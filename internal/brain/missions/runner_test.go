@@ -323,6 +323,64 @@ func TestRunReviewParsesVerdictAndCarriesGatekeeperState(t *testing.T) {
 	}
 }
 
+// TestRunReviewNextStateOmitsFullPacket pins issue #505: the persisted
+// gatekeeper state must never carry the round's diff/artifact text
+// (reworded across rounds, it's what compounded into a multi-megabyte
+// prompt), only a compact summary naming the finding.
+func TestRunReviewNextStateOmitsFullPacket(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(reviewVerdictToolName, `{"decision":"rework","findings":[{"title":"missing citation","file":"report.md","detail":"claim on line 4 has no source"}]}`)},
+	}}
+	r := newTestRunner(agent)
+	packet := ReviewPacket{
+		Goal:      "goal text",
+		UnitTitle: "Write the report",
+		Diff:      "+this diff line must never survive into persisted state",
+		Artifacts: map[string]string{"report.md": "this artifact body must never survive into persisted state"},
+	}
+	_, state, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, packet, nil)
+	if err != nil {
+		t.Fatalf("RunReview: %v", err)
+	}
+	if state == nil || len(state.Messages) != 2 {
+		t.Fatalf("state.Messages = %+v, want exactly 2 (summary + verdict)", state)
+	}
+	userMsg := state.Messages[0].Content
+	if strings.Contains(userMsg, "must never survive") {
+		t.Fatalf("persisted state leaked the full packet's diff/artifact content: %q", userMsg)
+	}
+	if !strings.Contains(userMsg, "missing citation") || !strings.Contains(userMsg, "Write the report") {
+		t.Fatalf("persisted state missing finding/unit summary: %q", userMsg)
+	}
+}
+
+// TestRunReviewCapsGatekeeperRounds pins the 4-round retention cap
+// (gatekeeperRoundsCap): a 6th consecutive rework round must still
+// leave only 4 rounds' worth of messages (8), oldest dropped first.
+func TestRunReviewCapsGatekeeperRounds(t *testing.T) {
+	r := newTestRunner(nil) // agent replaced per-round below
+	var gk *GatekeeperState
+	for i := 0; i < 6; i++ {
+		agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+			{toolEndEvent(reviewVerdictToolName, fmt.Sprintf(`{"decision":"rework","findings":[{"title":"gap round %d"}]}`, i))},
+		}}
+		r.agent = agent
+		_, next, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{UnitTitle: "unit"}, gk)
+		if err != nil {
+			t.Fatalf("round %d: RunReview: %v", i, err)
+		}
+		gk = next
+	}
+	if len(gk.Messages) != gatekeeperRoundsCap*2 {
+		t.Fatalf("Messages length = %d, want %d (cap of %d rounds)", len(gk.Messages), gatekeeperRoundsCap*2, gatekeeperRoundsCap)
+	}
+	// The oldest retained round must be round 2 (0-indexed), not round 0:
+	// six rounds capped to the last four means rounds 2-5 survive.
+	if !strings.Contains(gk.Messages[0].Content, "gap round 2") {
+		t.Fatalf("oldest retained round = %q, want round 2's summary", gk.Messages[0].Content)
+	}
+}
+
 // TestRunReviewRoutePrecedence pins review's route precedence at the
 // request level: ReviewRoute > PlanRoute > Route.
 func TestRunReviewRoutePrecedence(t *testing.T) {

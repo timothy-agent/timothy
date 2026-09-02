@@ -30,6 +30,12 @@ import (
 // succeed.
 var ErrModelFloor = errors.New("mission turn served by a below-floor model")
 
+// ErrPromptTooLong reports that a mission turn's prompt was rejected
+// for exceeding the model's context window: the driver drops or
+// shrinks the reviewer session and retries rather than treating it as
+// an ordinary infra failure.
+var ErrPromptTooLong = errors.New("mission turn rejected: prompt exceeds the model context window")
+
 // ErrAskedUser reports that a turn ended via a successful ask_user
 // call (D-088) rather than the phase's own sentinel: every phase
 // entry point (RunWorker/DiscoverSession/PlanSession/RunReview) returns
@@ -782,6 +788,9 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if ev.Err != nil {
 				msg = ev.Err.Message
 			}
+			if strings.Contains(msg, "context_length") {
+				return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser}, fmt.Errorf("%w: %s", ErrPromptTooLong, msg)
+			}
 			return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser}, fmt.Errorf("mission runner: %s", msg)
 		}
 	}
@@ -1364,8 +1373,74 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		return ReviewVerdict{}, nil, fmt.Errorf("mission runner: parse review_verdict: %w", err)
 	}
 
-	nextState := &GatekeeperState{Messages: append(messages, provider.Message{Role: "assistant", Content: NeutralizeSlot(text)})}
+	// D-091/issue #505: the round's full packet (goal, plan, artifacts,
+	// diff) is never retained across rounds: reviewers reword findings,
+	// so a run of reworks would otherwise compound copies of it into one
+	// prompt until every provider rejects it. Only a compact summary of
+	// this round plus the assistant's verdict is kept.
+	round := append(append([]provider.Message{}, gatekeeperMessages(gatekeeper)...),
+		provider.Message{Role: "user", Content: reviewRoundSummary(packet, verdict)},
+		provider.Message{Role: "assistant", Content: NeutralizeSlot(text)},
+	)
+	nextState := &GatekeeperState{Messages: capGatekeeperRounds(round)}
 	return verdict, nextState, nil
+}
+
+// gatekeeperMessages returns gatekeeper's prior messages, or nil when
+// gatekeeper is nil (first round).
+func gatekeeperMessages(gatekeeper *GatekeeperState) []provider.Message {
+	if gatekeeper == nil {
+		return nil
+	}
+	return gatekeeper.Messages
+}
+
+// gatekeeperRoundsCap bounds how many prior review rounds' messages
+// (user summary + assistant verdict pairs) are retained across rework
+// rounds.
+const gatekeeperRoundsCap = 4
+
+// capGatekeeperRounds drops the oldest round (a user/assistant pair)
+// once messages holds more than gatekeeperRoundsCap rounds.
+func capGatekeeperRounds(messages []provider.Message) []provider.Message {
+	maxLen := gatekeeperRoundsCap * 2
+	if len(messages) <= maxLen {
+		return messages
+	}
+	return messages[len(messages)-maxLen:]
+}
+
+// reviewRoundSummary renders a compact record of one finished review
+// round for the resumed reviewer session: the full packet is never
+// retained (see RunReview), so this summary, plus the packet's next
+// round (which IS authoritative), is all the reviewer carries forward.
+func reviewRoundSummary(packet ReviewPacket, verdict ReviewVerdict) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Prior review round for unit %s. The full goal, plan, artifacts and diff were shown in that round and are omitted here; the current round's packet below is authoritative. Verdict: ", NeutralizeSlot(packet.UnitTitle))
+	if verdict.Approved {
+		b.WriteString("approve")
+	} else {
+		b.WriteString("rework")
+	}
+	b.WriteString(". Findings:")
+	if len(verdict.Findings) == 0 {
+		b.WriteString(" none")
+		return b.String()
+	}
+	for _, f := range verdict.Findings {
+		b.WriteString("\n- ")
+		b.WriteString(NeutralizeSlot(f.Title))
+		if f.File != "" {
+			b.WriteString(" (")
+			b.WriteString(NeutralizeSlot(f.File))
+			b.WriteString(")")
+		}
+		if f.Detail != "" {
+			b.WriteString(": ")
+			b.WriteString(NeutralizeSlot(f.Detail))
+		}
+	}
+	return b.String()
 }
 
 // renderReviewContent lays the packet out for the reviewer: goal and

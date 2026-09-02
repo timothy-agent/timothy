@@ -118,6 +118,8 @@ func errEvent(err error) stream.StreamEvent {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		code = "timeout"
+	case perm != nil && isContextLengthMessage(perm.Error()):
+		code = "context_length"
 	case perm != nil && perm.status != 0:
 		code = fmt.Sprintf("http_%d", perm.status)
 	}
@@ -126,6 +128,34 @@ func errEvent(err error) stream.StreamEvent {
 		Message:   err.Error(),
 		Retryable: retryable,
 	}}
+}
+
+// contextLengthSignatures are provider error phrasings that mean "the
+// request itself is too big for this model's context window", a
+// prompt-shape failure, not a transient one, so it gets its own code
+// distinct from the generic http_<status>.
+var contextLengthSignatures = []string{
+	"exceeds max length",
+	"exceeds the context window",
+	"context length",
+	"context_length_exceeded",
+	"maximum context length",
+	"too many tokens",
+	"prompt is too long",
+	"input is too long",
+	"request too large",
+}
+
+// isContextLengthMessage reports whether s matches any known
+// context-length rejection phrasing, case-insensitively.
+func isContextLengthMessage(s string) bool {
+	lower := strings.ToLower(s)
+	for _, sig := range contextLengthSignatures {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 // emit sends an event unless ctx is done; it reports whether the send

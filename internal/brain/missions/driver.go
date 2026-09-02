@@ -1586,6 +1586,68 @@ func currentUnit(plan Plan) (*PlanUnit, int) {
 	return nil, -1
 }
 
+// reviewWithShrink runs RunReview, recovering from a prompt rejected
+// for exceeding the model's context window (ErrPromptTooLong) instead
+// of treating it like any other infra failure: first a cold retry with
+// the gatekeeper session dropped, then (if still too long) one retry
+// with the packet itself shrunk. Exactly one retry at each stage,
+// never a loop.
+func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
+	gk := d.gatekeepers[m.ID]
+	verdict, nextGK, err := d.runner.RunReview(ctx, m, packet, gk)
+	if err == nil {
+		d.gatekeepers[m.ID] = nextGK
+		return verdict, nil
+	}
+	if !errors.Is(err, ErrPromptTooLong) {
+		return ReviewVerdict{}, err
+	}
+
+	if gk != nil {
+		delete(d.gatekeepers, m.ID)
+		if evErr := d.store.AppendEvent(ctx, m.ID, "mission.review_prompt_shrunk", map[string]any{
+			"action": "dropped_reviewer_session",
+		}); evErr != nil {
+			d.log.Warn("driver: record review prompt shrunk failed", "mission_id", m.ID, "error", evErr)
+		}
+		verdict, nextGK, err = d.runner.RunReview(ctx, m, packet, nil)
+		if err == nil {
+			d.gatekeepers[m.ID] = nextGK
+			return verdict, nil
+		}
+		if !errors.Is(err, ErrPromptTooLong) {
+			return ReviewVerdict{}, err
+		}
+	}
+
+	diffCap, artifactsCap := baselineDiffCap/4, reviewArtifactsCap/2
+	trimmed := packet
+	if wt := m.WorktreePath(); wt != "" {
+		trimmedDiff, diffErr := baselineDiffCapped(ctx, wt, m.BaseCommit, diffCap)
+		if diffErr != nil {
+			return ReviewVerdict{}, diffErr
+		}
+		trimmed.Diff = trimmedDiff
+	}
+	if unit, _ := currentUnit(m.Plan); unit != nil {
+		trimmed.Artifacts = ReadArtifactsCapped(m.WorkRoot(), unit.Artifacts, artifactsCap)
+	}
+	if evErr := d.store.AppendEvent(ctx, m.ID, "mission.review_prompt_shrunk", map[string]any{
+		"action": "trimmed_packet", "diff_cap": diffCap, "artifacts_cap": artifactsCap,
+	}); evErr != nil {
+		d.log.Warn("driver: record review prompt shrunk failed", "mission_id", m.ID, "error", evErr)
+	}
+	verdict, nextGK, err = d.runner.RunReview(ctx, m, trimmed, nil)
+	if err != nil {
+		if errors.Is(err, ErrPromptTooLong) {
+			return ReviewVerdict{}, fmt.Errorf("review_prompt_too_large: %w", err)
+		}
+		return ReviewVerdict{}, err
+	}
+	d.gatekeepers[m.ID] = nextGK
+	return verdict, nil
+}
+
 func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	var diff string
 	if wt := m.WorktreePath(); wt != "" {
@@ -1604,12 +1666,10 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 		packet.UnitTitle = unit.Title
 		packet.Artifacts = ReadArtifacts(workRoot, unit.Artifacts)
 	}
-	gk := d.gatekeepers[m.ID]
-	verdict, nextGK, err := d.runner.RunReview(ctx, m, packet, gk)
+	verdict, err := d.reviewWithShrink(ctx, m, packet)
 	if err != nil {
 		return StepInput{}, err
 	}
-	d.gatekeepers[m.ID] = nextGK
 	// The reviewer's own worktree side effects (it may run tests) are
 	// rolled back unconditionally after every review round.
 	if wt := m.WorktreePath(); wt != "" {

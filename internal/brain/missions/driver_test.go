@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
 
 // fakeStore is an in-memory driverStore for scripting Driver scenarios
@@ -115,7 +116,8 @@ func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition
 	f.missions[id] = m
 	for _, ev := range t.Events {
 		f.seq[id]++
-		f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: ev.Kind})
+		raw, _ := json.Marshal(ev.Payload)
+		f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: ev.Kind, Payload: raw})
 	}
 	return nil
 }
@@ -262,8 +264,16 @@ type scriptedRunner struct {
 	workerPackets  []WorkPacket
 	reviewVerdicts []ReviewVerdict
 	reviewIdx      int
-	plans          []Plan
-	planIdx        int
+	// reviewErrs scripts RunReview's error return, one entry consumed per
+	// call (nil entries are a plain success): shorter than reviewCalls,
+	// once exhausted every further call succeeds. Lets a test script an
+	// ErrPromptTooLong on the first N calls and a normal verdict after.
+	reviewErrs []error
+	// reviewCalls counts every RunReview invocation and records the
+	// gatekeeper state each one was called with, in call order.
+	reviewCalls []*GatekeeperState
+	plans       []Plan
+	planIdx     int
 	// planDiscoverNotes records the discoverNotes argument PlanSession
 	// was called with, one entry per call — lets a test assert the plan
 	// phase actually received what the discover phase stored.
@@ -296,6 +306,11 @@ func (r *scriptedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPa
 }
 
 func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket, gk *GatekeeperState) (ReviewVerdict, *GatekeeperState, error) {
+	call := len(r.reviewCalls)
+	r.reviewCalls = append(r.reviewCalls, gk)
+	if call < len(r.reviewErrs) && r.reviewErrs[call] != nil {
+		return ReviewVerdict{}, nil, r.reviewErrs[call]
+	}
 	v := r.reviewVerdicts[r.reviewIdx]
 	if r.reviewIdx < len(r.reviewVerdicts)-1 {
 		r.reviewIdx++
@@ -1559,6 +1574,104 @@ func TestDriverGatekeeperCleanupOnTerminal(t *testing.T) {
 	}
 	if _, stillPresent := d.gatekeepers["m1"]; stillPresent {
 		t.Fatal("gatekeeper state was not cleaned up once the mission reached a terminal phase")
+	}
+}
+
+// TestDriverReviewPromptTooLongDropsGatekeeperAndRetries pins issue
+// #505's cold-retry path: a review round that fails with
+// ErrPromptTooLong while a gatekeeper session exists gets it dropped,
+// records mission.review_prompt_shrunk, and RunReview is retried once
+// with a nil gatekeeper.
+func TestDriverReviewPromptTooLongDropsGatekeeperAndRetries(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
+		Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}},
+	})
+	runner := &scriptedRunner{
+		reviewErrs:     []error{ErrPromptTooLong},
+		reviewVerdicts: []ReviewVerdict{{Approved: true}},
+	}
+	d := testDriver(store, runner)
+	d.gatekeepers["m1"] = &GatekeeperState{Messages: []provider.Message{{Role: "user", Content: "prior round"}}}
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if len(runner.reviewCalls) != 2 {
+		t.Fatalf("RunReview called %d times, want 2 (failed cold, then retried)", len(runner.reviewCalls))
+	}
+	if runner.reviewCalls[0] == nil {
+		t.Fatal("first RunReview call should have carried the existing gatekeeper state")
+	}
+	if runner.reviewCalls[1] != nil {
+		t.Fatal("retry after dropping the gatekeeper should pass nil state")
+	}
+	var found bool
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.review_prompt_shrunk" {
+			found = true
+			var payload struct {
+				Action string `json:"action"`
+			}
+			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+				t.Fatalf("unmarshal event payload: %v", err)
+			}
+			if payload.Action != "dropped_reviewer_session" {
+				t.Fatalf("payload.Action = %q, want dropped_reviewer_session", payload.Action)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a mission.review_prompt_shrunk event")
+	}
+}
+
+// TestDriverReviewPromptTooLongAlwaysFailsReturnsRecognisableError
+// pins the exhaustion path: a reviewer that ALWAYS rejects with
+// ErrPromptTooLong (cold retry included) gets exactly one more retry
+// with a trimmed packet, and the final error names
+// review_prompt_too_large so the infra-pause reason is diagnosable.
+func TestDriverReviewPromptTooLongAlwaysFailsReturnsRecognisableError(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
+		Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}},
+	})
+	runner := &scriptedRunner{
+		reviewErrs:     []error{ErrPromptTooLong, ErrPromptTooLong, ErrPromptTooLong},
+		reviewVerdicts: []ReviewVerdict{{Approved: true}}, // never reached
+	}
+	d := testDriver(store, runner)
+	d.gatekeepers["m1"] = &GatekeeperState{Messages: []provider.Message{{Role: "user", Content: "prior round"}}}
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if len(runner.reviewCalls) != 3 {
+		t.Fatalf("RunReview called %d times, want exactly 3 (cold, dropped-session retry, trimmed-packet retry)", len(runner.reviewCalls))
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
+		t.Fatalf("mission = status %q pause_reason %q, want paused/infra", m.Status, m.PauseReason)
+	}
+	var sawDetail bool
+	for _, ev := range store.events["m1"] {
+		if ev.Kind != "mission.paused" {
+			continue
+		}
+		var payload struct {
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal mission.paused payload: %v", err)
+		}
+		if strings.Contains(payload.Detail, "review_prompt_too_large") {
+			sawDetail = true
+		}
+	}
+	if !sawDetail {
+		t.Fatal("expected a mission.paused event whose detail mentions review_prompt_too_large")
 	}
 }
 

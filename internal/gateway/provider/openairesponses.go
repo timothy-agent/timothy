@@ -520,8 +520,12 @@ func (o *OpenAIResponses) relay(ctx context.Context, body io.Reader, ch chan<- s
 				if p.Error != nil && p.Error.Message != "" {
 					msg = p.Error.Message
 				}
+				code, retryable := "provider_error", true
+				if isContextLengthMessage(msg) {
+					code, retryable = "context_length", false
+				}
 				emit(ctx, ch, stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
-					Code: "provider_error", Message: msg, Retryable: true,
+					Code: code, Message: msg, Retryable: retryable,
 				}})
 				return false
 			}
@@ -565,8 +569,12 @@ func (o *OpenAIResponses) relay(ctx context.Context, body io.Reader, ch chan<- s
 			} else if p.Response != nil {
 				msg = fmt.Sprintf("response status %s", p.Response.Status)
 			}
+			code, retryable := "provider_error", true
+			if isContextLengthMessage(msg) {
+				code, retryable = "context_length", false
+			}
 			emit(ctx, ch, stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
-				Code: "provider_error", Message: msg, Retryable: true,
+				Code: code, Message: msg, Retryable: retryable,
 			}})
 			return false
 		case "response.incomplete":

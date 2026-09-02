@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -63,5 +64,52 @@ func TestRetryableStatus(t *testing.T) {
 		if got := retryableStatus(code); got != want {
 			t.Fatalf("retryableStatus(%d) = %v, want %v", code, got, want)
 		}
+	}
+}
+
+func TestIsContextLengthMessage(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		msg  string
+		want bool
+	}{
+		{"Prompt exceeds max length of 128000 tokens", true},
+		{"Your input exceeds the context window of this model", true},
+		{"This model's maximum context length is 8192 tokens", true},
+		{"error code: context_length_exceeded", true},
+		{"too many tokens in the request", true},
+		{"prompt is too long for this model", true},
+		{"input is too long", true},
+		{"request too large for this model", true},
+		{"CONTEXT LENGTH exceeded", true},
+		{"invalid api key", false},
+		{"rate limit exceeded", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		if got := isContextLengthMessage(c.msg); got != c.want {
+			t.Errorf("isContextLengthMessage(%q) = %v, want %v", c.msg, got, c.want)
+		}
+	}
+}
+
+func TestErrEventContextLengthCode(t *testing.T) {
+	t.Parallel()
+	err := &permanentError{status: 400, err: fmt.Errorf("http 400: Your input exceeds the context window of this model")}
+	ev := errEvent(err)
+	if ev.Err.Code != "context_length" {
+		t.Fatalf("code = %q, want context_length", ev.Err.Code)
+	}
+	if ev.Err.Retryable {
+		t.Fatal("context_length error must not be retryable")
+	}
+}
+
+func TestErrEventHTTPStatusCode(t *testing.T) {
+	t.Parallel()
+	err := &permanentError{status: 401, err: fmt.Errorf("http 401: invalid api key")}
+	ev := errEvent(err)
+	if ev.Err.Code != "http_401" {
+		t.Fatalf("code = %q, want http_401", ev.Err.Code)
 	}
 }

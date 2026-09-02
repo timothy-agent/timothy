@@ -62,11 +62,18 @@ type ReviewPacket struct {
 // unreadable files map to an error note rather than being dropped —
 // the reviewer must see the gap, not silently less material.
 func ReadArtifacts(workRoot string, artifacts []string) map[string]string {
+	return ReadArtifactsCapped(workRoot, artifacts, reviewArtifactsCap)
+}
+
+// ReadArtifactsCapped is ReadArtifacts with the total byte cap as a
+// parameter, so a reviewer round that overflowed the model's context
+// can retry with a smaller one (see driver.go's reviewWithShrink).
+func ReadArtifactsCapped(workRoot string, artifacts []string, limit int) map[string]string {
 	if len(artifacts) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(artifacts))
-	remaining := reviewArtifactsCap
+	remaining := limit
 	for _, a := range artifacts {
 		rel := strings.TrimSpace(a)
 		if rel == "" {
@@ -214,27 +221,58 @@ func GapFingerprint(findings []Finding) string {
 	return hex.EncodeToString(h[:])
 }
 
+// baselineDiffExcludes are pathspecs excluded from the reviewer's
+// baseline diff: lockfiles and build output carry no reviewable
+// content and were the single biggest contributor to oversized review
+// prompts.
+var baselineDiffExcludes = []string{
+	"**/package-lock.json", "**/yarn.lock", "**/pnpm-lock.yaml",
+	"**/Cargo.lock", "**/poetry.lock", "**/composer.lock", "**/Gemfile.lock",
+	"**/dist/**", "**/build/**", "**/node_modules/**", "**/vendor/**", "**/target/**",
+	"**/*.min.js", "**/*.min.css", "**/*.map",
+}
+
+// baselineDiffExcludeTrailer marks a diff as having lockfiles/build
+// output excluded, appended unconditionally to any non-empty diff,
+// since detecting whether an exclusion actually matched anything isn't
+// cheap enough to bother with.
+const baselineDiffExcludeTrailer = "\n[diff excludes lockfiles, dist/, build/, node_modules/, vendor/, target/, minified and source-map files]"
+
 // BaselineDiff runs `git diff <baseCommit>` in the mission's own
 // worktree — the reviewer judges the actual diff, never the worker's
 // account of it — capped at baselineDiffCap with a truncation marker
 // that never splits mid-line.
 func BaselineDiff(ctx context.Context, worktree, baseCommit string) (string, error) {
+	return baselineDiffCapped(ctx, worktree, baseCommit, baselineDiffCap)
+}
+
+// baselineDiffCapped is BaselineDiff with the byte cap as a parameter,
+// so a reviewer round that overflowed the model's context can retry
+// with a smaller one (see driver.go's reviewWithShrink).
+func baselineDiffCapped(ctx context.Context, worktree, baseCommit string, limit int) (string, error) {
 	if baseCommit == "" || baseCommit == unavailableCommit {
 		return "", fmt.Errorf("review: no base commit recorded for this worktree")
 	}
 	cctx, cancel := context.WithTimeout(ctx, baselineDiffTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "git", "diff", baseCommit) //nolint:gosec // baseCommit is a git commit hash captured by our own Provision, not user input
+	args := []string{"diff", baseCommit, "--", "."}
+	for _, pattern := range baselineDiffExcludes {
+		args = append(args, ":(exclude,glob)"+pattern)
+	}
+	cmd := exec.CommandContext(cctx, "git", args...) //nolint:gosec // baseCommit is a git commit hash captured by our own Provision, not user input
 	cmd.Dir = worktree
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("review: git diff: %w", err)
 	}
-	if len(out) <= baselineDiffCap {
-		return string(out), nil
+	if len(out) == 0 {
+		return "", nil
 	}
-	cut := lastNewlineBefore(out, baselineDiffCap)
-	return string(out[:cut]) + fmt.Sprintf("\n[truncated at %d bytes: diff is %d bytes]", cut, len(out)), nil
+	if len(out) <= limit {
+		return string(out) + baselineDiffExcludeTrailer, nil
+	}
+	cut := lastNewlineBefore(out, limit)
+	return string(out[:cut]) + fmt.Sprintf("\n[truncated at %d bytes: diff is %d bytes]", cut, len(out)) + baselineDiffExcludeTrailer, nil
 }
 
 // lastNewlineBefore returns the index of the last '\n' at or before
