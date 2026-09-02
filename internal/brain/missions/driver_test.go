@@ -113,6 +113,9 @@ func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition
 	m.ConsecutiveFailures, m.LastGapFingerprint, m.StallCount = t.Next.ConsecutiveFailures, t.Next.LastGapFingerprint, t.Next.StallCount
 	m.ReplanUsed = t.Next.ReplanUsed
 	m.ReviewFindings, m.ReworkRounds = t.Next.ReviewFindings, t.Next.ReworkRounds
+	if len(t.Next.Units) > 0 {
+		m.Plan.Units = t.Next.Units
+	}
 	f.missions[id] = m
 	for _, ev := range t.Events {
 		f.seq[id]++
@@ -1032,7 +1035,7 @@ func TestDriverExecuteRecordsRawTextWithoutHandoff(t *testing.T) {
 }
 
 // TestDriverLightDoneSetsFinalOutputAndSkipsToResult confirms a light
-// mission's done branch (D-069) short-circuits trySkipReview: it sets
+// mission's done branch (D-069) short-circuits routeVerified: it sets
 // FinalOutput to the worker's FinalMessage (the text since its last
 // non-sentinel tool call, NOT the whole multi-turn transcript — see
 // TestRunWorkerFinalMessageExcludesPriorToolRoundNarration for the
@@ -1263,7 +1266,7 @@ func TestDriverNonLightDoneStillGoesThroughReview(t *testing.T) {
 
 // TestDriverNoProveStillReviewsWithoutArtifacts confirms flow=no_prove
 // does NOT approve a unit directly when it has no declared artifacts:
-// trySkipReview's skip mechanism requires real harness evidence
+// routeVerified's skip mechanism requires real harness evidence
 // (artifacts + verify_cmd), same as an ordinary flow=full general
 // mission (TestDriverNonLightDoneStillGoesThroughReview). no_prove
 // keeps discover/plan and a real plan's units; it is not a planless
@@ -1865,7 +1868,7 @@ func TestDriverDriveIsSerializedPerMission(t *testing.T) {
 // be treated as an infra fault (which just parks the mission for a
 // human to blindly resume forever); it must route through rework,
 // back to execute, so the worker gets another attempt with the actual
-// failure recorded as a progress note.
+// failure recorded on the unit (D-094) and as a blocking finding.
 func TestDriverReviewApprovalContradictedByVerifyRoutesToRework(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
@@ -1887,11 +1890,11 @@ func TestDriverReviewApprovalContradictedByVerifyRoutesToRework(t *testing.T) {
 	if m.Iteration != 1 {
 		t.Fatalf("iteration = %d, want 1 (rework costs an iteration like any other rework)", m.Iteration)
 	}
-	if len(m.Progress) == 0 {
-		t.Fatal("expected a progress note explaining the verify failure to the next worker turn")
+	if open := OpenFindings(m.ReviewFindings); len(open) != 1 || !strings.Contains(open[0].Title, "verify_cmd check failed for unit 1") {
+		t.Fatalf("open findings = %+v, want one harness-authored verify_cmd finding", open)
 	}
-	if !strings.Contains(m.Progress[len(m.Progress)-1].Note, "Verification failed") {
-		t.Fatalf("progress note = %q, want it to explain the verify failure", m.Progress[len(m.Progress)-1].Note)
+	if u := m.Plan.Units[0]; u.HarnessPassed || u.VerifyCheck != "verify_cmd" {
+		t.Fatalf("unit = %+v, want the failed verify_cmd check recorded on it for the next worker packet", u)
 	}
 }
 
@@ -2575,8 +2578,8 @@ func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
 	if m.Phase != PhaseGenerate || m.Plan.Units[0].Passes {
 		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
 	}
-	if len(m.Progress) == 0 || !strings.Contains(m.Progress[len(m.Progress)-1].Note, "citation check failed") {
-		t.Fatalf("progress = %+v, want a note explaining the citation failure", m.Progress)
+	if u := m.Plan.Units[0]; u.VerifyCheck != "citations" || !strings.Contains(u.VerifyExcerpt, "citation check failed") {
+		t.Fatalf("unit = %+v, want the citation failure recorded on it for the next worker packet", u)
 	}
 }
 
@@ -2612,22 +2615,18 @@ func TestDriverCitationCheckSkippedForCodingMission(t *testing.T) {
 	}
 }
 
-// TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing reproduces
-// the fix: a unit that already passed can silently break while a LATER
-// unit's work is happening. Unit 0's artifact ("a.md") passed
-// previously; before the driver verifies unit 1, a.md gets deleted (as
-// if the worker's unit-1 changes broke it). The regression check must
-// catch this at the point unit 1's own verify succeeds, flip unit 0's
-// Passes back to false, emit mission.regression, and route back to
-// execute (worker_retry) instead of letting the mission advance to
-// review for unit 1.
+// TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing covers the
+// pass-then-regress case end to end (D-094): unit 0 passes its own
+// turn; during unit 1's turn its artifact ("a.md") gets deleted. The
+// batch pass after unit 1's turn must catch this, flip unit 0 back to
+// pending (Passes and HarnessPassed both false, Regressed set, the
+// excerpt attached), append mission.unit_regressed, route back to
+// generate (worker_retry) instead of approving unit 1, and name the
+// regression in the next worker packet's current-unit block.
 func TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing(t *testing.T) {
 	root := t.TempDir()
 	aPath := filepath.Join(root, "a.md")
 	if err := os.WriteFile(aPath, []byte("unit 0 content"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "b.md"), []byte("unit 1 content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := newFakeStore()
@@ -2635,43 +2634,206 @@ func TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing(t *testing.T) {
 		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root,
 		Plan: Plan{Units: []PlanUnit{
-			{Title: "unit0", Artifacts: []string{"a.md"}, Passes: true},
+			{Title: "unit0", Artifacts: []string{"a.md"}},
 			{Title: "unit1", Artifacts: []string{"b.md"}},
 		}},
 	})
-	// Simulate unit 1's work having broken unit 0's artifact by the time
-	// the harness re-checks it: delete a.md right before the driver runs.
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{
+		{Outcome: "done", Evidence: "wrote a.md"},
+		{Outcome: "done", Evidence: "wrote b.md"},
+	}}
+	d := testDriver(store, runner)
+
+	// Turn 1: unit 0 passes on harness evidence and the mission moves on
+	// to unit 1 without a review (general kind, artifacts declared).
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if u := m.Plan.Units[0]; !u.Passes || !u.HarnessPassed {
+		t.Fatalf("unit 0 after its turn = %+v, want passed on harness evidence", u)
+	}
+
+	// Turn 2: unit 1's work breaks unit 0's artifact.
+	if err := os.WriteFile(filepath.Join(root, "b.md"), []byte("unit 1 content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(aPath); err != nil {
 		t.Fatal(err)
 	}
-	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote b.md"}}}
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	m, _ = store.Get(context.Background(), "m1")
+	if m.Phase != PhaseGenerate {
+		t.Fatalf("mission phase = %q, want generate (regression routes back to work, not forward)", m.Phase)
+	}
+	u := m.Plan.Units[0]
+	if u.Passes || u.HarnessPassed || !u.Regressed || u.VerifyCheck != "artifacts" || !strings.Contains(u.VerifyExcerpt, "a.md: not found") {
+		t.Fatalf("unit 0 = %+v, want flipped back to pending as a regression with the failing output attached", u)
+	}
+	if !m.Plan.Units[1].HarnessPassed {
+		t.Fatal("unit 1 passed its own checks and must keep that harness evidence")
+	}
+	found := false
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.unit_regressed" {
+			found = true
+			if !strings.Contains(string(ev.Payload), `"unit":0`) || !strings.Contains(string(ev.Payload), `"check":"artifacts"`) {
+				t.Fatalf("mission.unit_regressed payload = %s, want unit=0 check=artifacts", ev.Payload)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a mission.unit_regressed event")
+	}
+	if m.Iteration == 0 {
+		t.Fatal("a regression must cost an iteration via worker_retry, same as any other rework")
+	}
+	packet, err := d.packet(context.Background(), m)
+	if err != nil {
+		t.Fatalf("packet: %v", err)
+	}
+	_, user := packet.Render()
+	if !strings.Contains(user, "Current unit: unit0\nREGRESSED:") || !strings.Contains(user, "[regressed] unit0") || !strings.Contains(user, "[harness-verified] unit1") {
+		t.Fatalf("worker packet = %q, want unit0 named as the regressed current unit and unit1 harness-verified", user)
+	}
+}
+
+// TestDriverBatchVerifyPassesLaterUnitInSameTurn confirms D-094's batch
+// pass verifies every unit, not just the one the worker was assigned:
+// a worker that finishes two units in one turn gets both harness-passed
+// and the mission moves straight on, costing no turn for the second.
+func TestDriverBatchVerifyPassesLaterUnitInSameTurn(t *testing.T) {
+	root := t.TempDir()
+	for _, f := range []string{"a.md", "b.md"} {
+		if err := os.WriteFile(filepath.Join(root, f), []byte("content"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking,
+		MaxIterations: 8, Workspace: root,
+		Plan: Plan{Units: []PlanUnit{
+			{Title: "unit0", Artifacts: []string{"a.md"}, VerifyCmd: "grep -q content a.md"},
+			{Title: "unit1", Artifacts: []string{"b.md"}, VerifyCmd: "grep -q content b.md"},
+		}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote both"}}}
+	d := testDriver(store, runner)
+
+	driveN(t, d, "m1", 3) // generate -> result -> done
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseDone {
+		t.Fatalf("mission phase = %q, want done: both units were harness-verified in one pass", m.Phase)
+	}
+	for i, u := range m.Plan.Units {
+		if !u.Passes || !u.HarnessPassed {
+			t.Fatalf("unit %d = %+v, want passed on harness evidence", i, u)
+		}
+	}
+	if len(runner.workerPackets) != 1 {
+		t.Fatalf("RunWorker ran %d times, want exactly 1 turn for two units", len(runner.workerPackets))
+	}
+}
+
+// TestDriverCodingVerifyFailureRetriesBeforeReview confirms a coding
+// mission's worker claim is harness-checked at the end of its turn
+// (D-094): a failing verify_cmd buys another worker turn with the
+// excerpt on the unit, and no review round runs on failing work.
+func TestDriverCodingVerifyFailureRetriesBeforeReview(t *testing.T) {
+	root, base := codingWorktree(t)
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusWorking,
+		MaxIterations: 8, Workspace: root, BaseCommit: base,
+		Plan: Plan{Units: []PlanUnit{{Title: "add feature", VerifyCmd: "echo tests failed; exit 1"}}},
+	})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
+		reviewVerdicts: []ReviewVerdict{{Approved: true}},
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d.retryDelayFn = func(int) time.Duration { return 0 }
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseGenerate || m.Iteration != 1 {
+		t.Fatalf("mission = phase %s iteration %d, want another generate turn (worker_retry)", m.Phase, m.Iteration)
+	}
+	if len(runner.reviewCalls) != 0 {
+		t.Fatal("a review round ran on work the harness had already failed")
+	}
+	if u := m.Plan.Units[0]; u.HarnessPassed || u.VerifyCheck != "verify_cmd" || !strings.Contains(u.VerifyExcerpt, "tests failed") {
+		t.Fatalf("unit = %+v, want the verify_cmd failure and output recorded", u)
+	}
+	if m.LastGapFingerprint != "verify_failed:unit_0" {
+		t.Fatalf("fingerprint = %q, want verify_failed:unit_0 for the stall brake", m.LastGapFingerprint)
+	}
+}
+
+// TestDriverSkipsGenerateWhenAllUnitsHarnessPassed confirms the D-094
+// short-circuit: a mission entering generate with every unit
+// harness-verified and no finding open never runs a worker turn; it
+// records mission.generate_skipped and moves to prove.
+func TestDriverSkipsGenerateWhenAllUnitsHarnessPassed(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 8,
+		Plan: Plan{Units: []PlanUnit{{Title: "unit0", HarnessPassed: true}}},
+	})
+	runner := &scriptedRunner{workerErr: errors.New("RunWorker must not be called")}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
-
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Phase != PhaseGenerate {
-		t.Fatalf("mission phase = %q, want execute (regression routes back to work, not forward)", m.Phase)
-	}
-	if m.Plan.Units[0].Passes {
-		t.Fatal("unit 0's Passes was not flipped back to false after its artifact regressed")
+	if m.Phase != PhaseProve {
+		t.Fatalf("mission phase = %q, want prove without a worker turn", m.Phase)
 	}
 	found := false
 	for _, ev := range store.events["m1"] {
-		if ev.Kind == "mission.regression" {
-			found = true
-			if !strings.Contains(string(ev.Payload), `"unit":"unit0"`) || !strings.Contains(string(ev.Payload), `"check":"artifacts"`) {
-				t.Fatalf("mission.regression payload = %s, want unit=unit0 check=artifacts", ev.Payload)
-			}
-		}
+		found = found || ev.Kind == "mission.generate_skipped"
 	}
 	if !found {
-		t.Fatal("expected a mission.regression event")
+		t.Fatal("expected a mission.generate_skipped event")
 	}
-	if m.Iteration == 0 {
-		t.Fatal("a regression must cost an iteration via worker_retry, same as any other rework")
+}
+
+// TestDriverOpenFindingsStillRunGenerate confirms the skip does not
+// fire while a review finding is open: harness-passed units with an
+// unresolved finding still need a rework turn.
+func TestDriverOpenFindingsStillRunGenerate(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte("content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 8, Workspace: root,
+		Plan:           Plan{Units: []PlanUnit{{Title: "unit0", Artifacts: []string{"a.md"}, HarnessPassed: true}}},
+		ReviewFindings: []Finding{{ID: "F1", Title: "wrong tone", File: "a.md", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1}},
+		ReworkRounds:   1,
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "fixed"}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if len(runner.workerPackets) != 1 {
+		t.Fatal("the rework turn must run while a finding is open")
+	}
+	if m.Phase != PhaseProve {
+		t.Fatalf("mission phase = %q, want prove (the reviewer must close the finding, no skip)", m.Phase)
 	}
 }
 
@@ -2691,7 +2853,7 @@ func TestDriverNoRegressionAdvancesNormally(t *testing.T) {
 		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root,
 		Plan: Plan{Units: []PlanUnit{
-			{Title: "unit0", Artifacts: []string{"a.md"}, Passes: true},
+			{Title: "unit0", Artifacts: []string{"a.md"}, Passes: true, HarnessPassed: true},
 			{Title: "unit1", Artifacts: []string{"b.md"}},
 		}},
 	})
@@ -2709,7 +2871,7 @@ func TestDriverNoRegressionAdvancesNormally(t *testing.T) {
 		t.Fatal("unit 0 must remain passed when its artifact still holds up")
 	}
 	for _, ev := range store.events["m1"] {
-		if ev.Kind == "mission.regression" {
+		if ev.Kind == "mission.unit_regressed" {
 			t.Fatal("no regression event expected when nothing regressed")
 		}
 	}

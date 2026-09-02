@@ -1,5 +1,21 @@
 import type { PlanAssumption, PlanUnit } from '../../api/types'
 
+// unitBadge mirrors the harness's plan markers (missions.unitStatus,
+// D-094): verified (complete), harness-verified (awaiting review),
+// regressed (passed once, failing now), pending.
+export function unitBadge(u: PlanUnit): { label: string; className: string } {
+  if (u.passes) {
+    return { label: 'verified', className: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300' }
+  }
+  if (u.harness_passed) {
+    return { label: 'harness-verified', className: 'bg-green-50 text-green-700 dark:bg-green-950/60 dark:text-green-400' }
+  }
+  if (u.regressed) {
+    return { label: 'regressed', className: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300' }
+  }
+  return { label: 'pending', className: 'bg-muted text-muted-foreground' }
+}
+
 export function PlanSection({ units, assumptions }: { units: PlanUnit[]; assumptions?: PlanAssumption[] }) {
   if (units.length === 0) {
     return <p className="text-sm text-muted-foreground">No plan yet.</p>
@@ -7,20 +23,20 @@ export function PlanSection({ units, assumptions }: { units: PlanUnit[]; assumpt
   return (
     <div className="space-y-3">
       <ul className="space-y-1.5">
-        {units.map((u, i) => (
-          <li key={i} className="flex items-center gap-2 text-sm">
-            <span
-              className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
-                u.passes
-                  ? 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300'
-                  : 'bg-muted text-muted-foreground'
-              }`}
-            >
-              {u.passes ? 'verified' : 'pending'}
-            </span>
-            <span>{u.title}</span>
-          </li>
-        ))}
+        {units.map((u, i) => {
+          const badge = unitBadge(u)
+          return (
+            <li key={i} className="flex items-center gap-2 text-sm">
+              <span
+                className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${badge.className}`}
+                title={!u.passes && !u.harness_passed && u.verify_excerpt ? u.verify_excerpt : undefined}
+              >
+                {badge.label}
+              </span>
+              <span>{u.title}</span>
+            </li>
+          )
+        })}
       </ul>
       {assumptions && assumptions.length > 0 && (
         <div>

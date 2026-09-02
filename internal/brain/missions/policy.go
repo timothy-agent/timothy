@@ -62,8 +62,8 @@ type missionPolicy struct {
 // skipsPlanning; flow=no_prove forces alwaysReview false on a
 // general-shaped policy, since skipping the LLM reviewer is the whole
 // point of choosing it (CheckArtifacts in verifier.go still runs via
-// trySkipReview either way). flow=discover_generate does NOT need this
-// override: it never reaches trySkipReview at all, its generate turn
+// routeVerified either way). flow=discover_generate does NOT need this
+// override: it never reaches routeVerified at all, its generate turn
 // takes the same planless short-circuit as flow=light
 // (Mission.RunsPlanless), which never consults alwaysReview. Coding
 // stays alwaysReview true regardless of flow (ValidateCreate rejects

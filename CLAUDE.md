@@ -140,6 +140,16 @@ First run: `cp deploy/env.example deploy/.env` and set
   must exist, non-empty, inside the workspace) runs BEFORE any
   model-authored `verify_cmd`. `passes` flags flip only on harness
   evidence, never on model claims.
+- Batch verification (D-094, issue #518): after every generate turn
+  `verifier.verifyAll` checks every unit (unverified ones fully,
+  already-passed ones as the regression subset) and the driver hands
+  the outcomes to `Step` via `StepInput.Verified`; `applyVerification`
+  records `harness_passed`, a 4 KB `verify_excerpt` and `regressed` on
+  the plan units, persisted only by `ApplyTransition`. A failing or
+  regressed unit costs a worker turn (`worker_retry`), never a review;
+  `stepReviewApprove` flips `passes` on harness-passed units only; a
+  generate phase with every unit harness-passed and no open finding
+  skips the worker turn (`mission.generate_skipped`).
 - Workers get per-mission `shell` + `write_file` tools via turn-scoped
   `ExtraTools` that shadow base tools by name. Workers must create files
   with `write_file` only; shell redirects/heredocs classify destructive

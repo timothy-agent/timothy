@@ -1402,11 +1402,7 @@ func renderReviewContent(p ReviewPacket) string {
 	if len(p.Plan.Units) > 0 {
 		b.WriteString("\nPlan:\n")
 		for _, u := range p.Plan.Units {
-			status := "pending"
-			if u.Passes {
-				status = "verified"
-			}
-			fmt.Fprintf(&b, "- [%s] %s\n", status, NeutralizeSlot(u.Title))
+			fmt.Fprintf(&b, "- [%s] %s\n", unitStatus(u), NeutralizeSlot(u.Title))
 		}
 	}
 	if open := OpenFindings(p.OpenFindings); len(open) > 0 {
@@ -1683,10 +1679,12 @@ func parsePlan(raw string) (Plan, error) {
 			}
 		}
 	}
-	// Passes is harness-only evidence (RunVerify); a plan is never born
-	// pre-verified regardless of what the planner's JSON claims.
+	// Passes and the D-094 verify state are harness-only evidence; a plan
+	// is never born pre-verified regardless of what the planner's JSON
+	// claims.
 	for i := range plan.Units {
-		plan.Units[i].Passes = false
+		u := &plan.Units[i]
+		u.Passes, u.HarnessPassed, u.Regressed, u.VerifyCheck, u.VerifyExcerpt = false, false, false, "", ""
 	}
 	return plan, nil
 }

@@ -50,7 +50,7 @@ func TestPolicyFor(t *testing.T) {
 			want: missionPolicy{needsWorktree: false, alwaysReview: false, checksCitations: true, canDelegate: false, skipsPlanning: false, canPush: false},
 		},
 		{
-			// discover_generate never reaches trySkipReview (its generate
+			// discover_generate never reaches routeVerified (its generate
 			// turn takes the planless short-circuit instead), so policyFor
 			// does not special-case it: this is the plain general policy,
 			// same as flow=full; alwaysReview is false here only because

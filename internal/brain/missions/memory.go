@@ -187,7 +187,7 @@ func lastReviewVerdict(events []Event) (decision, findings string, ok bool) {
 
 // reviewSkipped reports whether any mission.review_skipped event fired
 // — the non-coding fast path that bypasses LLM review entirely on
-// harness evidence (driver.go's trySkipReview).
+// harness evidence (driver.go's routeVerified).
 func reviewSkipped(events []Event) bool {
 	for _, ev := range events {
 		if ev.Kind == "mission.review_skipped" {

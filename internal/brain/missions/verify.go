@@ -29,8 +29,9 @@ type verifyBackend func(ctx context.Context, workdir, command string, timeout ti
 const verifyTimeout = 10 * time.Minute
 
 // verifyExcerptCap is the trailing slice of output kept alongside the
-// full digest — enough to see what failed without storing megabytes.
-const verifyExcerptCap = 2 << 10
+// full digest and stored per unit in the plan (D-094): enough to see
+// what failed without storing megabytes.
+const verifyExcerptCap = 4 << 10
 
 // VerifyResult is a plan unit's verification evidence. Only
 // RunVerifyWithBackend produces this — never model output — and only
@@ -40,6 +41,19 @@ type VerifyResult struct {
 	OutputSHA256 string
 	Excerpt      string
 	Passed       bool
+	// TimedOut marks a verify_cmd that hit verifyTimeout: a failure
+	// with the timeout named in Excerpt, never an infrastructure error.
+	TimedOut bool
+}
+
+// UnitVerification is one plan unit's outcome from a batch verify pass
+// (D-094): the driver collects these after a worker turn or a review
+// approval and Step folds them into the plan through ApplyTransition.
+type UnitVerification struct {
+	Unit    int
+	Passed  bool
+	Check   string // artifacts, citations, verify_cmd, timeout
+	Excerpt string
 }
 
 // RunVerifyWithBackend executes a plan unit's verify_cmd via backend
@@ -50,13 +64,31 @@ type VerifyResult struct {
 // full output, and a trailing excerpt — "done is auditable from
 // events alone."
 func RunVerifyWithBackend(ctx context.Context, backend verifyBackend, workRoot, verifyCmd string) (VerifyResult, error) {
-	cctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	return runVerifyTimed(ctx, backend, workRoot, verifyCmd, verifyTimeout)
+}
+
+// runVerifyTimed is RunVerifyWithBackend with the timeout as a
+// parameter so tests can exercise the hung-command path.
+func runVerifyTimed(ctx context.Context, backend verifyBackend, workRoot, verifyCmd string, timeout time.Duration) (VerifyResult, error) {
+	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	hash := sha256.New()
 	tail := &tailBuffer{max: verifyExcerptCap}
-	exitCode, err := backend(cctx, workRoot, verifyCmd, verifyTimeout, io.MultiWriter(hash, tail))
+	exitCode, err := backend(cctx, workRoot, verifyCmd, timeout, io.MultiWriter(hash, tail))
 	if err != nil {
+		// Our own deadline firing (not the caller's cancel), or sandboxd's
+		// server-side timeout for the same duration, is a hung verify_cmd:
+		// real evidence the unit did not pass, not infra.
+		sandboxTimeout := strings.Contains(err.Error(), "timed out")
+		if ctx.Err() == nil && (cctx.Err() != nil || sandboxTimeout) {
+			return VerifyResult{
+				ExitCode:     exitCode,
+				OutputSHA256: hex.EncodeToString(hash.Sum(nil)),
+				Excerpt:      tail.String() + fmt.Sprintf("\nverify_cmd timed out after %s", timeout),
+				TimedOut:     true,
+			}, nil
+		}
 		return VerifyResult{}, err
 	}
 	return VerifyResult{

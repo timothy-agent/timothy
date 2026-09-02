@@ -28,6 +28,19 @@ describe('mission.unit_verified rendering', () => {
   })
 })
 
+describe('mission.unit_regressed rendering', () => {
+  it('names the unit 1-indexed with its title and failing check', () => {
+    render(<div>{renderEvent(event({ unit: 0, title: 'write report', check: 'artifacts' }, 'mission.unit_regressed'))}</div>)
+    expect(screen.getByText('Unit 1 (write report) regressed: artifacts check failed')).toHaveClass('text-red-400')
+  })
+})
+
+describe('mission.generate_skipped rendering', () => {
+  it('explains the skipped worker turn', () => {
+    expect(renderEvent(event({}, 'mission.generate_skipped'))).toBe('Worker turn skipped: every unit is harness-verified')
+  })
+})
+
 describe('mission.plan_created rendering', () => {
   it('shows unit count alone when the plan has no assumptions', () => {
     expect(renderEvent(event({ units: 2 }, 'mission.plan_created'))).toBe('Plan created with 2 unit(s)')

@@ -828,6 +828,98 @@ func TestReviewFindingsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestApplyTransitionPersistsUnitVerifyState confirms D-094's per-unit
+// verify state is real DB state written through ApplyTransition: a unit
+// passes, then regresses, and each step's Units land in the plan jsonb
+// (the plan's other keys untouched) with the events appended in order.
+// A transition with no units leaves a planless mission's plan alone.
+func TestApplyTransitionPersistsUnitVerifyState(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "verify state", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8}}); err != nil {
+		t.Fatalf("ApplyTransition planless: %v", err)
+	}
+	planless, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(planless.Plan.Units) != 0 {
+		t.Fatalf("planless plan = %+v, want no units written", planless.Plan)
+	}
+
+	plan := Plan{
+		Units:       []PlanUnit{{Title: "write a.md", Artifacts: []string{"a.md"}, VerifyCmd: "test -s a.md"}, {Title: "write b.md"}},
+		Assumptions: []PlanAssumption{{Assumption: "format", Default: "markdown"}},
+	}
+	if err := s.SetPlan(ctx, id, plan); err != nil {
+		t.Fatalf("SetPlan: %v", err)
+	}
+
+	// Turn 1: unit 0 passes on harness evidence.
+	passed := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Units: plan.Units},
+		StepInput{Input: InputReviewApprove, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
+		DefaultConfig,
+	)
+	if err := s.ApplyTransition(ctx, id, passed); err != nil {
+		t.Fatalf("ApplyTransition pass: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if u := m.Plan.Units[0]; !u.Passes || !u.HarnessPassed || u.VerifyCheck != "verify_cmd" || u.VerifyExcerpt != "ok" {
+		t.Fatalf("unit 0 after pass = %+v, want passed on harness evidence with the excerpt", u)
+	}
+	if len(m.Plan.Assumptions) != 1 || m.Plan.Units[1].Title != "write b.md" {
+		t.Fatalf("plan after pass = %+v, want assumptions and the other unit untouched", m.Plan)
+	}
+
+	// Turn 2: unit 0 regresses while unit 1 passes.
+	regressed := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Units: m.Plan.Units},
+		StepInput{Input: InputWorkerRetry, GapFingerprint: "regression:unit_0", Verified: []UnitVerification{
+			{Unit: 0, Check: "artifacts", Excerpt: "a.md: not found"}, {Unit: 1, Passed: true, Check: "artifacts"},
+		}},
+		DefaultConfig,
+	)
+	if err := s.ApplyTransition(ctx, id, regressed); err != nil {
+		t.Fatalf("ApplyTransition regression: %v", err)
+	}
+	m, err = s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if u := m.Plan.Units[0]; u.Passes || u.HarnessPassed || !u.Regressed || u.VerifyCheck != "artifacts" || u.VerifyExcerpt != "a.md: not found" {
+		t.Fatalf("unit 0 after regression = %+v, want pending, regressed, with the failing output", u)
+	}
+	if u := m.Plan.Units[1]; !u.HarnessPassed || u.Passes {
+		t.Fatalf("unit 1 after regression = %+v, want harness-passed awaiting approval", u)
+	}
+	events, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var kinds []string
+	for _, ev := range events {
+		kinds = append(kinds, ev.Kind)
+	}
+	want := []string{"mission.unit_verified", "mission.unit_regressed", "mission.retry"}
+	if len(kinds) != len(want) {
+		t.Fatalf("event kinds = %v, want %v", kinds, want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Fatalf("event kinds = %v, want %v", kinds, want)
+		}
+	}
+}
+
 // TestPlanApprovalParkRoundTrip confirms D-087 (issue #456) is real DB
 // state, not in-memory only: a mission created with auto_approve_plan
 // false, parked on PauseApproval via ApplyTransition, survives a fresh

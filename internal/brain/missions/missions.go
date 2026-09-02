@@ -535,8 +535,28 @@ type PlanUnit struct {
 	// verify_cmd — a tautological verify_cmd (echo 'done') can no
 	// longer fake completion when the declared artifact is missing.
 	Artifacts []string `json:"artifacts,omitempty"`
-	Passes    bool     `json:"passes"`
+	// Passes marks the unit complete: harness-passed and, for missions
+	// that review, approved by the reviewer. Never true without
+	// HarnessPassed (legacy rows written before D-094 excepted).
+	Passes bool `json:"passes"`
+	// HarnessPassed (D-094, issue #518) is the batch verifier's own
+	// verdict: artifacts present and verify_cmd exit 0 after the last
+	// worker turn. Cleared when a later turn regresses the unit.
+	HarnessPassed bool `json:"harness_passed"`
+	// VerifyCheck names the check that decided the last verification
+	// (artifacts, citations, verify_cmd, timeout); VerifyExcerpt is its
+	// trailing output, capped at verifyExcerptCap, rendered into the
+	// worker packet while the unit is failing.
+	VerifyCheck   string `json:"verify_check,omitempty"`
+	VerifyExcerpt string `json:"verify_excerpt,omitempty"`
+	// Regressed marks a unit that had passed and failed a later
+	// regression run; cleared once it passes again.
+	Regressed bool `json:"regressed,omitempty"`
 }
+
+// verified reports whether the harness has passed this unit: Passes
+// implies it for rows written before HarnessPassed existed.
+func (u PlanUnit) verified() bool { return u.HarnessPassed || u.Passes }
 
 // PendingInput is ask_user's park detail (D-088, issue #457): the
 // structured question a phase turn is waiting on the operator to

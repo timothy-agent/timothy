@@ -154,14 +154,11 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 	if len(p.Plan.Units) > 0 {
 		if unit, _ := currentUnit(p.Plan); unit != nil {
 			fmt.Fprintf(&b, "Current unit: %s\n", NeutralizeSlot(unit.Title))
+			b.WriteString(renderUnitFailure(*unit))
 		}
 		b.WriteString("Plan:\n")
 		for _, u := range p.Plan.Units {
-			status := "pending"
-			if u.Passes {
-				status = "verified"
-			}
-			fmt.Fprintf(&b, "- [%s] %s\n", status, NeutralizeSlot(u.Title))
+			fmt.Fprintf(&b, "- [%s] %s\n", unitStatus(u), NeutralizeSlot(u.Title))
 			// The EXACT artifact paths the harness will check — a worker
 			// that invents its own filename (http-429 vs http429) fails
 			// verification without ever seeing why.
@@ -215,6 +212,43 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 	b.WriteString(renderAttachments(p.Attachments))
 
 	return system, b.String()
+}
+
+// unitStatus is the plan marker a worker or reviewer prompt shows for a
+// unit (D-094): verified (complete), harness-verified (awaiting
+// approval), regressed (passed once, failing now), or pending.
+func unitStatus(u PlanUnit) string {
+	switch {
+	case u.Passes:
+		return "verified"
+	case u.HarnessPassed:
+		return "harness-verified"
+	case u.Regressed:
+		return "regressed"
+	default:
+		return "pending"
+	}
+}
+
+// renderUnitFailure is the current-unit block's harness evidence
+// (D-094): the last failing check and its output excerpt, named as a
+// regression when the unit had passed before. Empty for a unit the
+// harness has not failed yet. The excerpt is command output, so it
+// passes NeutralizeSlot.
+func renderUnitFailure(u PlanUnit) string {
+	if u.verified() || u.VerifyCheck == "" {
+		return ""
+	}
+	var b strings.Builder
+	if u.Regressed {
+		fmt.Fprintf(&b, "REGRESSED: this unit passed before and now fails its %s check. Fix it before anything else.\n", u.VerifyCheck)
+	} else {
+		fmt.Fprintf(&b, "Last harness %s check failed for this unit.\n", u.VerifyCheck)
+	}
+	if u.VerifyExcerpt != "" {
+		fmt.Fprintf(&b, "Harness output:\n%s\n", NeutralizeSlot(strings.TrimRight(u.VerifyExcerpt, "\n")))
+	}
+	return b.String()
 }
 
 // renderOpenFindings is the rework turn's work order (D-092): the open

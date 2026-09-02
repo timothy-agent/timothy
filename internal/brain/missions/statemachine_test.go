@@ -60,10 +60,10 @@ func TestStep(t *testing.T) {
 		},
 		{
 			name:  "spend under budget does not pause",
-			state: StepState{Phase: PhaseProve, Status: StatusWorking, Spent: 5, Budget: budget(10), LastUnit: true},
+			state: StepState{Phase: PhaseProve, Status: StatusWorking, Spent: 5, Budget: budget(10)},
 			input: StepInput{Input: InputReviewApprove},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseResult, Status: StatusIdle, Spent: 5, Budget: budget(10), LastUnit: true},
+			want:  StepState{Phase: PhaseResult, Status: StatusIdle, Spent: 5, Budget: budget(10)},
 		},
 		{
 			name:  "nil budget never pauses on spend",
@@ -212,17 +212,17 @@ func TestStep(t *testing.T) {
 		},
 		{
 			name:  "review_approve on a non-last unit returns to generate",
-			state: StepState{Phase: PhaseProve, Status: StatusWorking, LastUnit: false, StallCount: 1, LastGapFingerprint: "x"},
+			state: StepState{Phase: PhaseProve, Status: StatusWorking, StallCount: 1, LastGapFingerprint: "x", Units: []PlanUnit{{}}},
 			input: StepInput{Input: InputReviewApprove},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, LastUnit: false},
+			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, Units: []PlanUnit{{}}},
 		},
 		{
 			name:  "review_approve on the last unit advances to result, not done",
-			state: StepState{Phase: PhaseProve, Status: StatusWorking, LastUnit: true, StallCount: 1, LastGapFingerprint: "x"},
+			state: StepState{Phase: PhaseProve, Status: StatusWorking, StallCount: 1, LastGapFingerprint: "x"},
 			input: StepInput{Input: InputReviewApprove},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseResult, Status: StatusIdle, LastUnit: true},
+			want:  StepState{Phase: PhaseResult, Status: StatusIdle},
 		},
 		{
 			name:  "review_rework with no findings returns to generate and counts the round",
@@ -396,7 +396,7 @@ func TestStep(t *testing.T) {
 // treats as false).
 func TestStepReviewApproveEmitsPassedTrue(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseProve, Status: StatusWorking, LastUnit: false},
+		StepState{Phase: PhaseProve, Status: StatusWorking, Units: []PlanUnit{{}}},
 		StepInput{Input: InputReviewApprove},
 		DefaultConfig,
 	)
@@ -481,13 +481,13 @@ func TestStepReplanEmitsReasonAndUsesReplanOnlyOnce(t *testing.T) {
 }
 
 // TestStepLightApproveGoesResult confirms a light mission (born in
-// PhaseGenerate, empty spec so LastUnit is always true) advances to
+// PhaseGenerate, empty plan so every unit counts as passed) advances to
 // the result phase on review_approve exactly like a coding/general
 // mission's last unit: not straight to done, since D-086's result
 // phase now sits between the last unit's approval and done.
 func TestStepLightApproveGoesResult(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowLight, LastUnit: true},
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowLight},
 		StepInput{Input: InputReviewApprove},
 		DefaultConfig,
 	)
@@ -498,11 +498,11 @@ func TestStepLightApproveGoesResult(t *testing.T) {
 
 // TestStepDiscoverGenerateApproveGoesResult confirms a discover_generate
 // mission (generate turn takes the same planless short-circuit as
-// light, empty spec so LastUnit is always true) advances to the
+// light, empty plan so every unit counts as passed) advances to the
 // result phase on review_approve exactly like light, D-090.
 func TestStepDiscoverGenerateApproveGoesResult(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowDiscoverGenerate, LastUnit: true},
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowDiscoverGenerate},
 		StepInput{Input: InputReviewApprove},
 		DefaultConfig,
 	)
@@ -575,15 +575,127 @@ func TestStepResultFailedParksInResult(t *testing.T) {
 	}
 }
 
+// TestStepAppliesVerification pins D-094's plan bookkeeping: a batch
+// pass carried by any input lands on Units before the input itself is
+// handled, Passes only ever flips on approval over harness evidence, and
+// a passed unit failing again flips back to pending with a
+// mission.unit_regressed event.
+func TestStepAppliesVerification(t *testing.T) {
+	long := strings.Repeat("x", verifyExcerptCap+100)
+	cases := []struct {
+		name       string
+		state      StepState
+		input      StepInput
+		wantUnits  []PlanUnit
+		wantPhase  Phase
+		wantEvents []string
+	}{
+		{
+			name:  "worker_retry records the failing excerpt without flipping anything",
+			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "a"}}},
+			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Verified: []UnitVerification{{Unit: 0, Check: "verify_cmd", Excerpt: long}}},
+			wantUnits: []PlanUnit{{Title: "a", VerifyCheck: "verify_cmd", VerifyExcerpt: long[:verifyExcerptCap] + "…"}},
+			wantPhase: PhaseGenerate, wantEvents: []string{"mission.retry"},
+		},
+		{
+			name:  "phase_complete marks a passing unit harness-passed, Passes waits for approval",
+			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}},
+			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
+			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}, {Title: "b"}},
+			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
+		},
+		{
+			name: "review_approve flips every harness-passed unit and advances to result when all passed",
+			state: StepState{Phase: PhaseProve, Status: StatusWorking, Units: []PlanUnit{
+				{Title: "a", Passes: true, HarnessPassed: true}, {Title: "b", HarnessPassed: true},
+			}},
+			input:     StepInput{Input: InputReviewApprove, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "artifacts"}, {Unit: 1, Passed: true, Check: "artifacts"}}},
+			wantUnits: []PlanUnit{{Title: "a", Passes: true, HarnessPassed: true, VerifyCheck: "artifacts"}, {Title: "b", Passes: true, HarnessPassed: true, VerifyCheck: "artifacts"}},
+			wantPhase: PhaseResult, wantEvents: []string{"mission.phase_started"},
+		},
+		{
+			name:      "review_approve never flips a unit without harness evidence",
+			state:     StepState{Phase: PhaseProve, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}}},
+			input:     StepInput{Input: InputReviewApprove},
+			wantUnits: []PlanUnit{{Title: "a", Passes: true, HarnessPassed: true}, {Title: "b"}},
+			wantPhase: PhaseGenerate, wantEvents: []string{"mission.unit_verified"},
+		},
+		{
+			name: "a passed unit failing again regresses to pending with the excerpt and an event",
+			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{
+				{Title: "a", Passes: true, HarnessPassed: true}, {Title: "b"},
+			}},
+			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "regression:unit_0", Verified: []UnitVerification{
+				{Unit: 0, Check: "artifacts", Excerpt: "a.md: not found"}, {Unit: 1, Passed: true, Check: "verify_cmd"},
+			}},
+			wantUnits: []PlanUnit{
+				{Title: "a", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "a.md: not found"},
+				{Title: "b", HarnessPassed: true, VerifyCheck: "verify_cmd"},
+			},
+			wantPhase: PhaseGenerate, wantEvents: []string{"mission.unit_regressed", "mission.retry"},
+		},
+		{
+			name:      "a regressed unit passing again clears the regression marker",
+			state:     StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "gone"}}},
+			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
+			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}},
+			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
+		},
+		{
+			name:      "an out-of-range unit index is ignored",
+			state:     StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}}},
+			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 4, Passed: true}}},
+			wantUnits: []PlanUnit{{Title: "a"}},
+			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Step(tc.state, tc.input, DefaultConfig)
+			if got.Next.Phase != tc.wantPhase {
+				t.Fatalf("phase = %q, want %q", got.Next.Phase, tc.wantPhase)
+			}
+			if !reflect.DeepEqual(got.Next.Units, tc.wantUnits) {
+				t.Fatalf("units = %+v, want %+v", got.Next.Units, tc.wantUnits)
+			}
+			kinds := make([]string, 0, len(got.Events))
+			for _, ev := range got.Events {
+				kinds = append(kinds, ev.Kind)
+			}
+			if !reflect.DeepEqual(kinds, tc.wantEvents) {
+				t.Fatalf("events = %v, want %v", kinds, tc.wantEvents)
+			}
+		})
+	}
+}
+
+// TestStepRegressionEventPayload pins what mission.unit_regressed
+// carries: the unit index and title, the failing check, and a bounded
+// excerpt, so the timeline names what broke without the full output.
+func TestStepRegressionEventPayload(t *testing.T) {
+	got := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "write a.md", Passes: true, HarnessPassed: true}}},
+		StepInput{Input: InputWorkerRetry, Verified: []UnitVerification{{Unit: 0, Check: "verify_cmd", Excerpt: strings.Repeat("y", 600)}}},
+		DefaultConfig,
+	)
+	if len(got.Events) == 0 || got.Events[0].Kind != "mission.unit_regressed" {
+		t.Fatalf("events = %+v, want mission.unit_regressed first", got.Events)
+	}
+	p := got.Events[0].Payload
+	if p["unit"] != 0 || p["title"] != "write a.md" || p["check"] != "verify_cmd" || len(p["excerpt"].(string)) > 510 {
+		t.Fatalf("payload = %+v, want unit 0, the title, the check and a bounded excerpt", p)
+	}
+}
+
 // TestStepReviewSkippedGoesResult confirms the non-coding review-skip
-// fast path (trySkipReview firing InputReviewApprove directly, driver.go)
+// fast path (routeVerified firing InputReviewApprove directly, driver.go)
 // lands in result the same way an approved prove round does: the
 // state machine can't distinguish the two, by design, so this is
 // really the same case as review_approve on the last unit; kept
 // separate as documentation of that fast path's contract.
 func TestStepReviewSkippedGoesResult(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, LastUnit: true},
+		StepState{Phase: PhaseGenerate, Status: StatusWorking},
 		StepInput{Input: InputReviewApprove},
 		DefaultConfig,
 	)

@@ -52,6 +52,18 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
       </span>
     )
   },
+  'mission.unit_regressed': (p) => {
+    const { unit, title, check } = asRecord(p)
+    const label = typeof unit === 'number' ? `Unit ${unit + 1}` : 'Unit'
+    const name = title ? ` (${String(title)})` : ''
+    return (
+      <span className="text-red-400">
+        {label}
+        {name} regressed: {String(check ?? 'harness')} check failed
+      </span>
+    )
+  },
+  'mission.generate_skipped': () => 'Worker turn skipped: every unit is harness-verified',
   'mission.review_verdict': (p) => {
     const { decision } = asRecord(p)
     const approved = decision === 'approve'

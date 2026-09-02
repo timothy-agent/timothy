@@ -13,6 +13,23 @@ describe('PlanSection', () => {
     expect(screen.getByText('No plan yet.')).toBeInTheDocument()
   })
 
+  it('badges units by harness state: verified, harness-verified, regressed, pending', () => {
+    render(
+      <PlanSection
+        units={[
+          { title: 'done', verify_cmd: '', passes: true, harness_passed: true },
+          { title: 'awaiting review', verify_cmd: '', passes: false, harness_passed: true },
+          { title: 'broke', verify_cmd: '', passes: false, regressed: true, verify_check: 'artifacts', verify_excerpt: 'a.md: not found' },
+          { title: 'todo', verify_cmd: '', passes: false },
+        ]}
+      />,
+    )
+    expect(screen.getByText('verified')).toBeInTheDocument()
+    expect(screen.getByText('harness-verified')).toBeInTheDocument()
+    expect(screen.getByText('regressed')).toHaveAttribute('title', 'a.md: not found')
+    expect(screen.getByText('pending')).toBeInTheDocument()
+  })
+
   it('does not render an Assumptions header when assumptions is absent', () => {
     render(<PlanSection units={units} />)
     expect(screen.queryByText('Assumptions')).toBeNull()

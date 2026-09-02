@@ -457,10 +457,11 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) 
 	return out, rows.Err()
 }
 
-// SetPlan persists the mission's plan -- written by the plan phase
-// (initial plan) and by unit verification (flipping a unit's Passes),
-// independent of ApplyTransition since a plan update doesn't always
-// coincide with a phase/status change.
+// SetPlan persists the mission's plan, written by the plan phase
+// (initial plan and replans) independent of ApplyTransition since a
+// plan landing doesn't coincide with a phase/status change. Per-unit
+// verify state (Passes, HarnessPassed, excerpts) is written only by
+// ApplyTransition (D-094).
 func (s *Store) SetPlan(ctx context.Context, id string, plan Plan) error {
 	db, err := s.db.Get()
 	if err != nil {
@@ -1096,16 +1097,26 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	if err != nil {
 		return fmt.Errorf("missions apply transition marshal findings: %w", err)
 	}
+	// Per-unit verify state (D-094) lives inside the plan jsonb; only the
+	// units key is rewritten, and only when the plan has units, so a
+	// planless mission's '{}' stays untouched.
+	var unitsJSON []byte
+	if len(t.Next.Units) > 0 {
+		if unitsJSON, err = json.Marshal(t.Next.Units); err != nil {
+			return fmt.Errorf("missions apply transition marshal units: %w", err)
+		}
+	}
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
 			phase = $2, status = $3, pause_reason = $4, pause_message = '', iteration = $5, max_iterations = $6,
 			consecutive_failures = $7, last_gap_fingerprint = $8, stall_count = $9, replan_used = $11, updated_at = now(),
 			pending_permission = CASE WHEN $10 THEN NULL ELSE pending_permission END,
-			review_findings = $12, rework_rounds = $13
+			review_findings = $12, rework_rounds = $13,
+			plan = CASE WHEN $14::jsonb IS NULL THEN plan ELSE jsonb_set(plan, '{units}', $14::jsonb) END
 		WHERE id = $1`,
 		id, string(t.Next.Phase), string(t.Next.Status), string(t.Next.PauseReason),
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,
 		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending, t.Next.ReplanUsed,
-		findingsJSON, t.Next.ReworkRounds,
+		findingsJSON, t.Next.ReworkRounds, unitsJSON,
 	); err != nil {
 		return fmt.Errorf("missions apply transition update: %w", err)
 	}

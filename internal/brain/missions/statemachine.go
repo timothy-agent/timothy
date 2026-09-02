@@ -28,7 +28,7 @@ const (
 // phaseOrder is the fixed pipeline stepPhaseComplete walks for
 // FlowFull/FlowNoProve: prove is its last entry since a mission never
 // reaches result via InputPhaseComplete, only via
-// stepReviewApprove/trySkipReview once the plan's last unit is
+// stepReviewApprove/routeVerified once the plan's last unit is
 // verified (reviewSkippedOrProvePassTransition).
 var phaseOrder = []Phase{PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve}
 
@@ -219,10 +219,13 @@ type StepState struct {
 	Budget             *float64
 	MixedCurrencySpend bool
 	RateAsOf           string
-	// LastUnit reports whether the unit under review is the plan's
-	// last unit: PhaseProve's approve transition needs this to decide
-	// between advancing to generate (more units left) or result.
-	LastUnit bool
+	// Units is the plan's unit list (D-094): applyVerification records
+	// each batch verify outcome on it and stepReviewApprove flips
+	// Passes on the harness-passed ones, deciding between generate
+	// (units left) and result (all passed). Always copied before a
+	// write: it shares its backing array with the Mission row. An empty
+	// plan counts as all passed (planless flows).
+	Units []PlanUnit
 	// ReplanUsed reports whether this mission already spent its one
 	// automatic replan-on-stall attempt (stepWorkerRetry/
 	// stepReviewRework), a second stall pauses for a human same as
@@ -293,6 +296,11 @@ type StepInput struct {
 	// turn failed before any provider answered.
 	Provider string
 	Model    string
+	// Verified is the batch verify pass that preceded this input
+	// (D-094): verifier.verifyAll's outcome per unit, folded into Units
+	// by applyVerification whatever the input is, so harness evidence
+	// is never lost to the transition that follows it.
+	Verified []UnitVerification
 }
 
 // EventDraft is one event Step decided must be appended; the Store
@@ -332,6 +340,11 @@ var DefaultConfig = Config{BackoffFailures: 3, StallRounds: 2}
 //     input-specific handling — an over-budget or unconvertible-spend
 //     mission pauses regardless of what input arrived.
 //  3. input-specific switch on (Phase, Status, Input).
+//
+// Batch verify evidence carried by the input (StepInput.Verified, D-094)
+// is folded into Units right after the cancel check, ahead of the
+// budget brake and the input switch: a mission pausing on budget still
+// keeps the harness outcome its last turn produced.
 func Step(s StepState, in StepInput, cfg Config) Transition {
 	if in.Input == InputCancel {
 		if s.Phase.Terminal() {
@@ -344,7 +357,15 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "cancelled"}}},
 		}
 	}
+	s, verifyEvents := applyVerification(s, in.Verified)
+	t := stepInput(s, in, cfg)
+	t.Events = append(verifyEvents, t.Events...)
+	return t
+}
 
+// stepInput is Step's budget brake and input switch, after cancel and
+// verification have been handled.
+func stepInput(s StepState, in StepInput, cfg Config) Transition {
 	if s.Budget != nil && !s.Phase.Terminal() {
 		if s.MixedCurrencySpend {
 			return Transition{
@@ -649,10 +670,11 @@ func replanTransition(s StepState, in StepInput) Transition {
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.replan", Payload: map[string]any{"reason": in.Reason}}}}
 }
 
-// stepReviewApprove clears the stall counter (progress was made) and
-// either moves to the next unit (more generate work) or advances to
-// the result phase, depending on whether the reviewed unit was the
-// plan's last.
+// stepReviewApprove clears the stall counter (progress was made),
+// flips Passes on every harness-passed unit (D-094: approval, whether a
+// reviewer's or the review-skip fast path's, only ever lands on harness
+// evidence), and either moves on to generate (units left) or advances
+// to the result phase (all passed).
 func stepReviewApprove(s StepState) Transition {
 	s.StallCount = 0
 	s.LastGapFingerprint = ""
@@ -660,7 +682,8 @@ func stepReviewApprove(s StepState) Transition {
 	// open is resolved by it and the rework counter starts over.
 	s.ReviewFindings = resolveAll(s.ReviewFindings)
 	s.ReworkRounds = 0
-	if s.LastUnit {
+	s.Units = passHarnessVerified(s.Units)
+	if allPassed(s.Units) {
 		return reviewSkippedOrProvePassTransition(s)
 	}
 	s.Phase = PhaseGenerate
@@ -668,6 +691,95 @@ func stepReviewApprove(s StepState) Transition {
 	s.Iteration = 0
 	s.ConsecutiveFailures = 0
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.unit_verified", Payload: map[string]any{"passed": true, "check": "review"}}}}
+}
+
+// applyVerification folds a batch verify pass into the plan (D-094):
+// a passing unit becomes harness-passed (Passes stays for
+// stepReviewApprove); a failing one keeps the excerpt for the worker
+// packet, and if it had passed before it flips back to pending as a
+// regression with a mission.unit_regressed event. Copies Units before
+// writing: the slice shares its backing array with the Mission row.
+func applyVerification(s StepState, verified []UnitVerification) (StepState, []EventDraft) {
+	if len(verified) == 0 {
+		return s, nil
+	}
+	units := make([]PlanUnit, len(s.Units))
+	copy(units, s.Units)
+	var events []EventDraft
+	for _, v := range verified {
+		if v.Unit < 0 || v.Unit >= len(units) {
+			continue
+		}
+		u := &units[v.Unit]
+		u.VerifyCheck = v.Check
+		u.VerifyExcerpt = truncate(v.Excerpt, verifyExcerptCap)
+		if v.Passed {
+			u.HarnessPassed, u.Regressed = true, false
+			continue
+		}
+		if u.verified() {
+			u.Regressed = true
+			events = append(events, EventDraft{Kind: "mission.unit_regressed", Payload: map[string]any{
+				"unit": v.Unit, "title": u.Title, "check": v.Check, "excerpt": truncate(v.Excerpt, 500),
+			}})
+		}
+		u.HarnessPassed, u.Passes = false, false
+	}
+	s.Units = units
+	return s, events
+}
+
+// passHarnessVerified returns units with Passes set wherever the
+// harness has passed the unit; units without harness evidence are left
+// alone. Returns the input unchanged when nothing flips.
+func passHarnessVerified(units []PlanUnit) []PlanUnit {
+	if len(unitsUnderReview(units)) == 0 {
+		return units
+	}
+	out := make([]PlanUnit, len(units))
+	copy(out, units)
+	for i := range out {
+		if out[i].HarnessPassed {
+			out[i].Passes = true
+		}
+	}
+	return out
+}
+
+// allPassed reports whether every unit is complete: the mission is only
+// done once nothing remains, not when the first still-unverified unit
+// happens to sit at the last index. An empty plan is trivially passed.
+func allPassed(units []PlanUnit) bool {
+	for _, u := range units {
+		if !u.Passes {
+			return false
+		}
+	}
+	return true
+}
+
+// firstUnverified returns the index of the first unit without harness
+// evidence, the one the next worker turn works on, or -1 when every
+// unit is harness-passed.
+func firstUnverified(plan Plan) int {
+	for i, u := range plan.Units {
+		if !u.verified() {
+			return i
+		}
+	}
+	return -1
+}
+
+// unitsUnderReview lists the indices of units the harness has passed
+// but no approval has flipped yet: what a prove round judges.
+func unitsUnderReview(units []PlanUnit) []int {
+	var out []int
+	for i, u := range units {
+		if u.HarnessPassed && !u.Passes {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // reviewSkippedOrProvePassTransition advances a mission whose last

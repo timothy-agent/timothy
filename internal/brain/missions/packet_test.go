@@ -37,6 +37,45 @@ func TestWorkPacketRender(t *testing.T) {
 	}
 }
 
+// TestWorkPacketRenderUnitFailure is the golden test for the D-094
+// current-unit block: the first unit without harness evidence is the
+// current one, its last failing check and excerpt render under it, and
+// plan markers distinguish verified, harness-verified, regressed and
+// pending units. A unit the harness never failed renders no block.
+func TestWorkPacketRenderUnitFailure(t *testing.T) {
+	p := WorkPacket{
+		Goal: "Write the report",
+		Plan: Plan{Units: []PlanUnit{
+			{Title: "Outline", Passes: true, HarnessPassed: true},
+			{Title: "Body", HarnessPassed: false, Regressed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "grep: body.md: No such file\n"},
+			{Title: "Appendix", HarnessPassed: true},
+			{Title: "Index"},
+		}},
+	}
+	_, user := p.Render()
+	want := "Current unit: Body\nREGRESSED: this unit passed before and now fails its verify_cmd check. Fix it before anything else.\nHarness output:\ngrep: body.md: No such file\nPlan:\n"
+	if !strings.Contains(user, want) {
+		t.Fatalf("Render current-unit block = %q, want it to contain %q", user, want)
+	}
+	for _, marker := range []string{"[verified] Outline", "[regressed] Body", "[harness-verified] Appendix", "[pending] Index"} {
+		if !strings.Contains(user, marker) {
+			t.Fatalf("Render = %q, want plan marker %q", user, marker)
+		}
+	}
+
+	p.Plan.Units[1] = PlanUnit{Title: "Body", VerifyCheck: "artifacts", VerifyExcerpt: "body.md: not found"}
+	_, user = p.Render()
+	if !strings.Contains(user, "Current unit: Body\nLast harness artifacts check failed for this unit.\nHarness output:\nbody.md: not found\n") {
+		t.Fatalf("Render = %q, want a plain failure block for a unit that never passed", user)
+	}
+
+	p.Plan.Units[1] = PlanUnit{Title: "Body"}
+	_, user = p.Render()
+	if !strings.Contains(user, "Current unit: Body\nPlan:\n") {
+		t.Fatalf("Render = %q, want no failure block for a unit the harness never checked", user)
+	}
+}
+
 // TestWorkPacketRenderOpenFindings is the golden test for the D-092
 // rework work order: the current-unit line above the plan, then the
 // findings block (exact wording, before "Progress so far"), identical

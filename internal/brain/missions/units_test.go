@@ -1,12 +1,10 @@
 package missions
 
 import (
-	"context"
-	"log/slog"
 	"testing"
 )
 
-func TestIsLastUnit(t *testing.T) {
+func TestAllPassed(t *testing.T) {
 	cases := []struct {
 		name  string
 		units []PlanUnit
@@ -24,43 +22,41 @@ func TestIsLastUnit(t *testing.T) {
 			false,
 		},
 		{"only last unit unverified with one unit total", []PlanUnit{{Passes: false}}, false},
+		{"harness-passed but not approved is not passed", []PlanUnit{{HarnessPassed: true}}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := isLastUnit(Plan{Units: c.units})
+			got := allPassed(c.units)
 			if got != c.want {
-				t.Fatalf("isLastUnit(%+v) = %v, want %v", c.units, got, c.want)
+				t.Fatalf("allPassed(%+v) = %v, want %v", c.units, got, c.want)
 			}
 		})
 	}
 }
 
-// TestMarkUnitPassedDoesNotAliasCaller guards the actual production
-// bug: markUnitPassed must not mutate the caller's Plan.Units backing
-// array. If it did, a caller that inspects m.Plan after calling it
-// (e.g. Advance's toStepState(m)) would observe a unit as passed one
-// full round before the harness ever verified it.
-func TestMarkUnitPassedDoesNotAliasCaller(t *testing.T) {
-	store := newFakeStore()
-	d := NewDriver(store, nil, nil, nil, nil, nil, nil, nil, slog.Default())
-
-	units := []PlanUnit{{Title: "a", Passes: true}, {Title: "b", Passes: false}, {Title: "c", Passes: false}}
+// TestStepDoesNotAliasCallerUnits guards the aliasing bug D-094 inherits
+// from the old markUnitPassed: Step receives Units sharing its backing
+// array with the caller's Mission row, so applyVerification and
+// stepReviewApprove must copy before writing. If they wrote through, a
+// caller inspecting m.Plan after Step (Advance's own m) would observe a
+// unit as passed before ApplyTransition ever persisted it.
+func TestStepDoesNotAliasCallerUnits(t *testing.T) {
+	units := []PlanUnit{{Title: "a", Passes: true, HarnessPassed: true}, {Title: "b", HarnessPassed: true}, {Title: "c"}}
 	m := Mission{ID: "m1", Plan: Plan{Units: units}}
-	store.put(m.ID, m)
 
-	if err := d.markUnitPassed(context.Background(), m, 1); err != nil {
-		t.Fatalf("markUnitPassed: %v", err)
-	}
+	got := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, Units: m.Plan.Units},
+		StepInput{Input: InputReviewApprove, Verified: []UnitVerification{{Unit: 2, Passed: false, Check: "artifacts", Excerpt: "missing"}}},
+		DefaultConfig,
+	)
 
-	if m.Plan.Units[1].Passes {
-		t.Fatal("markUnitPassed mutated the caller's Mission value through a shared slice backing array")
+	if m.Plan.Units[1].Passes || m.Plan.Units[2].VerifyExcerpt != "" {
+		t.Fatalf("Step mutated the caller's Mission value through a shared slice backing array: %+v", m.Plan.Units)
 	}
-
-	persisted := store.missions[m.ID]
-	if !persisted.Plan.Units[1].Passes {
-		t.Fatal("markUnitPassed did not persist the update to the store")
+	if !got.Next.Units[1].Passes {
+		t.Fatal("approve did not flip the harness-passed unit in the returned state")
 	}
-	if persisted.Plan.Units[2].Passes {
-		t.Fatal("markUnitPassed must not affect unrelated units")
+	if got.Next.Units[2].Passes || got.Next.Units[2].VerifyExcerpt != "missing" {
+		t.Fatalf("unit c = %+v, want unverified with the excerpt recorded", got.Next.Units[2])
 	}
 }

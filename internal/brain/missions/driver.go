@@ -140,9 +140,9 @@ type Driver struct {
 	budget budgetProjector
 
 	// verify holds the harness-evidence slice split out into its own
-	// type (D-074): verifyCurrentUnit, markUnitPassed, checkRegressions,
-	// regressed — the only code allowed to flip a PlanUnit's Passes
-	// flag.
+	// type (D-074): verifyAll's batch pass (D-094), whose outcomes are
+	// the only evidence that ever flips a PlanUnit's HarnessPassed and,
+	// through stepReviewApprove, Passes.
 	verify verifier
 
 	// capacity backs the D-056 admission gate (see SetCapacityGate /
@@ -992,10 +992,10 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		d.log.Warn("driver: record turn failed", "mission_id", id, "error", evErr)
 	}
 
-	// runPhase may have written plan changes of its own (e.g. review's
-	// verifyCurrentUnit -> markUnitPassed flipping a unit to passed) —
-	// re-fetch so the completion check below sees that write rather
-	// than the pre-round snapshot loaded at the top of this call.
+	// runPhase may have written mission state of its own (runPlan's
+	// SetPlan, progress notes, evidence): re-fetch so Step sees those
+	// writes rather than the pre-round snapshot loaded at the top of
+	// this call.
 	m, err = d.store.Get(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("driver advance: reload after phase: %w", err)
@@ -1212,24 +1212,10 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		ConsecutiveFailures: m.ConsecutiveFailures, LastGapFingerprint: m.LastGapFingerprint,
 		StallCount: m.StallCount, Spent: spent, Budget: m.BudgetAmount,
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
-		LastUnit: isLastUnit(m.Plan), ReplanUsed: m.ReplanUsed,
+		Units: m.Plan.Units, ReplanUsed: m.ReplanUsed,
 		AutoApprovePlan: m.AutoApprovePlan, Flow: m.Flow,
 		ReviewFindings: m.ReviewFindings, ReworkRounds: m.ReworkRounds,
 	}
-}
-
-// isLastUnit reports whether every unit in the plan has passed — the
-// mission is only done once nothing remains unverified, not merely
-// when the first still-unverified unit happens to sit at the last
-// index (that check alone is one unit short: it's true the moment the
-// second-to-last unit passes, before the actual last unit ever runs).
-func isLastUnit(plan Plan) bool {
-	for _, u := range plan.Units {
-		if !u.Passes {
-			return false
-		}
-	}
-	return true
 }
 
 // runPhase runs the phase-appropriate session and returns the StepInput
@@ -1415,7 +1401,7 @@ func restorePassedUnits(plan *Plan, prior Plan) {
 	}
 	for i := range plan.Units {
 		if passed[plan.Units[i].Title+"\x00"+plan.Units[i].VerifyCmd] {
-			plan.Units[i].Passes = true
+			plan.Units[i].Passes, plan.Units[i].HarnessPassed = true, true
 		}
 	}
 }
@@ -1433,6 +1419,16 @@ func (d *Driver) effectiveCommitStyle(ctx context.Context, m Mission) string {
 }
 
 func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
+	// D-094: every unit already harness-passed and no finding open means
+	// there is nothing for a worker to do; go straight to prove.
+	if !m.RunsPlanless() && len(m.Plan.Units) > 0 && firstUnverified(m.Plan) == -1 && len(OpenFindings(m.ReviewFindings)) == 0 {
+		if err := d.store.AppendEvent(ctx, m.ID, "mission.generate_skipped", map[string]any{
+			"reason": "every unit is harness-verified and no review finding is open",
+		}); err != nil {
+			d.log.Warn("driver: record generate skip failed", "mission_id", m.ID, "error", err)
+		}
+		return d.routeVerified(ctx, m, nil), nil
+	}
 	packet, err := d.packet(ctx, m)
 	if err != nil {
 		return StepInput{}, err
@@ -1477,7 +1473,7 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		if m.RunsPlanless() {
 			// D-069/D-090: a planless mission (light, or
 			// flow=discover_generate) has no plan/artifacts for
-			// trySkipReview to check (it would bail into review for want
+			// routeVerified to check (it would bail into review for want
 			// of them); the worker's final message IS the deliverable,
 			// so approve directly instead. FinalMessage is the text
 			// written since the worker's last non-sentinel tool call, not
@@ -1507,11 +1503,20 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 			}
 			return StepInput{Input: InputReviewApprove, Provider: verdict.Provider, Model: verdict.Model}, nil
 		}
-		if in, ok := d.trySkipReview(ctx, m, verdict.SeenURLs); ok {
-			in.Provider, in.Model = verdict.Provider, verdict.Model
+		// D-094: the harness checks every unit now, not the reviewer
+		// later. The worker's unit failing, or an earlier unit regressing,
+		// buys another worker turn with the excerpt in its packet.
+		verified, err := d.verify.verifyAll(ctx, m, verdict.SeenURLs, true)
+		if err != nil {
+			return StepInput{}, err
+		}
+		if failing := failedUnits(verified); len(failing) > 0 {
+			in := StepInput{Input: InputWorkerRetry, Verified: verified, Provider: verdict.Provider, Model: verdict.Model}
+			in.Reason, in.GapFingerprint = harnessFailureReason(m.Plan, failing)
 			return in, nil
 		}
-		in := StepInput{Input: InputPhaseComplete, Provider: verdict.Provider, Model: verdict.Model}
+		in := d.routeVerified(ctx, m, verified)
+		in.Provider, in.Model = verdict.Provider, verdict.Model
 		if preTurnHead != "" {
 			in.TouchedFiles = touchedFiles(ctx, m.WorktreePath(), preTurnHead)
 		}
@@ -1539,62 +1544,85 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	}
 }
 
-// trySkipReview short-circuits the review round for a non-coding
-// mission's unit when the harness's own deterministic evidence
-// (declared artifacts present and non-empty, verify_cmd passing)
-// already establishes the unit holds up — an LLM review round on top
-// of passing harness checks adds tokens, latency, and (with the
-// reviewer being the least reliable link) failure modes, not safety.
-// Coding missions always review: a diff can be wrong in ways
-// existence checks can't see. Units with no declared artifacts always
-// review too: there is no harness evidence to stand on. flow=no_prove
-// (D-090, issue #459) forces alwaysReview false the same way general
-// kind already does (policyFor), so this function is its only skip
-// mechanism: a no_prove unit with no artifacts still falls through to
-// a real review round, same as flow=full. flow=discover_generate never
-// reaches this function at all: it takes the light-style planless
-// path in runExecute instead, with no plan units to check.
-func (d *Driver) trySkipReview(ctx context.Context, m Mission, seenURLs []string) (StepInput, bool) {
-	if missionPolicyFor(m).alwaysReview {
-		return StepInput{}, false
+// routeVerified picks the input after a batch pass with no failures
+// (D-094): review_approve when the harness evidence alone settles the
+// units awaiting approval, phase_complete (into prove) otherwise. The
+// skip needs a policy that does not always review (coding missions
+// do: a diff can be wrong in ways existence checks can't see), no open
+// finding (a reviewer must close those), and declared artifacts on every
+// unit awaiting approval (none means no harness evidence to stand on).
+// flow=no_prove (D-090, issue #459) forces alwaysReview false the same
+// way general kind does (policyFor), so this is its only skip mechanism.
+func (d *Driver) routeVerified(ctx context.Context, m Mission, verified []UnitVerification) StepInput {
+	in := StepInput{Input: InputPhaseComplete, Verified: verified}
+	if missionPolicyFor(m).alwaysReview || len(OpenFindings(m.ReviewFindings)) > 0 {
+		return in
 	}
-	unit, idx := currentUnit(m.Plan)
-	if unit == nil || len(unit.Artifacts) == 0 {
-		return StepInput{}, false
-	}
-	if err := d.verify.verifyCurrentUnit(ctx, m, seenURLs); err != nil {
-		var vf *verifyFailure
-		if errors.As(err, &vf) {
-			note := fmt.Sprintf("Verification failed for unit %d before review: %s", vf.unit+1, vf.excerpt)
-			if perr := d.recordProgress(ctx, m.ID, note); perr != nil {
-				d.log.Warn("driver: record verify-failure note failed", "mission_id", m.ID, "error", perr)
-			}
-			fp := fmt.Sprintf("verify_failed:unit_%d", vf.unit)
-			return StepInput{Input: InputWorkerRetry, Reason: truncate(note, 500), GapFingerprint: fp}, true
+	units, _ := applyVerification(StepState{Units: m.Plan.Units}, verified)
+	pending := unitsUnderReview(units.Units)
+	for _, i := range pending {
+		if len(units.Units[i].Artifacts) == 0 {
+			return in
 		}
-		d.log.Warn("driver: pre-review verify errored; falling back to review", "mission_id", m.ID, "error", err)
-		return StepInput{}, false
-	}
-	if in, regressed := d.verify.checkRegressions(ctx, m); regressed {
-		return in, true
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{
-		"unit": idx, "reason": "artifacts and verify_cmd passed harness checks",
+		"units": pending, "reason": "artifacts and verify_cmd passed harness checks",
 	}); err != nil {
 		d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
 	}
-	return StepInput{Input: InputReviewApprove}, true
+	in.Input = InputReviewApprove
+	return in
 }
 
-// currentUnit returns the plan's first unverified unit and its index,
-// or nil when every unit already passed.
-func currentUnit(plan Plan) (*PlanUnit, int) {
-	for i := range plan.Units {
-		if !plan.Units[i].Passes {
-			return &plan.Units[i], i
+// harnessFailureReason renders a batch pass's failures into the retry
+// event's reason and the stall fingerprint: a regression of an earlier
+// unit and the current unit failing are different stalls.
+func harnessFailureReason(plan Plan, failing []UnitVerification) (reason, fingerprint string) {
+	parts := make([]string, 0, len(failing))
+	for _, f := range failing {
+		label := fmt.Sprintf("unit %d", f.Unit+1)
+		if f.Unit < len(plan.Units) && plan.Units[f.Unit].verified() {
+			label = fmt.Sprintf("regression in unit %d %q", f.Unit+1, plan.Units[f.Unit].Title)
+			if fingerprint == "" {
+				fingerprint = fmt.Sprintf("regression:unit_%d", f.Unit)
+			}
+		} else if fingerprint == "" {
+			fingerprint = fmt.Sprintf("verify_failed:unit_%d", f.Unit)
 		}
+		parts = append(parts, fmt.Sprintf("%s failed the harness %s check", label, f.Check))
+	}
+	return truncate(strings.Join(parts, "; "), 500), fingerprint
+}
+
+// currentUnit returns the plan's first unit without harness evidence
+// (the one the next worker turn works on) and its index, or nil when
+// every unit is harness-passed.
+func currentUnit(plan Plan) (*PlanUnit, int) {
+	if i := firstUnverified(plan); i >= 0 {
+		return &plan.Units[i], i
 	}
 	return nil, -1
+}
+
+// reviewUnits returns the indices, titles and declared artifact paths
+// of the units a prove round judges: the harness-passed, not yet
+// approved ones (unitsUnderReview), falling back to the first unit
+// still pending for rows written before HarnessPassed existed.
+func reviewUnits(plan Plan) (idx []int, titles, artifacts []string) {
+	idx = unitsUnderReview(plan.Units)
+	if len(idx) == 0 {
+		for i, u := range plan.Units {
+			if !u.Passes {
+				idx = []int{i}
+				break
+			}
+		}
+	}
+	for _, i := range idx {
+		titles = append(titles, plan.Units[i].Title)
+		artifacts = append(artifacts, plan.Units[i].Artifacts...)
+	}
+	return idx, titles, artifacts
 }
 
 // reviewWithShrink runs RunReview, recovering from a prompt rejected
@@ -1620,8 +1648,8 @@ func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewP
 		}
 		trimmed.Diff = trimmedDiff
 	}
-	if unit, _ := currentUnit(m.Plan); unit != nil {
-		trimmed.Artifacts = ReadArtifactsCapped(m.WorkRoot(), unit.Artifacts, artifactsCap)
+	if _, _, artifacts := reviewUnits(m.Plan); len(artifacts) > 0 {
+		trimmed.Artifacts = ReadArtifactsCapped(m.WorkRoot(), artifacts, artifactsCap)
 	}
 	if evErr := d.store.AppendEvent(ctx, m.ID, "mission.review_prompt_shrunk", map[string]any{
 		"action": "trimmed_packet", "diff_cap": diffCap, "artifacts_cap": artifactsCap,
@@ -1653,10 +1681,14 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 		Listing: ListWorkspace(workRoot), Progress: m.Progress,
 		OpenFindings: OpenFindings(m.ReviewFindings),
 	}
-	unit, unitIdx := currentUnit(m.Plan)
-	if unit != nil {
-		packet.UnitTitle = unit.Title
-		packet.Artifacts = ReadArtifacts(workRoot, unit.Artifacts)
+	idx, titles, artifacts := reviewUnits(m.Plan)
+	unitIdx := -1
+	if len(idx) > 0 {
+		unitIdx = idx[0]
+	}
+	packet.UnitTitle = strings.Join(titles, "; ")
+	if len(artifacts) > 0 {
+		packet.Artifacts = ReadArtifacts(workRoot, artifacts)
 	}
 	verdict, err := d.reviewWithShrink(ctx, m, packet)
 	if err != nil {
@@ -1684,39 +1716,33 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	}
 
 	if verdict.Approved {
-		var vf *verifyFailure
-		if err := d.verify.verifyCurrentUnit(ctx, m, nil); err != nil {
-			if errors.As(err, &vf) {
-				// The reviewer approved, but the harness's own verify_cmd
-				// disagrees — real evidence the approval didn't hold up
-				// (e.g. a claimed file was never actually written), not an
-				// infra fault. Route through the SAME rework path a
-				// reviewer's own rejection takes, as a harness-authored
-				// finding (D-092): back to generate with the failure in the
-				// worker's packet, counted against the rework ceiling, and
-				// deduplicated by title so the same failing verify never
-				// opens a second finding.
-				note := fmt.Sprintf("Verification failed for unit %d: the harness ran verify_cmd and it did NOT pass. Output:\n%s", vf.unit+1, vf.excerpt)
-				if err := d.recordProgress(ctx, m.ID, note); err != nil {
-					d.log.Warn("driver: record verify-failure note failed", "mission_id", m.ID, "error", err)
-				}
-				finding := Finding{
-					Title:    fmt.Sprintf("verify_cmd failed for unit %d", vf.unit+1),
-					Detail:   truncate(vf.excerpt, 500),
-					Severity: SeverityBlocking,
-				}
-				return StepInput{
-					Input: InputReviewRework, Findings: []Finding{finding}, Unit: vf.unit, Reason: finding.Title,
-					Provider: verdict.Provider, Model: verdict.Model,
-				}, nil
-			}
+		// The approval only lands on harness evidence: the batch pass
+		// runs again (no citations: the worker turn's seenURLs are gone)
+		// and a unit failing it, reviewed or regressed, routes through the
+		// SAME rework path a reviewer's own rejection takes, as a
+		// harness-authored blocking finding (D-092): back to generate with
+		// the failure in the worker's packet, counted against the rework
+		// ceiling, and deduplicated by title so the same failing verify
+		// never opens a second finding.
+		verified, err := d.verify.verifyAll(ctx, m, nil, false)
+		if err != nil {
 			return StepInput{Input: InputReviewInfraFailure}, err
 		}
-		if in, regressed := d.verify.checkRegressions(ctx, m); regressed {
-			in.Provider, in.Model = verdict.Provider, verdict.Model
-			return in, nil
+		if failing := failedUnits(verified); len(failing) > 0 {
+			findings := make([]Finding, 0, len(failing))
+			for _, f := range failing {
+				findings = append(findings, Finding{
+					Title:    fmt.Sprintf("harness %s check failed for unit %d", f.Check, f.Unit+1),
+					Detail:   truncate(f.Excerpt, 500),
+					Severity: SeverityBlocking,
+				})
+			}
+			return StepInput{
+				Input: InputReviewRework, Findings: findings, Unit: failing[0].Unit, Reason: reviewReason(findings),
+				Verified: verified, Provider: verdict.Provider, Model: verdict.Model,
+			}, nil
 		}
-		return StepInput{Input: InputReviewApprove, Provider: verdict.Provider, Model: verdict.Model}, nil
+		return StepInput{Input: InputReviewApprove, Verified: verified, Provider: verdict.Provider, Model: verdict.Model}, nil
 	}
 	return StepInput{
 		Input: InputReviewRework, Findings: verdict.Findings, Resolved: verdict.Resolved, Unit: unitIdx,
@@ -1732,13 +1758,6 @@ func reviewReason(findings []Finding) string {
 		titles = append(titles, f.Title)
 	}
 	return strings.Join(titles, "; ")
-}
-
-// markUnitPassed delegates to verifier.markUnitPassed (verifier.go,
-// D-074) — kept as a Driver method since units_test.go's alias-safety
-// guard calls it directly as d.markUnitPassed.
-func (d *Driver) markUnitPassed(ctx context.Context, m Mission, unit int) error {
-	return d.verify.markUnitPassed(ctx, m, unit)
 }
 
 // packet builds the WorkPacket for the current phase/iteration

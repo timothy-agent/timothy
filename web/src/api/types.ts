@@ -665,12 +665,20 @@ export interface KbDocument {
 }
 
 // PlanUnit is one item of a mission's plan. passes is flipped only by
-// the harness (RunVerify), never claimed by the model.
+// the harness (RunVerify), never claimed by the model. harness_passed
+// (D-094) is the batch verifier's own verdict after the last worker
+// turn, ahead of any review approval; regressed marks a unit that had
+// passed and fails now, with the failing check and output excerpt in
+// verify_check/verify_excerpt.
 export interface PlanUnit {
   title: string
   verify_cmd: string
   artifacts?: string[]
   passes: boolean
+  harness_passed?: boolean
+  verify_check?: string
+  verify_excerpt?: string
+  regressed?: boolean
 }
 
 // PlanAssumption is one ambiguity the planner resolved silently, and
