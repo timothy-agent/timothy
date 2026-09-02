@@ -50,8 +50,8 @@ func (errRunner) PlanSession(context.Context, missions.Mission, string) (mission
 	return missions.Plan{}, errors.New("errRunner: not implemented")
 }
 
-func (errRunner) DiscoverSession(context.Context, missions.Mission) (string, error) {
-	return "", errors.New("errRunner: not implemented")
+func (errRunner) DiscoverSession(context.Context, missions.Mission) (string, string, string, error) {
+	return "", "", "", errors.New("errRunner: not implemented")
 }
 
 // testMissionStore mirrors internal/brain/missions' own testStore
