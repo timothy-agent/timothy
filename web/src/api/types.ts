@@ -928,6 +928,11 @@ export interface ExecutorProgressPayload {
   byte_offset: number
   turns: number
   tool_calls: number
+  worktree?: {
+    untracked: number
+    modified: number
+    newest_mtime: number
+  }
 }
 
 export interface ExecutorResultPayload {

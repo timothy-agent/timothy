@@ -28,7 +28,14 @@ import {
   resumeMission,
   sendMissionNote,
 } from '../api/client'
-import type { Mission, MissionEvent, MissionPROpenedPayload, MissionUsage, Schedule } from '../api/types'
+import type {
+  ExecutorProgressPayload,
+  Mission,
+  MissionEvent,
+  MissionPROpenedPayload,
+  MissionUsage,
+  Schedule,
+} from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { DiscoverSection } from '../components/missions/DiscoverSection'
 import { GoalSection } from '../components/missions/GoalSection'
@@ -159,11 +166,10 @@ function latestPROpened(events: MissionEvent[]): MissionPROpenedPayload | null {
 // events fire on every byte the delegated CLI executor writes, far too
 // often to render as individual Timeline rows (TimelineSection drops
 // them), so only the latest one is surfaced here.
-function latestExecutorProgress(events: MissionEvent[]): { turns: number; tool_calls: number } | null {
+function latestExecutorProgress(events: MissionEvent[]): ExecutorProgressPayload | null {
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].kind === 'executor.progress') {
-      const { turns, tool_calls } = events[i].payload as { turns: number; tool_calls: number }
-      return { turns, tool_calls }
+      return events[i].payload as ExecutorProgressPayload
     }
   }
   return null
@@ -631,6 +637,14 @@ export function MissionDetail() {
                 <span>
                   harness: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
                   {executorActivity.tool_calls} tool call{executorActivity.tool_calls === 1 ? '' : 's'}
+                  {executorActivity.worktree && (
+                    <>
+                      {' · '}
+                      {executorActivity.worktree.untracked} new · {executorActivity.worktree.modified} modified
+                      {executorActivity.worktree.newest_mtime > 0 &&
+                        ` · changed ${relativeTime(new Date(executorActivity.worktree.newest_mtime * 1000).toISOString())}`}
+                    </>
+                  )}
                 </span>
               )}
               {!terminalPhases.has(mission.phase) && mission.iteration > 0 && (

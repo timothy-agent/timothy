@@ -407,6 +407,71 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
   })
 })
 
+describe('MissionDetail executor worktree summary (issue #500)', () => {
+  it('shows untracked/modified counts and a relative changed time from executor.progress', async () => {
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'executor.progress',
+        payload: {
+          run_id: 'r1',
+          byte_offset: 100,
+          turns: 3,
+          tool_calls: 1,
+          worktree: { untracked: 3, modified: 1, newest_mtime: Math.floor((Date.now() - 2 * 60_000) / 1000) },
+        },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    expect(await screen.findByText(/3 new · 1 modified · changed 2m ago/)).toBeTruthy()
+  })
+
+  it('renders turns/tool calls without a worktree segment for the legacy payload shape', async () => {
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'executor.progress',
+        payload: { run_id: 'r1', byte_offset: 100, turns: 3, tool_calls: 1 },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText(/3 turns, 1 tool call/)).toBeTruthy()
+    expect(screen.queryByText(/new ·/)).toBeNull()
+  })
+
+  it('omits the "changed ... ago" segment when newest_mtime is 0', async () => {
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'executor.progress',
+        payload: {
+          run_id: 'r1',
+          byte_offset: 100,
+          turns: 3,
+          tool_calls: 1,
+          worktree: { untracked: 0, modified: 0, newest_mtime: 0 },
+        },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText(/0 new · 0 modified/)).toBeTruthy()
+    expect(screen.queryByText(/changed/)).toBeNull()
+  })
+})
+
 describe('MissionDetail harness pill', () => {
   it('shows just the model text (the icon alone identifies the harness), with the harness name in the accessible name/tooltip', async () => {
     vi.mocked(missionEvents).mockResolvedValue([

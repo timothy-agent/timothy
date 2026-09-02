@@ -619,6 +619,9 @@ type pollState struct {
 	textBuf       strings.Builder
 	eventCount    int
 	infraRetries  int
+	// worktree is the latest non-nil WT: summary seen across polls
+	// (issue #500); nil until the first successful git status.
+	worktree *WorktreeSummary
 }
 
 // pollToVerdict polls rdir until the run terminates (exit_code present
@@ -644,7 +647,7 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 		case <-ticker.C:
 		}
 
-		chunk, exitCode, hasExit, alive, err := r.pollOnce(ctx, m.ID, m.Environment, workRoot, rdir, runID, st.offset)
+		chunk, exitCode, hasExit, alive, worktree, err := r.pollOnce(ctx, m.ID, m.Environment, workRoot, rdir, runID, st.offset)
 		if err != nil {
 			st.infraRetries++
 			if st.infraRetries >= pollInfraRetries {
@@ -654,6 +657,9 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 			continue
 		}
 		st.infraRetries = 0
+		if worktree != nil {
+			st.worktree = worktree
+		}
 
 		if len(chunk) > 0 {
 			st.offset += int64(len(chunk))
@@ -695,38 +701,74 @@ const pollBoundaryPrefix = "---TIMOTHY-RUN-"
 // it emits between tail content and status lines. The boundary rides as
 // a printf ARGUMENT ('%s\n' format), never as the format itself: dash's
 // printf builtin rejects a format string with a leading dash as an
-// illegal option.
-func buildPollCmd(rdir, runID string, offset int64) (cmd, boundary string) {
+// illegal option. workdir is the exec's cwd (the mission worktree for
+// coding missions, see Mission.WorkRoot); the WT: line runs `git
+// status --porcelain` against it directly, since the rest of the
+// command `cd`s into rdir (a sibling run-log dir, not the worktree).
+// Everything past the ALIVE check is best-effort (issue #500): a
+// missing/non-git workdir emits no WT: line rather than failing the
+// poll.
+// wtStatusLines bounds how many git status entries the WT: summary
+// inspects per poll.
+const wtStatusLines = 200
+
+func buildPollCmd(workdir, rdir, runID string, offset int64) (cmd, boundary string) {
 	boundary = pollBoundaryPrefix + runID + "---"
+	// wtCmd checks git status's own exit code first: a git failure (not
+	// a repo, git missing) prints nothing, distinct from a clean
+	// worktree's legitimate zero lines (still WT:0 0 0). Each status
+	// line's path is columns 4+; ?? marks untracked, everything else
+	// modified; newest is the max mtime seen, 0 when no path stats. The
+	// loop reads at most wtStatusLines entries so a huge untracked tree
+	// cannot turn one poll into thousands of stat calls.
+	wtCmd := `out=$(git status --porcelain 2>/dev/null) && printf '%s\n' "$out" | head -n ` + strconv.Itoa(wtStatusLines) + ` | { ` +
+		`u=0; m=0; newest=0; ` +
+		`while IFS= read -r line; do ` +
+		`[ -z "$line" ] && continue; ` +
+		`case "$line" in '??'*) u=$((u+1));; *) m=$((m+1));; esac; ` +
+		`path=$(printf '%s' "$line" | cut -c4-); ` +
+		`mt=$(stat -c %Y -- "$path" 2>/dev/null) && [ "$mt" -gt "$newest" ] && newest=$mt; ` +
+		`done; ` +
+		`printf 'WT:%d %d %d\n' "$u" "$m" "$newest"; ` +
+		`}`
 	cmd = fmt.Sprintf(
-		`cd %s && tail -c +%d run.ndjson | head -c %d; printf '%%s\n' %s; [ -f exit_code ] && printf 'EXITCODE:%%s\n' "$(cat exit_code)"; kill -0 "$(cat pid)" 2>/dev/null && printf 'ALIVE\n'`,
-		shQuote(rdir), offset+1, tailChunkCap, shQuote(boundary),
+		`cd %s && tail -c +%d run.ndjson | head -c %d; printf '%%s\n' %s; [ -f exit_code ] && printf 'EXITCODE:%%s\n' "$(cat exit_code)"; kill -0 "$(cat pid)" 2>/dev/null && printf 'ALIVE\n'; (cd %s && %s) 2>/dev/null || true`,
+		shQuote(rdir), offset+1, tailChunkCap, shQuote(boundary), shQuote(workdir), wtCmd,
 	)
 	return cmd, boundary
 }
 
+// WorktreeSummary is the cheap per-poll worktree signal (issue #500):
+// counts only, never file contents or paths, so a working delegated
+// mission with no commits yet doesn't look stuck.
+type WorktreeSummary struct {
+	Untracked   int   `json:"untracked"`
+	Modified    int   `json:"modified"`
+	NewestMtime int64 `json:"newest_mtime"`
+}
+
 // pollOnce runs one poll exec: tails run.ndjson from offset (capped at
-// tailChunkCap), then a boundary marker, then EXITCODE:/ALIVE status —
-// all in ONE exec so the exit_code/pid reads are consistent with the
-// tail snapshot they describe.
-func (r *delegatedRunner) pollOnce(ctx context.Context, missionID, environment, workRoot, rdir, runID string, offset int64) (chunk []byte, exitCode int, hasExit bool, alive bool, err error) {
-	cmd, boundary := buildPollCmd(rdir, runID, offset)
+// tailChunkCap), then a boundary marker, then EXITCODE:/ALIVE status,
+// then the WT: worktree summary, all in ONE exec so every field
+// reflects the same snapshot.
+func (r *delegatedRunner) pollOnce(ctx context.Context, missionID, environment, workRoot, rdir, runID string, offset int64) (chunk []byte, exitCode int, hasExit bool, alive bool, worktree *WorktreeSummary, err error) {
+	cmd, boundary := buildPollCmd(workRoot, rdir, runID, offset)
 	var out bytes.Buffer
 	_, execErr := r.sandboxExec(ctx, missionID, environment, workRoot, cmd, nil, pollTimeout, &out)
 	if execErr != nil {
-		return nil, 0, false, false, execErr
+		return nil, 0, false, false, nil, execErr
 	}
 	return parsePollOutput(out.Bytes(), boundary)
 }
 
 // parsePollOutput splits pollOnce's raw output at the boundary marker:
 // everything before it is tail content, everything after is the
-// EXITCODE:/ALIVE status lines (each optional).
-func parsePollOutput(raw []byte, boundary string) (chunk []byte, exitCode int, hasExit bool, alive bool, err error) {
+// EXITCODE:/ALIVE/WT: status lines (each optional).
+func parsePollOutput(raw []byte, boundary string) (chunk []byte, exitCode int, hasExit bool, alive bool, worktree *WorktreeSummary, err error) {
 	marker := []byte(boundary + "\n")
 	idx := bytes.Index(raw, marker)
 	if idx == -1 {
-		return nil, 0, false, false, fmt.Errorf("delegated runner: poll boundary marker not found in output")
+		return nil, 0, false, false, nil, fmt.Errorf("delegated runner: poll boundary marker not found in output")
 	}
 	chunk = raw[:idx]
 	status := raw[idx+len(marker):]
@@ -737,9 +779,29 @@ func parsePollOutput(raw []byte, boundary string) (chunk []byte, exitCode int, h
 			exitCode, _ = strconv.Atoi(strings.TrimPrefix(line, "EXITCODE:"))
 		case line == "ALIVE":
 			alive = true
+		case strings.HasPrefix(line, "WT:"):
+			if ws, ok := parseWorktreeLine(strings.TrimPrefix(line, "WT:")); ok {
+				worktree = ws
+			}
 		}
 	}
-	return chunk, exitCode, hasExit, alive, nil
+	return chunk, exitCode, hasExit, alive, worktree, nil
+}
+
+// parseWorktreeLine parses "<untracked> <modified> <newest_mtime>";
+// nil on any malformed field.
+func parseWorktreeLine(fields string) (*WorktreeSummary, bool) {
+	parts := strings.Fields(fields)
+	if len(parts) != 3 {
+		return nil, false
+	}
+	untracked, err1 := strconv.Atoi(parts[0])
+	modified, err2 := strconv.Atoi(parts[1])
+	newest, err3 := strconv.ParseInt(parts[2], 10, 64)
+	if err1 != nil || err2 != nil || err3 != nil {
+		return nil, false
+	}
+	return &WorktreeSummary{Untracked: untracked, Modified: modified, NewestMtime: newest}, true
 }
 
 // feedLines advances st.carry/offset bookkeeping and hands each
@@ -948,9 +1010,13 @@ func (r *delegatedRunner) recordProgressThrottled(ctx context.Context, missionID
 		return
 	}
 	st.lastProgress = time.Now()
-	r.recordEvent(ctx, missionID, st, "executor.progress", map[string]any{
+	payload := map[string]any{
 		"run_id": runID, "byte_offset": st.offset, "turns": st.turns, "tool_calls": st.toolCalls,
-	})
+	}
+	if st.worktree != nil {
+		payload["worktree"] = st.worktree
+	}
+	r.recordEvent(ctx, missionID, st, "executor.progress", payload)
 }
 
 // recordResult writes the terminal executor.result event. status is

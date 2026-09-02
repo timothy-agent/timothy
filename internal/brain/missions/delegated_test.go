@@ -1551,6 +1551,53 @@ func shRoundTrip(quoted string) (string, error) {
 
 // --- quote escaper ----------------------------------------------------------
 
+// TestParsePollOutputWorktreeLine covers the WT: line's three states:
+// present and well-formed, absent entirely, and malformed, issue #500
+// requires nil (not an error) on the latter two.
+func TestParsePollOutputWorktreeLine(t *testing.T) {
+	const boundary = "---TIMOTHY-RUN-abc---"
+	tests := []struct {
+		name string
+		raw  string
+		want *WorktreeSummary
+	}{
+		{
+			name: "present",
+			raw:  boundary + "\nEXITCODE:0\nWT:3 1 1735689600\n",
+			want: &WorktreeSummary{Untracked: 3, Modified: 1, NewestMtime: 1735689600},
+		},
+		{
+			name: "absent",
+			raw:  boundary + "\nEXITCODE:0\nALIVE\n",
+			want: nil,
+		},
+		{
+			name: "malformed_too_few_fields",
+			raw:  boundary + "\nWT:3 1\n",
+			want: nil,
+		},
+		{
+			name: "malformed_non_numeric",
+			raw:  boundary + "\nWT:x y z\n",
+			want: nil,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, _, worktree, err := parsePollOutput([]byte(tc.raw), boundary)
+			if err != nil {
+				t.Fatalf("parsePollOutput: %v", err)
+			}
+			if (worktree == nil) != (tc.want == nil) {
+				t.Fatalf("worktree = %+v, want %+v", worktree, tc.want)
+			}
+			if tc.want != nil && *worktree != *tc.want {
+				t.Fatalf("worktree = %+v, want %+v", worktree, tc.want)
+			}
+		})
+	}
+}
+
 // TestBuildPollCmdRealShell runs the composed poll command through a real
 // /bin/sh against an on-disk run dir — the fake sandbox re-implements the
 // poll semantics, so only a real shell catches syntax the fake forgives
@@ -1568,7 +1615,8 @@ func TestBuildPollCmdRealShell(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rdir, "pid"), []byte("999999\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd, boundary := buildPollCmd(rdir, "cafe0123beef", 0)
+	workdir := t.TempDir() // not a git repo: WT: line must be absent, not fatal
+	cmd, boundary := buildPollCmd(workdir, rdir, "cafe0123beef", 0)
 	out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput() //nolint:gosec // G204: executing the composed command is the point of the test.
 	if err != nil {
 		// The trailing `kill -0` legitimately exits nonzero for a dead
@@ -1577,7 +1625,7 @@ func TestBuildPollCmdRealShell(t *testing.T) {
 			t.Fatalf("poll command failed: %v", err)
 		}
 	}
-	chunk, exitCode, hasExit, alive, perr := parsePollOutput(out, boundary)
+	chunk, exitCode, hasExit, alive, worktree, perr := parsePollOutput(out, boundary)
 	if perr != nil {
 		t.Fatalf("parsePollOutput: %v (raw %q)", perr, out)
 	}
@@ -1589,6 +1637,76 @@ func TestBuildPollCmdRealShell(t *testing.T) {
 	}
 	if alive {
 		t.Fatal("pid 999999 should not be alive")
+	}
+	if worktree != nil {
+		t.Fatalf("worktree = %+v, want nil (workdir is not a git repo)", worktree)
+	}
+}
+
+// TestBuildPollCmdRealShellWorktreeSummary runs the composed poll
+// command against a real git repo (issue #500): one committed file,
+// one modified, two untracked. Asserts WT:2 1 <epoch> with epoch > 0.
+func TestBuildPollCmdRealShellWorktreeSummary(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable on this host; runs in the containerized suite")
+	}
+	workdir := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...) //nolint:gosec // G204: test-only, args are fixed literals from this test.
+		cmd.Dir = workdir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v (%s)", args, err, out)
+		}
+	}
+	runGit("init")
+	if err := os.WriteFile(filepath.Join(workdir, "committed.txt"), []byte("v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "committed.txt")
+	runGit("commit", "-m", "initial")
+	if err := os.WriteFile(filepath.Join(workdir, "committed.txt"), []byte("v2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "untracked1.txt"), []byte("a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workdir, "untracked2.txt"), []byte("b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rdir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rdir, "run.ndjson"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rdir, "exit_code"), []byte("0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rdir, "pid"), []byte("999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, boundary := buildPollCmd(workdir, rdir, "beef0123cafe", 0)
+	out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput() //nolint:gosec // G204: executing the composed command is the point of the test.
+	if err != nil && len(out) == 0 {
+		t.Fatalf("poll command failed: %v", err)
+	}
+	_, _, _, _, worktree, perr := parsePollOutput(out, boundary)
+	if perr != nil {
+		t.Fatalf("parsePollOutput: %v (raw %q)", perr, out)
+	}
+	if worktree == nil {
+		t.Fatalf("worktree = nil, want a summary (raw %q)", out)
+	}
+	if worktree.Untracked != 2 || worktree.Modified != 1 {
+		t.Fatalf("worktree = %+v, want {Untracked:2 Modified:1}", worktree)
+	}
+	if worktree.NewestMtime <= 0 {
+		t.Fatalf("worktree.NewestMtime = %d, want > 0", worktree.NewestMtime)
 	}
 }
 
