@@ -345,8 +345,8 @@ func TestRunReviewPacketListsOpenFindings(t *testing.T) {
 	content := agent.requests[0].Messages[0].Content
 	for _, want := range []string{
 		"Open findings from prior rounds (mark resolved ids in your verdict):",
-		"- F1 [blocking] x.go: missing validation",
-		"- F2 [minor] typo in banner",
+		"- F1 [blocking] (unit 1) x.go: missing validation",
+		"- F2 [minor] (unit 1) typo in banner",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("reviewer message missing %q:\n%s", want, content)
@@ -357,6 +357,61 @@ func TestRunReviewPacketListsOpenFindings(t *testing.T) {
 	}
 	if strings.Contains(renderReviewContent(ReviewPacket{Goal: "goal"}), "Open findings") {
 		t.Fatal("empty ledger must render no findings section")
+	}
+}
+
+// TestRenderReviewContentFindingsOnly pins the D-096 re-review packet
+// shape: the open findings with detail and evidence, the finding files,
+// the scope-creep list, the delta diff and the affected units' harness
+// state render; goal, plan, whole-change stat, listing, progress and the
+// worker's report never do.
+func TestRenderReviewContentFindingsOnly(t *testing.T) {
+	content := renderReviewContent(ReviewPacket{
+		FindingsOnly: true,
+		Units:        []PlanUnit{{Title: "write code", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok\n"}},
+		OpenFindings: []Finding{{ID: "F1", Unit: 0, Title: "missing validation", File: "src/main.go", Detail: "no input check", Evidence: "+func main()", Severity: SeverityBlocking, Status: FindingOpen}},
+		Files:        map[string]string{"src/main.go": "package main\n"},
+		ScopeCreep:   []string{"docs/notes.md"},
+		Diff:         "diff --git a/src/main.go b/src/main.go\n+validated\n",
+		// Fields a findings-only packet never carries; set here to prove
+		// the renderer does not leak them.
+		Goal: "the goal", Plan: Plan{Units: []PlanUnit{{Title: "write code"}}}, DiffStat: "1 file changed",
+		Listing: "src/main.go (13 bytes)", Evidence: "worker says done", Progress: []ProgressNote{{Note: "steer"}},
+	})
+	for _, want := range []string{
+		"Re-review of open findings only.",
+		"Affected units (harness state):",
+		"### write code [harness-verified]",
+		"Harness verify_cmd check: passed",
+		"- F1 [blocking] (unit 1) src/main.go: missing validation",
+		"  detail: no input check",
+		"  evidence: +func main()",
+		"Files named by the findings (read from disk by the harness):",
+		"--- src/main.go ---\npackage main",
+		"Changed outside unit scope (judge whether these changes belong; the harness opened no finding for them):\n- docs/notes.md",
+		"Diff since the last review (restricted to the finding files and the affected units' scope):",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("findings-only content missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "acceptance criteria") {
+		t.Fatalf("findings-only content must not ask for criteria judgement:\n%s", content)
+	}
+}
+
+// TestRenderReviewContentFullOmitsFindingsOnlySections confirms the
+// full round renders no re-review header and no scope-creep or files
+// section when the packet carries none.
+func TestRenderReviewContentFullOmitsFindingsOnlySections(t *testing.T) {
+	content := renderReviewContent(ReviewPacket{Goal: "goal", Diff: "diff --git a/x b/x\n"})
+	for _, banned := range []string{"Re-review", "Changed outside unit scope", "Files named by the findings", "Diff since the last review"} {
+		if strings.Contains(content, banned) {
+			t.Fatalf("full-round content carries %q:\n%s", banned, content)
+		}
+	}
+	if !strings.Contains(content, "Diff to review (restricted to the reviewed units' scope):") {
+		t.Fatalf("full-round diff heading missing:\n%s", content)
 	}
 }
 

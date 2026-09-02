@@ -511,6 +511,13 @@ type Plan struct {
 	// never a gate — the operator catches a wrong guess via a steering
 	// note, not a pause.
 	Assumptions []PlanAssumption `json:"assumptions,omitempty"`
+	// LastReviewCommit (D-096, issue #524) is the worktree HEAD when the
+	// last review round closed with findings still open: the next round
+	// reviews only the open findings against the diff since it. Empty
+	// until a round leaves findings open (and on plans written before
+	// D-096), which means the next round gets the full packet. Written
+	// only through Store.ApplyTransition.
+	LastReviewCommit string `json:"last_review_commit,omitempty"`
 	// Provider/Model (issue #507) are who served the plan turn; set by
 	// PlanSession after parsing, never persisted with the stored plan.
 	Provider string `json:"-"`

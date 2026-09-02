@@ -1215,6 +1215,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		Units: m.Plan.Units, ReplanUsed: m.ReplanUsed,
 		AutoApprovePlan: m.AutoApprovePlan, Flow: m.Flow,
 		ReviewFindings: m.ReviewFindings, ReworkRounds: m.ReworkRounds,
+		LastReviewCommit: m.Plan.LastReviewCommit,
 	}
 }
 
@@ -1678,13 +1679,19 @@ func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewP
 	diffCap, artifactsCap := baselineDiffCap/4, reviewArtifactsCap/2
 	trimmed := packet
 	if wt := m.WorktreePath(); wt != "" {
-		trimmedDiff, diffErr := baselineDiffCapped(ctx, wt, m.BaseCommit, reviewScope(packet.Units), diffCap)
+		// D-096: a findings-only packet diffs from the last review commit
+		// over the finding files and the affected units' scope.
+		base, scope := m.BaseCommit, reviewScope(packet.Units)
+		if packet.FindingsOnly {
+			base, scope = m.Plan.LastReviewCommit, append(findingFiles(packet.OpenFindings), scope...)
+		}
+		trimmedDiff, diffErr := baselineDiffCapped(ctx, wt, base, scope, diffCap)
 		if diffErr != nil {
 			return ReviewVerdict{}, diffErr
 		}
 		trimmed.Diff = trimmedDiff
 	}
-	if artifacts := reviewArtifacts(packet.Units, packet.Diff != ""); len(artifacts) > 0 {
+	if artifacts := reviewArtifacts(packet.Units, packet.Diff != ""); !packet.FindingsOnly && len(artifacts) > 0 {
 		trimmed.Artifacts = ReadArtifactsCapped(m.WorkRoot(), artifacts, artifactsCap)
 	}
 	if evErr := d.store.AppendEvent(ctx, m.ID, "mission.review_prompt_shrunk", map[string]any{
@@ -1702,16 +1709,12 @@ func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewP
 	return verdict, nil
 }
 
-func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
-	idx, units := reviewUnits(m.Plan)
-	unitIdx := -1
-	if len(idx) > 0 {
-		unitIdx = idx[0]
-	}
-	// D-095: the packet carries the reviewed units' criteria in place of
-	// the goal (legacy plans without criteria keep the goal), the
-	// whole-change stat and the diff restricted to the units' scope.
-	// changedFiles feeds the evidence gate below.
+// fullReviewPacket builds the packet for a round over the whole change
+// set (D-095): the reviewed units' criteria in place of the goal
+// (legacy plans without criteria keep the goal), the whole-change stat
+// and the diff restricted to the units' scope. The returned files are
+// every path the change touches, for the evidence gate.
+func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, units []PlanUnit) (ReviewPacket, []string, error) {
 	var changedFiles []string
 	packet := ReviewPacket{
 		Plan: m.Plan, Units: units, Evidence: m.LastEvidence,
@@ -1724,17 +1727,80 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	if wt := m.WorktreePath(); wt != "" {
 		var err error
 		if packet.Diff, err = BaselineDiff(ctx, wt, m.BaseCommit, reviewScope(units)); err != nil {
-			return StepInput{}, err
+			return ReviewPacket{}, nil, err
 		}
 		if packet.DiffStat, err = DiffStat(ctx, wt, m.BaseCommit); err != nil {
-			return StepInput{}, err
+			return ReviewPacket{}, nil, err
 		}
 		if changedFiles, err = ChangedFiles(ctx, wt, m.BaseCommit); err != nil {
-			return StepInput{}, err
+			return ReviewPacket{}, nil, err
 		}
 	}
 	if artifacts := reviewArtifacts(units, packet.Diff != ""); len(artifacts) > 0 {
 		packet.Artifacts = ReadArtifacts(m.WorkRoot(), artifacts)
+	}
+	return packet, changedFiles, nil
+}
+
+// findingsReviewPacket builds the re-review packet (D-096): the open
+// findings, the diff since the last review commit restricted to the
+// finding files and the affected units' scope, the finding files'
+// contents, the affected units' harness state (criteria dropped, the
+// findings are the question), and the files changed outside every
+// unit's scope. The returned files are the delta's paths plus the
+// finding files, for the evidence gate.
+func (d *Driver) findingsReviewPacket(ctx context.Context, m Mission, open []Finding) (ReviewPacket, []string, error) {
+	files := findingFiles(open)
+	var affected []PlanUnit
+	seen := map[int]bool{}
+	for _, f := range open {
+		if f.Unit < 0 || f.Unit >= len(m.Plan.Units) || seen[f.Unit] {
+			continue
+		}
+		seen[f.Unit] = true
+		u := m.Plan.Units[f.Unit]
+		u.Criteria = nil
+		affected = append(affected, u)
+	}
+	packet := ReviewPacket{FindingsOnly: true, Units: affected, OpenFindings: open}
+	wt := m.WorktreePath()
+	paths := append(append([]string{}, files...), reviewScope(affected)...)
+	var err error
+	if packet.Diff, err = BaselineDiff(ctx, wt, m.Plan.LastReviewCommit, paths); err != nil {
+		return ReviewPacket{}, nil, err
+	}
+	changed, err := ChangedFiles(ctx, wt, m.Plan.LastReviewCommit)
+	if err != nil {
+		return ReviewPacket{}, nil, err
+	}
+	packet.ScopeCreep = outsideScope(changed, reviewScope(m.Plan.Units))
+	if len(files) > 0 {
+		packet.Files = ReadArtifactsCapped(m.WorkRoot(), files, len(files)*reviewArtifactFileCap)
+	}
+	return packet, append(changed, files...), nil
+}
+
+func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
+	idx, units := reviewUnits(m.Plan)
+	unitIdx := -1
+	if len(idx) > 0 {
+		unitIdx = idx[0]
+	}
+	// D-096: a round after one that left findings open reviews only
+	// those findings against the diff since it; missions without a
+	// recorded review commit (or no worktree) get the full packet.
+	var (
+		packet       ReviewPacket
+		changedFiles []string
+		err          error
+	)
+	if open := OpenFindings(m.ReviewFindings); len(open) > 0 && m.Plan.LastReviewCommit != "" && m.WorktreePath() != "" {
+		packet, changedFiles, err = d.findingsReviewPacket(ctx, m, open)
+	} else {
+		packet, changedFiles, err = d.fullReviewPacket(ctx, m, units)
+	}
+	if err != nil {
+		return StepInput{}, err
 	}
 	verdict, err := d.reviewWithShrink(ctx, m, packet)
 	if err != nil {
@@ -1743,8 +1809,9 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	// D-095 evidence gate: a blocking finding must name a changed or
 	// declared file and quote evidence, or it is demoted to minor here,
 	// deterministically. A rework whose findings all end up minor, with
-	// no prior blocking finding left unresolved, counts as approval.
-	if !verdict.Approved && len(verdict.Findings) > 0 {
+	// no prior blocking finding left unresolved (D-096: a re-review that
+	// resolves every open blocking finding), counts as approval.
+	if !verdict.Approved {
 		gated, demoted := gateFindings(verdict.Findings, append(changedFiles, planArtifacts(m.Plan)...))
 		for _, dm := range demoted {
 			if err := d.store.AppendEvent(ctx, m.ID, "mission.finding_demoted", map[string]any{
@@ -1759,11 +1826,14 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 		}
 	}
 	// The reviewer's own worktree side effects (it may run tests) are
-	// rolled back unconditionally after every review round.
+	// rolled back unconditionally after every review round. The HEAD
+	// left behind anchors the next round's findings-only diff (D-096).
+	reviewCommit := ""
 	if wt := m.WorktreePath(); wt != "" {
 		if err := d.workspace.Rollback(ctx, wt, m.Kind); err != nil {
 			d.log.Warn("driver: post-review rollback failed", "mission_id", m.ID, "error", err)
 		}
+		reviewCommit = worktreeHead(ctx, wt)
 	}
 
 	// Every verdict is recorded, approvals included — a review that
@@ -1774,7 +1844,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 		decision = "approved"
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.review_verdict", map[string]any{
-		"decision": decision, "findings": verdict.Findings, "resolved": verdict.Resolved,
+		"decision": decision, "findings": verdict.Findings, "resolved": verdict.Resolved, "findings_only": packet.FindingsOnly,
 	}); err != nil {
 		d.log.Warn("driver: record review verdict failed", "mission_id", m.ID, "error", err)
 	}
@@ -1803,15 +1873,15 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 			}
 			return StepInput{
 				Input: InputReviewRework, Findings: findings, Unit: failing[0].Unit, Reason: reviewReason(findings),
-				Verified: verified, Provider: verdict.Provider, Model: verdict.Model,
+				Verified: verified, ReviewCommit: reviewCommit, Provider: verdict.Provider, Model: verdict.Model,
 			}, nil
 		}
 		return StepInput{Input: InputReviewApprove, Verified: verified, Provider: verdict.Provider, Model: verdict.Model}, nil
 	}
 	return StepInput{
 		Input: InputReviewRework, Findings: verdict.Findings, Resolved: verdict.Resolved, Unit: unitIdx,
-		Reason:   truncate(reviewReason(verdict.Findings), 500),
-		Provider: verdict.Provider, Model: verdict.Model,
+		Reason:       truncate(reviewReason(verdict.Findings), 500),
+		ReviewCommit: reviewCommit, Provider: verdict.Provider, Model: verdict.Model,
 	}, nil
 }
 

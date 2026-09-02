@@ -828,6 +828,53 @@ func TestReviewFindingsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestApplyTransitionPersistsLastReviewCommit confirms D-096's anchor is
+// real DB state inside the plan jsonb: a transition carrying it lands it
+// next to the units without touching the plan's other keys, and a later
+// transition without one leaves it in place.
+func TestApplyTransitionPersistsLastReviewCommit(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "review commit", Kind: "coding"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	plan := Plan{
+		Units:       []PlanUnit{{Title: "write a.md", Artifacts: []string{"a.md"}}},
+		Assumptions: []PlanAssumption{{Assumption: "format", Default: "markdown"}},
+	}
+	if err := s.SetPlan(ctx, id, plan); err != nil {
+		t.Fatalf("SetPlan: %v", err)
+	}
+	units := []PlanUnit{{Title: "write a.md", Artifacts: []string{"a.md"}, HarnessPassed: true}}
+	if err := s.ApplyTransition(ctx, id, Transition{
+		Next: StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 3, Units: units, LastReviewCommit: "abc123", ReworkRounds: 1},
+	}); err != nil {
+		t.Fatalf("ApplyTransition with review commit: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Plan.LastReviewCommit != "abc123" || len(m.Plan.Units) != 1 || !m.Plan.Units[0].HarnessPassed || len(m.Plan.Assumptions) != 1 {
+		t.Fatalf("plan after transition = %+v, want last_review_commit abc123 with units and assumptions intact", m.Plan)
+	}
+
+	if err := s.ApplyTransition(ctx, id, Transition{
+		Next: StepState{Phase: PhaseProve, Status: StatusIdle, MaxIterations: 3, Units: units, ReworkRounds: 1},
+	}); err != nil {
+		t.Fatalf("ApplyTransition without review commit: %v", err)
+	}
+	m, err = s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Plan.LastReviewCommit != "abc123" || m.Phase != PhaseProve {
+		t.Fatalf("plan after second transition = %+v phase %q, want last_review_commit kept", m.Plan, m.Phase)
+	}
+}
+
 // TestApplyTransitionPersistsUnitVerifyState confirms D-094's per-unit
 // verify state is real DB state written through ApplyTransition: a unit
 // passes, then regresses, and each step's Units land in the plan jsonb

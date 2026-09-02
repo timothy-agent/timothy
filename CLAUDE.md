@@ -164,6 +164,20 @@ First run: `cp deploy/env.example deploy/.env` and set
   `mission.finding_demoted` event; a round left with only minor findings
   and no unresolved prior blocking one counts as approval. Light
   missions never plan, so none of this applies to them.
+- One review round, findings-only re-review (D-096, issue #524): a
+  generate turn that leaves units without harness evidence and no
+  finding open stays in generate (`mission.generate_continued`); prove
+  runs one full round once every unit is harness-passed (or a finding
+  is open). A rework records the worktree HEAD in the plan jsonb as
+  `last_review_commit` (written only by `ApplyTransition`); every later
+  round with open findings is findings-only
+  (`Driver.findingsReviewPacket`): the open findings, the diff since
+  that commit scoped to the finding files and the affected units'
+  scope, the finding files (8 KB each), the affected units' harness
+  state, and a "Changed outside unit scope" list the harness opens no
+  finding for. The reviewer answers with `resolved` ids plus gated new
+  findings; all blocking ones resolved counts as approval. Missions
+  without `last_review_commit` get the full packet.
 - Workers get per-mission `shell` + `write_file` tools via turn-scoped
   `ExtraTools` that shadow base tools by name. Workers must create files
   with `write_file` only; shell redirects/heredocs classify destructive

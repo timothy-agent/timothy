@@ -598,10 +598,17 @@ func TestStepAppliesVerification(t *testing.T) {
 			wantPhase: PhaseGenerate, wantEvents: []string{"mission.retry"},
 		},
 		{
-			name:  "phase_complete marks a passing unit harness-passed, Passes waits for approval",
+			name:  "phase_complete marks a passing unit harness-passed and stays in generate while a unit is pending (D-096)",
 			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}},
 			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
 			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}, {Title: "b"}},
+			wantPhase: PhaseGenerate, wantEvents: []string{"mission.generate_continued"},
+		},
+		{
+			name:  "phase_complete enters prove once every unit is harness-passed, Passes waits for approval",
+			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}}},
+			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 1, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
+			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}},
 			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
 		},
 		{
@@ -646,7 +653,7 @@ func TestStepAppliesVerification(t *testing.T) {
 			state:     StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}}},
 			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 4, Passed: true}}},
 			wantUnits: []PlanUnit{{Title: "a"}},
-			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
+			wantPhase: PhaseGenerate, wantEvents: []string{"mission.generate_continued"},
 		},
 	}
 	for _, tc := range cases {
@@ -1066,6 +1073,71 @@ func TestStepPhaseCompleteKeepsReworkRounds(t *testing.T) {
 	final := Step(got.Next, StepInput{Input: InputReviewRework}, DefaultConfig)
 	if final.Next.PauseReason != PauseReviewExhausted {
 		t.Fatalf("third rework after a phase_complete = %+v, want review_exhausted park", final.Next)
+	}
+}
+
+// TestStepPhaseCompleteRoutesOnPendingUnits pins the D-096 routing: a
+// generate completion stays in generate (counters reset, next unit
+// named) while any unit lacks harness evidence and nothing is open,
+// enters prove once every unit is harness-passed, and enters prove
+// regardless when a finding is open (a rework must be re-reviewed).
+// Legacy Passes-only rows count as verified.
+func TestStepPhaseCompleteRoutesOnPendingUnits(t *testing.T) {
+	pending := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Iteration: 2, ConsecutiveFailures: 1, Units: []PlanUnit{
+			{Title: "a", HarnessPassed: true}, {Title: "b"}, {Title: "c"},
+		}},
+		StepInput{Input: InputPhaseComplete}, DefaultConfig,
+	)
+	if pending.Next.Phase != PhaseGenerate || pending.Next.Status != StatusIdle || pending.Next.Iteration != 0 || pending.Next.ConsecutiveFailures != 0 {
+		t.Fatalf("Next = %+v, want generate/idle with counters reset", pending.Next)
+	}
+	ev := eventOfKind(pending.Events, "mission.generate_continued")
+	if ev == nil || ev.Payload["next_unit"] != 1 || ev.Payload["pending_units"] != 2 {
+		t.Fatalf("events = %+v, want generate_continued naming unit 1 with 2 pending", pending.Events)
+	}
+	if eventOfKind(pending.Events, "mission.phase_started") != nil {
+		t.Fatal("staying in generate must not emit phase_started")
+	}
+
+	allPassed := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", Passes: true}}},
+		StepInput{Input: InputPhaseComplete}, DefaultConfig,
+	)
+	if allPassed.Next.Phase != PhaseProve || eventOfKind(allPassed.Events, "mission.phase_started") == nil {
+		t.Fatalf("Next = %+v events %+v, want prove", allPassed.Next, allPassed.Events)
+	}
+
+	openFinding := Step(
+		StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}},
+			ReviewFindings: []Finding{{ID: "F1", Title: "gap", Status: FindingOpen}}},
+		StepInput{Input: InputPhaseComplete}, DefaultConfig,
+	)
+	if openFinding.Next.Phase != PhaseProve {
+		t.Fatalf("Next = %+v, want prove: an open finding needs re-review even with a unit pending", openFinding.Next)
+	}
+}
+
+// TestStepReworkRecordsReviewCommit pins D-096's anchor: a rework
+// records the round's worktree HEAD as LastReviewCommit, an input
+// without one leaves the previous anchor alone, and approval keeps it
+// (harmless: findings-only needs an open finding too).
+func TestStepReworkRecordsReviewCommit(t *testing.T) {
+	first := Step(
+		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8},
+		StepInput{Input: InputReviewRework, ReviewCommit: "abc123", Findings: []Finding{{Title: "gap", File: "x.go"}}},
+		DefaultConfig,
+	)
+	if first.Next.LastReviewCommit != "abc123" {
+		t.Fatalf("LastReviewCommit = %q, want abc123", first.Next.LastReviewCommit)
+	}
+	second := Step(withStatus(first.Next, StatusWorking), StepInput{Input: InputReviewRework}, DefaultConfig)
+	if second.Next.LastReviewCommit != "abc123" {
+		t.Fatalf("LastReviewCommit = %q after a rework without a commit, want abc123 kept", second.Next.LastReviewCommit)
+	}
+	third := Step(withStatus(second.Next, StatusWorking), StepInput{Input: InputReviewRework, ReviewCommit: "def456"}, DefaultConfig)
+	if third.Next.LastReviewCommit != "def456" {
+		t.Fatalf("LastReviewCommit = %q, want def456", third.Next.LastReviewCommit)
 	}
 }
 

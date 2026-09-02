@@ -66,6 +66,58 @@ type ReviewPacket struct {
 	// the reviewer marks the ids it considers closed in resolved. This
 	// replaces the old in-process reviewer session carry-over.
 	OpenFindings []Finding
+	// FindingsOnly marks a re-review round (D-096, issue #524): the
+	// packet carries the open findings, Diff since the last review commit
+	// (restricted to the finding files and the affected units' scope),
+	// Files, ScopeCreep and the affected units' harness state, and none
+	// of Goal, Plan, DiffStat, Listing, Evidence or Progress.
+	FindingsOnly bool
+	// Files maps each open finding's file to its contents, capped at
+	// reviewArtifactFileCap each; findings-only rounds.
+	Files map[string]string
+	// ScopeCreep lists files changed since the last review outside every
+	// unit's scope, for the reviewer to judge; the harness opens no
+	// finding for them.
+	ScopeCreep []string
+}
+
+// findingFiles lists the distinct files the findings name, in order.
+func findingFiles(findings []Finding) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range findings {
+		file := strings.TrimSpace(f.File)
+		if key := normalizeFindingPath(file); key != "" && !seen[key] {
+			seen[key] = true
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
+// outsideScope returns the files under none of the scope paths (a file
+// equal to a scope entry or beneath it is in scope). An empty scope
+// means the whole tree, so nothing is outside it.
+func outsideScope(files, scope []string) []string {
+	if len(scope) == 0 {
+		return nil
+	}
+	var out []string
+	for _, file := range files {
+		got := normalizeFindingPath(file)
+		inScope := false
+		for _, s := range scope {
+			want := normalizeFindingPath(s)
+			if want == "" || got == want || strings.HasPrefix(got, want+"/") {
+				inScope = true
+				break
+			}
+		}
+		if !inScope {
+			out = append(out, file)
+		}
+	}
+	return out
 }
 
 // ReadArtifacts reads each declared artifact from workRoot, capped at

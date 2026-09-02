@@ -6,6 +6,8 @@
 # artifact present in the worktree, zero human permission parks. The
 # general-mission canary (canary-mission.sh) cannot catch regressions in
 # the git/worktree/review path; this one exists for exactly that.
+# CANARY_TWO_UNIT=1 runs a two-file goal instead and additionally asserts
+# the plan had two units and exactly one review round ran (D-096).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,8 +28,22 @@ CASES=(
   ".editorconfig|Add an .editorconfig file at the repository root with root=true and basic UTF-8/LF settings."
   "docs/FAQ.md|Add a docs/FAQ.md file with two short frequently-asked questions and answers about this repo."
 )
-CASE="${CASES[$((RANDOM % ${#CASES[@]}))]}"
-ARTIFACT="${CASE%%|*}"
+# Two-unit cases (D-096, issue #524): the goal names two files as two
+# separate plan units, so the run asserts the harness ran exactly one
+# review round once both units were harness-passed. Selected with
+# CANARY_TWO_UNIT=1 (make canary-two-unit); artifacts are space separated.
+TWO_UNIT_CASES=(
+  "CHANGELOG.md CONTRIBUTING.md|Add two files at the repository root, planned as two separate units: CHANGELOG.md with a version heading and one bullet point describing the initial release, and CONTRIBUTING.md with a short section on how to propose a change."
+  "SECURITY.md docs/USAGE.md|Add two files, planned as two separate units: SECURITY.md at the repository root describing how to report a vulnerability, and docs/USAGE.md with a short Usage section explaining what this fixture repo is for."
+  "docs/FAQ.md .editorconfig|Add two files, planned as two separate units: docs/FAQ.md with two short frequently-asked questions and answers about this repo, and an .editorconfig at the repository root with root=true and basic UTF-8/LF settings."
+)
+TWO_UNIT="${CANARY_TWO_UNIT:-0}"
+if [[ "${TWO_UNIT}" == "1" ]]; then
+  CASE="${TWO_UNIT_CASES[$((RANDOM % ${#TWO_UNIT_CASES[@]}))]}"
+else
+  CASE="${CASES[$((RANDOM % ${#CASES[@]}))]}"
+fi
+ARTIFACTS="${CASE%%|*}"
 GOAL="${CASE#*|}"
 
 # The API token stays in the shell environment only — sourced here,
@@ -93,9 +109,11 @@ worktree="$(echo "${m}" | python3 -c 'import json,sys; print(json.load(sys.stdin
 branch="$(echo "${m}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("branch") or "")')"
 
 events="$(curl -sf "${auth[@]}" "${BASE_URL}/v1/missions/${id}/events")"
-CANARY_EVENTS="${events}" python3 <<'PY'
+CANARY_EVENTS="${events}" CANARY_MISSION="${m}" CANARY_TWO_UNIT="${TWO_UNIT}" python3 <<'PY'
 import json, os, sys
 events = json.loads(os.environ["CANARY_EVENTS"])["events"]
+units = (json.loads(os.environ["CANARY_MISSION"]).get("plan") or {}).get("units") or []
+two_unit = os.environ["CANARY_TWO_UNIT"] == "1"
 kinds = {}
 for e in events:
     kinds[e["kind"]] = kinds.get(e["kind"], 0) + 1
@@ -105,9 +123,15 @@ turns = [e for e in events if e["kind"] == "mission.turn"]
 total_ms = sum((e.get("payload") or {}).get("duration_ms", 0) for e in turns)
 verified = [e for e in events if e["kind"] == "mission.unit_verified"
             and (e.get("payload") or {}).get("passed") is True]
+# The driver records one review_verdict per round; the state machine
+# appends another on rework, so count rounds by the driver's payload key.
+rounds = [e for e in events if e["kind"] == "mission.review_verdict"
+          and "findings_only" in (e.get("payload") or {})]
+worker_turns = [e for e in turns if (e.get("payload") or {}).get("phase") == "generate"]
 
 print(f"canary-coding: event counts: {json.dumps(kinds, sort_keys=True)}")
 print(f"canary-coding: {len(turns)} model turns, {total_ms/1000:.0f}s total model time")
+print(f"canary-coding: {len(units)} plan unit(s), {len(worker_turns)} worker turn(s), {len(rounds)} review round(s)")
 
 failures = []
 if parks > 0:
@@ -120,6 +144,11 @@ if kinds.get("mission.review_verdict", 0) == 0:
     failures.append("no review verdict — the coding review path never ran")
 if len(turns) > 10:
     failures.append(f"{len(turns)} turns for a trivial change — loop is not right-sized")
+if two_unit:
+    if len(units) < 2:
+        failures.append(f"{len(units)} plan unit(s) for a two-file goal: the two-unit case needs two units")
+    if len(rounds) != 1:
+        failures.append(f"{len(rounds)} review round(s): one round must cover the whole plan once every unit is harness-passed")
 if failures:
     print("canary-coding: FAIL — " + "; ".join(failures), file=sys.stderr)
     sys.exit(1)
@@ -133,12 +162,17 @@ if [[ -z "${worktree}" || -z "${branch}" ]]; then
   exit 1
 fi
 "${COMPOSE[@]}" exec -T brain sh -c "
-  git -C ${FIXTURE} rev-parse --verify --quiet '${branch}' >/dev/null &&
-  test -s '${worktree}/${ARTIFACT}'
+  git -C ${FIXTURE} rev-parse --verify --quiet '${branch}' >/dev/null
 " || {
-  echo "canary-coding: FAIL — branch ${branch} or ${worktree}/${ARTIFACT} missing in container" >&2
+  echo "canary-coding: FAIL: branch ${branch} missing in container" >&2
   exit 1
 }
+for artifact in ${ARTIFACTS}; do
+  "${COMPOSE[@]}" exec -T brain sh -c "test -s '${worktree}/${artifact}'" || {
+    echo "canary-coding: FAIL: ${worktree}/${artifact} missing in container" >&2
+    exit 1
+  }
+done
 
 echo "canary-coding: PASS"
 

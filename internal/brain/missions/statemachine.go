@@ -257,6 +257,9 @@ type StepState struct {
 	// stepPhaseComplete (which resets Iteration and so made
 	// max_iterations dead for rework before D-092).
 	ReworkRounds int
+	// LastReviewCommit is the worktree HEAD recorded by the last rework
+	// (D-096): the anchor for the next round's findings-only diff.
+	LastReviewCommit string
 }
 
 // neverVisitsPlan reports whether s's mission can never be in
@@ -285,6 +288,10 @@ type StepInput struct {
 	Findings []Finding
 	Resolved []string
 	Unit     int
+	// ReviewCommit is the worktree HEAD after the review round that
+	// produced this input (D-096), set on InputReviewRework; empty when
+	// there is no worktree, leaving LastReviewCommit as it was.
+	ReviewCommit string
 	// TouchedFiles is every workspace-relative path the worker turn
 	// that just ended changed (git diff --name-only against the
 	// pre-turn HEAD), set on InputPhaseComplete from generate. nil means
@@ -501,6 +508,12 @@ func stepResume(s StepState) Transition {
 // stall input stepReviewRework reads), and the blocking ones are named
 // in mission.rework_untouched. ReworkRounds is deliberately NOT reset
 // here: the review cycle is still running.
+//
+// A generate completion with units still lacking harness evidence and
+// no finding open stays in generate for the next unit (D-096, issue
+// #524): prove runs one round over the whole change set once every unit
+// is harness-passed, instead of one round per unit. Open findings send
+// the turn to prove regardless: a rework must be re-reviewed.
 func stepPhaseComplete(s StepState, in StepInput) Transition {
 	if s.Phase == PhasePlan && !s.AutoApprovePlan {
 		return Transition{
@@ -520,6 +533,17 @@ func stepPhaseComplete(s StepState, in StepInput) Transition {
 			events = append(events, EventDraft{Kind: "mission.rework_untouched", Payload: map[string]any{
 				"findings": findingIDs(untouched), "detail": findingsSummary(untouched),
 			}})
+		}
+	}
+	if s.Phase == PhaseGenerate && len(OpenFindings(s.ReviewFindings)) == 0 {
+		if pending := unverifiedUnits(s.Units); len(pending) > 0 {
+			s.Status = StatusIdle
+			s.Iteration = 0
+			s.ConsecutiveFailures = 0
+			events = append(events, EventDraft{Kind: "mission.generate_continued", Payload: map[string]any{
+				"next_unit": pending[0], "pending_units": len(pending),
+			}})
+			return Transition{Next: s, Events: events}
 		}
 	}
 	s.Phase = next
@@ -762,12 +786,21 @@ func allPassed(units []PlanUnit) bool {
 // evidence, the one the next worker turn works on, or -1 when every
 // unit is harness-passed.
 func firstUnverified(plan Plan) int {
-	for i, u := range plan.Units {
-		if !u.verified() {
-			return i
-		}
+	if pending := unverifiedUnits(plan.Units); len(pending) > 0 {
+		return pending[0]
 	}
 	return -1
+}
+
+// unverifiedUnits lists the indices of units without harness evidence.
+func unverifiedUnits(units []PlanUnit) []int {
+	var out []int
+	for i, u := range units {
+		if !u.verified() {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // unitsUnderReview lists the indices of units the harness has passed
@@ -805,9 +838,15 @@ func reviewSkippedOrProvePassTransition(s StepState) Transition {
 //  2. exhaustion: ReworkRounds reaching MaxIterations parks
 //     review_exhausted with the open ids in the detail. A park, never
 //     a failure: the work must survive for the operator.
+//
+// The round's worktree HEAD becomes LastReviewCommit (D-096): the next
+// round reviews only the open findings against the diff since it.
 func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 	s.ReworkRounds++
 	s.ReviewFindings = mergeFindings(s.ReviewFindings, in.Findings, in.Resolved, in.Unit, s.ReworkRounds)
+	if in.ReviewCommit != "" {
+		s.LastReviewCommit = in.ReviewCommit
+	}
 	open := OpenFindings(s.ReviewFindings)
 	s.Phase = PhaseGenerate
 	s.Status = StatusIdle

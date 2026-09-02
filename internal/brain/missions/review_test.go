@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -345,6 +346,34 @@ func TestReadArtifactsPerFileCap(t *testing.T) {
 
 // TestParseReviewVerdictEvidence pins that a finding's evidence line
 // survives parsing.
+// TestFindingFiles pins the D-096 helper: distinct finding files in
+// first-seen order, normalized for duplicates, blanks skipped.
+func TestFindingFiles(t *testing.T) {
+	got := findingFiles([]Finding{
+		{File: "src/x.go"}, {File: ""}, {File: "./src/x.go"}, {File: "docs/a.md"}, {File: "  "},
+	})
+	if !reflect.DeepEqual(got, []string{"src/x.go", "docs/a.md"}) {
+		t.Fatalf("findingFiles = %v, want [src/x.go docs/a.md]", got)
+	}
+}
+
+// TestOutsideScope pins the scope-creep rule (D-096): a file equal to or
+// beneath a scope entry is in scope; an empty scope (legacy plan) puts
+// nothing outside; a directory prefix must match on a path boundary.
+func TestOutsideScope(t *testing.T) {
+	files := []string{"src/main.go", "src/util/x.go", "srcs/y.go", "docs/notes.md", "README.md"}
+	got := outsideScope(files, []string{"src", "README.md"})
+	if !reflect.DeepEqual(got, []string{"srcs/y.go", "docs/notes.md"}) {
+		t.Fatalf("outsideScope = %v, want [srcs/y.go docs/notes.md]", got)
+	}
+	if got := outsideScope(files, nil); got != nil {
+		t.Fatalf("empty scope must put nothing outside, got %v", got)
+	}
+	if got := outsideScope(files, []string{"./src/", "docs", "README.md", "srcs"}); got != nil {
+		t.Fatalf("every file in scope, got %v", got)
+	}
+}
+
 func TestParseReviewVerdictEvidence(t *testing.T) {
 	v, err := parseReviewVerdict([]byte(`{"decision":"rework","findings":[{"title":"x","file":"a.go","evidence":"+return nil"}]}`))
 	if err != nil {

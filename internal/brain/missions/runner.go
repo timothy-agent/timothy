@@ -1397,11 +1397,20 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 // model-produced text passes through NeutralizeSlot.
 func renderReviewContent(p ReviewPacket) string {
 	var b strings.Builder
+	if p.FindingsOnly {
+		// D-096: the whole change was reviewed in an earlier round; this
+		// round judges only whether the open findings are closed.
+		b.WriteString("Re-review of open findings only. An earlier round reviewed the whole change and the units below pass the harness checks; judge only whether each open finding is closed by the changes since that round, and name every closed id in resolved. Report a NEW finding only with evidence quoted from the diff or files below.\n")
+	}
 	if p.Goal != "" {
 		fmt.Fprintf(&b, "Mission goal: %s\n", NeutralizeSlot(p.Goal))
 	}
 	if len(p.Units) > 0 {
-		b.WriteString("Units under review (judge each against its acceptance criteria):\n")
+		if p.FindingsOnly {
+			b.WriteString("\nAffected units (harness state):\n")
+		} else {
+			b.WriteString("Units under review (judge each against its acceptance criteria):\n")
+		}
 		for _, u := range p.Units {
 			fmt.Fprintf(&b, "\n### %s [%s]\n", NeutralizeSlot(u.Title), unitStatus(u))
 			if len(u.Criteria) > 0 {
@@ -1435,11 +1444,34 @@ func renderReviewContent(p ReviewPacket) string {
 			if severity == "" {
 				severity = SeverityBlocking
 			}
-			fmt.Fprintf(&b, "- %s [%s]", f.ID, severity)
+			fmt.Fprintf(&b, "- %s [%s] (unit %d)", f.ID, severity, f.Unit+1)
 			if f.File != "" {
 				fmt.Fprintf(&b, " %s:", NeutralizeSlot(f.File))
 			}
 			fmt.Fprintf(&b, " %s\n", NeutralizeSlot(f.Title))
+			if f.Detail != "" {
+				fmt.Fprintf(&b, "  detail: %s\n", NeutralizeSlot(f.Detail))
+			}
+			if f.Evidence != "" {
+				fmt.Fprintf(&b, "  evidence: %s\n", NeutralizeSlot(f.Evidence))
+			}
+		}
+	}
+	if len(p.Files) > 0 {
+		paths := make([]string, 0, len(p.Files))
+		for path := range p.Files {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		b.WriteString("\nFiles named by the findings (read from disk by the harness):\n")
+		for _, path := range paths {
+			fmt.Fprintf(&b, "\n--- %s ---\n%s\n", path, NeutralizeSlot(p.Files[path]))
+		}
+	}
+	if len(p.ScopeCreep) > 0 {
+		b.WriteString("\nChanged outside unit scope (judge whether these changes belong; the harness opened no finding for them):\n")
+		for _, path := range p.ScopeCreep {
+			fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(path))
 		}
 	}
 	if p.Listing != "" {
@@ -1463,7 +1495,11 @@ func renderReviewContent(p ReviewPacket) string {
 		b.WriteString("\n")
 	}
 	if p.Diff != "" {
-		b.WriteString("\nDiff to review (restricted to the reviewed units' scope):\n")
+		if p.FindingsOnly {
+			b.WriteString("\nDiff since the last review (restricted to the finding files and the affected units' scope):\n")
+		} else {
+			b.WriteString("\nDiff to review (restricted to the reviewed units' scope):\n")
+		}
 		b.WriteString(p.Diff)
 		b.WriteString("\n")
 	}

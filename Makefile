@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown pdfgen sandboxd dev canary canary-coding canary-research canary-executor canary-impossible kb-eval sandbox-image
+	brain gateway memoryd web markitdown pdfgen sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible kb-eval sandbox-image
 
 build:
 	$(GO_RUN) go build ./...
@@ -105,6 +105,12 @@ canary:
 # without it.
 canary-coding:
 	./scripts/canary-coding.sh
+
+# Same coding gate with a two-file goal planned as two units (D-096,
+# issue #524): asserts exactly one review round ran once both units were
+# harness-passed and both artifacts landed in the worktree.
+canary-two-unit:
+	CANARY_TWO_UNIT=1 ./scripts/canary-coding.sh
 
 # Same gate for research work: the goal requires current web
 # information and a cited markdown report, so it exercises

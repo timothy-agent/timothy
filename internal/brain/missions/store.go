@@ -1099,7 +1099,8 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	}
 	// Per-unit verify state (D-094) lives inside the plan jsonb; only the
 	// units key is rewritten, and only when the plan has units, so a
-	// planless mission's '{}' stays untouched.
+	// planless mission's '{}' stays untouched. last_review_commit (D-096)
+	// sits next to it, written only when a rework recorded one.
 	var unitsJSON []byte
 	if len(t.Next.Units) > 0 {
 		if unitsJSON, err = json.Marshal(t.Next.Units); err != nil {
@@ -1111,12 +1112,13 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 			consecutive_failures = $7, last_gap_fingerprint = $8, stall_count = $9, replan_used = $11, updated_at = now(),
 			pending_permission = CASE WHEN $10 THEN NULL ELSE pending_permission END,
 			review_findings = $12, rework_rounds = $13,
-			plan = CASE WHEN $14::jsonb IS NULL THEN plan ELSE jsonb_set(plan, '{units}', $14::jsonb) END
+			plan = (CASE WHEN $14::jsonb IS NULL THEN plan ELSE jsonb_set(plan, '{units}', $14::jsonb) END)
+				|| CASE WHEN $15::text = '' THEN '{}'::jsonb ELSE jsonb_build_object('last_review_commit', $15::text) END
 		WHERE id = $1`,
 		id, string(t.Next.Phase), string(t.Next.Status), string(t.Next.PauseReason),
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,
 		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending, t.Next.ReplanUsed,
-		findingsJSON, t.Next.ReworkRounds, unitsJSON,
+		findingsJSON, t.Next.ReworkRounds, unitsJSON, t.Next.LastReviewCommit,
 	); err != nil {
 		return fmt.Errorf("missions apply transition update: %w", err)
 	}

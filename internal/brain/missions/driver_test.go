@@ -116,6 +116,9 @@ func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition
 	if len(t.Next.Units) > 0 {
 		m.Plan.Units = t.Next.Units
 	}
+	if t.Next.LastReviewCommit != "" {
+		m.Plan.LastReviewCommit = t.Next.LastReviewCommit
+	}
 	f.missions[id] = m
 	for _, ev := range t.Events {
 		f.seq[id]++
@@ -3535,5 +3538,222 @@ func TestDriverReviewPacketScopedDiffAndGate(t *testing.T) {
 		if ev.Kind == "mission.finding_demoted" {
 			t.Fatalf("finding naming a changed file with evidence was demoted: %s", ev.Payload)
 		}
+	}
+}
+
+// writeWorktreeFile writes a workspace-relative file into wt, creating
+// parent directories.
+func writeWorktreeFile(t *testing.T, wt, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(wt, path)), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, path), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// countEvents returns how many events of kind the fake store holds.
+func countEvents(store *fakeStore, id, kind string) int {
+	n := 0
+	for _, ev := range store.events[id] {
+		if ev.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// TestDriverFindingsOnlyReReview drives D-096 end to end on a real
+// worktree: the first round (full packet) leaves F1 open and records
+// the worktree HEAD as last_review_commit; the rework turn changes the
+// finding's file and strays into a file outside every unit's scope; the
+// second round's packet is findings-only (the open finding, the delta
+// diff, the named file's contents, the scope-creep list, the affected
+// unit's harness state, and no goal, plan, stat, listing, artifacts,
+// progress or worker report) at a fraction of the first round's bytes;
+// the reviewer resolving F1 with no new finding counts as approval.
+func TestDriverFindingsOnlyReReview(t *testing.T) {
+	root, base := codingWorktree(t)
+	wt := filepath.Join(root, "wt")
+	filler := strings.Repeat("// filler line that pads the first round's diff\n", 60)
+	writeWorktreeFile(t, wt, "src/main.go", "package main\n\nfunc main() {}\n"+filler)
+	writeWorktreeFile(t, wt, "src/other.go", "package main\n"+strings.Repeat(filler, 4))
+	gitRun(t, wt, "add", "-A")
+	gitRun(t, wt, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "unit work")
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, Workspace: root, BaseCommit: base,
+		Goal: "add input validation to main", LastEvidence: "wrote main.go",
+		Progress: []ProgressNote{{Note: "operator: keep it small"}},
+		Plan: Plan{Units: []PlanUnit{{
+			Title: "write code", Artifacts: []string{"src/main.go"}, Scope: []string{"src"},
+			Criteria: []string{"main.go validates input", "main.go compiles"}, HarnessPassed: true,
+		}}},
+	})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "validated"}},
+		reviewVerdicts: []ReviewVerdict{
+			{Findings: []Finding{{Title: "missing validation", File: "src/main.go", Detail: "no input check", Evidence: "+func main() {}"}}},
+			{Resolved: []string{"F1"}},
+		},
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+
+	// Round 1: the full packet; F1 opens and HEAD is recorded.
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("review round 1: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	head := strings.TrimSpace(gitRun(t, wt, "rev-parse", "HEAD"))
+	if m.Phase != PhaseGenerate || m.Plan.LastReviewCommit != head {
+		t.Fatalf("after round 1: phase %q last_review_commit %q, want generate with HEAD %s", m.Phase, m.Plan.LastReviewCommit, head)
+	}
+	full := runner.reviewCalls[0]
+	if full.FindingsOnly || full.Diff == "" || full.DiffStat == "" {
+		t.Fatalf("round 1 packet = %+v, want the full packet", full)
+	}
+
+	// The rework turn: the worker fixes main.go and also edits docs/.
+	writeWorktreeFile(t, wt, "src/main.go", "package main\n\nfunc main() { validate() }\n"+filler)
+	writeWorktreeFile(t, wt, "docs/notes.md", "# notes\n")
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("rework turn: %v", err)
+	}
+	if m, _ = store.Get(context.Background(), "m1"); m.Phase != PhaseProve {
+		t.Fatalf("after the rework turn: phase %q, want prove", m.Phase)
+	}
+
+	// Round 2: findings-only.
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("review round 2: %v", err)
+	}
+	if len(runner.reviewCalls) != 2 {
+		t.Fatalf("RunReview ran %d times, want 2", len(runner.reviewCalls))
+	}
+	delta := runner.reviewCalls[1]
+	if !delta.FindingsOnly || delta.Goal != "" || len(delta.Plan.Units) != 0 || delta.DiffStat != "" ||
+		delta.Listing != "" || delta.Evidence != "" || len(delta.Progress) != 0 || len(delta.Artifacts) != 0 {
+		t.Fatalf("round 2 packet carries full-round material: %+v", delta)
+	}
+	if len(delta.OpenFindings) != 1 || delta.OpenFindings[0].ID != "F1" {
+		t.Fatalf("round 2 open findings = %+v, want F1", delta.OpenFindings)
+	}
+	if !strings.Contains(delta.Diff, "+func main() { validate() }") || strings.Contains(delta.Diff, "+// filler") || strings.Contains(delta.Diff, "docs/notes.md") {
+		t.Fatalf("round 2 diff is not the delta scoped to the finding file and unit scope:\n%s", delta.Diff)
+	}
+	if body, ok := delta.Files["src/main.go"]; !ok || !strings.Contains(body, "validate()") {
+		t.Fatalf("round 2 files = %v, want the finding's file contents", delta.Files)
+	}
+	if len(delta.ScopeCreep) != 1 || delta.ScopeCreep[0] != "docs/notes.md" {
+		t.Fatalf("round 2 scope creep = %v, want [docs/notes.md]", delta.ScopeCreep)
+	}
+	if len(delta.Units) != 1 || len(delta.Units[0].Criteria) != 0 || !delta.Units[0].HarnessPassed {
+		t.Fatalf("round 2 units = %+v, want the affected unit's harness state without criteria", delta.Units)
+	}
+	fullBytes, deltaBytes := len(renderReviewContent(full)), len(renderReviewContent(delta))
+	if deltaBytes*3 > fullBytes {
+		t.Fatalf("findings-only request is %d bytes against %d for the full round, want under a third", deltaBytes, fullBytes)
+	}
+
+	// Resolving F1 with nothing new counts as approval on harness evidence.
+	m, _ = store.Get(context.Background(), "m1")
+	if m.Phase != PhaseResult || !m.Plan.Units[0].Passes || len(OpenFindings(m.ReviewFindings)) != 0 {
+		t.Fatalf("after round 2: phase %q unit %+v findings %+v, want result with F1 resolved", m.Phase, m.Plan.Units[0], m.ReviewFindings)
+	}
+	// The driver's own verdict events (the state machine appends another
+	// on rework, without findings_only): round 1 full rework, round 2
+	// findings-only approval.
+	var driverVerdicts []string
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.review_verdict" && strings.Contains(string(ev.Payload), "findings_only") {
+			driverVerdicts = append(driverVerdicts, string(ev.Payload))
+		}
+	}
+	if len(driverVerdicts) != 2 || !strings.Contains(driverVerdicts[0], `"findings_only":false`) ||
+		!strings.Contains(driverVerdicts[1], `"findings_only":true`) || !strings.Contains(driverVerdicts[1], `"decision":"approved"`) {
+		t.Fatalf("driver verdict events = %v, want a full rework then a findings-only approval", driverVerdicts)
+	}
+}
+
+// TestDriverOpenFindingsWithoutReviewCommitUseFullPacket pins the D-096
+// compatibility rule: a mission created before last_review_commit
+// existed re-reviews its open findings with the full packet.
+func TestDriverOpenFindingsWithoutReviewCommitUseFullPacket(t *testing.T) {
+	root, base := codingWorktree(t)
+	writeWorktreeFile(t, filepath.Join(root, "wt"), "x.go", "package x\n")
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, Workspace: root, BaseCommit: base, Goal: "legacy",
+		Plan:           Plan{Units: []PlanUnit{{Title: "u1", Artifacts: []string{"x.go"}, HarnessPassed: true}}},
+		ReviewFindings: []Finding{{ID: "F1", Title: "gap", File: "x.go", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1}},
+	})
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	packet := runner.reviewCalls[0]
+	if packet.FindingsOnly || packet.Goal != "legacy" || len(packet.Plan.Units) != 1 || len(packet.OpenFindings) != 1 {
+		t.Fatalf("packet = %+v, want the full packet with the open finding", packet)
+	}
+}
+
+// TestDriverTwoUnitPlanReviewsOnce pins the D-096 routing through the
+// driver: a coding mission whose worker finishes one unit per turn stays
+// in generate after the first (mission.generate_continued, no review),
+// enters prove once both are harness-passed, and runs exactly one review
+// round covering both units before the mission advances to result.
+func TestDriverTwoUnitPlanReviewsOnce(t *testing.T) {
+	root, base := codingWorktree(t)
+	wt := filepath.Join(root, "wt")
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Workspace: root, BaseCommit: base,
+		Plan: Plan{Units: []PlanUnit{
+			{Title: "write a", Artifacts: []string{"a.md"}, Criteria: []string{"a.md exists", "a.md has content"}},
+			{Title: "write b", Artifacts: []string{"b.md"}, Criteria: []string{"b.md exists", "b.md has content"}},
+		}},
+	})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it"}},
+		reviewVerdicts: []ReviewVerdict{{Approved: true}},
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+
+	writeWorktreeFile(t, wt, "a.md", "a\n")
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("worker turn 1: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseGenerate || !m.Plan.Units[0].HarnessPassed || m.Plan.Units[0].Passes || m.Plan.Units[1].HarnessPassed {
+		t.Fatalf("after turn 1: phase %q units %+v, want generate with only unit 0 harness-passed", m.Phase, m.Plan.Units)
+	}
+	if len(runner.reviewCalls) != 0 || countEvents(store, "m1", "mission.generate_continued") != 1 {
+		t.Fatalf("after turn 1: %d reviews, %d generate_continued events, want 0 and 1", len(runner.reviewCalls), countEvents(store, "m1", "mission.generate_continued"))
+	}
+
+	writeWorktreeFile(t, wt, "b.md", "b\n")
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("worker turn 2: %v", err)
+	}
+	if m, _ = store.Get(context.Background(), "m1"); m.Phase != PhaseProve {
+		t.Fatalf("after turn 2: phase %q, want prove", m.Phase)
+	}
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("review round: %v", err)
+	}
+	m, _ = store.Get(context.Background(), "m1")
+	if m.Phase != PhaseResult || !m.Plan.Units[0].Passes || !m.Plan.Units[1].Passes {
+		t.Fatalf("after review: phase %q units %+v, want result with both units passed", m.Phase, m.Plan.Units)
+	}
+	if len(runner.reviewCalls) != 1 || len(runner.reviewCalls[0].Units) != 2 {
+		t.Fatalf("review calls = %d (units %d), want one round over both units", len(runner.reviewCalls), len(runner.reviewCalls[0].Units))
+	}
+	if n := countEvents(store, "m1", "mission.review_verdict"); n != 1 {
+		t.Fatalf("review_verdict events = %d, want exactly 1", n)
 	}
 }

@@ -48,6 +48,20 @@ describe('mission.generate_skipped rendering', () => {
   })
 })
 
+describe('mission.generate_continued rendering', () => {
+  it('names the next unit 1-indexed with the pending count', () => {
+    expect(renderEvent(event({ next_unit: 1, pending_units: 2 }, 'mission.generate_continued'))).toBe(
+      'Next worker turn on unit 2 (2 pending): review runs once every unit is harness-verified',
+    )
+  })
+
+  it('falls back to a generic label when the payload has no index', () => {
+    expect(renderEvent(event({}, 'mission.generate_continued'))).toBe(
+      'Next worker turn on the next unit: review runs once every unit is harness-verified',
+    )
+  })
+})
+
 describe('mission.plan_created rendering', () => {
   it('shows unit count alone when the plan has no assumptions', () => {
     expect(renderEvent(event({ units: 2 }, 'mission.plan_created'))).toBe('Plan created with 2 unit(s)')

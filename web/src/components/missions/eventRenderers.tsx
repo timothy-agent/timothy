@@ -64,6 +64,12 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     )
   },
   'mission.generate_skipped': () => 'Worker turn skipped: every unit is harness-verified',
+  'mission.generate_continued': (p) => {
+    const { next_unit, pending_units } = asRecord(p)
+    const unit = typeof next_unit === 'number' ? `unit ${next_unit + 1}` : 'the next unit'
+    const pending = typeof pending_units === 'number' ? ` (${pending_units} pending)` : ''
+    return `Next worker turn on ${unit}${pending}: review runs once every unit is harness-verified`
+  },
   'mission.finding_demoted': (p) => {
     const { title, reason } = asRecord(p)
     return (
