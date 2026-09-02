@@ -223,6 +223,12 @@ type WorkerVerdict struct {
 	// the mission_status tool call's own JSON args; set by RunWorker
 	// after parsing. Empty for the delegated (CLI harness) path.
 	FinalMessage string `json:"-"`
+	// Provider/Model (issue #507) are who actually served this turn:
+	// the last stream meta event for a native turn, or the executor's
+	// own chain entry for a delegated turn. Empty when the turn failed
+	// before any provider answered.
+	Provider string `json:"-"`
+	Model    string `json:"-"`
 }
 
 // parseWorkerVerdict decodes a mission_status tool call's arguments.

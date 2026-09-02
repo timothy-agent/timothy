@@ -1173,6 +1173,10 @@ func doneEvent(model string) stream.StreamEvent {
 	return stream.StreamEvent{Type: stream.EventDone, Meta: &stream.Meta{Model: model}}
 }
 
+func doneEventMeta(provider, model string) stream.StreamEvent {
+	return stream.StreamEvent{Type: stream.EventDone, Meta: &stream.Meta{Provider: provider, Model: model}}
+}
+
 // TestRunWorkerModelFloor: a turn served by a deny-listed fallback
 // model must surface ErrModelFloor so the driver pauses the mission
 // immediately instead of burning iterations on a model that cannot
@@ -1201,6 +1205,41 @@ func TestRunWorkerModelFloorDisabledByDefault(t *testing.T) {
 	}
 	if v.Outcome != "done" {
 		t.Fatalf("verdict = %+v", v)
+	}
+}
+
+// TestRunTurnCarriesServedProviderAndModel covers issue #507: runTurn
+// must surface the last stream meta event's provider/model on
+// turnResult, the entry that actually served the turn after any
+// failover.
+func TestRunTurnCarriesServedProviderAndModel(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`), doneEventMeta("OpenAI Responses", "gpt-5.3-codex")},
+	}}
+	r := newTestRunner(agent)
+	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate)
+	if err != nil {
+		t.Fatalf("runTurn: %v", err)
+	}
+	if res.provider != "OpenAI Responses" || res.model != "gpt-5.3-codex" {
+		t.Fatalf("turnResult provider/model = %q/%q, want OpenAI Responses/gpt-5.3-codex", res.provider, res.model)
+	}
+}
+
+// TestRunTurnOmitsProviderModelWhenNeverServed covers issue #507: a
+// turn that errors before any provider answered must never guess a
+// provider/model.
+func TestRunTurnOmitsProviderModelWhenNeverServed(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{{Type: stream.EventError, Err: &stream.StreamError{Message: "boom"}}},
+	}}
+	r := newTestRunner(agent)
+	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate)
+	if err == nil {
+		t.Fatal("runTurn: expected an error")
+	}
+	if res.provider != "" || res.model != "" {
+		t.Fatalf("turnResult provider/model = %q/%q, want both empty", res.provider, res.model)
 	}
 }
 
@@ -1485,7 +1524,7 @@ func TestDiscoverSessionIncludesConnectorReadsWhenResolverSet(t *testing.T) {
 		return []*tools.Tool{{Name: "google-calendar_calendar_list_events", ReadOnly: true}}
 	}
 	m := Mission{ID: "m1", AgentID: "a1", Route: "default"}
-	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
 	var names []string
@@ -1731,7 +1770,7 @@ func TestDiscoverSessionSentinelPresent(t *testing.T) {
 		{textEvent("looked around"), toolEndEvent(discoverNotesToolName, `{"findings":"no prior implementation; goal is self-contained"}`)},
 	}}
 	r := newTestRunner(agent)
-	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	notes, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
 	if err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
@@ -1751,7 +1790,7 @@ func TestDiscoverSessionUsesPlanRoute(t *testing.T) {
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "mini", PlanRoute: "strong", Goal: "test"}
-	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
 	if got := agent.requests[0].Route; got != "strong" {
@@ -1770,7 +1809,7 @@ func TestDiscoverSessionIncludesParentContext(t *testing.T) {
 		ID: "m1", Route: "default", Goal: "test", ParentMissionID: "parent",
 		Sources: []SourceEntry{{Source: SourceKindMission, ID: ParentLineageID, MissionID: "parent", Digest: "prior mission fixed the signup bug"}},
 	}
-	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
 	msgs := agent.requests[0].Messages
@@ -1795,7 +1834,7 @@ func TestDiscoverSessionIncludesReferencedContext(t *testing.T) {
 			{Source: SourceKindKB, DocID: "doc1", Name: "runbook", Digest: "kb doc: the login flow uses OAuth"},
 		},
 	}
-	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
 	msgs := agent.requests[0].Messages
@@ -1818,7 +1857,7 @@ func TestDiscoverSessionIncludesAttachments(t *testing.T) {
 	m := Mission{ID: "m1", Route: "default", Goal: "test", Sources: []SourceEntry{
 		{Source: SourceKindPDF, ID: "att1", Name: "spec.pdf", Markdown: "the spec says fix it this way"},
 	}}
-	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
 	msgs := agent.requests[0].Messages
@@ -1868,7 +1907,7 @@ func TestDiscoverSessionReportsEnvironment(t *testing.T) {
 			r := newTestRunner(agent)
 			sink := &fakeEnvironmentSink{}
 			r.SetEnvironmentSink(sink)
-			if _, err := r.DiscoverSession(context.Background(), tc.mission); err != nil {
+			if _, _, _, err := r.DiscoverSession(context.Background(), tc.mission); err != nil {
 				t.Fatalf("DiscoverSession: %v", err)
 			}
 			if strings.Join(sink.calls, ",") != strings.Join(tc.wantCalls, ",") {
@@ -1886,7 +1925,7 @@ func TestDiscoverSessionPrefixesUnsupportedStack(t *testing.T) {
 		{toolEndEvent(discoverNotesToolName, `{"findings":"Cargo.toml at the root","stack":"Rust CLI"}`)},
 	}}
 	r := newTestRunner(agent)
-	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "test"})
+	notes, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "test"})
 	if err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
@@ -1906,7 +1945,7 @@ func TestDiscoverSessionRecoversWhenSentinelMissingThenPresent(t *testing.T) {
 		{textEvent("done discovering"), toolEndEvent(discoverNotesToolName, `{"findings":"found a reusable config loader"}`)},
 	}}
 	r := newTestRunner(agent)
-	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	notes, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
 	if err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
@@ -1927,7 +1966,7 @@ func TestDiscoverSessionFallsBackToTextSentinel(t *testing.T) {
 		{textEvent(`Done. <discover_notes findings="the goal needs no exploration; it is self-contained"/>`)},
 	}}
 	r := newTestRunner(agent)
-	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	notes, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
 	if err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
@@ -1946,7 +1985,7 @@ func TestDiscoverSessionFallsBackToRawText(t *testing.T) {
 		{textEvent("Confirmed, nothing else to add.")},
 	}}
 	r := newTestRunner(agent)
-	notes, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
+	notes, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"})
 	if err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
@@ -1967,7 +2006,7 @@ func TestDiscoverSessionStreamErrorPropagates(t *testing.T) {
 		{Type: stream.EventError, Err: &stream.StreamError{Message: "connection lost"}},
 	}}}
 	r := newTestRunner(agent)
-	if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err == nil {
+	if _, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err == nil {
 		t.Fatal("DiscoverSession: expected the stream error to propagate")
 	}
 }
@@ -1982,7 +2021,7 @@ func TestDiscoverSessionGetsShellButNotWriteFile(t *testing.T) {
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "default", Goal: "test", Workspace: "/workspace/missions/m1"}
-	if _, err := r.DiscoverSession(context.Background(), m); err != nil {
+	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
 	var names []string
@@ -2015,7 +2054,7 @@ func TestDiscoverSessionKBNudge(t *testing.T) {
 	t.Run("no backend wired", func(t *testing.T) {
 		agent := &scriptedAgent{batches: notesBatch}
 		r := newTestRunner(agent)
-		if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+		if _, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
 			t.Fatalf("DiscoverSession: %v", err)
 		}
 		if strings.Contains(agent.requests[0].System, "search_kb") {
@@ -2029,7 +2068,7 @@ func TestDiscoverSessionKBNudge(t *testing.T) {
 		r.kbSearch = func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 			return nil, nil
 		}
-		if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+		if _, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
 			t.Fatalf("DiscoverSession: %v", err)
 		}
 		system := agent.requests[0].System
@@ -2146,7 +2185,7 @@ func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
 		{toolEndEvent(discoverNotesToolName, `{"findings":"none"}`)},
 	}}
 	r = newTestRunner(agent)
-	if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+	if _, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
 		t.Fatalf("DiscoverSession: %v", err)
 	}
 	if !agent.requests[len(agent.requests)-1].BuiltinsOnly {
@@ -2730,7 +2769,7 @@ func TestDiscoverSessionWiresSteeringFromProgressReader(t *testing.T) {
 		agent := &scriptedAgent{batches: batch}
 		r := newTestRunner(agent)
 		r.SetProgressReader(&fakeProgressReader{})
-		if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+		if _, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
 			t.Fatalf("DiscoverSession: %v", err)
 		}
 		if agent.requests[0].Steering == nil {
@@ -2741,7 +2780,7 @@ func TestDiscoverSessionWiresSteeringFromProgressReader(t *testing.T) {
 	t.Run("unwired", func(t *testing.T) {
 		agent := &scriptedAgent{batches: batch}
 		r := newTestRunner(agent)
-		if _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
+		if _, _, _, err := r.DiscoverSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "test"}); err != nil {
 			t.Fatalf("DiscoverSession: %v", err)
 		}
 		if agent.requests[0].Steering != nil {

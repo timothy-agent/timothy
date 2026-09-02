@@ -243,6 +243,10 @@ type ReviewVerdict struct {
 	// Resolved names prior-round finding ids the reviewer considers
 	// closed.
 	Resolved []string
+	// Provider/Model (issue #507) are who served the review turn; set by
+	// RunReview after parsing.
+	Provider string
+	Model    string
 }
 
 // parseReviewVerdict decodes a review_verdict tool call's arguments.

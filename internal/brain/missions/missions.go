@@ -511,6 +511,10 @@ type Plan struct {
 	// never a gate — the operator catches a wrong guess via a steering
 	// note, not a pause.
 	Assumptions []PlanAssumption `json:"assumptions,omitempty"`
+	// Provider/Model (issue #507) are who served the plan turn; set by
+	// PlanSession after parsing, never persisted with the stored plan.
+	Provider string `json:"-"`
+	Model    string `json:"-"`
 }
 
 // PlanAssumption is one ambiguity the planner resolved on its own,

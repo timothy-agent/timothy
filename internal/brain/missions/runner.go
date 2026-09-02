@@ -72,8 +72,8 @@ type Runner interface {
 	// explores the workspace and (via base tools) the web, ending with a
 	// discover_notes sentinel call. Discovery is advisory: a turn that
 	// never produces the sentinel degrades to the raw turn text rather
-	// than failing the phase.
-	DiscoverSession(ctx context.Context, m Mission) (string, error)
+	// than failing the phase. Also returns who served the turn (issue #507).
+	DiscoverSession(ctx context.Context, m Mission) (notes, provider, model string, err error)
 }
 
 // agentStream is the narrow slice of *loop.Agent nativeRunner actually
@@ -619,12 +619,17 @@ func (r *nativeRunner) belowFloor(model string) bool {
 // treating a missing sentinel as "no verdict," since ask_user's
 // EndTurnTools membership means the turn legitimately ends with no
 // sentinel call at all.
+// provider/model (issue #507) are the last stream meta event's values:
+// the chain entry that actually served the turn after any failover.
+// Empty when the turn failed before any provider answered.
 type turnResult struct {
 	text         string
 	sentinelArgs json.RawMessage
 	seenURLs     []string
 	finalSeg     string
 	askedUser    bool
+	provider     string
+	model        string
 }
 
 // toolCallDigestCap bounds a mission.tool_call event's args digest:
@@ -684,6 +689,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 	// not be mistaken for the still-blocked destructive one resolving.
 	parked := map[string]bool{}
 	servedModel := ""
+	servedProvider := ""
 	// sawTerminal mirrors chat's D-044 discipline: a channel that
 	// closes with no done/error/incomplete means every producer lost
 	// its terminal (deadline racing a stream cut). Without this check a
@@ -762,6 +768,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			sawTerminal = true
 			if ev.Meta != nil {
 				servedModel = ev.Meta.Model
+				servedProvider = ev.Meta.Provider
 			}
 		case stream.EventIncomplete:
 			// A cut-off stream is an infra failure, not a short clean
@@ -772,7 +779,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if len(parked) > 0 && r.parker != nil {
 				r.parker.OnPermissionCleared(ctx, req.MissionID)
 			}
-			return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser}, fmt.Errorf("mission runner: incomplete stream: %s", ev.Text)
+			return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("mission runner: incomplete stream: %s", ev.Text)
 		case stream.EventError:
 			if len(parked) > 0 && r.parker != nil {
 				r.parker.OnPermissionCleared(ctx, req.MissionID)
@@ -782,21 +789,21 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 				msg = ev.Err.Message
 			}
 			if strings.Contains(msg, "context_length") {
-				return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser}, fmt.Errorf("%w: %s", ErrPromptTooLong, msg)
+				return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("%w: %s", ErrPromptTooLong, msg)
 			}
-			return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser}, fmt.Errorf("mission runner: %s", msg)
+			return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("mission runner: %s", msg)
 		}
 	}
 	if !sawTerminal {
 		if len(parked) > 0 && r.parker != nil {
 			r.parker.OnPermissionCleared(ctx, req.MissionID)
 		}
-		return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser}, fmt.Errorf("mission runner: stream ended without a terminal event")
+		return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("mission runner: stream ended without a terminal event")
 	}
 	if servedModel != "" && r.belowFloor(servedModel) {
-		return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser}, fmt.Errorf("%w: %s", ErrModelFloor, servedModel)
+		return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("%w: %s", ErrModelFloor, servedModel)
 	}
-	return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser}, nil
+	return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, nil
 }
 
 // webFetchArgURL extracts the url arg from a fetch_url call's raw
@@ -1061,6 +1068,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	if v, ok := r.tryParseVerdict(res.sentinelArgs); ok {
 		v.SeenURLs = append(seenURLs, kbSeen.all()...)
 		v.FinalMessage = res.finalSeg
+		v.Provider, v.Model = res.provider, res.model
 		return v, text, nil
 	}
 
@@ -1079,6 +1087,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	if v, ok := r.tryParseVerdict(recoverRes.sentinelArgs); ok {
 		v.SeenURLs = append(seenURLs, kbSeen.all()...)
 		v.FinalMessage = recoverRes.finalSeg
+		v.Provider, v.Model = recoverRes.provider, recoverRes.model
 		return v, text + "\n" + recoverText, nil
 	}
 
@@ -1097,6 +1106,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 			r.log.Warn("mission worker expressed mission_status as text, not a tool call", "mission_id", m.ID, "route", workerRoute(m))
 			v.SeenURLs = append(seenURLs, kbSeen.all()...)
 			v.FinalMessage = recoverRes.finalSeg
+			v.Provider, v.Model = recoverRes.provider, recoverRes.model
 			return v, combined, nil
 		}
 	}
@@ -1148,8 +1158,9 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 // ladder, a missing discover_notes call never fails the phase: the
 // findings are advisory input to the planner, not a gate on progress,
 // so the ladder's last resort is the raw turn text rather than a forced
-// failure.
-func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
+// failure. provider/model (issue #507) are who served the turn that
+// produced the returned notes; empty when the turn errored.
+func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, servedProvider, servedModel string, err error) {
 	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the generate phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if pc := m.ParentContext(); pc != "" {
@@ -1197,13 +1208,13 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, 
 	res, err := r.runTurn(ctx, req, discoverNotesToolName, PhaseDiscover)
 	text := res.text
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	if res.askedUser {
-		return "", ErrAskedUser
+		return "", "", "", ErrAskedUser
 	}
 	if report, ok := tryParseFindings(res.sentinelArgs); ok {
-		return r.applyDiscoverReport(ctx, m, report), nil
+		return r.applyDiscoverReport(ctx, m, report), res.provider, res.model, nil
 	}
 
 	// One recovery re-run, same ladder shape as RunWorker/PlanSession.
@@ -1215,10 +1226,10 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, 
 	recoverRes, err := r.runTurn(ctx, recoverReq, discoverNotesToolName, PhaseDiscover)
 	recoverText := recoverRes.text
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
 	if report, ok := tryParseFindings(recoverRes.sentinelArgs); ok {
-		return r.applyDiscoverReport(ctx, m, report), nil
+		return r.applyDiscoverReport(ctx, m, report), recoverRes.provider, recoverRes.model, nil
 	}
 
 	// Neither turn produced a tool call: check for a text-form sentinel
@@ -1226,14 +1237,14 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (string, 
 	combined := text + "\n" + recoverText
 	if raw, ok := extractTextSentinel(combined, discoverNotesToolName); ok {
 		if report, ok := tryParseFindings(raw); ok {
-			return r.applyDiscoverReport(ctx, m, report), nil
+			return r.applyDiscoverReport(ctx, m, report), recoverRes.provider, recoverRes.model, nil
 		}
 	}
 
 	// Advisory phase: never a forced failure. The raw turn text is still
 	// useful context for the planner even with no structured findings.
 	r.log.Warn("mission discover ended without a discover_notes call; using raw turn text", "mission_id", m.ID, "route", oversightRoute(m))
-	return strings.TrimSpace(combined), nil
+	return strings.TrimSpace(combined), recoverRes.provider, recoverRes.model, nil
 }
 
 // tryParseFindings reports whether args decodes to a non-empty findings
@@ -1318,6 +1329,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 	if res.askedUser {
 		return ReviewVerdict{}, ErrAskedUser
 	}
+	servedProvider, servedModel := res.provider, res.model
 	if len(args) == 0 {
 		// Recovery re-run: same one-shot ladder RunWorker uses: a
 		// reviewer that ran long on analysis and didn't reach its tool
@@ -1333,6 +1345,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		if err != nil {
 			return ReviewVerdict{}, err
 		}
+		servedProvider, servedModel = recoverRes.provider, recoverRes.model
 		if len(recoverArgs) == 0 {
 			// Neither turn produced a review_verdict tool call: before
 			// failing the round, check for a text-form verdict: observed
@@ -1358,6 +1371,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 	if err != nil {
 		return ReviewVerdict{}, fmt.Errorf("mission runner: parse review_verdict: %w", err)
 	}
+	verdict.Provider, verdict.Model = servedProvider, servedModel
 	return verdict, nil
 }
 
@@ -1501,6 +1515,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	}
 	if len(args) > 0 {
 		if plan, planErr := parsePlan(string(args)); planErr == nil {
+			plan.Provider, plan.Model = res.provider, res.model
 			return plan, nil
 		}
 	}
@@ -1535,6 +1550,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 		r.log.Warn("mission planner submitted an invalid plan twice", "mission_id", m.ID, "route", oversightRoute(m), "text", text, "recover_text", recoverText, "error", err)
 		return Plan{}, err
 	}
+	plan.Provider, plan.Model = recoverRes.provider, recoverRes.model
 	return plan, nil
 }
 

@@ -327,21 +327,21 @@ func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, discoverNot
 	return s, nil
 }
 
-func (r *scriptedRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
+func (r *scriptedRunner) DiscoverSession(ctx context.Context, m Mission) (string, string, string, error) {
 	if r.discoverErr != nil {
-		return "", r.discoverErr
+		return "", "", "", r.discoverErr
 	}
 	if r.onDiscover != nil {
 		r.onDiscover(ctx, m)
 	}
 	if len(r.discoverNotes) == 0 {
-		return "", nil
+		return "", "", "", nil
 	}
 	notes := r.discoverNotes[r.discoverIdx]
 	if r.discoverIdx < len(r.discoverNotes)-1 {
 		r.discoverIdx++
 	}
-	return notes, nil
+	return notes, "", "", nil
 }
 
 // fakeSandboxExec runs command via /bin/sh -c directly in workdir —
@@ -1808,8 +1808,8 @@ func (r *blockingRunner) PlanSession(ctx context.Context, m Mission, discoverNot
 	return r.planSpec, nil
 }
 
-func (r *blockingRunner) DiscoverSession(ctx context.Context, m Mission) (string, error) {
-	return "", nil
+func (r *blockingRunner) DiscoverSession(ctx context.Context, m Mission) (string, string, string, error) {
+	return "", "", "", nil
 }
 
 // TestDriverDriveIsSerializedPerMission reproduces a real bug: the
@@ -2948,6 +2948,73 @@ func TestDriverTurnEventCarriesRouteAndAgent(t *testing.T) {
 	}
 	if _, ok := payload["model"]; ok {
 		t.Fatalf("payload[model] = %v, want absent (never guessed)", payload["model"])
+	}
+}
+
+// TestDriverTurnEventCarriesServedProviderAndModel covers issue #507:
+// the mission.turn event payload includes provider/model from the
+// runner's verdict when the turn actually got an answer, and omits
+// them when it didn't.
+func TestDriverTurnEventCarriesServedProviderAndModel(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{
+		{Outcome: "complete", Provider: "OpenAI Responses", Model: "gpt-5.3-codex"},
+	}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	events, _ := store.Events(context.Background(), "m1")
+	var turn Event
+	for _, e := range events {
+		if e.Kind == "mission.turn" {
+			turn = e
+		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(turn.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal mission.turn payload: %v", err)
+	}
+	if payload["provider"] != "OpenAI Responses" {
+		t.Fatalf("payload[provider] = %v, want OpenAI Responses", payload["provider"])
+	}
+	if payload["model"] != "gpt-5.3-codex" {
+		t.Fatalf("payload[model] = %v, want gpt-5.3-codex", payload["model"])
+	}
+}
+
+// TestDriverTurnEventOmitsProviderModelWhenNeverServed covers issue
+// #507: a turn that failed before any provider answered must never
+// guess provider/model on the mission.turn payload.
+func TestDriverTurnEventOmitsProviderModelWhenNeverServed(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{workerErr: fmt.Errorf("mission runner: provider stream error")}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	events, _ := store.Events(context.Background(), "m1")
+	var turn Event
+	for _, e := range events {
+		if e.Kind == "mission.turn" {
+			turn = e
+		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(turn.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal mission.turn payload: %v", err)
+	}
+	if _, ok := payload["provider"]; ok {
+		t.Fatalf("payload[provider] = %v, want absent", payload["provider"])
+	}
+	if _, ok := payload["model"]; ok {
+		t.Fatalf("payload[model] = %v, want absent", payload["model"])
 	}
 }
 

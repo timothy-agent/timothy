@@ -322,6 +322,42 @@ describe('mission.turn rendering', () => {
     expect(row).toBeInTheDocument()
     expect(row).not.toHaveTextContent('undefined')
   })
+
+  it('shows the served model in place of route when the payload carries one, with provider/route in the title', () => {
+    render(
+      <div>
+        {renderEvent(
+          event(
+            {
+              phase: 'prove', duration_ms: 42000, ok: true, input: 'review_approve',
+              route: 'coding', agent: 'coder', provider: 'OpenAI Responses', model: 'gpt-5.3-codex',
+            },
+            'mission.turn',
+          ),
+        )}
+      </div>,
+    )
+    const row = screen.getByText(/Turn \(prove\): ok · 42\.0s/)
+    expect(row).toHaveTextContent('coder · gpt-5.3-codex')
+    expect(row).not.toHaveTextContent('coding')
+    const context = screen.getByText('coder · gpt-5.3-codex')
+    expect(context).toHaveAttribute('title', 'OpenAI Responses / coding')
+  })
+
+  it('falls back to the agent · route form when model is absent (older events)', () => {
+    render(
+      <div>
+        {renderEvent(
+          event(
+            { phase: 'generate', duration_ms: 1500, ok: true, input: 'worker_retry', route: 'coding', agent: 'Coder' },
+            'mission.turn',
+          ),
+        )}
+      </div>,
+    )
+    const context = screen.getByText('Coder · coding')
+    expect(context).not.toHaveAttribute('title')
+  })
 })
 
 describe('mission.discover_complete / mission.explore_complete rendering', () => {

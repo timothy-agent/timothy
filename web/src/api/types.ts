@@ -1012,9 +1012,11 @@ export interface MissionSteeredPayload {
 // route/agent (issue #473) are the phase's effective route and the
 // mission agent's display name, both absent on a legacy event
 // recorded before this field existed and absent when unresolvable
-// (e.g. no agent set), never a placeholder string. model is
-// deliberately not carried here: the runner doesn't surface which
-// chain entry actually served the turn, and driver.go never guesses one.
+// (e.g. no agent set), never a placeholder string. provider/model
+// (issue #507) are who actually served the turn (the last stream meta
+// event after any failover, or the delegated executor's own chain
+// entry); both absent on a legacy event and on a turn that failed
+// before any provider answered, never guessed.
 export interface MissionTurnPayload {
   phase: string
   duration_ms: number
@@ -1024,6 +1026,8 @@ export interface MissionTurnPayload {
   escalated_route?: string
   route?: string
   agent?: string
+  provider?: string
+  model?: string
 }
 
 // MissionRetryPayload is mission.retry's payload (statemachine.go);
