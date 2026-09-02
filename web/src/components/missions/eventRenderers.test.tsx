@@ -35,6 +35,13 @@ describe('mission.unit_regressed rendering', () => {
   })
 })
 
+describe('mission.finding_demoted rendering', () => {
+  it('names the finding and the gate reason', () => {
+    render(<div>{renderEvent(event({ title: 'wrong status', file: 'nope.md', reason: 'quotes no evidence' }, 'mission.finding_demoted'))}</div>)
+    expect(screen.getByText('Finding demoted to minor: wrong status (quotes no evidence)')).toHaveClass('text-amber-400')
+  })
+})
+
 describe('mission.generate_skipped rendering', () => {
   it('explains the skipped worker turn', () => {
     expect(renderEvent(event({}, 'mission.generate_skipped'))).toBe('Worker turn skipped: every unit is harness-verified')

@@ -150,6 +150,20 @@ First run: `cp deploy/env.example deploy/.env` and set
   `stepReviewApprove` flips `passes` on harness-passed units only; a
   generate phase with every unit harness-passed and no open finding
   skips the worker turn (`mission.generate_skipped`).
+- Unit criteria and scoped review (D-095, issue #520): every plan unit
+  carries `criteria` (2 to 6 lines, `parsePlan` rejects the plan with
+  `plan_invalid` otherwise, one planner retry) and `scope` (paths,
+  default the artifact directories). The reviewer packet carries the
+  reviewed units' title, criteria, harness status and verify excerpt in
+  place of the goal (legacy plans without criteria still get the goal),
+  `git diff --stat` for the whole change and the diff restricted to the
+  units' scope, cut on a file boundary at the byte budget, plus
+  artifacts a criterion names (8 KB each). Evidence gate in
+  `Driver.runReview`: a blocking finding must name a changed or declared
+  file and quote `evidence`, else it is demoted to minor with a
+  `mission.finding_demoted` event; a round left with only minor findings
+  and no unresolved prior blocking one counts as approval. Light
+  missions never plan, so none of this applies to them.
 - Workers get per-mission `shell` + `write_file` tools via turn-scoped
   `ExtraTools` that shadow base tools by name. Workers must create files
   with `write_file` only; shell redirects/heredocs classify destructive

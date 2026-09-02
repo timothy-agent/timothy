@@ -1604,11 +1604,11 @@ func currentUnit(plan Plan) (*PlanUnit, int) {
 	return nil, -1
 }
 
-// reviewUnits returns the indices, titles and declared artifact paths
-// of the units a prove round judges: the harness-passed, not yet
-// approved ones (unitsUnderReview), falling back to the first unit
-// still pending for rows written before HarnessPassed existed.
-func reviewUnits(plan Plan) (idx []int, titles, artifacts []string) {
+// reviewUnits returns the indices and units a prove round judges: the
+// harness-passed, not yet approved ones (unitsUnderReview), falling
+// back to the first unit still pending for rows written before
+// HarnessPassed existed.
+func reviewUnits(plan Plan) (idx []int, units []PlanUnit) {
 	idx = unitsUnderReview(plan.Units)
 	if len(idx) == 0 {
 		for i, u := range plan.Units {
@@ -1619,10 +1619,46 @@ func reviewUnits(plan Plan) (idx []int, titles, artifacts []string) {
 		}
 	}
 	for _, i := range idx {
-		titles = append(titles, plan.Units[i].Title)
-		artifacts = append(artifacts, plan.Units[i].Artifacts...)
+		units = append(units, plan.Units[i])
 	}
-	return idx, titles, artifacts
+	return idx, units
+}
+
+// reviewScope is the union of the units' scope paths (D-095), in
+// first-seen order; empty, meaning the whole tree, when no unit
+// declares one (legacy plans).
+func reviewScope(units []PlanUnit) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, u := range units {
+		for _, p := range u.Scope {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// hasCriteria reports whether any unit carries acceptance criteria; a
+// plan without them predates D-095 and reviews against the goal.
+func hasCriteria(units []PlanUnit) bool {
+	for _, u := range units {
+		if len(u.Criteria) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// planArtifacts lists every artifact the plan declares.
+func planArtifacts(plan Plan) []string {
+	var out []string
+	for _, u := range plan.Units {
+		out = append(out, u.Artifacts...)
+	}
+	return out
 }
 
 // reviewWithShrink runs RunReview, recovering from a prompt rejected
@@ -1642,13 +1678,13 @@ func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewP
 	diffCap, artifactsCap := baselineDiffCap/4, reviewArtifactsCap/2
 	trimmed := packet
 	if wt := m.WorktreePath(); wt != "" {
-		trimmedDiff, diffErr := baselineDiffCapped(ctx, wt, m.BaseCommit, diffCap)
+		trimmedDiff, diffErr := baselineDiffCapped(ctx, wt, m.BaseCommit, reviewScope(packet.Units), diffCap)
 		if diffErr != nil {
 			return ReviewVerdict{}, diffErr
 		}
 		trimmed.Diff = trimmedDiff
 	}
-	if _, _, artifacts := reviewUnits(m.Plan); len(artifacts) > 0 {
+	if artifacts := reviewArtifacts(packet.Units, packet.Diff != ""); len(artifacts) > 0 {
 		trimmed.Artifacts = ReadArtifactsCapped(m.WorkRoot(), artifacts, artifactsCap)
 	}
 	if evErr := d.store.AppendEvent(ctx, m.ID, "mission.review_prompt_shrunk", map[string]any{
@@ -1667,32 +1703,60 @@ func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewP
 }
 
 func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
-	var diff string
-	if wt := m.WorktreePath(); wt != "" {
-		var err error
-		diff, err = BaselineDiff(ctx, wt, m.BaseCommit)
-		if err != nil {
-			return StepInput{}, err
-		}
-	}
-	workRoot := m.WorkRoot()
-	packet := ReviewPacket{
-		Goal: m.Goal, Plan: m.Plan, Diff: diff, Evidence: m.LastEvidence,
-		Listing: ListWorkspace(workRoot), Progress: m.Progress,
-		OpenFindings: OpenFindings(m.ReviewFindings),
-	}
-	idx, titles, artifacts := reviewUnits(m.Plan)
+	idx, units := reviewUnits(m.Plan)
 	unitIdx := -1
 	if len(idx) > 0 {
 		unitIdx = idx[0]
 	}
-	packet.UnitTitle = strings.Join(titles, "; ")
-	if len(artifacts) > 0 {
-		packet.Artifacts = ReadArtifacts(workRoot, artifacts)
+	// D-095: the packet carries the reviewed units' criteria in place of
+	// the goal (legacy plans without criteria keep the goal), the
+	// whole-change stat and the diff restricted to the units' scope.
+	// changedFiles feeds the evidence gate below.
+	var changedFiles []string
+	packet := ReviewPacket{
+		Plan: m.Plan, Units: units, Evidence: m.LastEvidence,
+		Listing: ListWorkspace(m.WorkRoot()), Progress: m.Progress,
+		OpenFindings: OpenFindings(m.ReviewFindings),
+	}
+	if !hasCriteria(units) {
+		packet.Goal = m.Goal
+	}
+	if wt := m.WorktreePath(); wt != "" {
+		var err error
+		if packet.Diff, err = BaselineDiff(ctx, wt, m.BaseCommit, reviewScope(units)); err != nil {
+			return StepInput{}, err
+		}
+		if packet.DiffStat, err = DiffStat(ctx, wt, m.BaseCommit); err != nil {
+			return StepInput{}, err
+		}
+		if changedFiles, err = ChangedFiles(ctx, wt, m.BaseCommit); err != nil {
+			return StepInput{}, err
+		}
+	}
+	if artifacts := reviewArtifacts(units, packet.Diff != ""); len(artifacts) > 0 {
+		packet.Artifacts = ReadArtifacts(m.WorkRoot(), artifacts)
 	}
 	verdict, err := d.reviewWithShrink(ctx, m, packet)
 	if err != nil {
 		return StepInput{}, err
+	}
+	// D-095 evidence gate: a blocking finding must name a changed or
+	// declared file and quote evidence, or it is demoted to minor here,
+	// deterministically. A rework whose findings all end up minor, with
+	// no prior blocking finding left unresolved, counts as approval.
+	if !verdict.Approved && len(verdict.Findings) > 0 {
+		gated, demoted := gateFindings(verdict.Findings, append(changedFiles, planArtifacts(m.Plan)...))
+		for _, dm := range demoted {
+			if err := d.store.AppendEvent(ctx, m.ID, "mission.finding_demoted", map[string]any{
+				"title": dm.Finding.Title, "file": dm.Finding.File, "reason": dm.Reason,
+			}); err != nil {
+				d.log.Warn("driver: record finding demoted failed", "mission_id", m.ID, "error", err)
+			}
+		}
+		verdict.Findings = gated
+		if !blockingRemain(gated, packet.OpenFindings, verdict.Resolved) {
+			verdict.Approved = true
+		}
 	}
 	// The reviewer's own worktree side effects (it may run tests) are
 	// rolled back unconditionally after every review round.

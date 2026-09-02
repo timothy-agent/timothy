@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -1307,7 +1309,7 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 // session (D-092): findings carry across rounds as mission state, so
 // no reviewer transcript is retained to anchor the next verdict.
 func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
-	system := "You are reviewing one unit of a mission's work. The mission goal, the plan, and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: the artifact not satisfying the goal, unsupported claims, missing substance. Reject when the work violates an explicit constraint stated in the goal, even if it faithfully follows the plan: the goal outranks the plan. Do NOT reject for material you were not given (the harness supplies everything there is). Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings. End your turn with exactly one review_verdict tool call."
+	system := "You are reviewing units of a mission's work. Each unit's acceptance criteria, the harness's own check results, the diff and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: a criterion the work does not satisfy, unsupported claims, missing substance. Do NOT reject for material you were not given (the harness supplies everything there is) and do not re-run checks the harness already reports as passed. Every blocking finding must name a file that appears in the diff or the artifacts and quote the line that shows the gap in evidence; a blocking finding without both is demoted to minor. Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings. End your turn with exactly one review_verdict tool call."
 	messages := []provider.Message{{Role: "user", Content: renderReviewContent(packet)}}
 
 	extra := append([]*tools.Tool{ReviewVerdictTool()}, r.missionTools(m)...)
@@ -1395,9 +1397,30 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 // model-produced text passes through NeutralizeSlot.
 func renderReviewContent(p ReviewPacket) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Mission goal: %s\n", NeutralizeSlot(p.Goal))
-	if p.UnitTitle != "" {
-		fmt.Fprintf(&b, "Unit under review: %s\n", NeutralizeSlot(p.UnitTitle))
+	if p.Goal != "" {
+		fmt.Fprintf(&b, "Mission goal: %s\n", NeutralizeSlot(p.Goal))
+	}
+	if len(p.Units) > 0 {
+		b.WriteString("Units under review (judge each against its acceptance criteria):\n")
+		for _, u := range p.Units {
+			fmt.Fprintf(&b, "\n### %s [%s]\n", NeutralizeSlot(u.Title), unitStatus(u))
+			if len(u.Criteria) > 0 {
+				b.WriteString("Acceptance criteria:\n")
+				for _, c := range u.Criteria {
+					fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(c))
+				}
+			}
+			if u.VerifyCheck != "" {
+				result := "failed"
+				if u.verified() {
+					result = "passed"
+				}
+				fmt.Fprintf(&b, "Harness %s check: %s\n", u.VerifyCheck, result)
+			}
+			if u.VerifyExcerpt != "" {
+				fmt.Fprintf(&b, "Verify output:\n%s\n", NeutralizeSlot(strings.TrimRight(u.VerifyExcerpt, "\n")))
+			}
+		}
 	}
 	if len(p.Plan.Units) > 0 {
 		b.WriteString("\nPlan:\n")
@@ -1434,8 +1457,13 @@ func renderReviewContent(p ReviewPacket) string {
 			fmt.Fprintf(&b, "\n--- %s ---\n%s\n", path, NeutralizeSlot(p.Artifacts[path]))
 		}
 	}
+	if p.DiffStat != "" {
+		b.WriteString("\nChanged files (whole change):\n")
+		b.WriteString(p.DiffStat)
+		b.WriteString("\n")
+	}
 	if p.Diff != "" {
-		b.WriteString("\nDiff to review:\n")
+		b.WriteString("\nDiff to review (restricted to the reviewed units' scope):\n")
 		b.WriteString(p.Diff)
 		b.WriteString("\n")
 	}
@@ -1465,7 +1493,7 @@ func renderReviewContent(p ReviewPacket) string {
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
-	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it — one unit is correct for a simple goal; never pad the plan. A worker turn is one continuous model generation: if a single unit's own deliverable would demand a very long uninterrupted output (many chapters, dozens of sections, a large multi-file dataset, or similar), a long stream is more likely to truncate mid-generation, so split that unit along its own natural boundaries (one unit per chapter/section/file) instead of one unit for the whole deliverable — this applies regardless of the goal's subject matter. Every unit must list at least one artifact — the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory — it must be a real POSIX shell command (using binaries like grep, test, wc — NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd — write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote(ctx)
+	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it: one unit is correct for a simple goal; never pad the plan. A worker turn is one continuous model generation: if a single unit's own deliverable would demand a very long uninterrupted output (many chapters, dozens of sections, a large multi-file dataset, or similar), a long stream is more likely to truncate mid-generation, so split that unit along its own natural boundaries (one unit per chapter/section/file) instead of one unit for the whole deliverable; this applies regardless of the goal's subject matter. Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)
@@ -1646,6 +1674,20 @@ func parsePlan(raw string) (Plan, error) {
 			return Plan{}, fmt.Errorf("mission runner: unit %q must list at least one workspace-relative artifact file the harness can check (for a report-style goal, the report file itself is the artifact)", u.Title)
 		}
 	}
+	// D-095: every unit carries 2 to 6 acceptance criteria; the reviewer
+	// judges against them, never the full goal. Scope defaults to the
+	// artifact directories when the planner left it out.
+	for i := range plan.Units {
+		u := &plan.Units[i]
+		u.Criteria = trimNonEmpty(u.Criteria)
+		if len(u.Criteria) < minUnitCriteria || len(u.Criteria) > maxUnitCriteria {
+			return Plan{}, fmt.Errorf("mission runner: plan_invalid: unit %q must list %d to %d acceptance criteria (one short line each, taken from the goal), got %d", u.Title, minUnitCriteria, maxUnitCriteria, len(u.Criteria))
+		}
+		u.Scope = trimNonEmpty(u.Scope)
+		if len(u.Scope) == 0 {
+			u.Scope = defaultScope(u.Artifacts)
+		}
+	}
 	// D-068: reject verify_cmds that succeed regardless of outcome.
 	// Deny-set on the first shell word only, deliberately not a shell
 	// parser; a no-op buried after && is out of scope.
@@ -1687,4 +1729,47 @@ func parsePlan(raw string) (Plan, error) {
 		u.Passes, u.HarnessPassed, u.Regressed, u.VerifyCheck, u.VerifyExcerpt = false, false, false, "", ""
 	}
 	return plan, nil
+}
+
+// Unit criteria bounds (D-095): few enough to quote back whole, many
+// enough to pin the goal's constraints.
+const (
+	minUnitCriteria = 2
+	maxUnitCriteria = 6
+)
+
+// trimNonEmpty trims each entry and drops the blank ones; nil when
+// nothing survives.
+func trimNonEmpty(in []string) []string {
+	var out []string
+	for _, s := range in {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// defaultScope derives a unit's scope from its artifacts: the parent
+// directory of each nested artifact, the file itself for one at the
+// workspace root (the root directory would scope the whole tree).
+// Deduplicated, in first-seen order.
+func defaultScope(artifacts []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range artifacts {
+		a = path.Clean(filepath.ToSlash(strings.TrimSpace(a)))
+		if a == "" || a == "." {
+			continue
+		}
+		p := a
+		if dir := path.Dir(a); dir != "." {
+			p = dir
+		}
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	return out
 }

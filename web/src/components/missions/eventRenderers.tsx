@@ -64,6 +64,14 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     )
   },
   'mission.generate_skipped': () => 'Worker turn skipped: every unit is harness-verified',
+  'mission.finding_demoted': (p) => {
+    const { title, reason } = asRecord(p)
+    return (
+      <span className="text-amber-400">
+        Finding demoted to minor: {String(title ?? '?')} ({String(reason ?? 'no evidence')})
+      </span>
+    )
+  },
   'mission.review_verdict': (p) => {
     const { decision } = asRecord(p)
     const approved = decision === 'approve'

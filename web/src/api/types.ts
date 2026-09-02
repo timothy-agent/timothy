@@ -674,6 +674,11 @@ export interface PlanUnit {
   title: string
   verify_cmd: string
   artifacts?: string[]
+  // criteria (D-095) are the unit's acceptance criteria, 2 to 6 short
+  // lines the reviewer judges against; scope lists the paths the unit
+  // may touch. Both absent on plans written before D-095.
+  criteria?: string[]
+  scope?: string[]
   passes: boolean
   harness_passed?: boolean
   verify_check?: string
@@ -703,6 +708,9 @@ export interface ReviewFinding {
   file: string
   detail: string
   severity?: 'blocking' | 'minor'
+  // evidence (D-095) is the reviewer's quoted diff or output line; a
+  // blocking finding without it is demoted to minor by the harness.
+  evidence?: string
   status?: 'open' | 'resolved' | 'accepted'
   round_opened?: number
   untouched_rounds?: number

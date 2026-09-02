@@ -535,6 +535,15 @@ type PlanUnit struct {
 	// verify_cmd — a tautological verify_cmd (echo 'done') can no
 	// longer fake completion when the declared artifact is missing.
 	Artifacts []string `json:"artifacts,omitempty"`
+	// Criteria (D-095, issue #520) are the unit's acceptance criteria,
+	// 2 to 6 short lines the planner extracts from the goal: the
+	// reviewer judges the unit against them instead of the full goal.
+	// Empty on plans written before D-095 (review falls back to the goal).
+	Criteria []string `json:"criteria,omitempty"`
+	// Scope lists the paths (files or directory prefixes) the unit may
+	// touch; the reviewer's diff is restricted to the reviewed units'
+	// scope. Defaults to the artifact directories at plan parse.
+	Scope []string `json:"scope,omitempty"`
 	// Passes marks the unit complete: harness-passed and, for missions
 	// that review, approved by the reviewer. Never true without
 	// HarnessPassed (legacy rows written before D-094 excepted).

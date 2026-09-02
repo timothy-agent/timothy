@@ -1361,17 +1361,24 @@ func TestDriverWorkerRetryDoesNotCountTowardBackoff(t *testing.T) {
 // made max_iterations dead for rework), and the round that reaches
 // max_iterations parks review_exhausted naming F1 instead of failing.
 func TestDriverReworkOpensFindingsAndParksWhenExhausted(t *testing.T) {
+	// x.go is a declared artifact present on disk: the D-095 evidence
+	// gate keeps a blocking finding only when it names such a file and
+	// quotes evidence.
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "x.go"), []byte("package x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	store := newFakeStore()
 	store.put("m1", Mission{
-		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 3,
-		Plan: Plan{Units: []PlanUnit{{Title: "u1"}}},
+		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 3, Workspace: root,
+		Plan: Plan{Units: []PlanUnit{{Title: "u1", Artifacts: []string{"x.go"}}}},
 	})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "done"}},
 		reviewVerdicts: []ReviewVerdict{
-			{Findings: []Finding{{Title: "missing validation", File: "x.go", Detail: "no input check"}}},
-			{Findings: []Finding{{Title: "Validation missing.", File: "./x.go"}}},
-			{Findings: []Finding{{Title: "MISSING validation", File: "x.go"}}},
+			{Findings: []Finding{{Title: "missing validation", File: "x.go", Detail: "no input check", Evidence: "package x"}}},
+			{Findings: []Finding{{Title: "Validation missing.", File: "./x.go", Evidence: "package x"}}},
+			{Findings: []Finding{{Title: "MISSING validation", File: "x.go", Evidence: "package x"}}},
 		},
 	}
 	d := testDriver(store, runner)
@@ -3395,6 +3402,138 @@ func TestRetryDelay(t *testing.T) {
 	for _, tc := range cases {
 		if got := retryDelay(tc.consecutiveFailures); got != tc.want {
 			t.Fatalf("retryDelay(%d) = %v, want %v", tc.consecutiveFailures, got, tc.want)
+		}
+	}
+}
+
+// TestDriverEvidenceGateDemotesAndApproves pins the D-095 gate through
+// Advance: a rework whose only blocking finding names a file outside
+// the change and quotes nothing is demoted with a
+// mission.finding_demoted event, the round counts as approval, and the
+// packet carried the unit's criteria in place of the goal.
+func TestDriverEvidenceGateDemotesAndApproves(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "out.md"), []byte("429 Too Many Requests\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 3, Workspace: root, Goal: "explain 429",
+		Plan: Plan{Units: []PlanUnit{{
+			Title: "u1", Artifacts: []string{"out.md"}, Criteria: []string{"out.md explains 429", "cites the RFC"}, HarnessPassed: true,
+		}}},
+	})
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Findings: []Finding{
+		{Title: "wrong status text", File: "nope.md", Detail: "should say Too Many Requests"},
+		{Title: "style nit", Severity: SeverityMinor},
+	}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseResult || !m.Plan.Units[0].Passes {
+		t.Fatalf("mission phase %q passes %v, want result with the unit passed", m.Phase, m.Plan.Units[0].Passes)
+	}
+	if len(OpenFindings(m.ReviewFindings)) != 0 {
+		t.Fatalf("findings = %+v, want none open after the gated approval", m.ReviewFindings)
+	}
+	var demoted, approved bool
+	for _, ev := range store.events["m1"] {
+		switch ev.Kind {
+		case "mission.finding_demoted":
+			demoted = true
+			if !strings.Contains(string(ev.Payload), `"nope.md"`) || !strings.Contains(string(ev.Payload), "not in the diff") {
+				t.Fatalf("finding_demoted payload = %s, want the file and reason", ev.Payload)
+			}
+		case "mission.review_verdict":
+			if strings.Contains(string(ev.Payload), `"decision":"approved"`) {
+				approved = true
+			}
+		}
+	}
+	if !demoted || !approved {
+		t.Fatalf("demoted=%v approved=%v, want both events", demoted, approved)
+	}
+	packet := runner.reviewCalls[0]
+	if packet.Goal != "" || len(packet.Units) != 1 || len(packet.Units[0].Criteria) != 2 {
+		t.Fatalf("review packet = %+v, want criteria and no goal", packet)
+	}
+	if _, ok := packet.Artifacts["out.md"]; !ok {
+		t.Fatalf("review packet artifacts = %v, want out.md (no diff, so every artifact)", packet.Artifacts)
+	}
+}
+
+// TestDriverLegacyPlanReviewsAgainstGoal pins the D-095 fallback: a
+// plan whose units carry no criteria still hands the reviewer the goal.
+func TestDriverLegacyPlanReviewsAgainstGoal(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 3, Goal: "the legacy goal",
+		Plan: Plan{Units: []PlanUnit{{Title: "u1", HarnessPassed: true}}},
+	})
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}}
+	d := testDriver(store, runner)
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got := runner.reviewCalls[0].Goal; got != "the legacy goal" {
+		t.Fatalf("review packet goal = %q, want the goal for a plan without criteria", got)
+	}
+}
+
+// TestDriverReviewPacketScopedDiffAndGate pins D-095 with a real
+// worktree: the packet's diff is restricted to the reviewed unit's
+// scope while the stat covers every changed file, and a blocking
+// finding naming a changed file outside the scope, with evidence,
+// survives the gate and sends the mission back to generate.
+func TestDriverReviewPacketScopedDiffAndGate(t *testing.T) {
+	root, base := codingWorktree(t)
+	wt := filepath.Join(root, "wt")
+	for path, content := range map[string]string{"src/main.go": "package main\n", "docs/notes.md": "# notes\n"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(wt, path)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wt, path), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, wt, "add", "-A")
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, Workspace: root, BaseCommit: base,
+		Plan: Plan{Units: []PlanUnit{{
+			Title: "write code", Artifacts: []string{"src/main.go"}, Scope: []string{"src"},
+			Criteria: []string{"main.go compiles", "no docs edits"}, HarnessPassed: true,
+		}}},
+	})
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Findings: []Finding{
+		{Title: "docs changed", File: "docs/notes.md", Evidence: "+# notes"},
+	}}}}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	packet := runner.reviewCalls[0]
+	if !strings.Contains(packet.Diff, "src/main.go") || strings.Contains(packet.Diff, "docs/notes.md") {
+		t.Fatalf("packet diff not restricted to scope:\n%s", packet.Diff)
+	}
+	if !strings.Contains(packet.DiffStat, "docs/notes.md") || !strings.Contains(packet.DiffStat, "src/main.go") {
+		t.Fatalf("packet stat missing changed files:\n%s", packet.DiffStat)
+	}
+	if _, ok := packet.Artifacts["src/main.go"]; !ok {
+		t.Fatalf("criteria name main.go, so its contents must be attached: %v", packet.Artifacts)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseGenerate || len(OpenFindings(m.ReviewFindings)) != 1 || !m.ReviewFindings[0].Blocking() {
+		t.Fatalf("mission phase %q findings %+v, want generate with the blocking finding kept", m.Phase, m.ReviewFindings)
+	}
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.finding_demoted" {
+			t.Fatalf("finding naming a changed file with evidence was demoted: %s", ev.Payload)
 		}
 	}
 }

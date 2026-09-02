@@ -30,6 +30,20 @@ describe('PlanSection', () => {
     expect(screen.getByText('pending')).toBeInTheDocument()
   })
 
+  it('lists acceptance criteria under a unit and none for a legacy unit', () => {
+    render(
+      <PlanSection
+        units={[
+          { title: 'with criteria', verify_cmd: '', passes: false, criteria: ['report.md names RFC 6585', 'under 200 words'] },
+          { title: 'legacy', verify_cmd: '', passes: false },
+        ]}
+      />,
+    )
+    expect(screen.getByText('report.md names RFC 6585')).toBeInTheDocument()
+    expect(screen.getByText('under 200 words')).toBeInTheDocument()
+    expect(screen.getByText('legacy').closest('li')?.querySelector('ul')).toBeNull()
+  })
+
   it('does not render an Assumptions header when assumptions is absent', () => {
     render(<PlanSection units={units} />)
     expect(screen.queryByText('Assumptions')).toBeNull()

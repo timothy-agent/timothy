@@ -26,14 +26,23 @@ export function PlanSection({ units, assumptions }: { units: PlanUnit[]; assumpt
         {units.map((u, i) => {
           const badge = unitBadge(u)
           return (
-            <li key={i} className="flex items-center gap-2 text-sm">
-              <span
-                className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${badge.className}`}
-                title={!u.passes && !u.harness_passed && u.verify_excerpt ? u.verify_excerpt : undefined}
-              >
-                {badge.label}
-              </span>
-              <span>{u.title}</span>
+            <li key={i} className="text-sm">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${badge.className}`}
+                  title={!u.passes && !u.harness_passed && u.verify_excerpt ? u.verify_excerpt : undefined}
+                >
+                  {badge.label}
+                </span>
+                <span>{u.title}</span>
+              </div>
+              {u.criteria && u.criteria.length > 0 && (
+                <ul className="ml-4 mt-0.5 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">
+                  {u.criteria.map((c, j) => (
+                    <li key={j}>{c}</li>
+                  ))}
+                </ul>
+              )}
             </li>
           )
         })}

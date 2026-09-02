@@ -429,7 +429,7 @@ func TestRunReviewPacketRendersArtifactsGoalAndEvidence(t *testing.T) {
 	r := newTestRunner(agent)
 	packet := ReviewPacket{
 		Goal:      "Summarize HTTP 429",
-		UnitTitle: "write summary",
+		Units:     []PlanUnit{{Title: "write summary"}},
 		Artifacts: map[string]string{"summary.md": "429 means Too Many Requests, per RFC 6585."},
 		Evidence:  "Summary written to summary.md, sourced from RFC 6585.",
 	}
@@ -536,7 +536,7 @@ func TestRunReviewFallsBackToTokenJSONTextSentinel(t *testing.T) {
 
 func TestPlanSessionParsesSpec(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
@@ -570,17 +570,17 @@ func TestPlanSessionParsesAssumptions(t *testing.T) {
 	}{
 		{
 			name: "omitted",
-			json: `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./..."}]}`,
+			json: `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./..."}]}`,
 			want: nil,
 		},
 		{
 			name: "empty",
-			json: `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./..."}],"assumptions":[]}`,
+			json: `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./..."}],"assumptions":[]}`,
 			want: nil,
 		},
 		{
 			name: "populated",
-			json: `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./..."}],"assumptions":[{"assumption":"no language version was specified","default":"Python 3.12"}]}`,
+			json: `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./..."}],"assumptions":[{"assumption":"no language version was specified","default":"Python 3.12"}]}`,
 			want: []PlanAssumption{{Assumption: "no language version was specified", Default: "Python 3.12"}},
 		},
 	}
@@ -611,7 +611,7 @@ func TestPlanSessionParsesAssumptions(t *testing.T) {
 // into one unit and truncated on a long model stream, twice).
 func TestPlanSessionPromptsLengthAwareSplitting(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
@@ -627,7 +627,7 @@ func TestPlanSessionPromptsLengthAwareSplitting(t *testing.T) {
 // planning turn's sole tool, the request forces it.
 func TestPlanSessionForcesPlanTool(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
@@ -643,7 +643,7 @@ func TestPlanSessionForcesPlanTool(t *testing.T) {
 // turn, so forcing submit_plan would make consulting them impossible.
 func TestPlanSessionNoForceToolWithKB(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	r.kbSearch = func(ctx context.Context, query string, collections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
@@ -662,7 +662,7 @@ func TestPlanSessionNoForceToolWithKB(t *testing.T) {
 // PlanRoute when set, instead of Route.
 func TestPlanSessionUsesPlanRoute(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "mini", PlanRoute: "strong", Goal: "fix bug"}
@@ -678,7 +678,7 @@ func TestPlanSessionUsesPlanRoute(t *testing.T) {
 // prior outcome digest reaches the planner's user prompt.
 func TestPlanSessionIncludesParentContext(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{
@@ -700,7 +700,7 @@ func TestPlanSessionIncludesParentContext(t *testing.T) {
 // additive to (not instead of) ParentContext.
 func TestPlanSessionIncludesReferencedContext(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{
@@ -727,7 +727,7 @@ func TestPlanSessionIncludesReferencedContext(t *testing.T) {
 // attachment's markdown reaches the planner's user prompt.
 func TestPlanSessionIncludesAttachments(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}}
 	r := newTestRunner(agent)
 	m := Mission{ID: "m1", Route: "default", Goal: "fix bug", Sources: []SourceEntry{
@@ -800,8 +800,8 @@ func TestPlanSessionRejectsInfeasibleWithoutReason(t *testing.T) {
 // submission, with feedback the planner can act on immediately.
 func TestPlanSessionRejectsCommandSubstitution(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
-		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
 	}}
 	r := newTestRunner(agent)
 	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
@@ -836,8 +836,8 @@ func TestPlanSessionRejectsBackticks(t *testing.T) {
 // what was wrong and a corrected plan on the next turn is accepted.
 func TestPlanSessionRecoversFromCommandSubstitutionFeedback(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
-		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"verify_cmd":"grep -qi ok out.md"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"test \"$(cat out.md)\" = ok"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Check output","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -qi ok out.md"}]}`)},
 	}}
 	r := newTestRunner(agent)
 	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
@@ -861,8 +861,8 @@ func TestPlanSessionRecoversFromCommandSubstitutionFeedback(t *testing.T) {
 func TestPlanSessionAcceptsLegitimateVerifyCmd(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(planToolName, `{"units":[`+
-			`{"title":"Check content","artifacts":["out.md"],"verify_cmd":"grep -qi 'foo' out.md"},`+
-			`{"title":"Check line count","artifacts":["x"],"verify_cmd":"test -f x && wc -l < x"}`+
+			`{"title":"Check content","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -qi 'foo' out.md"},`+
+			`{"title":"Check line count","artifacts":["x"],"criteria":["c1","c2"],"verify_cmd":"test -f x && wc -l < x"}`+
 			`]}`)},
 	}}
 	r := newTestRunner(agent)
@@ -889,7 +889,7 @@ func TestPlanSessionAcceptsLegitimateVerifyCmd(t *testing.T) {
 func TestPlanSessionRejectsUnitWithNoArtifacts(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(planToolName, `{"units":[{"title":"Integrate Gmail API","verify_cmd":"grep -qi ok out.md"}]}`)},
-		{toolEndEvent(planToolName, `{"units":[{"title":"Integrate Gmail API","artifacts":["out.md"],"verify_cmd":"grep -qi ok out.md"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Integrate Gmail API","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -qi ok out.md"}]}`)},
 	}}
 	r := newTestRunner(agent)
 	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
@@ -929,7 +929,7 @@ func TestPlanSessionRejectsNoOpVerifyCmd(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan := fmt.Sprintf(`{"units":[{"title":"Ship it","artifacts":["out.md"],"verify_cmd":%q}]}`, tc.cmd)
+			plan := fmt.Sprintf(`{"units":[{"title":"Ship it","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":%q}]}`, tc.cmd)
 			agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 				{toolEndEvent(planToolName, plan)},
 				{toolEndEvent(planToolName, plan)},
@@ -953,8 +953,8 @@ func TestPlanSessionRejectsNoOpVerifyCmd(t *testing.T) {
 func TestPlanSessionAcceptsVerifyCmdContainingEchoWord(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(planToolName, `{"units":[`+
-			`{"title":"Check literal word","artifacts":["file.md"],"verify_cmd":"grep -q echo file.md"},`+
-			`{"title":"Check then echo","artifacts":["report.md"],"verify_cmd":"test -s report.md && grep -q x report.md"}`+
+			`{"title":"Check literal word","artifacts":["file.md"],"criteria":["c1","c2"],"verify_cmd":"grep -q echo file.md"},`+
+			`{"title":"Check then echo","artifacts":["report.md"],"criteria":["c1","c2"],"verify_cmd":"test -s report.md && grep -q x report.md"}`+
 			`]}`)},
 	}}
 	r := newTestRunner(agent)
@@ -983,8 +983,8 @@ func TestPlanSessionRejectsUnterminatedQuote(t *testing.T) {
 	}
 	bad := `grep -q "unterminated report.md`
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, fmt.Sprintf(`{"units":[{"title":"Ship it","artifacts":["report.md"],"verify_cmd":%q}]}`, bad))},
-		{toolEndEvent(planToolName, fmt.Sprintf(`{"units":[{"title":"Ship it","artifacts":["report.md"],"verify_cmd":%q}]}`, bad))},
+		{toolEndEvent(planToolName, fmt.Sprintf(`{"units":[{"title":"Ship it","artifacts":["report.md"],"criteria":["c1","c2"],"verify_cmd":%q}]}`, bad))},
+		{toolEndEvent(planToolName, fmt.Sprintf(`{"units":[{"title":"Ship it","artifacts":["report.md"],"criteria":["c1","c2"],"verify_cmd":%q}]}`, bad))},
 	}}
 	r := newTestRunner(agent)
 	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
@@ -1003,7 +1003,7 @@ func TestPlanSessionAcceptsValidQuoting(t *testing.T) {
 		t.Skip("no /bin/sh on this machine")
 	}
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Ship it","artifacts":["report.md"],"verify_cmd":"grep -qi 'retry-after' report.md"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Ship it","artifacts":["report.md"],"criteria":["c1","c2"],"verify_cmd":"grep -qi 'retry-after' report.md"}]}`)},
 	}}
 	r := newTestRunner(agent)
 	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
@@ -1040,7 +1040,7 @@ func TestPlanSessionRejectsMalformedJSON(t *testing.T) {
 func TestPlanSessionRecoversWithFeedback(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{textEvent("here's my plan in prose, no tool call")},
-		{toolEndEvent(planToolName, `{"units":[{"title":"Fix it","artifacts":["out.md"],"verify_cmd":"grep -qi ok out.md"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Fix it","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -qi ok out.md"}]}`)},
 	}}
 	r := newTestRunner(agent)
 	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
@@ -2232,7 +2232,7 @@ func TestMissionRunnerRequestsAreBuiltinsOnly(t *testing.T) {
 	}
 
 	agent = &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"do it","artifacts":["out.md"],"verify_cmd":"grep -qi ok out.md"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"do it","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -qi ok out.md"}]}`)},
 	}}
 	r = newTestRunner(agent)
 	if _, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, ""); err != nil {
@@ -2822,7 +2822,7 @@ func TestDiscoverSessionWiresSteeringFromProgressReader(t *testing.T) {
 // (D-089, issue #458).
 func TestPlanSessionWiresSteeringFromProgressReader(t *testing.T) {
 	batch := [][]stream.StreamEvent{
-		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"verify_cmd":"go test ./...","passes":true}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
 	}
 
 	t.Run("wired", func(t *testing.T) {
@@ -2879,4 +2879,112 @@ func TestRunReviewWiresSteeringFromProgressReader(t *testing.T) {
 			t.Fatal("Steering wired despite no ProgressReader")
 		}
 	})
+}
+
+// TestParsePlanCriteriaAndScope is the D-095 plan validation table:
+// 2 to 6 criteria per unit or plan_invalid naming the unit; blank
+// entries trimmed; scope defaults to the artifact directories (the
+// file itself at the workspace root) unless the planner sets it.
+func TestParsePlanCriteriaAndScope(t *testing.T) {
+	unit := func(extra string) string {
+		return `{"units":[{"title":"Write it","artifacts":["src/a.go","report.md","src/b.go"],"verify_cmd":"grep -q x report.md"` + extra + `}]}`
+	}
+	tests := []struct {
+		name      string
+		json      string
+		wantErr   string
+		wantCrit  []string
+		wantScope []string
+	}{
+		{"missing criteria", unit(``), "plan_invalid: unit \"Write it\"", nil, nil},
+		{"one criterion", unit(`,"criteria":["only one"]`), "plan_invalid", nil, nil},
+		{"seven criteria", unit(`,"criteria":["1","2","3","4","5","6","7"]`), "plan_invalid", nil, nil},
+		{"blank entries do not count", unit(`,"criteria":["real"," ",""]`), "plan_invalid", nil, nil},
+		{"two criteria, default scope", unit(`,"criteria":[" a ","b"]`), "", []string{"a", "b"}, []string{"src", "report.md"}},
+		{"explicit scope kept", unit(`,"criteria":["a","b"],"scope":["src/","docs"]`), "", []string{"a", "b"}, []string{"src/", "docs"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := parsePlan(tc.json)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parsePlan err = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parsePlan: %v", err)
+			}
+			u := plan.Units[0]
+			if strings.Join(u.Criteria, "|") != strings.Join(tc.wantCrit, "|") {
+				t.Fatalf("Criteria = %v, want %v", u.Criteria, tc.wantCrit)
+			}
+			if strings.Join(u.Scope, "|") != strings.Join(tc.wantScope, "|") {
+				t.Fatalf("Scope = %v, want %v", u.Scope, tc.wantScope)
+			}
+		})
+	}
+}
+
+// TestPlanSessionRetriesWithCriteriaError pins the D-095 retry: a plan
+// without criteria buys one recovery turn whose message names the
+// plan_invalid error, and a corrected plan on that turn is accepted.
+func TestPlanSessionRetriesWithCriteriaError(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Write it","artifacts":["out.md"],"verify_cmd":"grep -q x out.md"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Write it","artifacts":["out.md"],"criteria":["a","b"],"verify_cmd":"grep -q x out.md"}]}`)},
+	}}
+	r := newTestRunner(agent)
+	plan, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "g"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if agent.call != 2 || len(plan.Units[0].Criteria) != 2 {
+		t.Fatalf("calls = %d, plan = %+v; want one recovery turn and the corrected plan", agent.call, plan)
+	}
+	msgs := agent.requests[1].Messages
+	last := msgs[len(msgs)-1].Content
+	if !strings.Contains(last, "plan_invalid: unit \"Write it\"") {
+		t.Fatalf("recovery message = %q, want the plan_invalid error naming the unit", last)
+	}
+}
+
+// TestRenderReviewContentCriteriaReplaceGoal pins the D-095 reviewer
+// packet: units render with criteria, harness status and verify
+// excerpt, the whole-change stat precedes the scoped diff, and the goal
+// is absent unless the packet sets it (legacy plans).
+func TestRenderReviewContentCriteriaReplaceGoal(t *testing.T) {
+	p := ReviewPacket{
+		Units: []PlanUnit{{
+			Title: "Write summary", Criteria: []string{"summary.md names RFC 6585", "under 200 words"},
+			HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "grep ok\n",
+		}},
+		DiffStat: " summary.md | 3 +++\n 1 file changed",
+		Diff:     "diff --git a/summary.md b/summary.md\n+429",
+	}
+	got := renderReviewContent(p)
+	for _, want := range []string{
+		"Units under review (judge each against its acceptance criteria):",
+		"### Write summary [harness-verified]",
+		"- summary.md names RFC 6585",
+		"- under 200 words",
+		"Harness verify_cmd check: passed",
+		"Verify output:\ngrep ok\n",
+		"Changed files (whole change):\n summary.md | 3 +++",
+		"Diff to review (restricted to the reviewed units' scope):\ndiff --git",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("review content missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Mission goal") {
+		t.Fatalf("review content carries the goal despite criteria:\n%s", got)
+	}
+	if statIdx, diffIdx := strings.Index(got, "Changed files"), strings.Index(got, "Diff to review"); statIdx > diffIdx {
+		t.Fatal("diff stat must precede the scoped diff")
+	}
+	legacy := renderReviewContent(ReviewPacket{Goal: "the goal", Units: []PlanUnit{{Title: "u"}}})
+	if !strings.Contains(legacy, "Mission goal: the goal") {
+		t.Fatalf("legacy packet must render the goal:\n%s", legacy)
+	}
 }

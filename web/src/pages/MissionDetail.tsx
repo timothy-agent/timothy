@@ -38,6 +38,7 @@ import type {
 } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { DiscoverSection } from '../components/missions/DiscoverSection'
+import { FindingsSection } from '../components/missions/FindingsSection'
 import { GoalSection } from '../components/missions/GoalSection'
 import { InputRequestBanner } from '../components/missions/InputRequestBanner'
 import { MarkdownField } from '../components/missions/MarkdownField'
@@ -1012,6 +1013,13 @@ export function MissionDetail() {
         <section>
           <h2 className="mb-2 text-sm font-semibold tracking-tight">Plan</h2>
           <PlanSection units={mission.plan?.units ?? []} assumptions={mission.plan?.assumptions} />
+        </section>
+      )}
+
+      {(mission.review_findings?.length ?? 0) > 0 && (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold tracking-tight">Review findings</h2>
+          <FindingsSection findings={mission.review_findings ?? []} />
         </section>
       )}
 

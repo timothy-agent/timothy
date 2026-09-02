@@ -95,9 +95,19 @@ func PlanTool() *tools.Tool {
 							"verify_cmd": {
 								"type": "string",
 								"description": "A real POSIX shell command, run as /bin/sh -c \"<verify_cmd>\" in the mission's workspace, that checks the CONTENT of the artifacts."
+							},
+							"criteria": {
+								"type": "array",
+								"items": {"type": "string"},
+								"description": "Required: 2 to 6 short acceptance criteria for this unit, each one line, extracted from the goal. The reviewer judges the unit against these lines, so quote the goal's own constraints."
+							},
+							"scope": {
+								"type": "array",
+								"items": {"type": "string"},
+								"description": "Workspace-relative files or directory prefixes this unit may touch. Optional: defaults to the directories of its artifacts."
 							}
 						},
-						"required": ["title", "artifacts", "verify_cmd"]
+						"required": ["title", "artifacts", "verify_cmd", "criteria"]
 					}
 				},
 				"infeasible": {
