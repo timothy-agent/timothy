@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Coding-mission canary: runs one coding mission end-to-end against its
 # own self-initialized worktree repo and asserts the coding-specific
-# harness contract — worktree provisioned, LLM review actually ran
+# harness contract: worktree provisioned, LLM review actually ran
 # (coding never skips review), harness-verified artifact present in the
 # worktree, zero human permission parks. The general-mission canary
 # (canary-mission.sh) cannot catch regressions in the git/worktree/
