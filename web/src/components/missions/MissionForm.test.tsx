@@ -142,7 +142,7 @@ beforeEach(() => {
   vi.mocked(listAgents).mockResolvedValue([])
   vi.mocked(listRoutes).mockResolvedValue(routes)
   vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
-  vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: false })
+  vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: false, has_plan: false })
   vi.mocked(getMissionExecutorOptions).mockResolvedValue([])
   vi.mocked(getMissionExecutionPlan).mockResolvedValue([])
   vi.mocked(listConnectors).mockResolvedValue([])
@@ -685,7 +685,7 @@ describe('MissionForm: kind chip', () => {
   })
 
   it('shows a detecting state then the classified kind after the debounce', async () => {
-    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false })
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false, has_plan: false })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug in the repo' } })
@@ -713,7 +713,7 @@ describe('MissionForm: kind chip', () => {
   })
 
   it('submits the mission with the classified kind', async () => {
-    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false })
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false, has_plan: false })
     vi.mocked(createMission).mockResolvedValue({ id: 'm3' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
@@ -852,7 +852,7 @@ describe('MissionForm: light mission toggle', () => {
 
   it('defaults the toggle from the classify preview when untouched', async () => {
     vi.useFakeTimers()
-    vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: true })
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: true, has_plan: false })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'summarize this' } })
@@ -864,7 +864,7 @@ describe('MissionForm: light mission toggle', () => {
 
   it('an operator-touched toggle is never overridden by a later classify preview', async () => {
     vi.useFakeTimers()
-    vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: true })
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: true, has_plan: false })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'summarize this' } })
@@ -904,6 +904,88 @@ describe('MissionForm: light mission toggle', () => {
 
     await waitFor(() =>
       expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ light: undefined })),
+    )
+  })
+})
+
+describe('MissionForm: has-plan checkbox', () => {
+  it('shows the checkbox for a general mission', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
+    expect(screen.getByLabelText(/Goal already contains the plan/)).toBeInTheDocument()
+  })
+
+  it('shows the checkbox for a coding mission too, unlike the light toggle', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    expect(await screen.findByText('Coding · branches from repo')).toBeInTheDocument()
+    expect(screen.getByLabelText(/Goal already contains the plan/)).toBeInTheDocument()
+  })
+
+  it('defaults the checkbox from the classify preview when untouched', async () => {
+    vi.useFakeTimers()
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: false, has_plan: true })
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), {
+      target: { value: 'Do the following:\n1. do a\n2. do b' },
+    })
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(screen.getByLabelText(/Goal already contains the plan/)).toBeChecked()
+  })
+
+  it('an operator-touched checkbox is never overridden by a later classify preview', async () => {
+    vi.useFakeTimers()
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: false, has_plan: true })
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(screen.getByLabelText(/Goal already contains the plan/))
+    expect(screen.getByLabelText(/Goal already contains the plan/)).toBeChecked()
+
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+
+    // classify resolved has_plan: true, matching the operator's own
+    // choice here, so this only proves the touched flag stops any
+    // further overrides -- the meaningful case is checked next.
+    expect(screen.getByLabelText(/Goal already contains the plan/)).toBeChecked()
+
+    fireEvent.click(screen.getByLabelText(/Goal already contains the plan/))
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g2' } })
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByLabelText(/Goal already contains the plan/)).not.toBeChecked()
+  })
+
+  it('submits has_plan=true when checked, and omits it when left unchecked', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm10' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByLabelText(/Goal already contains the plan/))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ has_plan: true })),
+    )
+  })
+
+  it('omits has_plan from the create payload when left unchecked', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm11' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ has_plan: undefined })),
     )
   })
 })
@@ -1327,7 +1409,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
 
   it('forces kind to general and locks it when repeat turns on with coding selected', async () => {
     vi.useFakeTimers()
-    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false })
+    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false, has_plan: false })
     vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 

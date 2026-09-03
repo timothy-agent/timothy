@@ -527,6 +527,31 @@ func TestOpencodeAdapter_BuildInvocation(t *testing.T) {
 	}
 }
 
+// TestOpencodeAdapter_ResumeUnsupported covers D-103 (issue #499):
+// opencode is not installed in this environment and no --help text or
+// repo doc records a resume/continue flag, so the adapter must declare
+// SupportsResume false and never invent one - BuildInvocation ignores
+// ResumeSessionID entirely rather than guessing a flag.
+func TestOpencodeAdapter_ResumeUnsupported(t *testing.T) {
+	a := opencodeAdapter{}
+	if a.Capabilities().SupportsResume {
+		t.Fatal("opencode Capabilities().SupportsResume = true, want false (no verified resume flag)")
+	}
+	inv, err := a.BuildInvocation(InvocationSpec{
+		Model: "gpt-oss:20b", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
+		AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "openai",
+		ResumeSessionID: "ses_should_be_ignored",
+	})
+	if err != nil {
+		t.Fatalf("BuildInvocation: %v", err)
+	}
+	for _, a := range inv.Argv {
+		if strings.Contains(a, "ses_should_be_ignored") {
+			t.Errorf("argv %v must never carry ResumeSessionID, no resume flag exists", inv.Argv)
+		}
+	}
+}
+
 // assertOpencodeConfig checks the opencode.json Files entry parses and
 // declares the expected npm/baseURL/model under provider.timothy.
 func assertOpencodeConfig(t *testing.T, inv Invocation, wantBaseURL, wantModel, wantNPM string) {

@@ -380,6 +380,27 @@ func TestClaudeAdapter_BuildInvocation(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "resume session id appends --resume flag (D-103, issue #499)",
+			spec: InvocationSpec{
+				Model: "sonnet", PromptPath: "/tmp/p.txt", AuthMode: AuthSubscription,
+				ResumeSessionID: "sess-abc-123",
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if !containsFlagValue(inv.Argv, "--resume", "sess-abc-123") {
+					t.Errorf("argv %v missing --resume sess-abc-123", inv.Argv)
+				}
+			},
+		},
+		{
+			name: "empty resume session id omits --resume flag",
+			spec: InvocationSpec{Model: "sonnet", PromptPath: "/tmp/p.txt", AuthMode: AuthSubscription},
+			check: func(t *testing.T, inv Invocation) {
+				if containsFlag(inv.Argv, "--resume") {
+					t.Error("--resume must not appear without a ResumeSessionID")
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -407,6 +428,17 @@ func TestClaudeAdapter_BuildInvocation(t *testing.T) {
 func containsFlag(argv []string, flag string) bool {
 	for _, a := range argv {
 		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// containsFlagValue reports whether argv has flag immediately followed
+// by value: shared by every adapter's resume-flag test.
+func containsFlagValue(argv []string, flag, value string) bool {
+	for i, a := range argv {
+		if a == flag && i+1 < len(argv) && argv[i+1] == value {
 			return true
 		}
 	}

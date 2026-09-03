@@ -35,6 +35,11 @@ type Capabilities struct {
 	// Empty OAuthTokenEnv means the adapter doesn't support this mode.
 	OAuthTokenEnv    string
 	OAuthTokenPrefix string
+	// SupportsResume declares whether BuildInvocation honors
+	// InvocationSpec.ResumeSessionID with a real CLI resume flag (D-103,
+	// issue #499). False means the runner must never set
+	// ResumeSessionID for this adapter: it always starts fresh.
+	SupportsResume bool
 }
 
 // InvocationSpec is what the runner supplies to build one CLI invocation.
@@ -57,6 +62,11 @@ type InvocationSpec struct {
 	// gwclient.ResolvedRouteEntry.Wire. Only a dual-wire harness (pi)
 	// needs this; a single-wire harness ignores it.
 	Wire string
+	// ResumeSessionID, when non-empty, asks BuildInvocation to resume
+	// that CLI session instead of starting fresh (D-103, issue #499).
+	// The runner only ever sets this when Capabilities().SupportsResume
+	// is true for the adapter in play.
+	ResumeSessionID string
 }
 
 // Invocation is the argv + env an adapter wants spawned. PromptFile, when
@@ -114,7 +124,13 @@ type Event struct {
 	// carries a different identifier per harness (thread id, session id,
 	// cwd), so the model needs its own field rather than an overload.
 	Model string
-	Tool  *ToolActivity
+	// SessionID is the harness's own CLI session/thread id, set only on
+	// KindSystem by adapters whose init line names one (D-103, issue
+	// #499: claude-cli, codex-cli, opencode, cursor-cli). Empty for an
+	// adapter that reports no such id, or one whose Capabilities().
+	// SupportsResume is false.
+	SessionID string
+	Tool      *ToolActivity
 	// Usage and Result are set only on KindResult; Usage may also be set
 	// standalone on KindUsage for harnesses that report it out of band.
 	Usage *Usage

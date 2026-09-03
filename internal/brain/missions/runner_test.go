@@ -784,6 +784,60 @@ func TestPlanSessionPromptsLengthAwareSplitting(t *testing.T) {
 	}
 }
 
+// TestPlanSessionTranscribeMode pins D-102 (issue #496): a mission
+// with HasPlan=true gets the transcribe-mode system prompt (told the
+// goal already carries the plan, must not redesign or add scope)
+// instead of the design-from-scratch opening, while the shared
+// unit-shape rules (artifacts/criteria/verify_cmd/infeasible) still
+// apply either way so generate/prove need no changes.
+func TestPlanSessionTranscribeMode(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", Goal: "1. do a\n2. do b", HasPlan: true}
+	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	system := agent.requests[0].System
+	if !strings.Contains(system, "You are transcribing a mission plan") {
+		t.Fatalf("planner system prompt missing transcribe-mode opening: %s", system)
+	}
+	if !strings.Contains(system, "Do not redesign the plan") {
+		t.Fatalf("planner system prompt missing the no-redesign instruction: %s", system)
+	}
+	if strings.Contains(system, "Break the goal into the SMALLEST ordered list") {
+		t.Fatalf("planner system prompt still carries the design-from-scratch opening: %s", system)
+	}
+	// The unit-shape contract must be unchanged: same artifacts/
+	// criteria/verify_cmd/infeasible rules regardless of mode.
+	if !strings.Contains(system, "Every unit must list at least one artifact") ||
+		!strings.Contains(system, "2 to 6 acceptance criteria") ||
+		!strings.Contains(system, "infeasible=true") {
+		t.Fatalf("planner system prompt missing unit-shape rules in transcribe mode: %s", system)
+	}
+}
+
+// TestPlanSessionDesignModeByDefault confirms HasPlan=false (the
+// default, omitted) keeps the pre-D-102 design-from-scratch opening.
+func TestPlanSessionDesignModeByDefault(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", Goal: "fix bug"}
+	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	system := agent.requests[0].System
+	if !strings.Contains(system, "Break the goal into the SMALLEST ordered list") {
+		t.Fatalf("planner system prompt missing design-from-scratch opening: %s", system)
+	}
+	if strings.Contains(system, "You are transcribing a mission plan") {
+		t.Fatalf("planner system prompt unexpectedly in transcribe mode: %s", system)
+	}
+}
+
 // TestPlanSessionForcesPlanTool pins D-063: when submit_plan is the
 // planning turn's sole tool, the request forces it.
 func TestPlanSessionForcesPlanTool(t *testing.T) {

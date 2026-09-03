@@ -362,6 +362,12 @@ export function MissionForm({
   // unless the operator has touched the toggle directly (lightTouched).
   const [light, setLight] = useState(initial?.light ?? false)
   const [lightTouched, setLightTouched] = useState(!!initial?.light)
+  // hasPlan (D-102, issue #496): the goal already carries the
+  // operator's own plan, so the plan turn transcribes it instead of
+  // designing one from scratch. Same "defaults from classify preview
+  // unless touched" pattern as light above.
+  const [hasPlan, setHasPlan] = useState(initial?.has_plan ?? false)
+  const [hasPlanTouched, setHasPlanTouched] = useState(!!initial?.has_plan)
   // flow (D-090, issue #459): defaults from kind/light (light=true ->
   // "light", else "full") unless the operator has picked a flow
   // directly (flowTouched), same "permanently defer once touched"
@@ -720,6 +726,9 @@ export function MissionForm({
           // operator's own choice (lightTouched): and only makes sense
           // once the goal actually classified as general.
           if (!lightTouched) setLight(r.kind === 'general' && r.light)
+          // has_plan likewise only ever defaults its own toggle, never
+          // overriding an explicit operator choice (hasPlanTouched).
+          if (!hasPlanTouched) setHasPlan(r.has_plan)
         })
         .catch(() => {
           // Best-effort preview: a failed classify leaves whatever kind
@@ -731,7 +740,7 @@ export function MissionForm({
       clearTimeout(t)
       setClassifying(false)
     }
-  }, [goal, kindLocked, lightTouched])
+  }, [goal, kindLocked, lightTouched, hasPlanTouched])
 
   // Light pre-fill signal 2 (issue #447): a short goal shaped like a
   // summary/digest ask, on a general mission, pre-toggles light on.
@@ -868,6 +877,7 @@ export function MissionForm({
       promote_kb_collection_id: promoteKBCollectionID || undefined,
       light: kind === 'general' ? light : undefined,
       flow: kind === 'general' ? flow : undefined,
+      has_plan: hasPlan || undefined,
       references:
         references.length > 0 ? references.map((r) => ({ kind: r.kind, id: r.id })) : undefined,
     })
@@ -1030,6 +1040,27 @@ export function MissionForm({
               <span className="block text-xs text-muted-foreground">
                 Skips discover/plan/prove for a single-pass task; the worker's final message
                 is delivered as the result.
+              </span>
+            </span>
+          </label>
+        )}
+        {mode === 'create' && !repeat && (kind !== 'general' || !light) && (
+          <label htmlFor="mission-has-plan" className="flex items-start gap-2 text-sm">
+            <input
+              id="mission-has-plan"
+              type="checkbox"
+              checked={hasPlan}
+              onChange={(e) => {
+                setHasPlan(e.target.checked)
+                setHasPlanTouched(true)
+              }}
+              className="mt-0.5"
+            />
+            <span>
+              Goal already contains the plan
+              <span className="block text-xs text-muted-foreground">
+                Skips designing a plan; the planner converts the goal's own steps into units
+                instead.
               </span>
             </span>
           </label>

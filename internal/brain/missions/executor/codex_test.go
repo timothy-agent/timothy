@@ -440,6 +440,37 @@ func TestCodexAdapter_BuildInvocation(t *testing.T) {
 			},
 		},
 		{
+			name: "resume session id switches to the resume subcommand (D-103, issue #499)",
+			spec: InvocationSpec{
+				Model: "gpt-5.3-codex", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
+				AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "openai",
+				ResumeSessionID: "thread-abc-123",
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if inv.Argv[0] != "codex" || inv.Argv[1] != "exec" || inv.Argv[2] != "resume" || inv.Argv[3] != "thread-abc-123" {
+					t.Fatalf("argv = %v, want [codex exec resume thread-abc-123 ...]", inv.Argv)
+				}
+				if containsFlag(inv.Argv, "-C") {
+					t.Error("codex exec resume has no -C flag, must not appear in argv")
+				}
+			},
+		},
+		{
+			name: "empty resume session id keeps the plain exec subcommand",
+			spec: InvocationSpec{
+				Model: "gpt-5.3-codex", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
+				AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "openai",
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if containsFlag(inv.Argv, "resume") {
+					t.Error("resume subcommand must not appear without a ResumeSessionID")
+				}
+				if !containsFlagValue(inv.Argv, "-C", "/tmp/run/ws") {
+					t.Error("plain exec must still pass -C <workdir>")
+				}
+			},
+		},
+		{
 			name: "hostile base url is toml-escaped, not broken out of the string",
 			spec: InvocationSpec{
 				Model: "gpt-5.3-codex", PromptPath: "/tmp/run/prompt.md",

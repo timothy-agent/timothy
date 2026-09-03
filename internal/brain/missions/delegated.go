@@ -29,6 +29,16 @@ import (
 // driver pauses the mission as infra instead of burning iterations.
 var ErrExecutorAuth = errors.New("executor: authentication failed")
 
+// ErrGatewayUnavailable reports that a delegated worker turn's route
+// resolve never got past the gateway itself being unavailable (D-101,
+// issue #511) after routeResolveRetries attempts: the gateway was
+// unreachable, or still answering 503 config_unavailable because its
+// routing snapshot hadn't loaded (e.g. a brain restart's boot recovery
+// sweep re-driving a mission before the gateway finished loading). This
+// is never a "no delegated route" answer: RunWorker must not fall back
+// to native on it, only the driver's infra pause.
+var ErrGatewayUnavailable = errors.New("delegated runner: gateway unavailable")
+
 // D-052: the delegated run protocol. A launch is one detached sandboxd
 // exec (setsid + nohup-style backgrounding via `&`, pid captured to a
 // file) so the CLI keeps running past the 60s ExecEnv call that started
@@ -60,6 +70,15 @@ const (
 	maxExecutorEvents = 300
 	pollInfraRetries  = 3
 	pollInfraBackoff  = 5 * time.Second
+
+	// routeResolveRetries/routeResolveBackoff bound RunWorker's retry of
+	// a route resolve that fails with ErrGatewayUnavailable (D-101): 5
+	// attempts, backoff doubling from 2s (2+4+8+16 = 30s of sleep across
+	// 4 waits before the 5th and final attempt) so the total wall clock
+	// stays close to the acceptance criterion's "5 attempts over about
+	// 30s" without a fixed-interval retry racing a slow gateway boot.
+	routeResolveRetries    = 5
+	routeResolveBackoffMin = 2 * time.Second
 )
 
 // routeResolver is the narrow seam over gwclient.Client.ResolveRoute —
@@ -102,6 +121,11 @@ type runState struct {
 	// polling it, only (if genuinely still needed) treat it as already
 	// decided.
 	Finished bool
+	// SessionID is the harness's own CLI session id (issue #499),
+	// recorded by the executor.session event once the run's first
+	// KindSystem line reported one. Empty when the run died before any
+	// system line arrived, or the harness never reports one.
+	SessionID string
 }
 
 // lastRunState is the narrow seam over Store.LastRunState.
@@ -145,9 +169,10 @@ type delegatedRunner struct {
 	log *slog.Logger
 
 	// Overridable in tests so scenarios don't wait real minutes.
-	pollInterval time.Duration
-	idleTimeout  time.Duration
-	runBudget    time.Duration
+	pollInterval        time.Duration
+	idleTimeout         time.Duration
+	runBudget           time.Duration
+	routeResolveBackoff time.Duration
 	// runBudgetFn, when set, is read once per launch and wins over
 	// runBudget: the settings-backed cap (issue #498).
 	runBudgetFn func(context.Context) time.Duration
@@ -167,7 +192,8 @@ func NewDelegatedRunner(native Runner, resolveRoute routeResolver, resolveCred c
 		native: native, resolveRoute: resolveRoute, resolveCred: resolveCred,
 		sandboxExec: sandboxExec, events: events, lastRun: lastRun, ledger: led, log: log,
 		pollInterval: pollInterval, idleTimeout: idleTimeout, runBudget: runBudgetDefault, runBudgetFn: runBudget,
-		cooldown: map[cooldownKey]time.Time{},
+		routeResolveBackoff: routeResolveBackoffMin,
+		cooldown:            map[cooldownKey]time.Time{},
 	}
 }
 
@@ -197,13 +223,19 @@ func (r *delegatedRunner) RunReview(ctx context.Context, m Mission, packet Revie
 // to native.RunWorker (which itself lets the gateway walk any native
 // chain). Otherwise it looks up the adapter and resolves the worker
 // route on the executor axis, walking the first usable, non-cooled
-// entry into the delegated protocol. An unknown harness, a resolve
-// failure, or no usable entry at all falls back to native.RunWorker
-// unchanged — today's behavior is always the floor — but a mission
-// that explicitly asked for a harness must not fall back silently: an
-// executor.skipped event is recorded first (see recordSkipped) so the
-// mission's own history shows the requested harness was never actually
-// used.
+// entry into the delegated protocol. An unknown harness or no usable
+// entry at all falls back to native.RunWorker unchanged: today's
+// behavior is always the floor, but a mission that explicitly asked
+// for a harness must not fall back silently: an executor.skipped event
+// is recorded first (see recordSkipped) so the mission's own history
+// shows the requested harness was never actually used. A route resolve
+// that fails because the gateway itself is unavailable (D-101, issue
+// #511) is different: that is transient infra, not "no delegated
+// route", so resolveRouteWithRetry retries it with bounded backoff and,
+// if still failing, this returns ErrGatewayUnavailable instead of
+// falling back: the driver pauses the mission as infra rather than
+// running a native worker turn behind a delegated run that may still be
+// alive in the sandbox.
 func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
 	if m.Harness == "" {
 		return r.native.RunWorker(ctx, m, packet)
@@ -224,14 +256,19 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 		return r.native.RunWorker(ctx, m, packet)
 	}
 
-	route, err := r.resolveRoute(ctx, workerRoute(m), m.Harness)
-	if err != nil || route == nil {
-		if err != nil {
-			r.log.Warn("delegated runner: route resolve failed; falling back to native", "mission_id", m.ID, "error", err)
-			r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": truncate(err.Error(), 2000)})
-		} else {
-			r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": "resolved route was nil without an error"})
+	route, err := r.resolveRouteWithRetry(ctx, m, workerRoute(m))
+	if err != nil {
+		if errors.Is(err, gwclient.ErrGatewayUnavailable) {
+			r.log.Error("delegated runner: gateway unavailable after retries; pausing as infra", "mission_id", m.ID, "error", err)
+			r.recordSkipped(ctx, m.ID, m.Harness, "gateway_unavailable", map[string]any{"error": truncate(err.Error(), 2000)})
+			return WorkerVerdict{}, "", fmt.Errorf("%w: %v", ErrGatewayUnavailable, err)
 		}
+		r.log.Warn("delegated runner: route resolve failed; falling back to native", "mission_id", m.ID, "error", err)
+		r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": truncate(err.Error(), 2000)})
+		return r.native.RunWorker(ctx, m, packet)
+	}
+	if route == nil {
+		r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": "resolved route was nil without an error"})
 		return r.native.RunWorker(ctx, m, packet)
 	}
 
@@ -292,6 +329,43 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 		r.recordSkipped(ctx, m.ID, m.Harness, "no_usable_entry", map[string]any{"skip_reasons": boundStrings(skipReasons, 5)})
 	}
 	return r.native.RunWorker(ctx, m, packet)
+}
+
+// resolveRouteWithRetry resolves route on the harness's executor axis,
+// retrying with bounded exponential backoff (routeResolveRetries
+// attempts, starting at routeResolveBackoffMin) ONLY when the failure is
+// gwclient.ErrGatewayUnavailable, the gateway unreachable or still
+// answering 503 config_unavailable because its routing snapshot hasn't
+// loaded (D-101, issue #511). Any other resolve error (unknown route,
+// bad request) returns immediately on the first attempt: those are
+// definitive "no delegated route" answers, not transient infra, and
+// retrying them would just delay the existing native fallback. Bounded
+// and ctx-aware: a cancelled ctx or an exhausted retry budget both
+// return the last error seen.
+func (r *delegatedRunner) resolveRouteWithRetry(ctx context.Context, m Mission, route string) (*gwclient.ResolvedRoute, error) {
+	backoff := r.routeResolveBackoff
+	var lastErr error
+	for attempt := 1; attempt <= routeResolveRetries; attempt++ {
+		resolved, err := r.resolveRoute(ctx, route, m.Harness)
+		if err == nil {
+			return resolved, nil
+		}
+		lastErr = err
+		if !errors.Is(err, gwclient.ErrGatewayUnavailable) {
+			return nil, err
+		}
+		if attempt == routeResolveRetries {
+			break
+		}
+		r.log.Warn("delegated runner: gateway unavailable resolving route, retrying", "mission_id", m.ID, "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return nil, lastErr
 }
 
 // pinInChain reports whether pin ("provider name/model") names any entry
@@ -453,6 +527,8 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 	system, user := packet.RenderForDelegated()
 	system += delegatedSystemAppend
 
+	decision := r.planSessionResume(ctx, m, workRoot, adapter)
+
 	runBudget := r.effectiveRunBudget(ctx)
 	spec := executor.InvocationSpec{
 		MissionID: m.ID, Workdir: workRoot,
@@ -461,6 +537,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
 		AllowTools: delegatedAllowTools, DenyTools: delegatedDenyTools,
 		ResultSchema: resultSchemaJSON, RunBudget: runBudget, Wire: entry.Wire,
+		ResumeSessionID: decision.sessionID,
 	}
 	inv, err := adapter.BuildInvocation(spec)
 	if err != nil {
@@ -483,7 +560,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: write invocation files: %w", err)
 	}
 
-	r.recordSpawned(ctx, m.ID, m.Harness, entry, runID, rdir, authMode)
+	r.recordSpawned(ctx, m.ID, m.Harness, entry, runID, rdir, authMode, decision)
 
 	if err := r.launch(ctx, m.ID, m.Environment, workRoot, rdir, inv, runBudget); err != nil {
 		r.coolDown(m.Harness, entry)
@@ -527,6 +604,56 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 	return true, v, t, rerr
 }
 
+// resumeReason* name why a retry started fresh instead of resuming the
+// prior CLI session (D-103, issue #499): recorded on executor.spawned
+// only when resumed is false, so a mission's own history shows which
+// gate stopped it.
+const (
+	resumeReasonNoPriorRun         = "no_prior_run"
+	resumeReasonNoSessionID        = "no_session_id"
+	resumeReasonAdapterUnsupported = "adapter_unsupported"
+	resumeReasonContainerRecreated = "container_recreated"
+)
+
+// resumeDecision is what planSessionResume works out before a fresh
+// spawn: whether to relaunch through the adapter's resume path with a
+// stored session id, and if not, why.
+type resumeDecision struct {
+	resume    bool
+	sessionID string
+	reason    string // set only when resume is false
+}
+
+// planSessionResume decides whether this launch should resume the prior
+// CLI session instead of starting fresh (D-103, issue #499). Called
+// only after attemptResume has already ruled out a still-pollable live
+// run (handled=false there means the prior run, if any, already reached
+// a terminal event or never existed), so a non-nil, Finished state
+// here means the prior run genuinely ended (executor.died, most often)
+// and this is a retry. Gates, in order: a prior run must exist for this
+// harness; it must have recorded a session id; the adapter must
+// support resume; and the SAME sandbox container (never recreated
+// since that run's launch) must still be alive.
+func (r *delegatedRunner) planSessionResume(ctx context.Context, m Mission, workRoot string, adapter executor.Adapter) resumeDecision {
+	if r.lastRun == nil {
+		return resumeDecision{reason: resumeReasonNoPriorRun}
+	}
+	state, err := r.lastRun(ctx, m.ID)
+	if err != nil || state == nil || state.Harness != m.Harness {
+		return resumeDecision{reason: resumeReasonNoPriorRun}
+	}
+	if state.SessionID == "" {
+		return resumeDecision{reason: resumeReasonNoSessionID}
+	}
+	if !adapter.Capabilities().SupportsResume {
+		return resumeDecision{reason: resumeReasonAdapterUnsupported}
+	}
+	if !r.probeContainerMarker(ctx, m.ID, m.Environment, workRoot) {
+		return resumeDecision{reason: resumeReasonContainerRecreated}
+	}
+	return resumeDecision{resume: true, sessionID: state.SessionID}
+}
+
 // launch starts the CLI detached: setsid backgrounds it so it survives
 // the ExecEnv call returning, pid captured to a file, stdout/stderr
 // redirected into the run directory. The `timeout` wrapper (D-052)
@@ -549,6 +676,20 @@ func (r *delegatedRunner) launch(ctx context.Context, missionID, environment, wo
 	return nil
 }
 
+// containerMarkerFile names a marker written directly under $HOME (D-103,
+// issue #499): not under /workspace (the shared workspace volume, which
+// survives a container being recreated from scratch) and not under
+// executorStateMountPath's .claude subtree (its own separate persistent
+// volume): $HOME itself, outside that subtree, lives on the container's
+// own writable layer, so the marker exists only for as long as THIS
+// container instance does. Gone after a real recreate (removed + created
+// fresh), present after a mere stop/restart in place (sandboxd's
+// ensureContainer reuses the container by name unless it was actually
+// removed). Read via $HOME rather than a hardcoded container path so the
+// same command also runs against a real /bin/sh in the composed-command
+// round-trip test, where $HOME is the test host's own home directory.
+const containerMarkerFile = ".timothy-container-marker"
+
 // buildLaunchCmd composes the full detached-launch command. The inner
 // script is quoted as ONE unit via shQuote — composing it with literal
 // quotes would let the argv elements' own single quotes toggle the
@@ -565,11 +706,26 @@ func buildLaunchCmd(workdir, rdir string, inv executor.Invocation, runBudget tim
 	)
 	// Braces bound the `&` to the setsid job alone — a bare `cd && mkdir
 	// && setsid ... & echo $!` backgrounds the whole chain and races the
-	// pid write against the mkdir it depends on.
+	// pid write against the mkdir it depends on. The marker write runs
+	// synchronously before backgrounding, so it's in place before this
+	// exec even returns.
 	return fmt.Sprintf(
-		"cd %s && mkdir -p %s && { setsid sh -c %s > /dev/null 2>&1 & echo $! > %s/pid; }",
-		shQuote(workdir), shQuote(rdir), shQuote(inner), shQuote(rdir),
+		"cd %s && mkdir -p %s && echo ok > \"$HOME/%s\" && { setsid sh -c %s > /dev/null 2>&1 & echo $! > %s/pid; }",
+		shQuote(workdir), shQuote(rdir), containerMarkerFile, shQuote(inner), shQuote(rdir),
 	), nil
+}
+
+// probeContainerMarker reports whether $HOME/containerMarkerFile still
+// exists in missionID's sandbox container: true means the same
+// container instance that wrote it at the died run's launch is still
+// around (D-103, issue #499's "same sandbox container is still alive"
+// test); false means it was recreated from scratch (or the probe itself
+// failed, treated the same as recreated: never guess a resume is safe).
+func (r *delegatedRunner) probeContainerMarker(ctx context.Context, missionID, environment, workRoot string) bool {
+	var out bytes.Buffer
+	cmd := fmt.Sprintf("[ -f \"$HOME/%s\" ]", containerMarkerFile)
+	code, err := r.sandboxExec(ctx, missionID, environment, workRoot, cmd, nil, launchTimeout, &out)
+	return err == nil && code == 0
 }
 
 // renderArgv substitutes the adapter's "@PROMPT@" placeholder with
@@ -622,6 +778,12 @@ type pollState struct {
 	// worktree is the latest non-nil WT: summary seen across polls
 	// (issue #500); nil until the first successful git status.
 	worktree *WorktreeSummary
+	// sessionID/sessionRecorded track the harness's own CLI session id
+	// (D-103, issue #499), from the run's KindSystem event.
+	// sessionRecorded guards recordSessionSeen against writing the
+	// executor.session event more than once per run.
+	sessionID       string
+	sessionRecorded bool
 }
 
 // pollToVerdict polls rdir until the run terminates (exit_code present
@@ -664,7 +826,7 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 		if len(chunk) > 0 {
 			st.offset += int64(len(chunk))
 			st.lastByteMove = time.Now()
-			r.feedLines(parser, chunk, st, m.ID)
+			r.feedLines(ctx, parser, chunk, st, m.ID, runID)
 			r.recordProgressThrottled(ctx, m.ID, runID, st)
 		}
 
@@ -809,7 +971,7 @@ func parseWorktreeLine(fields string) (*WorktreeSummary, bool) {
 // Incomplete trailing bytes (no terminating newline yet) are held in
 // st.carry until the next chunk completes them — mid-line chunk splits
 // must never be fed to the parser as a partial line.
-func (r *delegatedRunner) feedLines(parser executor.StreamParser, chunk []byte, st *pollState, missionID string) {
+func (r *delegatedRunner) feedLines(ctx context.Context, parser executor.StreamParser, chunk []byte, st *pollState, missionID, runID string) {
 	data := append(st.carry, chunk...)
 	st.carry = nil
 	for {
@@ -828,6 +990,10 @@ func (r *delegatedRunner) feedLines(parser executor.StreamParser, chunk []byte, 
 		case executor.KindSystem:
 			if ev.Model != "" {
 				st.reportedModel = ev.Model
+			}
+			if ev.SessionID != "" && st.sessionID == "" {
+				st.sessionID = ev.SessionID
+				r.recordSessionSeen(ctx, missionID, runID, st)
 			}
 		case executor.KindText:
 			st.textBuf.WriteString(ev.Text)
@@ -996,16 +1162,37 @@ func isAuthFailure(text string) bool {
 // carries the prompt substitution placeholder only ("@PROMPT@"), never
 // the rendered prompt text, and env values are never recorded, only
 // names.
-func (r *delegatedRunner) recordSpawned(ctx context.Context, missionID, harness string, entry gwclient.ResolvedRouteEntry, runID, rdir string, authMode executor.AuthMode) {
+func (r *delegatedRunner) recordSpawned(ctx context.Context, missionID, harness string, entry gwclient.ResolvedRouteEntry, runID, rdir string, authMode executor.AuthMode, decision resumeDecision) {
 	if r.events == nil {
 		return
 	}
-	if err := r.events.AppendEvent(ctx, missionID, "executor.spawned", map[string]any{
+	payload := map[string]any{
 		"harness": harness, "provider": entry.ProviderName, "model": entry.Model,
 		"auth_mode": string(authMode), "run_id": runID, "run_dir": rdir,
-	}); err != nil {
+		"resumed": decision.resume,
+	}
+	if decision.resume {
+		payload["session_id"] = decision.sessionID
+	} else {
+		payload["resume_reason"] = decision.reason
+	}
+	if err := r.events.AppendEvent(ctx, missionID, "executor.spawned", payload); err != nil {
 		r.log.Warn("delegated runner: record spawned failed", "mission_id", missionID, "error", err)
 	}
+}
+
+// recordSessionSeen writes executor.session once for a run: the first
+// time its stream reports a CLI session/thread id (D-103, issue #499).
+// Guarded by st.sessionRecorded so a run's later KindSystem-shaped noise
+// (there is none today, but the guard costs nothing) never double-writes.
+func (r *delegatedRunner) recordSessionSeen(ctx context.Context, missionID, runID string, st *pollState) {
+	if r.events == nil || st.sessionRecorded {
+		return
+	}
+	st.sessionRecorded = true
+	r.recordEventForce(ctx, missionID, "executor.session", map[string]any{
+		"run_id": runID, "session_id": st.sessionID,
+	})
 }
 
 // recordProgressThrottled writes executor.progress at most once per
