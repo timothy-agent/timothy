@@ -121,6 +121,11 @@ type runState struct {
 	// polling it, only (if genuinely still needed) treat it as already
 	// decided.
 	Finished bool
+	// SessionID is the harness's own CLI session id (issue #499),
+	// recorded by the executor.session event once the run's first
+	// KindSystem line reported one. Empty when the run died before any
+	// system line arrived, or the harness never reports one.
+	SessionID string
 }
 
 // lastRunState is the narrow seam over Store.LastRunState.
@@ -522,6 +527,8 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 	system, user := packet.RenderForDelegated()
 	system += delegatedSystemAppend
 
+	decision := r.planSessionResume(ctx, m, workRoot, adapter)
+
 	runBudget := r.effectiveRunBudget(ctx)
 	spec := executor.InvocationSpec{
 		MissionID: m.ID, Workdir: workRoot,
@@ -530,6 +537,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
 		AllowTools: delegatedAllowTools, DenyTools: delegatedDenyTools,
 		ResultSchema: resultSchemaJSON, RunBudget: runBudget, Wire: entry.Wire,
+		ResumeSessionID: decision.sessionID,
 	}
 	inv, err := adapter.BuildInvocation(spec)
 	if err != nil {
@@ -552,7 +560,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		return WorkerVerdict{}, "", fmt.Errorf("delegated runner: write invocation files: %w", err)
 	}
 
-	r.recordSpawned(ctx, m.ID, m.Harness, entry, runID, rdir, authMode)
+	r.recordSpawned(ctx, m.ID, m.Harness, entry, runID, rdir, authMode, decision)
 
 	if err := r.launch(ctx, m.ID, m.Environment, workRoot, rdir, inv, runBudget); err != nil {
 		r.coolDown(m.Harness, entry)
@@ -596,6 +604,56 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 	return true, v, t, rerr
 }
 
+// resumeReason* name why a retry started fresh instead of resuming the
+// prior CLI session (D-103, issue #499) — recorded on executor.spawned
+// only when resumed is false, so a mission's own history shows which
+// gate stopped it.
+const (
+	resumeReasonNoPriorRun         = "no_prior_run"
+	resumeReasonNoSessionID        = "no_session_id"
+	resumeReasonAdapterUnsupported = "adapter_unsupported"
+	resumeReasonContainerRecreated = "container_recreated"
+)
+
+// resumeDecision is what planSessionResume works out before a fresh
+// spawn: whether to relaunch through the adapter's resume path with a
+// stored session id, and if not, why.
+type resumeDecision struct {
+	resume    bool
+	sessionID string
+	reason    string // set only when resume is false
+}
+
+// planSessionResume decides whether this launch should resume the prior
+// CLI session instead of starting fresh (D-103, issue #499). Called
+// only after attemptResume has already ruled out a still-pollable live
+// run (handled=false there means the prior run, if any, already reached
+// a terminal event or never existed) — so a non-nil, Finished state
+// here means the prior run genuinely ended (executor.died, most often)
+// and this is a retry. Gates, in order: a prior run must exist for this
+// harness; it must have recorded a session id; the adapter must
+// support resume; and the SAME sandbox container (never recreated
+// since that run's launch) must still be alive.
+func (r *delegatedRunner) planSessionResume(ctx context.Context, m Mission, workRoot string, adapter executor.Adapter) resumeDecision {
+	if r.lastRun == nil {
+		return resumeDecision{reason: resumeReasonNoPriorRun}
+	}
+	state, err := r.lastRun(ctx, m.ID)
+	if err != nil || state == nil || state.Harness != m.Harness {
+		return resumeDecision{reason: resumeReasonNoPriorRun}
+	}
+	if state.SessionID == "" {
+		return resumeDecision{reason: resumeReasonNoSessionID}
+	}
+	if !adapter.Capabilities().SupportsResume {
+		return resumeDecision{reason: resumeReasonAdapterUnsupported}
+	}
+	if !r.probeContainerMarker(ctx, m.ID, m.Environment, workRoot) {
+		return resumeDecision{reason: resumeReasonContainerRecreated}
+	}
+	return resumeDecision{resume: true, sessionID: state.SessionID}
+}
+
 // launch starts the CLI detached: setsid backgrounds it so it survives
 // the ExecEnv call returning, pid captured to a file, stdout/stderr
 // redirected into the run directory. The `timeout` wrapper (D-052)
@@ -618,6 +676,20 @@ func (r *delegatedRunner) launch(ctx context.Context, missionID, environment, wo
 	return nil
 }
 
+// containerMarkerFile names a marker written directly under $HOME (D-103,
+// issue #499): not under /workspace (the shared workspace volume, which
+// survives a container being recreated from scratch) and not under
+// executorStateMountPath's .claude subtree (its own separate persistent
+// volume) — $HOME itself, outside that subtree, lives on the container's
+// own writable layer, so the marker exists only for as long as THIS
+// container instance does. Gone after a real recreate (removed + created
+// fresh), present after a mere stop/restart in place (sandboxd's
+// ensureContainer reuses the container by name unless it was actually
+// removed). Read via $HOME rather than a hardcoded container path so the
+// same command also runs against a real /bin/sh in the composed-command
+// round-trip test, where $HOME is the test host's own home directory.
+const containerMarkerFile = ".timothy-container-marker"
+
 // buildLaunchCmd composes the full detached-launch command. The inner
 // script is quoted as ONE unit via shQuote — composing it with literal
 // quotes would let the argv elements' own single quotes toggle the
@@ -634,11 +706,26 @@ func buildLaunchCmd(workdir, rdir string, inv executor.Invocation, runBudget tim
 	)
 	// Braces bound the `&` to the setsid job alone — a bare `cd && mkdir
 	// && setsid ... & echo $!` backgrounds the whole chain and races the
-	// pid write against the mkdir it depends on.
+	// pid write against the mkdir it depends on. The marker write runs
+	// synchronously before backgrounding, so it's in place before this
+	// exec even returns.
 	return fmt.Sprintf(
-		"cd %s && mkdir -p %s && { setsid sh -c %s > /dev/null 2>&1 & echo $! > %s/pid; }",
-		shQuote(workdir), shQuote(rdir), shQuote(inner), shQuote(rdir),
+		"cd %s && mkdir -p %s && echo ok > \"$HOME/%s\" && { setsid sh -c %s > /dev/null 2>&1 & echo $! > %s/pid; }",
+		shQuote(workdir), shQuote(rdir), containerMarkerFile, shQuote(inner), shQuote(rdir),
 	), nil
+}
+
+// probeContainerMarker reports whether $HOME/containerMarkerFile still
+// exists in missionID's sandbox container — true means the same
+// container instance that wrote it at the died run's launch is still
+// around (D-103, issue #499's "same sandbox container is still alive"
+// test); false means it was recreated from scratch (or the probe itself
+// failed, treated the same as recreated — never guess a resume is safe).
+func (r *delegatedRunner) probeContainerMarker(ctx context.Context, missionID, environment, workRoot string) bool {
+	var out bytes.Buffer
+	cmd := fmt.Sprintf("[ -f \"$HOME/%s\" ]", containerMarkerFile)
+	code, err := r.sandboxExec(ctx, missionID, environment, workRoot, cmd, nil, launchTimeout, &out)
+	return err == nil && code == 0
 }
 
 // renderArgv substitutes the adapter's "@PROMPT@" placeholder with
@@ -691,6 +778,12 @@ type pollState struct {
 	// worktree is the latest non-nil WT: summary seen across polls
 	// (issue #500); nil until the first successful git status.
 	worktree *WorktreeSummary
+	// sessionID/sessionRecorded track the harness's own CLI session id
+	// (D-103, issue #499), from the run's KindSystem event —
+	// sessionRecorded guards recordSessionSeen against writing the
+	// executor.session event more than once per run.
+	sessionID       string
+	sessionRecorded bool
 }
 
 // pollToVerdict polls rdir until the run terminates (exit_code present
@@ -733,7 +826,7 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 		if len(chunk) > 0 {
 			st.offset += int64(len(chunk))
 			st.lastByteMove = time.Now()
-			r.feedLines(parser, chunk, st, m.ID)
+			r.feedLines(ctx, parser, chunk, st, m.ID, runID)
 			r.recordProgressThrottled(ctx, m.ID, runID, st)
 		}
 
@@ -878,7 +971,7 @@ func parseWorktreeLine(fields string) (*WorktreeSummary, bool) {
 // Incomplete trailing bytes (no terminating newline yet) are held in
 // st.carry until the next chunk completes them — mid-line chunk splits
 // must never be fed to the parser as a partial line.
-func (r *delegatedRunner) feedLines(parser executor.StreamParser, chunk []byte, st *pollState, missionID string) {
+func (r *delegatedRunner) feedLines(ctx context.Context, parser executor.StreamParser, chunk []byte, st *pollState, missionID, runID string) {
 	data := append(st.carry, chunk...)
 	st.carry = nil
 	for {
@@ -897,6 +990,10 @@ func (r *delegatedRunner) feedLines(parser executor.StreamParser, chunk []byte, 
 		case executor.KindSystem:
 			if ev.Model != "" {
 				st.reportedModel = ev.Model
+			}
+			if ev.SessionID != "" && st.sessionID == "" {
+				st.sessionID = ev.SessionID
+				r.recordSessionSeen(ctx, missionID, runID, st)
 			}
 		case executor.KindText:
 			st.textBuf.WriteString(ev.Text)
@@ -1065,16 +1162,37 @@ func isAuthFailure(text string) bool {
 // carries the prompt substitution placeholder only ("@PROMPT@"), never
 // the rendered prompt text, and env values are never recorded, only
 // names.
-func (r *delegatedRunner) recordSpawned(ctx context.Context, missionID, harness string, entry gwclient.ResolvedRouteEntry, runID, rdir string, authMode executor.AuthMode) {
+func (r *delegatedRunner) recordSpawned(ctx context.Context, missionID, harness string, entry gwclient.ResolvedRouteEntry, runID, rdir string, authMode executor.AuthMode, decision resumeDecision) {
 	if r.events == nil {
 		return
 	}
-	if err := r.events.AppendEvent(ctx, missionID, "executor.spawned", map[string]any{
+	payload := map[string]any{
 		"harness": harness, "provider": entry.ProviderName, "model": entry.Model,
 		"auth_mode": string(authMode), "run_id": runID, "run_dir": rdir,
-	}); err != nil {
+		"resumed": decision.resume,
+	}
+	if decision.resume {
+		payload["session_id"] = decision.sessionID
+	} else {
+		payload["resume_reason"] = decision.reason
+	}
+	if err := r.events.AppendEvent(ctx, missionID, "executor.spawned", payload); err != nil {
 		r.log.Warn("delegated runner: record spawned failed", "mission_id", missionID, "error", err)
 	}
+}
+
+// recordSessionSeen writes executor.session once for a run — the first
+// time its stream reports a CLI session/thread id (D-103, issue #499).
+// Guarded by st.sessionRecorded so a run's later KindSystem-shaped noise
+// (there is none today, but the guard costs nothing) never double-writes.
+func (r *delegatedRunner) recordSessionSeen(ctx context.Context, missionID, runID string, st *pollState) {
+	if r.events == nil || st.sessionRecorded {
+		return
+	}
+	st.sessionRecorded = true
+	r.recordEventForce(ctx, missionID, "executor.session", map[string]any{
+		"run_id": runID, "session_id": st.sessionID,
+	})
 }
 
 // recordProgressThrottled writes executor.progress at most once per

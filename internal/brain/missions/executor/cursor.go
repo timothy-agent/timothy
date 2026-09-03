@@ -41,6 +41,9 @@ func (cursorAdapter) Capabilities() Capabilities {
 		// known distinguishing value prefix to classify on - it resolves
 		// as AuthAPIKey regardless (resolveCredential, delegated.go),
 		// which BuildInvocation already requires.
+		// cursor-agent's `--resume [chatId]` is documented (`cursor-agent
+		// --help`) and combines with `-p`.
+		SupportsResume: true,
 	}
 }
 
@@ -116,6 +119,9 @@ func (cursorAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 	if spec.SystemAppend != "" {
 		argv = append(argv, spec.SystemAppend)
 	}
+	if spec.ResumeSessionID != "" {
+		argv = append(argv, "--resume", spec.ResumeSessionID)
+	}
 	argv = append(argv, "@PROMPT@", cursorVerdictInstruction)
 
 	env := map[string]string{
@@ -176,7 +182,8 @@ type cursorLineEnvelope struct {
 }
 
 type cursorSystemLine struct {
-	Model string `json:"model"`
+	Model     string `json:"model"`
+	SessionID string `json:"session_id"`
 }
 
 type cursorAssistantBlock struct {
@@ -257,7 +264,7 @@ func (p *cursorParser) ParseLine(line []byte) (Event, bool) {
 			return Event{}, false
 		}
 		p.stats.Events++
-		return Event{Kind: KindSystem, Text: sys.Model, Model: sys.Model}, true
+		return Event{Kind: KindSystem, Text: sys.Model, Model: sys.Model, SessionID: sys.SessionID}, true
 
 	case "assistant":
 		var a cursorAssistantLine

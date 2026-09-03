@@ -978,7 +978,7 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 		return nil, fmt.Errorf("missions last run state: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT kind, payload FROM mission_events
-		WHERE mission_id = $1 AND kind IN ('executor.spawned', 'executor.result', 'executor.died', 'executor.progress')
+		WHERE mission_id = $1 AND kind IN ('executor.spawned', 'executor.result', 'executor.died', 'executor.progress', 'executor.session')
 		ORDER BY seq DESC`, missionID)
 	if err != nil {
 		return nil, fmt.Errorf("missions last run state: %w", err)
@@ -1024,6 +1024,22 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 				}
 				if err := json.Unmarshal(payload, &progress); err == nil {
 					state.ByteOffset = progress.ByteOffset
+				}
+			}
+		case "executor.session":
+			// Scanned in seq DESC order, so the first one seen (before
+			// the spawn row that terminates this loop) is the latest —
+			// belongs to the run this spawn started, since a run's own
+			// session id is only ever recorded after its spawn.
+			if state == nil {
+				state = &runState{}
+			}
+			if state.SessionID == "" {
+				var session struct {
+					SessionID string `json:"session_id"`
+				}
+				if err := json.Unmarshal(payload, &session); err == nil {
+					state.SessionID = session.SessionID
 				}
 			}
 		}
