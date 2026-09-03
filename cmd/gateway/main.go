@@ -19,6 +19,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
+	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 	"github.com/SumonMSelim/timothy/migrations"
@@ -66,6 +67,15 @@ func main() {
 	go runCatalogSweep(ctx, cat, app.Log)
 	store := router.NewStore(app.DB, credentialLookup(secrets, app.Log), cat, app.Log)
 	go store.Run(ctx)
+	// D-101: brain's boot recovery sweep polls this before re-driving a
+	// mission left working, so a re-drive never races the routing
+	// snapshot's own load and hits a spurious config_unavailable.
+	app.AddCheck("routing", func() httpserver.Check {
+		if store.Snapshot() == nil {
+			return httpserver.Check{Status: "degraded", Detail: "routing configuration not loaded yet"}
+		}
+		return httpserver.Check{Status: "ok"}
+	})
 	unpricedUsage := app.Metrics.NewCounter("gateway_unpriced_usage_total",
 		"Billable calls recorded with no catalog price (cost = NULL).")
 	led := ledger.New(app.DB, app.Log, unpricedUsage)

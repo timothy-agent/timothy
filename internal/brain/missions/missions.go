@@ -176,6 +176,13 @@ type Mission struct {
 	// engine both force this true regardless of template/step input:
 	// an unattended mission has nobody to approve its plan.
 	AutoApprovePlan bool   `json:"auto_approve_plan"`
+	// HasPlan (D-102, issue #496) marks a mission whose goal already
+	// carries the operator's own plan: the plan turn runs in transcribe
+	// mode (PlanSession), converting the goal's plan into units instead
+	// of designing one from scratch. Snapshotted at create time, never
+	// model-mutable; light missions never plan, so this has no effect
+	// there.
+	HasPlan         bool   `json:"has_plan,omitempty"`
 	ScheduleID      string `json:"schedule_id,omitempty"`
 	// ParentMissionID names the terminal mission this one follows up on
 	// (api/missions.go's create) — empty for an ordinary mission.
@@ -518,6 +525,10 @@ type Plan struct {
 	// D-096), which means the next round gets the full packet. Written
 	// only through Store.ApplyTransition.
 	LastReviewCommit string `json:"last_review_commit,omitempty"`
+	// LastReviewAt (D-098, issue #529) is when that round closed: the
+	// findings-only packet renders only progress notes written after
+	// it, the rework turns' notes. Zero on plans written before D-098.
+	LastReviewAt time.Time `json:"last_review_at,omitzero"`
 	// Provider/Model (issue #507) are who served the plan turn; set by
 	// PlanSession after parsing, never persisted with the stored plan.
 	Provider string `json:"-"`
@@ -633,4 +644,7 @@ var (
 	// (D-087, issue #456): approve/replan/rediscover are only valid
 	// while the mission is parked on PauseApproval.
 	ErrNotAwaitingApproval = errors.New("mission is not awaiting plan approval")
+	// ErrNotPaused guards the routing PATCH (D-100, issue #536): the
+	// review route is editable only while the mission is paused.
+	ErrNotPaused = errors.New("mission is not paused")
 )

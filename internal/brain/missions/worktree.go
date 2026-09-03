@@ -2,6 +2,7 @@ package missions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -427,7 +428,13 @@ func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
 	return nil
 }
 
-// CommitUnit commits the worktree's current changes. A github-
+// errNothingToCommit is CommitUnit's answer when the worktree has no
+// changes after staging (D-099, issue #533): no commit is created, so a
+// mission branch never carries empty commits.
+var errNothingToCommit = errors.New("worktree: nothing to commit")
+
+// CommitUnit commits the worktree's current changes, or returns
+// errNothingToCommit when there are none. A github-
 // connection mission's clone carries a LOCAL user.name/user.email (set
 // once at Provision time, see cloneRepo/setLocalIdentity) — that takes
 // priority so commits are authored as the connection; otherwise falls
@@ -438,6 +445,13 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) er
 	defer cancel()
 	if out, err := runGit(cctx, worktree, "add", "-A"); err != nil {
 		return fmt.Errorf("worktree: commit add: %w: %s", err, out)
+	}
+	status, err := runGit(cctx, worktree, "status", "--porcelain")
+	if err != nil {
+		return fmt.Errorf("worktree: commit status: %w: %s", err, status)
+	}
+	if strings.TrimSpace(status) == "" {
+		return errNothingToCommit
 	}
 	name, email := commitName, commitEmail
 	if w.identity != nil {
@@ -460,7 +474,7 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) er
 	}
 	cmd := exec.CommandContext(cctx, "git", //nolint:gosec // name/email may be operator-supplied but travel as -c key=value args, never shell-interpolated; message is driver-built from mission id/iteration, not user input
 		"-c", "user.name="+name, "-c", "user.email="+email,
-		"commit", "-m", message, "--allow-empty")
+		"commit", "-m", message)
 	cmd.Dir = worktree
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("worktree: commit: %w: %s", err, string(out))

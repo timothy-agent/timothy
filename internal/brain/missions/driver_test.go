@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,11 +123,17 @@ func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition
 	m.ConsecutiveFailures, m.LastGapFingerprint, m.StallCount = t.Next.ConsecutiveFailures, t.Next.LastGapFingerprint, t.Next.StallCount
 	m.ReplanUsed = t.Next.ReplanUsed
 	m.ReviewFindings, m.ReworkRounds = t.Next.ReviewFindings, t.Next.ReworkRounds
+	if t.Next.ReviewRoute != "" {
+		m.ReviewRoute, m.ReviewRouteModel = t.Next.ReviewRoute, t.Next.ReviewRouteModel
+	}
 	if len(t.Next.Units) > 0 {
 		m.Plan.Units = t.Next.Units
 	}
 	if t.Next.LastReviewCommit != "" {
 		m.Plan.LastReviewCommit = t.Next.LastReviewCommit
+	}
+	if !t.Next.LastReviewAt.IsZero() {
+		m.Plan.LastReviewAt = t.Next.LastReviewAt
 	}
 	f.missions[id] = m
 	for _, ev := range t.Events {
@@ -235,7 +242,7 @@ func (f *fakeStore) AppendProgress(ctx context.Context, id, note string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m := f.missions[id]
-	m.Progress = append(m.Progress, ProgressNote{Note: note})
+	m.Progress = append(m.Progress, ProgressNote{At: time.Now().UTC(), Note: note})
 	f.missions[id] = m
 	f.seq[id]++
 	f.events[id] = append(f.events[id], Event{MissionID: id, Seq: f.seq[id], Kind: "mission.progress"})
@@ -1043,6 +1050,52 @@ func TestDriverExecuteRecordsRawTextWithoutHandoff(t *testing.T) {
 	}
 	if m.Progress[0].Note != "raw turn text" {
 		t.Fatalf("progress note = %q, want the raw turn text", m.Progress[0].Note)
+	}
+}
+
+// TestDriverExecuteRecordsDelegatedNote confirms a delegated turn's
+// schema result note (WorkerVerdict.Note, D-099) is the progress note
+// when no handoff was given, not the accumulated stream text.
+func TestDriverExecuteRecordsDelegatedNote(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "tests red", Note: "tests red"}},
+		workerText:     "I'll create the file.Verification passed.",
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if len(m.Progress) != 1 || m.Progress[0].Note != "tests red" {
+		t.Fatalf("Progress = %+v, want the delegated result note alone", m.Progress)
+	}
+}
+
+// TestProgressNoteSelection pins the D-099 order: handoff, then the
+// delegated result note, then the raw turn text capped at
+// progressNoteCap with a truncation marker.
+func TestProgressNoteSelection(t *testing.T) {
+	long := strings.Repeat("x", progressNoteCap+10)
+	cases := []struct {
+		name    string
+		verdict WorkerVerdict
+		text    string
+		want    string
+	}{
+		{"handoff over note and text", WorkerVerdict{Handoff: "next: finish auth", Note: "done"}, "raw", "next: finish auth"},
+		{"delegated note over text", WorkerVerdict{Note: "done"}, "raw", "done"},
+		{"raw text when nothing else", WorkerVerdict{}, "raw", "raw"},
+		{"raw text capped", WorkerVerdict{}, long, strings.Repeat("x", progressNoteCap) + "…"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := progressNote(tc.verdict, tc.text); got != tc.want {
+				t.Fatalf("progressNote = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -2577,7 +2630,7 @@ func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
 // uses, never letting the invented citation stand.
 func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("source: [docs](https://example.com/invented)"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("source: [docs](https://docs.acme.dev/invented)"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := newFakeStore()
@@ -2586,7 +2639,7 @@ func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
 		MaxIterations: 8, Workspace: root,
 		Plan: Plan{Units: []PlanUnit{{Title: "write report", Artifacts: []string{"report.md"}}}},
 	})
-	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it", SeenURLs: []string{"https://example.com/other"}}}}
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it", SeenURLs: []string{"https://docs.acme.dev/other"}}}}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -2715,7 +2768,7 @@ func TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing(t *testing.T) {
 		t.Fatalf("packet: %v", err)
 	}
 	_, user := packet.Render()
-	if !strings.Contains(user, "Current unit: unit0\nREGRESSED:") || !strings.Contains(user, "[regressed] unit0") || !strings.Contains(user, "[harness-verified] unit1") {
+	if !strings.Contains(user, "Current unit: unit0\nREGRESSED:") || !strings.Contains(user, "[pending] unit0 (regressed: passed before, now fails its artifacts check)") || !strings.Contains(user, "[harness-verified] unit1") {
 		t.Fatalf("worker packet = %q, want unit0 named as the regressed current unit and unit1 harness-verified", user)
 	}
 }
@@ -3579,9 +3632,10 @@ func countEvents(store *fakeStore, id, kind string) int {
 // finding's file and strays into a file outside every unit's scope; the
 // second round's packet is findings-only (the open finding, the delta
 // diff, the named file's contents, the scope-creep list, the affected
-// unit's harness state, and no goal, plan, stat, listing, artifacts,
-// progress or worker report) at a fraction of the first round's bytes;
-// the reviewer resolving F1 with no new finding counts as approval.
+// unit's harness state, the rework turn's progress note alone (D-098),
+// and no goal, plan, stat, listing, artifacts or worker report) at a
+// fraction of the first round's bytes; the reviewer resolving F1 with
+// no new finding counts as approval.
 func TestDriverFindingsOnlyReReview(t *testing.T) {
 	root, base := codingWorktree(t)
 	wt := filepath.Join(root, "wt")
@@ -3601,7 +3655,7 @@ func TestDriverFindingsOnlyReReview(t *testing.T) {
 		}}},
 	})
 	runner := &scriptedRunner{
-		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "validated"}},
+		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "validated", Handoff: "F1 does not match the repository: main.go already validates"}},
 		reviewVerdicts: []ReviewVerdict{
 			{Findings: []Finding{{Title: "missing validation", File: "src/main.go", Detail: "no input check", Evidence: "+func main() {}"}}},
 			{Resolved: []string{"F1"}},
@@ -3616,12 +3670,15 @@ func TestDriverFindingsOnlyReReview(t *testing.T) {
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	head := strings.TrimSpace(gitRun(t, wt, "rev-parse", "HEAD"))
-	if m.Phase != PhaseGenerate || m.Plan.LastReviewCommit != head {
-		t.Fatalf("after round 1: phase %q last_review_commit %q, want generate with HEAD %s", m.Phase, m.Plan.LastReviewCommit, head)
+	if m.Phase != PhaseGenerate || m.Plan.LastReviewCommit != head || m.Plan.LastReviewAt.IsZero() {
+		t.Fatalf("after round 1: phase %q last_review_commit %q last_review_at %v, want generate with HEAD %s and a round time", m.Phase, m.Plan.LastReviewCommit, m.Plan.LastReviewAt, head)
 	}
 	full := runner.reviewCalls[0]
 	if full.FindingsOnly || full.Diff == "" || full.DiffStat == "" {
 		t.Fatalf("round 1 packet = %+v, want the full packet", full)
+	}
+	if len(full.UnitFiles) != 1 || !reflect.DeepEqual(full.UnitFiles[0], []string{"src/main.go", "src/other.go"}) {
+		t.Fatalf("round 1 unit files = %v, want the changed files inside the unit's scope", full.UnitFiles)
 	}
 
 	// The rework turn: the worker fixes main.go and also edits docs/.
@@ -3643,8 +3700,12 @@ func TestDriverFindingsOnlyReReview(t *testing.T) {
 	}
 	delta := runner.reviewCalls[1]
 	if !delta.FindingsOnly || delta.Goal != "" || len(delta.Plan.Units) != 0 || delta.DiffStat != "" ||
-		delta.Listing != "" || delta.Evidence != "" || len(delta.Progress) != 0 || len(delta.Artifacts) != 0 {
+		delta.Listing != "" || delta.Evidence != "" || len(delta.Artifacts) != 0 || len(delta.UnitFiles) != 0 {
 		t.Fatalf("round 2 packet carries full-round material: %+v", delta)
+	}
+	// D-098: only the rework turn's note, not the pre-review operator note.
+	if len(delta.Progress) != 1 || !strings.Contains(delta.Progress[0].Note, "F1 does not match the repository") {
+		t.Fatalf("round 2 progress = %+v, want the rework turn's note alone", delta.Progress)
 	}
 	if len(delta.OpenFindings) != 1 || delta.OpenFindings[0].ID != "F1" {
 		t.Fatalf("round 2 open findings = %+v, want F1", delta.OpenFindings)
@@ -3722,8 +3783,8 @@ func TestDriverTwoUnitPlanReviewsOnce(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Workspace: root, BaseCommit: base,
 		Plan: Plan{Units: []PlanUnit{
-			{Title: "write a", Artifacts: []string{"a.md"}, Criteria: []string{"a.md exists", "a.md has content"}},
-			{Title: "write b", Artifacts: []string{"b.md"}, Criteria: []string{"b.md exists", "b.md has content"}},
+			{Title: "write a", Artifacts: []string{"a.md"}, Scope: []string{"a.md"}, Criteria: []string{"a.md exists", "no other root files modified"}},
+			{Title: "write b", Artifacts: []string{"b.md"}, Scope: []string{"b.md"}, Criteria: []string{"b.md exists", "no other root files modified"}},
 		}},
 	})
 	runner := &scriptedRunner{
@@ -3761,6 +3822,11 @@ func TestDriverTwoUnitPlanReviewsOnce(t *testing.T) {
 	}
 	if len(runner.reviewCalls) != 1 || len(runner.reviewCalls[0].Units) != 2 {
 		t.Fatalf("review calls = %d (units %d), want one round over both units", len(runner.reviewCalls), len(runner.reviewCalls[0].Units))
+	}
+	// D-098: each unit's block names only the changed files inside its
+	// own scope (defaulted to the root artifact itself at plan parse).
+	if got := runner.reviewCalls[0].UnitFiles; !reflect.DeepEqual(got, [][]string{{"a.md"}, {"b.md"}}) {
+		t.Fatalf("unit files = %v, want [[a.md] [b.md]]", got)
 	}
 	if n := countEvents(store, "m1", "mission.review_verdict"); n != 1 {
 		t.Fatalf("review_verdict events = %d, want exactly 1", n)
@@ -3865,5 +3931,84 @@ func TestGatewayReviewWindow(t *testing.T) {
 	failing := GatewayReviewWindow(resolve, func(context.Context) (map[string]int, error) { return nil, errors.New("down") })
 	if got := failing(context.Background(), "review", "big"); got != 0 {
 		t.Fatalf("window with the catalog down = %d, want 0", got)
+	}
+}
+
+// TestDriverChangeRouting covers the routing PATCH's driver half (D-100,
+// issue #536): paused missions get the new review route and a
+// mission.route_changed event, anything else is refused untouched.
+func TestDriverChangeRouting(t *testing.T) {
+	store := newFakeStore()
+	store.put("paused", Mission{ID: "paused", Phase: PhaseProve, Status: StatusPaused, PauseReason: PauseInfra, Route: "worker", ReviewRoute: "old", ReviewRouteModel: "a/b"})
+	store.put("working", Mission{ID: "working", Phase: PhaseProve, Status: StatusWorking, ReviewRoute: "old"})
+	store.put("done", Mission{ID: "done", Phase: PhaseDone, Status: StatusDone, ReviewRoute: "old"})
+	d := testDriver(store, nil)
+	ctx := context.Background()
+
+	if err := d.ChangeRouting(ctx, "paused", "careful", ""); err != nil {
+		t.Fatalf("ChangeRouting(paused): %v", err)
+	}
+	got := store.missions["paused"]
+	if got.ReviewRoute != "careful" || got.ReviewRouteModel != "" || got.Route != "worker" || got.Status != StatusPaused {
+		t.Fatalf("mission after change = %+v, want review_route=careful, cleared pin, worker route and pause untouched", got)
+	}
+	events := store.events["paused"]
+	if len(events) != 1 || events[0].Kind != "mission.route_changed" || !strings.Contains(string(events[0].Payload), `"from_route":"old"`) || !strings.Contains(string(events[0].Payload), `"to_route":"careful"`) {
+		t.Fatalf("events = %+v, want one mission.route_changed with old and new route", events)
+	}
+
+	if err := d.ChangeRouting(ctx, "working", "careful", ""); !errors.Is(err, ErrNotPaused) {
+		t.Fatalf("ChangeRouting(working) = %v, want ErrNotPaused", err)
+	}
+	if err := d.ChangeRouting(ctx, "done", "careful", ""); !errors.Is(err, ErrTerminal) {
+		t.Fatalf("ChangeRouting(done) = %v, want ErrTerminal", err)
+	}
+	if store.missions["working"].ReviewRoute != "old" || len(store.events["working"]) != 0 {
+		t.Fatalf("working mission touched: %+v / %+v", store.missions["working"], store.events["working"])
+	}
+}
+
+// TestDriverReviewRouteSkip confirms a prove turn's no usable provider
+// failure is translated into the review route's name and first skip
+// reason (D-100), and that any other error, or a usable route, leaves
+// the raw error alone.
+func TestDriverReviewRouteSkip(t *testing.T) {
+	store := newFakeStore()
+	d := testDriver(store, nil)
+	m := Mission{Route: "worker", PlanRoute: "plan", ReviewRoute: "careful"}
+	noRoute := errors.New(`gwclient: gateway http 502: {"error":"no_route","message":"no usable provider for route \"careful\""}`)
+
+	if _, _, ok := d.reviewRouteSkip(context.Background(), m, noRoute); ok {
+		t.Fatal("no resolver wired: want ok=false")
+	}
+	d.SetRouteResolver(func(_ context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+		if harness != "" {
+			t.Fatalf("resolve harness = %q, want the chat axis", harness)
+		}
+		switch route {
+		case "careful":
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
+				{ProviderName: "zai", Model: "glm", Usable: false, SkipReason: "cooling down until 12:00"},
+				{ProviderName: "openai", Model: "gpt", Usable: false, SkipReason: "disabled"},
+			}}, nil
+		case "alive":
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{{Usable: true}}}, nil
+		}
+		return nil, errors.New("unknown route")
+	})
+	route, skip, ok := d.reviewRouteSkip(context.Background(), m, noRoute)
+	if !ok || route != "careful" || skip != "cooling down until 12:00" {
+		t.Fatalf("reviewRouteSkip = %q, %q, %v; want careful, first skip reason, true", route, skip, ok)
+	}
+	if _, _, ok := d.reviewRouteSkip(context.Background(), m, errors.New("context deadline exceeded")); ok {
+		t.Fatal("unrelated error: want ok=false")
+	}
+	m.ReviewRoute = "alive"
+	if _, _, ok := d.reviewRouteSkip(context.Background(), m, noRoute); ok {
+		t.Fatal("route with a usable entry: want ok=false")
+	}
+	m.ReviewRoute = ""
+	if route, _, ok := d.reviewRouteSkip(context.Background(), m, noRoute); ok || route != "" {
+		t.Fatalf("unknown route resolve error: got %q, %v; want ok=false", route, ok)
 	}
 }

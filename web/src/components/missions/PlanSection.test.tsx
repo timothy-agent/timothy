@@ -13,7 +13,7 @@ describe('PlanSection', () => {
     expect(screen.getByText('No plan yet.')).toBeInTheDocument()
   })
 
-  it('badges units by harness state: verified, harness-verified, regressed, pending', () => {
+  it('badges units by harness state: reviewed, harness-verified, pending; regressed is pending with a note', () => {
     render(
       <PlanSection
         units={[
@@ -24,10 +24,14 @@ describe('PlanSection', () => {
         ]}
       />,
     )
-    expect(screen.getByText('verified')).toBeInTheDocument()
+    expect(screen.getByText('reviewed')).toBeInTheDocument()
     expect(screen.getByText('harness-verified')).toBeInTheDocument()
-    expect(screen.getByText('regressed')).toHaveAttribute('title', 'a.md: not found')
-    expect(screen.getByText('pending')).toBeInTheDocument()
+    const pending = screen.getAllByText('pending')
+    expect(pending).toHaveLength(2)
+    expect(pending[0]).toHaveAttribute('title', 'a.md: not found')
+    expect(screen.getByText('regressed: passed before, now fails')).toBeInTheDocument()
+    expect(screen.queryByText('verified')).toBeNull()
+    expect(screen.queryByText('regressed')).toBeNull()
   })
 
   it('lists acceptance criteria under a unit and none for a legacy unit', () => {

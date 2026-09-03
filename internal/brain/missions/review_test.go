@@ -8,7 +8,51 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+// TestInsideScope covers the D-098 per-unit attribution: files equal
+// to or beneath a scope entry, every file for an empty scope, and a
+// non-nil empty result when nothing matches.
+func TestInsideScope(t *testing.T) {
+	files := []string{"CHANGELOG.md", "CONTRIBUTING.md", "src/main.go", "src/sub/x.go", "srcfoo/y.go"}
+	cases := []struct {
+		name  string
+		scope []string
+		want  []string
+	}{
+		{"root file", []string{"CHANGELOG.md"}, []string{"CHANGELOG.md"}},
+		{"directory", []string{"src"}, []string{"src/main.go", "src/sub/x.go"}},
+		{"dot-slash prefix", []string{"./src/"}, []string{"src/main.go", "src/sub/x.go"}},
+		{"empty scope is the whole tree", nil, files},
+		{"nothing matches", []string{"docs"}, []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := insideScope(files, tc.scope); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("insideScope = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestProgressSince pins the findings-only progress filter: only notes
+// written after the anchor, every note for a zero anchor (plans written
+// before D-098).
+func TestProgressSince(t *testing.T) {
+	anchor := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+	notes := []ProgressNote{
+		{At: anchor.Add(-time.Minute), Note: "before"},
+		{At: anchor, Note: "at"},
+		{At: anchor.Add(time.Minute), Note: "after"},
+	}
+	if got := progressSince(notes, anchor); len(got) != 1 || got[0].Note != "after" {
+		t.Fatalf("progressSince = %+v, want the note after the anchor only", got)
+	}
+	if got := progressSince(notes, time.Time{}); len(got) != 3 {
+		t.Fatalf("progressSince with a zero anchor = %+v, want every note", got)
+	}
+}
 
 func TestParseReviewVerdict(t *testing.T) {
 	v, err := parseReviewVerdict([]byte(`{"decision":"rework","findings":[{"title":"x","file":"y.go","detail":"z"}]}`))

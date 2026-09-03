@@ -293,7 +293,7 @@ func main() {
 	kbStore := kb.New(app.DB)
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
-		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier,
+		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, gwc,
 			flags.PermissionTimeoutSeconds, flags.AskTimeoutSeconds, broker.Resolve, app.Log)
 	}
 	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, app.Log)
@@ -1070,6 +1070,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetGitCommitStyle(flags.GitCommitStyle)
 	driver.SetLocation(flags.Location)
 	driver.SetReviewWindow(missions.GatewayReviewWindow(gwc.ResolveRoute, gwc.ModelWindows))
+	driver.SetRouteResolver(gwc.ResolveRoute)
 	driver.SetReviewTokenCeiling(flags.ReviewTokenCeiling)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)

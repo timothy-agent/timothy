@@ -127,6 +127,14 @@ type ReviewPacket struct {
 	// diff restricted to the reviewed units' scope paths.
 	DiffStat string
 	Diff     string
+	// UnitFiles (D-098, issue #529) lists, per entry of Units, the
+	// changed files inside that unit's scope: the files the reviewer
+	// judges an exclusivity criterion ("no other files modified")
+	// against, since DiffStat spans every unit. The harness records no
+	// per-unit commit, so scope is the attribution. nil without a
+	// worktree; an empty entry means the change touched nothing in
+	// the unit's scope.
+	UnitFiles [][]string
 	// Artifacts maps workspace-relative path -> file contents, read by
 	// the harness (ReadArtifacts), capped at reviewArtifactFileCap each
 	// and reviewArtifactsCap total.
@@ -139,7 +147,9 @@ type ReviewPacket struct {
 	// Progress is the mission's progress log, rendered so an operator
 	// steering note posted mid-mission reaches the reviewer too: a
 	// rework-triggering note ("skip the CSS polish") must not be invisible
-	// to the round deciding whether the unit passes.
+	// to the round deciding whether the unit passes. A findings-only
+	// round carries only the notes written since the last review round
+	// (D-098): the worker's own account of the rework turns.
 	Progress []ProgressNote
 	// OpenFindings are the prior rounds' still-open findings (D-092):
 	// the reviewer marks the ids it considers closed in resolved. This
@@ -148,8 +158,9 @@ type ReviewPacket struct {
 	// FindingsOnly marks a re-review round (D-096, issue #524): the
 	// packet carries the open findings, Diff since the last review commit
 	// (restricted to the finding files and the affected units' scope),
-	// Files, ScopeCreep and the affected units' harness state, and none
-	// of Goal, Plan, DiffStat, Listing, Evidence or Progress.
+	// Files, ScopeCreep, the affected units' harness state and the
+	// Progress notes since that commit, and none of Goal, Plan,
+	// DiffStat, Listing or Evidence.
 	FindingsOnly bool
 	// Files maps each open finding's file to its contents, capped at
 	// reviewArtifactFileCap each; findings-only rounds.
@@ -183,17 +194,47 @@ func outsideScope(files, scope []string) []string {
 	}
 	var out []string
 	for _, file := range files {
-		got := normalizeFindingPath(file)
-		inScope := false
-		for _, s := range scope {
-			want := normalizeFindingPath(s)
-			if want == "" || got == want || strings.HasPrefix(got, want+"/") {
-				inScope = true
-				break
-			}
-		}
-		if !inScope {
+		if !inScope(file, scope) {
 			out = append(out, file)
+		}
+	}
+	return out
+}
+
+// insideScope returns the files under any of the scope paths, in
+// order; every file when scope is empty (the whole tree). Never nil.
+func insideScope(files, scope []string) []string {
+	out := []string{}
+	for _, file := range files {
+		if len(scope) == 0 || inScope(file, scope) {
+			out = append(out, file)
+		}
+	}
+	return out
+}
+
+// inScope reports whether file equals a scope entry or sits beneath it.
+func inScope(file string, scope []string) bool {
+	got := normalizeFindingPath(file)
+	for _, s := range scope {
+		want := normalizeFindingPath(s)
+		if want == "" || got == want || strings.HasPrefix(got, want+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// progressSince returns the notes written after since, in order; every
+// note when since is zero (a plan written before D-098).
+func progressSince(notes []ProgressNote, since time.Time) []ProgressNote {
+	if since.IsZero() {
+		return notes
+	}
+	var out []ProgressNote
+	for _, n := range notes {
+		if n.At.After(since) {
+			out = append(out, n)
 		}
 	}
 	return out

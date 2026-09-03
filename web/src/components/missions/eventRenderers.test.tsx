@@ -42,6 +42,27 @@ describe('mission.finding_demoted rendering', () => {
   })
 })
 
+describe('mission.review_verdict rendering', () => {
+  it('renders an approved decision green', () => {
+    render(<div>{renderEvent(event({ decision: 'approved', findings: [], resolved: [] }, 'mission.review_verdict'))}</div>)
+    expect(screen.getByText('Review verdict: approved')).toHaveClass('text-green-400')
+  })
+
+  it('renders a rework decision amber with the open finding ids', () => {
+    render(<div>{renderEvent(event({ decision: 'rework', reason: 'missing test', round: 1, open: ['F1', 'F2'] }, 'mission.review_verdict'))}</div>)
+    expect(screen.getByText('Review verdict: rework: open F1, F2')).toHaveClass('text-amber-400')
+  })
+
+  it('marks a findings_only round as such', () => {
+    render(
+      <div>
+        {renderEvent(event({ decision: 'rework', findings: [], resolved: [], findings_only: true }, 'mission.review_verdict'))}
+      </div>,
+    )
+    expect(screen.getByText('Review verdict: rework (findings-only round)')).toHaveClass('text-amber-400')
+  })
+})
+
 describe('mission.generate_skipped rendering', () => {
   it('explains the skipped worker turn', () => {
     expect(renderEvent(event({}, 'mission.generate_skipped'))).toBe('Worker turn skipped: every unit is harness-verified')
@@ -452,5 +473,23 @@ describe('mission.permission_denied rendering', () => {
 describe('unknown event kind fallback', () => {
   it('falls back to the raw kind string', () => {
     expect(renderEvent(event({}, 'some.future.kind'))).toBe('some.future.kind')
+  })
+})
+
+describe('mission.route_changed rendering', () => {
+  it('names the old and new review route', () => {
+    render(<div>{renderEvent(event({ from_route: 'default', to_route: 'careful' }, 'mission.route_changed'))}</div>)
+    expect(screen.getByText('Review route changed: default → careful')).toHaveClass('text-amber-400')
+  })
+
+  it('appends the model pin change when it differs', () => {
+    render(
+      <div>
+        {renderEvent(
+          event({ from_route: 'default', to_route: 'careful', from_model: '', to_model: 'openai/gpt-5' }, 'mission.route_changed'),
+        )}
+      </div>,
+    )
+    expect(screen.getByText('Review route changed: default → careful · model auto → openai/gpt-5')).toBeInTheDocument()
   })
 })

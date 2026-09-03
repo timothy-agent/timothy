@@ -53,6 +53,14 @@ type StreamRequest struct {
 	ProviderState json.RawMessage `json:"provider_state,omitempty"`
 }
 
+// ErrGatewayUnavailable reports that the gateway itself is not yet
+// serving (unreachable, or answering 503 config_unavailable because its
+// routing snapshot hasn't loaded), distinct from a route genuinely not
+// existing (404 not_found) or a bad request (400). Callers that
+// dispatch on a route resolve (D-101, missions' delegated runner) must
+// treat this as transient infra and retry, never as "no such route".
+var ErrGatewayUnavailable = errors.New("gwclient: gateway unavailable")
+
 // windowsTTL matches the gateway's own config poll cadence: a fresher
 // read couldn't observe anything newer.
 const windowsTTL = 30 * time.Second
@@ -244,9 +252,13 @@ func (c *Client) ResolveRoute(ctx context.Context, name, harness string) (*Resol
 	}
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("gwclient: gateway unreachable: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrGatewayUnavailable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("%w: gateway http %d: %s", ErrGatewayUnavailable, resp.StatusCode, string(msg))
+	}
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return nil, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
@@ -263,6 +275,44 @@ func (c *Client) ResolveRoute(ctx context.Context, name, harness string) (*Resol
 	c.resolved[cacheKey] = resolveCacheEntry{route: &out, exp: time.Now().Add(resolveTTL)}
 	c.mu.Unlock()
 	return &out, nil
+}
+
+// Ready reports whether the gateway's /health says its routing
+// snapshot has loaded (D-101): the "routing" check gateway's own
+// cmd/gateway/main.go registers alongside postgres/migrations. Used by
+// the boot recovery sweep to wait out the same window that otherwise
+// hands a re-driven mission's route resolve a spurious
+// config_unavailable. A non-ok status (including "routing" missing
+// entirely, an older gateway build) reports not ready with the
+// detail/status named so the sweep can log something useful.
+func (c *Client) Ready(ctx context.Context) (bool, string, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/health", nil)
+	if err != nil {
+		return false, "", fmt.Errorf("gwclient: request: %w", err)
+	}
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return false, "", fmt.Errorf("%w: %v", ErrGatewayUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var health struct {
+		Status string `json:"status"`
+		Checks map[string]struct {
+			Status string `json:"status"`
+			Detail string `json:"detail"`
+		} `json:"checks"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		return false, "", fmt.Errorf("gwclient: decode health: %w", err)
+	}
+	routing, ok := health.Checks["routing"]
+	if !ok {
+		return false, "routing check not reported", nil
+	}
+	if routing.Status != "ok" {
+		return false, routing.Detail, nil
+	}
+	return true, "", nil
 }
 
 // SecretRef mirrors the gateway admin's SecretRef: a stored secret's

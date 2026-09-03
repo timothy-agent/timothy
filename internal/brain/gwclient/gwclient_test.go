@@ -2,6 +2,7 @@ package gwclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -281,5 +282,108 @@ func TestModelWindowsGatewayError(t *testing.T) {
 
 	if _, err := c.ModelWindows(t.Context()); err == nil {
 		t.Fatal("ModelWindows() = nil error for 503 gateway response")
+	}
+}
+
+// TestResolveRouteConfigUnavailableWrapsErrGatewayUnavailable proves
+// D-101 (issue #511): a 503 config_unavailable resolve response must be
+// classified as ErrGatewayUnavailable so missions' delegated runner
+// retries it instead of treating it as "no delegated route".
+func TestResolveRouteConfigUnavailableWrapsErrGatewayUnavailable(t *testing.T) {
+	t.Parallel()
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"config_unavailable","message":"routing configuration not loaded yet"}`, http.StatusServiceUnavailable)
+	})
+
+	_, err := c.ResolveRoute(t.Context(), "coding", "claude-cli")
+	if err == nil {
+		t.Fatal("ResolveRoute() = nil error for 503 config_unavailable")
+	}
+	if !errors.Is(err, ErrGatewayUnavailable) {
+		t.Fatalf("ResolveRoute() error = %v, want it to wrap ErrGatewayUnavailable", err)
+	}
+}
+
+// TestResolveRouteUnreachableWrapsErrGatewayUnavailable proves the same
+// classification applies to a pure transport failure (gateway process
+// not listening at all), not only an HTTP 503 response.
+func TestResolveRouteUnreachableWrapsErrGatewayUnavailable(t *testing.T) {
+	t.Parallel()
+	c := New("http://127.0.0.1:1") // nothing listens here
+
+	_, err := c.ResolveRoute(t.Context(), "coding", "claude-cli")
+	if err == nil {
+		t.Fatal("ResolveRoute() = nil error for an unreachable gateway")
+	}
+	if !errors.Is(err, ErrGatewayUnavailable) {
+		t.Fatalf("ResolveRoute() error = %v, want it to wrap ErrGatewayUnavailable", err)
+	}
+}
+
+// TestResolveRouteNotFoundDoesNotWrapErrGatewayUnavailable proves a
+// genuinely definitive "no such route" answer (404) is never mistaken
+// for the gateway being unavailable: only that distinction lets
+// missions' delegated runner retry the transient case while still
+// falling back to native on this one.
+func TestResolveRouteNotFoundDoesNotWrapErrGatewayUnavailable(t *testing.T) {
+	t.Parallel()
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"not_found"}`, http.StatusNotFound)
+	})
+
+	_, err := c.ResolveRoute(t.Context(), "no-such-route", "")
+	if err == nil {
+		t.Fatal("ResolveRoute() = nil error for 404 gateway response")
+	}
+	if errors.Is(err, ErrGatewayUnavailable) {
+		t.Fatalf("ResolveRoute() error = %v, want it NOT to wrap ErrGatewayUnavailable for a 404", err)
+	}
+}
+
+func TestReadyReportsRoutingCheckStatus(t *testing.T) {
+	t.Parallel()
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"status":"degraded","checks":{"routing":{"status":"degraded","detail":"routing configuration not loaded yet"}}}`)
+	})
+
+	ready, detail, err := c.Ready(t.Context())
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if ready {
+		t.Fatal("Ready() = true, want false for a degraded routing check")
+	}
+	if detail == "" {
+		t.Fatal("Ready() detail is empty, want the routing check's detail")
+	}
+}
+
+func TestReadyReportsOKWhenRoutingLoaded(t *testing.T) {
+	t.Parallel()
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"status":"ok","checks":{"postgres":{"status":"ok"},"routing":{"status":"ok"}}}`)
+	})
+
+	ready, _, err := c.Ready(t.Context())
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if !ready {
+		t.Fatal("Ready() = false, want true once the routing check is ok")
+	}
+}
+
+func TestReadyMissingRoutingCheckReportsNotReady(t *testing.T) {
+	t.Parallel()
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"status":"ok","checks":{"postgres":{"status":"ok"}}}`)
+	})
+
+	ready, _, err := c.Ready(t.Context())
+	if err != nil {
+		t.Fatalf("Ready: %v", err)
+	}
+	if ready {
+		t.Fatal("Ready() = true, want false when an older gateway build reports no routing check at all")
 	}
 }

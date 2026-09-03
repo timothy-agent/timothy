@@ -877,6 +877,10 @@ export interface Mission {
   // deliverable, same worker behavior as light); "light" is the
   // existing D-069 behavior, always paired with light: true.
   flow?: 'full' | 'discover_generate' | 'no_prove' | 'light'
+  // has_plan (D-102, issue #496) marks a mission whose goal already
+  // carried the operator's own plan: the plan turn ran in transcribe
+  // mode instead of designing units from scratch.
+  has_plan?: boolean
   final_output?: string
   // artifact_refs are this mission's declared artifact files, best-
   // effort copied into the attachment store in the result phase's step
@@ -1028,6 +1032,16 @@ export interface ExecutorSkippedPayload {
 export interface MissionSteeredPayload {
   note: string
   phase?: string
+}
+
+// MissionRouteChangedPayload is mission.route_changed's payload
+// (D-100): the review route and model pin before and after an
+// operator's routing PATCH on a paused mission.
+export interface MissionRouteChangedPayload {
+  from_route: string
+  to_route: string
+  from_model?: string
+  to_model?: string
 }
 
 // MissionTurnPayload is mission.turn's payload: one event per phase

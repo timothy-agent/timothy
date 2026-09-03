@@ -27,6 +27,10 @@ vi.mock('../api/client', () => ({
   pushMission: vi.fn(),
   openMissionPR: vi.fn(),
   fetchAttachmentBlob: vi.fn(),
+  getMissionDetailExecutionPlan: vi.fn().mockResolvedValue([]),
+  getMissionExecutionPlan: vi.fn().mockResolvedValue([]),
+  patchMissionRouting: vi.fn(),
+  listRoutes: vi.fn().mockResolvedValue([]),
 }))
 
 import {
@@ -34,6 +38,7 @@ import {
   cancelMission,
   deleteMission,
   getMission,
+  getMissionDetailExecutionPlan,
   getSettings,
   listMissionFiles,
   listSchedules,
@@ -963,6 +968,56 @@ describe('MissionDetail', () => {
     renderPage()
     await screen.findByText('Fix the login bug')
     expect(screen.getByRole('button', { name: 'Intervene' })).toBeDisabled()
+  })
+
+  it('offers the review route picker in the Intervene modal only while paused', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'infra', review_route: 'default' })
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
+    expect(await screen.findByRole('combobox', { name: 'Review route' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+  })
+
+  it('omits the review route picker from the Intervene modal while working', async () => {
+    renderPage()
+    await screen.findByText('Fix the login bug')
+    fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
+    await screen.findByPlaceholderText('Steer this mission (markdown supported)…')
+    expect(screen.queryByLabelText('Review route')).toBeNull()
+  })
+
+  it('renders the execution plan resolved from the mission row with its unusable entries', async () => {
+    vi.mocked(getMissionDetailExecutionPlan).mockResolvedValue([
+      {
+        phase: 'prove',
+        route: 'careful',
+        route_source: 'mission',
+        axis: 'native',
+        harness: '',
+        harness_source: '',
+        skipped: false,
+        skip_reason: '',
+        entries: [
+          {
+            provider_name: 'OpenAI',
+            driver: 'openaicompat',
+            kind: 'chat',
+            base_url: '',
+            model: 'gpt-5',
+            usable: false,
+            skip_reason: 'cooling down until 12:00',
+            selected: false,
+          },
+        ],
+      },
+    ])
+    renderPage()
+    await screen.findByText('Execution plan')
+    expect(screen.getByText('1 unusable - cooling down until 12:00')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Route careful has no usable provider for Prove: cooling down until 12:00',
+    )
   })
 
   it('surfaces the most recent mission.paused event detail while paused', async () => {

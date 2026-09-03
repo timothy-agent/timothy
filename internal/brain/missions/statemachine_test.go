@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStep(t *testing.T) {
@@ -1126,25 +1127,28 @@ func TestStepPhaseCompleteRoutesOnPendingUnits(t *testing.T) {
 }
 
 // TestStepReworkRecordsReviewCommit pins D-096's anchor: a rework
-// records the round's worktree HEAD as LastReviewCommit, an input
-// without one leaves the previous anchor alone, and approval keeps it
-// (harmless: findings-only needs an open finding too).
+// records the round's worktree HEAD as LastReviewCommit and its time as
+// LastReviewAt (D-098), an input without them leaves the previous
+// anchors alone, and approval keeps them (harmless: findings-only needs
+// an open finding too).
 func TestStepReworkRecordsReviewCommit(t *testing.T) {
+	t1 := time.Date(2026, 9, 2, 10, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
 	first := Step(
 		StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8},
-		StepInput{Input: InputReviewRework, ReviewCommit: "abc123", Findings: []Finding{{Title: "gap", File: "x.go"}}},
+		StepInput{Input: InputReviewRework, ReviewCommit: "abc123", ReviewAt: t1, Findings: []Finding{{Title: "gap", File: "x.go"}}},
 		DefaultConfig,
 	)
-	if first.Next.LastReviewCommit != "abc123" {
-		t.Fatalf("LastReviewCommit = %q, want abc123", first.Next.LastReviewCommit)
+	if first.Next.LastReviewCommit != "abc123" || !first.Next.LastReviewAt.Equal(t1) {
+		t.Fatalf("LastReviewCommit = %q LastReviewAt = %v, want abc123 at %v", first.Next.LastReviewCommit, first.Next.LastReviewAt, t1)
 	}
 	second := Step(withStatus(first.Next, StatusWorking), StepInput{Input: InputReviewRework}, DefaultConfig)
-	if second.Next.LastReviewCommit != "abc123" {
-		t.Fatalf("LastReviewCommit = %q after a rework without a commit, want abc123 kept", second.Next.LastReviewCommit)
+	if second.Next.LastReviewCommit != "abc123" || !second.Next.LastReviewAt.Equal(t1) {
+		t.Fatalf("anchors = %q %v after a rework without them, want abc123 at %v kept", second.Next.LastReviewCommit, second.Next.LastReviewAt, t1)
 	}
-	third := Step(withStatus(second.Next, StatusWorking), StepInput{Input: InputReviewRework, ReviewCommit: "def456"}, DefaultConfig)
-	if third.Next.LastReviewCommit != "def456" {
-		t.Fatalf("LastReviewCommit = %q, want def456", third.Next.LastReviewCommit)
+	third := Step(withStatus(second.Next, StatusWorking), StepInput{Input: InputReviewRework, ReviewCommit: "def456", ReviewAt: t2}, DefaultConfig)
+	if third.Next.LastReviewCommit != "def456" || !third.Next.LastReviewAt.Equal(t2) {
+		t.Fatalf("anchors = %q %v, want def456 at %v", third.Next.LastReviewCommit, third.Next.LastReviewAt, t2)
 	}
 }
 
@@ -1263,5 +1267,59 @@ func TestStepReworkStallsOnUntouchedFile(t *testing.T) {
 	)
 	if minor.Next.Status == StatusPaused {
 		t.Fatalf("a minor finding must never stall the mission: %+v", minor.Next)
+	}
+}
+
+// TestStepRouteChange covers the review-route rewrite (D-100, issue
+// #536): legal only while paused, records old and new values, and
+// leaves the mission paused for the operator's separate resume.
+func TestStepRouteChange(t *testing.T) {
+	paused := StepState{Phase: PhaseProve, Status: StatusPaused, PauseReason: PauseInfra, ReviewRoute: "old", ReviewRouteModel: "zai/glm-4.7"}
+	got := Step(paused, StepInput{Input: InputRouteChange, ReviewRoute: "careful", ReviewRouteModel: "openai/gpt-5"}, DefaultConfig)
+	want := paused
+	want.ReviewRoute, want.ReviewRouteModel = "careful", "openai/gpt-5"
+	if !reflect.DeepEqual(got.Next, want) {
+		t.Fatalf("Next = %+v, want %+v", got.Next, want)
+	}
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.route_changed" {
+		t.Fatalf("Events = %+v, want exactly one mission.route_changed", got.Events)
+	}
+	wantPayload := map[string]any{"from_route": "old", "to_route": "careful", "from_model": "zai/glm-4.7", "to_model": "openai/gpt-5"}
+	if !reflect.DeepEqual(got.Events[0].Payload, wantPayload) {
+		t.Fatalf("payload = %+v, want %+v", got.Events[0].Payload, wantPayload)
+	}
+
+	approval := StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval, ReviewRoute: "old"}
+	if got := Step(approval, StepInput{Input: InputRouteChange, ReviewRoute: "careful"}, DefaultConfig); got.Next.ReviewRoute != "careful" || got.Next.PauseReason != PauseApproval {
+		t.Fatalf("plan-approval park: Next = %+v, want route changed and still parked on approval", got.Next)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		state StepState
+		input StepInput
+	}{
+		{"working is a no-op", StepState{Phase: PhaseProve, Status: StatusWorking, ReviewRoute: "old"}, StepInput{Input: InputRouteChange, ReviewRoute: "careful"}},
+		{"terminal is a no-op", StepState{Phase: PhaseDone, Status: StatusDone, ReviewRoute: "old"}, StepInput{Input: InputRouteChange, ReviewRoute: "careful"}},
+		{"empty route is a no-op", paused, StepInput{Input: InputRouteChange}},
+	} {
+		got := Step(tc.state, tc.input, DefaultConfig)
+		if !reflect.DeepEqual(got.Next, tc.state) || len(got.Events) != 0 {
+			t.Fatalf("%s: got %+v / %+v, want unchanged state and no events", tc.name, got.Next, got.Events)
+		}
+	}
+}
+
+// TestStepReviewInfraFailureCarriesRoute confirms the pause payload
+// names the route when the input carries one (D-100) and omits the key
+// otherwise, so older readers see the same shape as before.
+func TestStepReviewInfraFailureCarriesRoute(t *testing.T) {
+	got := Step(StepState{Phase: PhaseProve, Status: StatusWorking}, StepInput{Input: InputReviewInfraFailure, Reason: "dead", Route: "careful"}, DefaultConfig)
+	if r, _ := got.Events[0].Payload["route"].(string); r != "careful" {
+		t.Fatalf("payload = %+v, want route=careful", got.Events[0].Payload)
+	}
+	got = Step(StepState{Phase: PhaseProve, Status: StatusWorking}, StepInput{Input: InputReviewInfraFailure, Reason: "dead"}, DefaultConfig)
+	if _, ok := got.Events[0].Payload["route"]; ok {
+		t.Fatalf("payload = %+v, want no route key", got.Events[0].Payload)
 	}
 }

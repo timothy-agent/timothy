@@ -52,7 +52,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	discover_notes, replan_used, schedule_id, session_id, harness, environment,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow,
-	review_findings, rework_rounds`
+	review_findings, rework_rounds, has_plan`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
 // missions table: bundles the five columns the API's flat
@@ -138,7 +138,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
-		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds,
+		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds, &m.HasPlan,
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
@@ -225,7 +225,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
-		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds); err != nil {
+		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds, &m.HasPlan); err != nil {
 		return Mission{}, err
 	}
 	m.Flow = Flow(flow)
@@ -322,9 +322,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	phase := initialPhase(m.Kind, flow)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -978,7 +978,7 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 		return nil, fmt.Errorf("missions last run state: %w", err)
 	}
 	rows, err := db.Query(ctx, `SELECT kind, payload FROM mission_events
-		WHERE mission_id = $1 AND kind IN ('executor.spawned', 'executor.result', 'executor.died', 'executor.progress')
+		WHERE mission_id = $1 AND kind IN ('executor.spawned', 'executor.result', 'executor.died', 'executor.progress', 'executor.session')
 		ORDER BY seq DESC`, missionID)
 	if err != nil {
 		return nil, fmt.Errorf("missions last run state: %w", err)
@@ -1024,6 +1024,22 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 				}
 				if err := json.Unmarshal(payload, &progress); err == nil {
 					state.ByteOffset = progress.ByteOffset
+				}
+			}
+		case "executor.session":
+			// Scanned in seq DESC order, so the first one seen (before
+			// the spawn row that terminates this loop) is the latest,
+			// belongs to the run this spawn started, since a run's own
+			// session id is only ever recorded after its spawn.
+			if state == nil {
+				state = &runState{}
+			}
+			if state.SessionID == "" {
+				var session struct {
+					SessionID string `json:"session_id"`
+				}
+				if err := json.Unmarshal(payload, &session); err == nil {
+					state.SessionID = session.SessionID
 				}
 			}
 		}
@@ -1100,12 +1116,19 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	// Per-unit verify state (D-094) lives inside the plan jsonb; only the
 	// units key is rewritten, and only when the plan has units, so a
 	// planless mission's '{}' stays untouched. last_review_commit (D-096)
-	// sits next to it, written only when a rework recorded one.
+	// and last_review_at (D-098) sit next to it, written only when a
+	// rework recorded them. review_route/review_route_model (D-100) are
+	// written only when the state carries a review route, so a
+	// hand-built StepState never blanks the row's routing.
 	var unitsJSON []byte
 	if len(t.Next.Units) > 0 {
 		if unitsJSON, err = json.Marshal(t.Next.Units); err != nil {
 			return fmt.Errorf("missions apply transition marshal units: %w", err)
 		}
+	}
+	lastReviewAt := ""
+	if !t.Next.LastReviewAt.IsZero() {
+		lastReviewAt = t.Next.LastReviewAt.UTC().Format(time.RFC3339Nano)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
 			phase = $2, status = $3, pause_reason = $4, pause_message = '', iteration = $5, max_iterations = $6,
@@ -1114,11 +1137,15 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 			review_findings = $12, rework_rounds = $13,
 			plan = (CASE WHEN $14::jsonb IS NULL THEN plan ELSE jsonb_set(plan, '{units}', $14::jsonb) END)
 				|| CASE WHEN $15::text = '' THEN '{}'::jsonb ELSE jsonb_build_object('last_review_commit', $15::text) END
+				|| CASE WHEN $16::text = '' THEN '{}'::jsonb ELSE jsonb_build_object('last_review_at', $16::text) END,
+			review_route = CASE WHEN $17::text = '' THEN review_route ELSE $17::text END,
+			review_route_model = CASE WHEN $17::text = '' THEN review_route_model ELSE $18::text END
 		WHERE id = $1`,
 		id, string(t.Next.Phase), string(t.Next.Status), string(t.Next.PauseReason),
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,
 		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending, t.Next.ReplanUsed,
-		findingsJSON, t.Next.ReworkRounds, unitsJSON, t.Next.LastReviewCommit,
+		findingsJSON, t.Next.ReworkRounds, unitsJSON, t.Next.LastReviewCommit, lastReviewAt,
+		t.Next.ReviewRoute, t.Next.ReviewRouteModel,
 	); err != nil {
 		return fmt.Errorf("missions apply transition update: %w", err)
 	}

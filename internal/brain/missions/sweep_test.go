@@ -526,3 +526,131 @@ func TestSweepAskTimeoutsAppliesDefaultAndDrives(t *testing.T) {
 		t.Fatalf("drove = %v, want exactly [timed-out]", driver.drove)
 	}
 }
+
+// scriptedGatewayReady returns ready/detail/err in sequence, one per
+// call, then repeats its last entry: waitForGatewayReady's own tests
+// script the gateway's boot sequence (not ready a few times, then
+// ready) without a real gwclient.Client.
+type scriptedGatewayReady struct {
+	mu    sync.Mutex
+	seq   []bool
+	calls int
+}
+
+func (s *scriptedGatewayReady) Ready(ctx context.Context) (bool, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := s.calls
+	if i >= len(s.seq) {
+		i = len(s.seq) - 1
+	}
+	s.calls++
+	if s.seq[i] {
+		return true, "", nil
+	}
+	return false, "routing configuration not loaded yet", nil
+}
+
+func (s *scriptedGatewayReady) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// TestWaitForGatewayReadyNilCheckerSkipsWait covers a deployment with no
+// gateway readiness checker wired (or one that predates D-101): the
+// wait must be a no-op, same as before this existed.
+func TestWaitForGatewayReadyNilCheckerSkipsWait(t *testing.T) {
+	t.Parallel()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	done := make(chan struct{})
+	go func() {
+		waitForGatewayReady(context.Background(), nil, log)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("waitForGatewayReady(nil checker) did not return promptly")
+	}
+}
+
+// TestWaitForGatewayReadyReturnsOnceReady proves the wait polls until
+// the gateway reports ready (D-101, issue #511): the boot recovery
+// sweep must not re-drive a mission while the gateway's routing
+// snapshot is still loading.
+func TestWaitForGatewayReadyReturnsOnceReady(t *testing.T) {
+	origInterval, origMaxWait := gatewayReadyPollInterval, gatewayReadyMaxWait
+	gatewayReadyPollInterval = time.Millisecond
+	gatewayReadyMaxWait = time.Minute
+	t.Cleanup(func() { gatewayReadyPollInterval, gatewayReadyMaxWait = origInterval, origMaxWait })
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	checker := &scriptedGatewayReady{seq: []bool{false, false, true}}
+
+	done := make(chan struct{})
+	go func() {
+		waitForGatewayReady(context.Background(), checker, log)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitForGatewayReady did not return once the checker reported ready")
+	}
+	if checker.callCount() < 3 {
+		t.Fatalf("Ready call count = %d, want at least 3 (polled until ready)", checker.callCount())
+	}
+}
+
+// TestWaitForGatewayReadyGivesUpAfterMaxWait proves the bounded cap: a
+// gateway that never reports ready must not hang the boot recovery
+// sweep forever: waitForGatewayReady gives up and returns once
+// gatewayReadyMaxWait elapses.
+func TestWaitForGatewayReadyGivesUpAfterMaxWait(t *testing.T) {
+	origInterval, origMaxWait := gatewayReadyPollInterval, gatewayReadyMaxWait
+	gatewayReadyPollInterval = time.Millisecond
+	gatewayReadyMaxWait = 20 * time.Millisecond
+	t.Cleanup(func() { gatewayReadyPollInterval, gatewayReadyMaxWait = origInterval, origMaxWait })
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	checker := &scriptedGatewayReady{seq: []bool{false}}
+
+	done := make(chan struct{})
+	go func() {
+		waitForGatewayReady(context.Background(), checker, log)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitForGatewayReady did not give up after gatewayReadyMaxWait")
+	}
+}
+
+// TestWaitForGatewayReadyRespectsContextCancellation proves the wait is
+// context-aware: a cancelled ctx must return promptly rather than
+// blocking until gatewayReadyMaxWait.
+func TestWaitForGatewayReadyRespectsContextCancellation(t *testing.T) {
+	origInterval, origMaxWait := gatewayReadyPollInterval, gatewayReadyMaxWait
+	gatewayReadyPollInterval = time.Millisecond
+	gatewayReadyMaxWait = time.Minute
+	t.Cleanup(func() { gatewayReadyPollInterval, gatewayReadyMaxWait = origInterval, origMaxWait })
+
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	checker := &scriptedGatewayReady{seq: []bool{false}}
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		waitForGatewayReady(ctx, checker, log)
+		close(done)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitForGatewayReady did not return promptly after context cancellation")
+	}
+}
