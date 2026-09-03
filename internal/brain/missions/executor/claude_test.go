@@ -435,7 +435,7 @@ func containsFlag(argv []string, flag string) bool {
 }
 
 // containsFlagValue reports whether argv has flag immediately followed
-// by value — shared by every adapter's resume-flag test.
+// by value: shared by every adapter's resume-flag test.
 func containsFlagValue(argv []string, flag, value string) bool {
 	for i, a := range argv {
 		if a == flag && i+1 < len(argv) && argv[i+1] == value {

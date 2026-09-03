@@ -1028,7 +1028,7 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 			}
 		case "executor.session":
 			// Scanned in seq DESC order, so the first one seen (before
-			// the spawn row that terminates this loop) is the latest —
+			// the spawn row that terminates this loop) is the latest,
 			// belongs to the run this spawn started, since a run's own
 			// session id is only ever recorded after its spawn.
 			if state == nil {

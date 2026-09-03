@@ -38,7 +38,7 @@ type Capabilities struct {
 	// SupportsResume declares whether BuildInvocation honors
 	// InvocationSpec.ResumeSessionID with a real CLI resume flag (D-103,
 	// issue #499). False means the runner must never set
-	// ResumeSessionID for this adapter — it always starts fresh.
+	// ResumeSessionID for this adapter: it always starts fresh.
 	SupportsResume bool
 }
 

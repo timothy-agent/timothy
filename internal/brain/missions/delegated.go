@@ -605,7 +605,7 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 }
 
 // resumeReason* name why a retry started fresh instead of resuming the
-// prior CLI session (D-103, issue #499) — recorded on executor.spawned
+// prior CLI session (D-103, issue #499): recorded on executor.spawned
 // only when resumed is false, so a mission's own history shows which
 // gate stopped it.
 const (
@@ -628,7 +628,7 @@ type resumeDecision struct {
 // CLI session instead of starting fresh (D-103, issue #499). Called
 // only after attemptResume has already ruled out a still-pollable live
 // run (handled=false there means the prior run, if any, already reached
-// a terminal event or never existed) — so a non-nil, Finished state
+// a terminal event or never existed), so a non-nil, Finished state
 // here means the prior run genuinely ended (executor.died, most often)
 // and this is a retry. Gates, in order: a prior run must exist for this
 // harness; it must have recorded a session id; the adapter must
@@ -680,7 +680,7 @@ func (r *delegatedRunner) launch(ctx context.Context, missionID, environment, wo
 // issue #499): not under /workspace (the shared workspace volume, which
 // survives a container being recreated from scratch) and not under
 // executorStateMountPath's .claude subtree (its own separate persistent
-// volume) — $HOME itself, outside that subtree, lives on the container's
+// volume): $HOME itself, outside that subtree, lives on the container's
 // own writable layer, so the marker exists only for as long as THIS
 // container instance does. Gone after a real recreate (removed + created
 // fresh), present after a mere stop/restart in place (sandboxd's
@@ -716,11 +716,11 @@ func buildLaunchCmd(workdir, rdir string, inv executor.Invocation, runBudget tim
 }
 
 // probeContainerMarker reports whether $HOME/containerMarkerFile still
-// exists in missionID's sandbox container — true means the same
+// exists in missionID's sandbox container: true means the same
 // container instance that wrote it at the died run's launch is still
 // around (D-103, issue #499's "same sandbox container is still alive"
 // test); false means it was recreated from scratch (or the probe itself
-// failed, treated the same as recreated — never guess a resume is safe).
+// failed, treated the same as recreated: never guess a resume is safe).
 func (r *delegatedRunner) probeContainerMarker(ctx context.Context, missionID, environment, workRoot string) bool {
 	var out bytes.Buffer
 	cmd := fmt.Sprintf("[ -f \"$HOME/%s\" ]", containerMarkerFile)
@@ -779,7 +779,7 @@ type pollState struct {
 	// (issue #500); nil until the first successful git status.
 	worktree *WorktreeSummary
 	// sessionID/sessionRecorded track the harness's own CLI session id
-	// (D-103, issue #499), from the run's KindSystem event —
+	// (D-103, issue #499), from the run's KindSystem event.
 	// sessionRecorded guards recordSessionSeen against writing the
 	// executor.session event more than once per run.
 	sessionID       string
@@ -1181,7 +1181,7 @@ func (r *delegatedRunner) recordSpawned(ctx context.Context, missionID, harness 
 	}
 }
 
-// recordSessionSeen writes executor.session once for a run — the first
+// recordSessionSeen writes executor.session once for a run: the first
 // time its stream reports a CLI session/thread id (D-103, issue #499).
 // Guarded by st.sessionRecorded so a run's later KindSystem-shaped noise
 // (there is none today, but the guard costs nothing) never double-writes.

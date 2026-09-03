@@ -123,7 +123,7 @@ type fakeSandbox struct {
 	stderrText string
 
 	// containerAlive gates probeContainerMarker's command (D-103, issue
-	// #499) — true (the default) simulates the same container instance
+	// #499): true (the default) simulates the same container instance
 	// still around; false simulates a recreated one, marker gone.
 	containerAlive bool
 }
@@ -159,7 +159,7 @@ func (s *fakeSandbox) Exec(ctx context.Context, missionID, environment, workdir,
 		_, _ = out.Write([]byte(s.stderrText))
 		return 0, nil
 	case strings.Contains(command, containerMarkerFile):
-		// probeContainerMarker's `[ -f "$HOME/<marker>" ]` — never
+		// probeContainerMarker's `[ -f "$HOME/<marker>" ]`, never
 		// matched by the launch case above since its own marker write
 		// also contains this literal, but launch's "setsid sh -c" case
 		// is checked first.
@@ -813,7 +813,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 // --- scenario 5b: session resume (D-103, issue #499) ----------------------
 
 // diedRunLastRun builds a lastRunStateFunc reporting one finished
-// (died) prior run for harness/sessionID — the resumeDecision gate's
+// (died) prior run for harness/sessionID: the resumeDecision gate's
 // input shape after an executor.died event, distinct from scenario 5's
 // still-alive reattach case.
 func diedRunLastRun(harness, runID, rdir, sessionID string) lastRunStateFunc {
@@ -839,7 +839,7 @@ func spawnedPayload(t *testing.T, events *fakeEventSink) map[string]any {
 // TestDelegatedRunWorker_SessionResume_AliveContainerResumes covers the
 // acceptance criterion: a retry after executor.died with a stored
 // session id, an adapter that supports resume, and the same sandbox
-// container still alive relaunches through the adapter's resume path —
+// container still alive relaunches through the adapter's resume path,
 // executor.spawned records resumed:true and the session id, and
 // BuildInvocation's argv carries the adapter's resume flag.
 func TestDelegatedRunWorker_SessionResume_AliveContainerResumes(t *testing.T) {
@@ -885,7 +885,7 @@ func TestDelegatedRunWorker_SessionResume_AliveContainerResumes(t *testing.T) {
 // covers the acceptance criterion: the container marker is gone (a
 // fresh container was created after the died run), so the retry starts
 // fresh even though a session id and a resume-capable adapter are both
-// present — executor.spawned records resumed:false, resume_reason
+// present: executor.spawned records resumed:false, resume_reason
 // container_recreated, and no --resume flag reaches the launch command.
 func TestDelegatedRunWorker_SessionResume_RecreatedContainerStartsFresh(t *testing.T) {
 	sandbox := newFakeSandbox()
@@ -922,7 +922,7 @@ func TestDelegatedRunWorker_SessionResume_RecreatedContainerStartsFresh(t *testi
 // TestDelegatedRunWorker_SessionResume_UnsupportedAdapterStartsFresh
 // covers the acceptance criterion: codex-cli has no verified resume flag
 // in this slice, so even a died run with a stored session id and an
-// alive container starts fresh — executor.spawned records resumed:false,
+// alive container starts fresh: executor.spawned records resumed:false,
 // resume_reason adapter_unsupported.
 func TestDelegatedRunWorker_SessionResume_UnsupportedAdapterStartsFresh(t *testing.T) {
 	sandbox := newFakeSandbox()
@@ -961,7 +961,7 @@ func TestDelegatedRunWorker_SessionResume_UnsupportedAdapterStartsFresh(t *testi
 // first acceptance criterion (D-103, issue #499): a fresh run's own
 // session id (parsed off claude-cli's system/init line) is recorded via
 // one executor.session event as soon as it's seen, and executor.spawned
-// itself reports resumed:false, resume_reason no_prior_run — there was
+// itself reports resumed:false, resume_reason no_prior_run: there was
 // nothing to resume on the very first run.
 func TestDelegatedRunWorker_SessionRecordedOnceWhenFirstSeen(t *testing.T) {
 	sandbox := newFakeSandbox()
