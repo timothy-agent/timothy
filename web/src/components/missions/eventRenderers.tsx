@@ -80,9 +80,18 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     )
   },
   'mission.review_verdict': (p) => {
-    const { decision } = asRecord(p)
-    const approved = decision === 'approve'
-    return <span className={approved ? 'text-green-400' : 'text-amber-400'}>Review verdict: {String(decision ?? '?')}</span>
+    const { decision, open, findings_only } = asRecord(p)
+    const approved = decision === 'approved'
+    const findingsOnly = findings_only === true ? ' (findings-only round)' : ''
+    const openIDs = Array.isArray(open) ? open : undefined
+    const openSuffix = !approved && openIDs && openIDs.length > 0 ? `: open ${openIDs.join(', ')}` : ''
+    return (
+      <span className={approved ? 'text-green-400' : 'text-amber-400'}>
+        Review verdict: {String(decision ?? '?')}
+        {findingsOnly}
+        {openSuffix}
+      </span>
+    )
   },
   'mission.turn': (p) => {
     const { phase, duration_ms, ok, reason, route, agent, provider, model } = p as MissionTurnPayload

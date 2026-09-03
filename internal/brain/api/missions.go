@@ -565,6 +565,12 @@ type createMissionRequest struct {
 	// Flow=light below when Flow is omitted, and must never contradict
 	// an explicit Flow.
 	Light bool `json:"light"`
+	// HasPlan (D-102, issue #496) marks a goal that already carries the
+	// operator's own plan: the plan turn runs in transcribe mode instead
+	// of designing units from scratch. "" (omitted) is false, the
+	// unchanged default. The classify preview only suggests a value
+	// (classifyGoal), the operator's checkbox is what actually sets it.
+	HasPlan bool `json:"has_plan"`
 	// Flow selects the phase set this mission runs (D-090, issue #459):
 	// "" (omitted, the default) maps to "light" when Light=true, else
 	// "full", today's exact pre-#459 behavior. Rejected outright on
@@ -808,6 +814,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		RouteModel: req.RouteModel, PlanRouteModel: req.PlanRouteModel, ReviewRouteModel: req.ReviewRouteModel,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveTools: autoApproveTools, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
+		HasPlan:                  req.HasPlan,
 		ParentMissionID:          parentMissionID,
 		Sources:                  sources,
 		Destinations:             req.destinationEntries(),
@@ -1145,6 +1152,23 @@ func classifyLight(ctx context.Context, classify agents.Classify, goal string) b
 	return strings.Contains(reply, "yes") && !strings.Contains(reply, "no")
 }
 
+// hasPlanPattern matches a goal shaped like an explicit numbered or
+// step-labeled plan (D-102, issue #496): "1. ...", "1) ...", "Step 1"
+// on its own line, anchored to line starts so a stray "1." mid-sentence
+// never matches. A syntactic heuristic, not an LLM call: cheap enough
+// for classifyGoal's every-keystroke preview, and the operator's own
+// checkbox is the real gate on create().
+var hasPlanPattern = regexp.MustCompile(`(?im)^\s*(?:[0-9]+[.)]|step\s+[0-9]+\b)`)
+
+// classifyHasPlan reports whether goal reads like it already contains
+// an explicit plan: two or more distinct numbered/step lines. One
+// stray "1." isn't enough signal (a goal can legitimately mention a
+// single numbered item without being a plan), so this counts matches
+// rather than just checking for one.
+func classifyHasPlan(goal string) bool {
+	return len(hasPlanPattern.FindAllString(goal, -1)) >= 2
+}
+
 // classifyKindAndLight answers both classifyKind and classifyLight's
 // questions in one model call — used only by the preview endpoint
 // (classifyGoal), which needs both on every debounced keystroke and
@@ -1210,7 +1234,8 @@ func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind, light := classifyKindAndLight(r.Context(), h.classify, req.Goal)
-	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "light": light})
+	hasPlan := classifyHasPlan(req.Goal)
+	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "light": light, "has_plan": hasPlan})
 }
 
 // detectDestination serves POST /v1/missions/detect-destination

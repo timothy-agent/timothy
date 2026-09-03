@@ -31,6 +31,9 @@ func (claudeAdapter) Capabilities() Capabilities {
 		StateDirs:             []string{".claude"},
 		OAuthTokenEnv:         "CLAUDE_CODE_OAUTH_TOKEN",
 		OAuthTokenPrefix:      "sk-ant-oat",
+		// claude-cli's `--resume <session-id>` is documented (`claude
+		// --help`) and combines with `-p` for a headless resumed turn.
+		SupportsResume: true,
 	}
 }
 
@@ -92,6 +95,9 @@ func (claudeAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 	if spec.SystemAppend != "" {
 		argv = append(argv, "--append-system-prompt", spec.SystemAppend)
 	}
+	if spec.ResumeSessionID != "" {
+		argv = append(argv, "--resume", spec.ResumeSessionID)
+	}
 
 	// nodeMaxOldSpaceMB (D-056) bounds the CLI's node heap: unbounded,
 	// node sizes its heap from cgroup limits, and a long run's transcript
@@ -145,8 +151,9 @@ type claudeLineEnvelope struct {
 }
 
 type claudeSystemLine struct {
-	Subtype string `json:"subtype"`
-	Model   string `json:"model"`
+	Subtype   string `json:"subtype"`
+	Model     string `json:"model"`
+	SessionID string `json:"session_id"`
 }
 
 type claudeContentBlock struct {
@@ -213,7 +220,7 @@ func (p *claudeParser) ParseLine(line []byte) (Event, bool) {
 			return Event{}, false
 		}
 		p.stats.Events++
-		return Event{Kind: KindSystem, Text: sys.Model, Model: sys.Model}, true
+		return Event{Kind: KindSystem, Text: sys.Model, Model: sys.Model, SessionID: sys.SessionID}, true
 
 	case "assistant":
 		var a claudeAssistantLine

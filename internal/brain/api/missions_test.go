@@ -905,10 +905,54 @@ func TestClassifyKindAndLight(t *testing.T) {
 	}
 }
 
+// TestClassifyHasPlan covers classifyHasPlan's shape heuristic (D-102,
+// issue #496): a goal shaped like an explicit numbered/step plan (two
+// or more distinct numbered/step lines) infers true; a plain goal, or
+// one with only a single stray numbered mention, infers false.
+func TestClassifyHasPlan(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		goal string
+		want bool
+	}{
+		{"plain goal", "write a report on Q3 sales", false},
+		{
+			"numbered plan with periods",
+			"Do the following:\n1. Create main.go\n2. Add a test\n3. Run go build",
+			true,
+		},
+		{
+			"numbered plan with parens",
+			"Steps:\n1) set up the repo\n2) write the handler\n3) wire it up",
+			true,
+		},
+		{
+			"step-labeled plan",
+			"Step 1: clone the repo\nStep 2: install dependencies\nStep 3: run the tests",
+			true,
+		},
+		{
+			"single stray numbered mention is not a plan",
+			"Ship v1.0 of the library, see also RFC 2.0 for background",
+			false,
+		},
+		{"empty goal", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := classifyHasPlan(tc.goal); got != tc.want {
+				t.Fatalf("classifyHasPlan(%q) = %v, want %v", tc.goal, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestMissionsClassifyEndpoint covers POST /v1/missions/classify: the
-// happy path returning the classifier's verdict (kind and light), and
-// the empty-goal 400 — this endpoint has no store/driver dependency, so
-// it can be tested end to end without Postgres.
+// happy path returning the classifier's verdict (kind, light, and
+// has_plan), and the empty-goal 400; this endpoint has no store/driver
+// dependency, so it can be tested end to end without Postgres.
 func TestMissionsClassifyEndpoint(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
@@ -928,8 +972,14 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 
 	if code, body := call(`{"goal":"write a report on Q3 sales"}`); code != http.StatusOK {
 		t.Fatalf("classify with a goal = %d %s, want 200", code, body)
-	} else if !strings.Contains(body, `"kind":"general"`) || !strings.Contains(body, `"light":true`) {
-		t.Fatalf("classify body = %s, want kind general and light true", body)
+	} else if !strings.Contains(body, `"kind":"general"`) || !strings.Contains(body, `"light":true`) || !strings.Contains(body, `"has_plan":false`) {
+		t.Fatalf("classify body = %s, want kind general, light true, has_plan false", body)
+	}
+
+	if code, body := call(`{"goal":"Do the following:\n1. write main.go\n2. add a test\n3. run go build"}`); code != http.StatusOK {
+		t.Fatalf("classify with a plan-shaped goal = %d %s, want 200", code, body)
+	} else if !strings.Contains(body, `"has_plan":true`) {
+		t.Fatalf("classify body = %s, want has_plan true", body)
 	}
 
 	if code, _ := call(`{"goal":""}`); code != http.StatusBadRequest {
@@ -1239,6 +1289,67 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	}
 	if code, body := call(`{"goal":"do something","kind":"bogus"}`); code != http.StatusBadRequest || !strings.Contains(body, "kind must be") {
 		t.Fatalf("create with an invalid kind = %d %s, want 400 from kind validation", code, body)
+	}
+}
+
+// TestMissionsCreateHasPlan covers has_plan's create-request parsing
+// (D-102, issue #496): true and omitted (defaults to false) both pass
+// straight through to the degraded driver/store (no ValidateCreate
+// rejection -- has_plan has no shape rules of its own), mirroring
+// TestMissionsCreateKindOptional's pattern of asserting on the response
+// body rather than the status code alone.
+func TestMissionsCreateHasPlan(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver.SetValidateDeps(missions.ValidateDeps{})
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
+
+	call := func(body string) (int, string) {
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+
+	if code, body := call(`{"goal":"do something","kind":"general","has_plan":true}`); code != http.StatusBadRequest || strings.Contains(body, "has_plan") {
+		t.Fatalf("create with has_plan=true = %d %s, want 400 from the degraded driver, not has_plan validation", code, body)
+	}
+	if code, body := call(`{"goal":"do something","kind":"general"}`); code != http.StatusBadRequest || strings.Contains(body, "has_plan") {
+		t.Fatalf("create with has_plan omitted = %d %s, want 400 from the degraded driver, not has_plan validation", code, body)
+	}
+}
+
+// TestCreateMissionRequestDecodesHasPlan pins the wire shape directly:
+// has_plan decodes to true only when explicitly set, omitted/false
+// both decode to false (Go's bool zero value), matching Light's own
+// json:"light" (no omitempty on read) tag shape.
+func TestCreateMissionRequestDecodesHasPlan(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"explicit true", `{"goal":"g","has_plan":true}`, true},
+		{"explicit false", `{"goal":"g","has_plan":false}`, false},
+		{"omitted defaults false", `{"goal":"g"}`, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var req createMissionRequest
+			if err := json.Unmarshal([]byte(tc.body), &req); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if req.HasPlan != tc.want {
+				t.Fatalf("HasPlan = %v, want %v", req.HasPlan, tc.want)
+			}
+		})
 	}
 }
 

@@ -1321,6 +1321,12 @@ export interface CreateMissionInput {
   // same worker behavior as light. Only "full" is valid when
   // kind === 'coding'.
   flow?: 'full' | 'discover_generate' | 'no_prove' | 'light'
+  // has_plan (D-102, issue #496) marks a goal that already carries the
+  // operator's own plan: the plan turn transcribes it into units
+  // instead of designing one from scratch. Omit (or false) for the
+  // pre-#496 default. The classify preview only ever suggests a value;
+  // this is the operator's own checkbox choice.
+  has_plan?: boolean
   // references name composer #-mention picks (missions/chats/kb docs)
   // to resolve at create time into ReferencedContext.
   references?: { kind: ReferenceKind; id: string }[]
@@ -1409,19 +1415,24 @@ export async function createMission(input: CreateMissionInput): Promise<Mission>
   })
 }
 
-// classifyMission previews the kind create() would infer for goal, and
+// classifyMission previews the kind create() would infer for goal,
 // (for a general goal) whether it looks like a single-pass light
-// mission: the same classifyKind/classifyLight logic the server falls
-// back to/suggests, exposed standalone for the create form's live chip
-// and light toggle default. light is only ever a suggestion; create()
-// still requires the operator's explicit flag.
+// mission, and whether the goal already reads like it contains an
+// explicit plan (D-102, issue #496): the same classifyKind/
+// classifyLight/classifyHasPlan logic the server falls back to/
+// suggests, exposed standalone for the create form's live chip and
+// toggle defaults. light and has_plan are only ever suggestions;
+// create() still requires the operator's explicit flag.
 export async function classifyMission(
   goal: string,
-): Promise<{ kind: 'coding' | 'general'; light: boolean }> {
-  return request<{ kind: 'coding' | 'general'; light: boolean }>('/v1/missions/classify', {
-    method: 'POST',
-    body: JSON.stringify({ goal }),
-  })
+): Promise<{ kind: 'coding' | 'general'; light: boolean; has_plan: boolean }> {
+  return request<{ kind: 'coding' | 'general'; light: boolean; has_plan: boolean }>(
+    '/v1/missions/classify',
+    {
+      method: 'POST',
+      body: JSON.stringify({ goal }),
+    },
+  )
 }
 
 // GitHubDestinationDetection is detectMissionDestination's result: a

@@ -1560,6 +1560,31 @@ func renderReviewContent(p ReviewPacket) string {
 	return b.String()
 }
 
+// planUnitShapeRules is the unit-shape contract every plan must
+// satisfy regardless of how it was derived (designed from scratch or
+// transcribed from an operator-supplied plan, D-102): artifacts,
+// criteria, scope, verify_cmd's POSIX-shell/no-substitution/content-
+// check rules, workspace-relative paths, the infeasible escape hatch
+// (D-077), and assumptions. Kept as one shared string so
+// generate/prove's unit parsing (parsePlan) never has to distinguish
+// which mode produced a plan.
+const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
+
+// planSystemPrompt builds PlanSession's system prompt: the design-mode
+// opening (break the goal into units from scratch) or, when hasPlan is
+// true (D-102, issue #496), transcribe mode -- the goal already
+// contains the operator's own plan, so the model converts it into
+// units faithfully instead of redesigning it. Either way the unit
+// shape (planUnitShapeRules) is identical, so generate/prove need no
+// changes: the same D-077 infeasible and D-095 criteria checks apply
+// to a transcribed plan as to a designed one.
+func planSystemPrompt(hasPlan bool) string {
+	if hasPlan {
+		return "You are transcribing a mission plan. The goal below already contains the operator's own plan: convert it into an ordered list of verifiable units faithfully, preserving its steps and order. Do not redesign the plan, do not add scope or steps the operator didn't ask for, and do not merge or split steps the operator kept separate, except where the shape rules below force a natural split (e.g. one step whose own deliverable would truncate a single worker turn)." + planUnitShapeRules
+	}
+	return "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it: one unit is correct for a simple goal; never pad the plan. A worker turn is one continuous model generation: if a single unit's own deliverable would demand a very long uninterrupted output (many chapters, dozens of sections, a large multi-file dataset, or similar), a long stream is more likely to truncate mid-generation, so split that unit along its own natural boundaries (one unit per chapter/section/file) instead of one unit for the whole deliverable; this applies regardless of the goal's subject matter." + planUnitShapeRules
+}
+
 // PlanSession runs the planning turn that produces a Plan from the
 // mission's goal and discover-phase findings. The plan is forced
 // through the submit_plan tool call (mirroring RunWorker/RunReview's
@@ -1568,7 +1593,7 @@ func renderReviewContent(p ReviewPacket) string {
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
-	system := "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it: one unit is correct for a simple goal; never pad the plan. A worker turn is one continuous model generation: if a single unit's own deliverable would demand a very long uninterrupted output (many chapters, dozens of sections, a large multi-file dataset, or similar), a long stream is more likely to truncate mid-generation, so split that unit along its own natural boundaries (one unit per chapter/section/file) instead of one unit for the whole deliverable; this applies regardless of the goal's subject matter. Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call." + r.execEnvironmentNote(ctx)
+	system := planSystemPrompt(m.HasPlan) + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)

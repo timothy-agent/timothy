@@ -38,6 +38,71 @@ const (
 	recoverWorkingRetryDelay = 2 * time.Second
 )
 
+// gatewayReadyPollInterval and gatewayReadyMaxWait bound how long the
+// boot recovery pass waits for the gateway's routing snapshot to load
+// before re-driving a mission left working (D-101, issue #511): without
+// this wait, a re-drive lands mid-boot, its worker turn's route resolve
+// hits 503 config_unavailable, and (pre-D-101) fell back to native
+// while the prior process's own delegated run was still alive in the
+// sandbox. gatewayReadyMaxWait is a sane cap, not a promise the gateway
+// will be ready by then: past it, recoverWorking proceeds anyway and
+// leans on the delegated runner's own bounded retry/infra-pause path
+// (RunWorker's resolveRouteWithRetry) for whatever config_unavailable
+// window remains.
+// var, not const, so tests can shrink both instead of waiting real minutes.
+var (
+	gatewayReadyPollInterval = 2 * time.Second
+	gatewayReadyMaxWait      = 2 * time.Minute
+)
+
+// gatewayReadyChecker is the narrow seam over gwclient.Client.Ready,
+// faked in tests so the wait's polling/logging is testable without a
+// real gateway. nil is valid (no gateway wired, or a deployment that
+// predates this check): recoverWorking then skips the wait entirely,
+// same as before this existed.
+type gatewayReadyChecker interface {
+	Ready(ctx context.Context) (bool, string, error)
+}
+
+// waitForGatewayReady polls checker.Ready until it reports ready, ctx
+// ends, or gatewayReadyMaxWait elapses, logging the wait exactly once
+// (not once per poll) so a slow-booting gateway doesn't flood the log.
+// A checker error is treated as not-ready and keeps polling: a
+// transiently unreachable gateway is exactly the condition this wait
+// exists to ride out.
+func waitForGatewayReady(ctx context.Context, checker gatewayReadyChecker, log *slog.Logger) {
+	if checker == nil {
+		return
+	}
+	ready, _, err := checker.Ready(ctx)
+	if err == nil && ready {
+		return
+	}
+	logged := false
+	deadline := time.Now().Add(gatewayReadyMaxWait)
+	ticker := time.NewTicker(gatewayReadyPollInterval)
+	defer ticker.Stop()
+	for {
+		if !logged {
+			log.Info("mission recovery: waiting for gateway readiness before re-driving")
+			logged = true
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			ready, detail, err := checker.Ready(ctx)
+			if err == nil && ready {
+				return
+			}
+			if time.Now().After(deadline) {
+				log.Warn("mission recovery: gateway still not ready after max wait, proceeding anyway", "detail", detail)
+				return
+			}
+		}
+	}
+}
+
 // permissionTimeoutStore is the narrow slice of *Store the parked-
 // permission timeout sweep needs, an interface for the same reason
 // backoffStore/pausedByReasonStore are: unit-testable against a faked
@@ -168,8 +233,8 @@ func admitWork(ctx context.Context, gate capacityChecker, log *slog.Logger) (adm
 // is the live in-memory PermBroker's Resolve, best-effort. nil is valid
 // (a still-running turn just times out on its own permissionTimeout
 // instead of waking early).
-func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, globalPermissionTimeout func(context.Context) int, globalAskTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
-	recoverWorking(ctx, d, store, log)
+func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, gateway gatewayReadyChecker, globalPermissionTimeout func(context.Context) int, globalAskTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
+	recoverWorking(ctx, d, store, gateway, log)
 	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, capacity, notify, globalPermissionTimeout, globalAskTimeout, resolveBroker, log)
 }
 
@@ -202,8 +267,12 @@ func sweepOrphanSandboxes(ctx context.Context, store *Store, sandbox sandboxSwee
 // recoverWorking runs once at service boot: every mission Store
 // reports via RecoverWorking (status='working' at process start,
 // meaning the prior process died mid-Advance) gets re-Driven — this is
-// what makes driveTimeBound and any hard crash NOT a dead end.
-func recoverWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logger) {
+// what makes driveTimeBound and any hard crash NOT a dead end. Waits
+// for gateway readiness first (D-101, issue #511): re-driving before
+// the gateway's routing snapshot has loaded is what let a delegated
+// worker turn's route resolve hit 503 config_unavailable and (pre-
+// D-101) fall back to native.
+func recoverWorking(ctx context.Context, d *Driver, store *Store, gateway gatewayReadyChecker, log *slog.Logger) {
 	var missions []Mission
 	var err error
 	for attempt := 1; attempt <= recoverWorkingRetries; attempt++ {
@@ -224,6 +293,10 @@ func recoverWorking(ctx context.Context, d *Driver, store *Store, log *slog.Logg
 		log.Error("mission recovery sweep: giving up after retries", "attempts", recoverWorkingRetries, "error", err)
 		return
 	}
+	if len(missions) == 0 {
+		return
+	}
+	waitForGatewayReady(ctx, gateway, log)
 	for _, m := range missions {
 		log.Info("mission recovery: re-driving a mission left working at boot", "mission_id", m.ID)
 		go func(id string) {
