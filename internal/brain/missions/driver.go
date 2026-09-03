@@ -1010,6 +1010,15 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// same entry is futile, so pause immediately as infra instead
 			// of burning iterations (same reasoning as ErrModelFloor above).
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
+		case errors.Is(err, ErrGatewayUnavailable):
+			// D-101: the delegated runner already retried its route resolve
+			// with bounded backoff before giving up: this is the gateway
+			// itself not yet serving (unreachable, or 503 config_unavailable
+			// mid-boot), never "no delegated route". Pause immediately as
+			// infra rather than burning iterations on a native worker turn
+			// that would race a delegated run possibly still alive in the
+			// sandbox.
+			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
 		case m.Phase == PhaseProve:
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
 			if route, skip, ok := d.reviewRouteSkip(ctx, m, err); ok {
