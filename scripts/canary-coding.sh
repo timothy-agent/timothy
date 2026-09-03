@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# Coding-mission canary: seeds a tiny fixture git repo inside the brain
-# container, runs one coding mission against it end-to-end, and asserts
-# the coding-specific harness contract — worktree provisioned, LLM
-# review actually ran (coding never skips review), harness-verified
-# artifact present in the worktree, zero human permission parks. The
-# general-mission canary (canary-mission.sh) cannot catch regressions in
-# the git/worktree/review path; this one exists for exactly that.
+# Coding-mission canary: runs one coding mission end-to-end against its
+# own self-initialized worktree repo and asserts the coding-specific
+# harness contract: worktree provisioned, LLM review actually ran
+# (coding never skips review), harness-verified artifact present in the
+# worktree, zero human permission parks. The general-mission canary
+# (canary-mission.sh) cannot catch regressions in the git/worktree/
+# review path; this one exists for exactly that.
 # CANARY_TWO_UNIT=1 runs a two-file goal instead and additionally asserts
-# the plan had two units and exactly one review round ran (D-096).
+# the plan had two units and exactly one full review round ran (D-096).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE=(docker compose -f "${REPO_ROOT}/deploy/docker-compose.yml")
 BASE_URL="${CANARY_BASE_URL:-http://localhost:${BRAIN_PORT:-8300}}"
 TIMEOUT_SECS="${CANARY_TIMEOUT:-900}"
-FIXTURE=/workspace/canary-fixture
 
 # A different goal every run: repeating one fixed goal would let
 # prompt caches and prior runs' artifacts flatter the result. Each
@@ -61,19 +60,14 @@ fi
 
 auth=(-H "Authorization: Bearer ${TIMOTHY_API_TOKEN}" -H "Content-Type: application/json")
 
-echo "canary-coding: seeding fixture repo at ${FIXTURE} (inside brain)"
-"${COMPOSE[@]}" exec -T brain sh -c "
-  rm -rf ${FIXTURE} &&
-  git init -q -b main ${FIXTURE} &&
-  cd ${FIXTURE} &&
-  printf '# Canary Fixture\n\nTiny repo the coding-mission canary works against.\n' > README.md &&
-  git add README.md &&
-  git -c user.name=timothy -c user.email=timothy@localhost commit -q -m 'add readme'
-"
-
+# No repo_path/repo_url: repo_path is not a supported create field
+# (issue #523) and repo_url clones from a github connector, neither of
+# which fits a local fixture. A coding mission with no clone source
+# self-initializes its own repo in the worktree, so the mission's
+# worktree IS the fixture the assertions below check.
 echo "canary-coding: creating mission against ${BASE_URL}"
 create_resp="$(curl -sf "${auth[@]}" -X POST "${BASE_URL}/v1/missions" \
-  -d "{\"goal\": \"${GOAL}\", \"kind\": \"coding\", \"repo_path\": \"${FIXTURE}\"}")"
+  -d "{\"goal\": \"${GOAL}\", \"kind\": \"coding\"}")"
 id="$(echo "${create_resp}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "canary-coding: mission ${id}"
 
@@ -125,13 +119,20 @@ verified = [e for e in events if e["kind"] == "mission.unit_verified"
             and (e.get("payload") or {}).get("passed") is True]
 # The driver records one review_verdict per round; the state machine
 # appends another on rework, so count rounds by the driver's payload key.
+# A full round covers the whole plan (findings_only false or absent); a
+# findings-only round only re-checks open findings after a fix and is
+# expected once a full round opened a blocking finding (D-096, #524), so
+# it is reported but never counted toward the "one round" assertion.
 rounds = [e for e in events if e["kind"] == "mission.review_verdict"
           and "findings_only" in (e.get("payload") or {})]
+full_rounds = [e for e in rounds if not (e.get("payload") or {}).get("findings_only")]
+findings_only_rounds = [e for e in rounds if (e.get("payload") or {}).get("findings_only")]
 worker_turns = [e for e in turns if (e.get("payload") or {}).get("phase") == "generate"]
 
 print(f"canary-coding: event counts: {json.dumps(kinds, sort_keys=True)}")
 print(f"canary-coding: {len(turns)} model turns, {total_ms/1000:.0f}s total model time")
-print(f"canary-coding: {len(units)} plan unit(s), {len(worker_turns)} worker turn(s), {len(rounds)} review round(s)")
+print(f"canary-coding: {len(units)} plan unit(s), {len(worker_turns)} worker turn(s), "
+      f"{len(full_rounds)} full review round(s), {len(findings_only_rounds)} findings-only round(s)")
 
 failures = []
 if parks > 0:
@@ -147,8 +148,8 @@ if len(turns) > 10:
 if two_unit:
     if len(units) < 2:
         failures.append(f"{len(units)} plan unit(s) for a two-file goal: the two-unit case needs two units")
-    if len(rounds) != 1:
-        failures.append(f"{len(rounds)} review round(s): one round must cover the whole plan once every unit is harness-passed")
+    if len(full_rounds) != 1:
+        failures.append(f"{len(full_rounds)} full review round(s): one round must cover the whole plan once every unit is harness-passed")
 if failures:
     print("canary-coding: FAIL — " + "; ".join(failures), file=sys.stderr)
     sys.exit(1)
@@ -156,13 +157,16 @@ PY
 
 # The harness already verified declared artifacts in the worktree; this
 # re-checks from outside the mission's own machinery — an independent
-# witness that the branch and the file are really on disk.
+# witness that the branch and the file are really on disk. A coding
+# mission self-initializes its own repo in the worktree (there is no
+# separate clone source to check against), so the branch is witnessed
+# there, same as canary-executor.sh's equivalent check.
 if [[ -z "${worktree}" || -z "${branch}" ]]; then
   echo "canary-coding: FAIL — mission has no worktree/branch (worktree='${worktree}' branch='${branch}')" >&2
   exit 1
 fi
 "${COMPOSE[@]}" exec -T brain sh -c "
-  git -C ${FIXTURE} rev-parse --verify --quiet '${branch}' >/dev/null
+  git -C '${worktree}' rev-parse --verify --quiet '${branch}' >/dev/null
 " || {
   echo "canary-coding: FAIL: branch ${branch} missing in container" >&2
   exit 1
