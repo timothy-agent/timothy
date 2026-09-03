@@ -42,6 +42,27 @@ describe('mission.finding_demoted rendering', () => {
   })
 })
 
+describe('mission.review_verdict rendering', () => {
+  it('renders an approved decision green', () => {
+    render(<div>{renderEvent(event({ decision: 'approved', findings: [], resolved: [] }, 'mission.review_verdict'))}</div>)
+    expect(screen.getByText('Review verdict: approved')).toHaveClass('text-green-400')
+  })
+
+  it('renders a rework decision amber with the open finding ids', () => {
+    render(<div>{renderEvent(event({ decision: 'rework', reason: 'missing test', round: 1, open: ['F1', 'F2'] }, 'mission.review_verdict'))}</div>)
+    expect(screen.getByText('Review verdict: rework: open F1, F2')).toHaveClass('text-amber-400')
+  })
+
+  it('marks a findings_only round as such', () => {
+    render(
+      <div>
+        {renderEvent(event({ decision: 'rework', findings: [], resolved: [], findings_only: true }, 'mission.review_verdict'))}
+      </div>,
+    )
+    expect(screen.getByText('Review verdict: rework (findings-only round)')).toHaveClass('text-amber-400')
+  })
+})
+
 describe('mission.generate_skipped rendering', () => {
   it('explains the skipped worker turn', () => {
     expect(renderEvent(event({}, 'mission.generate_skipped'))).toBe('Worker turn skipped: every unit is harness-verified')
