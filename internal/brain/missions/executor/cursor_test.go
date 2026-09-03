@@ -342,6 +342,31 @@ func TestCursorAdapter_BuildInvocation(t *testing.T) {
 			},
 		},
 		{
+			name: "resume session id appends --resume flag before @PROMPT@ (D-103, issue #499)",
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
+				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md",
+				AuthMode: AuthAPIKey, APIKey: "sk-cursor-test",
+				ResumeSessionID: "chat-abc-123",
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if !containsFlagValue(inv.Argv, "--resume", "chat-abc-123") {
+					t.Errorf("argv %v missing --resume chat-abc-123", inv.Argv)
+				}
+			},
+		},
+		{
+			name: "empty resume session id omits --resume flag",
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
+				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md",
+				AuthMode: AuthAPIKey, APIKey: "sk-cursor-test",
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if containsFlag(inv.Argv, "--resume") {
+					t.Error("--resume must not appear without a ResumeSessionID")
+				}
+			},
+		},
+		{
 			name:    "subscription auth rejected",
 			spec:    InvocationSpec{Model: "m", PromptPath: "/tmp/run/prompt.md", AuthMode: AuthSubscription},
 			wantErr: true,

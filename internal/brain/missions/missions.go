@@ -176,6 +176,13 @@ type Mission struct {
 	// engine both force this true regardless of template/step input:
 	// an unattended mission has nobody to approve its plan.
 	AutoApprovePlan bool   `json:"auto_approve_plan"`
+	// HasPlan (D-102, issue #496) marks a mission whose goal already
+	// carries the operator's own plan: the plan turn runs in transcribe
+	// mode (PlanSession), converting the goal's plan into units instead
+	// of designing one from scratch. Snapshotted at create time, never
+	// model-mutable; light missions never plan, so this has no effect
+	// there.
+	HasPlan         bool   `json:"has_plan,omitempty"`
 	ScheduleID      string `json:"schedule_id,omitempty"`
 	// ParentMissionID names the terminal mission this one follows up on
 	// (api/missions.go's create) — empty for an ordinary mission.

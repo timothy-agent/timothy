@@ -35,6 +35,10 @@ func (codexAdapter) Capabilities() Capabilities {
 		// not an env var - codex has no base-url env override.
 		BaseURLEnv: "",
 		StateDirs:  nil,
+		// `codex exec resume <SESSION_ID>` is documented (`codex exec
+		// resume --help`); BuildInvocation switches to that subcommand
+		// form when ResumeSessionID is set.
+		SupportsResume: true,
 	}
 }
 
@@ -77,12 +81,26 @@ func (codexAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		"codex-home/config.toml": codexConfigTOML(baseURL),
 	}
 
-	argv := []string{
-		"codex", "exec", "--json",
-		"-C", spec.Workdir,
-		"--dangerously-bypass-approvals-and-sandbox",
-		"--skip-git-repo-check",
-		"-m", spec.Model,
+	// `codex exec resume <SESSION_ID>` is a distinct subcommand form
+	// (confirmed via `codex exec resume --help`): no `-C` flag - the
+	// resumed session keeps the working root recorded at its original
+	// spawn - but the same --json/--output-schema/-m/bypass flags apply.
+	var argv []string
+	if spec.ResumeSessionID != "" {
+		argv = []string{
+			"codex", "exec", "resume", spec.ResumeSessionID, "--json",
+			"--dangerously-bypass-approvals-and-sandbox",
+			"--skip-git-repo-check",
+			"-m", spec.Model,
+		}
+	} else {
+		argv = []string{
+			"codex", "exec", "--json",
+			"-C", spec.Workdir,
+			"--dangerously-bypass-approvals-and-sandbox",
+			"--skip-git-repo-check",
+			"-m", spec.Model,
+		}
 	}
 	if spec.ResultSchema != nil {
 		schemaPath := filepath.Join(codexHome, "schema.json")
@@ -242,7 +260,7 @@ func (p *codexParser) ParseLine(line []byte) (Event, bool) {
 			return Event{}, false
 		}
 		p.stats.Events++
-		return Event{Kind: KindSystem, Text: t.ThreadID}, true
+		return Event{Kind: KindSystem, Text: t.ThreadID, SessionID: t.ThreadID}, true
 
 	case "item.started":
 		var it codexItemLine

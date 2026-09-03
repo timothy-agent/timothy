@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -2538,5 +2539,45 @@ func TestAgentRequestMaxToolCallsRefusesPastCap(t *testing.T) {
 				t.Fatal("refused call's result must be an error so the model keeps full effort")
 			}
 		})
+	}
+}
+
+// TestAgentLoadSkillErrorDigestIsTruthful: a failed load_skill (unknown
+// skill name) must not be shown to the client as "skill loaded"; the
+// digest carries the error the model saw.
+func TestAgentLoadSkillErrorDigestIsTruthful(t *testing.T) {
+	t.Parallel()
+	loadSkill := &tools.Tool{
+		Name:        "load_skill",
+		Description: "stands in for the real load_skill tool",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`),
+		Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+			return "", errors.New(`unknown skill "pdf", available: coding, research-brief`)
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"load_skill", `{"name":"pdf"}`}),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw, loadSkill)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "load the pdf skill"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saw bool
+	for _, ev := range collect(t, ch) {
+		if ev.Type == stream.EventToolResult && ev.ToolResult != nil {
+			saw = true
+			if ev.ToolResult.Status == "ok" {
+				t.Fatalf("status = ok, want error")
+			}
+			if ev.ToolResult.Digest == "skill loaded" || !strings.Contains(ev.ToolResult.Digest, `unknown skill "pdf"`) {
+				t.Fatalf("digest = %q, want the load_skill error", ev.ToolResult.Digest)
+			}
+		}
+	}
+	if !saw {
+		t.Fatal("no tool_result event")
 	}
 }

@@ -121,10 +121,15 @@ type fakeSandbox struct {
 	pollErrs   int
 
 	stderrText string
+
+	// containerAlive gates probeContainerMarker's command (D-103, issue
+	// #499): true (the default) simulates the same container instance
+	// still around; false simulates a recreated one, marker gone.
+	containerAlive bool
 }
 
 func newFakeSandbox() *fakeSandbox {
-	return &fakeSandbox{runs: map[string]*fakeRun{}}
+	return &fakeSandbox{runs: map[string]*fakeRun{}, containerAlive: true}
 }
 
 // lastLaunchCmd is the full shell command of the most recent launch.
@@ -153,6 +158,18 @@ func (s *fakeSandbox) Exec(ctx context.Context, missionID, environment, workdir,
 	case strings.Contains(command, "tail -c 2048 stderr.log"):
 		_, _ = out.Write([]byte(s.stderrText))
 		return 0, nil
+	case strings.Contains(command, containerMarkerFile):
+		// probeContainerMarker's `[ -f "$HOME/<marker>" ]`, never
+		// matched by the launch case above since its own marker write
+		// also contains this literal, but launch's "setsid sh -c" case
+		// is checked first.
+		s.mu.Lock()
+		alive := s.containerAlive
+		s.mu.Unlock()
+		if alive {
+			return 0, nil
+		}
+		return 1, nil
 	case strings.Contains(command, "[ -f exit_code ]"):
 		return s.probe(command)
 	default:
@@ -666,6 +683,29 @@ func TestDriverErrExecutorAuthPausesImmediately(t *testing.T) {
 	}
 }
 
+// TestDriverErrGatewayUnavailablePausesImmediately proves the D-101 fix
+// (issue #511) at the driver level: a worker turn failing with
+// ErrGatewayUnavailable (the delegated runner's route resolve
+// exhausting its retry budget against a 503 config_unavailable gateway)
+// pauses the mission as infra on the very first occurrence, the same as
+// ErrExecutorAuth/ErrModelFloor: never the ordinary worker_failed
+// backoff ladder, which would keep retrying a mission whose delegated
+// run may still be alive in the sandbox.
+func TestDriverErrGatewayUnavailablePausesImmediately(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: gwclient: gateway unavailable: gateway http 503: config_unavailable", ErrGatewayUnavailable)}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
+		t.Fatalf("mission after gateway-unavailable turn = %s/%s, want paused/infra immediately", m.Status, m.PauseReason)
+	}
+}
+
 // --- scenario 5: re-attach ------------------------------------------------
 
 func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
@@ -717,7 +757,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte("prompt"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	r.recordSpawned(context.Background(), m.ID, m.Harness, entry, runID, rdir, authMode)
+	r.recordSpawned(context.Background(), m.ID, m.Harness, entry, runID, rdir, authMode, resumeDecision{reason: resumeReasonNoPriorRun})
 	if err := r.launch(context.Background(), m.ID, m.Environment, m.WorkRoot(), rdir, inv, time.Minute); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
@@ -767,6 +807,198 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	}
 	if events.count("executor.spawned") != 1 {
 		t.Fatalf("executor.spawned count = %d, want 1 (no second spawn)", events.count("executor.spawned"))
+	}
+}
+
+// --- scenario 5b: session resume (D-103, issue #499) ----------------------
+
+// diedRunLastRun builds a lastRunStateFunc reporting one finished
+// (died) prior run for harness/sessionID: the resumeDecision gate's
+// input shape after an executor.died event, distinct from scenario 5's
+// still-alive reattach case.
+func diedRunLastRun(harness, runID, rdir, sessionID string) lastRunStateFunc {
+	return func(ctx context.Context, missionID string) (*runState, error) {
+		return &runState{Harness: harness, RunID: runID, RunDir: rdir, Finished: true, SessionID: sessionID}, nil
+	}
+}
+
+// spawnedPayload decodes the last executor.spawned event's payload.
+func spawnedPayload(t *testing.T, events *fakeEventSink) map[string]any {
+	t.Helper()
+	spawned, ok := events.last("executor.spawned")
+	if !ok {
+		t.Fatal("no executor.spawned event recorded")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(spawned.Payload, &payload); err != nil {
+		t.Fatalf("decode executor.spawned payload: %v", err)
+	}
+	return payload
+}
+
+// TestDelegatedRunWorker_SessionResume_AliveContainerResumes covers the
+// acceptance criterion: a retry after executor.died with a stored
+// session id, an adapter that supports resume, and the same sandbox
+// container still alive relaunches through the adapter's resume path,
+// executor.spawned records resumed:true and the session id, and
+// BuildInvocation's argv carries the adapter's resume flag.
+func TestDelegatedRunWorker_SessionResume_AliveContainerResumes(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.containerAlive = true
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+	lastRun := diedRunLastRun("claude-cli", "prior-run-id", "/does/not/matter", "sess-prior-123")
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, lastRun, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("verdict.Outcome = %q, want done", verdict.Outcome)
+	}
+	if sandbox.launches != 1 {
+		t.Fatalf("launches = %d, want 1", sandbox.launches)
+	}
+	if !strings.Contains(sandbox.lastLaunchCmd(), "--resume") || !strings.Contains(sandbox.lastLaunchCmd(), "sess-prior-123") {
+		t.Fatalf("launch command missing --resume sess-prior-123: %s", sandbox.lastLaunchCmd())
+	}
+
+	payload := spawnedPayload(t, events)
+	if payload["resumed"] != true {
+		t.Fatalf("executor.spawned resumed = %v, want true", payload["resumed"])
+	}
+	if payload["session_id"] != "sess-prior-123" {
+		t.Fatalf("executor.spawned session_id = %v, want sess-prior-123", payload["session_id"])
+	}
+	if _, ok := payload["resume_reason"]; ok {
+		t.Fatalf("executor.spawned must not carry resume_reason when resumed, got %v", payload["resume_reason"])
+	}
+}
+
+// TestDelegatedRunWorker_SessionResume_RecreatedContainerStartsFresh
+// covers the acceptance criterion: the container marker is gone (a
+// fresh container was created after the died run), so the retry starts
+// fresh even though a session id and a resume-capable adapter are both
+// present: executor.spawned records resumed:false, resume_reason
+// container_recreated, and no --resume flag reaches the launch command.
+func TestDelegatedRunWorker_SessionResume_RecreatedContainerStartsFresh(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.containerAlive = false
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+	lastRun := diedRunLastRun("claude-cli", "prior-run-id", "/does/not/matter", "sess-prior-123")
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, lastRun, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if strings.Contains(sandbox.lastLaunchCmd(), "--resume") {
+		t.Fatalf("launch command must not carry --resume after a container recreate: %s", sandbox.lastLaunchCmd())
+	}
+
+	payload := spawnedPayload(t, events)
+	if payload["resumed"] != false {
+		t.Fatalf("executor.spawned resumed = %v, want false", payload["resumed"])
+	}
+	if payload["resume_reason"] != resumeReasonContainerRecreated {
+		t.Fatalf("executor.spawned resume_reason = %v, want %q", payload["resume_reason"], resumeReasonContainerRecreated)
+	}
+	if _, ok := payload["session_id"]; ok {
+		t.Fatalf("executor.spawned must not carry session_id when not resumed, got %v", payload["session_id"])
+	}
+}
+
+// TestDelegatedRunWorker_SessionResume_UnsupportedAdapterStartsFresh
+// covers the acceptance criterion: codex-cli has no verified resume flag
+// in this slice, so even a died run with a stored session id and an
+// alive container starts fresh: executor.spawned records resumed:false,
+// resume_reason adapter_unsupported.
+func TestDelegatedRunWorker_SessionResume_UnsupportedAdapterStartsFresh(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.containerAlive = true
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson") // claude fixture stands in; only the spawn decision is under test
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := gwclient.ResolvedRouteEntry{
+		ProviderID: "prov-1", ProviderName: "opencode-provider", Driver: "openai",
+		Model: "gpt-oss:20b", CredentialRef: "cred-1", Usable: true, Wire: "openai",
+	}
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+	lastRun := diedRunLastRun("opencode", "prior-run-id", "/does/not/matter", "ses_prior123")
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("dummy-key", nil), sandbox, events, lastRun, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+	m.Harness = "opencode"
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if strings.Contains(sandbox.lastLaunchCmd(), "ses_prior123") {
+		t.Fatalf("launch command must not reference the prior session id, opencode has no resume flag: %s", sandbox.lastLaunchCmd())
+	}
+
+	payload := spawnedPayload(t, events)
+	if payload["resumed"] != false {
+		t.Fatalf("executor.spawned resumed = %v, want false", payload["resumed"])
+	}
+	if payload["resume_reason"] != resumeReasonAdapterUnsupported {
+		t.Fatalf("executor.spawned resume_reason = %v, want %q", payload["resume_reason"], resumeReasonAdapterUnsupported)
+	}
+}
+
+// TestDelegatedRunWorker_SessionRecordedOnceWhenFirstSeen covers the
+// first acceptance criterion (D-103, issue #499): a fresh run's own
+// session id (parsed off claude-cli's system/init line) is recorded via
+// one executor.session event as soon as it's seen, and executor.spawned
+// itself reports resumed:false, resume_reason no_prior_run: there was
+// nothing to resume on the very first run.
+func TestDelegatedRunWorker_SessionRecordedOnceWhenFirstSeen(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("verdict.Outcome = %q, want done", verdict.Outcome)
+	}
+	if events.count("executor.session") != 1 {
+		t.Fatalf("executor.session count = %d, want 1", events.count("executor.session"))
+	}
+	session, _ := events.last("executor.session")
+	var sessionPayload map[string]any
+	if err := json.Unmarshal(session.Payload, &sessionPayload); err != nil {
+		t.Fatalf("decode executor.session payload: %v", err)
+	}
+	if sessionPayload["session_id"] != "SESSION_ID" {
+		t.Fatalf("executor.session session_id = %v, want SESSION_ID", sessionPayload["session_id"])
+	}
+
+	payload := spawnedPayload(t, events)
+	if payload["resumed"] != false {
+		t.Fatalf("executor.spawned resumed = %v, want false (no prior run)", payload["resumed"])
+	}
+	if payload["resume_reason"] != resumeReasonNoPriorRun {
+		t.Fatalf("executor.spawned resume_reason = %v, want %q", payload["resume_reason"], resumeReasonNoPriorRun)
 	}
 }
 
@@ -1549,6 +1781,102 @@ func TestDelegatedRunWorker_Dispatch_ResolveErrorFallsBackToNative(t *testing.T)
 	}
 }
 
+// countingResolver wraps resolve, counting how many times it was
+// called: TestDelegatedRunWorker_GatewayUnavailable_RetriesThenFails
+// and its sibling need to assert the retry count directly.
+func countingResolver(resolve routeResolver) (routeResolver, *int) {
+	calls := 0
+	return func(ctx context.Context, name, harness string) (*gwclient.ResolvedRoute, error) {
+		calls++
+		return resolve(ctx, name, harness)
+	}, &calls
+}
+
+// TestDelegatedRunWorker_GatewayUnavailable_RetriesThenFails proves the
+// D-101 fix (issue #511): a route resolve failing with
+// gwclient.ErrGatewayUnavailable (503 config_unavailable, or the
+// gateway unreachable) is retried with bounded backoff, never falls
+// back to native, and once the retry budget is exhausted the turn
+// fails with ErrGatewayUnavailable so the driver can pause the mission
+// as infra instead of running a native worker turn.
+func TestDelegatedRunWorker_GatewayUnavailable_RetriesThenFails(t *testing.T) {
+	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
+	sandbox := newFakeSandbox()
+	events := &fakeEventSink{}
+
+	gwErr := fmt.Errorf("%w: gateway http 503: config_unavailable", gwclient.ErrGatewayUnavailable)
+	resolve, calls := countingResolver(scriptedResolver(nil, gwErr))
+	r := newTestDelegatedRunner(native, resolve, scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	r.routeResolveBackoff = time.Millisecond
+	m := testMission("m1", t.TempDir())
+
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err == nil {
+		t.Fatal("RunWorker: got nil error, want ErrGatewayUnavailable")
+	}
+	if !errors.Is(err, ErrGatewayUnavailable) {
+		t.Fatalf("RunWorker error = %v, want it to wrap ErrGatewayUnavailable", err)
+	}
+	if *calls != routeResolveRetries {
+		t.Fatalf("resolve call count = %d, want %d (bounded retry)", *calls, routeResolveRetries)
+	}
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0: a gateway-unavailable resolve must never fall back to native", native.callCount())
+	}
+	if events.count("executor.skipped") != 1 {
+		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
+	}
+	skipped, _ := events.last("executor.skipped")
+	var skippedPayload map[string]any
+	_ = json.Unmarshal(skipped.Payload, &skippedPayload)
+	if skippedPayload["reason"] != "gateway_unavailable" {
+		t.Fatalf("executor.skipped reason = %v, want gateway_unavailable", skippedPayload["reason"])
+	}
+}
+
+// TestDelegatedRunWorker_GatewayUnavailable_RecoversWithinRetryBudget
+// proves a transient config_unavailable that clears before the retry
+// budget is exhausted resolves normally: the mission proceeds through
+// the ordinary delegated path (no native fallback, no error) rather
+// than paying for every attempt.
+func TestDelegatedRunWorker_GatewayUnavailable_RecoversWithinRetryBudget(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedChunk = 40
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	gwErr := fmt.Errorf("%w: gateway http 503: config_unavailable", gwclient.ErrGatewayUnavailable)
+	attempt := 0
+	resolve := func(ctx context.Context, name, harness string) (*gwclient.ResolvedRoute, error) {
+		attempt++
+		if attempt < 3 {
+			return nil, gwErr
+		}
+		return route, nil
+	}
+	native := &fakeNative{}
+	r := newTestDelegatedRunner(native, resolve, scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	r.routeResolveBackoff = time.Millisecond
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+	if attempt != 3 {
+		t.Fatalf("resolve call count = %d, want 3 (recovers on the 3rd attempt)", attempt)
+	}
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0", native.callCount())
+	}
+}
+
 // --- discover/plan/review pass-through -------------------------------------
 
 func TestDelegatedRunner_PassesThroughNonWorkerSessions(t *testing.T) {
@@ -1799,6 +2127,62 @@ func TestBuildLaunchCmdRealShell(t *testing.T) {
 	b, err := os.ReadFile(exitPath) //nolint:gosec // G304: path under t.TempDir.
 	if err != nil || strings.TrimSpace(string(b)) != "0" {
 		t.Fatalf("exit_code = %q, err %v; want 0", b, err)
+	}
+}
+
+// TestBuildLaunchCmdRealShell_ContainerMarker proves the D-103 (issue
+// #499) container marker round-trips through a real /bin/sh: buildLaunchCmd
+// writes $HOME/containerMarkerFile before backgrounding the CLI, and the
+// same probe command probeContainerMarker issues must then find it.
+// HOME here is the test host's own home directory - in production it's
+// the sandbox container's $HOME (/home/sandbox), never a hardcoded path,
+// so this same command shape works in both.
+func TestBuildLaunchCmdRealShell_ContainerMarker(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid unavailable on this host; runs in the containerized suite")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no $HOME on this host")
+	}
+	markerPath := filepath.Join(home, containerMarkerFile)
+	_ = os.Remove(markerPath) // clean slate; best effort
+	t.Cleanup(func() { _ = os.Remove(markerPath) })
+
+	work := t.TempDir()
+	rdir := filepath.Join(work, "runs", "test01")
+	promptPath := filepath.Join(work, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("hi"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cli := filepath.Join(work, "fakecli")
+	//nolint:gosec // G306: an executable stand-in script needs the exec bit.
+	if err := os.WriteFile(cli, []byte("#!/bin/sh\necho done\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inv := executor.Invocation{Argv: []string{cli, "@PROMPT@"}, PromptFile: promptPath}
+
+	cmd, err := buildLaunchCmd(work, rdir, inv, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // G204: executing the composed command is the point of the test.
+		t.Fatalf("launch command failed: %v: %s", err, out)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("marker file %s not written: %v", markerPath, err)
+	}
+
+	probeCmd := fmt.Sprintf("[ -f \"$HOME/%s\" ]", containerMarkerFile)
+	if out, err := exec.Command("/bin/sh", "-c", probeCmd).CombinedOutput(); err != nil { //nolint:gosec // G204: same command shape probeContainerMarker issues.
+		t.Fatalf("probe command failed after a real launch: %v: %s", err, out)
+	}
+
+	if err := os.Remove(markerPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command("/bin/sh", "-c", probeCmd).Run(); err == nil { //nolint:gosec // G204: same command shape probeContainerMarker issues.
+		t.Fatal("probe command succeeded after the marker was removed, want failure")
 	}
 }
 

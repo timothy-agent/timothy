@@ -38,6 +38,10 @@ func (opencodeAdapter) Capabilities() Capabilities {
 		// not an env var - opencode has no base-url env override.
 		BaseURLEnv: "",
 		StateDirs:  nil,
+		// SupportsResume stays false (D-103, issue #499): opencode is not
+		// installed in this environment and no `--help` text or repo
+		// doc records its resume/continue flag, so BuildInvocation never
+		// guesses one - the runner starts fresh instead.
 	}
 }
 
@@ -274,7 +278,7 @@ func (p *opencodeParser) ParseLine(line []byte) (Event, bool) {
 		}
 		p.sawSystem = true
 		p.stats.Events++
-		return Event{Kind: KindSystem, Text: env.SessionID}, true
+		return Event{Kind: KindSystem, Text: env.SessionID, SessionID: env.SessionID}, true
 
 	case "text":
 		var l opencodeLine
