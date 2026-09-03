@@ -718,7 +718,7 @@ func TestChatRetriesAutoTitleUntilATurnCompletes(t *testing.T) {
 
 // TestTerminalErrorPersistsTurnFailed pins D-044: a turn that ends on
 // a terminal EventError with no partial text must not vanish silently
-//: relay used to drop the error after streaming it to the client,
+// : relay used to drop the error after streaming it to the client,
 // leaving nothing durable. persistTurn now appends a KindTurnFailed
 // event carrying the error's code and message.
 func TestTerminalErrorPersistsTurnFailed(t *testing.T) {
@@ -1977,11 +1977,11 @@ func TestRetryReplaysTrailingPendingStateAsInterrupted(t *testing.T) {
 	}
 }
 
-// TestAutoTitleUsesDefaultRouteNotClassifyRoute pins a real behavior
-// change: a session's name deserves the same model quality as the
-// conversation it's naming, not the cheapest classification route
-// (which resolves to a small local model unfit for the job).
-func TestAutoTitleUsesDefaultRouteNotClassifyRoute(t *testing.T) {
+// TestAutoTitleUsesSummarizeRoleWithLowEffort pins the title request
+// shape: the summarize role (fast derived-text chain, same as mission
+// titles) with low reasoning effort, so a reasoning model first in the
+// chain does not spend the whole deadline thinking.
+func TestAutoTitleUsesSummarizeRoleWithLowEffort(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
 	gw := &fakeGW{events: okEvents("a good title")}
@@ -2002,8 +2002,11 @@ func TestAutoTitleUsesDefaultRouteNotClassifyRoute(t *testing.T) {
 	defer gw.mu.Unlock()
 	for _, r := range gw.requests {
 		if r.Purpose == "title" {
-			if r.Route != "default" {
-				t.Fatalf("auto-title route = %q, want %q", r.Route, "default")
+			if r.Route != "summarize" {
+				t.Fatalf("auto-title route = %q, want %q", r.Route, "summarize")
+			}
+			if r.Effort != "low" {
+				t.Fatalf("auto-title effort = %q, want low", r.Effort)
 			}
 			return
 		}
@@ -2035,6 +2038,9 @@ func TestTitleOverGatewayUsesSummarizeRoleAndTrimsQuotes(t *testing.T) {
 	}
 	if gw.requests[0].Purpose != "title" {
 		t.Fatalf("purpose = %q, want title", gw.requests[0].Purpose)
+	}
+	if gw.requests[0].Effort != "low" {
+		t.Fatalf("effort = %q, want low", gw.requests[0].Effort)
 	}
 }
 

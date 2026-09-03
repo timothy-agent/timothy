@@ -848,11 +848,12 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 	}
 
 	duration := time.Since(start)
-	// load_skill's result is the pack's full rule text — useful to the
-	// model, never to the client. Every other tool's result is fair to
-	// show (truncated) in the audit trail and the UI.
+	// load_skill's result is the pack's full rule text, useful to the
+	// model, never to the client. Every other tool's result, and a
+	// failed load_skill (unknown skill name), is fair to show
+	// (truncated) in the audit trail and the UI.
 	var digest, traceContent string
-	if call.Name == "load_skill" {
+	if call.Name == "load_skill" && !isError {
 		digest = "skill loaded"
 	} else {
 		digest = content

@@ -53,7 +53,7 @@ const (
 	// compaction never converges. Post-turn passes are off the user's
 	// clock; the rare pre-send pass accepts the latency.
 	compactBudget = 150 * time.Second
-	titleTimeout  = 15 * time.Second
+	titleTimeout  = 30 * time.Second
 	// approvalGrantTTL matches missions/driver.go's missionGrantTTL and
 	// loop's own sessionGrantTTL (12h): a chat session idle longer than
 	// that just re-seeds the grant on its next turn, same degrade as a
@@ -115,7 +115,7 @@ type MemoryRetrieve func(ctx context.Context, sessionID, query string) string
 // AttachmentStore is the slice of *attachments.Store chat needs: Get
 // validates a ref exists (400 before any event append), Open resolves
 // its bytes to base64 at request-build time. Nil disables attachments
-//: a Request naming any Attachments id gets ErrBadRequest.
+// : a Request naming any Attachments id gets ErrBadRequest.
 type AttachmentStore interface {
 	Get(ctx context.Context, id string) (attachments.Attachment, error)
 	Open(ctx context.Context, id string) (io.ReadCloser, attachments.Attachment, error)
@@ -270,7 +270,7 @@ func (s *Service) SetWhisper(url string) {
 type KBSearch func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error)
 
 // SetKBSearch wires the search_kb tool's backing search call. Optional
-//: nil means search_kb is never offered on any turn, regardless of an
+// : nil means search_kb is never offered on any turn, regardless of an
 // agent's Knowledge list (same "the dependency's absence turns the
 // feature off entirely" contract as SetMemoryRetrieve/SetAttachments).
 func (s *Service) SetKBSearch(fn KBSearch) { s.kbSearch = fn }
@@ -554,8 +554,10 @@ func TitleOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, in
 			Messages: []provider.Message{{Role: "user", Content: input}},
 			// Reasoning models spend hundreds of tokens thinking before
 			// the first answer token; a tight cap truncates the stream
-			// mid-reasoning and yields an empty title.
+			// mid-reasoning and yields an empty title. Low effort keeps
+			// that thinking short on models that honour it.
 			MaxTokens: 1000,
+			Effort:    "low",
 		}
 		for attempt := 0; attempt < 2; attempt++ {
 			events, err := gw.Stream(ctx, req)
@@ -1868,7 +1870,13 @@ func (s *Service) autoTitle(sessionID, userText, reply, sensitiveRoute string) {
 	const titleSystem = `Produce a title for this conversation: at most 6 words, plain text, no quotes, no trailing punctuation. Reply with only the title.`
 	input := userText + "\n\n" + truncateRunes(reply, 200)
 
-	route := s.roleRoute(ctx, "default")
+	// The summarize role is the cheap, fast chain built for short
+	// derived text; the default role's first entry is often a reasoning
+	// model that spends the whole deadline thinking (issue #552).
+	route := s.roleRoute(ctx, "summarize")
+	if route == "" {
+		route = s.roleRoute(ctx, "default")
+	}
 	if sensitiveRoute != "" {
 		route = sensitiveRoute
 	}
@@ -1879,8 +1887,10 @@ func (s *Service) autoTitle(sessionID, userText, reply, sensitiveRoute string) {
 		Messages: []provider.Message{{Role: "user", Content: input}},
 		// Reasoning models spend hundreds of tokens thinking before
 		// the first answer token; a tight cap truncates the stream
-		// mid-reasoning and yields an empty title.
+		// mid-reasoning and yields an empty title. Low effort keeps
+		// that thinking short on models that honour it.
 		MaxTokens: 1000,
+		Effort:    "low",
 		SessionID: sessionID,
 	})
 	if err != nil {
