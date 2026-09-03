@@ -802,7 +802,12 @@ CREATE TABLE IF NOT EXISTS missions (
     -- for D-069 code paths (issue #479 dropped the redundant light
     -- column).
     flow                  text NOT NULL DEFAULT 'full'
-        CHECK (flow IN ('full', 'discover_generate', 'no_prove', 'light'))
+        CHECK (flow IN ('full', 'discover_generate', 'no_prove', 'light')),
+    -- has_plan (D-102, issue #496): the goal already carries the
+    -- operator's own plan, so the plan turn transcribes it into units
+    -- instead of designing one from scratch. false (default) is
+    -- today's behavior unchanged.
+    has_plan              boolean NOT NULL DEFAULT false
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

@@ -13,3 +13,12 @@ run before deploy.
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS review_findings jsonb NOT NULL DEFAULT '[]';
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS rework_rounds integer NOT NULL DEFAULT 0;
 ```
+
+## Transcribe-mode plan flag (D-102, issue #496)
+
+Required on live DBs before/with the next deploy. Additive, safe to
+run before deploy.
+
+```sql
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS has_plan boolean NOT NULL DEFAULT false;
+```
