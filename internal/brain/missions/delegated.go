@@ -29,6 +29,16 @@ import (
 // driver pauses the mission as infra instead of burning iterations.
 var ErrExecutorAuth = errors.New("executor: authentication failed")
 
+// ErrGatewayUnavailable reports that a delegated worker turn's route
+// resolve never got past the gateway itself being unavailable (D-101,
+// issue #511) after routeResolveRetries attempts: the gateway was
+// unreachable, or still answering 503 config_unavailable because its
+// routing snapshot hadn't loaded (e.g. a brain restart's boot recovery
+// sweep re-driving a mission before the gateway finished loading). This
+// is never a "no delegated route" answer: RunWorker must not fall back
+// to native on it, only the driver's infra pause.
+var ErrGatewayUnavailable = errors.New("delegated runner: gateway unavailable")
+
 // D-052: the delegated run protocol. A launch is one detached sandboxd
 // exec (setsid + nohup-style backgrounding via `&`, pid captured to a
 // file) so the CLI keeps running past the 60s ExecEnv call that started
@@ -60,6 +70,15 @@ const (
 	maxExecutorEvents = 300
 	pollInfraRetries  = 3
 	pollInfraBackoff  = 5 * time.Second
+
+	// routeResolveRetries/routeResolveBackoff bound RunWorker's retry of
+	// a route resolve that fails with ErrGatewayUnavailable (D-101): 5
+	// attempts, backoff doubling from 2s (2+4+8+16 = 30s of sleep across
+	// 4 waits before the 5th and final attempt) so the total wall clock
+	// stays close to the acceptance criterion's "5 attempts over about
+	// 30s" without a fixed-interval retry racing a slow gateway boot.
+	routeResolveRetries    = 5
+	routeResolveBackoffMin = 2 * time.Second
 )
 
 // routeResolver is the narrow seam over gwclient.Client.ResolveRoute —
@@ -145,9 +164,10 @@ type delegatedRunner struct {
 	log *slog.Logger
 
 	// Overridable in tests so scenarios don't wait real minutes.
-	pollInterval time.Duration
-	idleTimeout  time.Duration
-	runBudget    time.Duration
+	pollInterval        time.Duration
+	idleTimeout         time.Duration
+	runBudget           time.Duration
+	routeResolveBackoff time.Duration
 	// runBudgetFn, when set, is read once per launch and wins over
 	// runBudget: the settings-backed cap (issue #498).
 	runBudgetFn func(context.Context) time.Duration
@@ -167,7 +187,8 @@ func NewDelegatedRunner(native Runner, resolveRoute routeResolver, resolveCred c
 		native: native, resolveRoute: resolveRoute, resolveCred: resolveCred,
 		sandboxExec: sandboxExec, events: events, lastRun: lastRun, ledger: led, log: log,
 		pollInterval: pollInterval, idleTimeout: idleTimeout, runBudget: runBudgetDefault, runBudgetFn: runBudget,
-		cooldown: map[cooldownKey]time.Time{},
+		routeResolveBackoff: routeResolveBackoffMin,
+		cooldown:            map[cooldownKey]time.Time{},
 	}
 }
 
@@ -197,13 +218,19 @@ func (r *delegatedRunner) RunReview(ctx context.Context, m Mission, packet Revie
 // to native.RunWorker (which itself lets the gateway walk any native
 // chain). Otherwise it looks up the adapter and resolves the worker
 // route on the executor axis, walking the first usable, non-cooled
-// entry into the delegated protocol. An unknown harness, a resolve
-// failure, or no usable entry at all falls back to native.RunWorker
-// unchanged — today's behavior is always the floor — but a mission
-// that explicitly asked for a harness must not fall back silently: an
-// executor.skipped event is recorded first (see recordSkipped) so the
-// mission's own history shows the requested harness was never actually
-// used.
+// entry into the delegated protocol. An unknown harness or no usable
+// entry at all falls back to native.RunWorker unchanged: today's
+// behavior is always the floor, but a mission that explicitly asked
+// for a harness must not fall back silently: an executor.skipped event
+// is recorded first (see recordSkipped) so the mission's own history
+// shows the requested harness was never actually used. A route resolve
+// that fails because the gateway itself is unavailable (D-101, issue
+// #511) is different: that is transient infra, not "no delegated
+// route", so resolveRouteWithRetry retries it with bounded backoff and,
+// if still failing, this returns ErrGatewayUnavailable instead of
+// falling back: the driver pauses the mission as infra rather than
+// running a native worker turn behind a delegated run that may still be
+// alive in the sandbox.
 func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
 	if m.Harness == "" {
 		return r.native.RunWorker(ctx, m, packet)
@@ -224,14 +251,19 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 		return r.native.RunWorker(ctx, m, packet)
 	}
 
-	route, err := r.resolveRoute(ctx, workerRoute(m), m.Harness)
-	if err != nil || route == nil {
-		if err != nil {
-			r.log.Warn("delegated runner: route resolve failed; falling back to native", "mission_id", m.ID, "error", err)
-			r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": truncate(err.Error(), 2000)})
-		} else {
-			r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": "resolved route was nil without an error"})
+	route, err := r.resolveRouteWithRetry(ctx, m, workerRoute(m))
+	if err != nil {
+		if errors.Is(err, gwclient.ErrGatewayUnavailable) {
+			r.log.Error("delegated runner: gateway unavailable after retries; pausing as infra", "mission_id", m.ID, "error", err)
+			r.recordSkipped(ctx, m.ID, m.Harness, "gateway_unavailable", map[string]any{"error": truncate(err.Error(), 2000)})
+			return WorkerVerdict{}, "", fmt.Errorf("%w: %v", ErrGatewayUnavailable, err)
 		}
+		r.log.Warn("delegated runner: route resolve failed; falling back to native", "mission_id", m.ID, "error", err)
+		r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": truncate(err.Error(), 2000)})
+		return r.native.RunWorker(ctx, m, packet)
+	}
+	if route == nil {
+		r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": "resolved route was nil without an error"})
 		return r.native.RunWorker(ctx, m, packet)
 	}
 
@@ -292,6 +324,43 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 		r.recordSkipped(ctx, m.ID, m.Harness, "no_usable_entry", map[string]any{"skip_reasons": boundStrings(skipReasons, 5)})
 	}
 	return r.native.RunWorker(ctx, m, packet)
+}
+
+// resolveRouteWithRetry resolves route on the harness's executor axis,
+// retrying with bounded exponential backoff (routeResolveRetries
+// attempts, starting at routeResolveBackoffMin) ONLY when the failure is
+// gwclient.ErrGatewayUnavailable, the gateway unreachable or still
+// answering 503 config_unavailable because its routing snapshot hasn't
+// loaded (D-101, issue #511). Any other resolve error (unknown route,
+// bad request) returns immediately on the first attempt: those are
+// definitive "no delegated route" answers, not transient infra, and
+// retrying them would just delay the existing native fallback. Bounded
+// and ctx-aware: a cancelled ctx or an exhausted retry budget both
+// return the last error seen.
+func (r *delegatedRunner) resolveRouteWithRetry(ctx context.Context, m Mission, route string) (*gwclient.ResolvedRoute, error) {
+	backoff := r.routeResolveBackoff
+	var lastErr error
+	for attempt := 1; attempt <= routeResolveRetries; attempt++ {
+		resolved, err := r.resolveRoute(ctx, route, m.Harness)
+		if err == nil {
+			return resolved, nil
+		}
+		lastErr = err
+		if !errors.Is(err, gwclient.ErrGatewayUnavailable) {
+			return nil, err
+		}
+		if attempt == routeResolveRetries {
+			break
+		}
+		r.log.Warn("delegated runner: gateway unavailable resolving route, retrying", "mission_id", m.ID, "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return nil, lastErr
 }
 
 // pinInChain reports whether pin ("provider name/model") names any entry

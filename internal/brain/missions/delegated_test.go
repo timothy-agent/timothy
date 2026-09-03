@@ -666,6 +666,29 @@ func TestDriverErrExecutorAuthPausesImmediately(t *testing.T) {
 	}
 }
 
+// TestDriverErrGatewayUnavailablePausesImmediately proves the D-101 fix
+// (issue #511) at the driver level: a worker turn failing with
+// ErrGatewayUnavailable (the delegated runner's route resolve
+// exhausting its retry budget against a 503 config_unavailable gateway)
+// pauses the mission as infra on the very first occurrence, the same as
+// ErrExecutorAuth/ErrModelFloor: never the ordinary worker_failed
+// backoff ladder, which would keep retrying a mission whose delegated
+// run may still be alive in the sandbox.
+func TestDriverErrGatewayUnavailablePausesImmediately(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: gwclient: gateway unavailable: gateway http 503: config_unavailable", ErrGatewayUnavailable)}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
+		t.Fatalf("mission after gateway-unavailable turn = %s/%s, want paused/infra immediately", m.Status, m.PauseReason)
+	}
+}
+
 // --- scenario 5: re-attach ------------------------------------------------
 
 func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
@@ -1546,6 +1569,102 @@ func TestDelegatedRunWorker_Dispatch_ResolveErrorFallsBackToNative(t *testing.T)
 	}
 	if errStr, _ := skippedPayload["error"].(string); errStr == "" {
 		t.Fatalf("executor.skipped error = %q, want a non-empty error string", errStr)
+	}
+}
+
+// countingResolver wraps resolve, counting how many times it was
+// called: TestDelegatedRunWorker_GatewayUnavailable_RetriesThenFails
+// and its sibling need to assert the retry count directly.
+func countingResolver(resolve routeResolver) (routeResolver, *int) {
+	calls := 0
+	return func(ctx context.Context, name, harness string) (*gwclient.ResolvedRoute, error) {
+		calls++
+		return resolve(ctx, name, harness)
+	}, &calls
+}
+
+// TestDelegatedRunWorker_GatewayUnavailable_RetriesThenFails proves the
+// D-101 fix (issue #511): a route resolve failing with
+// gwclient.ErrGatewayUnavailable (503 config_unavailable, or the
+// gateway unreachable) is retried with bounded backoff, never falls
+// back to native, and once the retry budget is exhausted the turn
+// fails with ErrGatewayUnavailable so the driver can pause the mission
+// as infra instead of running a native worker turn.
+func TestDelegatedRunWorker_GatewayUnavailable_RetriesThenFails(t *testing.T) {
+	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
+	sandbox := newFakeSandbox()
+	events := &fakeEventSink{}
+
+	gwErr := fmt.Errorf("%w: gateway http 503: config_unavailable", gwclient.ErrGatewayUnavailable)
+	resolve, calls := countingResolver(scriptedResolver(nil, gwErr))
+	r := newTestDelegatedRunner(native, resolve, scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	r.routeResolveBackoff = time.Millisecond
+	m := testMission("m1", t.TempDir())
+
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err == nil {
+		t.Fatal("RunWorker: got nil error, want ErrGatewayUnavailable")
+	}
+	if !errors.Is(err, ErrGatewayUnavailable) {
+		t.Fatalf("RunWorker error = %v, want it to wrap ErrGatewayUnavailable", err)
+	}
+	if *calls != routeResolveRetries {
+		t.Fatalf("resolve call count = %d, want %d (bounded retry)", *calls, routeResolveRetries)
+	}
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0: a gateway-unavailable resolve must never fall back to native", native.callCount())
+	}
+	if events.count("executor.skipped") != 1 {
+		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
+	}
+	skipped, _ := events.last("executor.skipped")
+	var skippedPayload map[string]any
+	_ = json.Unmarshal(skipped.Payload, &skippedPayload)
+	if skippedPayload["reason"] != "gateway_unavailable" {
+		t.Fatalf("executor.skipped reason = %v, want gateway_unavailable", skippedPayload["reason"])
+	}
+}
+
+// TestDelegatedRunWorker_GatewayUnavailable_RecoversWithinRetryBudget
+// proves a transient config_unavailable that clears before the retry
+// budget is exhausted resolves normally: the mission proceeds through
+// the ordinary delegated path (no native fallback, no error) rather
+// than paying for every attempt.
+func TestDelegatedRunWorker_GatewayUnavailable_RecoversWithinRetryBudget(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedChunk = 40
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	gwErr := fmt.Errorf("%w: gateway http 503: config_unavailable", gwclient.ErrGatewayUnavailable)
+	attempt := 0
+	resolve := func(ctx context.Context, name, harness string) (*gwclient.ResolvedRoute, error) {
+		attempt++
+		if attempt < 3 {
+			return nil, gwErr
+		}
+		return route, nil
+	}
+	native := &fakeNative{}
+	r := newTestDelegatedRunner(native, resolve, scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	r.routeResolveBackoff = time.Millisecond
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+	if attempt != 3 {
+		t.Fatalf("resolve call count = %d, want 3 (recovers on the 3rd attempt)", attempt)
+	}
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0", native.callCount())
 	}
 }
 
