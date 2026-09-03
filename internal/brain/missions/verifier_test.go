@@ -129,7 +129,7 @@ func TestVerifyAllRegressionSubsetRerunsPassedUnits(t *testing.T) {
 func TestVerifyAllCitationsOnlyForUnverifiedUnits(t *testing.T) {
 	v := newFakeVerifier()
 	workRoot := t.TempDir()
-	if err := os.WriteFile(filepath.Join(workRoot, "r.md"), []byte("[x](https://example.com/invented)"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(workRoot, "r.md"), []byte("[x](https://docs.acme.dev/invented)"), 0o600); err != nil {
 		t.Fatalf("seed artifact: %v", err)
 	}
 	m := Mission{
@@ -137,7 +137,7 @@ func TestVerifyAllCitationsOnlyForUnverifiedUnits(t *testing.T) {
 		Plan: Plan{Units: []PlanUnit{{Title: "report", Artifacts: []string{"r.md"}}}},
 	}
 
-	got, err := v.verifyAll(context.Background(), m, []string{"https://example.com/other"}, true)
+	got, err := v.verifyAll(context.Background(), m, []string{"https://docs.acme.dev/other"}, true)
 	if err != nil {
 		t.Fatalf("verifyAll: %v", err)
 	}

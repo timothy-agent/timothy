@@ -2627,7 +2627,7 @@ func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
 // uses, never letting the invented citation stand.
 func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("source: [docs](https://example.com/invented)"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("source: [docs](https://docs.acme.dev/invented)"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	store := newFakeStore()
@@ -2636,7 +2636,7 @@ func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
 		MaxIterations: 8, Workspace: root,
 		Plan: Plan{Units: []PlanUnit{{Title: "write report", Artifacts: []string{"report.md"}}}},
 	})
-	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it", SeenURLs: []string{"https://example.com/other"}}}}
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it", SeenURLs: []string{"https://docs.acme.dev/other"}}}}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
