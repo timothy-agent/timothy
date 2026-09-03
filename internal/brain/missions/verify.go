@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -169,9 +170,72 @@ func CheckArtifacts(workRoot string, artifacts []string) []string {
 // URL/ref again from inside the parens (D-059).
 var citedURLPattern = regexp.MustCompile(`\[[^\]]*\]\(((?:https?|kb)://[^\s)]+)\)|((?:https?|kb)://[^\s)\]]+)`)
 
+// trailingURLPunct is punctuation and quote characters a URL scan
+// picks up from surrounding prose (a sentence-ending period, a closing
+// quote around a bare URL) that are never part of the URL itself.
+const trailingURLPunct = "'\",.;:)`"
+
+// placeholderDomains are RFC 2606 reserved second-level domains: exact
+// match or any subdomain is a documentation example, never a real
+// citation.
+var placeholderDomains = []string{"example.com", "example.net", "example.org"}
+
+// placeholderTLDs are RFC 2606 / RFC 6761 reserved TLDs used only in
+// documentation and examples.
+var placeholderTLDs = []string{".example", ".test", ".invalid", ".localhost"}
+
+// placeholderIPRanges are the RFC 5737 documentation IPv4 blocks.
+var placeholderIPRanges = []*net.IPNet{
+	mustCIDR("192.0.2.0/24"),
+	mustCIDR("198.51.100.0/24"),
+	mustCIDR("203.0.113.0/24"),
+}
+
+func mustCIDR(s string) *net.IPNet {
+	_, n, err := net.ParseCIDR(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
+}
+
+// isPlaceholderHost reports whether host is an RFC 2606 / RFC 6761
+// reserved documentation name or an RFC 5737 documentation IP literal
+// (issue #522): these appear in explainer goals (CORS, redirects, HTTP
+// examples) as illustrations, not as things a worker could fetch.
+func isPlaceholderHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "" {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	for _, d := range placeholderDomains {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	for _, tld := range placeholderTLDs {
+		if strings.HasSuffix(host, tld) {
+			return true
+		}
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		for _, r := range placeholderIPRanges {
+			if r.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ExtractCitedURLs pulls every http(s) URL and kb:// reference cited in
 // text — markdown link targets and bare refs alike — in first-seen
-// order, deduplicated.
+// order, deduplicated. Trailing punctuation and quote characters
+// picked up from surrounding prose are stripped, and a candidate whose
+// host has no dot (e.g. a truncated "https://app") is dropped.
 func ExtractCitedURLs(text string) []string {
 	matches := citedURLPattern.FindAllStringSubmatch(text, -1)
 	seen := make(map[string]bool, len(matches))
@@ -191,6 +255,11 @@ func ExtractCitedURLs(text string) []string {
 			u = "kb://" + strings.TrimRightFunc(rest, func(r rune) bool {
 				return r != '-' && (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F')
 			})
+		} else {
+			u = strings.TrimRight(u, trailingURLPunct)
+			if !hasDottedHost(u) {
+				continue
+			}
 		}
 		if seen[u] {
 			continue
@@ -199,6 +268,24 @@ func ExtractCitedURLs(text string) []string {
 		urls = append(urls, u)
 	}
 	return urls
+}
+
+// hasDottedHost reports whether rawURL parses to a host containing a
+// dot, or is an IP literal. A bare scheme+label with no dot
+// ("https://app") is a truncated fragment, not a fetchable URL.
+func hasDottedHost(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	return strings.Contains(host, ".")
 }
 
 // NormalizeURL canonicalizes a URL for citation comparison: lowercase
@@ -256,6 +343,9 @@ func CheckCitations(workRoot string, artifacts, seenURLs []string) []string {
 		var unknown []string
 		seenUnknown := map[string]bool{}
 		for _, cited := range ExtractCitedURLs(string(content)) {
+			if u, err := url.Parse(cited); err == nil && isPlaceholderHost(u.Hostname()) {
+				continue // RFC 2606/6761/5737 placeholder, not a real citation
+			}
 			norm := NormalizeURL(cited)
 			if allowed[norm] || seenUnknown[norm] {
 				continue
