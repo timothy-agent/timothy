@@ -951,7 +951,7 @@ func TestClassifyHasPlan(t *testing.T) {
 
 // TestMissionsClassifyEndpoint covers POST /v1/missions/classify: the
 // happy path returning the classifier's verdict (kind, light, and
-// has_plan), and the empty-goal 400 — this endpoint has no store/driver
+// has_plan), and the empty-goal 400; this endpoint has no store/driver
 // dependency, so it can be tested end to end without Postgres.
 func TestMissionsClassifyEndpoint(t *testing.T) {
 	t.Parallel()

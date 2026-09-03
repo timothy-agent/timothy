@@ -14,6 +14,18 @@ ALTER TABLE missions ADD COLUMN IF NOT EXISTS review_findings jsonb NOT NULL DEF
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS rework_rounds integer NOT NULL DEFAULT 0;
 ```
 
+## generate_pdf and share_file on the general agent (issue #546)
+
+Live rows seeded before this change never received the two builtins
+(agent tool lists are opt-in, #229). Idempotent, safe to run any time.
+
+```sql
+UPDATE agents SET tools = tools || '["share_file"]'::jsonb
+  WHERE name IN ('general', 'researcher') AND NOT tools ? 'share_file';
+UPDATE agents SET tools = tools || '["generate_pdf"]'::jsonb
+  WHERE name IN ('general', 'researcher') AND NOT tools ? 'generate_pdf';
+```
+
 ## Transcribe-mode plan flag (D-102, issue #496)
 
 Required on live DBs before/with the next deploy. Additive, safe to
