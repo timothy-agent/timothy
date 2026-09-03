@@ -1050,6 +1050,52 @@ func TestDriverExecuteRecordsRawTextWithoutHandoff(t *testing.T) {
 	}
 }
 
+// TestDriverExecuteRecordsDelegatedNote confirms a delegated turn's
+// schema result note (WorkerVerdict.Note, D-099) is the progress note
+// when no handoff was given, not the accumulated stream text.
+func TestDriverExecuteRecordsDelegatedNote(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "tests red", Note: "tests red"}},
+		workerText:     "I'll create the file.Verification passed.",
+	}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if len(m.Progress) != 1 || m.Progress[0].Note != "tests red" {
+		t.Fatalf("Progress = %+v, want the delegated result note alone", m.Progress)
+	}
+}
+
+// TestProgressNoteSelection pins the D-099 order: handoff, then the
+// delegated result note, then the raw turn text capped at
+// progressNoteCap with a truncation marker.
+func TestProgressNoteSelection(t *testing.T) {
+	long := strings.Repeat("x", progressNoteCap+10)
+	cases := []struct {
+		name    string
+		verdict WorkerVerdict
+		text    string
+		want    string
+	}{
+		{"handoff over note and text", WorkerVerdict{Handoff: "next: finish auth", Note: "done"}, "raw", "next: finish auth"},
+		{"delegated note over text", WorkerVerdict{Note: "done"}, "raw", "done"},
+		{"raw text when nothing else", WorkerVerdict{}, "raw", "raw"},
+		{"raw text capped", WorkerVerdict{}, long, strings.Repeat("x", progressNoteCap) + "…"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := progressNote(tc.verdict, tc.text); got != tc.want {
+				t.Fatalf("progressNote = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestDriverLightDoneSetsFinalOutputAndSkipsToResult confirms a light
 // mission's done branch (D-069) short-circuits routeVerified: it sets
 // FinalOutput to the worker's FinalMessage (the text since its last
@@ -2719,7 +2765,7 @@ func TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing(t *testing.T) {
 		t.Fatalf("packet: %v", err)
 	}
 	_, user := packet.Render()
-	if !strings.Contains(user, "Current unit: unit0\nREGRESSED:") || !strings.Contains(user, "[regressed] unit0") || !strings.Contains(user, "[harness-verified] unit1") {
+	if !strings.Contains(user, "Current unit: unit0\nREGRESSED:") || !strings.Contains(user, "[pending] unit0 (regressed: passed before, now fails its artifacts check)") || !strings.Contains(user, "[harness-verified] unit1") {
 		t.Fatalf("worker packet = %q, want unit0 named as the regressed current unit and unit1 harness-verified", user)
 	}
 }

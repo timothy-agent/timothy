@@ -869,7 +869,7 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, entry gwclient.
 	case ok:
 		verdict = WorkerVerdict{
 			Outcome:  strings.ToLower(res.Status),
-			Evidence: res.Note, Analysis: res.Note, Question: res.Note,
+			Evidence: res.Note, Analysis: res.Note, Question: res.Note, Note: res.Note,
 		}
 	default:
 		if raw, sok := extractTextSentinel(st.textBuf.String(), missionStatusToolName); sok {

@@ -26,7 +26,7 @@ func TestWorkPacketRender(t *testing.T) {
 	if !strings.Contains(user, "Fix the login bug") {
 		t.Fatal("Render did not include the goal")
 	}
-	if !strings.Contains(user, "[verified] Add validation") || !strings.Contains(user, "[pending] Add test") {
+	if !strings.Contains(user, "[reviewed] Add validation") || !strings.Contains(user, "[pending] Add test") {
 		t.Fatalf("Render did not include plan units with correct status: %q", user)
 	}
 	if !strings.Contains(user, "found the root cause") {
@@ -40,8 +40,9 @@ func TestWorkPacketRender(t *testing.T) {
 // TestWorkPacketRenderUnitFailure is the golden test for the D-094
 // current-unit block: the first unit without harness evidence is the
 // current one, its last failing check and excerpt render under it, and
-// plan markers distinguish verified, harness-verified, regressed and
-// pending units. A unit the harness never failed renders no block.
+// plan markers distinguish reviewed, harness-verified and pending units
+// (D-099), a regressed unit rendering pending plus the regressed note.
+// A unit the harness never failed renders no block.
 func TestWorkPacketRenderUnitFailure(t *testing.T) {
 	p := WorkPacket{
 		Goal: "Write the report",
@@ -57,10 +58,13 @@ func TestWorkPacketRenderUnitFailure(t *testing.T) {
 	if !strings.Contains(user, want) {
 		t.Fatalf("Render current-unit block = %q, want it to contain %q", user, want)
 	}
-	for _, marker := range []string{"[verified] Outline", "[regressed] Body", "[harness-verified] Appendix", "[pending] Index"} {
+	for _, marker := range []string{"[reviewed] Outline", "[pending] Body (regressed: passed before, now fails its verify_cmd check)", "[harness-verified] Appendix", "[pending] Index"} {
 		if !strings.Contains(user, marker) {
 			t.Fatalf("Render = %q, want plan marker %q", user, marker)
 		}
+	}
+	if strings.Contains(user, "[verified]") || strings.Contains(user, "[regressed]") {
+		t.Fatalf("Render = %q, want no bare verified or regressed marker", user)
 	}
 
 	p.Plan.Units[1] = PlanUnit{Title: "Body", VerifyCheck: "artifacts", VerifyExcerpt: "body.md: not found"}
@@ -100,7 +104,7 @@ func TestWorkPacketRenderOpenFindings(t *testing.T) {
 	}
 	want := "Current unit: Code block menu\n" +
 		"Plan:\n" +
-		"- [verified] Toolbar\n" +
+		"- [reviewed] Toolbar\n" +
 		"- [pending] Code block menu\n" +
 		"\n" +
 		"Current work: close open review findings (round 2 of 3)\n" +

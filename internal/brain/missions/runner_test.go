@@ -360,6 +360,36 @@ func TestRunReviewPacketListsOpenFindings(t *testing.T) {
 	}
 }
 
+// TestRenderReviewContentPlanMarkers pins the D-099 markers in the
+// reviewer packet: reviewed, harness-verified, pending; a regressed unit
+// is pending with the regressed note; no bare verified marker.
+func TestRenderReviewContentPlanMarkers(t *testing.T) {
+	units := []PlanUnit{
+		{Title: "approved", Passes: true, HarnessPassed: true},
+		{Title: "awaiting", HarnessPassed: true},
+		{Title: "broke", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "a.md: not found"},
+		{Title: "todo"},
+	}
+	content := renderReviewContent(ReviewPacket{Units: units, Plan: Plan{Units: units}})
+	for _, want := range []string{
+		"### approved [reviewed]",
+		"### awaiting [harness-verified]",
+		"### broke [pending]\nRegressed: this unit passed before and fails now.\n",
+		"### todo [pending]",
+		"- [reviewed] approved\n",
+		"- [harness-verified] awaiting\n",
+		"- [pending] broke (regressed: passed before, now fails its artifacts check)\n",
+		"- [pending] todo\n",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("review content missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "[verified]") || strings.Contains(content, "[regressed]") {
+		t.Fatalf("review content has a bare verified or regressed marker:\n%s", content)
+	}
+}
+
 // TestRenderReviewContentFindingsOnly pins the D-096 re-review packet
 // shape: the open findings with detail and evidence, the finding files,
 // the scope-creep list, the delta diff and the affected units' harness

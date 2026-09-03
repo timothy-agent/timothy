@@ -158,7 +158,7 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 		}
 		b.WriteString("Plan:\n")
 		for _, u := range p.Plan.Units {
-			fmt.Fprintf(&b, "- [%s] %s\n", unitStatus(u), NeutralizeSlot(u.Title))
+			b.WriteString(renderPlanLine(u))
 			// The EXACT artifact paths the harness will check — a worker
 			// that invents its own filename (http-429 vs http429) fails
 			// verification without ever seeing why.
@@ -215,19 +215,29 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 }
 
 // unitStatus is the plan marker a worker or reviewer prompt shows for a
-// unit (D-094): verified (complete), harness-verified (awaiting
-// approval), regressed (passed once, failing now), or pending.
+// unit (D-099, issue #533): reviewed (a review approved it),
+// harness-verified (harness evidence, awaiting approval), or pending.
+// A regressed unit is pending; renderPlanLine adds the regressed note.
 func unitStatus(u PlanUnit) string {
 	switch {
 	case u.Passes:
-		return "verified"
+		return "reviewed"
 	case u.HarnessPassed:
 		return "harness-verified"
-	case u.Regressed:
-		return "regressed"
 	default:
 		return "pending"
 	}
+}
+
+// renderPlanLine is the plan list entry both the worker and reviewer
+// packets show for a unit: the marker, the title, and for a regressed
+// unit the note that it passed before.
+func renderPlanLine(u PlanUnit) string {
+	line := fmt.Sprintf("- [%s] %s", unitStatus(u), NeutralizeSlot(u.Title))
+	if u.Regressed && !u.verified() {
+		line += fmt.Sprintf(" (regressed: passed before, now fails its %s check)", u.VerifyCheck)
+	}
+	return line + "\n"
 }
 
 // renderUnitFailure is the current-unit block's harness evidence

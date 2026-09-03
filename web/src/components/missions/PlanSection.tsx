@@ -1,17 +1,15 @@
 import type { PlanAssumption, PlanUnit } from '../../api/types'
 
 // unitBadge mirrors the harness's plan markers (missions.unitStatus,
-// D-094): verified (complete), harness-verified (awaiting review),
-// regressed (passed once, failing now), pending.
+// D-099): reviewed (a review approved it), harness-verified (harness
+// evidence, awaiting review), pending. A regressed unit is pending and
+// gets a separate regressed note.
 export function unitBadge(u: PlanUnit): { label: string; className: string } {
   if (u.passes) {
-    return { label: 'verified', className: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300' }
+    return { label: 'reviewed', className: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300' }
   }
   if (u.harness_passed) {
     return { label: 'harness-verified', className: 'bg-green-50 text-green-700 dark:bg-green-950/60 dark:text-green-400' }
-  }
-  if (u.regressed) {
-    return { label: 'regressed', className: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300' }
   }
   return { label: 'pending', className: 'bg-muted text-muted-foreground' }
 }
@@ -35,6 +33,9 @@ export function PlanSection({ units, assumptions }: { units: PlanUnit[]; assumpt
                   {badge.label}
                 </span>
                 <span>{u.title}</span>
+                {u.regressed && !u.passes && !u.harness_passed && (
+                  <span className="text-xs text-red-700 dark:text-red-400">regressed: passed before, now fails</span>
+                )}
               </div>
               {u.criteria && u.criteria.length > 0 && (
                 <ul className="ml-4 mt-0.5 list-disc space-y-0.5 pl-4 text-xs text-muted-foreground">

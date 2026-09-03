@@ -202,6 +202,9 @@ type WorkerVerdict struct {
 	Analysis string
 	Question string
 	Handoff  string
+	// Note is a delegated executor's result note (D-099, issue #533):
+	// the progress note when no handoff was given.
+	Note string
 	// FinalOutput is the mission_status call's own final_output argument
 	// — the deliverable a light-mission worker carries in the sentinel
 	// itself (D-069). Reasoning models routinely produce tool calls with

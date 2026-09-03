@@ -1431,6 +1431,9 @@ func renderReviewContent(p ReviewPacket) string {
 		}
 		for i, u := range p.Units {
 			fmt.Fprintf(&b, "\n### %s [%s]\n", NeutralizeSlot(u.Title), unitStatus(u))
+			if u.Regressed && !u.verified() {
+				b.WriteString("Regressed: this unit passed before and fails now.\n")
+			}
 			if len(u.Criteria) > 0 {
 				b.WriteString("Acceptance criteria:\n")
 				for _, c := range u.Criteria {
@@ -1462,7 +1465,7 @@ func renderReviewContent(p ReviewPacket) string {
 	if len(p.Plan.Units) > 0 {
 		b.WriteString("\nPlan:\n")
 		for _, u := range p.Plan.Units {
-			fmt.Fprintf(&b, "- [%s] %s\n", unitStatus(u), NeutralizeSlot(u.Title))
+			b.WriteString(renderPlanLine(u))
 		}
 	}
 	if open := OpenFindings(p.OpenFindings); len(open) > 0 {

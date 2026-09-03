@@ -1502,14 +1502,7 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	if err != nil {
 		return StepInput{}, err
 	}
-	// A handoff note is the worker's deliberate summary for the next
-	// session; prefer it over the raw turn text, which is often just
-	// tool chatter with no orientation value once the turn ends.
-	progressNote := text
-	if verdict.Handoff != "" {
-		progressNote = verdict.Handoff
-	}
-	if err := d.recordProgress(ctx, m.ID, progressNote); err != nil {
+	if err := d.recordProgress(ctx, m.ID, progressNote(verdict, text)); err != nil {
 		d.log.Warn("driver: record progress failed", "mission_id", m.ID, "error", err)
 	}
 
@@ -1522,7 +1515,10 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 			}
 			body := "mission " + m.ID + " iteration " + fmt.Sprint(m.Iteration)
 			msg := CommitMessage(unitTitle, m.Goal, body, d.effectiveCommitStyle(ctx, m))
-			if err := d.workspace.CommitUnit(ctx, wt, msg); err != nil {
+			switch err := d.workspace.CommitUnit(ctx, wt, msg); {
+			case errors.Is(err, errNothingToCommit):
+				d.log.Debug("driver: commit unit skipped, no changes", "mission_id", m.ID)
+			case err != nil:
 				d.log.Warn("driver: commit unit failed", "mission_id", m.ID, "error", err)
 			}
 		}
@@ -2020,6 +2016,22 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		p.SkillsIndex = d.skillsIndex(ctx, m.AgentID)
 	}
 	return p, nil
+}
+
+// progressNoteCap bounds a raw-turn-text progress note (D-099).
+const progressNoteCap = 2000
+
+// progressNote picks the note a worker turn leaves for the next
+// session (D-099, issue #533): the handoff, else a delegated result's
+// note, else the raw turn text capped at progressNoteCap.
+func progressNote(verdict WorkerVerdict, text string) string {
+	switch {
+	case verdict.Handoff != "":
+		return verdict.Handoff
+	case verdict.Note != "":
+		return verdict.Note
+	}
+	return truncate(text, progressNoteCap)
 }
 
 func (d *Driver) recordProgress(ctx context.Context, id, text string) error {

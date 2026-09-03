@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -342,6 +343,57 @@ func TestProvisionSelfInitRollbackAndCommitUnit(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatal("git log is empty after CommitUnit")
+	}
+}
+
+// TestCommitUnitSkipsWhenNothingChanged proves CommitUnit (D-099) makes
+// no commit on a clean worktree and reports errNothingToCommit, so HEAD
+// stays put and gitLogSince the base still counts only turns that
+// changed files; a later real change commits as before.
+func TestCommitUnitSkipsWhenNothingChanged(t *testing.T) {
+	requireGit(t)
+	w := newTestWorkspace(t)
+	ctx := context.Background()
+
+	_, worktree, _, _, _, err := w.Provision(ctx, "mission-noop", "Add a feature", "", "coding", "", "", nil, "", "")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	head := func() string {
+		out, err := runGit(ctx, worktree, "rev-parse", "HEAD")
+		if err != nil {
+			t.Fatalf("rev-parse HEAD: %v: %s", err, out)
+		}
+		return strings.TrimSpace(out)
+	}
+	base := head()
+
+	if err := w.CommitUnit(ctx, worktree, "noop turn"); !errors.Is(err, errNothingToCommit) {
+		t.Fatalf("CommitUnit on a clean worktree = %v, want errNothingToCommit", err)
+	}
+	if head() != base {
+		t.Fatal("CommitUnit on a clean worktree moved HEAD")
+	}
+
+	if err := os.WriteFile(filepath.Join(worktree, "unit1.txt"), []byte("unit 1 output"), 0o600); err != nil {
+		t.Fatalf("write unit file: %v", err)
+	}
+	if err := w.CommitUnit(ctx, worktree, "unit 1"); err != nil {
+		t.Fatalf("CommitUnit with changes: %v", err)
+	}
+	if head() == base {
+		t.Fatal("CommitUnit with changes did not move HEAD")
+	}
+	if err := w.CommitUnit(ctx, worktree, "noop turn"); !errors.Is(err, errNothingToCommit) {
+		t.Fatalf("second clean CommitUnit = %v, want errNothingToCommit", err)
+	}
+
+	log, err := gitLogSince(ctx, worktree, base)
+	if err != nil {
+		t.Fatalf("gitLogSince: %v", err)
+	}
+	if lines := strings.Split(strings.TrimSpace(log), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "unit 1") {
+		t.Fatalf("git log since base = %q, want exactly the one commit that changed files", log)
 	}
 }
 
