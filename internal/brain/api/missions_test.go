@@ -1970,3 +1970,112 @@ func TestPromoteKBReachesStore(t *testing.T) {
 		t.Fatalf("code=%d body=%s, want 400 from the degraded store", w.Code, w.Body.String())
 	}
 }
+
+// resolveRouteFixture fakes gwclient.ResolveRoute for the D-100 route
+// gate tests: "dead" has only unusable entries, "empty" has no chain,
+// "unknown" fails to resolve, everything else has one usable entry.
+func resolveRouteFixture(_ context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+	switch route {
+	case "dead":
+		return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
+			{ProviderName: "zai", Model: "glm-4.7", Usable: false, SkipReason: "cooling down until 12:00"},
+			{ProviderName: "openai", Model: "gpt-5", Usable: false, SkipReason: "disabled"},
+		}}, nil
+	case "empty":
+		return &gwclient.ResolvedRoute{Route: route}, nil
+	case "unknown":
+		return nil, errors.New("gwclient: gateway http 404: no such route")
+	case "harness-only-dead":
+		if harness != "" {
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{{Usable: false, SkipReason: "no executor entry"}}}, nil
+		}
+	}
+	return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{{ProviderName: "ok", Model: "m", Usable: true}}}, nil
+}
+
+// TestMissionsUnusableCreateRoute table-tests the create-time route
+// gate (D-100, issue #536) across phase axes and flows.
+func TestMissionsUnusableCreateRoute(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{log: discard(), resolveRoute: resolveRouteFixture}
+	for _, tc := range []struct {
+		name       string
+		req        createMissionRequest
+		flow       missions.Flow
+		wantRoute  string
+		wantReason string
+	}{
+		{name: "all usable", req: createMissionRequest{Route: "alive", ReviewRoute: "alive"}, flow: missions.FlowFull},
+		{name: "dead worker route", req: createMissionRequest{Route: "dead", ReviewRoute: "alive"}, flow: missions.FlowFull, wantRoute: "dead", wantReason: "cooling down until 12:00"},
+		{name: "dead review route", req: createMissionRequest{Route: "alive", ReviewRoute: "dead"}, flow: missions.FlowFull, wantRoute: "dead", wantReason: "cooling down until 12:00"},
+		{name: "dead plan route", req: createMissionRequest{Route: "alive", PlanRoute: "dead", ReviewRoute: "alive"}, flow: missions.FlowFull, wantRoute: "dead", wantReason: "cooling down until 12:00"},
+		{name: "empty chain never blocks", req: createMissionRequest{Route: "alive", PlanRoute: "empty", ReviewRoute: "alive"}, flow: missions.FlowFull},
+		{name: "dead escalation route", req: createMissionRequest{Route: "alive", ReviewRoute: "alive", EscalationRoute: "dead"}, flow: missions.FlowFull, wantRoute: "dead", wantReason: "cooling down until 12:00"},
+		{name: "light skips oversight and review", req: createMissionRequest{Route: "alive", PlanRoute: "dead", ReviewRoute: "dead"}, flow: missions.FlowLight},
+		{name: "no_prove skips review only", req: createMissionRequest{Route: "alive", ReviewRoute: "dead"}, flow: missions.FlowNoProve},
+		{name: "harness axis resolves separately", req: createMissionRequest{Route: "harness-only-dead", Harness: "claude-cli", ReviewRoute: "alive"}, flow: missions.FlowFull, wantRoute: "harness-only-dead", wantReason: "no executor entry"},
+		{name: "resolve error never blocks", req: createMissionRequest{Route: "unknown", ReviewRoute: "unknown"}, flow: missions.FlowFull},
+	} {
+		route, reason, unusable := h.unusableCreateRoute(context.Background(), tc.req, tc.flow)
+		if unusable != (tc.wantRoute != "") || route != tc.wantRoute || reason != tc.wantReason {
+			t.Errorf("%s: got (%q, %q, %v), want (%q, %q, %v)", tc.name, route, reason, unusable, tc.wantRoute, tc.wantReason, tc.wantRoute != "")
+		}
+	}
+	if _, _, unusable := (&missionAPI{log: discard()}).unusableCreateRoute(context.Background(), createMissionRequest{Route: "dead"}, missions.FlowFull); unusable {
+		t.Fatal("no gateway wiring must never block create")
+	}
+}
+
+// TestMissionsCreateRejectsUnusableRoute confirms the create handler
+// answers 400 route_unusable naming the route and first skip reason.
+func TestMissionsCreateRejectsUnusableRoute(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{log: discard(), resolveRoute: resolveRouteFixture}
+	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(`{"goal":"g","kind":"general","route":"alive","review_route":"dead"}`))
+	w := httptest.NewRecorder()
+	h.create(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	var body struct{ Error, Message string }
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Error != "route_unusable" || !strings.Contains(body.Message, `"dead"`) || !strings.Contains(body.Message, "cooling down until 12:00") {
+		t.Fatalf("body = %+v, want route_unusable naming the route and skip reason", body)
+	}
+}
+
+// TestMissionsRoutingValidation covers PATCH .../routing's request
+// checks that need no store: body shape, gateway wiring, and the
+// route's own resolution. The paused-only state gate lives in the
+// driver (TestDriverChangeRouting) and the integration test.
+func TestMissionsRoutingValidation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		h        *missionAPI
+		body     string
+		wantCode int
+		wantErr  string
+	}{
+		{"malformed body", &missionAPI{log: discard(), resolveRoute: resolveRouteFixture}, `{`, 400, "bad_request"},
+		{"missing review_route", &missionAPI{log: discard(), resolveRoute: resolveRouteFixture}, `{"review_route_model":"a/b"}`, 400, "bad_request"},
+		{"no gateway wiring", &missionAPI{log: discard()}, `{"review_route":"alive"}`, 404, "not_found"},
+		{"unknown route", &missionAPI{log: discard(), resolveRoute: resolveRouteFixture}, `{"review_route":"unknown"}`, 400, "unknown_route"},
+		{"unusable route", &missionAPI{log: discard(), resolveRoute: resolveRouteFixture}, `{"review_route":"dead"}`, 400, "route_unusable"},
+	} {
+		req := httptest.NewRequest("PATCH", "/v1/missions/abc/routing", strings.NewReader(tc.body))
+		req.SetPathValue("id", "abc")
+		w := httptest.NewRecorder()
+		tc.h.routing(w, req)
+		var body struct{ Error, Message string }
+		_ = json.NewDecoder(w.Body).Decode(&body)
+		if w.Code != tc.wantCode || body.Error != tc.wantErr {
+			t.Errorf("%s: got %d %q, want %d %q", tc.name, w.Code, body.Error, tc.wantCode, tc.wantErr)
+		}
+		if tc.wantErr == "route_unusable" && !strings.Contains(body.Message, "cooling down until 12:00") {
+			t.Errorf("%s: message = %q, want the first skip reason", tc.name, body.Message)
+		}
+	}
+}

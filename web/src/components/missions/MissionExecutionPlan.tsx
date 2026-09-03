@@ -1,4 +1,5 @@
 import type { ExecutionPlanEntry, ExecutionPlanPhase } from '../../api/types'
+import { unusablePhases, unusableReason } from './executionPlan'
 import { executorChoices } from './MissionForm'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { matchPreset } from '../settings/presets'
@@ -71,11 +72,11 @@ function modelPinFor(phaseKey: string, props: MissionExecutionPlanProps): string
   switch (phaseKey) {
     case 'discover':
     case 'plan':
-      return props.planRouteModel
+      return props.planRouteModel ?? ''
     case 'generate':
-      return props.routeModel
+      return props.routeModel ?? ''
     case 'prove':
-      return props.reviewRouteModel
+      return props.reviewRouteModel ?? ''
     default:
       return ''
   }
@@ -88,11 +89,11 @@ function onModelPinChangeFor(
   switch (phaseKey) {
     case 'discover':
     case 'plan':
-      return props.onPlanRouteModelChange
+      return props.onPlanRouteModelChange ?? null
     case 'generate':
-      return props.onRouteModelChange
+      return props.onRouteModelChange ?? null
     case 'prove':
-      return props.onReviewRouteModelChange
+      return props.onReviewRouteModelChange ?? null
     default:
       return null
   }
@@ -100,12 +101,17 @@ function onModelPinChangeFor(
 
 interface MissionExecutionPlanProps {
   plan: ExecutionPlanPhase[] | null
-  routeModel: string
-  onRouteModelChange: (v: string) => void
-  planRouteModel: string
-  onPlanRouteModelChange: (v: string) => void
-  reviewRouteModel: string
-  onReviewRouteModelChange: (v: string) => void
+  // title heads the table; the create form's default names the
+  // consequence of the form state, the detail page passes its own.
+  title?: string
+  // Pins and their change handlers are optional: omitted, a phase's
+  // resolved model renders read only (the mission detail page).
+  routeModel?: string
+  onRouteModelChange?: (v: string) => void
+  planRouteModel?: string
+  onPlanRouteModelChange?: (v: string) => void
+  reviewRouteModel?: string
+  onReviewRouteModelChange?: (v: string) => void
 }
 
 // MissionExecutionPlan renders the five-phase read-out of what a
@@ -113,15 +119,17 @@ interface MissionExecutionPlanProps {
 // the server-resolved consequence of the route/harness selects above
 // it, plus a per-phase model pin (D-078): a select over that phase's
 // entries, defaulting to "Auto (first usable)". Renders nothing while
-// the plan hasn't loaded yet.
+// the plan hasn't loaded yet. Phases whose route has no usable entry
+// get a warning line under the table (D-100).
 export function MissionExecutionPlan(props: MissionExecutionPlanProps) {
-  const { plan } = props
+  const { plan, title = 'This mission will run' } = props
   if (!plan || plan.length === 0) return null
   const byPhase = new Map(plan.map((p) => [p.phase, p]))
+  const unusable = unusablePhases(plan)
 
   return (
     <div className="rounded-lg border border-border p-4">
-      <div className="text-sm font-semibold">This mission will run</div>
+      <div className="text-sm font-semibold">{title}</div>
       <div className="mt-2 divide-y divide-border">
         {phaseOrder.map((key) => {
           const phase = byPhase.get(key)
@@ -129,6 +137,12 @@ export function MissionExecutionPlan(props: MissionExecutionPlanProps) {
           return <PhaseRow key={key} phase={phase} phaseKey={key} props={props} />
         })}
       </div>
+      {unusable.map((phase) => (
+        <p key={phase.phase} role="alert" className="mt-2 text-xs text-destructive">
+          Route {phase.route} has no usable provider for {phaseLabels[phase.phase] ?? phase.phase}:{' '}
+          {unusableReason(phase.entries)}
+        </p>
+      ))}
       <p className="mt-2 text-xs text-muted-foreground">
         Naming and memory extraction use the summarize route.
       </p>
@@ -202,7 +216,7 @@ function PhaseRow({
 // same pattern PhaseRow already used for display-only unusable counts.
 // The Auto item names the entry it actually resolves to when one is
 // selected and usable, so "Auto" isn't a mystery next to a picked model.
-function ModelPinSelect({
+export function ModelPinSelect({
   label,
   entries,
   pin,

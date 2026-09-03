@@ -51,6 +51,7 @@ import { envIcon } from '../icons/EnvIcons'
 import { type PendingAttachment } from '../Composer'
 import { MissionAttachments } from './MissionAttachments'
 import { GoalTextarea } from './MissionReferences'
+import { unusablePhases } from './executionPlan'
 import { MissionExecutionPlan } from './MissionExecutionPlan'
 
 type RepoSource = 'none' | 'github'
@@ -820,7 +821,8 @@ export function MissionForm({
         (!repeat || validCronShape(cron)) &&
         githubSourceReady &&
         githubDestinationReady &&
-        !attachments.some((a) => a.uploading)
+        !attachments.some((a) => a.uploading) &&
+        unusablePhases(executionPlan).length === 0
 
   const submitMission = async () => {
     let repoURL: string | undefined

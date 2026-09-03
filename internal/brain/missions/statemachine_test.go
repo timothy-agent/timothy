@@ -1269,3 +1269,57 @@ func TestStepReworkStallsOnUntouchedFile(t *testing.T) {
 		t.Fatalf("a minor finding must never stall the mission: %+v", minor.Next)
 	}
 }
+
+// TestStepRouteChange covers the review-route rewrite (D-100, issue
+// #536): legal only while paused, records old and new values, and
+// leaves the mission paused for the operator's separate resume.
+func TestStepRouteChange(t *testing.T) {
+	paused := StepState{Phase: PhaseProve, Status: StatusPaused, PauseReason: PauseInfra, ReviewRoute: "old", ReviewRouteModel: "zai/glm-4.7"}
+	got := Step(paused, StepInput{Input: InputRouteChange, ReviewRoute: "careful", ReviewRouteModel: "openai/gpt-5"}, DefaultConfig)
+	want := paused
+	want.ReviewRoute, want.ReviewRouteModel = "careful", "openai/gpt-5"
+	if !reflect.DeepEqual(got.Next, want) {
+		t.Fatalf("Next = %+v, want %+v", got.Next, want)
+	}
+	if len(got.Events) != 1 || got.Events[0].Kind != "mission.route_changed" {
+		t.Fatalf("Events = %+v, want exactly one mission.route_changed", got.Events)
+	}
+	wantPayload := map[string]any{"from_route": "old", "to_route": "careful", "from_model": "zai/glm-4.7", "to_model": "openai/gpt-5"}
+	if !reflect.DeepEqual(got.Events[0].Payload, wantPayload) {
+		t.Fatalf("payload = %+v, want %+v", got.Events[0].Payload, wantPayload)
+	}
+
+	approval := StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval, ReviewRoute: "old"}
+	if got := Step(approval, StepInput{Input: InputRouteChange, ReviewRoute: "careful"}, DefaultConfig); got.Next.ReviewRoute != "careful" || got.Next.PauseReason != PauseApproval {
+		t.Fatalf("plan-approval park: Next = %+v, want route changed and still parked on approval", got.Next)
+	}
+
+	for _, tc := range []struct {
+		name  string
+		state StepState
+		input StepInput
+	}{
+		{"working is a no-op", StepState{Phase: PhaseProve, Status: StatusWorking, ReviewRoute: "old"}, StepInput{Input: InputRouteChange, ReviewRoute: "careful"}},
+		{"terminal is a no-op", StepState{Phase: PhaseDone, Status: StatusDone, ReviewRoute: "old"}, StepInput{Input: InputRouteChange, ReviewRoute: "careful"}},
+		{"empty route is a no-op", paused, StepInput{Input: InputRouteChange}},
+	} {
+		got := Step(tc.state, tc.input, DefaultConfig)
+		if !reflect.DeepEqual(got.Next, tc.state) || len(got.Events) != 0 {
+			t.Fatalf("%s: got %+v / %+v, want unchanged state and no events", tc.name, got.Next, got.Events)
+		}
+	}
+}
+
+// TestStepReviewInfraFailureCarriesRoute confirms the pause payload
+// names the route when the input carries one (D-100) and omits the key
+// otherwise, so older readers see the same shape as before.
+func TestStepReviewInfraFailureCarriesRoute(t *testing.T) {
+	got := Step(StepState{Phase: PhaseProve, Status: StatusWorking}, StepInput{Input: InputReviewInfraFailure, Reason: "dead", Route: "careful"}, DefaultConfig)
+	if r, _ := got.Events[0].Payload["route"].(string); r != "careful" {
+		t.Fatalf("payload = %+v, want route=careful", got.Events[0].Payload)
+	}
+	got = Step(StepState{Phase: PhaseProve, Status: StatusWorking}, StepInput{Input: InputReviewInfraFailure, Reason: "dead"}, DefaultConfig)
+	if _, ok := got.Events[0].Payload["route"]; ok {
+		t.Fatalf("payload = %+v, want no route key", got.Events[0].Payload)
+	}
+}

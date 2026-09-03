@@ -1101,7 +1101,9 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	// units key is rewritten, and only when the plan has units, so a
 	// planless mission's '{}' stays untouched. last_review_commit (D-096)
 	// and last_review_at (D-098) sit next to it, written only when a
-	// rework recorded them.
+	// rework recorded them. review_route/review_route_model (D-100) are
+	// written only when the state carries a review route, so a
+	// hand-built StepState never blanks the row's routing.
 	var unitsJSON []byte
 	if len(t.Next.Units) > 0 {
 		if unitsJSON, err = json.Marshal(t.Next.Units); err != nil {
@@ -1119,12 +1121,15 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 			review_findings = $12, rework_rounds = $13,
 			plan = (CASE WHEN $14::jsonb IS NULL THEN plan ELSE jsonb_set(plan, '{units}', $14::jsonb) END)
 				|| CASE WHEN $15::text = '' THEN '{}'::jsonb ELSE jsonb_build_object('last_review_commit', $15::text) END
-				|| CASE WHEN $16::text = '' THEN '{}'::jsonb ELSE jsonb_build_object('last_review_at', $16::text) END
+				|| CASE WHEN $16::text = '' THEN '{}'::jsonb ELSE jsonb_build_object('last_review_at', $16::text) END,
+			review_route = CASE WHEN $17::text = '' THEN review_route ELSE $17::text END,
+			review_route_model = CASE WHEN $17::text = '' THEN review_route_model ELSE $18::text END
 		WHERE id = $1`,
 		id, string(t.Next.Phase), string(t.Next.Status), string(t.Next.PauseReason),
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,
 		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending, t.Next.ReplanUsed,
 		findingsJSON, t.Next.ReworkRounds, unitsJSON, t.Next.LastReviewCommit, lastReviewAt,
+		t.Next.ReviewRoute, t.Next.ReviewRouteModel,
 	); err != nil {
 		return fmt.Errorf("missions apply transition update: %w", err)
 	}

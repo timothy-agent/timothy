@@ -113,6 +113,8 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 	handle("GET /v1/missions/{id}", a.auth(http.HandlerFunc(h.get)))
 	handle("DELETE /v1/missions/{id}", a.auth(http.HandlerFunc(h.delete)))
 	handle("GET /v1/missions/{id}/events", a.auth(http.HandlerFunc(h.events)))
+	handle("GET /v1/missions/{id}/execution-plan", a.auth(http.HandlerFunc(h.missionExecutionPlan)))
+	handle("PATCH /v1/missions/{id}/routing", a.auth(http.HandlerFunc(h.routing)))
 	handle("POST /v1/missions/{id}/resume", a.auth(http.HandlerFunc(h.resume)))
 	handle("POST /v1/missions/{id}/note", a.auth(http.HandlerFunc(h.note)))
 	handle("POST /v1/missions/{id}/cancel", a.auth(http.HandlerFunc(h.cancel)))
@@ -265,6 +267,8 @@ func failMission(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusConflict, "not_terminal", err.Error())
 	case errors.Is(err, missions.ErrNotAwaitingApproval):
 		jsonError(w, http.StatusConflict, "not_awaiting_approval", err.Error())
+	case errors.Is(err, missions.ErrNotPaused):
+		jsonError(w, http.StatusConflict, "not_paused", err.Error())
 	case errors.Is(err, missions.ErrInvalidMission):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
@@ -778,6 +782,13 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			flow = string(missions.FlowFull)
 		}
 	}
+	// Route gate (D-100, issue #536): every phase axis this flow runs
+	// must resolve to at least one usable chain entry, else the mission
+	// would park on its first turn with the gateway's no_route error.
+	if route, reason, unusable := h.unusableCreateRoute(r.Context(), req, missions.Flow(flow)); unusable {
+		jsonError(w, http.StatusBadRequest, "route_unusable", fmt.Sprintf("route %q has no usable provider: %s", route, reason))
+		return
+	}
 	// Sources order matches packet.go's renderSources exactly (issue
 	// #481): parent-mission digest, then referenced picks, then
 	// attached PDFs, then the github clone source (order-independent,
@@ -830,6 +841,99 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		h.generateName(id, req.Goal)
 	}
 	writeJSON(w, http.StatusCreated, h.decorateTopModels(r.Context(), []missions.Mission{sanitizeMission(created)})[0])
+}
+
+// routeUnusable resolves route on the given axis (harness == "" is the
+// chat axis) and reports whether the chain has entries but none is
+// usable, with the first entry's skip reason. A resolve error, missing
+// gateway wiring, or an empty chain is never "unusable": the gate
+// blocks only on positive evidence of dead entries, same degrade
+// executorOptions applies.
+func (h *missionAPI) routeUnusable(ctx context.Context, route, harness string) (reason string, unusable bool) {
+	if route == "" || h.resolveRoute == nil {
+		return "", false
+	}
+	resolved, err := h.resolveRoute(ctx, route, harness)
+	if err != nil || resolved == nil || len(resolved.Entries) == 0 {
+		return "", false
+	}
+	reason = "no usable provider for this route"
+	for _, e := range resolved.Entries {
+		if e.Usable {
+			return "", false
+		}
+		if reason == "no usable provider for this route" && e.SkipReason != "" {
+			reason = e.SkipReason
+		}
+	}
+	return reason, true
+}
+
+// unusableCreateRoute walks the phase axes a create request's flow
+// actually runs (D-100): generate on the harness axis, discover/plan on
+// the oversight route and prove on the review route (chat axis) unless
+// the flow skips them, escalate when set. Returns the first route with
+// zero usable entries and its reason.
+func (h *missionAPI) unusableCreateRoute(ctx context.Context, req createMissionRequest, flow missions.Flow) (route, reason string, unusable bool) {
+	type axis struct{ route, harness string }
+	axes := []axis{{req.Route, req.Harness}}
+	if flow != missions.FlowLight {
+		oversight := req.PlanRoute
+		if oversight == "" {
+			oversight = req.Route
+		}
+		axes = append(axes, axis{oversight, ""})
+	}
+	if flow == missions.FlowFull || flow == "" {
+		axes = append(axes, axis{req.ReviewRoute, ""})
+	}
+	if req.EscalationRoute != "" {
+		axes = append(axes, axis{req.EscalationRoute, ""})
+	}
+	seen := map[axis]bool{}
+	for _, a := range axes {
+		if a.route == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		if reason, bad := h.routeUnusable(ctx, a.route, a.harness); bad {
+			return a.route, reason, true
+		}
+	}
+	return "", "", false
+}
+
+// routing handles PATCH /v1/missions/{id}/routing (D-100, issue #536):
+// rewrites a paused mission's review route and optional model pin. The
+// route must resolve with at least one usable chain entry on the chat
+// axis; the driver enforces the paused-only state gate (409 not_paused
+// otherwise). Worker and plan routes are never touched here.
+func (h *missionAPI) routing(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ReviewRoute      string `json:"review_route"`
+		ReviewRouteModel string `json:"review_route_model"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ReviewRoute == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON with a non-empty review_route field")
+		return
+	}
+	if h.resolveRoute == nil {
+		jsonError(w, http.StatusNotFound, "not_found", "route validation is not enabled")
+		return
+	}
+	if _, err := h.resolveRoute(r.Context(), body.ReviewRoute, ""); err != nil {
+		jsonError(w, http.StatusBadRequest, "unknown_route", fmt.Sprintf("route %q did not resolve: %s", body.ReviewRoute, err.Error()))
+		return
+	}
+	if reason, unusable := h.routeUnusable(r.Context(), body.ReviewRoute, ""); unusable {
+		jsonError(w, http.StatusBadRequest, "route_unusable", fmt.Sprintf("route %q has no usable provider: %s", body.ReviewRoute, reason))
+		return
+	}
+	if err := h.driver.ChangeRouting(r.Context(), r.PathValue("id"), body.ReviewRoute, body.ReviewRouteModel); err != nil {
+		failMission(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // referenceSourceKind maps a composer #-mention Reference.Kind to its
@@ -1367,17 +1471,70 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 	routeModel := q.Get("route_model")
 	planRouteModel := q.Get("plan_route_model")
 	reviewRouteModel := q.Get("review_route_model")
-	oversightModel := routeModel
-	if planRouteModel != "" {
-		oversightModel = planRouteModel
-	}
-	reviewModel := oversightModel
-	if reviewRouteModel != "" {
-		reviewModel = reviewRouteModel
-	}
 
 	ctx := r.Context()
 	base, baseSource := h.baseRoute(ctx, kind, route, agentID)
+	harness, harnessSource := h.resolveHarness(ctx, kind, explicitHarness, agentID)
+	writeJSON(w, http.StatusOK, map[string]any{"phases": h.buildExecutionPlan(ctx, executionPlanInput{
+		route: base, routeSource: baseSource, planRoute: planRoute, reviewRoute: reviewRoute, escalationRoute: escalationRoute,
+		harness: harness, harnessSource: harnessSource,
+		routeModel: routeModel, planRouteModel: planRouteModel, reviewRouteModel: reviewRouteModel, light: light,
+	})})
+}
+
+// executionPlanInput is the resolved route/harness set buildExecutionPlan
+// renders: the create preview fills it from query params through the
+// create-time precedence chain, the per-mission view straight from the
+// row (D-100).
+type executionPlanInput struct {
+	route, routeSource                           string
+	planRoute, reviewRoute, escalationRoute      string
+	harness, harnessSource                       string
+	routeModel, planRouteModel, reviewRouteModel string
+	light                                        bool
+}
+
+// missionExecutionPlan serves GET /v1/missions/{id}/execution-plan
+// (D-100, issue #536): the same five-phase read-out as the create
+// preview, resolved from the mission row's own snapshotted routes so
+// the detail page shows unusable entries per phase as they stand now.
+func (h *missionAPI) missionExecutionPlan(w http.ResponseWriter, r *http.Request) {
+	if h.resolveRoute == nil {
+		jsonError(w, http.StatusNotFound, "not_found", "execution plan preview is not enabled")
+		return
+	}
+	m, err := h.store.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failMission(w, err)
+		return
+	}
+	harnessSource := "native"
+	if m.Harness != "" {
+		harnessSource = "mission"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"phases": h.buildExecutionPlan(r.Context(), executionPlanInput{
+		route: m.Route, routeSource: "mission", planRoute: m.PlanRoute, reviewRoute: m.ReviewRoute, escalationRoute: m.EscalationRoute,
+		harness: m.Harness, harnessSource: harnessSource,
+		routeModel: m.RouteModel, planRouteModel: m.PlanRouteModel, reviewRouteModel: m.ReviewRouteModel,
+		light: m.Flow == missions.FlowLight,
+	})})
+}
+
+// buildExecutionPlan resolves every phase (discover, plan, generate,
+// prove, escalate) for one route/harness set.
+func (h *missionAPI) buildExecutionPlan(ctx context.Context, in executionPlanInput) []executionPlanPhase {
+	base, baseSource := in.route, in.routeSource
+	planRoute, reviewRoute, escalationRoute := in.planRoute, in.reviewRoute, in.escalationRoute
+	harness, harnessSource := in.harness, in.harnessSource
+	routeModel, light := in.routeModel, in.light
+	oversightModel := routeModel
+	if in.planRouteModel != "" {
+		oversightModel = in.planRouteModel
+	}
+	reviewModel := oversightModel
+	if in.reviewRouteModel != "" {
+		reviewModel = in.reviewRouteModel
+	}
 
 	// oversightRoute mirrors runner.go's own helper: plan_route when
 	// set, else the base route.
@@ -1386,7 +1543,6 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 		oversight, oversightSource = planRoute, "explicit"
 	}
 
-	harness, harnessSource := h.resolveHarness(ctx, kind, explicitHarness, agentID)
 	executeAxis := "native"
 	if harness != "" {
 		executeAxis = "harness"
@@ -1453,7 +1609,7 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"phases": phases})
+	return phases
 }
 
 // skipReasonIf returns lightReason when skipped is true, else

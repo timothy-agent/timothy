@@ -194,6 +194,10 @@ const (
 	// Status to waiting_for_input); the difference is ask_user's answer
 	// resolves through Store.AnswerPendingInput, not a plain resume.
 	InputAskUser Input = "ask_user"
+	// InputRouteChange rewrites a paused mission's review route and
+	// model pin (D-100, issue #536): valid only while Status is paused
+	// (any pause reason, plan approval included); a no-op anywhere else.
+	InputRouteChange Input = "route_change"
 )
 
 // StepState is the state-machine-relevant slice of a Mission — Step
@@ -268,6 +272,12 @@ type StepState struct {
 	// LastReviewAt is when the last rework round closed (D-098): the
 	// findings-only packet renders only progress notes written after it.
 	LastReviewAt time.Time
+	// ReviewRoute/ReviewRouteModel mirror the mission row's review
+	// routing (D-100): carried so ApplyTransition writes them back
+	// unchanged on every transition and InputRouteChange can rewrite
+	// them. An empty ReviewRoute leaves both columns untouched.
+	ReviewRoute      string
+	ReviewRouteModel string
 }
 
 // neverVisitsPlan reports whether s's mission can never be in
@@ -319,6 +329,14 @@ type StepInput struct {
 	// by applyVerification whatever the input is, so harness evidence
 	// is never lost to the transition that follows it.
 	Verified []UnitVerification
+	// Route names the route a failed review turn ran on (D-100), set on
+	// InputReviewInfraFailure when the gateway found no usable provider;
+	// empty otherwise.
+	Route string
+	// ReviewRoute/ReviewRouteModel are the new values an
+	// InputRouteChange writes (D-100).
+	ReviewRoute      string
+	ReviewRouteModel string
 }
 
 // EventDraft is one event Step decided must be appended; the Store
@@ -431,9 +449,13 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 	case InputReviewRework:
 		return stepReviewRework(s, in, cfg)
 	case InputReviewInfraFailure:
+		payload := map[string]any{"reason": string(PauseInfra), "detail": in.Reason}
+		if in.Route != "" {
+			payload["route"] = in.Route
+		}
 		return Transition{
 			Next:   withPause(s, PauseInfra),
-			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "detail": in.Reason}}},
+			Events: []EventDraft{{Kind: "mission.paused", Payload: payload}},
 		}
 	case InputReviewBudget:
 		return Transition{
@@ -463,6 +485,8 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 		return stepPlanReplan(s, in)
 	case InputPlanRediscover:
 		return stepPlanRediscover(s)
+	case InputRouteChange:
+		return stepRouteChange(s, in)
 	default:
 		// Unrecognized input: no-op rather than a panic or a silent
 		// wrong transition — the driver logs this as a bug elsewhere.
@@ -622,6 +646,24 @@ func stepPlanRediscover(s StepState) Transition {
 	s.Iteration = 0
 	s.ConsecutiveFailures = 0
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.rediscover_requested", Payload: map[string]any{}}}}
+}
+
+// stepRouteChange rewrites the review route and model pin of a paused
+// mission (D-100, issue #536). The mission stays paused: the operator
+// resumes separately, and the next review round reads the new route
+// off the row. Any other status is a no-op (the API layer already
+// rejects it with 409).
+func stepRouteChange(s StepState, in StepInput) Transition {
+	if s.Phase.Terminal() || s.Status != StatusPaused || in.ReviewRoute == "" {
+		return Transition{Next: s}
+	}
+	payload := map[string]any{
+		"from_route": s.ReviewRoute, "to_route": in.ReviewRoute,
+		"from_model": s.ReviewRouteModel, "to_model": in.ReviewRouteModel,
+	}
+	s.ReviewRoute = in.ReviewRoute
+	s.ReviewRouteModel = in.ReviewRouteModel
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.route_changed", Payload: payload}}}
 }
 
 // stepWorkerFailed counts consecutive failures toward the backoff

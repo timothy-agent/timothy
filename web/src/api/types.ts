@@ -1030,6 +1030,16 @@ export interface MissionSteeredPayload {
   phase?: string
 }
 
+// MissionRouteChangedPayload is mission.route_changed's payload
+// (D-100): the review route and model pin before and after an
+// operator's routing PATCH on a paused mission.
+export interface MissionRouteChangedPayload {
+  from_route: string
+  to_route: string
+  from_model?: string
+  to_model?: string
+}
+
 // MissionTurnPayload is mission.turn's payload: one event per phase
 // run (driver.go's Advance), recording wall time and the StepInput that
 // resulted regardless of which phase actually ran.

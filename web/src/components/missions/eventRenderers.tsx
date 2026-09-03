@@ -10,6 +10,7 @@ import type {
   MissionPermissionDeniedPayload,
   MissionPROpenedPayload,
   MissionRetryPayload,
+  MissionRouteChangedPayload,
   MissionSteeredPayload,
   MissionToolCallPayload,
   MissionTurnPayload,
@@ -195,6 +196,16 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return (
       <span className="text-amber-400">
         Operator note{phase ? ` (${phase})` : ''}: {note}
+      </span>
+    )
+  },
+  'mission.route_changed': (p) => {
+    const { from_route, to_route, from_model, to_model } = p as MissionRouteChangedPayload
+    const pin = (from_model ?? '') !== (to_model ?? '') ? ` · model ${from_model || 'auto'} → ${to_model || 'auto'}` : ''
+    return (
+      <span className="text-amber-400">
+        Review route changed: {from_route || 'none'} → {to_route}
+        {pin}
       </span>
     )
   },

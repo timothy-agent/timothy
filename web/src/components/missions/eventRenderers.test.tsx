@@ -454,3 +454,21 @@ describe('unknown event kind fallback', () => {
     expect(renderEvent(event({}, 'some.future.kind'))).toBe('some.future.kind')
   })
 })
+
+describe('mission.route_changed rendering', () => {
+  it('names the old and new review route', () => {
+    render(<div>{renderEvent(event({ from_route: 'default', to_route: 'careful' }, 'mission.route_changed'))}</div>)
+    expect(screen.getByText('Review route changed: default → careful')).toHaveClass('text-amber-400')
+  })
+
+  it('appends the model pin change when it differs', () => {
+    render(
+      <div>
+        {renderEvent(
+          event({ from_route: 'default', to_route: 'careful', from_model: '', to_model: 'openai/gpt-5' }, 'mission.route_changed'),
+        )}
+      </div>,
+    )
+    expect(screen.getByText('Review route changed: default → careful · model auto → openai/gpt-5')).toBeInTheDocument()
+  })
+})

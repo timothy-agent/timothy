@@ -637,4 +637,7 @@ var (
 	// (D-087, issue #456): approve/replan/rediscover are only valid
 	// while the mission is parked on PauseApproval.
 	ErrNotAwaitingApproval = errors.New("mission is not awaiting plan approval")
+	// ErrNotPaused guards the routing PATCH (D-100, issue #536): the
+	// review route is editable only while the mission is paused.
+	ErrNotPaused = errors.New("mission is not paused")
 )

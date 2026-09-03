@@ -1515,6 +1515,28 @@ export async function rediscoverMission(id: string): Promise<void> {
   await request<void>(`/v1/missions/${id}/rediscover`, { method: 'POST' })
 }
 
+// getMissionDetailExecutionPlan resolves an existing mission's phases
+// from its own snapshotted routes (D-100), the detail page's read-only
+// counterpart to getMissionExecutionPlan.
+export async function getMissionDetailExecutionPlan(id: string): Promise<ExecutionPlanPhase[]> {
+  const { phases } = await request<{ phases: ExecutionPlanPhase[] }>(`/v1/missions/${id}/execution-plan`)
+  return phases ?? []
+}
+
+// patchMissionRouting rewrites a paused mission's review route and
+// optional model pin (D-100). The server answers 409 not_paused for a
+// running or finished mission and 400 route_unusable when the route
+// has no usable chain entry.
+export async function patchMissionRouting(
+  id: string,
+  input: { review_route: string; review_route_model?: string },
+): Promise<void> {
+  await request<void>(`/v1/missions/${id}/routing`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  })
+}
+
 // answerMissionQuestion answers a mission parked on ask_user
 // (pending_input): mcq/yes_no answers must match the question's own
 // options, open accepts any non-empty text, the server validates

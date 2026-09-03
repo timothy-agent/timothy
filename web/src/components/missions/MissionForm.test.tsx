@@ -1810,3 +1810,37 @@ describe('MissionForm: execution plan', () => {
     )
   })
 })
+
+describe('MissionForm: unusable route gate', () => {
+  it('warns and blocks submit when a phase route has no usable entry', async () => {
+    const plan = fivePhases.map((p) =>
+      p.phase === 'prove'
+        ? {
+            ...p,
+            route: 'careful',
+            entries: [
+              {
+                provider_name: 'OpenAI',
+                driver: 'openaicompat',
+                kind: 'chat',
+                base_url: 'https://api.openai.com/v1',
+                model: 'gpt-5-mini',
+                usable: false,
+                skip_reason: 'cooling down until 12:00',
+                selected: false,
+              },
+            ],
+          }
+        : p,
+    )
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Route careful has no usable provider for Prove: cooling down until 12:00',
+    )
+    expect(screen.getByRole('button', { name: 'Create mission' })).toBeDisabled()
+    expect(createMission).not.toHaveBeenCalled()
+  })
+})

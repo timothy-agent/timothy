@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1966,4 +1967,79 @@ func TestMissionsPromoteKB(t *testing.T) {
 			t.Fatalf("ingest calls = %d, want 2 (one per promote)", ingest.callCount())
 		}
 	})
+}
+
+// TestMissionsRoutingPatchStateGate covers PATCH .../routing end to end
+// (D-100, issue #536): 409 not_paused while working, 204 while paused
+// with the row and a mission.route_changed event updated, and a later
+// hand-built transition leaving the new routing in place.
+func TestMissionsRoutingPatchStateGate(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+
+	id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission routing", Kind: "general", Route: "worker", ReviewRoute: "old", ReviewRouteModel: "a/b"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := store.ApplyTransition(ctx, id, missions.Transition{
+		Next: missions.StepState{Phase: missions.PhaseProve, Status: missions.StatusWorking},
+	}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, resolveRouteFixture, nil, nil, nil, nil, "", nil, nil, nil, nil)
+
+	patch := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("PATCH", "/v1/missions/"+id+"/routing", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w
+	}
+
+	if w := patch(`{"review_route":"careful"}`); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "not_paused") {
+		t.Fatalf("PATCH while working = %d %s, want 409 not_paused", w.Code, w.Body.String())
+	}
+	got, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ReviewRoute != "old" || got.ReviewRouteModel != "a/b" {
+		t.Fatalf("routing after hand-built transition = %q/%q, want old/a/b untouched", got.ReviewRoute, got.ReviewRouteModel)
+	}
+
+	if err := store.ApplyTransition(ctx, id, missions.Transition{
+		Next: missions.StepState{Phase: missions.PhaseProve, Status: missions.StatusPaused, PauseReason: missions.PauseInfra},
+	}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+	if w := patch(`{"review_route":"careful","review_route_model":"ok/m"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("PATCH while paused = %d %s, want 204", w.Code, w.Body.String())
+	}
+	got, err = store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ReviewRoute != "careful" || got.ReviewRouteModel != "ok/m" || got.Route != "worker" || got.Status != missions.StatusPaused {
+		t.Fatalf("mission after PATCH = route %q review %q/%q status %q, want worker/careful/ok/m/paused", got.Route, got.ReviewRoute, got.ReviewRouteModel, got.Status)
+	}
+	events, err := store.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var payload map[string]string
+	for _, e := range events {
+		if e.Kind == "mission.route_changed" {
+			if err := json.Unmarshal(e.Payload, &payload); err != nil {
+				t.Fatalf("decode mission.route_changed payload: %v", err)
+			}
+		}
+	}
+	want := map[string]string{"from_route": "old", "to_route": "careful", "from_model": "a/b", "to_model": "ok/m"}
+	if !reflect.DeepEqual(payload, want) {
+		t.Fatalf("mission.route_changed payload = %v, want %v", payload, want)
+	}
 }

@@ -123,6 +123,9 @@ func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition
 	m.ConsecutiveFailures, m.LastGapFingerprint, m.StallCount = t.Next.ConsecutiveFailures, t.Next.LastGapFingerprint, t.Next.StallCount
 	m.ReplanUsed = t.Next.ReplanUsed
 	m.ReviewFindings, m.ReworkRounds = t.Next.ReviewFindings, t.Next.ReworkRounds
+	if t.Next.ReviewRoute != "" {
+		m.ReviewRoute, m.ReviewRouteModel = t.Next.ReviewRoute, t.Next.ReviewRouteModel
+	}
 	if len(t.Next.Units) > 0 {
 		m.Plan.Units = t.Next.Units
 	}
@@ -3928,5 +3931,84 @@ func TestGatewayReviewWindow(t *testing.T) {
 	failing := GatewayReviewWindow(resolve, func(context.Context) (map[string]int, error) { return nil, errors.New("down") })
 	if got := failing(context.Background(), "review", "big"); got != 0 {
 		t.Fatalf("window with the catalog down = %d, want 0", got)
+	}
+}
+
+// TestDriverChangeRouting covers the routing PATCH's driver half (D-100,
+// issue #536): paused missions get the new review route and a
+// mission.route_changed event, anything else is refused untouched.
+func TestDriverChangeRouting(t *testing.T) {
+	store := newFakeStore()
+	store.put("paused", Mission{ID: "paused", Phase: PhaseProve, Status: StatusPaused, PauseReason: PauseInfra, Route: "worker", ReviewRoute: "old", ReviewRouteModel: "a/b"})
+	store.put("working", Mission{ID: "working", Phase: PhaseProve, Status: StatusWorking, ReviewRoute: "old"})
+	store.put("done", Mission{ID: "done", Phase: PhaseDone, Status: StatusDone, ReviewRoute: "old"})
+	d := testDriver(store, nil)
+	ctx := context.Background()
+
+	if err := d.ChangeRouting(ctx, "paused", "careful", ""); err != nil {
+		t.Fatalf("ChangeRouting(paused): %v", err)
+	}
+	got := store.missions["paused"]
+	if got.ReviewRoute != "careful" || got.ReviewRouteModel != "" || got.Route != "worker" || got.Status != StatusPaused {
+		t.Fatalf("mission after change = %+v, want review_route=careful, cleared pin, worker route and pause untouched", got)
+	}
+	events := store.events["paused"]
+	if len(events) != 1 || events[0].Kind != "mission.route_changed" || !strings.Contains(string(events[0].Payload), `"from_route":"old"`) || !strings.Contains(string(events[0].Payload), `"to_route":"careful"`) {
+		t.Fatalf("events = %+v, want one mission.route_changed with old and new route", events)
+	}
+
+	if err := d.ChangeRouting(ctx, "working", "careful", ""); !errors.Is(err, ErrNotPaused) {
+		t.Fatalf("ChangeRouting(working) = %v, want ErrNotPaused", err)
+	}
+	if err := d.ChangeRouting(ctx, "done", "careful", ""); !errors.Is(err, ErrTerminal) {
+		t.Fatalf("ChangeRouting(done) = %v, want ErrTerminal", err)
+	}
+	if store.missions["working"].ReviewRoute != "old" || len(store.events["working"]) != 0 {
+		t.Fatalf("working mission touched: %+v / %+v", store.missions["working"], store.events["working"])
+	}
+}
+
+// TestDriverReviewRouteSkip confirms a prove turn's no usable provider
+// failure is translated into the review route's name and first skip
+// reason (D-100), and that any other error, or a usable route, leaves
+// the raw error alone.
+func TestDriverReviewRouteSkip(t *testing.T) {
+	store := newFakeStore()
+	d := testDriver(store, nil)
+	m := Mission{Route: "worker", PlanRoute: "plan", ReviewRoute: "careful"}
+	noRoute := errors.New(`gwclient: gateway http 502: {"error":"no_route","message":"no usable provider for route \"careful\""}`)
+
+	if _, _, ok := d.reviewRouteSkip(context.Background(), m, noRoute); ok {
+		t.Fatal("no resolver wired: want ok=false")
+	}
+	d.SetRouteResolver(func(_ context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+		if harness != "" {
+			t.Fatalf("resolve harness = %q, want the chat axis", harness)
+		}
+		switch route {
+		case "careful":
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
+				{ProviderName: "zai", Model: "glm", Usable: false, SkipReason: "cooling down until 12:00"},
+				{ProviderName: "openai", Model: "gpt", Usable: false, SkipReason: "disabled"},
+			}}, nil
+		case "alive":
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{{Usable: true}}}, nil
+		}
+		return nil, errors.New("unknown route")
+	})
+	route, skip, ok := d.reviewRouteSkip(context.Background(), m, noRoute)
+	if !ok || route != "careful" || skip != "cooling down until 12:00" {
+		t.Fatalf("reviewRouteSkip = %q, %q, %v; want careful, first skip reason, true", route, skip, ok)
+	}
+	if _, _, ok := d.reviewRouteSkip(context.Background(), m, errors.New("context deadline exceeded")); ok {
+		t.Fatal("unrelated error: want ok=false")
+	}
+	m.ReviewRoute = "alive"
+	if _, _, ok := d.reviewRouteSkip(context.Background(), m, noRoute); ok {
+		t.Fatal("route with a usable entry: want ok=false")
+	}
+	m.ReviewRoute = ""
+	if route, _, ok := d.reviewRouteSkip(context.Background(), m, noRoute); ok || route != "" {
+		t.Fatalf("unknown route resolve error: got %q, %v; want ok=false", route, ok)
 	}
 }

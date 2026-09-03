@@ -169,6 +169,10 @@ type Driver struct {
 	// SetReviewWindow); nil or 0 means unknown, reviewByteBudget's
 	// fallback applies.
 	reviewWindow func(ctx context.Context, route, model string) int
+	// resolveRoute names the dead chain entry when a review turn fails
+	// on the gateway's no usable provider error (D-100); nil leaves the
+	// pause detail as the raw error.
+	resolveRoute routeResolver
 
 	// reviewTokenCeiling reads the per-mission review input token cap
 	// (D-097, see SetReviewTokenCeiling); nil or 0 disables the check.
@@ -435,6 +439,12 @@ func (d *Driver) SetLocation(loc func(ctx context.Context) *time.Location) {
 // setter for the same reason SetLocation is.
 func (d *Driver) SetReviewWindow(fn func(ctx context.Context, route, model string) int) {
 	d.reviewWindow = fn
+}
+
+// SetRouteResolver wires gwclient.ResolveRoute for review-route pause
+// details (D-100).
+func (d *Driver) SetRouteResolver(fn routeResolver) {
+	d.resolveRoute = fn
 }
 
 // SetReviewTokenCeiling wires the settings-backed review token ceiling
@@ -1002,6 +1012,10 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
 		case m.Phase == PhaseProve:
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
+			if route, skip, ok := d.reviewRouteSkip(ctx, m, err); ok {
+				in.Route = route
+				in.Reason = fmt.Sprintf("review route %q has no usable provider: %s", route, skip)
+			}
 		case m.Phase == PhaseResult:
 			// runResult itself never returns an error (each hook's own
 			// failure is folded into the result, see runResult); this
@@ -1189,6 +1203,63 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 	return nil
 }
 
+// isNoRouteError reports whether err is the gateway's no usable
+// provider failure, as gwclient surfaces it (an HTTP 502 body carrying
+// the no_route code, or the router's own message).
+func isNoRouteError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, `"no_route"`) || strings.Contains(msg, "no usable provider")
+}
+
+// reviewRouteSkip names the review route a failed prove turn ran on
+// and the first chain entry's skip reason (D-100), so the pause detail
+// says which entry is dead. ok is false when err is not the gateway's
+// no usable provider error or the route cannot be resolved.
+func (d *Driver) reviewRouteSkip(ctx context.Context, m Mission, err error) (route, skip string, ok bool) {
+	if d.resolveRoute == nil || !isNoRouteError(err) {
+		return "", "", false
+	}
+	route = reviewRoute(m)
+	resolved, rerr := d.resolveRoute(ctx, route, "")
+	if rerr != nil || resolved == nil {
+		return "", "", false
+	}
+	skip = "route has no chain entries"
+	for _, e := range resolved.Entries {
+		if e.Usable {
+			return "", "", false
+		}
+		if e.SkipReason != "" {
+			skip = e.SkipReason
+			break
+		}
+	}
+	return route, skip, true
+}
+
+// ChangeRouting rewrites a paused mission's review route and model pin
+// (D-100, issue #536): the API layer's routing PATCH calls this after
+// validating the route resolves. ErrNotPaused for any other status,
+// mapped to 409 by the API layer. The mission stays paused; resume is
+// a separate operator action.
+func (d *Driver) ChangeRouting(ctx context.Context, id, reviewRoute, reviewRouteModel string) error {
+	m, err := d.store.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("driver: change routing: %w", err)
+	}
+	if m.Phase.Terminal() {
+		return ErrTerminal
+	}
+	if m.Status != StatusPaused {
+		return ErrNotPaused
+	}
+	t := Step(d.toStepState(ctx, m), StepInput{Input: InputRouteChange, ReviewRoute: reviewRoute, ReviewRouteModel: reviewRouteModel}, d.cfg)
+	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
+		return fmt.Errorf("driver: change routing: apply transition: %w", err)
+	}
+	return nil
+}
+
 // DecidePlan applies one of the three plan-approval verbs (D-087,
 // issue #456) to a mission parked on PauseApproval: the API layer's
 // approve/replan/rediscover endpoints call this, never the model.
@@ -1274,6 +1345,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 		AutoApprovePlan: m.AutoApprovePlan, Flow: m.Flow,
 		ReviewFindings: m.ReviewFindings, ReworkRounds: m.ReworkRounds,
 		LastReviewCommit: m.Plan.LastReviewCommit, LastReviewAt: m.Plan.LastReviewAt,
+		ReviewRoute: m.ReviewRoute, ReviewRouteModel: m.ReviewRouteModel,
 	}
 }
 
