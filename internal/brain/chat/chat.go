@@ -1012,13 +1012,17 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if err != nil {
 		return sessionID, nil, err
 	}
-	// needsTitle, not "is this literally message #1": a session whose
-	// earlier turns all failed (chain exhausted, a dropped stream) has
-	// never had a live shot at autoTitle, since persistTurn only calls
-	// it on a completed turn. Keying off "no PRIOR turn ever completed"
-	// instead of "no PRIOR message exists" makes titling retry on every
-	// later message too, until one finally succeeds.
-	needsTitle := !hasCompletedTurn(events)
+	// needsTitle keys on the session's title staying empty, not on
+	// turn history: SetTitleIfEmpty only ever writes once, so an empty
+	// title means no title call has succeeded yet, whether because no
+	// turn has completed, every turn so far failed, or the title call
+	// itself timed out (issue #552, #555). Mission bookkeeping sessions
+	// never get a chat title.
+	meta, err := s.log.Get(ctx, sessionID)
+	if err != nil {
+		return sessionID, nil, err
+	}
+	needsTitle := meta.Title == "" && !meta.Mission
 	modelHint := req.ModelHint
 	route, modelHint = s.pinSensitiveRoute(ctx, events, route, modelHint)
 
@@ -1248,7 +1252,11 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 	if !ok {
 		return sessionID, nil, fmt.Errorf("chat: %w: session has no retryable turn", ErrNoRetryableTurn)
 	}
-	needsTitle := !hasCompletedTurn(events)
+	meta, err := s.log.Get(ctx, sessionID)
+	if err != nil {
+		return sessionID, nil, err
+	}
+	needsTitle := meta.Title == "" && !meta.Mission
 
 	profile := agents.Agent{Memory: true}
 	if s.agents != nil {
@@ -1948,21 +1956,6 @@ func collapseRepeatedTail(s string) string {
 		return s
 	}
 	return t
-}
-
-// hasCompletedTurn reports whether events carries at least one
-// assistant_turn: the only kind persistTurn appends on sawDone.
-// Gates auto-title: a session with no completed turn yet has never had
-// a live shot at being titled (a turn that only ever failed skips
-// autoTitle entirely), so retitling keeps being attempted on every
-// later message or retry until one finally succeeds.
-func hasCompletedTurn(events []session.Event) bool {
-	for _, ev := range events {
-		if ev.Kind == session.KindAssistantTurn {
-			return true
-		}
-	}
-	return false
 }
 
 // lastUserMessage returns the session's last user_message when it has

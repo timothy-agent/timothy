@@ -41,10 +41,13 @@ type fakeLog struct {
 	// knowledgeErr, when set, makes Knowledge fail instead of reading
 	// the map: for the session-knowledge-lookup-failure fallback test.
 	knowledgeErr error
+	// missions marks a session as mission bookkeeping, mirroring the
+	// session store's Meta.Mission.
+	missions map[string]bool
 }
 
 func newFakeLog() *fakeLog {
-	return &fakeLog{events: map[string][]session.Event{}, titles: map[string]string{}, category: map[string]string{}, knowledge: map[string][]string{}}
+	return &fakeLog{events: map[string][]session.Event{}, titles: map[string]string{}, category: map[string]string{}, knowledge: map[string][]string{}, missions: map[string]bool{}}
 }
 
 func (f *fakeLog) Create(_ context.Context, title string) (string, error) {
@@ -59,7 +62,7 @@ func (f *fakeLog) Create(_ context.Context, title string) (string, error) {
 func (f *fakeLog) Get(_ context.Context, id string) (session.Meta, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return session.Meta{ID: id, Title: f.titles[id]}, nil
+	return session.Meta{ID: id, Title: f.titles[id], Mission: f.missions[id]}, nil
 }
 
 func (f *fakeLog) Events(_ context.Context, id string) ([]session.Event, error) {
@@ -664,11 +667,9 @@ func TestChatAutoTitlesFirstExchange(t *testing.T) {
 
 // A session whose first exchange fails outright (chain exhausted, a
 // dropped stream) never reaches autoTitle: persistTurn returns before
-// it on !sawDone. The old firstExchange gate then locked the session
-// out of titling forever: it only ever fired once, keyed on "is this
-// message #1", which the SECOND message already fails. hasCompletedTurn
-// fixes this by keying on "has ANY turn completed yet" instead, so
-// titling keeps being retried across failed attempts until one lands.
+// it on !sawDone, so the title stays empty. Keying needsTitle on the
+// title staying empty, rather than on turn history, means titling
+// keeps being retried across failed attempts until one lands.
 func TestChatRetriesAutoTitleUntilATurnCompletes(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
@@ -713,6 +714,85 @@ func TestChatRetriesAutoTitleUntilATurnCompletes(t *testing.T) {
 	log.mu.Unlock()
 	if title != "second answer" {
 		t.Fatalf("title = %q, want the second (first-completed) exchange's text", title)
+	}
+}
+
+// A session can carry a completed turn yet still have an empty title:
+// the title call itself timed out (issue #552). needsTitle must key on
+// the empty title, not on turn history, so this session isn't stuck
+// untitled forever.
+func TestChatTitlesUntitledSessionWithCompletedTurns(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("hello there")}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat 1: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool {
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		return log.titles["s1"] != ""
+	})
+
+	// Simulate the title call having timed out: the turn completed but
+	// no title landed.
+	log.mu.Lock()
+	log.titles["s1"] = ""
+	log.mu.Unlock()
+
+	gw.mu.Lock()
+	gw.events = okEvents("second answer")
+	gw.mu.Unlock()
+	_, ch, err = s.Chat(t.Context(), Request{SessionID: "s1", Message: "again"})
+	if err != nil {
+		t.Fatalf("Chat 2: %v", err)
+	}
+	drain(t, ch)
+
+	waitFor(t, func() bool {
+		log.mu.Lock()
+		defer log.mu.Unlock()
+		return log.titles["s1"] != ""
+	})
+	log.mu.Lock()
+	title := log.titles["s1"]
+	log.mu.Unlock()
+	if title != "second answer" {
+		t.Fatalf("title = %q, want a retitle after the earlier title call timed out", title)
+	}
+}
+
+// Mission bookkeeping sessions are not chat: they must never get a
+// title call.
+func TestChatSkipsTitleForMissionSession(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	log.missions["s1"] = true
+	gw := &fakeGW{events: okEvents("hello there")}
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) >= 3 }) // session_started, user_message, assistant_turn
+
+	gw.mu.Lock()
+	calls := len(gw.requests)
+	gw.mu.Unlock()
+	if calls != 1 { // chat only, no title call
+		t.Fatalf("mission session made %d gateway calls, want 1", calls)
+	}
+	log.mu.Lock()
+	title := log.titles["s1"]
+	log.mu.Unlock()
+	if title != "" {
+		t.Fatalf("title = %q, want empty for a mission bookkeeping session", title)
 	}
 }
 

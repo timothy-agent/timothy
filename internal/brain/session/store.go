@@ -157,6 +157,9 @@ type Meta struct {
 	// (composer # mentions); unioned with the serving agent's own
 	// Knowledge list per turn (D-060).
 	Knowledge []string `json:"knowledge"`
+	// Mission is true when a missions row points at this session via
+	// missions.session_id: tool-audit bookkeeping, not chat.
+	Mission bool `json:"mission,omitempty"`
 }
 
 const listLimit = 100
@@ -234,9 +237,10 @@ func (s *Store) Get(ctx context.Context, id string) (Meta, error) {
 	var m Meta
 	var knowledge []byte
 	err = db.QueryRow(ctx,
-		`SELECT id, COALESCE(title, ''), archived, last_route, created_at, updated_at, knowledge
+		`SELECT id, COALESCE(title, ''), archived, last_route, created_at, updated_at, knowledge,
+		        EXISTS (SELECT 1 FROM missions m WHERE m.session_id = sessions.id)
 		 FROM sessions WHERE id = $1`, id,
-	).Scan(&m.ID, &m.Title, &m.Archived, &m.LastRoute, &m.CreatedAt, &m.UpdatedAt, &knowledge)
+	).Scan(&m.ID, &m.Title, &m.Archived, &m.LastRoute, &m.CreatedAt, &m.UpdatedAt, &knowledge, &m.Mission)
 	if err != nil {
 		return Meta{}, fmt.Errorf("session: get %s: %w", id, err)
 	}
