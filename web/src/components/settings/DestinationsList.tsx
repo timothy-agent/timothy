@@ -4,8 +4,14 @@ import { TelegramIcon } from '@/components/icons/TelegramIcon'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { deleteDestination, listDestinations, patchDestination, testDestination } from '../../api/client'
-import type { Destination } from '../../api/types'
+import {
+  deleteDestination,
+  listConnectors,
+  listDestinations,
+  patchDestination,
+  testDestination,
+} from '../../api/client'
+import type { AdminConnector, Destination } from '../../api/types'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -19,6 +25,7 @@ import { errText } from './util'
 
 export function DestinationsList() {
   const [destinations, setDestinations] = useState<Destination[]>([])
+  const [connectors, setConnectors] = useState<AdminConnector[]>([])
   const navigate = useNavigate()
 
   const refresh = useCallback(() => {
@@ -27,6 +34,16 @@ export function DestinationsList() {
       .catch((err: unknown) => toast.error('Could not load destinations', { description: errText(err) }))
   }, [])
   useEffect(refresh, [refresh])
+
+  // Resolves a github destination's connector id to its name for the
+  // card summary; best-effort, the summary falls back to mode alone.
+  useEffect(() => {
+    listConnectors()
+      .then(setConnectors)
+      .catch(() => {
+        // Non-fatal: card summaries just show mode without a connector name.
+      })
+  }, [])
 
   return (
     <div className="mt-6 space-y-8">
@@ -48,6 +65,7 @@ export function DestinationsList() {
               <DestinationCard
                 key={d.id}
                 destination={d}
+                connectors={connectors}
                 onChanged={refresh}
                 onManage={() => navigate(`/settings/destinations/${d.id}`)}
               />
@@ -100,18 +118,42 @@ export function DestinationsList() {
               </span>
             </span>
           </button>
+          <button
+            type="button"
+            onClick={() => navigate('/settings/destinations/new/github')}
+            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
+          >
+            <DestinationKindIcon kind="github" className="size-9" />
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold">GitHub</span>
+              <span className="block truncate text-sm text-muted-foreground">
+                Pushes a branch or opens a PR via a connector
+              </span>
+            </span>
+          </button>
         </div>
       </section>
     </div>
   )
 }
 
+// githubSummary renders a github destination's mode plus the
+// connector name when it can be resolved cheaply from the already-
+// loaded connector list, else the mode alone.
+function githubSummary(destination: Destination, connectors: AdminConnector[]): string {
+  const mode = destination.config.mode === 'push_pr' ? 'push + PR' : 'push'
+  const connector = connectors.find((c) => c.id === destination.config.connector_id)
+  return connector ? `${mode} via ${connector.name}` : mode
+}
+
 function DestinationCard({
   destination,
+  connectors,
   onChanged,
   onManage,
 }: {
   destination: Destination
+  connectors: AdminConnector[]
   onChanged: () => void
   onManage: () => void
 }) {
@@ -165,7 +207,9 @@ function DestinationCard({
           ? String(destination.config.to ?? '')
           : destination.kind === 'telegram'
             ? `chat ${String(destination.config.chat_id ?? '')}`
-            : String(destination.config.url ?? '')}
+            : destination.kind === 'github'
+              ? githubSummary(destination, connectors)
+              : String(destination.config.url ?? '')}
       </div>
 
       {test && (
@@ -177,9 +221,11 @@ function DestinationCard({
       )}
 
       <div className="mt-auto flex items-center gap-2 pt-1">
-        <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
-          {testing ? 'Sending…' : 'Test send'}
-        </Button>
+        {destination.kind !== 'github' && (
+          <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
+            {testing ? 'Sending…' : 'Test send'}
+          </Button>
+        )}
         <Button size="sm" variant="outline" onClick={onManage} className="flex-1">
           Manage
         </Button>

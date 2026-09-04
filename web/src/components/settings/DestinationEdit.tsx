@@ -12,6 +12,12 @@ import {
   testDestination,
 } from '../../api/client'
 import type { AdminConnector, Destination } from '../../api/types'
+import {
+  COMMIT_STYLE_DEFAULT,
+  ON_COMPLETE_NONE,
+  commitStyleChoices,
+  onCompleteChoices,
+} from '../../lib/githubDestination'
 import { Button } from '../ui/button'
 import {
   Dialog,
@@ -42,6 +48,10 @@ export function DestinationEdit() {
   const [url, setURL] = useState('')
   const [format, setFormat] = useState<'json' | 'text'>('json')
   const [chatID, setChatID] = useState('')
+  const [mode, setMode] = useState<'push' | 'push_pr'>('push')
+  const [branchPattern, setBranchPattern] = useState('')
+  const [commitStyle, setCommitStyle] = useState('')
+  const [createIfMissing, setCreateIfMissing] = useState(false)
   const [savingConfig, setSavingConfig] = useState(false)
 
   // Rotating the bot token is a separate save from the rest of the
@@ -64,6 +74,12 @@ export function DestinationEdit() {
           setFormat((found.config.format as 'json' | 'text') ?? 'json')
         } else if (found?.kind === 'telegram') {
           setChatID(String(found.config.chat_id ?? ''))
+        } else if (found?.kind === 'github') {
+          setConnectorID(String(found.config.connector_id ?? ''))
+          setMode((found.config.mode as 'push' | 'push_pr') ?? 'push')
+          setBranchPattern(String(found.config.branch_pattern ?? ''))
+          setCommitStyle(String(found.config.commit_style ?? ''))
+          setCreateIfMissing(Boolean(found.config.create_if_missing))
         }
       })
       .catch((err: unknown) => toast.error('Could not load destination', { description: errText(err) }))
@@ -72,7 +88,9 @@ export function DestinationEdit() {
 
   useEffect(() => {
     listConnectors()
-      .then((rows) => setConnectors(rows.filter((c) => c.kind === 'google' && c.enabled)))
+      .then((rows) =>
+        setConnectors(rows.filter((c) => (c.kind === 'google' || c.kind === 'github') && c.enabled)),
+      )
       .catch(() => {
         // Non-fatal: the connector select just shows the currently
         // stored id with no friendly name if this fails.
@@ -120,7 +138,15 @@ export function DestinationEdit() {
           ? { connector_id: connectorID, to: to.trim() }
           : destination.kind === 'telegram'
             ? { chat_id: chatID.trim() }
-            : { url: url.trim(), format }
+            : destination.kind === 'github'
+              ? {
+                  connector_id: connectorID,
+                  mode,
+                  branch_pattern: branchPattern.trim() || undefined,
+                  commit_style: commitStyle || undefined,
+                  create_if_missing: createIfMissing || undefined,
+                }
+              : { url: url.trim(), format }
       await patchDestination(destination.id, { config })
       toast.success('Destination updated')
       refresh()
@@ -185,29 +211,31 @@ export function DestinationEdit() {
           <Toggle on={destination.enabled} onChange={toggleEnabled} label={`${destination.name} enabled`} />
         </div>
 
-        <div
-          className={
-            'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
-            (test?.ok
-              ? 'border-good/30 bg-good-soft text-good'
-              : test && !test.ok
-                ? 'border-destructive/30 bg-destructive/5 text-destructive'
-                : 'border-border bg-muted/40 text-muted-foreground')
-          }
-        >
-          <span className="min-w-0 flex-1 font-medium">
-            {testing
-              ? 'Sending test delivery…'
-              : test?.ok
-                ? 'Test delivery sent.'
+        {destination.kind !== 'github' && (
+          <div
+            className={
+              'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
+              (test?.ok
+                ? 'border-good/30 bg-good-soft text-good'
                 : test && !test.ok
-                  ? `Failed: ${test.error}`
-                  : 'Not tested yet.'}
-          </span>
-          <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
-            {testing ? 'Sending…' : 'Test send'}
-          </Button>
-        </div>
+                  ? 'border-destructive/30 bg-destructive/5 text-destructive'
+                  : 'border-border bg-muted/40 text-muted-foreground')
+            }
+          >
+            <span className="min-w-0 flex-1 font-medium">
+              {testing
+                ? 'Sending test delivery…'
+                : test?.ok
+                  ? 'Test delivery sent.'
+                  : test && !test.ok
+                    ? `Failed: ${test.error}`
+                    : 'Not tested yet.'}
+            </span>
+            <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
+              {testing ? 'Sending…' : 'Test send'}
+            </Button>
+          </div>
+        )}
 
         {destination.kind === 'email' ? (
           <>
@@ -218,11 +246,13 @@ export function DestinationEdit() {
                   <SelectValue placeholder="Choose a connected Gmail account" />
                 </SelectTrigger>
                 <SelectContent>
-                  {connectors.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
+                  {connectors
+                    .filter((c) => c.kind === 'google')
+                    .map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -235,6 +265,83 @@ export function DestinationEdit() {
             <Field label="Chat ID">
               <Input value={chatID} onChange={(e) => setChatID(e.target.value)} className="mt-1.5 h-10" />
             </Field>
+          </>
+        ) : destination.kind === 'github' ? (
+          <>
+            <div className="space-y-1.5">
+              <span className="text-sm font-medium text-foreground">GitHub connector</span>
+              <Select value={connectorID} onValueChange={setConnectorID}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Choose a connected GitHub account" />
+                </SelectTrigger>
+                <SelectContent>
+                  {connectors
+                    .filter((c) => c.kind === 'github')
+                    .map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <span className="text-sm font-medium text-foreground">Mode</span>
+              <Select value={mode} onValueChange={(v) => setMode(v as 'push' | 'push_pr')}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {onCompleteChoices
+                    .filter((c) => c.value !== ON_COMPLETE_NONE)
+                    .map((c) => (
+                      <SelectItem key={c.value} value={c.value}>
+                        {c.label}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Field label="Branch pattern" hint="optional">
+              <Input
+                value={branchPattern}
+                onChange={(e) => setBranchPattern(e.target.value)}
+                placeholder="Default (from settings)"
+                className="mt-1.5 h-10"
+              />
+            </Field>
+            <div className="space-y-1.5">
+              <span className="text-sm font-medium text-foreground">Commit style</span>
+              <Select
+                value={commitStyle || COMMIT_STYLE_DEFAULT}
+                onValueChange={(v) => setCommitStyle(v === COMMIT_STYLE_DEFAULT ? '' : v)}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {commitStyleChoices.map((c) => (
+                    <SelectItem key={c.value} value={c.value}>
+                      {c.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Create repository if missing</div>
+                <p className="text-sm text-muted-foreground">
+                  Create the repository through this connector when the mission has no target
+                  repository.
+                </p>
+              </div>
+              <Toggle
+                on={createIfMissing}
+                onChange={setCreateIfMissing}
+                label="Create repository if missing"
+              />
+            </div>
           </>
         ) : (
           <>

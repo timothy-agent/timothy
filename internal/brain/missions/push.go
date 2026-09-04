@@ -12,11 +12,63 @@ import (
 	"time"
 )
 
+// NotPushable reports the shared kind/branch/worktree guards push and
+// pr both require, Go code, never a prompt: only a coding mission
+// with a live worktree is ever pushable. Shared by the manual push/pr
+// API handlers and the driver's auto-fire-on-done hook, and by
+// destinations.GitHubAdapter's delivery, so none of them can diverge on
+// what counts as pushable.
+func NotPushable(m Mission) string {
+	switch {
+	case !missionPolicyFor(m).canPush:
+		return "only coding missions can be pushed"
+	case m.Branch == "":
+		return "mission has no branch"
+	default:
+		if _, err := os.Stat(m.WorktreePath()); err != nil {
+			return "mission worktree is not available"
+		}
+	}
+	return ""
+}
+
 var (
 	ErrPushRejected      = errors.New("push rejected by remote")
 	ErrRemoteUnsupported = errors.New("remote is not a supported https origin")
 	ErrNotPushable       = errors.New("mission is not pushable")
 )
+
+// githubRepoPattern matches the owner/repo path segment of a GitHub
+// https clone URL (with or without .git suffix), the shape
+// ParseGitHubRepoURL extracts from mission.RepoURL.
+var githubRepoPattern = regexp.MustCompile(`^https://[^/]+/([^/]+)/([^/]+?)(?:\.git)?/?$`)
+
+// ParseGitHubRepoURL extracts owner/repo from repoURL (always an https
+// clone URL per validateRemote's own gate at push time); ok is false
+// for anything that doesn't match the expected shape.
+func ParseGitHubRepoURL(repoURL string) (owner, repo string, ok bool) {
+	m := githubRepoPattern.FindStringSubmatch(repoURL)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}
+
+// PRTitleGoalCap bounds a fallback title built from the goal when the
+// mission has no generated display name yet.
+const PRTitleGoalCap = 72
+
+// PRTitle prefers the mission's generated display name, falling back
+// to a truncated goal: used for PR titles and operator notifications.
+func PRTitle(m Mission) string {
+	if m.Name != "" {
+		return m.Name
+	}
+	if len(m.Goal) <= PRTitleGoalCap {
+		return m.Goal
+	}
+	return m.Goal[:PRTitleGoalCap] + "…"
+}
 
 // pushTimeout bounds one push attempt — long enough for a real repo
 // over the network, short enough that a hung remote doesn't pin the

@@ -303,7 +303,29 @@ func main() {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, gwc,
 			flags.PermissionTimeoutSeconds, flags.AskTimeoutSeconds, broker.Resolve, app.Log)
 	}
-	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, app.Log)
+	// The push/PR adapter (issue #560): built once here so both the
+	// driver's auto-fire-on-done hook (legacy self-describing github
+	// entry) and the Deliverer (saved github destination kind) share the
+	// exact same push/PR code. nil workspace/store (missions disabled)
+	// still builds one; ResolveToken/PR nil-gate its actual use.
+	var githubAdapter *destinations.GitHubAdapter
+	if missionDriver != nil {
+		var resolveGitHubToken destinations.PushTokenResolver
+		var githubPR destinations.PRSource
+		if conns != nil && secrets != nil {
+			resolveGitHubToken = func(ctx context.Context, connectorID string) (string, error) {
+				c, err := conns.Store().Get(ctx, connectorID)
+				if err != nil {
+					return "", fmt.Errorf("resolve connector %s: %w", connectorID, err)
+				}
+				return secrets.Resolve(ctx, c.CredentialRef)
+			}
+			githubPR = connsPRSource{conns}
+		}
+		githubAdapter = destinations.NewGitHubAdapter(missionWorkspace, missionStore, resolveGitHubToken, githubPR)
+		missionDriver.SetCompleter(githubAdapter)
+	}
+	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, githubAdapter, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
 		missionDriver.SetDestinationDeliver(destinationDeliverer.Deliver)
 	}
@@ -396,7 +418,7 @@ func main() {
 				}
 				return secrets.Resolve(ctx, c.CredentialRef)
 			}
-			completer := missionCompleterAdapter{missionStore, missions.NewCompleter(missionWorkspace, missionStore, nil, connsPRSource{conns})}
+			completer := missionCompleterAdapter{missionStore, githubAdapter}
 			newTools = append(newTools, builtin.PushMissionBranch(missionAdapter, completer, resolvePushToken))
 		}
 		current := builtinSet.add(newTools...)
@@ -830,7 +852,7 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 // validation with a clear error, same nil-gated shape as
 // api/missions.go's own repo_url-needs-connectors check. secrets nil
 // (no valid master key) leaves telegram unregistered the same way.
-func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, flags *settings.Store, missionStore *missions.Store, log *slog.Logger) (*destinations.Store, *destinations.Deliverer) {
+func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, flags *settings.Store, missionStore *missions.Store, github *destinations.GitHubAdapter, log *slog.Logger) (*destinations.Store, *destinations.Deliverer) {
 	if missionStore == nil {
 		return nil, nil
 	}
@@ -852,7 +874,7 @@ func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connect
 	if secrets != nil {
 		telegram = &destinations.TelegramAdapter{ResolveToken: secrets.Resolve}
 	}
-	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, telegram, flags.WebBaseURL, flags.Location, log)
+	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, telegram, github, flags.WebBaseURL, flags.Location, log)
 	return store, deliverer
 }
 
@@ -914,9 +936,15 @@ func (d destinationLister) List(ctx context.Context) ([]builtin.DestinationInfo,
 	if err != nil {
 		return nil, err
 	}
-	out := make([]builtin.DestinationInfo, len(rows))
-	for i, r := range rows {
-		out[i] = builtin.DestinationInfo{ID: r.ID, Name: r.Name, Enabled: r.Enabled}
+	var out []builtin.DestinationInfo
+	for _, r := range rows {
+		// github destinations are not usable by the deliver tool
+		// (push/PR, not a message send): excluded from the tool's own
+		// list, same as Deliverer.DeliverNow's own rejection.
+		if r.Kind == "github" {
+			continue
+		}
+		out = append(out, builtin.DestinationInfo{ID: r.ID, Name: r.Name, Enabled: r.Enabled})
 	}
 	return out, nil
 }
@@ -1152,19 +1180,6 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		})
 	}
 	if conns != nil && secrets != nil {
-		// The auto-fire-on-done hook's push token: resolve connector_id
-		// straight to its credential_ref's secret value, same as the
-		// clone token resolver above and the push endpoint's own
-		// resolvePushToken: the on_complete path never has an explicit
-		// credential_ref override, only ever the mission's own connector.
-		resolvePushToken := func(ctx context.Context, connectorID string) (string, error) {
-			c, err := conns.Store().Get(ctx, connectorID)
-			if err != nil {
-				return "", fmt.Errorf("resolve connector %s: %w", connectorID, err)
-			}
-			return secrets.Resolve(ctx, c.CredentialRef)
-		}
-		driver.SetCompleter(missions.NewCompleter(workspace, store, resolvePushToken, connsPRSource{conns}))
 		driver.SetPushFailedNotifier(func(ctx context.Context, missionID, message string) {
 			if err := notifier.NotifyMessage(ctx, missionID, "push_failed", message); err != nil {
 				log.Warn("driver: on_complete push_failed notification failed", "mission_id", missionID, "error", err)
@@ -1187,10 +1202,10 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	return store, driver, notifier, workspace, hub, scheduler
 }
 
-// connsPRSource adapts *connectors.Manager to missions.PRSource for the
-// driver's on_complete auto-fire hook: missions has no compile-time
-// dependency on the connectors package, same reasoning as
-// CloneTokenResolver's closure-based wiring above.
+// connsPRSource adapts *connectors.Manager to destinations.PRSource for
+// the shared GitHubAdapter: destinations has no compile-time dependency
+// on the connectors package, same reasoning as CloneTokenResolver's
+// closure-based wiring above.
 type connsPRSource struct {
 	conns *connectors.Manager
 }
@@ -1211,7 +1226,7 @@ func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, t
 	return created.HTMLURL, created.Number, nil
 }
 
-// RepoExists backs missions.Completer.ensureRepo's create-if-missing
+// RepoExists backs destinations.GitHubAdapter's ensureRepo create-if-missing
 // existence check (issue #483): connectors.ErrRepoNotFound (GetRepo's
 // 404) is the only "safe to create" signal, distinguished from every
 // other lookup failure (network, auth), which propagates as a hard
@@ -1302,16 +1317,16 @@ func (a missionToolStore) MissionEvents(ctx context.Context, id string) ([]built
 	return out, nil
 }
 
-// missionCompleterAdapter adapts *missions.Completer to the builtin
-// package's missionCompleter interface: push_mission_branch's
-// push/PR calls go through the exact same Completer the button/
+// missionCompleterAdapter adapts *destinations.GitHubAdapter to the
+// builtin package's missionCompleter interface: push_mission_branch's
+// push/PR calls go through the exact same GitHubAdapter the button/
 // auto-fire paths use. It re-Gets the mission by id from the real
-// store before calling Completer, so Completer always acts on the
-// authoritative missions.Mission (worktree, full plan for PRBody,
-// ...) rather than a partial copy shuttled through builtin.MissionRecord.
+// store before calling it, so it always acts on the authoritative
+// missions.Mission (worktree, full plan for PRBody, ...) rather than a
+// partial copy shuttled through builtin.MissionRecord.
 type missionCompleterAdapter struct {
 	store     *missions.Store
-	completer *missions.Completer
+	completer *destinations.GitHubAdapter
 }
 
 func (a missionCompleterAdapter) PushMissionBranch(ctx context.Context, id, token string) (string, error) {

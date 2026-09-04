@@ -61,6 +61,27 @@ const googleConnector: AdminConnector = {
   sensitive: false,
 }
 
+const githubConnector: AdminConnector = {
+  id: 'c2',
+  name: 'my-github',
+  kind: 'github',
+  config: {},
+  credential_ref: 'MY_GITHUB_PAT',
+  enabled: true,
+  sensitive: false,
+}
+
+const githubDestination: Destination = {
+  id: 'd5',
+  name: 'ops-repo',
+  kind: 'github',
+  config: { connector_id: 'c2', mode: 'push_pr' },
+  credential_ref: '',
+  enabled: true,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
+
 function renderTab(entry = '/settings/destinations') {
   return render(
     <MemoryRouter initialEntries={[entry]}>
@@ -76,7 +97,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(listDestinations).mockResolvedValue([])
-  vi.mocked(listConnectors).mockResolvedValue([googleConnector])
+  vi.mocked(listConnectors).mockResolvedValue([googleConnector, githubConnector])
   vi.mocked(listSecretRefs).mockResolvedValue([])
 })
 
@@ -299,5 +320,67 @@ describe('Destinations tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save token' }))
     await waitFor(() => expect(setSecret).toHaveBeenCalledWith('OPS_TELEGRAM_TELEGRAM_BOT_TOKEN', 'new-token'))
     expect(patchDestination).toHaveBeenCalledWith('d4', { credential_ref: 'OPS_TELEGRAM_TELEGRAM_BOT_TOKEN' })
+  })
+
+  it('offers the GitHub tile in the add flow', async () => {
+    renderTab()
+    expect(await screen.findByRole('button', { name: /^GitHub/ })).toBeTruthy()
+  })
+
+  it('adds a github destination: no test-send, creates enabled directly', async () => {
+    vi.mocked(createDestination).mockResolvedValue('d5')
+
+    renderTab()
+    fireEvent.click(await screen.findByRole('button', { name: /^GitHub/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-repo' } })
+
+    // No test-send affordance for github.
+    expect(screen.queryByRole('button', { name: 'Test send' })).toBeNull()
+
+    // Connector + mode required before submit is enabled.
+    const addButton = screen.getByRole('button', { name: 'Add destination' })
+    expect((addButton as HTMLButtonElement).disabled).toBe(true)
+
+    fireEvent.click(await screen.findByText('Choose a connected GitHub account'))
+    fireEvent.click(await screen.findByRole('option', { name: 'my-github' }))
+    fireEvent.click(await screen.findByText('Push branch when done'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Push and open a PR when done' }))
+
+    await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(addButton)
+
+    await waitFor(() =>
+      expect(createDestination).toHaveBeenCalledWith({
+        name: 'ops-repo',
+        kind: 'github',
+        config: { connector_id: 'c2', mode: 'push_pr' },
+        enabled: true,
+      }),
+    )
+  })
+
+  it('renders a github destination card with mode and no Test send button', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([githubDestination])
+    renderTab()
+
+    expect(await screen.findByText('ops-repo')).toBeTruthy()
+    expect(await screen.findByText('push + PR via my-github')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Test send' })).toBeNull()
+  })
+
+  it('loads a github destination config into the edit form', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([githubDestination])
+
+    render(
+      <MemoryRouter initialEntries={['/settings/destinations/d5']}>
+        <Routes>
+          <Route path="/settings/destinations/*" element={<DestinationsTab />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('my-github')).toBeTruthy()
+    expect(await screen.findByText('Push and open a PR when done')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Test send' })).toBeNull()
   })
 })

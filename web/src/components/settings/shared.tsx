@@ -17,6 +17,13 @@ export function DestinationKindIcon({
   className?: string
 }) {
   if (kind === 'telegram') return <TelegramIcon className={className} />
+  if (kind === 'github') {
+    return (
+      <svg className={`${className} fill-current`} aria-hidden="true">
+        <use href="#clogo-github" />
+      </svg>
+    )
+  }
   return <HugeiconsIcon icon={destinationKindIcon[kind]} className={className} />
 }
 

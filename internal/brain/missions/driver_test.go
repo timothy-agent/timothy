@@ -461,10 +461,58 @@ func codingWorktree(t *testing.T) (workspace, baseCommit string) {
 	return workspace, strings.TrimSpace(gitRun(t, dir, "rev-parse", "HEAD"))
 }
 
+// fakeOnCompleterPusher scripts the branch push onCompleter needs,
+// standing in for destinations.GitHubAdapter's own Push call without a
+// real https origin. Push/PR call-counting mirrors the pre-#560
+// fakeBranchPusher/fakePRSource this replaces (those now live in
+// destinations/github_test.go, testing the real adapter directly).
+type fakeOnCompleterPusher struct {
+	host      string
+	err       error
+	pushCalls int
+}
+
+func (f *fakeOnCompleterPusher) push() (string, error) {
+	f.pushCalls++
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.host, nil
+}
+
+// fakeOnCompleter is a scripted onCompleter standing in for
+// destinations.GitHubAdapter in driver tests: destinations.GitHubAdapter
+// itself is exercised directly in destinations/github_test.go, so this
+// only needs to prove Driver.fireOnComplete calls RunOnComplete and
+// reacts correctly to its result (updated entry, error).
+type fakeOnCompleter struct {
+	pusher    *fakeOnCompleterPusher
+	prCreated int
+}
+
+func (f *fakeOnCompleter) RunOnComplete(ctx context.Context, m Mission) (DestinationEntry, bool, error) {
+	entry, _ := m.GitHubEntry()
+	onComplete := m.OnComplete()
+	if onComplete == "" {
+		return entry, false, nil
+	}
+	if reason := NotPushable(m); reason != "" {
+		return entry, false, fmt.Errorf("on_complete: %s", reason)
+	}
+	if _, err := f.pusher.push(); err != nil {
+		return entry, false, err
+	}
+	if onComplete == "push_pr" {
+		f.prCreated++
+	}
+	return entry, false, nil
+}
+
 // TestDriverFiresOnCompletePushPROnDone proves a coding mission with
 // on_complete="push_pr" fires exactly one push and one PR create the
-// moment it reaches phase=done — the SAME Completer the manual push/pr
-// API endpoints use, wired via Driver.SetCompleter.
+// moment it reaches phase=done: the SAME onCompleter the manual push/pr
+// API endpoints' destinations.GitHubAdapter satisfies, wired via
+// Driver.SetCompleter.
 func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
 	store := newFakeStore()
 	dir, base := codingWorktree(t)
@@ -481,11 +529,9 @@ func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
-	pusher := &fakeBranchPusher{host: "github.com"}
-	pr := &fakePRSource{defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/1", prNumber: 1}
-	d.SetCompleter(&Completer{workspace: pusher, store: store, resolveToken: func(ctx context.Context, connectorID string) (string, error) {
-		return "dummy-token", nil
-	}, pr: pr})
+	pusher := &fakeOnCompleterPusher{host: "github.com"}
+	completer := &fakeOnCompleter{pusher: pusher}
+	d.SetCompleter(completer)
 
 	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
 
@@ -496,21 +542,8 @@ func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
 	if pusher.pushCalls != 1 {
 		t.Fatalf("Push called %d times, want exactly 1", pusher.pushCalls)
 	}
-	if pr.createCalls != 1 {
-		t.Fatalf("CreatePR called %d times, want exactly 1", pr.createCalls)
-	}
-	events := store.events["m1"]
-	var pushed, prOpened int
-	for _, e := range events {
-		switch e.Kind {
-		case "mission.pushed":
-			pushed++
-		case "mission.pr_opened":
-			prOpened++
-		}
-	}
-	if pushed != 1 || prOpened != 1 {
-		t.Fatalf("events pushed=%d pr_opened=%d, want exactly 1 each", pushed, prOpened)
+	if completer.prCreated != 1 {
+		t.Fatalf("CreatePR called %d times, want exactly 1", completer.prCreated)
 	}
 }
 
@@ -535,10 +568,8 @@ func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
-	pusher := &fakeBranchPusher{err: ErrPushRejected}
-	d.SetCompleter(&Completer{workspace: pusher, store: store, resolveToken: func(ctx context.Context, connectorID string) (string, error) {
-		return "dummy-token", nil
-	}})
+	pusher := &fakeOnCompleterPusher{err: ErrPushRejected}
+	d.SetCompleter(&fakeOnCompleter{pusher: pusher})
 	var notified []string
 	d.SetPushFailedNotifier(func(ctx context.Context, missionID, message string) {
 		notified = append(notified, message)
@@ -552,15 +583,6 @@ func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
 	}
 	if len(notified) != 1 {
 		t.Fatalf("push-failed notifications = %d, want exactly 1", len(notified))
-	}
-	var pushFailed int
-	for _, e := range store.events["m1"] {
-		if e.Kind == "mission.push_failed" {
-			pushFailed++
-		}
-	}
-	if pushFailed != 1 {
-		t.Fatalf("mission.push_failed events = %d, want exactly 1", pushFailed)
 	}
 }
 

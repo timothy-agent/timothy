@@ -64,7 +64,8 @@ First run: `cp deploy/env.example deploy/.env` and set
   `create_calendar_event` route to the right connector/account via an
   `account` parameter — see `manager.go`'s `aggregateTools`),
   `destinations` (mission result delivery: email/webhook/
-  telegram), `kb` (knowledge-base collections/documents; image
+  telegram/github, the last pushing/opening a PR through a github
+  connector via `GitHubAdapter`), `kb` (knowledge-base collections/documents; image
   captioning at ingest, issues #349/#350, is default-off behind
   `settings.KeyKBImageCaptioning` — `kb.Enricher` runs in the ingest
   funnel, mission promotion, and PDF conversion), `attachments`,

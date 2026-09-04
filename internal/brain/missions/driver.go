@@ -187,13 +187,13 @@ type Driver struct {
 	// (push/push_pr) once it reaches phase=done (see SetCompleter,
 	// fireOnComplete) — nil-safe: unset (no connectors/secrets wired)
 	// just means the auto-fire hook never runs, same as a mission whose
-	// on_complete is "".
-	completer *Completer
+	// on_complete is "". destinations.GitHubAdapter satisfies onCompleter.
+	completer onCompleter
 
 	// notifyPushFailed fires a best-effort notification when the
 	// auto-fire hook's push/PR attempt fails (see SetPushFailedNotifier)
 	// — nil-safe: unset just skips the notification, the mission.push_failed
-	// event (Completer.PushBranch's own append) is still recorded either way.
+	// event (GitHubAdapter.PushBranch's own append) is still recorded either way.
 	notifyPushFailed func(ctx context.Context, missionID, message string)
 
 	// memory wires the memoryd extraction hook (see SetMemoryExtract) —
@@ -488,12 +488,20 @@ func reviewTokensExceeded(used, ceiling int64) bool {
 	return ceiling > 0 && used >= ceiling
 }
 
-// SetCompleter wires the Completer the driver's auto-fire-on-done hook
+// onCompleter is the narrow slice of destinations.GitHubAdapter the
+// driver's auto-fire-on-done hook (fireOnComplete) needs, an interface
+// so missions never imports destinations (missions must stay import-
+// free of it; destinations imports missions the other way).
+type onCompleter interface {
+	RunOnComplete(ctx context.Context, m Mission) (DestinationEntry, bool, error)
+}
+
+// SetCompleter wires the onCompleter the driver's auto-fire-on-done hook
 // (fireOnComplete) runs a mission's on_complete choice through — a
 // setter (not a NewDriver parameter) for the same reason SetAgentResolver
 // is: cmd/brain/main.go builds it after the Driver, once connectors/
 // secrets are available.
-func (d *Driver) SetCompleter(c *Completer) {
+func (d *Driver) SetCompleter(c onCompleter) {
 	d.completer = c
 }
 
@@ -546,10 +554,11 @@ func (d *Driver) SetDestinationDeliver(fn DestinationDeliver) {
 }
 
 // deliverableEntries filters m.Destinations down to the kinds
-// DestinationDeliver actually delivers: email/webhook/telegram, i.e.
-// every entry naming an operator-owned destinations table row. "kb"
-// and "github" entries are acted on by promoteToKB/fireOnComplete
-// instead.
+// DestinationDeliver actually delivers: email/webhook/telegram/github,
+// i.e. every entry naming an operator-owned destinations table row. A
+// "kb" entry is acted on by promoteToKB instead, and the legacy
+// self-describing "github" entry (Destination == "github", no
+// DestinationID) by fireOnComplete.
 func deliverableEntries(entries []DestinationEntry) []DestinationEntry {
 	var out []DestinationEntry
 	for _, e := range entries {
@@ -708,9 +717,9 @@ func (d *Driver) fireOnTerminal(m Mission) {
 }
 
 // fireOnComplete runs a mission's recorded on_complete choice
-// (push/push_pr), the SAME Completer code the manual push/pr API
+// (push/push_pr), the SAME GitHubAdapter code the manual push/pr API
 // endpoints use, so an auto-fired push/PR can never diverge from what
-// a human clicking the button gets. Completer.RunOnComplete already
+// a human clicking the button gets. GitHubAdapter.RunOnComplete already
 // appends mission.push_failed itself (via PushBranch/OpenPR's own
 // error path) on failure; this additionally fires a best-effort
 // notification so the operator hears about it, mirroring notify.go's

@@ -931,12 +931,23 @@ export interface DestinationEntry {
 export interface Destination {
   id: string
   name: string
-  kind: 'email' | 'webhook' | 'telegram'
+  kind: 'email' | 'webhook' | 'telegram' | 'github'
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean
   created_at: string
   updated_at: string
+}
+
+// GitHubDestinationConfig is the config shape for a 'github' kind
+// Destination (issue #560): the token comes from connector_id's own
+// credential, so credential_ref stays empty for this kind.
+export interface GitHubDestinationConfig {
+  connector_id: string
+  mode: 'push' | 'push_pr'
+  branch_pattern?: string
+  commit_style?: string
+  create_if_missing?: boolean
 }
 
 export interface MissionEvent {

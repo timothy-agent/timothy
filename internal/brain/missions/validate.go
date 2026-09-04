@@ -123,11 +123,11 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			// eventual push/PR call regardless of source. repo_url is
 			// required UNLESS CreateIfMissing is set (issue #483): a
 			// create-if-missing github entry legitimately has no repo yet
-			// at create time (a scratch mission whose repo Completer.
-			// ensureRepo creates at delivery, named from the mission's own
-			// goal): its own ConnectorID (or, absent that, the mission's
-			// clone-source connector_id) still has to authenticate that
-			// create call.
+			// at create time (a scratch mission whose repo
+			// destinations.GitHubAdapter creates at delivery, named from
+			// the mission's own goal): its own ConnectorID (or, absent
+			// that, the mission's clone-source connector_id) still has to
+			// authenticate that create call.
 			entryConnectorID := githubEntry.ConnectorID
 			if entryConnectorID == "" {
 				entryConnectorID = connectorID

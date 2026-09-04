@@ -950,11 +950,12 @@ CREATE INDEX IF NOT EXISTS kb_chunks_document_idx ON kb_chunks (document_id);
 -- Destinations: operator-created outbound sinks missions deliver
 -- results to (internal/brain/destinations). config is per-kind and
 -- never a secret value; credential_ref names a secret store ref, used
--- by telegram destinations (unused for email/webhook).
+-- by telegram destinations (unused for email/webhook/github; github's
+-- token comes from its connector instead).
 CREATE TABLE destinations (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name        text NOT NULL UNIQUE,
-    kind        text NOT NULL CHECK (kind IN ('email', 'webhook', 'telegram')),
+    kind        text NOT NULL CHECK (kind IN ('email', 'webhook', 'telegram', 'github')),
     config      jsonb NOT NULL DEFAULT '{}',
     credential_ref text NOT NULL DEFAULT '',
     enabled     boolean NOT NULL DEFAULT true,

@@ -1,9 +1,9 @@
 // Package destinations implements operator-created outbound sinks
 // mission results deliver to: email (rides a google connector's Gmail
-// send path), webhook, and telegram (Bot API). Delivery is
-// harness-owned and deterministic (D-061) — the model never supplies
-// or addresses a destination, only ids resolved against this
-// operator-owned table are ever reachable.
+// send path), webhook, telegram (Bot API), and github (push/PR through
+// a github connector). Delivery is harness-owned and deterministic
+// (D-061): the model never supplies or addresses a destination, only
+// ids resolved against this operator-owned table are ever reachable.
 package destinations
 
 import (
@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -24,7 +25,7 @@ import (
 type Destination struct {
 	ID            string          `json:"id"`
 	Name          string          `json:"name"`
-	Kind          string          `json:"kind"` // email | webhook | telegram
+	Kind          string          `json:"kind"` // email | webhook | telegram | github
 	Config        json.RawMessage `json:"config"`
 	CredentialRef string          `json:"credential_ref"`
 	Enabled       bool            `json:"enabled"`
@@ -49,6 +50,24 @@ type WebhookConfig struct {
 // token lives in Destination.CredentialRef, never here.
 type TelegramConfig struct {
 	ChatID string `json:"chat_id"`
+}
+
+// GitHubConfig is the config shape for kind='github': push (or push+PR)
+// a mission's branch through an existing github connector, replacing
+// the mission-create-time on_complete/branch_pattern/commit_style
+// fields with a reusable saved destination. The token comes from the
+// connector's own credential, never CredentialRef.
+type GitHubConfig struct {
+	ConnectorID string `json:"connector_id"`
+	Mode        string `json:"mode"` // push | push_pr
+	// BranchPattern/CommitStyle empty means "use the settings default,"
+	// same precedence as the old mission-level fields.
+	BranchPattern string `json:"branch_pattern,omitempty"`
+	CommitStyle   string `json:"commit_style,omitempty"`
+	// CreateIfMissing, when the mission has no target repo at delivery
+	// time, creates one through ConnectorID's credential instead of
+	// failing the push/PR.
+	CreateIfMissing bool `json:"create_if_missing,omitempty"`
 }
 
 var namePattern = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`)
@@ -130,8 +149,45 @@ func validate(ctx context.Context, conns connectorLookup, d Destination) error {
 		if d.CredentialRef == "" {
 			return fmt.Errorf("telegram destination requires credential_ref (bot token)")
 		}
+	case "github":
+		var cfg GitHubConfig
+		if err := json.Unmarshal(d.Config, &cfg); err != nil {
+			return fmt.Errorf("github config: %w", err)
+		}
+		if cfg.ConnectorID == "" {
+			return fmt.Errorf("github destination requires config.connector_id")
+		}
+		if conns == nil {
+			return fmt.Errorf("github destination requires connectors to be enabled")
+		}
+		c, err := conns.Get(ctx, cfg.ConnectorID)
+		if err != nil {
+			return fmt.Errorf("config.connector_id: %w", err)
+		}
+		if c.Kind != "github" {
+			return fmt.Errorf("config.connector_id must name a github-kind connector")
+		}
+		if !c.Enabled {
+			return fmt.Errorf("config.connector_id names a disabled connector")
+		}
+		switch cfg.Mode {
+		case "push", "push_pr":
+		default:
+			return fmt.Errorf(`github destination requires config.mode to be "push" or "push_pr"`)
+		}
+		if cfg.BranchPattern != "" {
+			if err := missions.ValidateBranchPattern(cfg.BranchPattern); err != nil {
+				return fmt.Errorf("config.branch_pattern: %w", err)
+			}
+		}
+		if err := missions.ValidateCommitStyle(cfg.CommitStyle); err != nil {
+			return fmt.Errorf("config.commit_style: %w", err)
+		}
+		if d.CredentialRef != "" {
+			return fmt.Errorf("github destination must not set credential_ref (token comes from the connector)")
+		}
 	default:
-		return fmt.Errorf("unsupported kind %q (only email, webhook, telegram in this release)", d.Kind)
+		return fmt.Errorf("unsupported kind %q (only email, webhook, telegram, github in this release)", d.Kind)
 	}
 	return nil
 }

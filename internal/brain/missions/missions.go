@@ -282,11 +282,19 @@ type DestinationEntry struct {
 	// entry's repo doesn't exist yet at delivery time, create it
 	// through ConnectorID's credential instead of failing the push/PR.
 	// "" RepoURL with this set derives the repo name from the mission
-	// (see Completer.ensureRepo); false (the default) never creates:
+	// (see destinations.GitHubAdapter); false (the default) never creates:
 	// delivery fails honestly into Error instead of inventing a repo.
-	CreateIfMissing bool   `json:"create_if_missing,omitempty"`
-	DeliveredAt     string `json:"delivered_at,omitempty"`
-	Error           string `json:"error,omitempty"`
+	CreateIfMissing bool `json:"create_if_missing,omitempty"`
+	// Branch/RemoteHost/PRURL/PRNumber are set by destinations.GitHubAdapter
+	// on a successful delivery (issue #560, saved github destination
+	// kind): the final pushed branch/host, and the opened PR's url/number
+	// when Mode is "push_pr".
+	Branch      string `json:"branch,omitempty"`
+	RemoteHost  string `json:"remote_host,omitempty"`
+	PRURL       string `json:"pr_url,omitempty"`
+	PRNumber    int    `json:"pr_number,omitempty"`
+	DeliveredAt string `json:"delivered_at,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // GitHubEntry returns this mission's "github" destination entry, if
@@ -305,8 +313,9 @@ func (m Mission) GitHubEntry() (DestinationEntry, bool) {
 // OnComplete is the effective on_complete value the pre-#480 Mission
 // column used to carry: "" when there is no github entry, else its
 // Mode ("push" or "push_pr"). Kept as a read-only derivation for the
-// handful of call sites (Completer, NotPushable, the missions builtin
-// tool) that only ever need this one field, not the full entry.
+// handful of call sites (destinations.GitHubAdapter, NotPushable, the
+// missions builtin tool) that only ever need this one field, not the
+// full entry.
 func (m Mission) OnComplete() string {
 	e, ok := m.GitHubEntry()
 	if !ok {

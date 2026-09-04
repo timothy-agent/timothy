@@ -2,6 +2,7 @@ package destinations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -39,6 +40,11 @@ type Deliverer struct {
 	store    destinationStore
 	events   eventRecorder
 	adapters map[string]Adapter
+	// github, unlike the rest of adapters, delivers through
+	// GitHubAdapter.DeliverMission (push/PR, no Payload rendering, no
+	// retry) rather than the Adapter interface, so deliverOne special-cases
+	// kind == "github" instead of a map lookup.
+	github   *GitHubAdapter
 	webURL   func(ctx context.Context) string
 	location func(ctx context.Context) *time.Location
 	log      *slog.Logger
@@ -46,29 +52,31 @@ type Deliverer struct {
 
 // NewDeliverer builds a Deliverer. webURL resolves the web_base_url
 // setting fresh at delivery time (never cached on the struct) so an
-// operator's later change applies without a restart. email/telegram
-// nil (no google connectors / no secret store wired, respectively)
-// leaves that kind unregistered in adapters — deliverOne's map lookup
-// then reports "no adapter for kind" rather than boxing a nil adapter
-// as a non-nil Adapter (which would panic on first field access
-// inside Deliver). location follows the same fresh-read pattern as
-// webURL; nil (or a nil *time.Location it returns) defaults to UTC.
-func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, telegram *TelegramAdapter, webURL func(ctx context.Context) string, location func(ctx context.Context) *time.Location, log *slog.Logger) *Deliverer {
-	adapters := map[string]Adapter{"webhook": webhook}
-	if email != nil {
-		adapters["email"] = email
-	}
-	if telegram != nil {
-		adapters["telegram"] = telegram
-	}
-	return &Deliverer{
+// operator's later change applies without a restart. email/telegram/
+// github nil (no google connectors / no secret store / no connectors
+// wired, respectively) leaves that kind unregistered in adapters, so
+// deliverOne's map lookup then reports "no adapter for kind" rather
+// than boxing a nil adapter as a non-nil Adapter (which would panic on
+// first field access inside Deliver). location follows the same
+// fresh-read pattern as webURL; nil (or a nil *time.Location it
+// returns) defaults to UTC.
+func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, telegram *TelegramAdapter, github *GitHubAdapter, webURL func(ctx context.Context) string, location func(ctx context.Context) *time.Location, log *slog.Logger) *Deliverer {
+	d := &Deliverer{
 		store:    store,
 		events:   events,
-		adapters: adapters,
+		adapters: map[string]Adapter{"webhook": webhook},
+		github:   github,
 		webURL:   webURL,
 		location: location,
 		log:      log,
 	}
+	if email != nil {
+		d.adapters["email"] = email
+	}
+	if telegram != nil {
+		d.adapters["telegram"] = telegram
+	}
+	return d
 }
 
 // eventDelivered/eventDeliveryFailed name the mission_events rows
@@ -118,7 +126,7 @@ func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, entries []m
 			out[i] = e
 			continue
 		}
-		if err := d.deliverOne(ctx, m.ID, &e, payload); err != nil {
+		if err := d.deliverOne(ctx, m, &e, payload); err != nil {
 			failed = append(failed, e.DestinationID)
 		}
 		out[i] = e
@@ -132,7 +140,8 @@ func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, entries []m
 // deliverOne attempts one entry's delivery, mutating it in place with
 // the outcome (DeliveredAt on success, Error on failure) and recording
 // the same outcome as a mission_events row for the Timeline.
-func (d *Deliverer) deliverOne(ctx context.Context, missionID string, e *missions.DestinationEntry, payload Payload) error {
+func (d *Deliverer) deliverOne(ctx context.Context, m missions.Mission, e *missions.DestinationEntry, payload Payload) error {
+	missionID := m.ID
 	destinationID := e.DestinationID
 	dest, err := d.store.Get(ctx, destinationID)
 	if err != nil {
@@ -145,6 +154,31 @@ func (d *Deliverer) deliverOne(ctx context.Context, missionID string, e *mission
 		d.recordOutcome(ctx, missionID, e, dest.Name, reason)
 		return errors.New(reason)
 	}
+
+	if dest.Kind == "github" {
+		// github delivery is push/PR, not a rendered Payload send: a
+		// single attempt, no deliverBackoff retries (a push retry against
+		// a half-pushed branch is a different risk profile than re-POSTing
+		// a webhook).
+		if d.github == nil {
+			reason := "no adapter for kind github"
+			d.recordOutcome(ctx, missionID, e, dest.Name, reason)
+			return errors.New(reason)
+		}
+		var cfg GitHubConfig
+		if err := json.Unmarshal(dest.Config, &cfg); err != nil {
+			reason := "github config: " + err.Error()
+			d.recordOutcome(ctx, missionID, e, dest.Name, reason)
+			return errors.New(reason)
+		}
+		if err := d.github.DeliverMission(ctx, cfg, m, e); err != nil {
+			d.recordOutcome(ctx, missionID, e, dest.Name, err.Error())
+			return err
+		}
+		d.recordOutcome(ctx, missionID, e, dest.Name, "")
+		return nil
+	}
+
 	adapter := d.adapters[dest.Kind]
 	if adapter == nil {
 		reason := "no adapter for kind " + dest.Kind
@@ -220,6 +254,9 @@ func (d *Deliverer) Test(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if dest.Kind == "github" {
+		return fmt.Errorf("github destinations have no test send: use the mission's push/pr actions instead")
+	}
 	adapter := d.adapters[dest.Kind]
 	if adapter == nil {
 		return fmt.Errorf("no adapter for kind %q", dest.Kind)
@@ -241,6 +278,9 @@ func (d *Deliverer) DeliverNow(ctx context.Context, id, subject, body string) (n
 	}
 	if !dest.Enabled {
 		return "", "", fmt.Errorf("destination %q is disabled", dest.Name)
+	}
+	if dest.Kind == "github" {
+		return "", "", fmt.Errorf("github destinations are not usable by the deliver tool")
 	}
 	adapter := d.adapters[dest.Kind]
 	if adapter == nil {

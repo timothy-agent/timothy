@@ -523,7 +523,7 @@ type createMissionRequest struct {
 	// somewhere via CreateIfMissing, and even a cloned mission can push
 	// to a different repo than it cloned from. DestinationRepoURL empty
 	// with CreateIfMissing=true derives a repo name from the mission's
-	// goal at delivery time (missions.Completer.ensureRepo);
+	// goal at delivery time (destinations.GitHubAdapter);
 	// DestinationConnectorID empty falls back to ConnectorID (the same
 	// connector authenticates both clone and push, the common case).
 	DestinationConnectorID string `json:"destination_connector_id"`
@@ -2367,7 +2367,7 @@ func (h *missionAPI) resolvePushToken(ctx context.Context, m missions.Mission, c
 
 // pushMissionBranch pushes m's branch to its worktree's origin remote
 // with token, recording mission.pushed/mission.push_failed either way —
-// missions.Completer.PushBranch does the actual push and event
+// destinations.GitHubAdapter.PushBranch does the actual push and event
 // recording, the SAME code the driver's auto-fire-on-done hook calls,
 // so a manual push and an auto-fired push can never diverge in what
 // they do or which events land on the Timeline. Event-record failures
@@ -2381,24 +2381,24 @@ func (h *missionAPI) pushMissionBranch(ctx context.Context, m missions.Mission, 
 	return host, err
 }
 
-// completer builds a missions.Completer wired to this handler's own
-// workspace/store — cheap, stateless besides those two pointers, so a
-// fresh one per call is simplest; the driver holds its own long-lived
-// Completer for the auto-fire path.
-func (h *missionAPI) completer() *missions.Completer {
-	return missions.NewCompleter(h.workspace, h.store, nil, h.prSource())
+// completer builds a destinations.GitHubAdapter wired to this handler's
+// own workspace/store, cheap and stateless besides those two pointers,
+// so a fresh one per call is simplest; the driver holds its own
+// long-lived GitHubAdapter for the auto-fire path.
+func (h *missionAPI) completer() *destinations.GitHubAdapter {
+	return destinations.NewGitHubAdapter(h.workspace, h.store, nil, h.prSource())
 }
 
-// prSource adapts h.conns (nil-safe) to missions.PRSource.
-func (h *missionAPI) prSource() missions.PRSource {
+// prSource adapts h.conns (nil-safe) to destinations.PRSource.
+func (h *missionAPI) prSource() destinations.PRSource {
 	if h.conns == nil {
 		return nil
 	}
 	return connsPRSource{h.conns}
 }
 
-// connsPRSource adapts *connectors.Manager to missions.PRSource — the
-// PR endpoint's own adapter; the driver's SetPRSource wiring in
+// connsPRSource adapts *connectors.Manager to destinations.PRSource,
+// the PR endpoint's own adapter; the driver's SetPRSource wiring in
 // cmd/brain/main.go builds an equivalent one.
 type connsPRSource struct {
 	conns *connectors.Manager
@@ -2420,7 +2420,7 @@ func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, t
 	return created.HTMLURL, created.Number, nil
 }
 
-// RepoExists/CreateRepo satisfy missions.PRSource's create-if-missing
+// RepoExists/CreateRepo satisfy destinations.PRSource's create-if-missing
 // methods (issue #483); see cmd/brain/main.go's connsPRSource for the
 // full doc comments, identical adapter logic duplicated here since
 // this handler builds its own short-lived Completer per call (see
@@ -2501,11 +2501,11 @@ func (h *missionAPI) push(w http.ResponseWriter, r *http.Request) {
 }
 
 // pr handles POST /v1/missions/{id}/pr: github-connection missions
-// only (400 otherwise). missions.Completer.OpenPR does the actual push,
-// default-branch lookup, PR create, and mission.pr_opened event
-// recording — the SAME code the driver's auto-fire-on-done hook calls
-// for on_complete="push_pr", so a manual PR and an auto-fired one can
-// never diverge. A re-call that finds the existing PR (CreatePR's
+// only (400 otherwise). destinations.GitHubAdapter.OpenPR does the
+// actual push, default-branch lookup, PR create, and mission.pr_opened
+// event recording, the SAME code the driver's auto-fire-on-done hook
+// calls for on_complete="push_pr", so a manual PR and an auto-fired one
+// can never diverge. A re-call that finds the existing PR (CreatePR's
 // already-exists path) still appends a SECOND mission.pr_opened event,
 // tolerated as a harmless duplicate (the Timeline shows one extra
 // identical row) rather than adding a "did we already record this PR"

@@ -36,6 +36,12 @@ import { useAgents, useRoutes } from '../AgentPicker'
 import { slugify } from '../settings/AgentForm'
 import { cronPresets, type CronPresetValue, presetFor } from '../../lib/schedules'
 import { CURRENCIES } from '../../lib/currencies'
+import {
+  COMMIT_STYLE_DEFAULT,
+  ON_COMPLETE_NONE,
+  commitStyleChoices,
+  onCompleteChoices,
+} from '../../lib/githubDestination'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Calendar } from '../ui/calendar'
@@ -78,17 +84,6 @@ const flowChoices: { value: Flow; label: string; description: string }[] = [
     description: 'Discovers first, then a single planless pass; the final message is the result.',
   },
   { value: 'light', label: 'Light', description: "Single pass; the worker's final message is the result." },
-]
-
-// Sentinel for the github destination's Mode Select: Radix Select.Item
-// rejects an empty string value, so the "do nothing" choice (the wire
-// value '') is represented by this sentinel on the Select itself.
-const ON_COMPLETE_NONE = '__none__'
-
-const onCompleteChoices: { value: string; label: string }[] = [
-  { value: ON_COMPLETE_NONE, label: 'Nothing' },
-  { value: 'push', label: 'Push branch when done' },
-  { value: 'push_pr', label: 'Push and open a PR when done' },
 ]
 
 // repoFromCloneURL rebuilds a minimal GitHubRepo from a parent
@@ -248,17 +243,6 @@ const environmentChoices: { value: string; label: string }[] = [
   { value: 'python', label: 'Python' },
   { value: 'java', label: 'Java' },
   { value: 'php', label: 'PHP' },
-]
-
-// Sentinel for the commit-style Select's "apply the settings default"
-// choice: wire value stays '' (omit commit_style from the create
-// payload) to match the API's own empty-means-default semantics.
-const COMMIT_STYLE_DEFAULT = '__default__'
-
-const commitStyleChoices: { value: string; label: string }[] = [
-  { value: COMMIT_STYLE_DEFAULT, label: 'Default (from settings)' },
-  { value: 'conventional', label: 'Conventional' },
-  { value: 'plain', label: 'Plain' },
 ]
 
 // lightSignalPattern matches goal text shaped like a lightweight

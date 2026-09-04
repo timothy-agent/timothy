@@ -5,11 +5,17 @@ import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { createDestination, listConnectors, patchDestination, setSecret, testDestination } from '../../api/client'
 import type { AdminConnector } from '../../api/types'
+import {
+  COMMIT_STYLE_DEFAULT,
+  ON_COMPLETE_NONE,
+  commitStyleChoices,
+  onCompleteChoices,
+} from '../../lib/githubDestination'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
-import { Field } from './shared'
+import { Field, Toggle } from './shared'
 import { errText } from './util'
 
 function slugify(v: string): string {
@@ -24,7 +30,7 @@ function slugify(v: string): string {
 // created (disabled) as part of testing, and a passing test enables
 // it.
 export function DestinationAdd() {
-  const { kind } = useParams<{ kind: 'email' | 'webhook' | 'telegram' }>()
+  const { kind } = useParams<{ kind: 'email' | 'webhook' | 'telegram' | 'github' }>()
   const navigate = useNavigate()
 
   const [name, setName] = useState('')
@@ -47,14 +53,21 @@ export function DestinationAdd() {
   const [botTokenMode, setBotTokenMode] = useState<CredentialMode>('new')
   const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
 
+  // github fields (reuses connectorID above for the picked connector)
+  const [mode, setMode] = useState<'push' | 'push_pr'>('push')
+  const [branchPattern, setBranchPattern] = useState('')
+  const [commitStyle, setCommitStyle] = useState('')
+  const [createIfMissing, setCreateIfMissing] = useState(false)
+
   useEffect(() => {
-    if (kind !== 'email') return
+    if (kind !== 'email' && kind !== 'github') return
+    const wantKind = kind === 'email' ? 'google' : 'github'
     listConnectors()
-      .then((rows) => setConnectors(rows.filter((c) => c.kind === 'google' && c.enabled)))
+      .then((rows) => setConnectors(rows.filter((c) => c.kind === wantKind && c.enabled)))
       .catch((err: unknown) => toast.error('Could not load connectors', { description: errText(err) }))
   }, [kind])
 
-  if (kind !== 'email' && kind !== 'webhook' && kind !== 'telegram') {
+  if (kind !== 'email' && kind !== 'webhook' && kind !== 'telegram' && kind !== 'github') {
     return <Navigate to="/settings/destinations" replace />
   }
 
@@ -72,7 +85,15 @@ export function DestinationAdd() {
       ? { connector_id: connectorID, to: to.trim() }
       : kind === 'telegram'
         ? { chat_id: chatID.trim() }
-        : { url: url.trim(), format }
+        : kind === 'github'
+          ? {
+              connector_id: connectorID,
+              mode,
+              branch_pattern: branchPattern.trim() || undefined,
+              commit_style: commitStyle || undefined,
+              create_if_missing: createIfMissing || undefined,
+            }
+          : { url: url.trim(), format }
 
   const canTest =
     slug !== '' &&
@@ -80,7 +101,9 @@ export function DestinationAdd() {
       ? connectorID !== '' && to.trim() !== ''
       : kind === 'telegram'
         ? chatID.trim() !== '' && (usingExistingBotToken ? existingBotTokenRef !== '' : botToken.trim() !== '')
-        : url.trim() !== '')
+        : kind === 'github'
+          ? connectorID !== ''
+          : url.trim() !== '')
 
   const runTest = async () => {
     setBusy(true)
@@ -98,6 +121,22 @@ export function DestinationAdd() {
       setTest(await testDestination(id))
     } catch (err) {
       setTest({ ok: false, error: errText(err) })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // github destinations cannot be test-sent (no test-send affordance
+  // for this kind), so adding one creates it enabled directly.
+  const submitGitHub = async () => {
+    if (!canTest) return
+    setBusy(true)
+    try {
+      await createDestination({ name: slug, kind: 'github', config, enabled: true })
+      toast.success('Destination added')
+      navigate('/settings/destinations')
+    } catch (err) {
+      toast.error('Could not add destination', { description: errText(err) })
     } finally {
       setBusy(false)
     }
@@ -134,7 +173,8 @@ export function DestinationAdd() {
 
       <div className="border-b border-border pb-6">
         <h1 className="text-xl font-semibold tracking-tight">
-          Add {kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : 'Webhook'} destination
+          Add {kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : kind === 'github' ? 'GitHub' : 'Webhook'}{' '}
+          destination
         </h1>
         <p className="text-sm text-muted-foreground">kind: {kind}</p>
       </div>
@@ -239,6 +279,107 @@ export function DestinationAdd() {
               )}
             </div>
           </>
+        ) : kind === 'github' ? (
+          <>
+            <div className="space-y-1.5">
+              <span className="text-sm font-medium text-foreground">GitHub connector</span>
+              <Select
+                value={connectorID}
+                onValueChange={(v) => {
+                  setConnectorID(v)
+                  invalidate()
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Choose a connected GitHub account" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(connectors ?? []).map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {connectors && connectors.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No enabled GitHub connectors yet, add one under Connectors first.
+                </p>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <span className="text-sm font-medium text-foreground">Mode</span>
+              <Select
+                value={mode}
+                onValueChange={(v) => {
+                  setMode(v as 'push' | 'push_pr')
+                  invalidate()
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {onCompleteChoices
+                    .filter((c) => c.value !== ON_COMPLETE_NONE)
+                    .map((c) => (
+                      <SelectItem key={c.value} value={c.value}>
+                        {c.label}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <Field label="Branch pattern" hint="optional">
+              <Input
+                value={branchPattern}
+                onChange={(e) => {
+                  setBranchPattern(e.target.value)
+                  invalidate()
+                }}
+                placeholder="Default (from settings)"
+                className="mt-1.5 h-10"
+              />
+            </Field>
+            <div className="space-y-1.5">
+              <span className="text-sm font-medium text-foreground">Commit style</span>
+              <Select
+                value={commitStyle || COMMIT_STYLE_DEFAULT}
+                onValueChange={(v) => {
+                  setCommitStyle(v === COMMIT_STYLE_DEFAULT ? '' : v)
+                  invalidate()
+                }}
+              >
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {commitStyleChoices.map((c) => (
+                    <SelectItem key={c.value} value={c.value}>
+                      {c.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
+              <div className="min-w-0">
+                <div className="text-sm font-medium">Create repository if missing</div>
+                <p className="text-sm text-muted-foreground">
+                  Create the repository through this connector when the mission has no target
+                  repository.
+                </p>
+              </div>
+              <Toggle
+                on={createIfMissing}
+                onChange={(v) => {
+                  setCreateIfMissing(v)
+                  invalidate()
+                }}
+                label="Create repository if missing"
+              />
+            </div>
+          </>
         ) : (
           <>
             <Field label="URL">
@@ -267,37 +408,45 @@ export function DestinationAdd() {
           </>
         )}
 
-        <div
-          className={
-            'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
-            (tested
-              ? 'border-good/30 bg-good-soft text-good'
-              : test && !test.ok
-                ? 'border-destructive/30 bg-destructive/5 text-destructive'
-                : 'border-border bg-muted/40 text-muted-foreground')
-          }
-        >
-          <span className="min-w-0 flex-1 font-medium">
-            {busy
-              ? 'Testing…'
-              : tested
-                ? 'Test delivery sent, ready to add.'
+        {kind !== 'github' && (
+          <div
+            className={
+              'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
+              (tested
+                ? 'border-good/30 bg-good-soft text-good'
                 : test && !test.ok
-                  ? `Test failed: ${test.error}. The destination was saved disabled, fix and retry.`
-                  : 'Not tested yet, run a test before adding.'}
-          </span>
-          <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
-            {busy ? 'Testing…' : 'Test send'}
-          </Button>
-        </div>
+                  ? 'border-destructive/30 bg-destructive/5 text-destructive'
+                  : 'border-border bg-muted/40 text-muted-foreground')
+            }
+          >
+            <span className="min-w-0 flex-1 font-medium">
+              {busy
+                ? 'Testing…'
+                : tested
+                  ? 'Test delivery sent, ready to add.'
+                  : test && !test.ok
+                    ? `Test failed: ${test.error}. The destination was saved disabled, fix and retry.`
+                    : 'Not tested yet, run a test before adding.'}
+            </span>
+            <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
+              {busy ? 'Testing…' : 'Test send'}
+            </Button>
+          </div>
+        )}
 
         <div className="flex gap-3 pt-2">
           <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/destinations')}>
             Cancel
           </Button>
-          <Button disabled={!tested || busy} onClick={() => void submit()}>
-            Add destination
-          </Button>
+          {kind === 'github' ? (
+            <Button disabled={!canTest || busy} onClick={() => void submitGitHub()}>
+              {busy ? 'Adding…' : 'Add destination'}
+            </Button>
+          ) : (
+            <Button disabled={!tested || busy} onClick={() => void submit()}>
+              Add destination
+            </Button>
+          )}
         </div>
       </div>
     </div>

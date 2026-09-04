@@ -190,3 +190,65 @@ func gitRun2(dir string, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// TestNotPushableGuards covers the shared kind/branch/worktree gate
+// both push and pr require, without touching a store or workspace.
+func TestNotPushableGuards(t *testing.T) {
+	t.Parallel()
+	if reason := NotPushable(Mission{Kind: "general"}); reason == "" {
+		t.Fatal("general mission should not be pushable")
+	}
+	if reason := NotPushable(Mission{Kind: "coding"}); reason == "" {
+		t.Fatal("coding mission with no branch should not be pushable")
+	}
+	if reason := NotPushable(Mission{Kind: "coding", Branch: "mission/x", Workspace: "/does/not/exist"}); reason == "" {
+		t.Fatal("coding mission with a missing worktree should not be pushable")
+	}
+}
+
+// TestParseGitHubRepoURL covers the owner/repo extraction OpenPR needs
+// from mission.RepoURL (always an https clone URL), with and without
+// the .git suffix, and a malformed shape reporting ok=false.
+func TestParseGitHubRepoURL(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		url    string
+		owner  string
+		repo   string
+		wantOK bool
+	}{
+		{"with .git suffix", "https://github.com/octocat/hello-world.git", "octocat", "hello-world", true},
+		{"without .git suffix", "https://github.com/octocat/hello-world", "octocat", "hello-world", true},
+		{"trailing slash", "https://github.com/octocat/hello-world/", "octocat", "hello-world", true},
+		{"malformed, no repo segment", "https://github.com/octocat", "", "", false},
+		{"not a URL", "not-a-url", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			owner, repo, ok := ParseGitHubRepoURL(tc.url)
+			if ok != tc.wantOK || owner != tc.owner || repo != tc.repo {
+				t.Fatalf("ParseGitHubRepoURL(%q) = (%q, %q, %v), want (%q, %q, %v)", tc.url, owner, repo, ok, tc.owner, tc.repo, tc.wantOK)
+			}
+		})
+	}
+}
+
+// TestPRTitleFallsBackToTruncatedGoal covers PRTitle's name-vs-goal
+// precedence and the truncation cap for a long goal with no name yet.
+func TestPRTitleFallsBackToTruncatedGoal(t *testing.T) {
+	t.Parallel()
+	named := Mission{Name: "Fix Login Bug", Goal: "fix the login bug that logs everyone out"}
+	if got := PRTitle(named); got != "Fix Login Bug" {
+		t.Fatalf("PRTitle with a name = %q, want the name", got)
+	}
+	short := Mission{Goal: "fix the login bug"}
+	if got := PRTitle(short); got != "fix the login bug" {
+		t.Fatalf("PRTitle with a short goal and no name = %q, want the goal verbatim", got)
+	}
+	long := Mission{Goal: strings.Repeat("a", 100)}
+	got := PRTitle(long)
+	if len(got) != PRTitleGoalCap+len("…") || !strings.HasSuffix(got, "…") {
+		t.Fatalf("PRTitle with a long goal and no name = %q (len %d), want truncated to %d chars + ellipsis", got, len(got), PRTitleGoalCap)
+	}
+}
