@@ -55,6 +55,10 @@ const featureCopy: Record<string, { label: string; description: string }> = {
     label: 'Scheduler',
     description: 'Off: recurring schedules stop firing missions.',
   },
+  kb_image_captioning_enabled: {
+    label: 'KB image captioning',
+    description: 'On: images in ingested documents get a vision-model caption, spending gateway tokens per image.',
+  },
 }
 
 export function FeaturesTab() {

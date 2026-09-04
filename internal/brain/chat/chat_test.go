@@ -3,6 +3,7 @@ package chat
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2161,6 +2162,88 @@ func TestTitleOverGatewayEmptyOnGatewayError(t *testing.T) {
 	name := TitleOverGateway(gw, discard())(context.Background(), "a goal")
 	if name != "" {
 		t.Fatalf("name = %q, want empty on gateway error", name)
+	}
+}
+
+// TestCaptionImageOverGatewayUsesVisionRoleAndSendsImage confirms the
+// route preference and that the caller's image bytes reach the request
+// as a base64 ImageData part rather than raw bytes.
+func TestCaptionImageOverGatewayUsesVisionRoleAndSendsImage(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("A bar chart showing quarterly revenue.")}
+	caption := CaptionImageOverGateway(gw, discard())(context.Background(), "image/png", []byte("fake-bytes"))
+	if caption != "A bar chart showing quarterly revenue." {
+		t.Fatalf("caption = %q, want the streamed text", caption)
+	}
+
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.requests) != 1 {
+		t.Fatalf("requests = %d, want 1", len(gw.requests))
+	}
+	req := gw.requests[0]
+	if req.Route != "vision" {
+		t.Fatalf("route = %q, want vision", req.Route)
+	}
+	if req.Purpose != "kb_caption" {
+		t.Fatalf("purpose = %q, want kb_caption", req.Purpose)
+	}
+	if len(req.Messages) != 1 || len(req.Messages[0].Images) != 1 {
+		t.Fatalf("messages = %+v, want one message carrying one image", req.Messages)
+	}
+	img := req.Messages[0].Images[0]
+	if img.MediaType != "image/png" {
+		t.Fatalf("media type = %q, want image/png", img.MediaType)
+	}
+	if img.Data != base64.StdEncoding.EncodeToString([]byte("fake-bytes")) {
+		t.Fatalf("image data = %q, want base64 of the input bytes", img.Data)
+	}
+}
+
+// TestCaptionImageOverGatewayFallsBackToDefaultRoleWhenVisionUnbound
+// mirrors TitleOverGateway's fallback: a fresh install may not have
+// bound the vision role yet.
+func TestCaptionImageOverGatewayFallsBackToDefaultRoleWhenVisionUnbound(t *testing.T) {
+	t.Parallel()
+	gw := &roleGW{
+		fakeGW: fakeGW{events: okEvents("A screenshot of a terminal.")},
+		routeForRole: func(_ context.Context, role string) (string, bool, error) {
+			if role == "vision" {
+				return "", false, nil
+			}
+			return role, true, nil
+		},
+	}
+	caption := CaptionImageOverGateway(gw, discard())(context.Background(), "image/jpeg", []byte("x"))
+	if caption != "A screenshot of a terminal." {
+		t.Fatalf("caption = %q, want the streamed text", caption)
+	}
+	if got := gw.lastRequest().Route; got != "default" {
+		t.Fatalf("route = %q, want default (fallback from unbound vision)", got)
+	}
+}
+
+// TestCaptionImageOverGatewayEmptyOnGatewayError confirms the
+// best-effort contract: a Stream error returns "" so KB ingest keeps
+// the original link/image untouched rather than failing.
+func TestCaptionImageOverGatewayEmptyOnGatewayError(t *testing.T) {
+	t.Parallel()
+	gw := &erroringGW{}
+	caption := CaptionImageOverGateway(gw, discard())(context.Background(), "image/png", []byte("x"))
+	if caption != "" {
+		t.Fatalf("caption = %q, want empty on gateway error", caption)
+	}
+}
+
+// TestCaptionImageOverGatewayEmptyOnEmptyReply confirms an empty stream
+// (no chunks) also degrades to "" rather than a blank caption string
+// being treated as real content by a caller.
+func TestCaptionImageOverGatewayEmptyOnEmptyReply(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: nil}
+	caption := CaptionImageOverGateway(gw, discard())(context.Background(), "image/png", []byte("x"))
+	if caption != "" {
+		t.Fatalf("caption = %q, want empty on empty stream", caption)
 	}
 }
 

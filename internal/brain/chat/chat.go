@@ -705,6 +705,79 @@ func ClassifyCollectionOverGateway(gw Gateway, log *slog.Logger) func(ctx contex
 	}
 }
 
+// captionTimeout bounds one image-captioning gateway call (KB ingest
+// enrichment, issues #349/#350): generous enough for a slow vision
+// route, short enough that one stuck image never stalls ingest.
+const captionTimeout = 30 * time.Second
+
+// captionSystem asks for a plain-text description suitable for
+// embedding in stored markdown and for text search (search_kb matching
+// caption wording): no markdown, no preamble, transcribe visible text
+// verbatim since diagrams/screenshots often carry the only copy of it.
+const captionSystem = `Describe this image in plain prose, at most 120 words: what it shows, and transcribe any visible text verbatim. No markdown formatting, no preamble like "This image shows". Reply with only the description.`
+
+// CaptionImageOverGateway mirrors TitleOverGateway's mechanism (route
+// resolution, Stream-and-drain, never-errors contract) for captioning
+// one image at KB ingest time: routed by the "vision" role, falling
+// back to "default" (same D-046 gateway-side safety net covers an
+// unbound vision role). Any failure (no route, stream error, empty
+// reply) returns "", never an error -- callers keep the original
+// content unchanged on a bad caption, exactly like a fetch failure.
+func CaptionImageOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, mediaType string, data []byte) string {
+	return func(ctx context.Context, mediaType string, data []byte) string {
+		ctx, cancel := context.WithTimeout(ctx, captionTimeout)
+		defer cancel()
+
+		route, ok, err := gw.RouteForRole(ctx, "vision")
+		if err != nil || !ok {
+			route, ok, err = gw.RouteForRole(ctx, "default")
+			if err != nil {
+				log.Warn("caption: route lookup failed", "error", err)
+				return ""
+			}
+			if !ok {
+				log.Warn("caption: no route bound for vision or default")
+				return ""
+			}
+		}
+
+		req := gwclient.StreamRequest{
+			Route:   route,
+			Purpose: "kb_caption",
+			System:  captionSystem,
+			Messages: []provider.Message{{
+				Role:    "user",
+				Content: "Describe this image.",
+				Images:  []provider.ImageData{{MediaType: mediaType, Data: base64.StdEncoding.EncodeToString(data)}},
+			}},
+			MaxTokens: 600,
+		}
+		events, err := gw.Stream(ctx, req)
+		if err != nil {
+			log.Warn("caption: stream failed", "error", err)
+			return ""
+		}
+		var b strings.Builder
+		var streamErr *stream.StreamError
+		for ev := range events {
+			switch ev.Type {
+			case stream.EventChunk:
+				b.WriteString(ev.Text)
+			case stream.EventError:
+				streamErr = ev.Err
+			}
+		}
+		caption := strings.TrimSpace(b.String())
+		if caption == "" {
+			if streamErr != nil {
+				log.Warn("caption: stream error event", "code", streamErr.Code, "message", streamErr.Message)
+			}
+			return ""
+		}
+		return caption
+	}
+}
+
 // GitHubDestinationProposal is ExtractGitHubDestinationOverGateway's
 // result: a github destination entry for the create form to show the
 // operator before submit (issue #483, part of the missions schema

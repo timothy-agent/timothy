@@ -25,10 +25,23 @@ const (
 	KeyMemoryExtraction = "memory_extraction_enabled"
 	KeyCompaction       = "compaction_enabled"
 	KeyScheduler        = "scheduler_enabled"
+	// KeyKBImageCaptioning gates spending on vision-model calls to
+	// caption images at KB ingest (issues #349/#350); unlike every other
+	// switch here it defaults OFF for an absent row (knownKeysOff), since
+	// enabling it means real gateway spend the operator must opt into.
+	KeyKBImageCaptioning = "kb_image_captioning_enabled"
 )
 
 var knownKeys = map[string]bool{
 	KeyTools: true, KeyMemoryExtraction: true, KeyCompaction: true, KeyScheduler: true,
+	KeyKBImageCaptioning: true,
+}
+
+// knownKeysOff lists switches from knownKeys whose absent-row default is
+// false instead of the package's normal true (a database outage still
+// degrades this key to false, same fail-closed-on-spend reasoning).
+var knownKeysOff = map[string]bool{
+	KeyKBImageCaptioning: true,
 }
 
 // Typed value settings: strings where empty means the built-in
@@ -172,13 +185,13 @@ func New(db *pgpool.Pool, log *slog.Logger) *Store {
 }
 
 // Enabled reports one switch, defaulting to true for absent rows and
-// unknown keys.
+// unknown keys, except knownKeysOff members which default to false.
 func (s *Store) Enabled(ctx context.Context, key string) bool {
 	all := s.All(ctx)
 	if v, ok := all[key]; ok {
 		return v
 	}
-	return true
+	return !knownKeysOff[key]
 }
 
 // All returns every known switch with defaults applied.
@@ -336,7 +349,7 @@ func (s *Store) load(ctx context.Context) (map[string]bool, map[string]string) {
 
 	flags := map[string]bool{}
 	for k := range knownKeys {
-		flags[k] = true
+		flags[k] = !knownKeysOff[k]
 	}
 	values := map[string]string{}
 	for k := range knownValueKeys {
