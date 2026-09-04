@@ -1526,14 +1526,6 @@ export async function rediscoverMission(id: string): Promise<void> {
   await request<void>(`/v1/missions/${id}/rediscover`, { method: 'POST' })
 }
 
-// getMissionDetailExecutionPlan resolves an existing mission's phases
-// from its own snapshotted routes (D-100), the detail page's read-only
-// counterpart to getMissionExecutionPlan.
-export async function getMissionDetailExecutionPlan(id: string): Promise<ExecutionPlanPhase[]> {
-  const { phases } = await request<{ phases: ExecutionPlanPhase[] }>(`/v1/missions/${id}/execution-plan`)
-  return phases ?? []
-}
-
 // patchMissionRouting rewrites a paused mission's review route and
 // optional model pin (D-100). The server answers 409 not_paused for a
 // running or finished mission and 400 route_unusable when the route

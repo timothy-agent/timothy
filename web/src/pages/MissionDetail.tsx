@@ -18,7 +18,6 @@ import {
   cancelMission,
   deleteMission,
   getMission,
-  getMissionDetailExecutionPlan,
   listSchedules,
   missionEvents,
   missionUsage,
@@ -30,7 +29,6 @@ import {
   sendMissionNote,
 } from '../api/client'
 import type {
-  ExecutionPlanPhase,
   ExecutorProgressPayload,
   Mission,
   MissionEvent,
@@ -44,7 +42,6 @@ import { FindingsSection } from '../components/missions/FindingsSection'
 import { GoalSection } from '../components/missions/GoalSection'
 import { InputRequestBanner } from '../components/missions/InputRequestBanner'
 import { MarkdownField } from '../components/missions/MarkdownField'
-import { MissionExecutionPlan } from '../components/missions/MissionExecutionPlan'
 import { ReviewRoutePicker } from '../components/missions/ReviewRoutePicker'
 import { PermissionBanner } from '../components/missions/PermissionBanner'
 import { PlanApprovalBanner } from '../components/missions/PlanApprovalBanner'
@@ -256,10 +253,6 @@ export function MissionDetail() {
   const [mission, setMission] = useState<Mission | null>(null)
   const [events, setEvents] = useState<MissionEvent[]>([])
   const [usage, setUsage] = useState<MissionUsage | null>(null)
-  // executionPlan is the mission's own per-phase route resolution
-  // (D-100): read only here, refetched with the mission so a routing
-  // change or a provider coming back shows up.
-  const [executionPlan, setExecutionPlan] = useState<ExecutionPlanPhase[] | null>(null)
   const [schedule, setSchedule] = useState<Schedule | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -319,9 +312,6 @@ export function MissionDetail() {
     }, () => undefined)
     missionUsage(id).then((u) => {
       if (seq === refreshSeq.current) setUsage(u)
-    }, () => undefined)
-    getMissionDetailExecutionPlan(id).then((p) => {
-      if (seq === refreshSeq.current) setExecutionPlan(p)
     }, () => undefined)
   }, [id])
 
@@ -1034,8 +1024,6 @@ export function MissionDetail() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      <MissionExecutionPlan plan={executionPlan} title="Execution plan" />
 
       {mission.discover_notes && (
         <section>
