@@ -158,11 +158,19 @@ type Driver struct {
 	retryDelayFn func(consecutiveFailures int) time.Duration
 
 	// gitCommitStyle resolves the settings-configured default commit
-	// style (see SetGitCommitStyle) — consulted by runExecute only when
-	// the mission's own CommitStyle is empty (mission override > settings
-	// > CommitStyleConventional). nil-safe: unset falls straight through
-	// to CommitMessage's own conventional-style default.
+	// style (see SetGitCommitStyle), consulted by effectiveCommitStyle
+	// only when no github destination entry's own policy sets one
+	// (destination override > settings > CommitStyleConventional).
+	// nil-safe: unset falls straight through to CommitMessage's own
+	// conventional-style default.
 	gitCommitStyle func(ctx context.Context) string
+
+	// resolveGitHubPolicy wires GitHubPolicyResolver (see
+	// SetGitHubPolicyResolver): resolves a mission's github destination
+	// entries' saved branch pattern / commit style, consulted by
+	// githubPolicy before the settings defaults above. nil-safe: unset
+	// means every mission falls straight through to settings.
+	resolveGitHubPolicy GitHubPolicyResolver
 
 	// reviewWindow resolves the context window (tokens) of the model a
 	// review route would serve, for the packet byte budget (D-097, see
@@ -182,19 +190,6 @@ type Driver struct {
 	// worker packet's exec-environment note and progress-note timestamps
 	// (see SetLocation), nil-safe: unset renders both in UTC.
 	location func(ctx context.Context) *time.Location
-
-	// completer runs a mission's recorded on_complete choice
-	// (push/push_pr) once it reaches phase=done (see SetCompleter,
-	// fireOnComplete) — nil-safe: unset (no connectors/secrets wired)
-	// just means the auto-fire hook never runs, same as a mission whose
-	// on_complete is "". destinations.GitHubAdapter satisfies onCompleter.
-	completer onCompleter
-
-	// notifyPushFailed fires a best-effort notification when the
-	// auto-fire hook's push/PR attempt fails (see SetPushFailedNotifier)
-	// — nil-safe: unset just skips the notification, the mission.push_failed
-	// event (GitHubAdapter.PushBranch's own append) is still recorded either way.
-	notifyPushFailed func(ctx context.Context, missionID, message string)
 
 	// memory wires the memoryd extraction hook (see SetMemoryExtract) —
 	// nil-safe: unset skips extraction entirely, same as chat's own
@@ -358,6 +353,65 @@ func (d *Driver) SetCapacityGate(gate capacityChecker) {
 	d.capacity = gate
 }
 
+// GitHubPolicy is the git strategy a saved github destination row
+// carries (destinations.GitHubConfig's BranchPattern/CommitStyle):
+// resolved fresh at provisioning/commit time, missions never imports
+// destinations directly (see GitHubPolicyResolver).
+type GitHubPolicy struct {
+	BranchPattern string
+	CommitStyle   string
+}
+
+// GitHubPolicyResolver resolves a destination id to its github row's
+// policy, destinations.Store.GitHubPolicy (or an equivalent lookup)
+// satisfies this. ok is false when id does not name a github-kind row
+// (missions has no compile-time dependency on destinations, same
+// reasoning as CloneTokenResolver).
+type GitHubPolicyResolver func(ctx context.Context, destinationID string) (GitHubPolicy, bool, error)
+
+// SetGitHubPolicyResolver wires the resolver ensureProvisioned and
+// effectiveCommitStyle use to resolve a mission's github destination
+// entries' branch pattern / commit style, a setter for the same
+// reason SetAgentResolver is.
+func (d *Driver) SetGitHubPolicyResolver(resolve GitHubPolicyResolver) {
+	d.provision.resolveGitHubPolicy = resolve
+	d.resolveGitHubPolicy = resolve
+}
+
+// githubPolicy walks m.Destinations' entries with a DestinationID in
+// order, taking the first one GitHubPolicyResolver reports ok=true for
+// as the mission override, same precedence a legacy single github entry
+// used to carry. Each field the row leaves empty falls back to the
+// settings default. A resolver error is logged and treated as "no
+// override" (fall through to the next entry, then settings), never
+// fails provisioning/commit.
+func (d *Driver) githubPolicy(ctx context.Context, m Mission) GitHubPolicy {
+	var policy GitHubPolicy
+	if d.resolveGitHubPolicy != nil {
+		for _, e := range m.Destinations {
+			if e.DestinationID == "" {
+				continue
+			}
+			p, ok, err := d.resolveGitHubPolicy(ctx, e.DestinationID)
+			if err != nil {
+				d.log.Warn("driver: resolve github policy failed", "mission_id", m.ID, "destination_id", e.DestinationID, "error", err)
+				continue
+			}
+			if ok {
+				policy = p
+				break
+			}
+		}
+	}
+	if policy.BranchPattern == "" && d.provision.gitBranchPattern != nil {
+		policy.BranchPattern = d.provision.gitBranchPattern(ctx)
+	}
+	if policy.CommitStyle == "" && d.gitCommitStyle != nil {
+		policy.CommitStyle = d.gitCommitStyle(ctx)
+	}
+	return policy
+}
+
 // CloneTokenResolver resolves a mission's connector_id to the PAT that
 // authenticates ensureProvisioned's clone — api/missions.go validates
 // connector_id names a github-kind connector at create time; this
@@ -488,33 +542,9 @@ func reviewTokensExceeded(used, ceiling int64) bool {
 	return ceiling > 0 && used >= ceiling
 }
 
-// onCompleter is the narrow slice of destinations.GitHubAdapter the
-// driver's auto-fire-on-done hook (fireOnComplete) needs, an interface
-// so missions never imports destinations (missions must stay import-
-// free of it; destinations imports missions the other way).
-type onCompleter interface {
-	RunOnComplete(ctx context.Context, m Mission) (DestinationEntry, bool, error)
-}
-
-// SetCompleter wires the onCompleter the driver's auto-fire-on-done hook
-// (fireOnComplete) runs a mission's on_complete choice through — a
-// setter (not a NewDriver parameter) for the same reason SetAgentResolver
-// is: cmd/brain/main.go builds it after the Driver, once connectors/
-// secrets are available.
-func (d *Driver) SetCompleter(c onCompleter) {
-	d.completer = c
-}
-
-// SetPushFailedNotifier wires the best-effort notification fired when
-// the auto-fire hook's push/PR attempt fails — a setter for the same
-// reason SetCompleter is.
-func (d *Driver) SetPushFailedNotifier(notify func(ctx context.Context, missionID, message string)) {
-	d.notifyPushFailed = notify
-}
-
 // SetMemoryExtract wires the memoryd extraction hook fired once a
 // mission reaches a terminal phase (see extractMissionMemory) — a
-// setter (not a NewDriver parameter) for the same reason SetCompleter
+// setter (not a NewDriver parameter) for the same reason SetAgentResolver
 // is. Optional — nil (today's default) leaves missions extracting
 // nothing into memory.
 func (d *Driver) SetMemoryExtract(fn MemoryExtract) {
@@ -556,9 +586,7 @@ func (d *Driver) SetDestinationDeliver(fn DestinationDeliver) {
 // deliverableEntries filters m.Destinations down to the kinds
 // DestinationDeliver actually delivers: email/webhook/telegram/github,
 // i.e. every entry naming an operator-owned destinations table row. A
-// "kb" entry is acted on by promoteToKB instead, and the legacy
-// self-describing "github" entry (Destination == "github", no
-// DestinationID) by fireOnComplete.
+// "kb" entry is acted on by promoteToKB instead.
 func deliverableEntries(entries []DestinationEntry) []DestinationEntry {
 	var out []DestinationEntry
 	for _, e := range entries {
@@ -716,63 +744,6 @@ func (d *Driver) fireOnTerminal(m Mission) {
 	go d.onTerminal(rctx, m) //nolint:gosec // G118: deliberate — the mission is already terminal, the hook must outlive whatever request/ctx observed that transition
 }
 
-// fireOnComplete runs a mission's recorded on_complete choice
-// (push/push_pr), the SAME GitHubAdapter code the manual push/pr API
-// endpoints use, so an auto-fired push/PR can never diverge from what
-// a human clicking the button gets. GitHubAdapter.RunOnComplete already
-// appends mission.push_failed itself (via PushBranch/OpenPR's own
-// error path) on failure; this additionally fires a best-effort
-// notification so the operator hears about it, mirroring notify.go's
-// own best-effort webhook fan-out. The error return is the result
-// step's own signal to park (an explicit operator choice, made at
-// create time, so a failure here must be visible and retryable, not
-// silently swallowed).
-//
-// RunOnComplete's create-if-missing path (issue #483) may create a
-// repo and resolve the github destination entry's final RepoURL: when
-// that happened (updated), this persists it via SetDestinations before
-// returning, same "write back what actually changed" pattern
-// deliverToDestinations/promoteToKB already follow. A retry (the
-// autoResumeInfra sweep) then sees the created repo on its next
-// attempt instead of trying to create it again.
-func (d *Driver) fireOnComplete(ctx context.Context, id string, m Mission) error {
-	onComplete := m.OnComplete()
-	if d.completer == nil || onComplete == "" {
-		return nil
-	}
-	entry, updated, err := d.completer.RunOnComplete(ctx, m)
-	if updated {
-		merged := mergeGitHubDestinationEntry(m.Destinations, entry)
-		if setErr := d.store.SetDestinations(ctx, id, merged); setErr != nil {
-			d.log.Warn("driver: persist github destination entry failed", "mission_id", id, "error", setErr)
-		}
-	}
-	if err != nil {
-		d.log.Error("driver: on_complete auto-fire failed", "mission_id", id, "on_complete", onComplete, "error", err)
-		if d.notifyPushFailed != nil {
-			d.notifyPushFailed(ctx, id, fmt.Sprintf("mission %s: automatic %s failed: %s", id, onComplete, err.Error()))
-		}
-		return err
-	}
-	return nil
-}
-
-// mergeGitHubDestinationEntry replaces all's "github" entry with
-// updated, leaving every other entry untouched: mergeDestinationEntries'
-// counterpart for the single github entry (which, unlike email/webhook/
-// telegram entries, has no DestinationID to match on).
-func mergeGitHubDestinationEntry(all []DestinationEntry, updated DestinationEntry) []DestinationEntry {
-	merged := make([]DestinationEntry, len(all))
-	for i, e := range all {
-		if e.Destination == DestinationKindGitHub {
-			merged[i] = updated
-			continue
-		}
-		merged[i] = e
-	}
-	return merged
-}
-
 // resultStepOrder documents runResult's fixed sequence (slice 1 of the
 // phase redesign, D-086): every piece the old terminal-done transition
 // used to fire, now run as the result phase's own deterministic step,
@@ -782,10 +753,10 @@ func mergeGitHubDestinationEntry(all []DestinationEntry, updated DestinationEntr
 //     reload so every piece past this point sees the backfilled name.
 //  2. artifact copy (see copyArtifacts): runs before destinations
 //     delivery below so its webhook payload can include the refs.
-//  3. destinations delivery, kb promotion, on_complete: each a
-//     required piece now (unlike before this phase existed); any
-//     failure among them means runResult reports failure and the
-//     driver parks the mission in result instead of losing it.
+//  3. destinations delivery, kb promotion: each a required piece now
+//     (unlike before this phase existed); any failure among them
+//     means runResult reports failure and the driver parks the
+//     mission in result instead of losing it.
 //
 // A failure in one piece does not stop the others from running this
 // same round: every piece gets a chance, and every failure is folded
@@ -824,14 +795,6 @@ func (d *Driver) runResult(ctx context.Context, m Mission) (StepInput, error) {
 		summary["promoted_kb_collection_id"] = kbCollectionID
 	}
 
-	onComplete := m.OnComplete()
-	if err := d.fireOnComplete(ctx, m.ID, m); err != nil {
-		failures = append(failures, "on_complete: "+err.Error())
-		summary["on_complete_error"] = err.Error()
-	} else if onComplete != "" {
-		summary["on_complete"] = onComplete
-	}
-
 	if len(m.ArtifactRefs) > 0 {
 		summary["artifacts_copied"] = len(m.ArtifactRefs)
 	}
@@ -849,9 +812,9 @@ func (d *Driver) runResult(ctx context.Context, m Mission) (StepInput, error) {
 // every terminal-transition hook, replacing what used to be a verbatim
 // block duplicated in both. Since D-086 (the result phase), this only
 // covers the hooks that fire on EVERY terminal transition (done or
-// failed): delivery/copy/promote/on_complete moved into runResult,
-// which the driver runs as an ordinary phase step before the mission
-// ever reaches this function.
+// failed): delivery/copy/promote moved into runResult, which the
+// driver runs as an ordinary phase step before the mission ever
+// reaches this function.
 //
 // Fixed order:
 //  1. sandbox container removal (async, best-effort)
@@ -1555,16 +1518,10 @@ func restorePassedUnits(plan *Plan, prior Plan) {
 	}
 }
 
-// effectiveCommitStyle resolves the precedence mission override >
+// effectiveCommitStyle resolves the precedence destination override >
 // settings default > CommitMessage's own conventional-style default.
 func (d *Driver) effectiveCommitStyle(ctx context.Context, m Mission) string {
-	if e, ok := m.GitHubEntry(); ok && e.CommitStyle != "" {
-		return e.CommitStyle
-	}
-	if d.gitCommitStyle != nil {
-		return d.gitCommitStyle(ctx)
-	}
-	return ""
+	return d.githubPolicy(ctx, m).CommitStyle
 }
 
 func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {

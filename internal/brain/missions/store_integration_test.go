@@ -518,18 +518,17 @@ func TestMissionLightAndFinalOutputRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMissionOnCompleteRoundTrips covers on_complete: a "github"
-// destinations entry snapshotted at create time (issue #480), same
-// shape as Harness above: no github entry (do nothing) is the default
-// when a mission omits it.
-func TestMissionOnCompleteRoundTrips(t *testing.T) {
+// TestMissionDestinationRepoURLRoundTrips covers a github-kind
+// destination entry's repo_url override (issue #561): snapshotted at
+// create time, same shape as Harness above.
+func TestMissionDestinationRepoURLRoundTrips(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
 	id, err := s.Create(ctx, Mission{
-		Goal: marker + "on-complete", Kind: "coding", Route: "default",
+		Goal: marker + "destination-repo-url", Kind: "coding", Route: "default",
 		Sources:      []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}},
-		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push_pr"}},
+		Destinations: []DestinationEntry{{DestinationID: "gh-dest-1", RepoURL: "https://github.com/octo/other.git"}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -538,11 +537,11 @@ func TestMissionOnCompleteRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if m.OnComplete() != "push_pr" {
-		t.Fatalf("OnComplete() = %q, want push_pr", m.OnComplete())
+	if len(m.Destinations) != 1 || m.Destinations[0].RepoURL != "https://github.com/octo/other.git" {
+		t.Fatalf("Destinations = %+v, want repo_url round-tripped", m.Destinations)
 	}
 
-	id2, err := s.Create(ctx, Mission{Goal: marker + "no-on-complete", Kind: "general", Route: "default"})
+	id2, err := s.Create(ctx, Mission{Goal: marker + "no-destination-repo-url", Kind: "general", Route: "default"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -550,51 +549,8 @@ func TestMissionOnCompleteRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if m2.OnComplete() != "" {
-		t.Fatalf("OnComplete() = %q, want empty when not set", m2.OnComplete())
-	}
-}
-
-// TestMissionGitStrategyRoundTrips covers branch_pattern/commit_style:
-// fields of a "github" destinations entry snapshotted at create time
-// (issue #480), same shape as Harness above: "" (use the settings
-// default) is the default when a mission omits them.
-func TestMissionGitStrategyRoundTrips(t *testing.T) {
-	s := testStore(t)
-	ctx := t.Context()
-
-	id, err := s.Create(ctx, Mission{
-		Goal: marker + "git-strategy", Kind: "coding", Route: "default",
-		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push", BranchPattern: "{type}/{login}/{slug}", CommitStyle: "plain"}},
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	m, err := s.Get(ctx, id)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	e, ok := m.GitHubEntry()
-	if !ok {
-		t.Fatal("GitHubEntry() ok = false, want true")
-	}
-	if e.BranchPattern != "{type}/{login}/{slug}" {
-		t.Fatalf("BranchPattern = %q, want {type}/{login}/{slug}", e.BranchPattern)
-	}
-	if e.CommitStyle != "plain" {
-		t.Fatalf("CommitStyle = %q, want plain", e.CommitStyle)
-	}
-
-	id2, err := s.Create(ctx, Mission{Goal: marker + "no-git-strategy", Kind: "general", Route: "default"})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	m2, err := s.Get(ctx, id2)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if _, ok := m2.GitHubEntry(); ok {
-		t.Fatal("GitHubEntry() ok = true, want false when not set")
+	if len(m2.Destinations) != 0 {
+		t.Fatalf("Destinations = %+v, want empty when not set", m2.Destinations)
 	}
 }
 

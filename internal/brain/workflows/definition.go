@@ -40,7 +40,6 @@ type Step struct {
 	Route          string   `json:"route,omitempty"`
 	PlanRoute      string   `json:"plan_route,omitempty"`
 	AgentID        string   `json:"agent_id,omitempty"`
-	OnComplete     string   `json:"on_complete,omitempty"`
 	DestinationIDs []string `json:"destination_ids,omitempty"`
 }
 
@@ -83,11 +82,6 @@ func (d *Definition) Validate() error {
 		case "coding", "general":
 		default:
 			return fmt.Errorf("step %q: kind must be \"coding\" or \"general\"", name)
-		}
-		switch d.Steps[name].OnComplete {
-		case "", "push", "push_pr":
-		default:
-			return fmt.Errorf("step %q: on_complete must be \"\", \"push\", or \"push_pr\"", name)
 		}
 		if d.Steps[name].Light && d.Steps[name].Kind != "general" {
 			return fmt.Errorf("step %q: light is only valid for kind=general", name)

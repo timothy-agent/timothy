@@ -274,6 +274,43 @@ func (s *Store) EnabledByID(ctx context.Context, id string) (bool, error) {
 	return d.Enabled, nil
 }
 
+// KindByID reports id's kind and enabled state, missions.ValidateDeps'
+// DestinationKind dep: a mission's destination entry must both exist
+// AND be enabled, and a "github" kind entry carries its own extra
+// create-time rules (coding-only, repo_url only on github).
+func (s *Store) KindByID(ctx context.Context, id string) (kind string, enabled bool, err error) {
+	d, err := s.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return d.Kind, d.Enabled, nil
+}
+
+// GitHubPolicy resolves id's saved branch pattern / commit style for
+// missions.GitHubPolicyResolver: ok is false when id does not name a
+// github-kind row (missions has no compile-time dependency on this
+// package, see missions.GitHubPolicy's doc comment).
+func (s *Store) GitHubPolicy(ctx context.Context, id string) (missions.GitHubPolicy, bool, error) {
+	d, err := s.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return missions.GitHubPolicy{}, false, nil
+		}
+		return missions.GitHubPolicy{}, false, err
+	}
+	if d.Kind != "github" {
+		return missions.GitHubPolicy{}, false, nil
+	}
+	var cfg GitHubConfig
+	if err := json.Unmarshal(d.Config, &cfg); err != nil {
+		return missions.GitHubPolicy{}, false, fmt.Errorf("github config: %w", err)
+	}
+	return missions.GitHubPolicy{BranchPattern: cfg.BranchPattern, CommitStyle: cfg.CommitStyle}, true, nil
+}
+
 // Create validates and inserts a destination row.
 func (s *Store) Create(ctx context.Context, d Destination) (string, error) {
 	if err := validate(ctx, s.conns, d); err != nil {

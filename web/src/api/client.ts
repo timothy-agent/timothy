@@ -1097,19 +1097,6 @@ export async function listConnectorRepos(id: string): Promise<GitHubRepo[]> {
   return repos ?? []
 }
 
-// createConnectorRepo creates a new repo through a github-kind
-// connector's PAT, auto-initialized so it has a default branch to
-// clone into a mission workspace.
-export async function createConnectorRepo(
-  id: string,
-  input: { name: string; private: boolean },
-): Promise<GitHubRepo> {
-  return request<GitHubRepo>(`/v1/admin/connectors/${id}/repos`, {
-    method: 'POST',
-    body: JSON.stringify(input),
-  })
-}
-
 // connectorOAuthStart returns the Google consent URL to send the
 // browser to; the callback lands back on /settings?tab=connectors.
 export async function connectorOAuthStart(id: string): Promise<string> {
@@ -1264,35 +1251,6 @@ export interface CreateMissionInput {
   // clone) and is only valid when kind === 'coding'.
   repo_url?: string
   connector_id?: string
-  // on_complete is the operator's consent-at-create choice for what the
-  // harness does automatically once this mission reaches done: omit
-  // (or "") does nothing, "push" pushes the branch, "push_pr" pushes
-  // then opens a pull request. Requires repo_url + connector_id and
-  // kind === 'coding', UNLESS create_if_missing is set (see below).
-  on_complete?: '' | 'push' | 'push_pr'
-  // branch_pattern/commit_style override the settings-configured git
-  // strategy defaults for this mission alone; omit (or "") applies the
-  // settings default. See FeaturesTab's git strategy cards for the
-  // placeholder/style reference.
-  branch_pattern?: string
-  commit_style?: string
-  // create_if_missing (issue #483) opts the github destination entry
-  // into creating destination_repo_url's repo (or one derived from the
-  // mission's goal, when destination_repo_url is omitted) through
-  // destination_connector_id's credential if it doesn't exist yet at
-  // delivery time, instead of failing the push/PR. Only meaningful
-  // alongside on_complete. Lets a scratch mission (no repo_url/
-  // connector_id at all, self-init'd worktree) still push somewhere.
-  create_if_missing?: boolean
-  // destination_connector_id/destination_repo_url name the github
-  // destination entry's OWN push target, distinct from repo_url/
-  // connector_id above (the mission's clone SOURCE): a scratch mission
-  // can push via create_if_missing, and even a cloned mission can push
-  // to a different repo than it cloned from. destination_connector_id
-  // omitted falls back to connector_id (the common case: the same
-  // connector authenticates both clone and push).
-  destination_connector_id?: string
-  destination_repo_url?: string
   // parent_mission_id, when set, makes this a follow-up mission: the
   // named mission must already be terminal (done/failed). Its branch,
   // when reachable, becomes this mission's worktree base, and its
@@ -1305,6 +1263,11 @@ export interface CreateMissionInput {
   // mission's outcome digest to on the terminal done transition; omit
   // (or empty) delivers nowhere.
   destination_ids?: string[]
+  // destination_repo_urls overrides one checked github destination's
+  // push target, keyed by its destination id: an https clone URL.
+  // Omitted (or a missing key) reuses the source repo the mission was
+  // cloned from, or lets the destination create one when it allows it.
+  destination_repo_urls?: Record<string, string>
   // promote_kb_collection_id names a kb collection to promote this
   // mission's markdown artifacts into in the result phase's step
   // (D-081, issue #370; D-086); omit (or "") promotes nothing automatically.
@@ -1433,30 +1396,6 @@ export async function classifyMission(
       body: JSON.stringify({ goal }),
     },
   )
-}
-
-// GitHubDestinationDetection is detectMissionDestination's result: a
-// found proposal names an owner/repo (and push/push_pr mode) the goal
-// unambiguously named; found: false means nothing was detected
-// (ambiguous goal, no repo named, or the server has no gateway wired)
-// -- never a guess, and never auto-applied by the caller.
-export interface GitHubDestinationDetection {
-  found: boolean
-  owner?: string
-  repo?: string
-  mode?: 'push' | 'push_pr'
-}
-
-// detectMissionDestination is the create form's explicit "Detect from
-// goal" action (issue #483): unlike classifyMission's live debounced
-// preview, this is only ever called on demand -- the proposal must
-// reach the operator for review/confirm/discard before it can ride a
-// create request, so it can't be a silent background/backfilled step.
-export async function detectMissionDestination(goal: string): Promise<GitHubDestinationDetection> {
-  return request<GitHubDestinationDetection>('/v1/missions/detect-destination', {
-    method: 'POST',
-    body: JSON.stringify({ goal }),
-  })
 }
 
 export async function getMission(id: string): Promise<Mission> {

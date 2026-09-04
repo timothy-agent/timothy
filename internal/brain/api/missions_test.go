@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
-	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
@@ -27,7 +26,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/missions"},
@@ -67,7 +66,7 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	call := func(path string) int {
 		req := httptest.NewRequest("GET", path, nil)
@@ -121,7 +120,7 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	req := httptest.NewRequest("DELETE", "/v1/missions/abc", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -141,7 +140,7 @@ func TestMissionsExportPDFNotEnabled(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/abc/export-pdf", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -180,7 +179,7 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 
 	post := func(codingExecutorDefault func(context.Context) string, body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -241,7 +240,7 @@ func TestMissionsCreateValidatesLight(t *testing.T) {
 
 	post := func(classify func(context.Context, string) (string, error), body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -280,7 +279,7 @@ func TestMissionsCreateFlowNormalization(t *testing.T) {
 
 	post := func(body string) (int, string) {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -347,7 +346,7 @@ func TestMissionsCreateValidatesRepoURL(t *testing.T) {
 
 	post := func(body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns, nil, "", nil, nil, nil, nil, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns, nil, "", nil, nil, nil, nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -373,139 +372,13 @@ func TestMissionsCreateValidatesRepoURL(t *testing.T) {
 	// No conns wired at all: repo_url is rejected outright rather than
 	// panicking on a nil manager.
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(`{"goal":"g","kind":"coding","repo_url":"https://github.com/o/r","connector_id":"1"}`))
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
 	if w.Code != 400 {
 		t.Fatalf("repo_url with no conns wired = %d, want 400", w.Code)
-	}
-}
-
-// TestMissionsCreateValidatesOnComplete covers on_complete's create()
-// gate: an unknown value is rejected outright, and "push"/"push_pr"
-// both require a github-connection coding mission (repo_url +
-// connector_id) — mirrors TestMissionsCreateValidatesRepoURL's shape.
-func TestMissionsCreateValidatesOnComplete(t *testing.T) {
-	t.Parallel()
-	a, _, _ := testAPI(t, "tok", nil)
-	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
-	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
-	connStore := connectors.NewStore(pool, discard())
-	conns := connectors.NewManager(connStore, nil, discard())
-
-	post := func(body string) int {
-		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns, nil, "", nil, nil, nil, nil, nil)
-		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
-		req.Header.Set("Authorization", "Bearer tok")
-		w := httptest.NewRecorder()
-		m.ServeHTTP(w, req)
-		return w.Code
-	}
-
-	if code := post(`{"goal":"g","kind":"coding","repo_url":"https://github.com/o/r","connector_id":"1","on_complete":"bogus"}`); code != 400 {
-		t.Fatalf("unknown on_complete = %d, want 400", code)
-	}
-	if code := post(`{"goal":"g","kind":"coding","on_complete":"push"}`); code != 400 {
-		t.Fatalf("on_complete=push without repo_url/connector_id = %d, want 400", code)
-	}
-	if code := post(`{"goal":"g","kind":"coding","on_complete":"push_pr"}`); code != 400 {
-		t.Fatalf("on_complete=push_pr without repo_url/connector_id = %d, want 400", code)
-	}
-	if code := post(`{"goal":"g","kind":"general","repo_url":"https://github.com/o/r","connector_id":"1","on_complete":"push"}`); code != 400 {
-		t.Fatalf("on_complete=push on kind=general = %d, want 400", code)
-	}
-}
-
-// TestMissionsCreateValidatesCreateIfMissing covers create()'s
-// create_if_missing gate (issue #483, missions.ValidateCreate: wired
-// via SetValidateDeps here so ValidateCreate actually runs, same
-// pattern TestMissionsCreateValidatesGitStrategy/ParentMission use):
-// unlike plain on_complete=push, create_if_missing=true does NOT
-// require repo_url on the request (a scratch mission's repo doesn't
-// exist yet), but still requires SOME connector_id to authenticate the
-// eventual create call, either destination_connector_id or the plain
-// connector_id (the clone source, reused when the destination doesn't
-// name its own). create_if_missing with no connector_id at all is
-// rejected outright, with a distinct message (not the generic
-// degraded-store 400 every passing case here also hits).
-func TestMissionsCreateValidatesCreateIfMissing(t *testing.T) {
-	t.Parallel()
-	a, _, _ := testAPI(t, "tok", nil)
-	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
-	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
-	driver.SetValidateDeps(missions.ValidateDeps{})
-
-	post := func(body string) (int, string) {
-		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
-		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
-		req.Header.Set("Authorization", "Bearer tok")
-		w := httptest.NewRecorder()
-		m.ServeHTTP(w, req)
-		b, _ := io.ReadAll(w.Result().Body)
-		return w.Code, string(b)
-	}
-
-	// create_if_missing with no connector_id anywhere: rejected by
-	// ValidateCreate's own message, before ever reaching the store.
-	if code, body := post(`{"goal":"g","kind":"coding","route":"default","on_complete":"push","create_if_missing":true}`); code != 400 || !strings.Contains(body, "create_if_missing requires connector_id") {
-		t.Fatalf("create_if_missing with no connector_id: code=%d body=%q, want 400 naming create_if_missing", code, body)
-	}
-	// create_if_missing with destination_connector_id but no repo_url:
-	// passes ValidateCreate (still 400, but the generic degraded-store
-	// message, not create_if_missing's own gate, proving it got
-	// through, same shape TestMissionsCreateValidatesGitStrategy uses).
-	// This also proves repo_url is NOT required when create_if_missing
-	// is set (unlike plain on_complete=push, TestMissionsCreateValidatesOnComplete).
-	if code, body := post(`{"goal":"g","kind":"coding","route":"default","on_complete":"push","create_if_missing":true,"destination_connector_id":"conn1"}`); code != 400 || !strings.Contains(body, "database unavailable") {
-		t.Fatalf("create_if_missing with destination_connector_id: code=%d body=%q, want past validation (database unavailable)", code, body)
-	}
-}
-
-// TestMissionsCreateValidatesGitStrategy covers create()'s
-// branch_pattern/commit_style gate: an invalid pattern/style is
-// rejected outright (a distinct error body, before Driver.Create is
-// ever reached), while a valid one passes validation and reaches the
-// (degraded) store — same generic 400 failMission maps every
-// unrecognized store error to, mirroring
-// TestMissionsCreateValidatesHarness's shape.
-func TestMissionsCreateValidatesGitStrategy(t *testing.T) {
-	t.Parallel()
-	a, _, _ := testAPI(t, "tok", nil)
-	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
-	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
-	driver.SetValidateDeps(missions.ValidateDeps{})
-
-	post := func(body string) (int, string) {
-		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
-		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
-		req.Header.Set("Authorization", "Bearer tok")
-		w := httptest.NewRecorder()
-		m.ServeHTTP(w, req)
-		b, _ := io.ReadAll(w.Result().Body)
-		return w.Code, string(b)
-	}
-
-	if code, body := post(`{"goal":"g","kind":"coding","branch_pattern":"{unknown}/{slug}"}`); code != 400 || !strings.Contains(body, "unknown placeholder") {
-		t.Fatalf("unknown placeholder: code=%d body=%q, want 400 with an unknown-placeholder message", code, body)
-	}
-	if code, body := post(`{"goal":"g","kind":"coding","branch_pattern":"../{slug}"}`); code != 400 || !strings.Contains(body, "branch pattern") {
-		t.Fatalf("traversal pattern: code=%d body=%q, want 400 with a branch-pattern message", code, body)
-	}
-	if code, body := post(`{"goal":"g","kind":"coding","commit_style":"loud"}`); code != 400 || !strings.Contains(body, "commit style") {
-		t.Fatalf("unknown commit style: code=%d body=%q, want 400 with a commit-style message", code, body)
-	}
-	// Valid values pass validation and reach the degraded store —
-	// failMission's generic 400, not a git-strategy-specific message.
-	if code, body := post(`{"goal":"g","kind":"coding","branch_pattern":"{type}/{login}/{slug}","commit_style":"plain"}`); code != 400 || strings.Contains(body, "branch pattern") || strings.Contains(body, "commit style") {
-		t.Fatalf("valid git strategy fields: code=%d body=%q, want a generic 400 (passed validation)", code, body)
 	}
 }
 
@@ -524,7 +397,7 @@ func TestMissionsCreateValidatesParentMission(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(`{"goal":"g","kind":"general","parent_mission_id":"00000000-0000-0000-0000-000000000000"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -603,7 +476,7 @@ func TestMissionsCreateAttachmentsValidation(t *testing.T) {
 		t.Helper()
 		a, _, _ := testAPI(t, "tok", nil)
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, atts, markitdownURL, nil, nil, nil, nil, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, atts, markitdownURL, nil, nil, nil, nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -688,7 +561,7 @@ func TestMissionsCreateReferencesValidation(t *testing.T) {
 		t.Helper()
 		a, _, _ := testAPI(t, "tok", nil)
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -988,7 +861,7 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 		return "general light", nil
 	}
 	m := mux(a)
-	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions/classify", strings.NewReader(body))
@@ -1015,70 +888,6 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 	}
 }
 
-// TestMissionsDetectDestinationEndpoint covers POST
-// /v1/missions/detect-destination (issue #483): a found proposal, a
-// not-found result, the empty-goal 400, and the nil-extractor degrade
-// (no gateway wiring). Every case must 200 with found:false rather
-// than error, matching ExtractGitHubDestinationOverGateway's own
-// never-errors contract.
-func TestMissionsDetectDestinationEndpoint(t *testing.T) {
-	t.Parallel()
-	a, _, _ := testAPI(t, "tok", nil)
-	m := mux(a)
-	extract := func(ctx context.Context, goal string) chat.GitHubDestinationProposal {
-		if goal == "push to github.com/octocat/hello-world" {
-			return chat.GitHubDestinationProposal{Found: true, Owner: "octocat", Repo: "hello-world", Mode: "push"}
-		}
-		return chat.GitHubDestinationProposal{}
-	}
-	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, extract)
-
-	call := func(body string) (int, string) {
-		req := httptest.NewRequest("POST", "/v1/missions/detect-destination", strings.NewReader(body))
-		req.Header.Set("Authorization", "Bearer tok")
-		w := httptest.NewRecorder()
-		m.ServeHTTP(w, req)
-		return w.Code, w.Body.String()
-	}
-
-	if code, body := call(`{"goal":"push to github.com/octocat/hello-world"}`); code != http.StatusOK {
-		t.Fatalf("detect-destination with a matching goal = %d %s, want 200", code, body)
-	} else if !strings.Contains(body, `"found":true`) || !strings.Contains(body, `"owner":"octocat"`) || !strings.Contains(body, `"repo":"hello-world"`) {
-		t.Fatalf("detect-destination body = %s, want found owner/repo", body)
-	}
-
-	if code, body := call(`{"goal":"write a report"}`); code != http.StatusOK {
-		t.Fatalf("detect-destination with a non-matching goal = %d %s, want 200", code, body)
-	} else if !strings.Contains(body, `"found":false`) {
-		t.Fatalf("detect-destination body = %s, want found false", body)
-	}
-
-	if code, _ := call(`{"goal":""}`); code != http.StatusBadRequest {
-		t.Fatalf("detect-destination with an empty goal = %d, want 400", code)
-	}
-}
-
-// TestMissionsDetectDestinationEndpointNilExtractorDegrades proves a
-// nil extractGitHubDestination (no gateway wiring) still 200s with
-// found:false instead of erroring.
-func TestMissionsDetectDestinationEndpointNilExtractorDegrades(t *testing.T) {
-	t.Parallel()
-	a, _, _ := testAPI(t, "tok", nil)
-	m := mux(a)
-	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
-
-	req := httptest.NewRequest("POST", "/v1/missions/detect-destination", strings.NewReader(`{"goal":"push to github.com/octocat/hello-world"}`))
-	req.Header.Set("Authorization", "Bearer tok")
-	w := httptest.NewRecorder()
-	m.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("detect-destination with nil extractor = %d, want 200", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), `"found":false`) {
-		t.Fatalf("detect-destination body = %s, want found false", w.Body.String())
-	}
-}
-
 // TestMissionsResumeMalformedBodyRejected confirms a resume request
 // with a body that isn't valid JSON 400s before ever reaching the store
 // or driver — a degraded pool would surface as 500 (failMission's
@@ -1091,7 +900,7 @@ func TestMissionsResumeMalformedBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/abc/resume", strings.NewReader(`{not json`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1114,7 +923,7 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/resume", body)
@@ -1145,7 +954,7 @@ func TestMissionsNoteMalformedOrEmptyBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/note", body)
@@ -1293,7 +1102,7 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -1334,7 +1143,7 @@ func TestMissionsCreateHasPlan(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -1391,7 +1200,7 @@ func TestPRRejectsNonGitHubConnectionMission(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	// Against a degraded pool, store.Get itself fails before the
 	// connector_id/repo_url gate is ever reached — this test only
@@ -2065,7 +1874,7 @@ func TestPromoteKBNotEnabledWithoutStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/some-id/promote-kb", strings.NewReader(`{"collection_id":"c1"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -2099,7 +1908,7 @@ func TestPromoteKBReachesStore(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	kbStore := kb.New(pool)
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, kbStore, noopIngester{}, nil, nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, kbStore, noopIngester{}, nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/some-id/promote-kb", strings.NewReader(`{"collection_id":"c1"}`))
 	req.Header.Set("Authorization", "Bearer tok")

@@ -19,7 +19,9 @@ function missionToInitial(m: Mission): Partial<CreateMissionInput> {
     escalation_route: m.escalation_route,
     harness: m.harness,
     environment: m.environment,
-    on_complete: m.on_complete,
+    destination_ids: m.destinations
+      ?.map((d) => d.destination_id)
+      .filter((id): id is string => !!id),
   }
 }
 

@@ -47,12 +47,19 @@ type provisioner struct {
 
 	// gitBranchPattern resolves the settings-configured default branch
 	// pattern (see SetGitBranchPattern) — consulted by ensureProvisioned
-	// only when the mission's own github destination entry has no
-	// BranchPattern (mission override > settings > worktree.go's
+	// only when no github destination entry's own policy sets one
+	// (destination override > settings > worktree.go's
 	// DefaultBranchPattern). nil-safe: unset falls straight through to
 	// Provision's own DefaultBranchPattern fallback, same as before this
 	// setting existed.
 	gitBranchPattern func(ctx context.Context) string
+
+	// resolveGitHubPolicy wires GitHubPolicyResolver (see
+	// Driver.SetGitHubPolicyResolver): resolves a mission's github
+	// destination entries' saved branch pattern, consulted before
+	// gitBranchPattern above. nil-safe: unset means every mission falls
+	// straight through to settings.
+	resolveGitHubPolicy GitHubPolicyResolver
 
 	// resolvePRState resolves whether a github PR has been merged (see
 	// SetPRStateResolver) — consulted by followUpBaseRef when the parent
@@ -149,13 +156,7 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 				}
 			}
 		}
-		branchPattern := ""
-		if e, ok := m.GitHubEntry(); ok {
-			branchPattern = e.BranchPattern
-		}
-		if branchPattern == "" && p.gitBranchPattern != nil {
-			branchPattern = p.gitBranchPattern(ctx)
-		}
+		branchPattern := p.githubBranchPattern(ctx, m)
 		baseRef := p.followUpBaseRef(ctx, m)
 		m = p.nameBeforeBranch(ctx, m)
 		workspace, worktree, branch, baseCommit, baseUsed, err := p.workspace.Provision(ctx, m.ID, m.Goal, m.Name, m.Kind, repoURL, token, connIdentity, branchPattern, baseRef)
@@ -205,6 +206,33 @@ func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission
 		}
 	}
 	return m, nil
+}
+
+// githubBranchPattern resolves the precedence a mission's github
+// destination entries (in order, first ok=true wins) > settings
+// default > "" (Provision's own DefaultBranchPattern fallback), a
+// resolver error is logged and treated as "no override," never fails
+// provisioning.
+func (p *provisioner) githubBranchPattern(ctx context.Context, m Mission) string {
+	if p.resolveGitHubPolicy != nil {
+		for _, e := range m.Destinations {
+			if e.DestinationID == "" {
+				continue
+			}
+			policy, ok, err := p.resolveGitHubPolicy(ctx, e.DestinationID)
+			if err != nil {
+				p.log.Warn("driver: resolve github policy failed", "mission_id", m.ID, "destination_id", e.DestinationID, "error", err)
+				continue
+			}
+			if ok && policy.BranchPattern != "" {
+				return policy.BranchPattern
+			}
+		}
+	}
+	if p.gitBranchPattern != nil {
+		return p.gitBranchPattern(ctx)
+	}
+	return ""
 }
 
 // followUpBaseRef resolves a follow-up mission's worktree base: the

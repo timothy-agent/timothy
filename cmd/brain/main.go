@@ -303,11 +303,10 @@ func main() {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, gwc,
 			flags.PermissionTimeoutSeconds, flags.AskTimeoutSeconds, broker.Resolve, app.Log)
 	}
-	// The push/PR adapter (issue #560): built once here so both the
-	// driver's auto-fire-on-done hook (legacy self-describing github
-	// entry) and the Deliverer (saved github destination kind) share the
-	// exact same push/PR code. nil workspace/store (missions disabled)
-	// still builds one; ResolveToken/PR nil-gate its actual use.
+	// The push/PR adapter (issue #560): built once here so the Deliverer
+	// (saved github destination kind) always has the same push/PR code
+	// the manual push/pr API endpoints use. nil workspace/store (missions
+	// disabled) still builds one; ResolveToken/PR nil-gate its actual use.
 	var githubAdapter *destinations.GitHubAdapter
 	if missionDriver != nil {
 		var resolveGitHubToken destinations.PushTokenResolver
@@ -323,7 +322,6 @@ func main() {
 			githubPR = connsPRSource{conns}
 		}
 		githubAdapter = destinations.NewGitHubAdapter(missionWorkspace, missionStore, resolveGitHubToken, githubPR)
-		missionDriver.SetCompleter(githubAdapter)
 	}
 	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, githubAdapter, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
@@ -331,6 +329,9 @@ func main() {
 	}
 	if missionScheduler != nil && destinationStore != nil {
 		missionScheduler.SetDestinationEnabled(destinationStore.EnabledByID)
+	}
+	if missionDriver != nil && destinationStore != nil {
+		missionDriver.SetGitHubPolicyResolver(destinationStore.GitHubPolicy)
 	}
 	if missionDriver != nil {
 		// D-071: close the unvalidated Driver.Create path (the workflows
@@ -346,7 +347,7 @@ func main() {
 			},
 		}
 		if destinationStore != nil {
-			deps.DestinationEnabled = destinationStore.EnabledByID
+			deps.DestinationKind = destinationStore.KindByID
 		}
 		deps.KBCollectionExists = func(ctx context.Context, id string) (bool, error) {
 			if _, err := kbStore.GetCollection(ctx, id); err != nil {
@@ -759,7 +760,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, pdfService, chat.ExtractGitHubDestinationOverGateway(gwc, app.Log))
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, pdfService)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -1179,14 +1180,6 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 			return conns.PRMerged(ctx, connectorID, owner, repo, number)
 		})
 	}
-	if conns != nil && secrets != nil {
-		driver.SetPushFailedNotifier(func(ctx context.Context, missionID, message string) {
-			if err := notifier.NotifyMessage(ctx, missionID, "push_failed", message); err != nil {
-				log.Warn("driver: on_complete push_failed notification failed", "mission_id", missionID, "error", err)
-			}
-		})
-	}
-
 	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
 	// routeExists backs DefaultCodingRoute's preference check for a
 	// coding template's route (see api/missions.go's own copy of this
@@ -1271,7 +1264,6 @@ func toMissionRecord(m missions.Mission) builtin.MissionRecord {
 		CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt,
 		UnitsPassed: passed, UnitsTotal: len(m.Plan.Units),
 		PauseReason: string(m.PauseReason), PauseMessage: m.PauseMessage,
-		OnComplete:        m.OnComplete(),
 		NotPushableReason: missions.NotPushable(m),
 	}
 }

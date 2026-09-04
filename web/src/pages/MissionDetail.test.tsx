@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Mission, MissionEvent } from '../api/types'
+import type { Destination, Mission, MissionEvent } from '../api/types'
 import type { Signal } from '../lib/events'
 import { MissionDetail } from './MissionDetail'
 
@@ -30,6 +30,7 @@ vi.mock('../api/client', () => ({
   getMissionExecutionPlan: vi.fn().mockResolvedValue([]),
   patchMissionRouting: vi.fn(),
   listRoutes: vi.fn().mockResolvedValue([]),
+  listDestinations: vi.fn().mockResolvedValue([]),
 }))
 
 import {
@@ -38,6 +39,7 @@ import {
   deleteMission,
   getMission,
   getSettings,
+  listDestinations,
   listMissionFiles,
   listSchedules,
   missionEvents,
@@ -151,6 +153,7 @@ beforeEach(() => {
   vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
   vi.mocked(listSchedules).mockResolvedValue([])
   vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+  vi.mocked(listDestinations).mockResolvedValue([])
 })
 
 describe('MissionDetail spend', () => {
@@ -574,22 +577,43 @@ describe('MissionDetail environment pill', () => {
   })
 })
 
-describe('MissionDetail on_complete badge', () => {
-  it('shows the auto-push badge when on_complete is push', async () => {
-    vi.mocked(getMission).mockResolvedValue({ ...baseMission, on_complete: 'push' })
+const githubDestinationRow: Destination = {
+  id: 'dest-gh',
+  name: 'origin repo',
+  kind: 'github',
+  config: { connector_id: 'conn-1', mode: 'push_pr' },
+  credential_ref: '',
+  enabled: true,
+  created_at: '2026-01-01T00:00:00Z',
+  updated_at: '2026-01-01T00:00:00Z',
+}
+
+describe('MissionDetail github destination badges', () => {
+  it('shows the auto-push badge for a checked destination whose row mode is push', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([
+      { ...githubDestinationRow, config: { connector_id: 'conn-1', mode: 'push' } },
+    ])
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [{ destination_id: 'dest-gh' }],
+    })
     renderPage()
     expect(await screen.findByText('auto-push')).toBeTruthy()
     expect(screen.queryByText('auto-PR')).toBeNull()
   })
 
-  it('shows the auto-PR badge when on_complete is push_pr', async () => {
-    vi.mocked(getMission).mockResolvedValue({ ...baseMission, on_complete: 'push_pr' })
+  it('shows the auto-PR badge for a checked destination whose row mode is push_pr', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([githubDestinationRow])
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [{ destination_id: 'dest-gh' }],
+    })
     renderPage()
     expect(await screen.findByText('auto-PR')).toBeTruthy()
     expect(screen.queryByText('auto-push')).toBeNull()
   })
 
-  it('omits both badges when on_complete is empty', async () => {
+  it('omits both badges when no destination entries exist', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
     expect(screen.queryByText('auto-push')).toBeNull()
@@ -597,60 +621,72 @@ describe('MissionDetail on_complete badge', () => {
   })
 })
 
-describe('MissionDetail destinations (issue #483)', () => {
+describe('MissionDetail destinations', () => {
   it('omits the Destinations section when the mission has none', async () => {
     renderPage()
     await screen.findByText('Fix the login bug')
     expect(screen.queryByText('Destinations')).toBeNull()
   })
 
-  it('renders a github destination entry with repo/mode and delivered status', async () => {
+  it('renders a github destination entry with the row name, mode, branch, and delivered status', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([githubDestinationRow])
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
       destinations: [
         {
-          destination: 'github',
+          destination_id: 'dest-gh',
           repo_url: 'https://github.com/octocat/hello-world.git',
-          mode: 'push_pr',
-          create_if_missing: true,
+          branch: 'mission/fix-login',
           delivered_at: '2026-08-05T00:00:00Z',
         },
       ],
     })
     renderPage()
     expect(await screen.findByText('Destinations')).toBeTruthy()
+    expect(screen.getByText('origin repo')).toBeTruthy()
     expect(screen.getByText(/octocat\/hello-world/)).toBeTruthy()
     expect(screen.getByText(/push \+ PR/)).toBeTruthy()
-    expect(screen.getByText(/create if missing/)).toBeTruthy()
+    expect(screen.getAllByText(/mission\/fix-login/).length).toBeGreaterThan(0)
     expect(screen.getByText('delivered')).toBeTruthy()
   })
 
-  it('renders a failed github delivery with the error as a badge title', async () => {
+  it('renders a PR link when pr_url is set', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([githubDestinationRow])
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
       destinations: [
         {
-          destination: 'github',
-          mode: 'push',
-          create_if_missing: true,
-          error: 'repo does not exist and create_if_missing is not set',
+          destination_id: 'dest-gh',
+          repo_url: 'https://github.com/octocat/hello-world.git',
+          pr_url: 'https://github.com/octocat/hello-world/pull/9',
+          pr_number: 9,
         },
       ],
     })
     renderPage()
-    expect(await screen.findByText('Destinations')).toBeTruthy()
-    expect(screen.getByText(/repo not yet created/)).toBeTruthy()
-    expect(screen.getByText('failed')).toBeTruthy()
+    const link = await screen.findByRole('link', { name: 'PR #9' })
+    expect(link).toHaveAttribute('href', 'https://github.com/octocat/hello-world/pull/9')
   })
 
-  it('renders an email/webhook destination entry by its destination_id', async () => {
+  it('renders a failed github delivery with the error as a badge title', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([githubDestinationRow])
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
-      destinations: [{ destination: 'email', destination_id: 'dest-1', delivered_at: '2026-08-05T00:00:00Z' }],
+      destinations: [{ destination_id: 'dest-gh', error: 'push failed: remote rejected' }],
     })
     renderPage()
     expect(await screen.findByText('Destinations')).toBeTruthy()
-    expect(screen.getByText('dest-1')).toBeTruthy()
+    expect(screen.getByText('failed')).toBeTruthy()
+  })
+
+  it('renders a kb destination entry', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [{ destination: 'kb', collection_id: 'coll-1', delivered_at: '2026-08-05T00:00:00Z' }],
+    })
+    renderPage()
+    expect(await screen.findByText('Destinations')).toBeTruthy()
+    expect(screen.getByText('promoted to knowledge base')).toBeTruthy()
   })
 })
 

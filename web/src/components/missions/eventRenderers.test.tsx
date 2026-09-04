@@ -428,17 +428,12 @@ describe('mission.discover_complete / mission.explore_complete rendering', () =>
 describe('mission.result_complete rendering', () => {
   it('renders a successful result step summary', () => {
     render(
-      <div>
-        {renderEvent(
-          event({ delivered: 2, artifacts_copied: 1, on_complete: 'push' }, 'mission.result_complete'),
-        )}
-      </div>,
+      <div>{renderEvent(event({ delivered: 2, artifacts_copied: 1 }, 'mission.result_complete'))}</div>,
     )
     const row = screen.getByText(/Result complete/)
     expect(row).toHaveClass('text-green-400')
     expect(row).toHaveTextContent('delivered to 2')
     expect(row).toHaveTextContent('1 artifact(s) copied')
-    expect(row).toHaveTextContent('push')
   })
 
   it('renders a failed result step in red', () => {

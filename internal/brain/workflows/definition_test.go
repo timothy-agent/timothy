@@ -88,26 +88,6 @@ func TestValidateBadStepKind(t *testing.T) {
 	}
 }
 
-func TestValidateBadStepOnComplete(t *testing.T) {
-	d := validDefinition()
-	d.Steps["coder"] = Step{Goal: "write code", Kind: "coding", OnComplete: "bogus"}
-	if err := d.Validate(); err == nil {
-		t.Fatal("Validate() = nil, want error for unknown on_complete")
-	}
-}
-
-func TestValidateAllowsKnownStepOnComplete(t *testing.T) {
-	for _, oc := range []string{"", "push", "push_pr"} {
-		d := validDefinition()
-		step := d.Steps["coder"]
-		step.OnComplete = oc
-		d.Steps["coder"] = step
-		if err := d.Validate(); err != nil {
-			t.Fatalf("Validate() with on_complete=%q = %v, want nil", oc, err)
-		}
-	}
-}
-
 func TestValidateClampsMaxIterations(t *testing.T) {
 	d := validDefinition()
 	d.Edges[0].MaxIterations = 999

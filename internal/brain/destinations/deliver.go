@@ -89,19 +89,54 @@ const (
 )
 
 // Deliver runs delivery for every entry in entries, best-effort per
-// destination. Recipients get the mission's generated output (Render's
-// Files, from the mission's declared plan-unit artifacts) plus a short
-// completion line, never the goal/plan/review process digest.
-// Idempotent under a re-drive: an entry whose DeliveredAt is already
-// set is skipped, one with Error set (or never attempted) is retried.
-// Returns the entries with DeliveredAt/Error updated in place (the
-// caller persists them, see missions.Driver.deliverToDestinations)
+// destination: every github-kind entry delivers FIRST, then the
+// mission's generated output is rendered, then every other kind
+// (email/webhook/telegram) delivers, so a message entry listed before
+// a github entry still gets the fresh branch/PR link (Render's
+// lastPROpenedURL reads the mission.pr_opened event a github delivery
+// above just appended). Recipients get the mission's generated output
+// (Render's Files, from the mission's declared plan-unit artifacts)
+// plus a short completion line, never the goal/plan/review process
+// digest. Idempotent under a re-drive: an entry whose DeliveredAt is
+// already set is skipped, one with Error set (or never attempted) is
+// retried. Returns the entries with DeliveredAt/Error updated in place
+// (the caller persists them, see missions.Driver.deliverToDestinations)
 // plus an error naming every destination that failed this round, or
 // nil if all succeeded. No-ops immediately for an empty entries.
 func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, entries []missions.DestinationEntry) ([]missions.DestinationEntry, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
+	// Resolve each entry's destination row once, splitting github (push/PR)
+	// from every other kind (rendered Payload send) up front. A resolve
+	// failure (unknown id) falls into the "other" bucket: deliverOne's own
+	// Get re-resolves it and records the same "destination not found"
+	// outcome it always has.
+	var githubIdx, otherIdx []int
+	for i, e := range entries {
+		dest, err := d.store.Get(ctx, e.DestinationID)
+		if err == nil && dest.Kind == "github" {
+			githubIdx = append(githubIdx, i)
+		} else {
+			otherIdx = append(otherIdx, i)
+		}
+	}
+
+	out := make([]missions.DestinationEntry, len(entries))
+	copy(out, entries)
+	var failed []string
+
+	for _, i := range githubIdx {
+		if out[i].DeliveredAt != "" {
+			continue
+		}
+		e := out[i]
+		if err := d.deliverOne(ctx, m, &e, Payload{}); err != nil {
+			failed = append(failed, e.DestinationID)
+		}
+		out[i] = e
+	}
+
 	events, err := d.events.Events(ctx, m.ID)
 	if err != nil {
 		d.log.Warn("destinations: load events for render failed", "mission_id", m.ID, "error", err)
@@ -119,18 +154,17 @@ func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, entries []m
 	}
 	payload := Render(m, webBaseURL, events, loc)
 
-	out := make([]missions.DestinationEntry, len(entries))
-	var failed []string
-	for i, e := range entries {
-		if e.DeliveredAt != "" {
-			out[i] = e
+	for _, i := range otherIdx {
+		if out[i].DeliveredAt != "" {
 			continue
 		}
+		e := out[i]
 		if err := d.deliverOne(ctx, m, &e, payload); err != nil {
 			failed = append(failed, e.DestinationID)
 		}
 		out[i] = e
 	}
+
 	if len(failed) > 0 {
 		return out, fmt.Errorf("delivery failed for destination(s): %s", strings.Join(failed, ", "))
 	}
@@ -139,7 +173,8 @@ func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, entries []m
 
 // deliverOne attempts one entry's delivery, mutating it in place with
 // the outcome (DeliveredAt on success, Error on failure) and recording
-// the same outcome as a mission_events row for the Timeline.
+// the same outcome as a mission_events row for the Timeline. payload is
+// unused for a github-kind entry (push/PR, not a rendered send).
 func (d *Deliverer) deliverOne(ctx context.Context, m missions.Mission, e *missions.DestinationEntry, payload Payload) error {
 	missionID := m.ID
 	destinationID := e.DestinationID

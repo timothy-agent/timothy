@@ -461,131 +461,6 @@ func codingWorktree(t *testing.T) (workspace, baseCommit string) {
 	return workspace, strings.TrimSpace(gitRun(t, dir, "rev-parse", "HEAD"))
 }
 
-// fakeOnCompleterPusher scripts the branch push onCompleter needs,
-// standing in for destinations.GitHubAdapter's own Push call without a
-// real https origin. Push/PR call-counting mirrors the pre-#560
-// fakeBranchPusher/fakePRSource this replaces (those now live in
-// destinations/github_test.go, testing the real adapter directly).
-type fakeOnCompleterPusher struct {
-	host      string
-	err       error
-	pushCalls int
-}
-
-func (f *fakeOnCompleterPusher) push() (string, error) {
-	f.pushCalls++
-	if f.err != nil {
-		return "", f.err
-	}
-	return f.host, nil
-}
-
-// fakeOnCompleter is a scripted onCompleter standing in for
-// destinations.GitHubAdapter in driver tests: destinations.GitHubAdapter
-// itself is exercised directly in destinations/github_test.go, so this
-// only needs to prove Driver.fireOnComplete calls RunOnComplete and
-// reacts correctly to its result (updated entry, error).
-type fakeOnCompleter struct {
-	pusher    *fakeOnCompleterPusher
-	prCreated int
-}
-
-func (f *fakeOnCompleter) RunOnComplete(ctx context.Context, m Mission) (DestinationEntry, bool, error) {
-	entry, _ := m.GitHubEntry()
-	onComplete := m.OnComplete()
-	if onComplete == "" {
-		return entry, false, nil
-	}
-	if reason := NotPushable(m); reason != "" {
-		return entry, false, fmt.Errorf("on_complete: %s", reason)
-	}
-	if _, err := f.pusher.push(); err != nil {
-		return entry, false, err
-	}
-	if onComplete == "push_pr" {
-		f.prCreated++
-	}
-	return entry, false, nil
-}
-
-// TestDriverFiresOnCompletePushPROnDone proves a coding mission with
-// on_complete="push_pr" fires exactly one push and one PR create the
-// moment it reaches phase=done: the SAME onCompleter the manual push/pr
-// API endpoints' destinations.GitHubAdapter satisfies, wired via
-// Driver.SetCompleter.
-func TestDriverFiresOnCompletePushPROnDone(t *testing.T) {
-	store := newFakeStore()
-	dir, base := codingWorktree(t)
-	store.put("m1", Mission{
-		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
-		Workspace: dir, BaseCommit: base, Branch: "mission/x",
-		Sources:      []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}},
-		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push_pr"}},
-	})
-	runner := &scriptedRunner{
-		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
-		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
-		reviewVerdicts: []ReviewVerdict{{Approved: true}},
-	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
-	pusher := &fakeOnCompleterPusher{host: "github.com"}
-	completer := &fakeOnCompleter{pusher: pusher}
-	d.SetCompleter(completer)
-
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
-
-	m, _ := store.Get(context.Background(), "m1")
-	if m.Phase != PhaseDone {
-		t.Fatalf("mission phase = %q, want done", m.Phase)
-	}
-	if pusher.pushCalls != 1 {
-		t.Fatalf("Push called %d times, want exactly 1", pusher.pushCalls)
-	}
-	if completer.prCreated != 1 {
-		t.Fatalf("CreatePR called %d times, want exactly 1", completer.prCreated)
-	}
-}
-
-// TestDriverOnCompleteFailureParksInResultAndNotifies proves a failed
-// auto-fire (push rejected) never un-dones the mission: it parks the
-// mission IN result (D-086, an operator's on_complete choice failing
-// is an explicit park, not a silently-lost notification), and fires
-// the wired push-failed notifier exactly once.
-func TestDriverOnCompleteFailureParksInResultAndNotifies(t *testing.T) {
-	store := newFakeStore()
-	dir, base := codingWorktree(t)
-	store.put("m1", Mission{
-		ID: "m1", Kind: "coding", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
-		Workspace: dir, BaseCommit: base, Branch: "mission/x",
-		Sources:      []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}},
-		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, Mode: "push"}},
-	})
-	runner := &scriptedRunner{
-		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
-		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
-		reviewVerdicts: []ReviewVerdict{{Approved: true}},
-	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
-	pusher := &fakeOnCompleterPusher{err: ErrPushRejected}
-	d.SetCompleter(&fakeOnCompleter{pusher: pusher})
-	var notified []string
-	d.SetPushFailedNotifier(func(ctx context.Context, missionID, message string) {
-		notified = append(notified, message)
-	})
-
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result(parked)
-
-	m, _ := store.Get(context.Background(), "m1")
-	if m.Phase != PhaseResult || m.Status != StatusPaused || m.PauseReason != PauseInfra {
-		t.Fatalf("mission after failed auto-fire = %+v, want parked in result/paused/infra", m)
-	}
-	if len(notified) != 1 {
-		t.Fatalf("push-failed notifications = %d, want exactly 1", len(notified))
-	}
-}
-
 // TestDriverDiscoverStoresNotesAndAdvances confirms the discover phase
 // stores DiscoverSession's findings on the mission, emits
 // mission.discover_complete, and advances to plan.
@@ -2306,15 +2181,15 @@ func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
 	}
 }
 
-// TestDriverProvisionUsesMissionBranchPatternOverSettings confirms the
-// precedence order ensureProvisioned resolves: a mission's own github
-// destination entry's BranchPattern wins over the settings-configured
-// default.
-func TestDriverProvisionUsesMissionBranchPatternOverSettings(t *testing.T) {
+// TestDriverProvisionUsesDestinationBranchPatternOverSettings confirms
+// the precedence order ensureProvisioned resolves: a mission's github
+// destination entry's resolved BranchPattern wins over the settings-
+// configured default.
+func TestDriverProvisionUsesDestinationBranchPatternOverSettings(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Goal: "Fix the login bug", Kind: "coding",
-		Destinations: []DestinationEntry{{Destination: DestinationKindGitHub, BranchPattern: "custom/{slug}"}},
+		Destinations: []DestinationEntry{{DestinationID: "gh-dest-1"}},
 		Phase:        PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
 	})
 	sessions := &fakeSessionCreator{}
@@ -2323,13 +2198,19 @@ func TestDriverProvisionUsesMissionBranchPatternOverSettings(t *testing.T) {
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
 	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
 	d.SetGitBranchPattern(func(context.Context) string { return "settings/{slug}" })
+	d.SetGitHubPolicyResolver(func(ctx context.Context, id string) (GitHubPolicy, bool, error) {
+		if id == "gh-dest-1" {
+			return GitHubPolicy{BranchPattern: "custom/{slug}"}, true, nil
+		}
+		return GitHubPolicy{}, false, nil
+	})
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	if got, want := m.Branch, "custom/fix-the-login-bug"; got != want {
-		t.Fatalf("Branch = %q, want %q (mission override should win over settings)", got, want)
+		t.Fatalf("Branch = %q, want %q (destination override should win over settings)", got, want)
 	}
 }
 
@@ -2493,25 +2374,31 @@ func TestDriverProvisionThreadsSigningKeyFromIdentityResolver(t *testing.T) {
 	}
 }
 
-// TestDriverEffectiveCommitStylePrecedence confirms mission override >
-// settings default > CommitMessage's own conventional default.
+// TestDriverEffectiveCommitStylePrecedence confirms destination
+// override > settings default > CommitMessage's own conventional
+// default.
 func TestDriverEffectiveCommitStylePrecedence(t *testing.T) {
 	cases := []struct {
-		name          string
-		missionStyle  string
-		settingsStyle func(context.Context) string
-		want          string
+		name             string
+		hasDestination   bool
+		destinationStyle string
+		settingsStyle    func(context.Context) string
+		want             string
 	}{
-		{"mission override wins", CommitStylePlain, func(context.Context) string { return CommitStyleConventional }, CommitStylePlain},
-		{"settings default applies", "", func(context.Context) string { return CommitStylePlain }, CommitStylePlain},
-		{"no override, no settings: conventional default", "", nil, ""},
+		{"destination override wins", true, CommitStylePlain, func(context.Context) string { return CommitStyleConventional }, CommitStylePlain},
+		{"destination without style falls back to settings", true, "", func(context.Context) string { return CommitStylePlain }, CommitStylePlain},
+		{"settings default applies", false, "", func(context.Context) string { return CommitStylePlain }, CommitStylePlain},
+		{"no override, no settings: conventional default", false, "", nil, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := &Driver{gitCommitStyle: tc.settingsStyle, log: slog.Default()}
 			var destinations []DestinationEntry
-			if tc.missionStyle != "" {
-				destinations = []DestinationEntry{{Destination: DestinationKindGitHub, CommitStyle: tc.missionStyle}}
+			if tc.hasDestination {
+				destinations = []DestinationEntry{{DestinationID: "gh-dest-1"}}
+				d.SetGitHubPolicyResolver(func(ctx context.Context, id string) (GitHubPolicy, bool, error) {
+					return GitHubPolicy{CommitStyle: tc.destinationStyle}, true, nil
+				})
 			}
 			got := d.effectiveCommitStyle(context.Background(), Mission{Destinations: destinations})
 			if got != tc.want {
