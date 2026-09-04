@@ -1418,6 +1418,9 @@ func TestChatSendsCompactedContext(t *testing.T) {
 	if _, err := log.Append(ctx, "s1", session.KindAssistantTurn, turn); err != nil {
 		t.Fatal(err)
 	}
+	// A session with a completed turn is already titled; otherwise the
+	// async title call races lastRequest below.
+	log.titles["s1"] = "seeded"
 
 	gw := &fakeGW{events: okEvents("fresh reply")}
 	svc := New(gw, log, nil, &compactingLog{log: log}, staticBudget(60_000), nil, nil, nil, nil, discard())
@@ -2778,6 +2781,9 @@ func seedSensitiveSession(t *testing.T, log *fakeLog, sessionID string) {
 	if _, err := log.Append(t.Context(), sessionID, session.KindAssistantTurn, session.AssistantTurn{}); err != nil {
 		t.Fatalf("seed assistant_turn: %v", err)
 	}
+	// Already titled, like any session with a completed turn: keeps the
+	// async title call out of the gateway requests these tests inspect.
+	log.titles[sessionID] = "seeded"
 }
 
 // TestChatPinsSessionSensitiveRouteOnNextTurn is the feature under
