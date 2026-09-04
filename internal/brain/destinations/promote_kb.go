@@ -33,6 +33,7 @@ type kbDocStore interface {
 	SetIngesting(ctx context.Context, id string) error
 	SetFailed(ctx context.Context, id, errMsg string) error
 	GetDocument(ctx context.Context, id string) (kb.Document, error)
+	UpdateMarkdown(ctx context.Context, id, markdown string) error
 }
 
 // markdownArtifactExt names the ArtifactRef extensions PromoteKB
@@ -62,12 +63,12 @@ func promoteSourceRef(missionID, name string) string {
 // is silently skipped, not an error): the caller decides whether a
 // partial failure matters (the manual endpoint reports it, the
 // auto-fire hook just logs it).
-func PromoteMission(ctx context.Context, opener artifactOpener, store kbDocStore, ingest kbIngester, m missions.Mission, collectionID string) (promoted int, errs []error) {
+func PromoteMission(ctx context.Context, opener artifactOpener, store kbDocStore, ingest kbIngester, enrich *kb.Enricher, m missions.Mission, collectionID string) (promoted int, errs []error) {
 	for _, ref := range m.ArtifactRefs {
 		if !markdownArtifactExt[strings.ToLower(filepath.Ext(ref.Name))] {
 			continue
 		}
-		if err := promoteOne(ctx, opener, store, ingest, m.ID, collectionID, ref); err != nil {
+		if err := promoteOne(ctx, opener, store, ingest, enrich, m.ID, collectionID, ref); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", ref.Name, err))
 			continue
 		}
@@ -80,9 +81,9 @@ func PromoteMission(ctx context.Context, opener artifactOpener, store kbDocStore
 // result-phase step signature (D-086): every per-artifact error is
 // logged, and the first one is also returned so the result step can
 // fold it into its overall outcome and park the mission on failure.
-func PromoteKB(opener artifactOpener, store kbDocStore, ingest kbIngester, log *slog.Logger) missions.PromoteKB {
+func PromoteKB(opener artifactOpener, store kbDocStore, ingest kbIngester, enrich *kb.Enricher, log *slog.Logger) missions.PromoteKB {
 	return func(ctx context.Context, m missions.Mission, collectionID string) error {
-		_, errs := PromoteMission(ctx, opener, store, ingest, m, collectionID)
+		_, errs := PromoteMission(ctx, opener, store, ingest, enrich, m, collectionID)
 		for _, err := range errs {
 			log.Warn("mission kb promotion skipped", "mission_id", m.ID, "error", err)
 		}
@@ -93,7 +94,7 @@ func PromoteKB(opener artifactOpener, store kbDocStore, ingest kbIngester, log *
 	}
 }
 
-func promoteOne(ctx context.Context, opener artifactOpener, store kbDocStore, ingest kbIngester, missionID, collectionID string, ref missions.ArtifactRef) error {
+func promoteOne(ctx context.Context, opener artifactOpener, store kbDocStore, ingest kbIngester, enrich *kb.Enricher, missionID, collectionID string, ref missions.ArtifactRef) error {
 	r, att, err := opener.Open(ctx, ref.ID)
 	if err != nil {
 		return fmt.Errorf("open artifact: %w", err)
@@ -127,6 +128,14 @@ func promoteOne(ctx context.Context, opener artifactOpener, store kbDocStore, in
 	doc, err := store.GetDocument(ctx, docID)
 	if err != nil {
 		return fmt.Errorf("reload document: %w", err)
+	}
+	if enrich != nil {
+		enriched, stats := enrich.EnrichMarkdown(ctx, doc.Markdown)
+		if stats.Captioned > 0 {
+			if err := store.UpdateMarkdown(ctx, docID, enriched); err == nil {
+				doc.Markdown = enriched
+			}
+		}
 	}
 	if ingest == nil {
 		_ = store.SetFailed(ctx, docID, "memoryd is not configured")

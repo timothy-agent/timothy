@@ -291,6 +291,13 @@ func main() {
 	// below) can close over the same store the kb admin API and mission
 	// promotion hook use later in this function.
 	kbStore := kb.New(app.DB)
+	// KB image captioning (issues #349/#350): default-off, gated on
+	// settings.KeyKBImageCaptioning; shared by the manual ingest funnel,
+	// the retry sweep, and mission promotion so none of the three diverge
+	// on what "captioned" means.
+	kbEnrich := api.NewKBEnricher(chat.CaptionImageOverGateway(gwc, app.Log), func(ctx context.Context) bool {
+		return flags.Enabled(ctx, settings.KeyKBImageCaptioning)
+	}, app.Log)
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, gwc,
@@ -654,7 +661,7 @@ func main() {
 	// as artifact copy above (promotion reads from the attachment-store
 	// refs artifact copy just wrote).
 	if attachmentStore != nil && missionDriver != nil {
-		missionDriver.SetPromoteKB(destinations.PromoteKB(attachmentStore, kbStore, mc, app.Log))
+		missionDriver.SetPromoteKB(destinations.PromoteKB(attachmentStore, kbStore, mc, kbEnrich, app.Log))
 	}
 
 	// search_kb: nil-safe wiring, same shape as memory retrieve/extract
@@ -684,7 +691,7 @@ func main() {
 	}()
 	// kb retry sweep (issue #414): re-ingests documents that failed on a
 	// transient embedding/provider error, on their own backoff schedule.
-	go api.RunKBRetrySweep(ctx, kbStore, mc, app.Log)
+	go api.RunKBRetrySweep(ctx, kbStore, mc, kbEnrich, app.Log)
 	svc.SetKBSearch(func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		hits, err := mc.KBSearch(ctx, query, nil, boostCollections, mode, k)
 		if err != nil {
@@ -730,7 +737,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), destinationStore, destinationTest, workflowStore, workflowEngine, pdfService, chat.ExtractGitHubDestinationOverGateway(gwc, app.Log))
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, pdfService, chat.ExtractGitHubDestinationOverGateway(gwc, app.Log))
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

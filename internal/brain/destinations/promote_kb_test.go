@@ -97,6 +97,16 @@ func (f *fakeKBStore) GetDocument(_ context.Context, id string) (kb.Document, er
 	return d, nil
 }
 
+func (f *fakeKBStore) UpdateMarkdown(_ context.Context, id, markdown string) error {
+	d, ok := f.docs[id]
+	if !ok {
+		return kb.ErrNotFound
+	}
+	d.Markdown = markdown
+	f.docs[id] = d
+	return nil
+}
+
 // fakeIngest stubs kbIngester, optionally erroring for a fixed doc id.
 type fakeIngest struct {
 	failFor string
@@ -117,7 +127,7 @@ func TestPromoteMissionHappyPath(t *testing.T) {
 	ingest := &fakeIngest{}
 	m := missions.Mission{ID: "m1", ArtifactRefs: []missions.ArtifactRef{{ID: "a1", Mime: "text/plain", Name: "report.md"}}}
 
-	promoted, errs := PromoteMission(t.Context(), opener, store, ingest, m, "col1")
+	promoted, errs := PromoteMission(t.Context(), opener, store, ingest, nil, m, "col1")
 	if promoted != 1 || len(errs) != 0 {
 		t.Fatalf("promoted=%d errs=%v, want 1 promoted, no errors", promoted, errs)
 	}
@@ -144,7 +154,7 @@ func TestPromoteMissionIgnoresNonMarkdownArtifacts(t *testing.T) {
 	store := newFakeKBStore()
 	m := missions.Mission{ID: "m1", ArtifactRefs: []missions.ArtifactRef{{ID: "a1", Mime: "application/pdf", Name: "chart.pdf"}}}
 
-	promoted, errs := PromoteMission(t.Context(), opener, store, &fakeIngest{}, m, "col1")
+	promoted, errs := PromoteMission(t.Context(), opener, store, &fakeIngest{}, nil, m, "col1")
 	if promoted != 0 || len(errs) != 0 {
 		t.Fatalf("promoted=%d errs=%v, want 0 and no errors (non-markdown skipped silently)", promoted, errs)
 	}
@@ -158,7 +168,7 @@ func TestPromoteMissionIdempotentReplacesContent(t *testing.T) {
 	store := newFakeKBStore()
 	m := missions.Mission{ID: "m1", ArtifactRefs: []missions.ArtifactRef{{ID: "a1", Mime: "text/plain", Name: "report.md"}}}
 
-	if _, errs := PromoteMission(t.Context(), opener, store, &fakeIngest{}, m, "col1"); len(errs) != 0 {
+	if _, errs := PromoteMission(t.Context(), opener, store, &fakeIngest{}, nil, m, "col1"); len(errs) != 0 {
 		t.Fatalf("first promote errs = %v", errs)
 	}
 	if len(store.docs) != 1 {
@@ -168,7 +178,7 @@ func TestPromoteMissionIdempotentReplacesContent(t *testing.T) {
 	// Re-promote with updated content: must replace in place, not add a
 	// second document.
 	opener.data["a1"] = []byte("v2")
-	if _, errs := PromoteMission(t.Context(), opener, store, &fakeIngest{}, m, "col1"); len(errs) != 0 {
+	if _, errs := PromoteMission(t.Context(), opener, store, &fakeIngest{}, nil, m, "col1"); len(errs) != 0 {
 		t.Fatalf("second promote errs = %v", errs)
 	}
 	if len(store.docs) != 1 {
@@ -188,7 +198,7 @@ func TestPromoteMissionCollectsIngestErrors(t *testing.T) {
 
 	// failFor targets the first created document id (doc1, per
 	// fakeKBStore.CreateDocument's counter).
-	promoted, errs := PromoteMission(t.Context(), opener, store, &fakeIngest{failFor: "doc1"}, m, "col1")
+	promoted, errs := PromoteMission(t.Context(), opener, store, &fakeIngest{failFor: "doc1"}, nil, m, "col1")
 	if promoted != 0 || len(errs) != 1 {
 		t.Fatalf("promoted=%d errs=%v, want 0 promoted, 1 error", promoted, errs)
 	}
@@ -208,7 +218,7 @@ func TestPromoteKBLogsAndReturnsError(t *testing.T) {
 	store := newFakeKBStore()
 	m := missions.Mission{ID: "m1", ArtifactRefs: []missions.ArtifactRef{{ID: "a1", Mime: "text/plain", Name: "report.md"}}}
 
-	err := PromoteKB(opener, store, &fakeIngest{}, slog.Default())(t.Context(), m, "col1")
+	err := PromoteKB(opener, store, &fakeIngest{}, nil, slog.Default())(t.Context(), m, "col1")
 	if err == nil {
 		t.Fatal("PromoteKB with a vanished artifact: want an error, got nil")
 	}

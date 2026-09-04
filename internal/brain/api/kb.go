@@ -88,12 +88,12 @@ type kbTitler func(ctx context.Context, input string) string
 
 // registerKB mounts the knowledge-base admin surface (D-060). Nil
 // store leaves it unmounted, same nil-gate pattern as agents/skills.
-func (a *API) registerKB(handle func(pattern string, h http.Handler), store *kb.Store, ingest kbIngester, markitdownURL string, classify kbClassifier, title kbTitler) {
+func (a *API) registerKB(handle func(pattern string, h http.Handler), store *kb.Store, ingest kbIngester, markitdownURL string, classify kbClassifier, title kbTitler, enrich *kb.Enricher) {
 	if store == nil {
 		return
 	}
 	h := &kbAPI{
-		store: store, ingest: ingest, markitdownURL: markitdownURL, classify: classify, title: title,
+		store: store, ingest: ingest, markitdownURL: markitdownURL, classify: classify, title: title, enrich: enrich,
 		markitdownHTTP: &http.Client{},
 		fetchHTTP:      &http.Client{Timeout: kbURLFetchTimeout, Transport: kbFetchTransport},
 		log:            a.log,
@@ -119,6 +119,7 @@ type kbAPI struct {
 	ingest         kbIngester
 	classify       kbClassifier
 	title          kbTitler
+	enrich         *kb.Enricher
 	markitdownURL  string
 	markitdownHTTP *http.Client
 	// fetchHTTP fetches user-supplied URLs; production wires it through
@@ -433,6 +434,20 @@ const kbURLFetchTimeout = 30 * time.Second
 // public addresses are reached (SSRF). A var, not inline, so tests can
 // point it at an unguarded transport; production never reassigns it.
 var kbFetchTransport http.RoundTripper = &http.Transport{DialContext: netguard.Dial, ForceAttemptHTTP2: true}
+
+// NewKBEnricher builds the image-captioning Enricher for KB ingest
+// (issues #349/#350), reusing the same netguard-guarded transport
+// kbFetchTransport dials user-supplied URLs through: caption is
+// chat.CaptionImageOverGateway(gwc, log) in production, enabled reads
+// settings.Store.Enabled(ctx, settings.KeyKBImageCaptioning).
+func NewKBEnricher(caption kb.Captioner, enabled func(context.Context) bool, log *slog.Logger) *kb.Enricher {
+	return &kb.Enricher{
+		Fetch:   &http.Client{Timeout: kbURLFetchTimeout, Transport: kbFetchTransport},
+		Caption: caption,
+		Enabled: enabled,
+		Log:     log,
+	}
+}
 
 type kbURLRequest struct {
 	URL   string `json:"url"`
@@ -791,6 +806,20 @@ func (h *kbAPI) startIngest(docID, title string) {
 			h.log.Warn("kb ingest: document vanished before ingest", "document_id", docID, "error", err)
 			return
 		}
+		if h.enrich != nil {
+			enriched, stats := h.enrich.EnrichMarkdown(ctx, doc.Markdown)
+			if stats.Captioned > 0 {
+				if err := h.store.UpdateMarkdown(ctx, docID, enriched); err != nil {
+					h.log.Warn("kb ingest: caption persist failed", "document_id", docID, "error", err)
+				} else {
+					doc.Markdown = enriched
+				}
+			}
+			if stats.Found > 0 {
+				h.log.Info("kb ingest: image captioning", "document_id", docID,
+					"found", stats.Found, "captioned", stats.Captioned, "skipped", stats.Skipped, "failed", stats.Failed)
+			}
+		}
 		if h.ingest == nil {
 			_ = h.store.SetFailed(ctx, docID, "memoryd is not configured")
 			return
@@ -845,7 +874,7 @@ const kbRetrySweepInterval = time.Minute
 // never diverge on what "retry" means. Runs until ctx is done; store
 // nil (KB unmounted) or ingest nil (memoryd not configured) makes this
 // a no-op loop.
-func RunKBRetrySweep(ctx context.Context, store *kb.Store, ingest kbIngester, log *slog.Logger) {
+func RunKBRetrySweep(ctx context.Context, store *kb.Store, ingest kbIngester, enrich *kb.Enricher, log *slog.Logger) {
 	if store == nil || ingest == nil {
 		return
 	}
@@ -856,7 +885,7 @@ func RunKBRetrySweep(ctx context.Context, store *kb.Store, ingest kbIngester, lo
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sweepKBRetries(ctx, store, ingest, log)
+			sweepKBRetries(ctx, store, ingest, enrich, log)
 		}
 	}
 }
@@ -864,7 +893,7 @@ func RunKBRetrySweep(ctx context.Context, store *kb.Store, ingest kbIngester, lo
 // sweepKBRetries runs one retry-sweep tick: re-ingests every document
 // DueForRetry reports. Logs nothing when there is nothing due, to keep
 // the steady-state quiet (issue #414 acceptance criteria).
-func sweepKBRetries(ctx context.Context, store *kb.Store, ingest kbIngester, log *slog.Logger) {
+func sweepKBRetries(ctx context.Context, store *kb.Store, ingest kbIngester, enrich *kb.Enricher, log *slog.Logger) {
 	docs, err := store.DueForRetry(ctx)
 	if err != nil {
 		log.Error("kb retry sweep: list failed", "error", err)
@@ -873,7 +902,7 @@ func sweepKBRetries(ctx context.Context, store *kb.Store, ingest kbIngester, log
 	if len(docs) == 0 {
 		return
 	}
-	h := &kbAPI{store: store, ingest: ingest, log: log}
+	h := &kbAPI{store: store, ingest: ingest, enrich: enrich, log: log}
 	for _, doc := range docs {
 		log.Info("kb retry sweep: re-ingesting a transiently failed document",
 			"document_id", doc.ID, "retry_count", doc.RetryCount)

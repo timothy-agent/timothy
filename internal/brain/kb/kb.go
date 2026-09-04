@@ -445,6 +445,28 @@ func (s *Store) ReplaceDocumentContent(ctx context.Context, id, title, markdown 
 	return nil
 }
 
+// UpdateMarkdown overwrites a document's stored markdown in place
+// (issue #349's image-caption enrichment, run inside startIngest
+// between SetIngesting and the memoryd call): unlike
+// ReplaceDocumentContent this touches only markdown/bytes, never
+// status/retry/collection, so it can run mid-ingest without disturbing
+// the status flow already in progress.
+func (s *Store) UpdateMarkdown(ctx context.Context, id, markdown string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("kb document %s update markdown: %w", id, err)
+	}
+	tag, err := db.Exec(ctx, `UPDATE kb_documents SET markdown = $2, bytes = $3, updated_at = now() WHERE id = $1`,
+		id, markdown, len(markdown))
+	if err != nil {
+		return fmt.Errorf("kb document %s update markdown: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("document %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // DeleteDocument removes a document; ON DELETE CASCADE takes its
 // chunks with it.
 func (s *Store) DeleteDocument(ctx context.Context, id string) error {

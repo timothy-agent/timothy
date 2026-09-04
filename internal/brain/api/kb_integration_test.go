@@ -130,7 +130,7 @@ func TestKBCollectionsCRUD(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil, nil)
 
 	create := httptest.NewRequest("POST", "/v1/admin/kb/collections", strings.NewReader(`{"name":"itest-docs","description":"test collection"}`))
 	create.Header.Set("Authorization", "Bearer tok")
@@ -249,7 +249,7 @@ func TestKBDocumentUploadSkipsMarkitdownForMarkdown(t *testing.T) {
 	ingester := &fakeIngester{}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-upload", "", 0)
 	if err != nil {
@@ -311,6 +311,72 @@ func TestKBDocumentUploadSkipsMarkitdownForMarkdown(t *testing.T) {
 	}
 }
 
+// TestKBDocumentUploadCaptionsImageLinkWhenEnabled confirms issue
+// #349's ingest-funnel hook: startIngest runs the Enricher between
+// SetIngesting and the memoryd call, persisting the captioned markdown
+// via kb.Store.UpdateMarkdown before the fake ingester ever sees it.
+func TestKBDocumentUploadCaptionsImageLinkWhenEnabled(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{}
+	imgSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'})
+	}))
+	defer imgSrv.Close()
+	enrich := &kb.Enricher{
+		Fetch:   imgSrv.Client(),
+		Caption: func(context.Context, string, []byte) string { return "a test chart" },
+		Enabled: func(context.Context) bool { return true },
+		Log:     discard(),
+	}
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, enrich)
+
+	collID, err := store.CreateCollection(context.Background(), "itest-caption", "", 0)
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	md := "# Report\n![a chart](" + imgSrv.URL + "/a.png)\n"
+	body, contentType := multipartFile(t, "file", "report.md", []byte(md))
+	req := httptest.NewRequest("POST", "/v1/admin/kb/collections/"+collID+"/documents", body)
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("Content-Type", contentType)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body %s", w.Code, w.Body)
+	}
+	var doc struct {
+		ID string `json:"id"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if ingester.callCount() > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := ingester.callCount(); got != 1 {
+		t.Fatalf("ingester calls = %d, want 1", got)
+	}
+	final, err := store.GetDocument(context.Background(), doc.ID)
+	if err != nil {
+		t.Fatalf("GetDocument: %v", err)
+	}
+	if !strings.Contains(final.Markdown, "a test chart") {
+		t.Fatalf("stored markdown = %q, want a caption inserted", final.Markdown)
+	}
+	if !strings.Contains(final.Markdown, imgSrv.URL+"/a.png") {
+		t.Fatalf("stored markdown = %q, want the original image link kept", final.Markdown)
+	}
+}
+
 // TestKBSearchDocumentsCrossCollectionTitleMatch covers GET
 // /v1/admin/kb/documents?q=: a case-insensitive title match across
 // EVERY collection (the composer #-mention "find a kb document"
@@ -320,7 +386,7 @@ func TestKBSearchDocumentsCrossCollectionTitleMatch(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil, nil)
 
 	collA, err := store.CreateCollection(context.Background(), "itest-search-a", "", 0)
 	if err != nil {
@@ -376,7 +442,7 @@ func TestKBDocumentUploadStripsNULAndInvalidUTF8(t *testing.T) {
 	ingester := &fakeIngester{}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-nul", "", 0)
 	if err != nil {
@@ -414,7 +480,7 @@ func TestKBDocumentUploadRejectsUnsupportedType(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-upload-bad", "", 0)
 	if err != nil {
@@ -450,7 +516,7 @@ func TestKBDocumentFromURLIngestsFetchedMarkdown(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-url", "", 0)
 	if err != nil {
@@ -526,7 +592,7 @@ func TestKBDocumentFromURLScopedReAddRefreshesInPlace(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-url-readd", "", 0)
 	if err != nil {
@@ -619,7 +685,7 @@ func TestKBDocumentFromURLAutoReAddSkipsClassifierKeepsCollection(t *testing.T) 
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", classify, nil)
+	a.registerKB(m.Handle, store, ingester, "", classify, nil, nil)
 
 	post := func() *httptest.ResponseRecorder {
 		req := httptest.NewRequest("POST", "/v1/admin/kb/documents/url",
@@ -687,7 +753,7 @@ func TestKBDocumentFromURLDifferentURLStillCreates(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-url-distinct", "", 0)
 	if err != nil {
@@ -742,7 +808,7 @@ func TestKBDocumentUploadAutoCreatesNewCollection(t *testing.T) {
 	ingester := &fakeIngester{}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 
 	body, contentType := multipartFile(t, "file", "notes.md", []byte("# Title\nsome content"))
 	req := httptest.NewRequest("POST", "/v1/admin/kb/documents", body)
@@ -797,7 +863,7 @@ func TestKBDocumentFromURLAutoUsesExistingCollection(t *testing.T) {
 
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", matchExisting, nil)
+	a.registerKB(m.Handle, store, ingester, "", matchExisting, nil, nil)
 
 	req := httptest.NewRequest("POST", "/v1/admin/kb/documents/url",
 		strings.NewReader(`{"url":"`+page.URL+`/notes.md","title":""}`))
@@ -912,7 +978,7 @@ func TestKBClipValidation(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil, nil)
 
 	tests := []struct {
 		name       string
@@ -959,7 +1025,7 @@ func TestKBClipNewDocumentAutoClassifiesAndNormalizesURL(t *testing.T) {
 	}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", classify, nil)
+	a.registerKB(m.Handle, store, ingester, "", classify, nil, nil)
 
 	body := clipRequest(map[string]any{"url": "https://example.com/article?utm_source=x&x=1#frag"})
 	w := postClip(t, m, body)
@@ -1011,7 +1077,7 @@ func TestKBClipNewDocumentWithCollectionSkipsClassifier(t *testing.T) {
 	}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", classify, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", classify, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-clip-target", "", 0)
 	if err != nil {
@@ -1049,7 +1115,7 @@ func TestKBClipReClipRefreshesInPlace(t *testing.T) {
 	}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", classify, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", classify, nil, nil)
 
 	first := postClip(t, m, clipRequest(map[string]any{"url": "https://example.com/reclip?utm_source=a#x"}))
 	if first.Code != http.StatusAccepted {
@@ -1129,7 +1195,7 @@ func TestKBClipReClipMovesCollection(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil, nil)
 
 	origID, err := store.CreateCollection(context.Background(), "itest-clip-orig", "", 0)
 	if err != nil {
@@ -1164,7 +1230,7 @@ func TestKBClipStripsNULBytes(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil, nil)
 
 	w := postClip(t, m, clipRequest(map[string]any{"markdown": "clean\x00 text \xff here"}))
 	if w.Code != http.StatusAccepted {
@@ -1190,7 +1256,7 @@ func TestKBClipEmptyTitleUsesGeneratedTitle(t *testing.T) {
 	titler := func(ctx context.Context, input string) string { return "Generated Title" }
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, titler)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, titler, nil)
 
 	w := postClip(t, m, clipRequest(map[string]any{"title": ""}))
 	if w.Code != http.StatusAccepted {
@@ -1212,7 +1278,7 @@ func TestKBClipEmptyTitleFallsBackToURLWhenTitlerEmpty(t *testing.T) {
 	titler := func(ctx context.Context, input string) string { return "" }
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, titler)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, titler, nil)
 
 	body := clipRequest(map[string]any{"title": "", "url": "https://example.com/docs/getting-started.html"})
 	w := postClip(t, m, body)
@@ -1238,7 +1304,7 @@ func TestKBClipExplicitTitleSkipsTitler(t *testing.T) {
 	}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, titler)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, titler, nil)
 
 	w := postClip(t, m, clipRequest(map[string]any{"title": "Explicit Title"}))
 	if w.Code != http.StatusAccepted {
@@ -1259,7 +1325,7 @@ func TestKBDocumentFromURLRejectsBadURL(t *testing.T) {
 	store := testKBStore(t)
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-url-bad", "", 0)
 	if err != nil {
@@ -1283,7 +1349,7 @@ func TestKBDocumentFromURLBlocksLocalAddresses(t *testing.T) {
 	m := mux(a)
 	// Real guarded transport: the loopback httptest server must be
 	// refused at dial time.
-	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, &fakeIngester{}, "", fixedClassifier, nil, nil)
 
 	page := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("secret internal page"))
@@ -1310,7 +1376,7 @@ func TestKBDocumentReingestFailureSetsFailedStatus(t *testing.T) {
 	ingester := &fakeIngester{err: errors.New("memoryd unreachable")}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-reingest", "", 0)
 	if err != nil {
@@ -1379,7 +1445,7 @@ func TestKBDocumentReingestRetryableErrorSchedulesRetry(t *testing.T) {
 	ingester := &fakeIngester{err: errors.New("every provider failed: chain_exhausted")}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-retry-schedule", "", 0)
 	if err != nil {
@@ -1422,7 +1488,7 @@ func TestKBDocumentReingestPermanentErrorNeverSchedulesRetry(t *testing.T) {
 	ingester := &fakeIngester{err: errors.New("document produced no chunks")}
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 
 	collID, err := store.CreateCollection(context.Background(), "itest-retry-permanent", "", 0)
 	if err != nil {
@@ -1496,11 +1562,11 @@ func TestRunKBRetrySweepRetriesUntilBudgetExhausted(t *testing.T) {
 	// total scheduled retries, then one more failure exhausts the budget.
 	for want := 2; want <= kbRetryMaxAttempts; want++ {
 		forceDue()
-		sweepKBRetries(ctx, store, ingester, discard())
+		sweepKBRetries(ctx, store, ingester, nil, discard())
 		waitForDocument(t, store, docID, func(d kb.Document) bool { return d.RetryCount >= want })
 	}
 	forceDue()
-	sweepKBRetries(ctx, store, ingester, discard())
+	sweepKBRetries(ctx, store, ingester, nil, discard())
 	final := waitForDocument(t, store, docID, func(d kb.Document) bool { return d.NextRetryAt == nil })
 
 	if final.Status != "failed" {
@@ -1522,7 +1588,7 @@ func TestRunKBRetrySweepRetriesUntilBudgetExhausted(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer tok")
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
-	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil)
+	a.registerKB(m.Handle, store, ingester, "", fixedClassifier, nil, nil)
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
 	if w.Code != http.StatusNoContent {
@@ -1538,7 +1604,7 @@ func TestSweepKBRetriesNoopIsQuiet(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&buf, nil))
 
-	sweepKBRetries(context.Background(), store, &fakeIngester{}, log)
+	sweepKBRetries(context.Background(), store, &fakeIngester{}, nil, log)
 
 	if buf.Len() != 0 {
 		t.Fatalf("sweep logged with no failed documents: %s", buf.String())

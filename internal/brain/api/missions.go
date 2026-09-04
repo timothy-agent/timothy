@@ -75,7 +75,7 @@ type missionAttachmentStore interface {
 // (not *attachments.Store) so the caller's own nil-box guard (a nil
 // *attachments.Store boxed here would be a non-nil interface value)
 // happens once, at the call site — same shape as chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, extractGitHubDestination func(context.Context, string) chat.GitHubDestinationProposal) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, extractGitHubDestination func(context.Context, string) chat.GitHubDestinationProposal) {
 	if store == nil {
 		return
 	}
@@ -103,7 +103,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 			return a.Harness, true
 		}
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, extractGitHubDestination: extractGitHubDestination}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich, extractGitHubDestination: extractGitHubDestination}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -212,6 +212,7 @@ type missionAPI struct {
 	// the endpoint the same way pdfService's absence does export-pdf.
 	kbStore  *kb.Store
 	kbIngest kbIngester
+	kbEnrich *kb.Enricher
 	// resolveReferences resolves a create request's picked #-mention
 	// references (mission/session/kb doc) into documents: chat.Service's
 	// own resolver (chat.go's ResolveReferences), reused here so a
@@ -2123,7 +2124,7 @@ func (h *missionAPI) promoteKB(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "no_artifacts", "mission has no artifacts to promote")
 		return
 	}
-	promoted, errs := destinations.PromoteMission(r.Context(), h.attachments, h.kbStore, h.kbIngest, m, body.CollectionID)
+	promoted, errs := destinations.PromoteMission(r.Context(), h.attachments, h.kbStore, h.kbIngest, h.kbEnrich, m, body.CollectionID)
 	if promoted == 0 {
 		msg := "no markdown artifacts were promoted"
 		if len(errs) > 0 {
