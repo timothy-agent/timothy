@@ -53,6 +53,59 @@ func TestConvert(t *testing.T) {
 	})
 }
 
+func TestPDFImages(t *testing.T) {
+	t.Run("posts raw bytes and decodes per-page results", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/pdf/images" {
+				t.Errorf("path = %q, want /pdf/images", r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"pages":[
+				{"page":1,"text_chars":2000,"images":[{"index":7,"media_type":"image/png","data_b64":"AAAA","width":200,"height":100}],"render_b64":null},
+				{"page":2,"text_chars":10,"images":[],"render_b64":"QkJC"}
+			]}`))
+		}))
+		defer srv.Close()
+
+		out, err := PDFImages(context.Background(), srv.Client(), srv.URL, []byte("%PDF-1.7"))
+		if err != nil {
+			t.Fatalf("PDFImages: %v", err)
+		}
+		if len(out.Pages) != 2 {
+			t.Fatalf("pages = %d, want 2", len(out.Pages))
+		}
+		p1 := out.Pages[0]
+		if p1.TextChars != 2000 || len(p1.Images) != 1 || p1.RenderB64 != nil {
+			t.Fatalf("page 1 = %+v, want text-rich page with one image and no render", p1)
+		}
+		if p1.Images[0].MediaType != "image/png" || p1.Images[0].Width != 200 {
+			t.Fatalf("page 1 image = %+v", p1.Images[0])
+		}
+		p2 := out.Pages[1]
+		if p2.RenderB64 == nil || *p2.RenderB64 != "QkJC" {
+			t.Fatalf("page 2 = %+v, want a rendered page (scanned)", p2)
+		}
+	})
+
+	t.Run("unconfigured base URL errors without a request", func(t *testing.T) {
+		if _, err := PDFImages(context.Background(), nil, "", []byte("x")); err == nil {
+			t.Fatal("empty baseURL accepted")
+		}
+	})
+
+	t.Run("non-2xx surfaces status and body snippet", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "pdf open failed: not a pdf", http.StatusUnprocessableEntity)
+		}))
+		defer srv.Close()
+
+		_, err := PDFImages(context.Background(), srv.Client(), srv.URL, []byte("x"))
+		if err == nil || !strings.Contains(err.Error(), "422") {
+			t.Fatalf("err = %v, want http 422 surfaced", err)
+		}
+	})
+}
+
 func TestTruncateMarkdown(t *testing.T) {
 	t.Run("under cap is unchanged", func(t *testing.T) {
 		md := "# short document"

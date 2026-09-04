@@ -2,12 +2,15 @@ package kb
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
 
 // Captioner describes one image's bytes in plain prose; the empty
@@ -192,6 +195,87 @@ func (e *Enricher) EnrichMarkdown(ctx context.Context, md string) (string, Enric
 		stats.Captioned++
 	}
 	return out, stats
+}
+
+// maxPDFPages/maxPDFImagesPerDoc bound one document's PDF enrichment
+// spend the same way maxCaptionedImages bounds EnrichMarkdown: a
+// document with more pages/images than this skips the rest rather than
+// captioning unboundedly.
+const (
+	maxPDFPages        = 50
+	maxPDFImagesPerDoc = 30
+)
+
+// EnrichPDF captions each embedded image and each rendered scanned
+// page markitdown-svc's /pdf/images extracted (issue #350), appending
+// a per-page section to md: "## Page N images" for embedded images,
+// "## Page N (scanned)" for a page whose text layer was too sparse to
+// trust. A page/image with no caption (fetch never needed here, only
+// the vision call can fail) is silently skipped, never blocking the
+// rest of the document.
+func (e *Enricher) EnrichPDF(ctx context.Context, md string, res markitdown.PDFImagesResult) (string, EnrichStats) {
+	var stats EnrichStats
+	if e == nil || e.Enabled == nil || !e.Enabled(ctx) {
+		return md, stats
+	}
+
+	var out strings.Builder
+	out.WriteString(md)
+	imagesCaptioned := 0
+	for pageIdx, page := range res.Pages {
+		if pageIdx >= maxPDFPages {
+			break
+		}
+		var section strings.Builder
+		for _, img := range page.Images {
+			if imagesCaptioned >= maxPDFImagesPerDoc {
+				stats.Skipped++
+				continue
+			}
+			stats.Found++
+			data, err := base64.StdEncoding.DecodeString(img.DataB64)
+			if err != nil {
+				stats.Failed++
+				continue
+			}
+			caption := e.Caption(ctx, img.MediaType, data)
+			if caption == "" {
+				stats.Failed++
+				continue
+			}
+			fmt.Fprintf(&section, "\n> %s %s\n", captionMarker, caption)
+			imagesCaptioned++
+			stats.Captioned++
+		}
+		if section.Len() > 0 {
+			fmt.Fprintf(&out, "\n\n## Page %d images\n%s", page.Page, section.String())
+		}
+
+		if page.RenderB64 != nil {
+			if imagesCaptioned >= maxPDFImagesPerDoc {
+				stats.Skipped++
+				continue
+			}
+			stats.Found++
+			data, err := base64.StdEncoding.DecodeString(*page.RenderB64)
+			if err != nil {
+				stats.Failed++
+				continue
+			}
+			caption := e.Caption(ctx, "image/png", data)
+			if caption == "" {
+				stats.Failed++
+				continue
+			}
+			fmt.Fprintf(&out, "\n\n## Page %d (scanned)\n> %s %s\n", page.Page, captionMarker, caption)
+			imagesCaptioned++
+			stats.Captioned++
+		}
+	}
+	if stats.Captioned == 0 {
+		return md, stats
+	}
+	return out.String(), stats
 }
 
 // captionOne fetches and captions a single image URL, logging (not

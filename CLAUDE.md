@@ -64,7 +64,10 @@ First run: `cp deploy/env.example deploy/.env` and set
   `create_calendar_event` route to the right connector/account via an
   `account` parameter — see `manager.go`'s `aggregateTools`),
   `destinations` (mission result delivery: email/webhook/
-  telegram), `kb` (knowledge-base collections/documents), `attachments`,
+  telegram), `kb` (knowledge-base collections/documents; image
+  captioning at ingest, issues #349/#350, is default-off behind
+  `settings.KeyKBImageCaptioning` — `kb.Enricher` runs in the ingest
+  funnel, mission promotion, and PDF conversion), `attachments`,
   `gwclient`, `memclient`, `sandboxclient`, `settings`, `skills`.
 - `internal/gateway/`: `provider` (wire adapters only), `router`,
   `catalog` (LiteLLM-synced model/pricing catalog), `ledger`, `stream`,

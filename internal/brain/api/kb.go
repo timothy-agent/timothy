@@ -356,6 +356,9 @@ func (h *kbAPI) decodeUpload(w http.ResponseWriter, r *http.Request) (decodedUpl
 			jsonError(w, http.StatusBadGateway, "conversion_failed", err.Error())
 			return decodedUpload{}, false
 		}
+		if ext == ".pdf" && h.enrich != nil {
+			md = h.enrichPDF(r.Context(), md, raw)
+		}
 		markdownText = markitdown.TruncateMarkdown(md)
 	}
 
@@ -369,6 +372,25 @@ func (h *kbAPI) decodeUpload(w http.ResponseWriter, r *http.Request) (decodedUpl
 		markdown: markdownText,
 		rawBytes: int64(len(raw)),
 	}, true
+}
+
+// enrichPDF captions a PDF's embedded images and scanned pages (issue
+// #350): fetches the sidecar's /pdf/images extraction, then runs
+// h.enrich.EnrichPDF over it. Any failure (sidecar unreachable, PDF
+// unparsable) logs and returns md unchanged: a captioning problem must
+// never fail the conversion that already succeeded.
+func (h *kbAPI) enrichPDF(ctx context.Context, md string, raw []byte) string {
+	res, err := markitdown.PDFImages(ctx, h.markitdownHTTP, h.markitdownURL, raw)
+	if err != nil {
+		h.log.Warn("kb ingest: pdf image extraction failed", "error", err)
+		return md
+	}
+	enriched, stats := h.enrich.EnrichPDF(ctx, md, res)
+	if stats.Found > 0 {
+		h.log.Info("kb ingest: pdf image captioning",
+			"found", stats.Found, "captioned", stats.Captioned, "skipped", stats.Skipped, "failed", stats.Failed)
+	}
+	return enriched
 }
 
 // finishIngest creates the pending document row, fires the background
@@ -767,6 +789,9 @@ func (h *kbAPI) convertFetched(ctx context.Context, u *url.URL, body []byte, con
 		md, err := markitdown.Convert(ctx, h.markitdownHTTP, h.markitdownURL, name, contentType, body)
 		if err != nil {
 			return "", err
+		}
+		if strings.Contains(contentType, "application/pdf") && h.enrich != nil {
+			md = h.enrichPDF(ctx, md, body)
 		}
 		return markitdown.TruncateMarkdown(md), nil
 	case strings.Contains(contentType, "text/markdown"), strings.Contains(contentType, "text/plain"):

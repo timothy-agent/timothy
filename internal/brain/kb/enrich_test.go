@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
 
 func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -176,6 +178,67 @@ func TestEnrichMarkdownAlreadyCaptionedIsIdempotent(t *testing.T) {
 	}
 	if out2 != out1 {
 		t.Fatalf("second pass changed the markdown, want byte-identical output on an already-captioned doc")
+	}
+}
+
+func TestEnrichPDFDisabledIsNoop(t *testing.T) {
+	e := &Enricher{Enabled: func(context.Context) bool { return false }, Log: discardLog()}
+	res := markitdown.PDFImagesResult{Pages: []markitdown.PDFPage{{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}}}}
+	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
+	if out != "# doc" || stats != (EnrichStats{}) {
+		t.Fatalf("out=%q stats=%+v, want unchanged/zero when disabled", out, stats)
+	}
+}
+
+func TestEnrichPDFCaptionsEmbeddedImage(t *testing.T) {
+	e := &Enricher{Caption: fakeCaptioner("a flowchart", false), Enabled: alwaysEnabled, Log: discardLog()}
+	res := markitdown.PDFImagesResult{Pages: []markitdown.PDFPage{
+		{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}},
+	}}
+	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
+	if stats.Found != 1 || stats.Captioned != 1 || stats.Failed != 0 {
+		t.Fatalf("stats = %+v, want Found=1 Captioned=1", stats)
+	}
+	if !strings.Contains(out, "## Page 1 images") || !strings.Contains(out, "a flowchart") {
+		t.Fatalf("out = %q, want a Page 1 images section with the caption", out)
+	}
+}
+
+func TestEnrichPDFCaptionsScannedPage(t *testing.T) {
+	renderB64 := "QkJC"
+	e := &Enricher{Caption: fakeCaptioner("transcribed text", false), Enabled: alwaysEnabled, Log: discardLog()}
+	res := markitdown.PDFImagesResult{Pages: []markitdown.PDFPage{
+		{Page: 3, TextChars: 5, RenderB64: &renderB64},
+	}}
+	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
+	if stats.Found != 1 || stats.Captioned != 1 {
+		t.Fatalf("stats = %+v, want Found=1 Captioned=1", stats)
+	}
+	if !strings.Contains(out, "## Page 3 (scanned)") || !strings.Contains(out, "transcribed text") {
+		t.Fatalf("out = %q, want a Page 3 (scanned) section with the transcription", out)
+	}
+}
+
+func TestEnrichPDFCaptionerFailureSkipsPage(t *testing.T) {
+	e := &Enricher{Caption: fakeCaptioner("", true), Enabled: alwaysEnabled, Log: discardLog()}
+	res := markitdown.PDFImagesResult{Pages: []markitdown.PDFPage{
+		{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}},
+	}}
+	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
+	if out != "# doc" {
+		t.Fatalf("out = %q, want unchanged when the captioner fails", out)
+	}
+	if stats.Failed != 1 || stats.Captioned != 0 {
+		t.Fatalf("stats = %+v, want Failed=1 Captioned=0", stats)
+	}
+}
+
+func TestEnrichPDFNoImagesOrScannedPagesIsNoop(t *testing.T) {
+	e := &Enricher{Caption: fakeCaptioner("x", false), Enabled: alwaysEnabled, Log: discardLog()}
+	res := markitdown.PDFImagesResult{Pages: []markitdown.PDFPage{{Page: 1, TextChars: 5000}}}
+	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
+	if out != "# doc" || stats.Captioned != 0 {
+		t.Fatalf("out=%q stats=%+v, want unchanged with a text-rich page and no images", out, stats)
 	}
 }
 
