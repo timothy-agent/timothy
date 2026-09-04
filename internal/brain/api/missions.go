@@ -1106,30 +1106,35 @@ func (h *missionAPI) generateName(id, goal string) {
 }
 
 // classifyKind decides how a mission's work happens when the create
-// request omits kind. Biased hard toward "coding" on anything short of
-// an unambiguous "general" reply: a coding goal misread as general
-// loses branch/diff/rollback safety (the worse failure), while a
-// general goal misread as coding only wastes an empty worktree — so
-// every ambiguous or failed classification lands on the cheap side of
-// the error. nil classify (no gateway wiring) takes the same default.
+// request omits kind. Classifies by deliverable, not topic: a book or
+// article about coding is general, since it produces no repository
+// files. Falls back to "general" on a nil classifier, a classify
+// error, or an unrecognised reply, since general is the cheaper
+// mistake, no worktree, no branch, no coding harness, while create()
+// still receives the operator's explicit kind from the form, so this
+// only changes the suggestion.
 func classifyKind(ctx context.Context, classify agents.Classify, goal string) string {
 	if classify == nil {
-		return "coding"
+		return "general"
 	}
-	prompt := "Decide how this mission's work happens. Answer with exactly one word.\n" +
-		"coding — the goal requires creating or modifying code, scripts, or configuration in a project/repository.\n" +
-		"general — everything else (documents, analysis, data gathering, operations).\n\n" +
+	prompt := "Decide how this mission's work happens, based on its deliverable, not its topic. Answer with exactly one word.\n" +
+		"coding — the mission produces or changes code, scripts, or configuration files in a repository.\n" +
+		"general — the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n\n" +
 		"Goal: " + goal
 	reply, err := classify(ctx, prompt)
 	if err != nil {
-		return "coding"
-	}
-	reply = strings.ToLower(reply)
-	// "general" wins only when "coding" is absent from the reply.
-	if strings.Contains(reply, "general") && !strings.Contains(reply, "coding") {
 		return "general"
 	}
-	return "coding"
+	// First recognised word decides.
+	for _, field := range strings.Fields(strings.ToLower(reply)) {
+		switch strings.Trim(field, ".,") {
+		case "coding":
+			return "coding"
+		case "general":
+			return "general"
+		}
+	}
+	return "general"
 }
 
 // classifyLight decides whether a general-kind goal is single-pass
@@ -1176,42 +1181,60 @@ func classifyHasPlan(goal string) bool {
 // would otherwise pay for two full LLM turns per preview. create()'s
 // fallback path keeps using classifyKind/classifyLight separately,
 // since it only ever needs light after kind is already known to be
-// general. Parsing is defensive: any reply shape other than exactly
-// "coding"/"general" followed by "light"/"full" (case-insensitive,
-// separated by whitespace) falls back to kind=coding, light=false —
-// the same safe-side bias classifyKind/classifyLight each apply alone.
+// general. Parsing takes the first recognised kind word and the first
+// recognised light/full word, in order, from the reply's fields
+// (punctuation stripped), rather than requiring exactly two fields.
+// Falls back to kind=general, light=false on a nil classifier, a
+// classify error, or no recognised word, the same cheap-mistake bias
+// as classifyKind: no worktree, no branch, no coding harness, and
+// create() still receives the operator's explicit kind and light flag
+// from the form, so this only changes the suggestion.
 func classifyKindAndLight(ctx context.Context, classify agents.Classify, goal string) (kind string, light bool) {
 	if classify == nil {
-		return "coding", false
+		return "general", false
 	}
-	prompt := "Classify this mission goal along two independent axes.\n" +
-		"Axis 1 — coding or general: coding means creating or modifying code, scripts, or configuration in a project/repository; general means everything else (documents, analysis, data gathering, operations).\n" +
+	prompt := "Classify this mission goal along two independent axes, based on its deliverable, not its topic.\n" +
+		"Axis 1 — coding or general: coding means the mission produces or changes code, scripts, or configuration files in a repository; general means the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n" +
 		"Axis 2 — light or full: light means the goal is a single-pass task deliverable in one response (a read, summary, lookup, or short write-up with no multi-step plan or file artifacts); full means it needs a plan and artifacts.\n" +
 		"Answer with exactly two words separated by a space: first coding or general, then light or full.\n\n" +
 		"Goal: " + goal
 	reply, err := classify(ctx, prompt)
 	if err != nil {
-		return "coding", false
+		return "general", false
 	}
 	fields := strings.Fields(strings.ToLower(reply))
-	if len(fields) != 2 {
-		return "coding", false
+	kind = ""
+	kindFound, lightFound := false, false
+	for _, field := range fields {
+		clean := strings.Trim(field, ".,")
+		if !kindFound {
+			switch clean {
+			case "coding":
+				kind = "coding"
+				kindFound = true
+				continue
+			case "general":
+				kind = "general"
+				kindFound = true
+				continue
+			}
+		}
+		if kindFound && !lightFound {
+			switch clean {
+			case "light":
+				light = true
+				lightFound = true
+			case "full":
+				light = false
+				lightFound = true
+			}
+		}
 	}
-	switch fields[0] {
-	case "general":
-		kind = "general"
-	case "coding":
-		kind = "coding"
-	default:
-		return "coding", false
+	if !kindFound {
+		return "general", false
 	}
-	switch fields[1] {
-	case "light":
-		light = true
-	case "full":
+	if !lightFound {
 		light = false
-	default:
-		return "coding", false
 	}
 	return kind, kind == "general" && light
 }

@@ -721,10 +721,10 @@ func TestMissionsCreateReferencesValidation(t *testing.T) {
 	})
 }
 
-// TestClassifyKind exercises classifyKind's parsing and its bias to
-// "coding" for anything short of an unambiguous "general" reply —
-// nil classify, a classify error, and a garbage reply must all land on
-// the cheap side of the error (see classifyKind's doc comment).
+// TestClassifyKind exercises classifyKind's deliverable-based parsing:
+// the first recognised word in the reply wins, and nil classify, a
+// classify error, or an unrecognised reply all fall back to "general"
+// (see classifyKind's doc comment).
 func TestClassifyKind(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -732,36 +732,46 @@ func TestClassifyKind(t *testing.T) {
 		classify func(ctx context.Context, prompt string) (string, error)
 		want     string
 	}{
-		{"nil classify defaults to coding", nil, "coding"},
+		{"nil classify defaults to general", nil, "general"},
 		{
-			"unambiguous general reply", func(context.Context, string) (string, error) {
-				return "General", nil
-			}, "general",
-		},
-		{
-			"unambiguous coding reply", func(context.Context, string) (string, error) {
+			"plain coding reply", func(context.Context, string) (string, error) {
 				return "coding", nil
 			}, "coding",
 		},
 		{
-			"garbage reply defaults to coding", func(context.Context, string) (string, error) {
-				return "banana", nil
+			"plain general reply", func(context.Context, string) (string, error) {
+				return "general", nil
+			}, "general",
+		},
+		{
+			"topic is coding but deliverable is a book", func(context.Context, string) (string, error) {
+				return "general (the goal is about coding but produces a book)", nil
+			}, "general",
+		},
+		{
+			"punctuation stripped before matching", func(context.Context, string) (string, error) {
+				return "Coding.", nil
 			}, "coding",
 		},
 		{
-			"reply mentioning both words defaults to coding", func(context.Context, string) (string, error) {
+			"first recognised word wins when coding comes first", func(context.Context, string) (string, error) {
 				return "coding, not general", nil
 			}, "coding",
 		},
 		{
-			"empty reply defaults to coding", func(context.Context, string) (string, error) {
-				return "", nil
-			}, "coding",
+			"garbage reply defaults to general", func(context.Context, string) (string, error) {
+				return "banana", nil
+			}, "general",
 		},
 		{
-			"classify error defaults to coding", func(context.Context, string) (string, error) {
+			"empty reply defaults to general", func(context.Context, string) (string, error) {
+				return "", nil
+			}, "general",
+		},
+		{
+			"classify error defaults to general", func(context.Context, string) (string, error) {
 				return "", errors.New("gateway down")
-			}, "coding",
+			}, "general",
 		},
 	}
 	for _, tc := range tests {
@@ -772,6 +782,22 @@ func TestClassifyKind(t *testing.T) {
 				t.Fatalf("classifyKind() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestClassifyKindPrompt pins the deliverable-vs-topic intent in the
+// prompt sent to the classifier, so a future edit can't silently
+// revert to topic-based classification.
+func TestClassifyKindPrompt(t *testing.T) {
+	t.Parallel()
+	var gotPrompt string
+	classify := func(_ context.Context, prompt string) (string, error) {
+		gotPrompt = prompt
+		return "general", nil
+	}
+	classifyKind(context.Background(), classify, "some goal")
+	if !strings.Contains(gotPrompt, "deliverable") && !strings.Contains(gotPrompt, "book") {
+		t.Fatalf("classifyKind prompt = %q, want it to mention deliverable or the book counter-example", gotPrompt)
 	}
 }
 
@@ -826,9 +852,11 @@ func TestClassifyLight(t *testing.T) {
 }
 
 // TestClassifyKindAndLight exercises the merged single-call classifier
-// classifyGoal uses: happy paths for both axes, and every ambiguous or
-// malformed reply shape falling back to kind=coding light=false, the
-// same safe-side bias classifyKind/classifyLight apply separately.
+// classifyGoal uses: happy paths for both axes, the first recognised
+// kind and light/full words winning in order even with extra fields,
+// and every classify failure or unrecognised reply falling back to
+// kind=general light=false, the same cheap-mistake bias classifyKind
+// applies alone.
 func TestClassifyKindAndLight(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -837,15 +865,15 @@ func TestClassifyKindAndLight(t *testing.T) {
 		wantKind  string
 		wantLight bool
 	}{
-		{"nil classify defaults to coding/full", nil, "coding", false},
+		{"nil classify defaults to general/full", nil, "general", false},
 		{
 			"general + light", func(context.Context, string) (string, error) {
 				return "general light", nil
 			}, "general", true,
 		},
 		{
-			"general + full", func(context.Context, string) (string, error) {
-				return "general full", nil
+			"general + full with punctuation", func(context.Context, string) (string, error) {
+				return "General, full.", nil
 			}, "general", false,
 		},
 		{
@@ -864,34 +892,34 @@ func TestClassifyKindAndLight(t *testing.T) {
 			}, "general", true,
 		},
 		{
-			"single word reply falls back", func(context.Context, string) (string, error) {
-				return "general", nil
-			}, "coding", false,
+			"three word reply uses first recognised kind and light word", func(context.Context, string) (string, error) {
+				return "general full extra", nil
+			}, "general", false,
 		},
 		{
-			"three word reply falls back", func(context.Context, string) (string, error) {
-				return "general light extra", nil
-			}, "coding", false,
+			"single word reply falls back", func(context.Context, string) (string, error) {
+				return "general", nil
+			}, "general", false,
 		},
 		{
 			"garbage first word falls back", func(context.Context, string) (string, error) {
 				return "banana light", nil
-			}, "coding", false,
+			}, "general", false,
 		},
 		{
 			"garbage second word falls back", func(context.Context, string) (string, error) {
 				return "general banana", nil
-			}, "coding", false,
+			}, "general", false,
 		},
 		{
 			"empty reply falls back", func(context.Context, string) (string, error) {
 				return "", nil
-			}, "coding", false,
+			}, "general", false,
 		},
 		{
 			"classify error falls back", func(context.Context, string) (string, error) {
 				return "", errors.New("gateway down")
-			}, "coding", false,
+			}, "general", false,
 		},
 	}
 	for _, tc := range tests {
@@ -1253,7 +1281,7 @@ func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 }
 
 // TestMissionsCreateKindOptional confirms an omitted kind no longer
-// 400s: it reaches classifyKind (defaulting to "coding" with no
+// 400s: it reaches classifyKind (defaulting to "general" with no
 // classify wired) and then the degraded store, which 500s — proving
 // validation accepted the empty kind rather than rejecting it. An
 // explicit kind is still validated and honored exactly as before.
