@@ -1190,7 +1190,7 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 	if rc := m.ReferencedContext(); rc != "" {
 		user += "\n\nReferenced context:\n" + NeutralizeSlot(rc)
 	}
-	if notes := recentProgressNotes(m.Progress, progressRenderCap); notes != "" {
+	if notes := progressWithOperatorNotes(m.Progress, progressRenderCap, nil); notes != "" {
 		user += "\n\nProgress so far (includes any operator answers to prior questions):\n" + notes
 	}
 	user += renderAttachments(m.Attachments())
@@ -1544,17 +1544,21 @@ func renderReviewContent(p ReviewPacket) string {
 		b.WriteString("\n")
 	}
 	if len(p.Progress) > 0 {
-		notes := p.Progress
-		if len(notes) > progressRenderCap {
-			notes = notes[len(notes)-progressRenderCap:]
-		}
 		if p.FindingsOnly {
 			b.WriteString("\nWorker notes since the last review round (its own account of the rework; verify against the files above):\n")
+			notes := p.Progress
+			if len(notes) > progressRenderCap {
+				notes = notes[len(notes)-progressRenderCap:]
+			}
+			for _, n := range notes {
+				fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(n.Note))
+			}
 		} else {
+			// issue #357: pin any older operator steering note ahead of the
+			// last progressRenderCap notes so a full review round never
+			// drops it.
 			b.WriteString("\nRecent progress (includes any operator steering notes):\n")
-		}
-		for _, n := range notes {
-			fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(n.Note))
+			b.WriteString(progressWithOperatorNotes(p.Progress, progressRenderCap, NeutralizeSlot))
 		}
 	}
 	if p.Evidence != "" {

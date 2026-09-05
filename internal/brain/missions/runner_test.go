@@ -460,6 +460,38 @@ func TestRenderReviewContentFindingsOnlyEmptyDelta(t *testing.T) {
 	}
 }
 
+// TestRenderReviewContentFullPinsOlderOperatorNote covers issue #357: a
+// full review round must not drop an operator steering note older than
+// progressRenderCap notes.
+func TestRenderReviewContentFullPinsOlderOperatorNote(t *testing.T) {
+	notes := []ProgressNote{{Note: operatorNotePrefix + "focus on error handling"}}
+	for i := 0; i < progressRenderCap; i++ {
+		notes = append(notes, ProgressNote{Note: fmt.Sprintf("progress %d", i)})
+	}
+	content := renderReviewContent(ReviewPacket{Goal: "goal", Progress: notes})
+	if !strings.Contains(content, operatorNotePrefix+"focus on error handling") {
+		t.Fatalf("full-round content dropped an operator note older than progressRenderCap:\n%s", content)
+	}
+	if !strings.Contains(content, "progress 0") || !strings.Contains(content, fmt.Sprintf("progress %d", progressRenderCap-1)) {
+		t.Fatalf("full-round content missing recent notes:\n%s", content)
+	}
+}
+
+// TestRenderReviewContentFindingsOnlyDoesNotPinOlderOperatorNote confirms
+// the findings-only branch keeps its existing behavior: it renders only
+// notes since the last review round and never pins an older operator
+// note (D-096's window is intentionally narrow).
+func TestRenderReviewContentFindingsOnlyDoesNotPinOlderOperatorNote(t *testing.T) {
+	notes := []ProgressNote{{Note: operatorNotePrefix + "focus on error handling"}}
+	for i := 0; i < progressRenderCap; i++ {
+		notes = append(notes, ProgressNote{Note: fmt.Sprintf("progress %d", i)})
+	}
+	content := renderReviewContent(ReviewPacket{FindingsOnly: true, Progress: notes})
+	if strings.Contains(content, operatorNotePrefix+"focus on error handling") {
+		t.Fatalf("findings-only content must not pin an older operator note:\n%s", content)
+	}
+}
+
 // TestRenderReviewContentMultiUnitFiles pins D-098's attribution in a
 // full round over several units: each unit block lists the changed
 // files inside its own scope, the whole-change stat is labelled as

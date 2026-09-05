@@ -3042,6 +3042,59 @@ func TestDriverFirstPlanDoesNotGetReplanNotes(t *testing.T) {
 	}
 }
 
+// TestReplanNotesPinsOlderOperatorNote covers issue #357: an operator
+// steering note older than the last-3 window must still reach the
+// replan prompt, in both the first-time-plan and plan-exists branches.
+func TestReplanNotesPinsOlderOperatorNote(t *testing.T) {
+	notes := []ProgressNote{
+		{Note: operatorNotePrefix + "use approach B"},
+		{Note: "progress 1"},
+		{Note: "progress 2"},
+		{Note: "progress 3"},
+	}
+	t.Run("first plan", func(t *testing.T) {
+		m := Mission{DiscoverNotes: "original findings", Progress: notes}
+		got := replanNotes(m)
+		for _, want := range []string{operatorNotePrefix + "use approach B", "progress 1", "progress 2", "progress 3"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("replanNotes = %q, want it to contain %q", got, want)
+			}
+		}
+	})
+	t.Run("plan exists", func(t *testing.T) {
+		m := Mission{
+			DiscoverNotes: "original findings",
+			Progress:      notes,
+			Plan:          Plan{Units: []PlanUnit{{Title: "unit0", Passes: true}}},
+		}
+		got := replanNotes(m)
+		for _, want := range []string{operatorNotePrefix + "use approach B", "progress 1", "progress 2", "progress 3"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("replanNotes = %q, want it to contain %q", got, want)
+			}
+		}
+	})
+}
+
+// TestReplanNotesNoDuplicateWhenOperatorNoteInWindow: an operator note
+// that already falls inside the last-3 window must render once, not
+// twice.
+func TestReplanNotesNoDuplicateWhenOperatorNoteInWindow(t *testing.T) {
+	m := Mission{
+		DiscoverNotes: "original findings",
+		Progress: []ProgressNote{
+			{Note: "progress 1"},
+			{Note: operatorNotePrefix + "stay the course"},
+			{Note: "progress 2"},
+		},
+	}
+	got := replanNotes(m)
+	want := operatorNotePrefix + "stay the course"
+	if n := strings.Count(got, want); n != 1 {
+		t.Fatalf("replanNotes = %q, want operator note to appear once, got %d times", got, n)
+	}
+}
+
 // TestDriverCodingMissionsAlwaysReview: the skip gate must never apply
 // to coding missions — a diff can be wrong in ways existence checks
 // cannot see.

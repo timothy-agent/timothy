@@ -1281,7 +1281,7 @@ func (d *Driver) DecidePlan(ctx context.Context, id string, input Input, feedbac
 // the API layer's answer endpoint calls this, never the model.
 // Records the Q+A as a progress note (the same durable channel a
 // worker/review/plan turn already reads back: WorkPacket.Progress,
-// ReviewPacket.Progress, replanNotes' recentProgressNotes), so the
+// ReviewPacket.Progress, replanNotes' progressWithOperatorNotes), so the
 // NEXT turn of the SAME phase (Store.AnswerPendingInput resumes to
 // idle without touching Phase) carries the question and answer
 // verbatim. Returns ErrNotAwaitingApproval if the mission isn't
@@ -1464,9 +1464,9 @@ func replanNotes(m Mission) string {
 		// D-088: an ask_user answer during a first-time plan turn (no
 		// plan landed yet, so the "being replanned" branch below never
 		// runs) still needs to reach the very next plan turn's prompt,
-		// same recentProgressNotes channel, just not gated on a plan
+		// same progressWithOperatorNotes channel, just not gated on a plan
 		// existing yet.
-		if progress := recentProgressNotes(m.Progress, 3); progress != "" {
+		if progress := progressWithOperatorNotes(m.Progress, 3, nil); progress != "" {
 			notes += "\n\nRecent progress (includes any operator answers to prior questions):\n" + progress
 		}
 		return notes
@@ -1481,7 +1481,7 @@ func replanNotes(m Mission) string {
 		}
 		fmt.Fprintf(&b, "- [%s] %s\n", status, u.Title)
 	}
-	if notes := recentProgressNotes(m.Progress, 3); notes != "" {
+	if notes := progressWithOperatorNotes(m.Progress, 3, nil); notes != "" {
 		b.WriteString("\nRecent progress:\n")
 		b.WriteString(notes)
 	}
@@ -1489,14 +1489,29 @@ func replanNotes(m Mission) string {
 	return b.String()
 }
 
-// recentProgressNotes renders the last n progress notes, oldest first.
-func recentProgressNotes(notes []ProgressNote, n int) string {
+// progressWithOperatorNotes renders the last n progress notes, oldest
+// first, plus any older operator steering note (operatorNotePrefix)
+// pinned ahead of them so the "last n" cap never drops operator input
+// (issue #357). Each note renders once, as "- <note>\n". render, when
+// non-nil, transforms each note's text before rendering (e.g.
+// NeutralizeSlot in the reviewer prompt); pass nil to render as-is.
+func progressWithOperatorNotes(notes []ProgressNote, n int, render func(string) string) string {
+	if render == nil {
+		render = func(s string) string { return s }
+	}
+	var older []ProgressNote
+	recent := notes
 	if len(notes) > n {
-		notes = notes[len(notes)-n:]
+		older, recent = notes[:len(notes)-n], notes[len(notes)-n:]
 	}
 	var b strings.Builder
-	for _, note := range notes {
-		fmt.Fprintf(&b, "- %s\n", note.Note)
+	for _, note := range older {
+		if strings.HasPrefix(note.Note, operatorNotePrefix) {
+			fmt.Fprintf(&b, "- %s\n", render(note.Note))
+		}
+	}
+	for _, note := range recent {
+		fmt.Fprintf(&b, "- %s\n", render(note.Note))
 	}
 	return b.String()
 }
