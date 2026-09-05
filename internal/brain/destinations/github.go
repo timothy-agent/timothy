@@ -9,10 +9,10 @@ import (
 )
 
 // PushTokenResolver resolves a github-connection mission's own PAT from
-// its connector_id: the auto-fire path (RunOnComplete/DeliverMission)
-// never has an explicit credential_ref override, unlike the manual
-// push/pr API endpoints, so this is exactly api/missions.go's
-// resolvePushToken minus the credential_ref-override branch.
+// its connector_id: DeliverMission never has an explicit credential_ref
+// override, unlike the manual push/pr API endpoints, so this is exactly
+// api/missions.go's resolvePushToken minus the credential_ref-override
+// branch.
 type PushTokenResolver func(ctx context.Context, connectorID string) (string, error)
 
 // PRSource is the narrow slice of a GitHub connector's repo operations
@@ -56,12 +56,12 @@ type events interface {
 	AppendEvent(ctx context.Context, id, kind string, payload map[string]any) error
 }
 
-// GitHubAdapter runs a mission's push/push+PR delivery: the operator's
-// consent-at-create (legacy) or saved-destination (github kind) choice.
-// It shares PushBranch/OpenPR's actual push-and-record-event logic with
-// the manual push/pr API endpoints (api/missions.go calls the same two
-// methods), so neither path can diverge in what "push" or "PR" means or
-// which events land on the Timeline.
+// GitHubAdapter runs a mission's push/push+PR delivery for a saved
+// github-kind destination. It shares PushBranch/OpenPR's actual
+// push-and-record-event logic with the manual push/pr API endpoints
+// (api/missions.go calls the same two methods), so neither path can
+// diverge in what "push" or "PR" means or which events land on the
+// Timeline.
 type GitHubAdapter struct {
 	Pusher       pusher
 	Events       events
@@ -70,9 +70,9 @@ type GitHubAdapter struct {
 }
 
 // NewGitHubAdapter builds a GitHubAdapter. resolveToken/pr may be nil
-// (no secret store / no connectors wired): RunOnComplete/DeliverMission
-// report a plain error in that case rather than a panic; pusher/events
-// are always present since missions itself requires both to run at all.
+// (no secret store / no connectors wired): DeliverMission reports a
+// plain error in that case rather than a panic; pusher/events are
+// always present since missions itself requires both to run at all.
 func NewGitHubAdapter(p pusher, e events, resolveToken PushTokenResolver, pr PRSource) *GitHubAdapter {
 	return &GitHubAdapter{Pusher: p, Events: e, ResolveToken: resolveToken, PR: pr}
 }
@@ -243,78 +243,8 @@ func (a *GitHubAdapter) ensureRepo(ctx context.Context, m missions.Mission, conn
 	return cloneURL, true, nil
 }
 
-// RunOnComplete executes m's recorded on_complete choice ("push" or
-// "push_pr") for the legacy self-describing "github" destination entry,
-// called by the driver exactly once, right after the mission's own
-// ApplyTransition into phase=done succeeds. Failure never un-dones a
-// verified mission: it appends mission.push_failed (already scrubbed of
-// the token by PushBranch/OpenPR's error paths) and returns the error
-// for the caller to fire a notification; the mission row itself is
-// untouched either way. No retry loop, one attempt: the manual push/pr
-// endpoints remain available for the operator.
-//
-// Before pushing, this runs ensureRepo against the entry (issue #483):
-// when the entry names its own repo (or asks for one to be created),
-// ensureRepo may create it and redirect the worktree's origin, in which
-// case the push/PR target is the entry's repo, not m.RepoURL()'s clone
-// source (see openPRFor). entry, updated is the caller's (fireOnComplete's)
-// signal to persist the entry via SetDestinations: updated is true only
-// when ensureRepo actually changed RepoURL (a repo was created this
-// call).
-func (a *GitHubAdapter) RunOnComplete(ctx context.Context, m missions.Mission) (entry missions.DestinationEntry, updated bool, err error) {
-	onComplete := m.OnComplete()
-	entry, _ = m.GitHubEntry()
-	if onComplete == "" {
-		return entry, false, nil
-	}
-	if reason := missions.NotPushable(m); reason != "" {
-		return entry, false, fmt.Errorf("on_complete: %s", reason)
-	}
-	if a.ResolveToken == nil {
-		return entry, false, fmt.Errorf("on_complete: connectors are not enabled")
-	}
-
-	connectorID := entry.ConnectorID
-	if connectorID == "" {
-		connectorID = m.ConnectorID()
-	}
-	finalRepoURL, updated, err := a.ensureRepo(ctx, m, connectorID, entry.RepoURL, entry.CreateIfMissing)
-	if err != nil {
-		return entry, updated, fmt.Errorf("on_complete: %w", err)
-	}
-	if updated {
-		entry.RepoURL = finalRepoURL
-		entry.ConnectorID = connectorID
-	}
-
-	token, err := a.ResolveToken(ctx, connectorID)
-	if err != nil {
-		return entry, updated, fmt.Errorf("on_complete: resolve token: %w", err)
-	}
-
-	switch onComplete {
-	case "push":
-		_, err := a.PushBranch(ctx, m, token)
-		return entry, updated, err
-	case "push_pr":
-		if entry.RepoURL != "" {
-			owner, repo, ok := missions.ParseGitHubRepoURL(entry.RepoURL)
-			if !ok {
-				return entry, updated, fmt.Errorf("on_complete: destination repo_url is not a recognizable github https clone URL")
-			}
-			_, _, err := a.openPRFor(ctx, m, token, connectorID, owner, repo)
-			return entry, updated, err
-		}
-		_, _, err := a.OpenPR(ctx, m, token)
-		return entry, updated, err
-	default:
-		return entry, updated, fmt.Errorf("on_complete: unknown value %q", onComplete)
-	}
-}
-
 // DeliverMission runs a saved "github" destination's delivery for m
-// (issue #560): the Deliverer's own entry point, distinct from
-// RunOnComplete's legacy self-describing entry. Repo resolution order:
+// (issue #560): the Deliverer's own entry point. Repo resolution order:
 // (a) e.RepoURL if already set, (b) else m.RepoURL() (the mission's own
 // clone source), (c) else, if cfg.CreateIfMissing, create a repo named
 // after the mission's goal/id, (d) else fail. On success e is updated

@@ -214,16 +214,13 @@ func (e *Engine) spawnStep(ctx context.Context, runID, stepName string, step Ste
 	if step.Light {
 		flow = missions.FlowLight
 	}
-	// step.OnComplete/DestinationIDs become destination entries, same
-	// "github" (kind=coding, mode=on_complete) and bare-id shape
+	// step.DestinationIDs becomes bare-id destination entries, same shape
 	// api/missions.go's create handler normalizes a request into (see
-	// missions.DestinationEntry).
+	// missions.DestinationEntry). A step wanting a push names a github
+	// destination row's id here.
 	var destinations []missions.DestinationEntry
 	for _, id := range step.DestinationIDs {
 		destinations = append(destinations, missions.DestinationEntry{DestinationID: id})
-	}
-	if step.OnComplete != "" {
-		destinations = append(destinations, missions.DestinationEntry{Destination: missions.DestinationKindGitHub, Mode: step.OnComplete})
 	}
 	// outcome becomes this step's mission's parent-lineage Sources entry
 	// (issue #481), same shape as followup.go's own CreateFollowUp.

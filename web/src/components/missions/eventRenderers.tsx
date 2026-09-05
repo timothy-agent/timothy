@@ -261,23 +261,15 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     return `Discover complete (${String(chars ?? '?')} chars)`
   },
   // mission.result_complete is the result phase's own step outcome
-  // (D-086): a summary of what delivery/copy/promote/on_complete did.
+  // (D-086): a summary of what delivery/copy/promote did.
   'mission.result_complete': (p) => {
-    const {
-      delivered,
-      artifacts_copied,
-      promoted_kb_collection_id,
-      on_complete,
-      delivery_error,
-      promote_kb_error,
-      on_complete_error,
-    } = asRecord(p)
+    const { delivered, artifacts_copied, promoted_kb_collection_id, delivery_error, promote_kb_error } =
+      asRecord(p)
     const parts: string[] = []
     if (delivered) parts.push(`delivered to ${String(delivered)}`)
     if (artifacts_copied) parts.push(`${String(artifacts_copied)} artifact(s) copied`)
     if (promoted_kb_collection_id) parts.push('promoted to kb')
-    if (on_complete) parts.push(String(on_complete))
-    const errors = [delivery_error, promote_kb_error, on_complete_error].filter(Boolean)
+    const errors = [delivery_error, promote_kb_error].filter(Boolean)
     if (errors.length === 0) {
       return <span className="text-green-400">Result complete{parts.length > 0 ? `: ${parts.join(', ')}` : ''}</span>
     }

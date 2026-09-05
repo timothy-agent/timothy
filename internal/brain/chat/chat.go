@@ -14,7 +14,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -775,128 +774,6 @@ func CaptionImageOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Cont
 			return ""
 		}
 		return caption
-	}
-}
-
-// GitHubDestinationProposal is ExtractGitHubDestinationOverGateway's
-// result: a github destination entry for the create form to show the
-// operator before submit (issue #483, part of the missions schema
-// restructure's slice 5). Found is false for "no destination detected"
-// -- the create form must never auto-add a destination the operator
-// never saw, so a zero value here means literally nothing is proposed.
-type GitHubDestinationProposal struct {
-	Found bool
-	// Owner/Repo name the repo the goal named, e.g. "octocat/hello-world"
-	// parsed into "octocat" and "hello-world" -- never guessed when the
-	// goal doesn't unambiguously name both.
-	Owner string
-	Repo  string
-	// Mode is "push" or "push_pr" -- defaults to "push" when the goal
-	// doesn't say which.
-	Mode string
-}
-
-// githubDestinationOwnerRepoPattern matches an "owner/repo" pair in
-// the model's reply line -- deliberately permissive on the character
-// class (GitHub logins/repo names allow letters, digits, hyphens,
-// underscores, dots) since this only ever parses the model's own
-// structured reply, never raw user text.
-var githubDestinationOwnerRepoPattern = regexp.MustCompile(`^([\w.-]+)/([\w.-]+)$`)
-
-// ExtractGitHubDestinationOverGateway mirrors TitleOverGateway/
-// ClassifyCollectionOverGateway's exact mechanism (same route
-// resolution via RouteForRole("summarize") falling back to "default",
-// same Stream-and-drain, same free-text single-line reply protocol --
-// this codebase has no precedent for parsing prose-as-JSON from a
-// model reply) for a create-time job: given a mission goal, propose a
-// github push/push_pr destination when the goal unambiguously names a
-// repo to push to (e.g. "work on this and push to
-// github.com/x/y"), or report nothing found otherwise. Ambiguity (a
-// repo mentioned with no owner, or no repo named at all) must never
-// guess -- the model is instructed to reply NONE in that case, and any
-// reply that doesn't parse as "owner/repo" or "owner/repo push_pr"
-// falls back to Found: false, same never-errors contract as its two
-// siblings: a gateway error, empty stream, or malformed reply always
-// resolves rather than blocking mission creation. Callers wire this as
-// an on-demand create-form action ("Detect from goal"), not a
-// background/backfilled step like TitleOverGateway -- the operator
-// needs the proposal to review and confirm/discard before submit, not
-// after.
-func ExtractGitHubDestinationOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Context, goal string) GitHubDestinationProposal {
-	return func(ctx context.Context, goal string) GitHubDestinationProposal {
-		ctx, cancel := context.WithTimeout(ctx, titleTimeout)
-		defer cancel()
-
-		none := GitHubDestinationProposal{}
-
-		const extractSystem = `Decide whether this mission goal asks to push or open a pull request against a specific, unambiguous GitHub repository. Reply with exactly one line, nothing else.
-If the goal clearly names both an owner (user or organization) and a repo, e.g. "push to github.com/octocat/hello-world" or "PR against octocat/hello-world": reply "<owner>/<repo>" to push the branch, or "<owner>/<repo> push_pr" to also open a pull request (only when the goal explicitly asks for a pull request/PR, not just a push).
-If the goal doesn't name a repo, names one with no clear owner, or is ambiguous in any way: reply exactly "NONE". Never guess an owner or repo name.`
-		route, ok, err := gw.RouteForRole(ctx, "summarize")
-		if err != nil || !ok {
-			route, ok, err = gw.RouteForRole(ctx, "default")
-			if err != nil {
-				log.Warn("extract github destination: route lookup failed", "error", err)
-				return none
-			}
-			if !ok {
-				log.Warn("extract github destination: no route bound for summarize or default")
-				return none
-			}
-		}
-
-		events, err := gw.Stream(ctx, gwclient.StreamRequest{
-			Route:     route,
-			Purpose:   "mission_destination_extract",
-			System:    extractSystem,
-			Messages:  []provider.Message{{Role: "user", Content: "Goal: " + goal}},
-			MaxTokens: 1000,
-		})
-		if err != nil {
-			log.Warn("extract github destination: stream failed", "error", err)
-			return none
-		}
-		var b strings.Builder
-		var streamErr *stream.StreamError
-		for ev := range events {
-			switch ev.Type {
-			case stream.EventChunk:
-				b.WriteString(ev.Text)
-			case stream.EventError:
-				streamErr = ev.Err
-			}
-		}
-		reply, _, _ := strings.Cut(strings.TrimSpace(b.String()), "\n")
-		reply = strings.TrimSpace(reply)
-		if reply == "" {
-			if streamErr != nil {
-				log.Warn("extract github destination: stream error event", "code", streamErr.Code, "message", streamErr.Message)
-			}
-			return none
-		}
-		if strings.EqualFold(reply, "NONE") {
-			return none
-		}
-
-		fields := strings.Fields(reply)
-		if len(fields) < 1 || len(fields) > 2 {
-			log.Warn("extract github destination: reply matched neither NONE nor owner/repo", "reply", truncateRunes(reply, 80))
-			return none
-		}
-		m := githubDestinationOwnerRepoPattern.FindStringSubmatch(fields[0])
-		if m == nil {
-			log.Warn("extract github destination: reply matched neither NONE nor owner/repo", "reply", truncateRunes(reply, 80))
-			return none
-		}
-		mode := "push"
-		if len(fields) == 2 {
-			if !strings.EqualFold(fields[1], "push_pr") {
-				log.Warn("extract github destination: unrecognized mode in reply", "reply", truncateRunes(reply, 80))
-				return none
-			}
-			mode = "push_pr"
-		}
-		return GitHubDestinationProposal{Found: true, Owner: m[1], Repo: m[2], Mode: mode}
 	}
 }
 

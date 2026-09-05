@@ -891,6 +891,11 @@ const kbSearchNoHits = "no matching passages found"
 // document id and its fused score together.
 var kbSearchSourceLine = regexp.MustCompile(`^Source: kb://(\S+) \(score ([-\d.]+)\)$`)
 
+// verifyCmdGitInvocation matches a git invocation as a shell word: at the
+// start of the command or after a non-word character, so it catches
+// "git status" and "&& git diff" but not "digit" or "widget.md".
+var verifyCmdGitInvocation = regexp.MustCompile(`(^|\W)git\s`)
+
 // kbSearchHitTrace pulls document ids, titles, and fused scores out of
 // search_kb's rendered result (kbsearch.go's formatKBHits), the same
 // parse-the-rendered-output approach webSearchResultURLs uses for
@@ -1568,7 +1573,7 @@ func renderReviewContent(p ReviewPacket) string {
 // (D-077), and assumptions. Kept as one shared string so
 // generate/prove's unit parsing (parsePlan) never has to distinguish
 // which mode produced a plan.
-const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
+const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. The harness commits each unit's files itself after the worker turn, so criteria and verify_cmd must judge file CONTENT only, never git status, staging, untracked, or uncommitted state. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
 
 // planSystemPrompt builds PlanSession's system prompt: the design-mode
 // opening (break the goal into units from scratch) or, when hasPlan is
@@ -1765,6 +1770,14 @@ func parsePlan(raw string) (Plan, error) {
 	for _, u := range plan.Units {
 		if strings.Contains(u.VerifyCmd, "$(") || strings.Contains(u.VerifyCmd, "`") {
 			return Plan{}, fmt.Errorf("mission runner: verify_cmd must not use command substitution ($(...) or backticks), write the direct command instead")
+		}
+	}
+	// The harness commits every unit's files itself after the worker turn
+	// (Workspace.CommitUnit), so a verify_cmd that runs git always checks
+	// a stale or wrong assumption about working-tree state.
+	for _, u := range plan.Units {
+		if verifyCmdGitInvocation.MatchString(u.VerifyCmd) {
+			return Plan{}, fmt.Errorf("mission runner: unit %q verify_cmd must not run git: the harness commits each unit itself, check artifact content instead", u.Title)
 		}
 	}
 	// D-068: every unit must declare at least one artifact so the

@@ -203,16 +203,13 @@ type Mission struct {
 	// bookkeeping (session_events, audit) hard-requires a real session
 	// id, which a mission otherwise has no reason to have.
 	SessionID string `json:"-"`
-	// Destinations names every sink this mission's outcome delivers to
-	// or acts on in the result phase's step (issue #480, replacing the
-	// five columns destination_ids/on_complete/branch_pattern/
-	// commit_style/promote_kb_collection_id): destination/webhook/email/
-	// telegram entries (D-061, validated against the operator-owned
-	// destinations table at create time), a "kb" entry (D-081), and a
-	// "github" entry (the operator's consent-at-create push/push_pr
-	// choice). Never model-decided. Each entry's delivered_at/error
-	// fields are the result step's own delivery-state record, written
-	// back by runResult (see SetDestinations).
+	// Destinations names every sink this mission's outcome delivers to or
+	// acts on in the result phase's step (issue #480, extended #561):
+	// email/webhook/telegram/github entries name an operator-owned
+	// destinations table row (D-061, validated at create time), plus a
+	// "kb" entry (D-081). Never model-decided. Each entry's
+	// delivered_at/error fields are the result step's own delivery-state
+	// record, written back by runResult (see SetDestinations).
 	Destinations []DestinationEntry `json:"destinations,omitempty"`
 	CreatedAt    time.Time          `json:"created_at"`
 	UpdatedAt    time.Time          `json:"updated_at"`
@@ -241,22 +238,21 @@ type ArtifactRef struct {
 }
 
 // destinationKind names DestinationEntry.Destination's known values:
-// "email"/"webhook"/"telegram" ride an operator-created destinations
-// table row (DestinationID); "kb" and "github" are harness-native
-// sinks with no such row.
+// "kb" is the only harness-native sink with no destinations table
+// row; email/webhook/telegram/github all ride an operator-created
+// destinations table row (DestinationID).
 const (
-	DestinationKindKB     = "kb"
-	DestinationKindGitHub = "github"
+	DestinationKindKB = "kb"
 )
 
 // DestinationEntry is one sink this mission's result phase delivers to
-// or acts on (issue #480): the union of what were five separate mission
-// columns (destination_ids, promote_kb_collection_id, on_complete,
-// branch_pattern, commit_style). Destination names the kind
-// ("email"/"webhook"/"telegram"/"kb"/"github"); DestinationID, when
-// set, names the operator-owned destinations table row carrying that
-// sink's auth/channel config. DeliveredAt/Error are the result step's
-// own delivery-state record (runResult, SetDestinations): DeliveredAt
+// or acts on (issue #480, extended #561): Destination names the kind
+// ("kb" for the one harness-native sink, empty for every entry naming
+// an operator-owned destinations table row). DestinationID, when set,
+// names that row. CollectionID is a "kb" entry's own field. RepoURL,
+// on a github-kind destination's entry, sets the target repository for
+// that delivery. DeliveredAt/Error are the result step's own
+// delivery-state record (runResult, SetDestinations): DeliveredAt
 // (RFC3339) is set on success, Error on failure, mutually exclusive,
 // both empty before the first attempt. A retry skips an entry whose
 // DeliveredAt is already set and retries one whose Error is set (or
@@ -267,61 +263,21 @@ type DestinationEntry struct {
 	// CollectionID names a kb_collections row for a "kb" entry (D-081):
 	// the collection this mission's markdown artifacts promote into.
 	CollectionID string `json:"collection_id,omitempty"`
-	// ConnectorID/RepoURL/Mode/BranchPattern/CommitStyle are a "github"
-	// entry's fields: the operator's consent-at-create push automation
-	// (mirrors the old on_complete/branch_pattern/commit_style columns).
-	// Mode is "push" or "push_pr". BranchPattern/CommitStyle empty means
-	// "use the settings default," resolved fresh at provisioning/commit
-	// time (driver.go), same precedence the old columns had.
-	ConnectorID   string `json:"connector_id,omitempty"`
-	RepoURL       string `json:"repo_url,omitempty"`
-	Mode          string `json:"mode,omitempty"`
-	BranchPattern string `json:"branch_pattern,omitempty"`
-	CommitStyle   string `json:"commit_style,omitempty"`
-	// CreateIfMissing (issue #483), github entries only: when the
-	// entry's repo doesn't exist yet at delivery time, create it
-	// through ConnectorID's credential instead of failing the push/PR.
-	// "" RepoURL with this set derives the repo name from the mission
-	// (see destinations.GitHubAdapter); false (the default) never creates:
-	// delivery fails honestly into Error instead of inventing a repo.
-	CreateIfMissing bool `json:"create_if_missing,omitempty"`
+	// RepoURL, on a github-kind destination's entry, sets the target
+	// repository for that delivery: "" falls back to the mission's own
+	// clone source, or (when the destination's config allows it) a
+	// repo created at delivery time (see destinations.GitHubAdapter).
+	RepoURL string `json:"repo_url,omitempty"`
 	// Branch/RemoteHost/PRURL/PRNumber are set by destinations.GitHubAdapter
 	// on a successful delivery (issue #560, saved github destination
 	// kind): the final pushed branch/host, and the opened PR's url/number
-	// when Mode is "push_pr".
+	// when the destination's mode is push_pr.
 	Branch      string `json:"branch,omitempty"`
 	RemoteHost  string `json:"remote_host,omitempty"`
 	PRURL       string `json:"pr_url,omitempty"`
 	PRNumber    int    `json:"pr_number,omitempty"`
 	DeliveredAt string `json:"delivered_at,omitempty"`
 	Error       string `json:"error,omitempty"`
-}
-
-// GitHubEntry returns this mission's "github" destination entry, if
-// any: there is at most one per mission (api/missions.go's create
-// only ever appends one from on_complete). ok is false when the
-// mission has none.
-func (m Mission) GitHubEntry() (DestinationEntry, bool) {
-	for _, e := range m.Destinations {
-		if e.Destination == DestinationKindGitHub {
-			return e, true
-		}
-	}
-	return DestinationEntry{}, false
-}
-
-// OnComplete is the effective on_complete value the pre-#480 Mission
-// column used to carry: "" when there is no github entry, else its
-// Mode ("push" or "push_pr"). Kept as a read-only derivation for the
-// handful of call sites (destinations.GitHubAdapter, NotPushable, the
-// missions builtin tool) that only ever need this one field, not the
-// full entry.
-func (m Mission) OnComplete() string {
-	e, ok := m.GitHubEntry()
-	if !ok {
-		return ""
-	}
-	return e.Mode
 }
 
 // KBCollectionID is the effective promote_kb_collection_id the

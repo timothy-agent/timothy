@@ -14,11 +14,12 @@ USER root
 # builds use. GOPATH lands in the writable home base already set up.
 COPY --from=go-dist /usr/local/go /usr/local/go
 ENV GOPATH=/home/sandbox/go
-# CRITICAL LESSON: symlinked into /usr/local/bin (not only ENV PATH) —
-# sandboxd creates containers with a fixed minimal PATH that ignores
-# image ENV, so a PATH-only install exists in the image yet 127s at
-# exec time. Every toolchain binary added by a variant must be
-# reachable this way.
+# CRITICAL LESSON: symlinked into /usr/local/bin (belt and braces),
+# since sandboxd creates containers with a fixed PATH that ignores image ENV,
+# so a PATH-only install exists in the image yet 127s at exec time.
+# sandboxd's fixed PATH (internal/sandboxd/manager.go's sandboxPath)
+# now includes /home/sandbox/go/bin, but keep the symlinks in case a
+# future variant's binaries land somewhere sandboxPath doesn't cover.
 RUN ln -s /usr/local/go/bin/go /usr/local/bin/go && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 ENV PATH="/home/sandbox/go/bin:${PATH}"
 

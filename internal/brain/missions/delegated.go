@@ -486,7 +486,7 @@ var resultSchemaJSON = json.RawMessage(`{"type":"object","properties":{"status":
 // and that DONE means every acceptance criterion is met even though the
 // harness-side verify_cmd/CheckArtifacts runs regardless of what it
 // reports.
-const delegatedSystemAppend = " You are running as a delegated coding CLI, not through mission_status. End your turn by producing the required structured output with status DONE, RETRY, or BLOCKED and a short note. Only report DONE when every acceptance criterion for the current unit is genuinely met — the harness independently verifies your artifacts and verify_cmd regardless of what you report, so a false DONE only costs a wasted review round, never actually passes."
+const delegatedSystemAppend = " You are running as a delegated coding CLI, not through mission_status. End your turn by producing the required structured output with status DONE, RETRY, or BLOCKED and a short note. Only report DONE when every acceptance criterion for the current unit is genuinely met — the harness independently verifies your artifacts and verify_cmd regardless of what you report, so a false DONE only costs a wasted review round, never actually passes. The harness commits the unit's files itself after your turn, so never run git add, commit, reset, stash, or checkout."
 
 // delegatedAllowTools/delegatedDenyTools are the delegated worker's
 // static tool surface, passed as the CLI's own allow/deny flags at

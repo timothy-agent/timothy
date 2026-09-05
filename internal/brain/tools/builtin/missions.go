@@ -34,7 +34,6 @@ type MissionRecord struct {
 	UnitsTotal   int
 	PauseReason  string
 	PauseMessage string
-	OnComplete   string
 	// NotPushableReason is missions.NotPushable(m) precomputed by the
 	// adapter (that check lives in missions, same import-cycle reason
 	// as the rest of this type) — empty means pushable.
@@ -104,7 +103,6 @@ type missionSnapshot struct {
 	PauseReason  string `json:"pause_reason,omitempty"`
 	PauseMessage string `json:"pause_message,omitempty"`
 	PRURL        string `json:"pr_url,omitempty"`
-	OnComplete   string `json:"on_complete,omitempty"`
 }
 
 // missionListItem is the compact shape for the list-mode result.
@@ -136,7 +134,6 @@ func toMissionSnapshot(ctx context.Context, events missionEventReader, m Mission
 		UpdatedAt:   m.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UnitsPassed: m.UnitsPassed, UnitsTotal: m.UnitsTotal,
 		PauseReason: m.PauseReason, PauseMessage: m.PauseMessage,
-		OnComplete: m.OnComplete,
 	}
 	if events != nil {
 		if evs, err := events.MissionEvents(ctx, m.ID); err == nil {
@@ -264,8 +261,8 @@ Arguments (exactly one required):
 
 Returns a snapshot with: id, name, goal, kind, phase, status,
 iteration, harness, repo_url, branch, created/updated timestamps, unit
-pass counts, pause reason/message if paused, the latest PR url if one
-was opened, and the on_complete setting.
+pass counts, pause reason/message if paused, and the latest PR url if
+one was opened.
 
 Example: {"query": "invoice pdf export"} → that mission's snapshot, or
 a disambiguation list if more than one mission matches.`,

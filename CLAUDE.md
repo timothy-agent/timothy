@@ -104,10 +104,11 @@ First run: `cp deploy/env.example deploy/.env` and set
   rows safely before the data migration in `scripts/pending-alters.md`
   runs; historical `mission_events` payloads keep their old phase
   names forever, tolerated by the web timeline renderer. Result is
-  deterministic harness code (zero LLM turns): destinations delivery,
-  artifact copy, KB promotion, and `on_complete` push/PR all run there
-  now, not on the old done transition; a failure parks the mission IN
-  result with a visible pause reason instead of being lost.
+  deterministic harness code (zero LLM turns): destinations delivery
+  (including github push/PR, issue #561), artifact copy, and KB
+  promotion all run there now, not on the old done transition; a
+  failure parks the mission IN result with a visible pause reason
+  instead of being lost.
 - Light missions (D-069, kind=general only): born in phase=generate,
   skip discover/plan/prove; the deliverable travels in mission_status's
   `final_output` argument (reasoning models emit tool calls with no

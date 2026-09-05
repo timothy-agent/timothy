@@ -769,12 +769,6 @@ export interface Mission {
   // authenticated the clone; only present alongside repo_url.
   repo_url?: string
   connector_id?: string
-  // on_complete is derived server-side from the mission's "github"
-  // destinations entry (issue #480 dropped the on_complete column):
-  // '' does nothing, 'push' pushes the branch, 'push_pr' pushes then
-  // opens a pull request. Only ever set at create time, never by the
-  // model.
-  on_complete?: '' | 'push' | 'push_pr'
   // discover_notes is set once, at the end of the discover phase
   // (driver.go's runDiscover): absent/empty for a mission created
   // before the discover phase existed, or one that hasn't reached it
@@ -887,40 +881,35 @@ export interface Mission {
   // (D-086): survive workspace deletion, unlike the live-workspace
   // files ArtifactsSection browses. Absent/empty until that copy runs.
   artifact_refs?: MediaRef[]
-  // destinations is the full result-phase delivery list (issue #480,
-  // #483): the union of what on_complete/branch_pattern/commit_style/
-  // repo_url/connector_id above only partially expose, plus every
-  // email/webhook/telegram/kb entry. on_complete/repo_url/connector_id
-  // stay as convenience derivations of this entry's github member for
-  // existing call sites; this is the source of truth for rendering a
-  // full destinations list (delivered_at/error status included).
+  // destinations is the full result-phase delivery list: the union of
+  // what repo_url/connector_id above only partially expose, plus every
+  // email/webhook/telegram/kb/github entry. This is the source of
+  // truth for rendering a full destinations list (delivered_at/error
+  // status included).
   destinations?: DestinationEntry[]
   created_at: string
   updated_at: string
 }
 
 // DestinationEntry is one result-phase delivery/action sink
-// (internal/brain/missions.DestinationEntry, issue #480/#483): the
-// wire shape of one entry in Mission.destinations. destination names
-// the kind ("email"/"webhook"/"telegram" ride an operator-owned
-// destinations table row via destination_id; "kb"/"github" are
-// harness-native, no such row). delivered_at/error are the result
-// step's own outcome record, mutually exclusive, both absent before
-// the first attempt.
+// (internal/brain/missions.DestinationEntry, issue #561): the wire
+// shape of one entry in Mission.destinations. destination is 'kb' for
+// a harness-native promotion, or '' for an entry that only names an
+// operator-created destination (email/webhook/telegram/github) via
+// destination_id -- look up that row's kind/config to know what it is.
+// repo_url/branch/remote_host/pr_url/pr_number are a github entry's own
+// delivery outcome, filled in at push/PR time. delivered_at/error are
+// the result step's own outcome record, mutually exclusive, both
+// absent before the first attempt.
 export interface DestinationEntry {
-  destination: 'email' | 'webhook' | 'telegram' | 'kb' | 'github' | ''
+  destination?: 'kb' | ''
   destination_id?: string
   collection_id?: string
-  connector_id?: string
   repo_url?: string
-  mode?: '' | 'push' | 'push_pr'
-  branch_pattern?: string
-  commit_style?: string
-  // create_if_missing (issue #483): a "github" entry only, opts
-  // result-phase delivery into creating repo_url's repo through
-  // connector_id's credential when it doesn't exist yet, instead of
-  // failing the push/PR. false (the default/absent) never creates.
-  create_if_missing?: boolean
+  branch?: string
+  remote_host?: string
+  pr_url?: string
+  pr_number?: number
   delivered_at?: string
   error?: string
 }
@@ -1206,8 +1195,6 @@ export interface MissionTemplate {
   auto_approve_tools?: boolean
   harness?: string
   environment?: string
-  branch_pattern?: string
-  commit_style?: string
   // destination_ids names operator-created destinations this template's
   // fired missions deliver their outcome digest to. Re-validated at
   // fire time: a destination deleted or disabled since the schedule

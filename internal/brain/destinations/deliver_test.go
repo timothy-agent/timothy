@@ -406,6 +406,58 @@ func TestDeliverGitHubNoAdapterFails(t *testing.T) {
 	}
 }
 
+// capturingAdapter records the last Payload it was asked to deliver,
+// TestDeliverGitHubDeliversBeforeMessageKinds' way of proving the
+// message payload was rendered AFTER the github delivery ran.
+type capturingAdapter struct {
+	last Payload
+}
+
+func (a *capturingAdapter) Deliver(_ context.Context, _ json.RawMessage, _ string, payload Payload) error {
+	a.last = payload
+	return nil
+}
+
+// TestDeliverGitHubDeliversBeforeMessageKinds proves a mission with a
+// telegram entry listed BEFORE a github entry still gets the fresh PR
+// URL in the message payload's links (issue #561): github delivers
+// first, Render runs against the resulting mission.pr_opened event,
+// then the telegram entry delivers.
+func TestDeliverGitHubDeliversBeforeMessageKinds(t *testing.T) {
+	m := pushableMission(t)
+	destStore := &fakeDestStore{rows: map[string]Destination{
+		"tg1": {ID: "tg1", Name: "telegram-1", Kind: "telegram", Enabled: true, Config: json.RawMessage(`{"chat_id":"123"}`), CredentialRef: "tok"},
+		"gh1": {ID: "gh1", Name: "gh-1", Kind: "github", Enabled: true, Config: json.RawMessage(`{"connector_id":"conn1","mode":"push_pr"}`)},
+	}}
+	eventStore := &fakeEventStore{}
+	p := &fakePusher{host: "github.com"}
+	pr := &fakePRSource{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/7", prNumber: 7}
+	resolveToken := func(context.Context, string) (string, error) { return "tok", nil }
+	github := &GitHubAdapter{Pusher: p, Events: eventStore, ResolveToken: resolveToken, PR: pr}
+	telegram := &capturingAdapter{}
+	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{"telegram": telegram}, github: github, log: discardLog()}
+
+	// telegram entry listed BEFORE the github entry.
+	updated, err := d.Deliver(t.Context(), m, entries("tg1", "gh1"))
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	for _, e := range updated {
+		if e.DeliveredAt == "" {
+			t.Fatalf("entry %+v not delivered", e)
+		}
+	}
+	found := false
+	for _, link := range telegram.last.Links {
+		if link == "https://github.com/octo/repo/pull/7" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("telegram payload links = %v, want the PR url from the github delivery that ran first", telegram.last.Links)
+	}
+}
+
 func TestDeliverTest(t *testing.T) {
 	destStore := &fakeDestStore{rows: map[string]Destination{
 		"d1": {ID: "d1", Name: "webhook-1", Kind: "webhook", Enabled: true, Config: json.RawMessage(`{"url":"https://example.com","format":"json"}`)},

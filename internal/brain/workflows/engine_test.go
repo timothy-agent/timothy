@@ -228,23 +228,22 @@ func TestStartRunRefusesDisabledWorkflow(t *testing.T) {
 
 // TestStartRunPausesOnSpawnValidationError covers D-071: a step whose
 // spawned mission Driver.Create rejects (here, missions.ErrInvalidMission
-// from an on_complete a workflow step can never satisfy, since Step
-// carries no repo_url/connector_id) must pause the run with the
-// validation error as the reason, not silently create an invalid
-// mission or crash the engine.
+// from a destination id validation a workflow step can never itself
+// resolve) must pause the run with the validation error as the reason,
+// not silently create an invalid mission or crash the engine.
 func TestStartRunPausesOnSpawnValidationError(t *testing.T) {
 	def := Definition{
 		Entry: "coder",
 		Steps: map[string]Step{
-			"coder": {Goal: "write the code", Kind: "coding", OnComplete: "push"},
+			"coder": {Goal: "write the code", Kind: "coding", DestinationIDs: []string{"unknown-dest"}},
 		},
 	}
 	if err := def.Validate(); err != nil {
-		t.Fatalf("Validate() = %v, want nil (on_complete shape is valid at the definition level)", err)
+		t.Fatalf("Validate() = %v, want nil (destination_ids shape is valid at the definition level)", err)
 	}
 	store := newFakeEngineStore()
 	store.putWorkflow("wf1", def, true)
-	spawner := &fakeSpawner{createErr: fmt.Errorf("driver: create: %w: on_complete requires repo_url and connector_id on a kind=coding mission", missions.ErrInvalidMission)}
+	spawner := &fakeSpawner{createErr: fmt.Errorf("driver: create: %w: unknown or disabled destination id(s): unknown-dest", missions.ErrInvalidMission)}
 	e := testEngine(store, spawner)
 
 	runID, err := e.StartRun(context.Background(), "wf1", nil)

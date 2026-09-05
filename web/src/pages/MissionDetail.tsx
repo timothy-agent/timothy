@@ -18,6 +18,7 @@ import {
   cancelMission,
   deleteMission,
   getMission,
+  listDestinations,
   listSchedules,
   missionEvents,
   missionUsage,
@@ -29,7 +30,9 @@ import {
   sendMissionNote,
 } from '../api/client'
 import type {
+  Destination,
   ExecutorProgressPayload,
+  GitHubDestinationConfig,
   Mission,
   MissionEvent,
   MissionPROpenedPayload,
@@ -254,6 +257,17 @@ export function MissionDetail() {
   const [events, setEvents] = useState<MissionEvent[]>([])
   const [usage, setUsage] = useState<MissionUsage | null>(null)
   const [schedule, setSchedule] = useState<Schedule | null>(null)
+  // destinations backs the badges/Destinations card below: fetched
+  // once, same call the mission create form uses, so a destination
+  // entry's own id-only reference can resolve to its name/kind/config.
+  const [destinations, setDestinations] = useState<Destination[] | null>(null)
+  useEffect(() => {
+    listDestinations()
+      .then(setDestinations)
+      .catch(() => {
+        // Non-fatal: badges/card just fall back to id-only rendering.
+      })
+  }, [])
   const [busy, setBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [intervening, setIntervening] = useState(false)
@@ -393,6 +407,15 @@ export function MissionDetail() {
   // to the durable mission.pr_opened event on reload/cross-tab.
   const isGitHubConnection = !!mission.connector_id
   const prChip = prInfo ?? latestPROpened(events)
+
+  // destinationsByID resolves a destination entry's destination_id to
+  // its saved row (name/kind/config): a github row's config.mode drives
+  // the auto-push/auto-PR badges and the Destinations card's mode text.
+  const destinationsByID = new Map((destinations ?? []).map((d) => [d.id, d]))
+  const githubModes = (mission.destinations ?? [])
+    .map((d) => (d.destination_id ? destinationsByID.get(d.destination_id) : undefined))
+    .filter((d): d is Destination => !!d && d.kind === 'github')
+    .map((d) => (d.config as unknown as GitHubDestinationConfig).mode)
 
   const { turns, processingMs } = turnStats(events)
   const executorActivity = terminalPhases.has(mission.phase) ? null : latestExecutorProgress(events)
@@ -882,12 +905,12 @@ export function MissionDetail() {
                 </Badge>
               )
             })()}
-          {mission.on_complete === 'push' && (
+          {githubModes.includes('push') && (
             <Badge variant="secondary" title="This mission pushes its branch automatically when it finishes">
               auto-push
             </Badge>
           )}
-          {mission.on_complete === 'push_pr' && (
+          {githubModes.includes('push_pr') && (
             <Badge
               variant="secondary"
               title="This mission pushes its branch and opens a pull request automatically when it finishes"
@@ -1060,43 +1083,65 @@ export function MissionDetail() {
         <section>
           <h2 className="mb-2 text-sm font-semibold tracking-tight">Destinations</h2>
           <div className="space-y-1.5 rounded-lg border border-border p-3 text-sm">
-            {mission.destinations.map((d, i) => (
-              <div key={d.destination_id || `${d.destination}-${i}`} className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground uppercase">{d.destination || 'destination'}</span>
-                {d.destination === 'github' ? (
-                  <span className="truncate">
-                    {d.repo_url ? (
-                      <a
-                        href={githubHTMLURL(d.repo_url)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline underline-offset-2 hover:text-foreground"
-                      >
-                        {githubFullName(d.repo_url)}
-                      </a>
-                    ) : (
-                      <span className="text-muted-foreground">repo not yet created</span>
-                    )}
-                    {d.mode && ` · ${d.mode === 'push_pr' ? 'push + PR' : 'push'}`}
-                    {d.create_if_missing && ' · create if missing'}
+            {mission.destinations.map((d, i) => {
+              const row = d.destination_id ? destinationsByID.get(d.destination_id) : undefined
+              const isGitHub = row?.kind === 'github'
+              const mode = isGitHub ? (row.config as unknown as GitHubDestinationConfig).mode : undefined
+              return (
+                <div key={d.destination_id || `${d.destination}-${i}`} className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground uppercase">
+                    {row?.kind ?? d.destination ?? 'destination'}
                   </span>
-                ) : d.destination === 'kb' ? (
-                  <span className="text-muted-foreground">promoted to knowledge base</span>
-                ) : (
-                  <span className="text-muted-foreground">{d.destination_id}</span>
-                )}
-                {d.delivered_at && (
-                  <Badge variant="secondary" title={`Delivered ${formatDate(d.delivered_at)}`}>
-                    delivered
-                  </Badge>
-                )}
-                {d.error && (
-                  <Badge variant="destructive" title={d.error}>
-                    failed
-                  </Badge>
-                )}
-              </div>
-            ))}
+                  {isGitHub ? (
+                    <span className="truncate">
+                      <span className="font-medium text-foreground">{row.name}</span>
+                      {d.repo_url && (
+                        <>
+                          {' · '}
+                          <a
+                            href={githubHTMLURL(d.repo_url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline underline-offset-2 hover:text-foreground"
+                          >
+                            {githubFullName(d.repo_url)}
+                          </a>
+                        </>
+                      )}
+                      {mode && ` · ${mode === 'push_pr' ? 'push + PR' : 'push'}`}
+                      {d.branch && ` · ${d.branch}`}
+                      {d.pr_url && (
+                        <>
+                          {' · '}
+                          <a
+                            href={d.pr_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="underline underline-offset-2 hover:text-foreground"
+                          >
+                            PR #{d.pr_number}
+                          </a>
+                        </>
+                      )}
+                    </span>
+                  ) : d.destination === 'kb' ? (
+                    <span className="text-muted-foreground">promoted to knowledge base</span>
+                  ) : (
+                    <span className="text-muted-foreground">{row?.name ?? d.destination_id}</span>
+                  )}
+                  {d.delivered_at && (
+                    <Badge variant="secondary" title={`Delivered ${formatDate(d.delivered_at)}`}>
+                      delivered
+                    </Badge>
+                  )}
+                  {d.error && (
+                    <Badge variant="destructive" title={d.error}>
+                      failed
+                    </Badge>
+                  )}
+                </div>
+              )
+            })}
           </div>
         </section>
       )}

@@ -58,7 +58,7 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		Harness: "claude-cli", Environment: "node",
 		Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}},
 		Destinations: []DestinationEntry{
-			{Destination: DestinationKindGitHub, Mode: "push_pr", BranchPattern: "custom/{slug}", CommitStyle: "conventional"},
+			{DestinationID: "gh-dest-1", RepoURL: "https://github.com/o/r.git"},
 			{DestinationID: "dest-1"},
 		},
 	})

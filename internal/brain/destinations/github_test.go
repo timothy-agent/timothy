@@ -27,18 +27,8 @@ func (f *fakeEvents) AppendEvent(_ context.Context, id, kind string, _ map[strin
 	return nil
 }
 
-func (f *fakeEvents) kinds() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	out := make([]string, len(f.events))
-	for i, e := range f.events {
-		out[i] = e.Kind
-	}
-	return out
-}
-
-// fakePRSource scripts PRSource for RunOnComplete/DeliverMission's
-// push_pr path without a real GitHub connector. repoExists/existsErr/
+// fakePRSource scripts PRSource for DeliverMission's push_pr path
+// without a real GitHub connector. repoExists/existsErr/
 // newCloneURL/createRepoErr back ensureRepo's create-if-missing path
 // (issue #483); existsCalls/createRepoCalls count those specifically,
 // distinct from createCalls (CreatePR, the pull-request call).
@@ -128,129 +118,6 @@ func pushableMission(t *testing.T) missions.Mission {
 	return missions.Mission{
 		ID: "m1", Kind: "coding", Workspace: dir, Branch: "mission/x",
 		Sources: []missions.SourceEntry{{Source: missions.SourceKindGitHub, RepoURL: "https://github.com/octo/repo.git", ConnectorID: "conn1"}},
-	}
-}
-
-// TestRunOnCompletePush proves on_complete="push" pushes the branch and
-// records exactly one mission.pushed event, the same event the manual
-// push endpoint records.
-func TestRunOnCompletePush(t *testing.T) {
-	t.Parallel()
-	m := pushableMission(t)
-	m.Destinations = []missions.DestinationEntry{{Destination: missions.DestinationKindGitHub, Mode: "push"}}
-	store := &fakeEvents{}
-	p := &fakePusher{host: "github.com"}
-	resolveToken := func(context.Context, string) (string, error) { return "dummy-token", nil }
-	a := &GitHubAdapter{Pusher: p, Events: store, ResolveToken: resolveToken}
-
-	if _, _, err := a.RunOnComplete(context.Background(), m); err != nil {
-		t.Fatalf("RunOnComplete: %v", err)
-	}
-	if p.pushCalls != 1 {
-		t.Fatalf("Push called %d times, want exactly 1", p.pushCalls)
-	}
-	if kinds := store.kinds(); len(kinds) != 1 || kinds[0] != "mission.pushed" {
-		t.Fatalf("events = %v, want exactly one mission.pushed", kinds)
-	}
-}
-
-// TestRunOnCompletePushPR proves on_complete="push_pr" pushes then opens
-// a PR, recording both mission.pushed and mission.pr_opened, exactly
-// once each.
-func TestRunOnCompletePushPR(t *testing.T) {
-	t.Parallel()
-	m := pushableMission(t)
-	m.Destinations = []missions.DestinationEntry{{Destination: missions.DestinationKindGitHub, Mode: "push_pr"}}
-	store := &fakeEvents{}
-	p := &fakePusher{host: "github.com"}
-	resolveToken := func(context.Context, string) (string, error) { return "dummy-token", nil }
-	pr := &fakePRSource{defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/1", prNumber: 1}
-	a := &GitHubAdapter{Pusher: p, Events: store, ResolveToken: resolveToken, PR: pr}
-
-	if _, _, err := a.RunOnComplete(context.Background(), m); err != nil {
-		t.Fatalf("RunOnComplete: %v", err)
-	}
-	if p.pushCalls != 1 {
-		t.Fatalf("Push called %d times, want exactly 1", p.pushCalls)
-	}
-	kinds := store.kinds()
-	if len(kinds) != 2 || kinds[0] != "mission.pushed" || kinds[1] != "mission.pr_opened" {
-		t.Fatalf("events = %v, want [mission.pushed mission.pr_opened]", kinds)
-	}
-	if pr.createCalls != 1 {
-		t.Fatalf("CreatePR called %d times, want exactly 1", pr.createCalls)
-	}
-}
-
-// TestRunOnCompletePushFailureNoPR proves a push failure during push_pr
-// stops before ever calling CreatePR: a failed push must never still
-// open a PR against whatever was last pushed.
-func TestRunOnCompletePushFailureNoPR(t *testing.T) {
-	t.Parallel()
-	m := pushableMission(t)
-	m.Destinations = []missions.DestinationEntry{{Destination: missions.DestinationKindGitHub, Mode: "push_pr"}}
-	store := &fakeEvents{}
-	p := &fakePusher{err: missions.ErrPushRejected}
-	resolveToken := func(context.Context, string) (string, error) { return "dummy-token", nil }
-	pr := &fakePRSource{defaultBranch: "main"}
-	a := &GitHubAdapter{Pusher: p, Events: store, ResolveToken: resolveToken, PR: pr}
-
-	if _, _, err := a.RunOnComplete(context.Background(), m); err == nil {
-		t.Fatal("RunOnComplete should surface the push failure")
-	}
-	if pr.createCalls != 0 {
-		t.Fatalf("CreatePR called %d times, want 0 (push failed first)", pr.createCalls)
-	}
-	if kinds := store.kinds(); len(kinds) != 1 || kinds[0] != "mission.push_failed" {
-		t.Fatalf("events = %v, want exactly one mission.push_failed", kinds)
-	}
-}
-
-// TestRunOnCompleteEmptyIsNoop proves a mission with no on_complete
-// choice does nothing: no push, no event, no error.
-func TestRunOnCompleteEmptyIsNoop(t *testing.T) {
-	t.Parallel()
-	store := &fakeEvents{}
-	a := NewGitHubAdapter(nil, store, nil, nil)
-	if _, _, err := a.RunOnComplete(context.Background(), missions.Mission{}); err != nil {
-		t.Fatalf("RunOnComplete with empty on_complete: %v", err)
-	}
-	if len(store.kinds()) != 0 {
-		t.Fatalf("events = %v, want none", store.kinds())
-	}
-}
-
-// TestRunOnCompletePushFailureRecordsEvent proves a push failure
-// (unpushable mission) reports an error and records no mission.pushed
-// event; the mission itself is never touched, only the caller
-// (fireOnComplete) learns of the failure.
-func TestRunOnCompletePushFailureRecordsEvent(t *testing.T) {
-	t.Parallel()
-	store := &fakeEvents{}
-	a := NewGitHubAdapter(nil, store, nil, nil)
-	m := missions.Mission{Kind: "general", Destinations: []missions.DestinationEntry{{Destination: missions.DestinationKindGitHub, Mode: "push"}}} // NotPushable rejects kind != coding
-	_, _, err := a.RunOnComplete(context.Background(), m)
-	if err == nil {
-		t.Fatal("RunOnComplete should fail for an unpushable mission")
-	}
-	if len(store.kinds()) != 0 {
-		t.Fatalf("events = %v, want none (NotPushable fails before any push attempt)", store.kinds())
-	}
-}
-
-// TestRunOnCompleteNoResolverFails proves a nil token resolver
-// (connectors/secrets not wired) fails cleanly rather than panicking.
-func TestRunOnCompleteNoResolverFails(t *testing.T) {
-	t.Parallel()
-	m := pushableMission(t)
-	m.Destinations = []missions.DestinationEntry{{Destination: missions.DestinationKindGitHub, Mode: "push"}}
-	store := &fakeEvents{}
-	a := NewGitHubAdapter(nil, store, nil, nil)
-	if _, _, err := a.RunOnComplete(context.Background(), m); err == nil {
-		t.Fatal("RunOnComplete with no token resolver should fail")
-	}
-	if len(store.kinds()) != 0 {
-		t.Fatalf("events = %v, want none", store.kinds())
 	}
 }
 
@@ -379,42 +246,6 @@ func TestEnsureRepoNoRepoURLDerivesNameFromGoal(t *testing.T) {
 	}
 	if pr.createRepoCalls != 1 {
 		t.Fatalf("CreateRepo called %d times, want 1", pr.createRepoCalls)
-	}
-}
-
-// TestRunOnCompletePersistsCreatedRepo proves RunOnComplete's
-// create-if-missing path actually pushes to the newly created repo (an
-// end-to-end proof that PushBranch runs after SetOrigin, not against a
-// stale origin) and reports updated=true so the caller
-// (Driver.fireOnComplete) knows to persist the entry.
-func TestRunOnCompletePersistsCreatedRepo(t *testing.T) {
-	t.Parallel()
-	m := pushableMission(t)
-	m.Destinations = []missions.DestinationEntry{{
-		Destination: missions.DestinationKindGitHub, Mode: "push",
-		ConnectorID: "conn1", RepoURL: "https://github.com/octo/new-repo.git", CreateIfMissing: true,
-	}}
-	store := &fakeEvents{}
-	p := &fakePusher{host: "github.com"}
-	pr := &fakePRSource{repoExists: false, newCloneURL: "https://github.com/octo/new-repo.git"}
-	resolveToken := func(context.Context, string) (string, error) { return "dummy-token", nil }
-	a := &GitHubAdapter{Pusher: p, Events: store, ResolveToken: resolveToken, PR: pr}
-
-	entry, updated, err := a.RunOnComplete(context.Background(), m)
-	if err != nil {
-		t.Fatalf("RunOnComplete: %v", err)
-	}
-	if !updated {
-		t.Fatal("expected updated=true after creating the repo")
-	}
-	if entry.RepoURL != "https://github.com/octo/new-repo.git" {
-		t.Fatalf("entry.RepoURL = %q, want the created clone URL", entry.RepoURL)
-	}
-	if p.setOriginCalls != 1 || p.lastOriginURL != "https://github.com/octo/new-repo.git" {
-		t.Fatalf("SetOrigin calls = %d, lastURL = %q, want 1 call at the created URL", p.setOriginCalls, p.lastOriginURL)
-	}
-	if p.pushCalls != 1 {
-		t.Fatalf("Push called %d times, want exactly 1", p.pushCalls)
 	}
 }
 

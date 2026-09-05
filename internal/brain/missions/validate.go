@@ -30,14 +30,14 @@ type ValidateDeps struct {
 	// ValidateDeps (wired the same way DestinationEnabled is) for a
 	// future caller that wants that stricter check.
 	RouteExists func(ctx context.Context, name string) bool
-	// DestinationEnabled reports whether id names a real, enabled
-	// destinations row (destinations.Store.EnabledByID) — nil skips
-	// destination-entry validation entirely (same as api/missions.go's
+	// DestinationKind reports a destination row's kind and enabled state
+	// (destinations.Store.KindByID), nil skips destination-entry
+	// validation entirely (same as api/missions.go's
 	// validateDestinationIDs with h.destinations == nil, except this
 	// degrades to "unchecked" rather than "reject every non-empty list",
 	// since a caller with no destinations wiring has nothing to check
-	// against).
-	DestinationEnabled func(ctx context.Context, id string) (bool, error)
+	// against). ok is false for an unknown or disabled id.
+	DestinationKind func(ctx context.Context, id string) (kind string, enabled bool, err error)
 	// KBCollectionExists reports whether id names a real kb_collections
 	// row: nil skips a "kb" destination entry's collection_id validation
 	// entirely, same degrade-to-unchecked reasoning as DestinationEnabled.
@@ -84,7 +84,6 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	if m.Flow == FlowLight && m.Kind != KindGeneral {
 		return fmt.Errorf("%w: flow=%q is only valid for kind=general missions", ErrInvalidMission, FlowLight)
 	}
-	githubEntry, hasGitHub := m.GitHubEntry()
 	repoURL, connectorID := m.RepoURL(), m.ConnectorID()
 	if !missionPolicyFor(m).canDelegate {
 		switch {
@@ -94,8 +93,6 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			return fmt.Errorf("%w: environment is only valid for kind=coding missions", ErrInvalidMission)
 		case repoURL != "":
 			return fmt.Errorf("%w: repo_url is only valid for kind=coding missions", ErrInvalidMission)
-		case hasGitHub:
-			return fmt.Errorf("%w: a github destination is only valid for kind=coding missions", ErrInvalidMission)
 		}
 	}
 	if m.Harness != "" {
@@ -112,46 +109,6 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	case repoURL == "" && connectorID != "":
 		return fmt.Errorf("%w: connector_id is only valid alongside repo_url", ErrInvalidMission)
 	}
-	if hasGitHub {
-		switch githubEntry.Mode {
-		case "":
-			// A github entry can carry only BranchPattern/CommitStyle with
-			// no on_complete choice: the operator overriding the git
-			// strategy without opting into auto-push.
-		case "push", "push_pr":
-			// connector_id is always required: it authenticates the
-			// eventual push/PR call regardless of source. repo_url is
-			// required UNLESS CreateIfMissing is set (issue #483): a
-			// create-if-missing github entry legitimately has no repo yet
-			// at create time (a scratch mission whose repo
-			// destinations.GitHubAdapter creates at delivery, named from
-			// the mission's own goal): its own ConnectorID (or, absent
-			// that, the mission's clone-source connector_id) still has to
-			// authenticate that create call.
-			entryConnectorID := githubEntry.ConnectorID
-			if entryConnectorID == "" {
-				entryConnectorID = connectorID
-			}
-			switch {
-			case githubEntry.CreateIfMissing:
-				if entryConnectorID == "" {
-					return fmt.Errorf("%w: create_if_missing requires connector_id on a kind=coding mission", ErrInvalidMission)
-				}
-			case repoURL == "" || connectorID == "":
-				return fmt.Errorf("%w: on_complete requires repo_url and connector_id on a kind=coding mission", ErrInvalidMission)
-			}
-		default:
-			return fmt.Errorf(`%w: on_complete must be "", "push", or "push_pr"`, ErrInvalidMission)
-		}
-		if githubEntry.BranchPattern != "" {
-			if err := ValidateBranchPattern(githubEntry.BranchPattern); err != nil {
-				return fmt.Errorf("%w: %s", ErrInvalidMission, err.Error())
-			}
-		}
-		if err := ValidateCommitStyle(githubEntry.CommitStyle); err != nil {
-			return fmt.Errorf("%w: %s", ErrInvalidMission, err.Error())
-		}
-	}
 	if m.Route == "" {
 		return fmt.Errorf("%w: route is required", ErrInvalidMission)
 	}
@@ -163,15 +120,33 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	case m.ReviewRouteModel != "" && !validModelPin(m.ReviewRouteModel):
 		return fmt.Errorf(`%w: review_route_model must be "provider name/model"`, ErrInvalidMission)
 	}
-	if deps.DestinationEnabled != nil {
+	for _, e := range m.Destinations {
+		if e.DestinationID == "" || e.RepoURL == "" {
+			continue
+		}
+		if _, _, ok := ParseGitHubRepoURL(e.RepoURL); !ok {
+			return fmt.Errorf("%w: repo_url is not a recognizable github https clone URL", ErrInvalidMission)
+		}
+	}
+	if deps.DestinationKind != nil {
 		var invalid []string
-		for _, id := range m.DestinationIDs() {
-			ok, err := deps.DestinationEnabled(ctx, id)
+		for _, e := range m.Destinations {
+			if e.DestinationID == "" {
+				continue
+			}
+			kind, enabled, err := deps.DestinationKind(ctx, e.DestinationID)
 			if err != nil {
 				return fmt.Errorf("%w: destination_ids: %s", ErrInvalidMission, err.Error())
 			}
-			if !ok {
-				invalid = append(invalid, id)
+			if !enabled {
+				invalid = append(invalid, e.DestinationID)
+				continue
+			}
+			if kind == "github" && !missionPolicyFor(m).canDelegate {
+				return fmt.Errorf("%w: a github destination is only valid for kind=coding missions", ErrInvalidMission)
+			}
+			if kind != "github" && e.RepoURL != "" {
+				return fmt.Errorf("%w: repo_url is only valid for a github destination entry", ErrInvalidMission)
 			}
 		}
 		if len(invalid) > 0 {
