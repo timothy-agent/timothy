@@ -54,7 +54,8 @@ type Payload struct {
 // non-empty) plus branch/PR URL when the mission has them.
 // Files/TextArtifacts/OversizeFiles come from the mission's declared
 // plan-unit artifacts, read from its workspace (resolveArtifactFiles) —
-// exactly what CheckArtifacts already verified exists.
+// exactly what CheckArtifacts already verified exists, except for a
+// coding mission, which gets links only (issue #564).
 func Render(m missions.Mission, webBaseURL string, events []missions.Event, loc *time.Location) Payload {
 	name := m.Name
 	if name == "" {
@@ -70,7 +71,14 @@ func Render(m missions.Mission, webBaseURL string, events []missions.Event, loc 
 	if url, ok := lastPROpenedURL(events); ok {
 		links = append(links, url)
 	}
-	files, texts, oversize := resolveArtifactFiles(m)
+	// Issue #564: coding missions send links only, no loose source-file
+	// attachments, code leaves the box through a github destination.
+	var files []File
+	var texts []TextArtifact
+	var oversize []string
+	if m.Kind != missions.KindCoding {
+		files, texts, oversize = resolveArtifactFiles(m)
+	}
 	body := "Mission complete: " + name
 	if m.RunsPlanless() && m.FinalOutput != "" {
 		// D-069/D-090: a planless mission (light, or flow=discover_generate)

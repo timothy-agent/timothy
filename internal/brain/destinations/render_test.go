@@ -124,6 +124,62 @@ func TestRender(t *testing.T) {
 		}
 	})
 
+	t.Run("coding missions send links only, no artifact attachments", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "report.md"), []byte("report"), 0o600); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "data.csv"), []byte("a,b\n1,2\n"), 0o600); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+		plan := missions.Plan{Units: []missions.PlanUnit{{Artifacts: []string{"report.md", "data.csv"}}}}
+		payload, _ := json.Marshal(map[string]any{"url": "https://github.com/org/repo/pull/1"})
+		events := []missions.Event{{Kind: "mission.pr_opened", Payload: payload}}
+
+		cases := []struct {
+			name         string
+			kind         string
+			wantFiles    int
+			wantTexts    int
+			wantOversize int
+		}{
+			{name: "coding", kind: missions.KindCoding, wantFiles: 0, wantTexts: 0, wantOversize: 0},
+			{name: "general", kind: missions.KindGeneral, wantFiles: 1, wantTexts: 1, wantOversize: 0},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				withArtifacts := m
+				withArtifacts.Kind = c.kind
+				withArtifacts.Workspace = root
+				withArtifacts.Plan = plan
+				withArtifacts.Branch = "feat/ship-it"
+				p := Render(withArtifacts, "https://timothy.example.lan", events, time.UTC)
+				if len(p.Files) != c.wantFiles {
+					t.Fatalf("Files = %+v, want %d", p.Files, c.wantFiles)
+				}
+				if len(p.TextArtifacts) != c.wantTexts {
+					t.Fatalf("TextArtifacts = %+v, want %d", p.TextArtifacts, c.wantTexts)
+				}
+				if len(p.OversizeFiles) != c.wantOversize {
+					t.Fatalf("OversizeFiles = %+v, want %d", p.OversizeFiles, c.wantOversize)
+				}
+				want := []string{
+					"https://timothy.example.lan/missions/m1",
+					"branch: feat/ship-it",
+					"https://github.com/org/repo/pull/1",
+				}
+				if len(p.Links) != len(want) {
+					t.Fatalf("links = %v, want %v", p.Links, want)
+				}
+				for i := range want {
+					if p.Links[i] != want[i] {
+						t.Fatalf("links[%d] = %q, want %q", i, p.Links[i], want[i])
+					}
+				}
+			})
+		}
+	})
+
 	t.Run("light mission body is the final output, not a completion line", func(t *testing.T) {
 		light := m
 		light.Flow = missions.FlowLight
