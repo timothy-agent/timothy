@@ -33,6 +33,16 @@ import (
 // write the shared volume as the same uid/gid.
 const sandboxUser = "65534:65534"
 
+// sandboxPath is the fixed PATH set on every sandbox container,
+// overriding the image's own ENV PATH (see createContainer's Env
+// comment). The three user-prefix dirs come first so a tool a worker
+// installs with `npm install -g`, `pip install --user`, or `go install`
+// under the sandbox HOME is on PATH for every later exec in the same
+// container: sandbox-base.Dockerfile sets NPM_CONFIG_PREFIX to
+// /home/sandbox/.npm-global and adds .local/bin, sandbox-go.Dockerfile
+// adds go/bin.
+const sandboxPath = "PATH=/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:/home/sandbox/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 const (
 	workspaceMountPath  = "/workspace"
 	containerNamePrefix = "timothy-sandbox-"
@@ -391,7 +401,7 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		// beyond this (e.g. an executor's ANTHROPIC_* credentials) is
 		// injected per-exec against the D-053 allowlist (api.go), never
 		// baked into the container itself.
-		Env:    []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/home/sandbox"},
+		Env:    []string{sandboxPath, "HOME=/home/sandbox"},
 		User:   sandboxUser,
 		Cmd:    []string{"sleep", "infinity"},
 		Labels: map[string]string{missionLabel: missionID},

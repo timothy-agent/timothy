@@ -641,6 +641,48 @@ func TestCreateContainerHardensResources(t *testing.T) {
 	}
 }
 
+// TestCreateContainerSetsUserPrefixPath confirms the container's PATH
+// (issue #568) leads with the sandbox HOME's user-install dirs, so a
+// tool a worker installs with `npm install -g` or `pip install --user`
+// is reachable by a later exec in the same container.
+func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
+	var gotEnv []string
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read create body: %v", err)
+			}
+			var cfg struct {
+				Env []string
+			}
+			if err := json.Unmarshal(body, &cfg); err != nil {
+				t.Fatalf("unmarshal create body: %v", err)
+			}
+			gotEnv = cfg.Env
+			writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+		t.Fatalf("createContainer: %v", err)
+	}
+	if !slices.Contains(gotEnv, sandboxPath) {
+		t.Fatalf("Env = %v, want to contain %q", gotEnv, sandboxPath)
+	}
+	wantPrefix := "PATH=/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:/home/sandbox/go/bin:"
+	if !strings.HasPrefix(sandboxPath, wantPrefix) {
+		t.Errorf("sandboxPath = %q, want prefix %q", sandboxPath, wantPrefix)
+	}
+}
+
 // TestManagerCapacityReadsRealMeminfo confirms Capacity reads the
 // process's real /proc/meminfo (the host view sandboxd's own
 // memory-unlimited container sees) and folds in List's live container
