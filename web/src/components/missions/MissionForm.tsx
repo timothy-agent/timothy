@@ -31,6 +31,7 @@ import { useAgents, useRoutes } from '../AgentPicker'
 import { slugify } from '../settings/AgentForm'
 import { cronPresets, type CronPresetValue, presetFor } from '../../lib/schedules'
 import { CURRENCIES } from '../../lib/currencies'
+import { extractRepoMentions, matchRepo } from '../../lib/goalRepo'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Calendar } from '../ui/calendar'
@@ -244,6 +245,11 @@ function looksLikeLightGoal(goal: string): boolean {
   return lightSignalPattern.test(trimmed)
 }
 
+// pushSignalPattern matches goal text that talks about pushing or
+// opening a pull/merge request (issue #563): the destination-suggestion
+// hint, never auto-checked.
+const pushSignalPattern = /\b(push|pull request|pr|merge request)\b/i
+
 // expiresAt is stored as the wire-compatible 'YYYY-MM-DDTHH:mm' string the
 // API already expects; these split it into a Date (for the calendar) and a
 // 'HH:mm' string (for the time input) and back.
@@ -412,6 +418,26 @@ export function MissionForm({
   )
   const [repoPickerOpen, setRepoPickerOpen] = useState(false)
 
+  // sourceProposed (issue #563) marks a repo source this form set from
+  // the goal text rather than the operator's own pick: gates whether a
+  // later proposal is still allowed to override it (a hand-picked
+  // source, sourceProposed=false, is never touched again).
+  const [sourceProposed, setSourceProposed] = useState(false)
+  const [proposalNote, setProposalNote] = useState<string | null>(null)
+  const [proposalCandidates, setProposalCandidates] = useState<{
+    connectorID: string
+    repos: GitHubRepo[]
+  } | null>(null)
+  // clearedForGoal remembers the goal text a "Clear" click suppressed
+  // proposals for: re-proposing on every keystroke after a deliberate
+  // clear would fight the operator, so this only re-arms once the goal
+  // itself changes again.
+  const [clearedForGoal, setClearedForGoal] = useState<string | null>(null)
+  // repoCache (issue #563) holds each github connector's repo list,
+  // fetched on demand while searching for a goal match, keyed by
+  // connector id: avoids re-fetching a connector already tried.
+  const [repoCache, setRepoCache] = useState<Record<string, GitHubRepo[]>>({})
+
   // A repo/connector is considered "attached" once it resolves to a
   // clone URL: mirrors githubSourceReady's own readiness check below.
   const repoAttached = repoSource === 'github' && !!connectorID && !!selectedRepo
@@ -436,14 +462,15 @@ export function MissionForm({
   const [destinationRepoURLs, setDestinationRepoURLs] = useState<Record<string, string>>({})
 
   // Fetch github-kind connectors once the operator picks the GitHub
-  // clone source: most missions never touch it, so this isn't loaded
-  // upfront with agents/routes.
+  // clone source, or once a coding mission's goal might need them for
+  // the repo-mention proposal below (issue #563): most missions never
+  // touch it, so this isn't loaded upfront with agents/routes.
   useEffect(() => {
-    if (repoSource !== 'github' || githubConnectors !== null) return
+    if ((repoSource !== 'github' && kind !== 'coding') || githubConnectors !== null) return
     listConnectors()
       .then((all) => setGithubConnectors(all.filter((c) => c.kind === 'github' && c.enabled)))
       .catch(() => setGithubConnectors([]))
-  }, [repoSource, githubConnectors])
+  }, [repoSource, kind, githubConnectors])
 
   // Fetch the connector's repo list whenever it changes: best-effort,
   // an error surfaces inline rather than blocking the form.
@@ -455,7 +482,10 @@ export function MissionForm({
     setReposLoading(true)
     setReposError(null)
     listConnectorRepos(connectorID)
-      .then(setRepos)
+      .then((r) => {
+        setRepos(r)
+        setRepoCache((prev) => ({ ...prev, [connectorID]: r }))
+      })
       .catch((err) => setReposError(errText(err)))
       .finally(() => setReposLoading(false))
   }, [repoSource, connectorID])
@@ -466,6 +496,104 @@ export function MissionForm({
     if (!q) return repos
     return repos.filter((r) => r.full_name.toLowerCase().includes(q))
   }, [repos, repoQuery])
+
+  // Repo proposal from the goal text (issue #563): debounced ~400ms
+  // like the classify preview above, only for a coding mission with no
+  // hand-picked source and at least one github connector. Tries each
+  // github connector's repo list (fetching + caching on demand) until
+  // one yields a match, sets the source on a single match, and lists
+  // "candidates" for the operator to pick from on an ambiguous one.
+  // Never runs again for goal text the operator already cleared a
+  // proposal for.
+  useEffect(() => {
+    // Coding is unavailable while repeating (toggleKind/the repeat
+    // toggle both enforce that), so kind === 'coding' already implies
+    // !repeat here.
+    if (kind !== 'coding' || mode !== 'create') return
+    if (repoSource !== 'none' && !sourceProposed) return // a hand-picked source is never touched
+    if (!githubConnectors || githubConnectors.length === 0) return
+    if (goal.trim() === '' || goal === clearedForGoal) return
+
+    const mentions = extractRepoMentions(goal)
+    if (mentions.length === 0) {
+      setProposalNote(null)
+      setProposalCandidates(null)
+      return
+    }
+
+    let cancelled = false
+    const t = setTimeout(() => {
+      const tryConnectors = async () => {
+        for (const connector of githubConnectors) {
+          let connectorRepos = repoCache[connector.id]
+          if (!connectorRepos) {
+            try {
+              connectorRepos = await listConnectorRepos(connector.id)
+            } catch {
+              continue // best-effort: skip a connector whose repo list fails to load
+            }
+            if (cancelled) return
+            setRepoCache((prev) => ({ ...prev, [connector.id]: connectorRepos! }))
+          }
+          if (connectorRepos.length === 0) continue
+
+          const result = matchRepo(mentions, connectorRepos)
+          if (!result) continue
+          if (cancelled) return
+
+          if ('candidates' in result) {
+            setProposalCandidates({ connectorID: connector.id, repos: result.candidates })
+            setProposalNote(null)
+            return
+          }
+          setRepoSource('github')
+          setSourceProposed(true)
+          setConnectorID(connector.id)
+          setRepos(connectorRepos)
+          setSelectedRepo(result.repo)
+          setProposalCandidates(null)
+          setProposalNote(result.guess ? 'Proposed from the goal (best guess)' : 'Proposed from the goal')
+          return
+        }
+        if (!cancelled) {
+          setProposalNote(null)
+          setProposalCandidates(null)
+        }
+      }
+      void tryConnectors()
+    }, 400)
+
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [goal, kind, mode, repoSource, sourceProposed, githubConnectors, clearedForGoal, repoCache])
+
+  // clearProposal resets the repo source and note, and suppresses
+  // further proposals for the current goal text: the operator's clear
+  // click is a deliberate override, not something the next keystroke
+  // should immediately re-propose.
+  const clearProposal = () => {
+    setRepoSource('none')
+    setSourceProposed(false)
+    setConnectorID('')
+    setSelectedRepo(null)
+    setProposalNote(null)
+    setProposalCandidates(null)
+    setClearedForGoal(goal)
+  }
+
+  // pickProposalCandidate resolves an ambiguous proposal by hand: the
+  // operator clicked one of the listed candidate repos.
+  const pickProposalCandidate = (candidateConnectorID: string, repo: GitHubRepo) => {
+    setRepoSource('github')
+    setSourceProposed(false) // an explicit click is a hand pick, not a proposal
+    setConnectorID(candidateConnectorID)
+    setRepos(repoCache[candidateConnectorID] ?? null)
+    setSelectedRepo(repo)
+    setProposalCandidates(null)
+    setProposalNote(null)
+  }
 
   // Live executor pairing/usability preview: coding-only, refetched
   // whenever the kind flips to coding or the route selection (explicit
@@ -702,6 +830,19 @@ export function MissionForm({
     (d) => destinationIDs.includes(d.id) && d.kind === 'github',
   )
   const githubDestinationKindOk = kind === 'coding' || checkedGithubDestinations.length === 0
+
+  // Destination suggestion (issue #563): once a source is attached or
+  // proposed, exactly one enabled github destination exists and isn't
+  // already checked, and the goal mentions pushing/opening a PR, hint
+  // at adding it. Never checks it automatically.
+  const enabledGithubDestinations = (destinations ?? []).filter((d) => d.kind === 'github' && d.enabled)
+  const suggestedGithubDestination =
+    (repoAttached || sourceProposed) &&
+    enabledGithubDestinations.length === 1 &&
+    !destinationIDs.includes(enabledGithubDestinations[0].id) &&
+    pushSignalPattern.test(goal)
+      ? enabledGithubDestinations[0]
+      : null
 
   const canSubmit =
     mode === 'edit'
@@ -942,7 +1083,10 @@ export function MissionForm({
           <div className="inline-flex rounded-lg bg-muted p-1 text-sm">
             <button
               type="button"
-              onClick={() => setRepoSource('none')}
+              onClick={() => {
+                setRepoSource('none')
+                setSourceProposed(false)
+              }}
               aria-pressed={repoSource === 'none'}
               className={`rounded-md px-3 py-1.5 font-medium transition ${
                 repoSource === 'none' ? 'bg-background shadow-sm' : 'text-muted-foreground'
@@ -952,7 +1096,10 @@ export function MissionForm({
             </button>
             <button
               type="button"
-              onClick={() => setRepoSource('github')}
+              onClick={() => {
+                setRepoSource('github')
+                setSourceProposed(false)
+              }}
               aria-pressed={repoSource === 'github'}
               className={`rounded-md px-3 py-1.5 font-medium transition ${
                 repoSource === 'github' ? 'bg-background shadow-sm' : 'text-muted-foreground'
@@ -961,6 +1108,37 @@ export function MissionForm({
               GitHub
             </button>
           </div>
+
+          {proposalNote && (
+            <p className="text-xs text-muted-foreground">
+              {proposalNote}{' '}
+              <button
+                type="button"
+                onClick={clearProposal}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                Clear
+              </button>
+            </p>
+          )}
+
+          {proposalCandidates && proposalCandidates.repos.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Repositories matching the goal:{' '}
+              {proposalCandidates.repos.map((r, i) => (
+                <span key={r.full_name}>
+                  {i > 0 && ', '}
+                  <button
+                    type="button"
+                    onClick={() => pickProposalCandidate(proposalCandidates.connectorID, r)}
+                    className="underline underline-offset-2 hover:text-foreground"
+                  >
+                    {r.full_name}
+                  </button>
+                </span>
+              ))}
+            </p>
+          )}
 
           {repoSource === 'github' && (
             <div className="space-y-3 rounded-lg border border-border p-4">
@@ -984,6 +1162,7 @@ export function MissionForm({
                         setConnectorID(v)
                         setSelectedRepo(null)
                         setRepoQuery('')
+                        setSourceProposed(false)
                       }}
                     >
                       <SelectTrigger id="mission-connector" className="w-full">
@@ -1032,6 +1211,7 @@ export function MissionForm({
                                   onSelect={() => {
                                     setSelectedRepo(r)
                                     setRepoPickerOpen(false)
+                                    setSourceProposed(false)
                                   }}
                                 >
                                   <span className="truncate">{r.full_name}</span>
@@ -1376,6 +1556,21 @@ export function MissionForm({
               {!githubDestinationKindOk && (
                 <p className="text-xs text-destructive">
                   A GitHub destination only applies to a coding mission.
+                </p>
+              )}
+
+              {suggestedGithubDestination && (
+                <p className="text-xs text-muted-foreground">
+                  The goal mentions pushing; add the {suggestedGithubDestination.name} destination?{' '}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setDestinationIDs((prev) => [...prev, suggestedGithubDestination.id])
+                    }
+                    className="underline underline-offset-2 hover:text-foreground"
+                  >
+                    Add
+                  </button>
                 </p>
               )}
             </div>

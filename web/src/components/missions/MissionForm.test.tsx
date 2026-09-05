@@ -1770,3 +1770,161 @@ describe('MissionForm: unusable route gate', () => {
     expect(createMission).not.toHaveBeenCalled()
   })
 })
+
+// toCodingMissionForProposal types the given goal, waits out the
+// classify debounce (real timers; the mock default classifies
+// general), and clicks the chip to switch to coding: the goal-repo
+// proposal only ever runs for a coding mission.
+async function toCodingMissionForProposal(goalText: string) {
+  fireEvent.change(screen.getByLabelText('Goal'), { target: { value: goalText } })
+  fireEvent.click(await screen.findByText('General · scratch workspace'))
+  expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
+}
+
+describe('MissionForm: goal repo proposal (issue #563)', () => {
+  it('proposes the connector + repo named in the goal and shows a note', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMissionForProposal('Clone octocat/hello-world and audit its dependencies')
+
+    expect(await screen.findByText('Proposed from the goal')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'GitHub' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'octocat/hello-world' })).toBeInTheDocument()
+  })
+
+  it('labels a fuzzy match as a guess', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMissionForProposal('Clone the hello repo and audit its dependencies')
+
+    expect(await screen.findByText('Proposed from the goal (best guess)')).toBeInTheDocument()
+  })
+
+  it('clears the proposal and suppresses it for the same goal text', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    const goalText = 'Clone octocat/hello-world and audit its dependencies'
+    await toCodingMissionForProposal(goalText)
+    expect(await screen.findByText('Proposed from the goal')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(screen.queryByText('Proposed from the goal')).toBeNull()
+    expect(screen.getByRole('button', { name: 'None' })).toHaveAttribute('aria-pressed', 'true')
+
+    // Re-typing the exact same goal text does not re-propose.
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: `${goalText} ` } })
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: goalText } })
+    await new Promise((r) => setTimeout(r, 700))
+    expect(screen.queryByText('Proposed from the goal')).toBeNull()
+  })
+
+  it('never overrides a source the operator picked by hand', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMission()
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
+    fireEvent.click(await screen.findByLabelText('Connector'))
+    fireEvent.click(await screen.findByText('personal-gh'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose a repository' }))
+    fireEvent.click(await screen.findByText('octocat/secret-project'))
+
+    fireEvent.change(screen.getByLabelText('Goal'), {
+      target: { value: 'Clone octocat/hello-world and audit its dependencies' },
+    })
+    await new Promise((r) => setTimeout(r, 700))
+
+    expect(screen.queryByText('Proposed from the goal')).toBeNull()
+    expect(screen.getByRole('button', { name: 'octocat/secret-project' })).toBeInTheDocument()
+  })
+
+  it('shows candidates and sets nothing when two repos match a bare name', async () => {
+    const ambiguousRepos: GitHubRepo[] = [
+      { ...repos[0], full_name: 'octocat/widget-one', clone_url: 'https://github.com/octocat/widget-one.git' },
+      { ...repos[0], full_name: 'octocat/widget-two', clone_url: 'https://github.com/octocat/widget-two.git' },
+    ]
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(ambiguousRepos)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMissionForProposal('Clone the widget repo and audit its dependencies')
+
+    expect(await screen.findByText(/Repositories matching the goal:/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'octocat/widget-one' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'octocat/widget-two' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'None' })).toHaveAttribute('aria-pressed', 'true')
+
+    fireEvent.click(screen.getByRole('button', { name: 'octocat/widget-two' }))
+    expect(screen.getByRole('button', { name: 'GitHub' })).toHaveAttribute('aria-pressed', 'true')
+    expect(await screen.findByText('octocat/widget-two')).toBeInTheDocument()
+  })
+
+  it('proposes nothing for a general-kind goal', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), {
+      target: { value: 'Summarize the octocat/hello-world repo activity' },
+    })
+    await screen.findByText('General · scratch workspace')
+    await new Promise((r) => setTimeout(r, 500))
+
+    expect(screen.queryByText('Proposed from the goal')).toBeNull()
+    expect(screen.queryByText('Repository')).toBeNull()
+  })
+
+  it('renders nothing extra when no github connector exists', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([])
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMissionForProposal('Clone octocat/hello-world and audit its dependencies')
+    await new Promise((r) => setTimeout(r, 500))
+
+    expect(screen.queryByText('Proposed from the goal')).toBeNull()
+    expect(screen.getByRole('button', { name: 'None' })).toHaveAttribute('aria-pressed', 'true')
+  })
+})
+
+describe('MissionForm: destination push-wording suggestion (issue #563)', () => {
+  it('suggests the single enabled github destination when the goal mentions pushing', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    vi.mocked(listDestinations).mockResolvedValue([githubDestination])
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMissionForProposal('Clone octocat/hello-world, fix the bug, and push the branch')
+
+    expect(
+      await screen.findByText(/The goal mentions pushing; add the origin repo destination\?/),
+    ).toBeInTheDocument()
+    const checkbox = screen.getByLabelText(/^origin repo/) as HTMLInputElement
+    expect(checkbox.checked).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(checkbox.checked).toBe(true)
+  })
+
+  it('never checks the destination on its own', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    vi.mocked(listDestinations).mockResolvedValue([githubDestination])
+    vi.mocked(createMission).mockResolvedValue({ id: 'm20' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMissionForProposal('Clone octocat/hello-world, fix the bug, and open a pull request')
+    await screen.findByText(/The goal mentions pushing/)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ destination_ids: undefined })),
+    )
+  })
+})
