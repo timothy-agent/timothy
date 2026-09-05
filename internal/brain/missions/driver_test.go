@@ -2493,6 +2493,107 @@ func TestDriverProvisionThreadsSigningKeyFromIdentityResolver(t *testing.T) {
 	}
 }
 
+// blockingSessionCreator blocks its first Create call on entered/release
+// so a test can open a window mid-provisioning: entered closes once
+// Create is reached, release must close before Create returns.
+// Concurrency-safe call counting for TestDriverProvisionsOnceUnderConcurrentAdvance.
+type blockingSessionCreator struct {
+	entered chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (b *blockingSessionCreator) Create(ctx context.Context, title string) (string, error) {
+	n := b.calls.Add(1)
+	if n == 1 {
+		close(b.entered)
+		<-b.release
+	}
+	return fmt.Sprintf("session-%d", n), nil
+}
+
+// TestDriverProvisionsOnceUnderConcurrentAdvance reproduces issue #569:
+// Create inserts the row idle and provisions inline; if the work-slot
+// sweep's Drive->Advance reaches ensureProvisioned for the same mission
+// while that inline provisioning is still running, it must wait for the
+// lock and re-read the finished row instead of provisioning (and
+// cloning) a second time. Blocking the session creator opens the same
+// race window a slow clone would in production.
+func TestDriverProvisionsOnceUnderConcurrentAdvance(t *testing.T) {
+	store := newFakeStore()
+	sessions := &blockingSessionCreator{entered: make(chan struct{}), release: make(chan struct{})}
+	workspace := NewWorkspace(t.TempDir(), nil, slog.Default())
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+
+	var id string
+	var createErr error
+	createDone := make(chan struct{})
+	go func() {
+		defer close(createDone)
+		id, createErr = d.Create(context.Background(), Mission{
+			Goal: "Fix the login bug", Kind: "general", Route: "route-x",
+			Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8,
+		})
+	}()
+
+	<-sessions.entered
+
+	var driveErr error
+	// Mirrors the real work-slot sweep: it only ever calls Drive (never
+	// bare Advance), so claimDriving's own guard is exercised too:
+	// Create's inline provisioning still owns the lock, so this Drive
+	// call must wait for it rather than starting a competing loop.
+	driveDone := make(chan struct{})
+	go func() {
+		defer close(driveDone)
+		driveErr = d.Drive(context.Background(), missionIDFromCreate(store))
+	}()
+
+	select {
+	case <-driveDone:
+		t.Fatal("Drive returned before the concurrent Create finished provisioning")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(sessions.release)
+	<-createDone
+	<-driveDone
+
+	if createErr != nil {
+		t.Fatalf("Create: %v", createErr)
+	}
+	if driveErr != nil {
+		t.Fatalf("Drive: %v", driveErr)
+	}
+	if sessions.calls.Load() != 1 {
+		t.Fatalf("session Create calls = %d, want exactly 1", sessions.calls.Load())
+	}
+	m, err := store.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Workspace == "" {
+		t.Fatal("mission never got a workspace")
+	}
+	if m.Status == StatusPaused {
+		t.Fatalf("mission paused (reason=%q), want provisioning to succeed once", m.PauseReason)
+	}
+}
+
+// missionIDFromCreate returns the single mission id currently in store,
+// used by TestDriverProvisionsOnceUnderConcurrentAdvance since the
+// concurrent Drive call needs the id before Create's goroutine returns
+// it.
+func missionIDFromCreate(store *fakeStore) string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	for id := range store.missions {
+		return id
+	}
+	return ""
+}
+
 // TestDriverEffectiveCommitStylePrecedence confirms mission override >
 // settings default > CommitMessage's own conventional default.
 func TestDriverEffectiveCommitStylePrecedence(t *testing.T) {

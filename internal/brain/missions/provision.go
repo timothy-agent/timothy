@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
@@ -22,6 +23,15 @@ type provisioner struct {
 	sessions  sessionCreator
 	perms     sessionGranter
 	log       *slog.Logger
+
+	// provisionMu guards provisionLocks, a per-mission lock so a second
+	// caller (issue #569: the work-slot sweep claiming a row Create is
+	// still cloning into) waits for the first ensureProvisioned instead of
+	// racing it into a second clone. Entries are never removed: missions
+	// are finite per process lifetime, so the map stays bounded by however
+	// many distinct missions this process has provisioned.
+	provisionMu    sync.Mutex
+	provisionLocks map[string]*sync.Mutex
 
 	// resolveAgent resolves a mission's agent_id to its
 	// ApprovalAllowlist at provisioning time (see SetAgentResolver) —
@@ -110,7 +120,40 @@ func (p *provisioner) nameBeforeBranch(ctx context.Context, m Mission) Mission {
 	return m
 }
 
+// missionLock returns the mutex guarding mission id's provisioning,
+// creating one on first use.
+func (p *provisioner) missionLock(id string) *sync.Mutex {
+	p.provisionMu.Lock()
+	defer p.provisionMu.Unlock()
+	if p.provisionLocks == nil {
+		p.provisionLocks = map[string]*sync.Mutex{}
+	}
+	mu, ok := p.provisionLocks[id]
+	if !ok {
+		mu = &sync.Mutex{}
+		p.provisionLocks[id] = mu
+	}
+	return mu
+}
+
+// ensureProvisioned serializes concurrent callers for the same mission
+// id (issue #569: Create's inline provisioning and the work-slot
+// sweep's Advance can both reach this for a mission still mid-clone).
+// The second caller waits, then re-reads the row so it sees the first
+// caller's finished work instead of provisioning again.
 func (p *provisioner) ensureProvisioned(ctx context.Context, m Mission) (Mission, error) {
+	mu := p.missionLock(m.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	if fresh, err := p.store.Get(ctx, m.ID); err != nil {
+		p.log.Warn("driver: ensureProvisioned: re-read failed, using passed-in mission", "mission_id", m.ID, "error", err)
+	} else {
+		m = fresh
+	}
+	return p.ensureProvisionedLocked(ctx, m)
+}
+
+func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (Mission, error) {
 	if m.SessionID == "" && p.sessions != nil {
 		sessionID, err := p.sessions.Create(ctx, "")
 		if err != nil {
