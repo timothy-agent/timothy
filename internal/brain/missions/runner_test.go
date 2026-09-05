@@ -1045,6 +1045,65 @@ func TestPlanSessionRejectsBackticks(t *testing.T) {
 	}
 }
 
+// TestPlanSessionRejectsGitStatusVerifyCmd guards issue #567: the
+// harness commits every unit's files itself after the worker turn, so
+// a verify_cmd asserting on git status always checks a stale
+// assumption about working-tree state.
+func TestPlanSessionRejectsGitStatusVerifyCmd(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add smoke file","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"git status --porcelain | grep -qxF '?? out.md'"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add smoke file","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"git status --porcelain | grep -qxF '?? out.md'"}]}`)},
+	}}
+	r := newTestRunner(agent)
+	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
+	if err == nil {
+		t.Fatal("PlanSession accepted a verify_cmd asserting on git status")
+	}
+	if !strings.Contains(err.Error(), "must not run git") {
+		t.Fatalf("PlanSession error = %q, want it to name the git rejection", err.Error())
+	}
+}
+
+// TestPlanSessionRejectsGitDiffVerifyCmd mirrors the git status case
+// for git diff, another common working-tree-state assertion.
+func TestPlanSessionRejectsGitDiffVerifyCmd(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add smoke file","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"git diff --exit-code out.md"}]}`)},
+		{toolEndEvent(planToolName, `{"units":[{"title":"Add smoke file","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"git diff --exit-code out.md"}]}`)},
+	}}
+	r := newTestRunner(agent)
+	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default"}, "")
+	if err == nil {
+		t.Fatal("PlanSession accepted a verify_cmd asserting on git diff")
+	}
+	if !strings.Contains(err.Error(), "must not run git") {
+		t.Fatalf("PlanSession error = %q, want it to name the git rejection", err.Error())
+	}
+}
+
+// TestPlanSessionAcceptsVerifyCmdNotMatchingGitWord confirms the git
+// guard is word-bounded: neither a substring like "digit" nor a path
+// like widget.md false-positives as a git invocation.
+func TestPlanSessionAcceptsVerifyCmdNotMatchingGitWord(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[`+
+			`{"title":"Check digit count","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -qi '[0-9] digit' out.md"},`+
+			`{"title":"Check widget file","artifacts":["widget.md"],"criteria":["c1","c2"],"verify_cmd":"grep -qi 'ok' widget.md"}`+
+			`]}`)},
+	}}
+	r := newTestRunner(agent)
+	spec, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if len(spec.Units) != 2 {
+		t.Fatalf("PlanSession spec = %+v", spec)
+	}
+	if agent.call != 1 {
+		t.Fatalf("expected exactly one turn (no recovery needed), got %d", agent.call)
+	}
+}
+
 // TestPlanSessionRecoversFromCommandSubstitutionFeedback confirms the
 // substitution rejection feeds the same one-recovery-turn ladder as
 // the empty-plan/malformed-JSON cases: the planner gets told exactly
