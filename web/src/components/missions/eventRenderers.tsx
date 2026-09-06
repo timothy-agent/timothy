@@ -7,6 +7,7 @@ import type {
   ExecutorSkippedPayload,
   ExecutorSpawnedPayload,
   ExecutorSteeredPayload,
+  ReviewDelegatedFallbackPayload,
   MissionEvent,
   MissionPermissionDeniedPayload,
   MissionPROpenedPayload,
@@ -281,10 +282,10 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     )
   },
   'executor.spawned': (p) => {
-    const { harness, provider, model, auth_mode } = p as ExecutorSpawnedPayload
+    const { harness, provider, model, auth_mode, phase } = p as ExecutorSpawnedPayload
     return (
       <span>
-        Delegated to {harness} ·{' '}
+        {phase === 'prove' ? 'Review delegated to' : 'Delegated to'} {harness} ·{' '}
         <span className="font-mono">
           {provider}/{model}
         </span>{' '}
@@ -322,6 +323,17 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
         {reason === 'no_usable_entry' && skip_reasons && skip_reasons.length > 0
           ? ` — ${skip_reasons.join(', ')}`
           : ''}
+      </span>
+    )
+  },
+  // review.delegated_fallback (issue #582): the mission's review_harness
+  // could not serve the round, so the native reviewer ran instead.
+  'review.delegated_fallback': (p) => {
+    const { harness, reason, error } = p as ReviewDelegatedFallbackPayload
+    return (
+      <span className="text-amber-400">
+        Review harness {harness} unavailable ({reason}), native review ran instead
+        {error ? `: ${truncateForDisplay(error)}` : ''}
       </span>
     )
   },

@@ -37,6 +37,13 @@ func (claudeAdapter) Capabilities() Capabilities {
 	}
 }
 
+// claudeReadOnlyAllow/claudeReadOnlyDeny are the tool lists a read-only
+// run gets (issue #582).
+var (
+	claudeReadOnlyAllow = []string{"Read", "Grep", "Glob"}
+	claudeReadOnlyDeny  = []string{"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch"}
+)
+
 // BuildInvocation validates spec and translates it to a claude CLI argv +
 // env. The prompt never rides the argv directly - PromptFile names the
 // path the runner substitutes via `$(cat PromptFile)` at spawn time, since
@@ -76,11 +83,18 @@ func (claudeAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		"--model", spec.Model,
 		"--permission-mode", "dontAsk",
 	}
-	if len(spec.AllowTools) > 0 {
-		argv = append(argv, "--allowedTools", strings.Join(spec.AllowTools, ","))
+	// issue #582: a read-only run gets the fixed read-only lists no
+	// matter what spec.AllowTools/DenyTools say; the deny list is what
+	// actually blocks a write, the allow list only pre-approves reads.
+	allow, deny := spec.AllowTools, spec.DenyTools
+	if spec.ReadOnly {
+		allow, deny = claudeReadOnlyAllow, claudeReadOnlyDeny
 	}
-	if len(spec.DenyTools) > 0 {
-		argv = append(argv, "--disallowedTools", strings.Join(spec.DenyTools, ","))
+	if len(allow) > 0 {
+		argv = append(argv, "--allowedTools", strings.Join(allow, ","))
+	}
+	if len(deny) > 0 {
+		argv = append(argv, "--disallowedTools", strings.Join(deny, ","))
 	}
 	if spec.BudgetUSD != nil && spec.AuthMode == AuthAPIKey {
 		argv = append(argv, "--max-budget-usd", fmt.Sprintf("%v", *spec.BudgetUSD))

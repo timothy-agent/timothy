@@ -54,6 +54,33 @@ const piDefaultAnthropicBaseURL = "https://api.anthropic.com"
 // (spec.ResultSchema is intentionally never passed to pi's argv or env).
 const piVerdictInstruction = " End your final message with a single line containing only a JSON object of the form {\"status\":\"DONE\"|\"RETRY\"|\"BLOCKED\",\"note\":\"...\"} and nothing after it."
 
+// piSchemaInstruction replaces piVerdictInstruction when spec.ResultSchema
+// is set (issue #582): the final line must be one JSON object matching
+// the compact schema appended after it. extractTrailingJSONObject picks
+// that line up exactly as it does the worker verdict.
+const piSchemaInstruction = " End your final message with a single line containing only a JSON object matching this JSON schema, and nothing after it: "
+
+// piReadOnlyTools is the tool list a read-only run gets (issue #582):
+// pi's read/grep/find/ls never write or execute anything.
+const (
+	piTools         = "read,bash,edit,write,grep,find,ls"
+	piReadOnlyTools = "read,grep,find,ls"
+)
+
+// piVerdictSuffix picks the sentinel instruction for spec: the DONE/
+// RETRY/BLOCKED sentence, or the schema-aware one when a ResultSchema is
+// given.
+func piVerdictSuffix(spec InvocationSpec) (string, error) {
+	if spec.ResultSchema == nil {
+		return piVerdictInstruction, nil
+	}
+	compact, err := compactJSON(spec.ResultSchema)
+	if err != nil {
+		return "", fmt.Errorf("executor/pi: result schema: %w", err)
+	}
+	return piSchemaInstruction + compact, nil
+}
+
 // BuildInvocation validates spec and translates it to a pi CLI argv +
 // env. The prompt never rides the argv directly - PromptFile names the
 // path the runner substitutes via `$(cat PromptFile)` at spawn time,
@@ -95,7 +122,15 @@ func (piAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		return Invocation{}, fmt.Errorf("executor/pi: unknown wire %q", spec.Wire)
 	}
 
-	system := spec.SystemAppend + piVerdictInstruction
+	suffix, err := piVerdictSuffix(spec)
+	if err != nil {
+		return Invocation{}, err
+	}
+	system := spec.SystemAppend + suffix
+	tools := piTools
+	if spec.ReadOnly {
+		tools = piReadOnlyTools
+	}
 
 	// issue #358: --mode rpc replaces --mode json. rpc mode takes the
 	// prompt as a JSON line on stdin (see PromptCommand), not on argv,
@@ -111,7 +146,7 @@ func (piAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		"--no-context-files",
 		"--no-session",
 		"--no-approve",
-		"--tools", "read,bash,edit,write,grep,find,ls",
+		"--tools", tools,
 		"--model", "timothy/" + spec.Model,
 		"--append-system-prompt", system,
 	}

@@ -106,6 +106,11 @@ type Mission struct {
 	// (internal/brain/missions/executor). Coding-only; a general mission
 	// always runs native.
 	Harness string `json:"harness,omitempty"`
+	// ReviewHarness names the registered executor the prove phase's
+	// review round runs as a read-only delegated CLI (issue #582); ""
+	// keeps the native gateway reviewer. Native is the floor: every
+	// delegated failure falls back to it.
+	ReviewHarness string `json:"review_harness,omitempty"`
 	// Flow is the phase set this mission runs (D-090, issue #459),
 	// chosen once at create time, snapshotted here, never model-
 	// mutable. FlowLight (D-069, general kind only) skips discover/plan/

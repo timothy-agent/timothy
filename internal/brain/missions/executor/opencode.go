@@ -81,6 +81,11 @@ func (opencodeAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) 
 	if spec.Wire != "openai" {
 		return Invocation{}, fmt.Errorf("executor/opencode: wire %q not supported, opencode speaks openai only", spec.Wire)
 	}
+	if spec.ReadOnly {
+		// issue #582: the adapter runs opencode with permission "allow"
+		// and no per-tool deny surface is verified against 1.18.18.
+		return Invocation{}, fmt.Errorf("executor/opencode: %w", ErrReadOnlyUnsupported)
+	}
 
 	baseURL := spec.BaseURL
 	if baseURL == "" {

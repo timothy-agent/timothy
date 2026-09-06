@@ -262,6 +262,30 @@ describe('executor lifecycle event rendering', () => {
     expect(screen.getByText('harness')).toBeInTheDocument()
   })
 
+  it('renders a prove-phase executor.spawned as a delegated review (issue #582)', () => {
+    render(
+      <div>
+        {renderEvent(
+          event(
+            { harness: 'pi', provider: 'anthropic', model: 'sonnet', auth_mode: 'api_key', run_id: 'r2', phase: 'prove' },
+            'executor.spawned',
+          ),
+        )}
+      </div>,
+    )
+    expect(screen.getByText(/Review delegated to pi/)).toBeInTheDocument()
+  })
+
+  it('renders review.delegated_fallback with the harness and reason (issue #582)', () => {
+    render(
+      <div>
+        {renderEvent(event({ harness: 'cursor-cli', reason: 'refused', error: 'read-only mode not supported' }, 'review.delegated_fallback'))}
+      </div>,
+    )
+    expect(screen.getByText(/Review harness cursor-cli unavailable \(refused\), native review ran instead/)).toBeInTheDocument()
+    expect(screen.getByText(/read-only mode not supported/)).toBeInTheDocument()
+  })
+
   it('renders executor.died as an error row', () => {
     render(<div>{renderEvent(event({ reason: 'oom' }, 'executor.died'))}</div>)
     expect(screen.getByText(/Harness died: oom/)).toBeInTheDocument()

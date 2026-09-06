@@ -47,7 +47,7 @@ const (
 // sandbox. gatewayReadyMaxWait is a sane cap, not a promise the gateway
 // will be ready by then: past it, recoverWorking proceeds anyway and
 // leans on the delegated runner's own bounded retry/infra-pause path
-// (RunWorker's resolveRouteWithRetry) for whatever config_unavailable
+// (RunWorker's resolveRouteFor) for whatever config_unavailable
 // window remains.
 // var, not const, so tests can shrink both instead of waiting real minutes.
 var (

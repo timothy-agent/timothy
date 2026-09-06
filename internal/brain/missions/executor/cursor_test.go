@@ -237,6 +237,14 @@ func TestCursorAdapter_BuildInvocation(t *testing.T) {
 		check   func(t *testing.T, inv Invocation)
 	}{
 		{
+			name: "read-only is refused: cursor-agent has no read-only knob (issue #582)",
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
+				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
+				AuthMode: AuthAPIKey, APIKey: "sk-cursor-test", ReadOnly: true,
+			},
+			wantErr: true,
+		},
+		{
 			name: "basic",
 			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
 				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",

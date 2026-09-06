@@ -49,7 +49,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay,
 	pending_permission, auto_approve_tools, auto_approve_plan, last_evidence,
-	discover_notes, replan_used, schedule_id, session_id, harness, environment,
+	discover_notes, replan_used, schedule_id, session_id, harness, review_harness, environment,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow,
 	review_findings, rework_rounds, has_plan`
@@ -134,7 +134,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
+		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -221,7 +221,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.Environment,
+		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -322,9 +322,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	phase := initialPhase(m.Kind, flow)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30, $31) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -999,9 +999,17 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 				AuthMode string `json:"auth_mode"`
 				RunID    string `json:"run_id"`
 				RunDir   string `json:"run_dir"`
+				Phase    string `json:"phase"`
 			}
 			if err := json.Unmarshal(payload, &spawned); err != nil {
 				return nil, fmt.Errorf("missions last run state: decode spawned: %w", err)
+			}
+			if spawned.Phase == string(PhaseProve) {
+				// A delegated review run (issue #582) is never resumed
+				// and must never stand in for the worker's last run:
+				// drop what was collected after it and keep scanning.
+				state = nil
+				continue
 			}
 			if state == nil {
 				state = &runState{}

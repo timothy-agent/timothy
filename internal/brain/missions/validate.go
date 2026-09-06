@@ -100,6 +100,11 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			return fmt.Errorf("%w: unknown harness %q", ErrInvalidMission, m.Harness)
 		}
 	}
+	if m.ReviewHarness != "" {
+		if _, ok := executor.Lookup(m.ReviewHarness); !ok {
+			return fmt.Errorf("%w: unknown review_harness %q", ErrInvalidMission, m.ReviewHarness)
+		}
+	}
 	if !ValidEnvironment(m.Environment) {
 		return fmt.Errorf("%w: unknown environment %q", ErrInvalidMission, m.Environment)
 	}

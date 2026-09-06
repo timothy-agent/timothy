@@ -1,0 +1,9 @@
+{"type":"response","command":"prompt","success":true}
+{"type":"session","version":3,"id":"SESSION_ID","timestamp":"2026-09-05T10:00:00.000Z","cwd":"/w"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"tool_execution_start","toolName":"read","args":{"path":"README.md"}}
+{"type":"tool_execution_end","toolName":"read"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"The README covers every criterion and the harness checks pass.\n{\"decision\":\"approve\",\"findings\":[],\"resolved\":[\"F1\"]}"}],"usage":{"input":900,"output":60,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}}
+{"type":"turn_end"}
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"The README covers every criterion and the harness checks pass.\n{\"decision\":\"approve\",\"findings\":[],\"resolved\":[\"F1\"]}"}],"usage":{"input":900,"output":60,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}],"willRetry":false}

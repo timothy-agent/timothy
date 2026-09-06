@@ -839,6 +839,10 @@ export interface Mission {
   // dispatch, "claude-cli"/"pi"/"codex-cli"/"opencode"/"cursor-cli" name
   // a registered executor.
   harness?: string
+  // review_harness (issue #582) names the registered executor the prove
+  // phase's review round runs as a read-only delegated CLI; "" or
+  // absent keeps the native reviewer (also the fallback on any failure).
+  review_harness?: string
   // top_model/top_model_provider are decorated onto the list/get
   // response from the cost ledger's top-served-model-per-mission
   // lookup (internal/brain/api/missions.go's decorateTopModels): the
@@ -977,6 +981,19 @@ export interface ExecutorSpawnedPayload {
   model: string
   auth_mode: string
   run_id: string
+  // phase (issue #582) is 'generate' for a worker run and 'prove' for
+  // a delegated review run; absent on events recorded before it existed
+  // (always worker runs).
+  phase?: string
+}
+
+// ReviewDelegatedFallbackPayload is review.delegated_fallback's payload
+// (issue #582): a mission's review_harness could not serve the round,
+// so the native reviewer ran instead.
+export interface ReviewDelegatedFallbackPayload {
+  harness: string
+  reason: string
+  error?: string
 }
 
 export interface ExecutorProgressPayload {
@@ -1203,6 +1220,8 @@ export interface MissionTemplate {
   budget_currency?: string
   auto_approve_tools?: boolean
   harness?: string
+  // review_harness is copied onto every fired mission as-is (issue #582).
+  review_harness?: string
   environment?: string
   // destination_ids names operator-created destinations this template's
   // fired missions deliver their outcome digest to. Re-validated at

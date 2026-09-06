@@ -85,23 +85,22 @@ func (codexAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 	// (confirmed via `codex exec resume --help`): no `-C` flag - the
 	// resumed session keeps the working root recorded at its original
 	// spawn - but the same --json/--output-schema/-m/bypass flags apply.
+	//
+	// issue #582: a read-only run swaps the bypass flag for codex's own
+	// `--sandbox read-only` (`codex exec --help` on 0.147.0 lists
+	// read-only, workspace-write, danger-full-access), so the CLI
+	// itself refuses writes and shell side effects.
+	sandbox := []string{"--dangerously-bypass-approvals-and-sandbox"}
+	if spec.ReadOnly {
+		sandbox = []string{"--sandbox", "read-only"}
+	}
 	var argv []string
 	if spec.ResumeSessionID != "" {
-		argv = []string{
-			"codex", "exec", "resume", spec.ResumeSessionID, "--json",
-			"--dangerously-bypass-approvals-and-sandbox",
-			"--skip-git-repo-check",
-			"-m", spec.Model,
-		}
+		argv = append([]string{"codex", "exec", "resume", spec.ResumeSessionID, "--json"}, sandbox...)
 	} else {
-		argv = []string{
-			"codex", "exec", "--json",
-			"-C", spec.Workdir,
-			"--dangerously-bypass-approvals-and-sandbox",
-			"--skip-git-repo-check",
-			"-m", spec.Model,
-		}
+		argv = append([]string{"codex", "exec", "--json", "-C", spec.Workdir}, sandbox...)
 	}
+	argv = append(argv, "--skip-git-repo-check", "-m", spec.Model)
 	if spec.ResultSchema != nil {
 		schemaPath := filepath.Join(codexHome, "schema.json")
 		compact, err := compactJSON(spec.ResultSchema)

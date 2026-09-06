@@ -424,6 +424,39 @@ func TestMissionHarnessRoundTrips(t *testing.T) {
 	}
 }
 
+// TestMissionReviewHarnessRoundTrips covers issue #582: review_harness
+// is snapshotted at create time next to harness; unset stays "".
+func TestMissionReviewHarnessRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{
+		Goal: marker + "review-harness", Kind: "coding", Route: "default", ReviewHarness: "pi",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.ReviewHarness != "pi" {
+		t.Fatalf("ReviewHarness = %q, want pi", m.ReviewHarness)
+	}
+
+	id2, err := s.Create(ctx, Mission{Goal: marker + "no-review-harness", Kind: "coding", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m2, err := s.Get(ctx, id2)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m2.ReviewHarness != "" {
+		t.Fatalf("ReviewHarness = %q, want empty (native) when not set", m2.ReviewHarness)
+	}
+}
+
 // TestMissionModelPinsRoundTrip covers route_model/plan_route_model/
 // review_route_model (D-078): same shape as TestMissionHarnessRoundTrips:
 // set on create, read back verbatim; unset stays empty.

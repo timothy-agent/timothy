@@ -1,0 +1,9 @@
+{"type":"response","command":"prompt","success":true}
+{"type":"session","version":3,"id":"SESSION_ID","timestamp":"2026-09-05T10:05:00.000Z","cwd":"/w"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"tool_execution_start","toolName":"grep","args":{"pattern":"Usage","path":"README.md"}}
+{"type":"tool_execution_end","toolName":"grep"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"The usage section is missing.\n{\"decision\":\"rework\",\"findings\":[{\"title\":\"README lacks a usage section\",\"file\":\"README.md\",\"detail\":\"Criterion 2 asks for usage examples; none present.\",\"severity\":\"blocking\",\"evidence\":\"+# hello\"}],\"resolved\":[]}"}],"usage":{"input":950,"output":90,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}}
+{"type":"turn_end"}
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"The usage section is missing.\n{\"decision\":\"rework\",\"findings\":[{\"title\":\"README lacks a usage section\",\"file\":\"README.md\",\"detail\":\"Criterion 2 asks for usage examples; none present.\",\"severity\":\"blocking\",\"evidence\":\"+# hello\"}],\"resolved\":[]}"}],"usage":{"input":950,"output":90,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}],"willRetry":false}

@@ -77,6 +77,10 @@ func (cursorAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 	if spec.BaseURL != "" {
 		return Invocation{}, fmt.Errorf("executor/cursor: cursor-agent has no custom endpoint support, base url must be empty")
 	}
+	if spec.ReadOnly {
+		// issue #582: cursor-agent has no CLI-enforced read-only mode.
+		return Invocation{}, fmt.Errorf("executor/cursor: %w", ErrReadOnlyUnsupported)
+	}
 
 	runDir := filepath.Dir(spec.PromptPath)
 	configDir := filepath.Join(runDir, "cursor-home")

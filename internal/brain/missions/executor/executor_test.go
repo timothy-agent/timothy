@@ -1,6 +1,9 @@
 package executor
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // fakeAdapter is a minimal Adapter for registry tests, distinct from
 // claudeAdapter so registering it never collides with the real adapter's
@@ -41,6 +44,26 @@ func TestLookup(t *testing.T) {
 // thread id, opencode a session id, pi a cwd), and must leave Model
 // empty so recordLedger keeps falling back to the route entry's model
 // instead of booking usage against a thread id.
+// TestReadOnlyRefusalIsErrReadOnlyUnsupported pins that the adapters
+// without a read-only knob refuse with the shared sentinel (issue
+// #582), which the delegated runner classifies as a refusal.
+func TestReadOnlyRefusalIsErrReadOnlyUnsupported(t *testing.T) {
+	spec := InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
+		Model: "m", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
+		AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "openai", ReadOnly: true,
+	}
+	for _, harness := range []string{cursorHarness, opencodeHarness} {
+		a, ok := Lookup(harness)
+		if !ok {
+			t.Fatalf("%s not registered", harness)
+		}
+		_, err := a.BuildInvocation(spec)
+		if !errors.Is(err, ErrReadOnlyUnsupported) {
+			t.Errorf("%s read-only error = %v, want ErrReadOnlyUnsupported", harness, err)
+		}
+	}
+}
+
 func TestKindSystemModelOnlyWhereReported(t *testing.T) {
 	cases := []struct {
 		name      string

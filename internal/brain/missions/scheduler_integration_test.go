@@ -132,6 +132,40 @@ func TestSchedulerFireForcesAutoApprovePlanTrue(t *testing.T) {
 	}
 }
 
+// TestSchedulerFireCopiesReviewHarness covers issue #582: a template's
+// review_harness lands on the fired mission verbatim.
+func TestSchedulerFireCopiesReviewHarness(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	db, _ := store.db.Get()
+	var id string
+	if err := db.QueryRow(ctx, `INSERT INTO schedules (name, cron, mission_template, created_at)
+		VALUES ($1, '* * * * *', $2, $3) RETURNING id`,
+		marker+"review-harness", `{"goal":"`+marker+`review harness run","kind":"coding","review_harness":"pi"}`,
+		time.Now().Add(-2*time.Minute)).Scan(&id); err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = db.Exec(cctx, "DELETE FROM schedules WHERE id = $1", id)
+	})
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	var reviewHarness string
+	if err := db.QueryRow(ctx, `SELECT review_harness FROM missions WHERE schedule_id = $1`, id).Scan(&reviewHarness); err != nil {
+		t.Fatalf("query fired mission's review_harness: %v", err)
+	}
+	if reviewHarness != "pi" {
+		t.Fatalf("fired mission review_harness = %q, want pi", reviewHarness)
+	}
+}
+
 // TestSchedulerFireUsesTemplateNameOverSlug guards the fix for a real
 // UI gap: schedule names are strict lowercase slugs (shared validation
 // with connectors/destinations/agents), so a scheduled mission's

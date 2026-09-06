@@ -225,6 +225,47 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateValidatesReviewHarness covers issue #582's create()
+// gate: an unknown review_harness 400s before the store is reached,
+// while "native" (normalized to "") and a registered harness pass
+// validation and reach the degraded store (same generic 400 shape and
+// the same distinguishing trick as TestMissionsCreateValidatesHarness:
+// the store error surfaces as failMission's generic 400 too, so the
+// body text is what tells the two apart).
+func TestMissionsCreateValidatesReviewHarness(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver.SetValidateDeps(missions.ValidateDeps{})
+
+	post := func(body string) (int, string) {
+		m := mux(a)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+
+	code, body := post(`{"goal":"g","kind":"coding","review_harness":"not-a-real-harness"}`)
+	if code != 400 || !strings.Contains(body, "unknown review_harness") {
+		t.Fatalf("unknown review_harness = %d %q, want 400 naming review_harness", code, body)
+	}
+	for _, body := range []string{
+		`{"goal":"g","kind":"coding","review_harness":"native"}`,
+		`{"goal":"g","kind":"coding","review_harness":"pi"}`,
+		`{"goal":"g","kind":"general","review_harness":"claude-cli"}`,
+	} {
+		code, resp := post(body)
+		if code != 400 || strings.Contains(resp, "review_harness") {
+			t.Fatalf("%s = %d %q, want 400 from the degraded store, not a review_harness validation error", body, code, resp)
+		}
+	}
+}
+
 // TestMissionsCreateValidatesLight covers light's create() gate
 // (D-069): rejected outright on an explicit kind=coding, and rejected
 // when kind is omitted and classifies as coding — light never overrides

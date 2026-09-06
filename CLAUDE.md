@@ -193,6 +193,11 @@ First run: `cp deploy/env.example deploy/.env` and set
   and park the turn.
 - Non-coding units whose artifacts + verify_cmd pass harness checks skip
   LLM review entirely (`mission.review_skipped`).
+- Delegated reviewer (issue #582): a mission's opt-in `review_harness`
+  runs the prove round as a read-only CLI (`executor.InvocationSpec.
+  ReadOnly`, enforced per adapter in Go) in the sandbox/worktree with
+  the rendered review packet as prompt; native review is the floor,
+  every failure records `review.delegated_fallback` and runs it.
 - `make canary` is the regression gate for any harness change.
 
 ## Key invariants (enforce, never relax)

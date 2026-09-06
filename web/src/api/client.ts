@@ -1240,6 +1240,10 @@ export interface CreateMissionInput {
   // "native" to force the built-in agent loop. Only valid when
   // kind === 'coding'.
   harness?: string
+  // review_harness names the registered executor the prove phase's
+  // review round runs as a read-only delegated CLI (issue #582): omit
+  // (or "") for the native reviewer, "native" to force it.
+  review_harness?: string
   // environment selects the sandbox image key (D-05x) a coding
   // mission's container runs: omit (or "") to auto-detect (repo
   // markers, then a goal-keyword heuristic, falling back to base).

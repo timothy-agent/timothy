@@ -6,6 +6,7 @@ package executor
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -67,7 +68,19 @@ type InvocationSpec struct {
 	// The runner only ever sets this when Capabilities().SupportsResume
 	// is true for the adapter in play.
 	ResumeSessionID string
+	// ReadOnly asks for a run that can read the workdir but never
+	// modify it or run shell commands (issue #582, the delegated
+	// reviewer). Each adapter maps it onto its own CLI knob; an adapter
+	// with no such knob returns ErrReadOnlyUnsupported from
+	// BuildInvocation instead of pretending.
+	ReadOnly bool
 }
+
+// ErrReadOnlyUnsupported is returned by BuildInvocation when
+// spec.ReadOnly is set and the harness has no CLI-enforced read-only
+// mode (issue #582). The runner treats it as a refusal and falls back
+// to the native reviewer.
+var ErrReadOnlyUnsupported = errors.New("executor: read-only mode not supported")
 
 // Invocation is the argv + env an adapter wants spawned. PromptFile, when
 // non-empty, names a path (equal to InvocationSpec.PromptPath) the runner

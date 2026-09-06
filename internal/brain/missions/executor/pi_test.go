@@ -308,6 +308,54 @@ func TestPiParser_RPCModeIgnoresResponseAndQueueUpdate(t *testing.T) {
 	}
 }
 
+// TestPiParser_ReviewVerdictLine covers issue #582: a run whose final
+// message ends with a review_verdict-shaped JSON line lands that line
+// on Event.Result verbatim (the missions package decodes it), while
+// ParseResult, which only knows DONE/RETRY/BLOCKED, reports ok=false.
+func TestPiParser_ReviewVerdictLine(t *testing.T) {
+	tests := []struct {
+		fixture      string
+		wantDecision string
+		wantFindings int
+	}{
+		{"review-approve.ndjson", "approve", 0},
+		{"review-rework.ndjson", "rework", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.fixture, func(t *testing.T) {
+			p := piAdapter{}.NewParser()
+			var result Event
+			var results int
+			for _, line := range loadPiFixture(t, tt.fixture) {
+				ev, ok := p.ParseLine(line)
+				if ok && ev.Kind == KindResult {
+					results++
+					result = ev
+				}
+			}
+			if results != 1 {
+				t.Fatalf("KindResult count = %d, want exactly 1", results)
+			}
+			if result.Result == nil {
+				t.Fatalf("Result = nil, want the trailing verdict line; text was %q", result.Text)
+			}
+			var v struct {
+				Decision string           `json:"decision"`
+				Findings []map[string]any `json:"findings"`
+			}
+			if err := json.Unmarshal(result.Result, &v); err != nil {
+				t.Fatalf("Result does not decode: %v", err)
+			}
+			if v.Decision != tt.wantDecision || len(v.Findings) != tt.wantFindings {
+				t.Errorf("decision/findings = %q/%d, want %q/%d", v.Decision, len(v.Findings), tt.wantDecision, tt.wantFindings)
+			}
+			if _, ok := (piAdapter{}).ParseResult(result); ok {
+				t.Error("ParseResult accepted a review verdict as a worker status")
+			}
+		})
+	}
+}
+
 // TestPiAdapter_ImplementsSteerer pins that piAdapter satisfies
 // executor.Steerer (issue #358): the delegated runner type-asserts
 // adapters against this interface to decide whether mid-run steering
@@ -467,6 +515,46 @@ func TestPiAdapter_BuildInvocation(t *testing.T) {
 				}
 				if containsFlag(inv.Argv, "--max-budget-usd") {
 					t.Error("pi has no budget flag, must not appear in argv")
+				}
+			},
+		},
+		{
+			name: "read-only narrows --tools to the read-only list (issue #582)",
+			spec: InvocationSpec{
+				Model: "sonnet", PromptPath: "/tmp/run/prompt.md",
+				AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "anthropic",
+				ReadOnly: true,
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if !containsFlagValue(inv.Argv, "--tools", piReadOnlyTools) {
+					t.Errorf("argv %v missing --tools %s", inv.Argv, piReadOnlyTools)
+				}
+				for _, a := range inv.Argv {
+					if strings.Contains(a, "bash") || strings.Contains(a, "edit") || strings.Contains(a, "write") {
+						t.Errorf("read-only argv element %q still names a writing tool", a)
+					}
+				}
+			},
+		},
+		{
+			name: "result schema swaps the sentinel for the schema-aware instruction (issue #582)",
+			spec: InvocationSpec{
+				Model: "sonnet", PromptPath: "/tmp/run/prompt.md",
+				AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "anthropic",
+				SystemAppend: "judge it",
+				ResultSchema: json.RawMessage(`{"type": "object", "properties": {"decision": {"type": "string"}}}`),
+			},
+			check: func(t *testing.T, inv Invocation) {
+				idx := flagIndex(inv.Argv, "--append-system-prompt")
+				if idx == -1 {
+					t.Fatalf("argv %v missing --append-system-prompt", inv.Argv)
+				}
+				want := "judge it" + piSchemaInstruction + `{"properties":{"decision":{"type":"string"}},"type":"object"}`
+				if got := inv.Argv[idx+1]; got != want {
+					t.Errorf("system append = %q, want %q", got, want)
+				}
+				if strings.Contains(inv.Argv[idx+1], "DONE") {
+					t.Error("schema-aware instruction must not mention the DONE/RETRY/BLOCKED sentinel")
 				}
 			},
 		},

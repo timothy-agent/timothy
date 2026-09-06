@@ -297,6 +297,14 @@ func TestOpencodeAdapter_BuildInvocation(t *testing.T) {
 		check   func(t *testing.T, inv Invocation)
 	}{
 		{
+			name: "read-only is refused: no verified opencode knob (issue #582)",
+			spec: InvocationSpec{
+				Model: "gpt-oss:20b", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
+				AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "openai", ReadOnly: true,
+			},
+			wantErr: true,
+		},
+		{
 			name: "openai wire with base url",
 			spec: InvocationSpec{
 				Model: "gpt-oss:20b", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",

@@ -506,6 +506,38 @@ func TestCodexAdapter_BuildInvocation(t *testing.T) {
 			},
 		},
 		{
+			name: "read-only swaps the bypass flag for --sandbox read-only (issue #582)",
+			spec: InvocationSpec{
+				Model: "gpt-5.3-codex", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
+				AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "openai",
+				ReadOnly: true,
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if !containsFlagValue(inv.Argv, "--sandbox", "read-only") {
+					t.Errorf("argv %v missing --sandbox read-only", inv.Argv)
+				}
+				if containsFlag(inv.Argv, "--dangerously-bypass-approvals-and-sandbox") {
+					t.Error("read-only run must not carry the bypass flag")
+				}
+			},
+		},
+		{
+			name: "read-only resume keeps --sandbox read-only on the resume subcommand (issue #582)",
+			spec: InvocationSpec{
+				Model: "gpt-5.3-codex", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",
+				AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "openai",
+				ReadOnly: true, ResumeSessionID: "thread-abc-123",
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if !containsFlagValue(inv.Argv, "--sandbox", "read-only") {
+					t.Errorf("argv %v missing --sandbox read-only", inv.Argv)
+				}
+				if containsFlag(inv.Argv, "--dangerously-bypass-approvals-and-sandbox") {
+					t.Error("read-only run must not carry the bypass flag")
+				}
+			},
+		},
+		{
 			name: "argv exact",
 			spec: InvocationSpec{
 				Model: "gpt-5.3-codex", PromptPath: "/tmp/run/prompt.md", Workdir: "/tmp/run/ws",

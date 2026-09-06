@@ -381,6 +381,22 @@ func TestClaudeAdapter_BuildInvocation(t *testing.T) {
 			},
 		},
 		{
+			name: "read-only forces the read-only allow/deny lists over the spec's own (issue #582)",
+			spec: InvocationSpec{
+				Model: "sonnet", PromptPath: "/tmp/p.txt", AuthMode: AuthSubscription,
+				AllowTools: []string{"Write", "Bash"}, DenyTools: []string{"WebFetch"},
+				ReadOnly: true,
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if !containsFlagValue(inv.Argv, "--allowedTools", "Read,Grep,Glob") {
+					t.Errorf("argv %v missing --allowedTools Read,Grep,Glob", inv.Argv)
+				}
+				if !containsFlagValue(inv.Argv, "--disallowedTools", "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch") {
+					t.Errorf("argv %v missing the read-only --disallowedTools list", inv.Argv)
+				}
+			},
+		},
+		{
 			name: "resume session id appends --resume flag (D-103, issue #499)",
 			spec: InvocationSpec{
 				Model: "sonnet", PromptPath: "/tmp/p.txt", AuthMode: AuthSubscription,

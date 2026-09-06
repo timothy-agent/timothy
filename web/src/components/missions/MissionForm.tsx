@@ -108,6 +108,7 @@ function hasNonDefaults(t: Schedule['mission_template']): boolean {
     t.review_route ||
     t.plan_route ||
     t.harness ||
+    t.review_harness ||
     t.environment
   )
 }
@@ -173,6 +174,15 @@ export const executorChoices: { value: string; label: string }[] = [
   { value: 'codex-cli', label: 'Codex CLI' },
   { value: 'opencode', label: 'OpenCode' },
   { value: 'cursor-cli', label: 'Cursor CLI' },
+]
+
+// reviewHarnessChoices is the Review harness select's list (issue #582):
+// Native (the default, wire value '') plus the registered adapters.
+// cursor-cli and opencode have no read-only mode, so picking them would
+// only ever fall back to native; they are left out.
+export const reviewHarnessChoices: { value: string; label: string }[] = [
+  { value: EXECUTOR_DEFAULT, label: 'Native' },
+  ...executorChoices.filter((c) => ['claude-cli', 'pi', 'codex-cli'].includes(c.value)),
 ]
 
 // defaultHarnessLabel names what the Harness select's "Default" choice
@@ -394,6 +404,7 @@ export function MissionForm({
   const [autoApproveTools, setAutoApproveTools] = useState(true)
   const [autoApprovePlan, setAutoApprovePlan] = useState(true)
   const [harness, setHarness] = useState(initial?.harness ?? '')
+  const [reviewHarness, setReviewHarness] = useState(initial?.review_harness ?? '')
   const [environment, setEnvironment] = useState(initial?.environment ?? '')
   const [executorOptions, setExecutorOptions] = useState<ExecutorOption[] | null>(null)
   const [executionPlan, setExecutionPlan] = useState<ExecutionPlanPhase[] | null>(null)
@@ -717,6 +728,7 @@ export function MissionForm({
     )
     setBudgetCurrency(schedule.mission_template.budget_currency || 'USD')
     setHarness(schedule.mission_template.harness ?? '')
+    setReviewHarness(schedule.mission_template.review_harness ?? '')
     setEnvironment(schedule.mission_template.environment ?? '')
     setDestinationIDs(schedule.mission_template.destination_ids ?? [])
     setAttachments(
@@ -888,6 +900,7 @@ export function MissionForm({
       auto_approve_tools: autoApproveTools,
       auto_approve_plan: autoApprovePlan,
       harness: kind === 'coding' ? harness || undefined : undefined,
+      review_harness: light ? undefined : reviewHarness || undefined,
       environment: kind === 'coding' ? environment || undefined : undefined,
       repo_url: repoURL,
       connector_id: repoURL ? connectorID : undefined,
@@ -923,6 +936,7 @@ export function MissionForm({
         budget_currency: budget ? budgetCurrency : undefined,
         auto_approve_tools: autoApproveTools,
         harness: kind === 'coding' ? harness || undefined : undefined,
+        review_harness: light ? undefined : reviewHarness || undefined,
         environment: kind === 'coding' ? environment || undefined : undefined,
         destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
         light: kind === 'general' ? light : undefined,
@@ -954,6 +968,7 @@ export function MissionForm({
         budget_currency: budget ? budgetCurrency : undefined,
         auto_approve_tools: autoApproveTools,
         harness: schedule.mission_template.kind === 'coding' ? harness || undefined : undefined,
+        review_harness: light ? undefined : reviewHarness || undefined,
         environment:
           schedule.mission_template.kind === 'coding' ? environment || undefined : undefined,
         destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
@@ -1751,6 +1766,30 @@ export function MissionForm({
                       </SelectContent>
                     </Select>
                   )}
+                </div>
+              )}
+              {!light && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="mission-review-harness">Review harness</Label>
+                  <Select
+                    value={reviewHarness || EXECUTOR_DEFAULT}
+                    onValueChange={(v) => setReviewHarness(v === EXECUTOR_DEFAULT ? '' : v)}
+                  >
+                    <SelectTrigger id="mission-review-harness" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {reviewHarnessChoices.map((c) => (
+                        <SelectItem key={c.value} value={c.value}>
+                          {c.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Runs the review round as a read-only CLI in the mission sandbox; native review is
+                    the fallback whenever it cannot run.
+                  </p>
                 </div>
               )}
               {kind === 'general' && !repeat && (

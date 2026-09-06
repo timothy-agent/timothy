@@ -461,6 +461,11 @@ type createMissionRequest struct {
 	// "native" forces native (stored as ""), anything else must name a
 	// registered harness. Rejected outright on kind=general.
 	Harness string `json:"harness"`
+	// ReviewHarness (issue #582) names the registered executor the
+	// prove phase's review round runs as a read-only delegated CLI: ""
+	// or "native" (stored as "") keeps the native reviewer, anything
+	// else must name a registered harness. No settings default.
+	ReviewHarness string `json:"review_harness"`
 	// Environment selects the per-language sandbox image (D-05x) a
 	// coding mission's container runs: "" auto-detects from the repo at
 	// provisioning (falling back to base), a registered key forces that
@@ -621,6 +626,9 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Harness == "native" {
 		req.Harness = ""
+	}
+	if req.ReviewHarness == "native" {
+		req.ReviewHarness = ""
 	}
 	// codingExecutorDefault/environment auto-detect are HTTP-request-time
 	// resolution seams (settings lookup, goal-keyword heuristic) with no
@@ -796,6 +804,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		RouteModel: req.RouteModel, PlanRouteModel: req.PlanRouteModel, ReviewRouteModel: req.ReviewRouteModel,
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveTools: autoApproveTools, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
+		ReviewHarness:            req.ReviewHarness,
 		HasPlan:                  req.HasPlan,
 		ParentMissionID:          parentMissionID,
 		Sources:                  sources,

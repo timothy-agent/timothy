@@ -58,6 +58,14 @@ func TestValidateCreate(t *testing.T) {
 			m.Kind, m.Harness = "coding", "not-a-real-harness"
 			return m
 		}, ValidateDeps{}, true},
+		{"unknown review_harness", func(m Mission) Mission {
+			m.Kind, m.ReviewHarness = "coding", "not-a-real-harness"
+			return m
+		}, ValidateDeps{}, true},
+		{"registered review_harness", func(m Mission) Mission {
+			m.Kind, m.ReviewHarness = "coding", "pi"
+			return m
+		}, ValidateDeps{}, false},
 		{"environment on general", func(m Mission) Mission {
 			m.Environment = "go"
 			return m

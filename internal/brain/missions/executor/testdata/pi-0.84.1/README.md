@@ -58,3 +58,13 @@ fixture recorded/built against that mode.
   command is accepted). Both must parse as noise, same as any other
   unrecognized type; there is no `session` event difference from json
   mode.
+- `review-approve.ndjson` / `review-rework.ndjson` - hand-built, not
+  recorded live (issue #582, delegated reviewer): a `--mode rpc` run
+  launched with `--tools read,grep,find,ls` whose final assistant
+  message ends with a single line holding a `review_verdict`-shaped
+  JSON object (`decision`, `findings`, `resolved`) instead of the
+  DONE/RETRY/BLOCKED sentinel. `extractTrailingJSONObject` lifts that
+  line into `Event.Result` unchanged; the missions package decodes it
+  with `parseReviewVerdict`, never `ParseResult` (which only knows the
+  worker statuses). approve resolves a prior finding; rework opens one
+  blocking finding with file and evidence.

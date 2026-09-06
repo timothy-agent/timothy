@@ -375,7 +375,17 @@ func ReviewVerdictTool() *tools.Tool {
 	return &tools.Tool{
 		Name:        reviewVerdictToolName,
 		Description: "Report your review verdict. Call this exactly once. Look for reasons to reject before approving — approve only when you cannot find a real gap.",
-		InputSchema: json.RawMessage(`{
+		InputSchema: reviewVerdictSchema,
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			return "verdict recorded", nil
+		},
+	}
+}
+
+// reviewVerdictSchema is the review_verdict input schema, shared by the
+// native tool and the delegated reviewer's CLI result schema (issue
+// #582) so both answer in one shape parseReviewVerdict decodes.
+var reviewVerdictSchema = json.RawMessage(`{
 			"type": "object",
 			"properties": {
 				"decision": {
@@ -405,12 +415,7 @@ func ReviewVerdictTool() *tools.Tool {
 				}
 			},
 			"required": ["decision"]
-		}`),
-		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
-			return "verdict recorded", nil
-		},
-	}
-}
+		}`)
 
 // Finding severities and statuses (D-092, issue #512).
 const (

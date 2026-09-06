@@ -77,6 +77,10 @@ type MissionTemplate struct {
 	// time via resolveTemplateDefaults, same precedence as create()'s
 	// own handling of an omitted request field.
 	Harness string `json:"harness,omitempty"`
+	// ReviewHarness (issue #582) is copied onto the fired mission as-is:
+	// the registered executor its review round runs as a read-only
+	// delegated CLI, "" for the native reviewer. No settings default.
+	ReviewHarness string `json:"review_harness,omitempty"`
 	// Light missions (D-069) skip discover/plan/prove; only meaningful
 	// on a kind=general template (rejected at schedule create/update for
 	// kind=coding, api/schedules.go).
@@ -514,10 +518,10 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	// template (D-087, issue #456): a scheduler-fired mission runs
 	// unattended, so nobody is watching to approve its plan.
 	_, err = tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, auto_approve_tools, auto_approve_plan, plan, schedule_id, harness, environment, sources, destinations, phase, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, auto_approve_tools, auto_approve_plan, plan, schedule_id, harness, environment, sources, destinations, phase, flow, review_harness)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
 		t.Goal, name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 3), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
-		promptOverlay, t.AutoApproveTools, true, plan, sc.ID, t.Harness, t.Environment, sourcesJSON, destinationsJSON, phase, flow)
+		promptOverlay, t.AutoApproveTools, true, plan, sc.ID, t.Harness, t.Environment, sourcesJSON, destinationsJSON, phase, flow, t.ReviewHarness)
 	return err
 }
 

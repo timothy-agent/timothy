@@ -1330,6 +1330,15 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan must include a unit that installs what the work needs before building or testing.\n\n%s", NeutralizeSlot(stack), report.Findings)
 }
 
+// reviewSystemPrompt is the reviewer's system prompt; reviewSystemToolCall
+// is the native closing sentence. The delegated reviewer (issue #582)
+// reuses the body with its own closing instruction, so the native
+// prompt stays byte-identical.
+const (
+	reviewSystemPrompt   = "You are reviewing units of a mission's work. Each unit's acceptance criteria, the harness's own check results, the diff and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: a criterion the work does not satisfy, unsupported claims, missing substance. Do NOT reject for material you were not given (the harness supplies everything there is) and do not re-run checks the harness already reports as passed. Every blocking finding must name a file that appears in the diff or the artifacts and quote the line that shows the gap in evidence; a blocking finding without both is demoted to minor. The changed-files stat spans every unit of the plan: judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone, never against another unit's files. Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings."
+	reviewSystemToolCall = " End your turn with exactly one review_verdict tool call."
+)
+
 // RunReview judges the packet: the mission's goal and plan, the
 // harness-read artifact contents (never the worker's description of
 // them), the baseline diff when one exists, the prior rounds' open
@@ -1337,7 +1346,7 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 // session (D-092): findings carry across rounds as mission state, so
 // no reviewer transcript is retained to anchor the next verdict.
 func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
-	system := "You are reviewing units of a mission's work. Each unit's acceptance criteria, the harness's own check results, the diff and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: a criterion the work does not satisfy, unsupported claims, missing substance. Do NOT reject for material you were not given (the harness supplies everything there is) and do not re-run checks the harness already reports as passed. Every blocking finding must name a file that appears in the diff or the artifacts and quote the line that shows the gap in evidence; a blocking finding without both is demoted to minor. The changed-files stat spans every unit of the plan: judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone, never against another unit's files. Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings. End your turn with exactly one review_verdict tool call."
+	system := reviewSystemPrompt + reviewSystemToolCall
 	messages := []provider.Message{{Role: "user", Content: renderReviewContent(packet)}}
 
 	extra := append([]*tools.Tool{ReviewVerdictTool()}, r.missionTools(m)...)

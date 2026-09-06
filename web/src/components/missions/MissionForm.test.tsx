@@ -782,6 +782,73 @@ describe('MissionForm: kind chip', () => {
   })
 })
 
+describe('MissionForm: review harness select (issue #582)', () => {
+  it('offers Native plus the read-only capable adapters under Advanced', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Show advanced options' }))
+    fireEvent.click(screen.getByLabelText('Review harness'))
+
+    // "Native" shows twice once open: the trigger's current value and
+    // the option itself.
+    expect(await screen.findAllByText('Native')).toHaveLength(2)
+    expect(screen.getByText('Claude Code')).toBeInTheDocument()
+    expect(screen.getByText('pi')).toBeInTheDocument()
+    expect(screen.getByText('Codex CLI')).toBeInTheDocument()
+    expect(screen.queryByText('Cursor CLI')).toBeNull()
+    expect(screen.queryByText('OpenCode')).toBeNull()
+  })
+
+  it('submits the picked review harness and omits it when left on Native', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm6' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Show advanced options' }))
+    fireEvent.click(screen.getByLabelText('Review harness'))
+    fireEvent.click(await screen.findByText('pi'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ review_harness: 'pi' })),
+    )
+  })
+
+  it('leaves review_harness undefined when nothing is picked', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm7' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() => expect(createMission).toHaveBeenCalled())
+    expect(vi.mocked(createMission).mock.calls[0][0].review_harness).toBeUndefined()
+  })
+
+  it('hydrates review_harness from the schedule template and sends it back on save', async () => {
+    vi.mocked(patchSchedule).mockResolvedValue(schedule)
+    const seeded: Schedule = {
+      ...schedule,
+      mission_template: { ...schedule.mission_template, review_harness: 'claude-cli' },
+    }
+    renderForm(<MissionForm mode="edit" schedule={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await screen.findByDisplayValue('weekly-digest')
+    expect(screen.getByLabelText('Review harness')).toHaveTextContent('Claude Code')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(patchSchedule).toHaveBeenCalledWith(
+        's1',
+        expect.objectContaining({
+          mission_template: expect.objectContaining({ review_harness: 'claude-cli' }),
+        }),
+      ),
+    )
+  })
+})
+
 describe('MissionForm: harness select placement', () => {
   it('shows the harness select in the main form body for a coding mission, without expanding Advanced', async () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)

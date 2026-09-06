@@ -682,6 +682,11 @@ CREATE TABLE IF NOT EXISTS missions (
     -- settings at dispatch. "" is native; "claude-cli" (etc) names a
     -- registered delegated executor (internal/brain/missions/executor).
     harness               text NOT NULL DEFAULT '',
+    -- ReviewHarness (issue #582) names the registered executor the
+    -- prove phase's review round runs as a read-only delegated CLI;
+    -- "" keeps the native gateway reviewer, which every delegated
+    -- failure also falls back to.
+    review_harness        text NOT NULL DEFAULT '',
     -- Mission worker turns run through loop.Agent same as chat, but
     -- tool-call bookkeeping (session_events, tools audit) hard-requires
     -- a real session_id uuid FK -- a mission has no chat session of its

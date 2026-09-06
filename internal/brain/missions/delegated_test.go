@@ -438,6 +438,10 @@ type fakeNative struct {
 	verdict WorkerVerdict
 	text    string
 	err     error
+	// reviews counts RunReview calls; reviewVerdict is what they return
+	// (issue #582's fallback tests assert the native reviewer ran).
+	reviews       int
+	reviewVerdict ReviewVerdict
 }
 
 func (f *fakeNative) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
@@ -447,7 +451,15 @@ func (f *fakeNative) RunWorker(ctx context.Context, m Mission, packet WorkPacket
 	return f.verdict, f.text, f.err
 }
 func (f *fakeNative) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
-	return ReviewVerdict{}, nil
+	f.mu.Lock()
+	f.reviews++
+	f.mu.Unlock()
+	return f.reviewVerdict, nil
+}
+func (f *fakeNative) reviewCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reviews
 }
 func (f *fakeNative) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	return Plan{}, nil
@@ -789,7 +801,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte("prompt"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	r.recordSpawned(context.Background(), m.ID, m.Harness, entry, runID, rdir, authMode, resumeDecision{reason: resumeReasonNoPriorRun})
+	r.recordSpawned(context.Background(), m.ID, workerRun(m, entry, adapter, authMode), runID, rdir, resumeDecision{reason: resumeReasonNoPriorRun})
 	if err := r.launch(context.Background(), m.ID, m.Environment, m.WorkRoot(), rdir, inv, time.Minute, false); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
@@ -2587,8 +2599,8 @@ func TestRecordLedgerPrefersReportedModel(t *testing.T) {
 			r := &delegatedRunner{ledger: led, log: slog.Default()}
 			entry := gwclient.ResolvedRouteEntry{ProviderName: "Cursor", Model: tc.entryModel}
 
-			r.recordLedger(context.Background(), Mission{ID: "m1"}, entry,
-				executor.AuthSubscription, nil, time.Now(), true, "", tc.reportedModel)
+			run := cliRun{phase: string(PhaseGenerate), entry: entry, authMode: executor.AuthSubscription, route: "default", agent: "mission-worker"}
+			r.recordLedger(context.Background(), Mission{ID: "m1"}, run, nil, time.Now(), true, "", tc.reportedModel)
 
 			if len(led.entries) != 1 {
 				t.Fatalf("got %d ledger entries, want 1", len(led.entries))
