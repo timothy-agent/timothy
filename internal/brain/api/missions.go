@@ -28,15 +28,15 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
-	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 	"github.com/SumonMSelim/timothy/internal/platform/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
 
-// maxMissionAttachments caps how many PDFs a single mission create
-// request may attach — bounds worst-case prompt size across every
-// discover/plan/work turn (each attachment's markdown is rendered every
-// turn, unlike chat where it's per-message).
+// maxMissionAttachments caps how many documents/images/audio clips a
+// single mission create request may attach, bounding worst-case prompt
+// size across every discover/plan/work turn (each attachment's
+// markdown/caption/transcript is rendered every turn, unlike chat
+// where it's per-message).
 const maxMissionAttachments = 8
 
 // missionAttachmentStore is the slice of *attachments.Store missions
@@ -69,13 +69,17 @@ type missionAttachmentStore interface {
 // provider/model per mission id from the cost ledger (D-05x's
 // ledger.Aggregator.TopModelByMission) for the list response's
 // top_model decoration — nil (no ledger wiring) omits the field.
-// attachmentStore/markitdownURL back create-time PDF attachment
-// conversion (see resolveAttachments) — a nil store or empty URL
-// disables attachments. attachmentStore takes the narrow interface
-// (not *attachments.Store) so the caller's own nil-box guard (a nil
-// *attachments.Store boxed here would be a non-nil interface value)
-// happens once, at the call site — same shape as chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher) {
+// attachmentStore/markitdownURL/whisperURL/caption back create-time
+// attachment conversion (see attachmentResolver, issue #359): a nil
+// store disables attachments entirely; an empty markitdownURL/
+// whisperURL or nil caption only disable the corresponding attachment
+// type (pdf/audio/image respectively), each rejected with its own 400
+// naming the missing sidecar. attachmentStore takes the narrow
+// interface (not *attachments.Store) so the caller's own nil-box guard
+// (a nil *attachments.Store boxed here would be a non-nil interface
+// value) happens once, at the call site, same shape as
+// chat.Service.SetAttachments.
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, whisperURL string, caption func(context.Context, string, []byte) string) {
 	if store == nil {
 		return
 	}
@@ -103,7 +107,8 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 			return a.Harness, true
 		}
 	}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
+	resolver := &attachmentResolver{store: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: &http.Client{}, caption: caption}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -195,13 +200,14 @@ type missionAPI struct {
 	// mission-specific store.
 	dir Directory
 	log *slog.Logger
-	// attachments resolves create-time PDF refs; nil disables mission
+	// attachments resolves create-time attachment refs (pdf/text/image/
+	// audio, issue #359); a nil store field on it disables mission
 	// attachments entirely (same as chat's own attachments field).
-	attachments missionAttachmentStore
-	// markitdownURL is the sidecar's base URL for PDF conversion; ""
-	// rejects any attachment with a 400 naming the missing sidecar.
-	markitdownURL  string
-	markitdownHTTP *http.Client
+	attachments *attachmentResolver
+	// rawAttachments is the same store attachments.store wraps, kept
+	// separately for promoteKB below (destinations.PromoteMission wants
+	// Open only, not the full resolver).
+	rawAttachments missionAttachmentStore
 	// pdfService renders export-pdf requests via the pdfgen sidecar; nil
 	// (PDFGEN_URL unset or attachments disabled) 503s the endpoint.
 	pdfService *pdfgenservice.Service
@@ -487,10 +493,10 @@ type createMissionRequest struct {
 	// mission's ParentContext at create time, and its branch, when
 	// reachable, becomes this mission's worktree base.
 	ParentMissionID string `json:"parent_mission_id"`
-	// Attachments name already-uploaded PDF documents (POST
-	// /v1/attachments) to attach at create time — PDF-only, converted
-	// to markdown once here (see resolveAttachments); images/audio are
-	// unsupported for missions.
+	// Attachments name already-uploaded documents, images, or audio
+	// clips (POST /v1/attachments) to attach at create time: converted
+	// once here into markdown/caption/transcript (issue #359, see
+	// attachmentResolver.Resolve).
 	Attachments []missionAttachmentInput `json:"attachments"`
 	// References names composer #-mention picks (missions/sessions/kb
 	// docs) to resolve at create time into ReferencedContext, additive
@@ -676,8 +682,9 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			Digest: missions.OutcomeDigest(parent, events, parent.Phase, parent.FailureReason),
 		}
 	}
-	pdfSources, ok := h.resolveAttachments(w, r.Context(), req.Attachments)
-	if !ok {
+	pdfSources, err := h.attachments.Resolve(r.Context(), req.Attachments)
+	if err != nil {
+		jsonError(w, attachmentErrorStatus(err), "bad_request", err.Error())
 		return
 	}
 	refSources, err := h.resolveReferenceSources(r.Context(), req.References)
@@ -977,80 +984,6 @@ func (h *missionAPI) resolveReferenceSources(ctx context.Context, refs []chat.Re
 		out = append(out, e)
 	}
 	return out, nil
-}
-
-// resolveAttachments validates and converts a create request's PDF and
-// text refs into "pdf" SourceEntry values -- writes any error response
-// itself and returns ok=false, mirroring chat.validateAttachments'
-// shape but as a method so it can write directly (create()'s other
-// validation blocks use jsonError+return rather than a returned
-// error). Empty input returns nil, true without touching the store,
-// same as chat's own zero-ids fast path.
-func (h *missionAPI) resolveAttachments(w http.ResponseWriter, ctx context.Context, in []missionAttachmentInput) ([]missions.SourceEntry, bool) {
-	if len(in) == 0 {
-		return nil, true
-	}
-	if h.attachments == nil {
-		jsonError(w, http.StatusBadRequest, "bad_request", "attachments are not enabled")
-		return nil, false
-	}
-	if len(in) > maxMissionAttachments {
-		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("too many attachments (max %d)", maxMissionAttachments))
-		return nil, false
-	}
-	// Fetch and validate mime up front so the markitdown-sidecar check
-	// below only fires when a PDF actually needs conversion — text
-	// attachments must succeed with no sidecar configured.
-	atts := make([]attachments.Attachment, len(in))
-	needsMarkitdown := false
-	for i, input := range in {
-		att, err := h.attachments.Get(ctx, input.ID)
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("attachment %q not found", input.ID))
-			return nil, false
-		}
-		if att.Mime != "application/pdf" && att.Mime != "text/plain" {
-			jsonError(w, http.StatusBadRequest, "bad_request", "only document attachments are supported for missions")
-			return nil, false
-		}
-		if att.Mime == "application/pdf" {
-			needsMarkitdown = true
-		}
-		atts[i] = att
-	}
-	if needsMarkitdown && h.markitdownURL == "" {
-		jsonError(w, http.StatusBadRequest, "bad_request", "pdf attachments require the markitdown sidecar (MARKITDOWN_URL)")
-		return nil, false
-	}
-	out := make([]missions.SourceEntry, 0, len(in))
-	for i, input := range in {
-		att := atts[i]
-		r, _, err := h.attachments.Open(ctx, att.ID)
-		if err != nil {
-			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
-			return nil, false
-		}
-		raw, err := io.ReadAll(r)
-		_ = r.Close()
-		if err != nil {
-			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
-			return nil, false
-		}
-		var md string
-		if att.Mime == "application/pdf" {
-			md, err = markitdown.Convert(ctx, h.markitdownHTTP, h.markitdownURL, att.ID+".pdf", att.Mime, raw)
-			if err != nil {
-				jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
-				return nil, false
-			}
-		} else {
-			md = string(raw)
-		}
-		out = append(out, missions.SourceEntry{
-			Source: missions.SourceKindPDF, ID: att.ID, Mime: att.Mime, Name: input.Name, Markdown: markitdown.TruncateMarkdown(md),
-		})
-	}
-	return out, true
 }
 
 // generateName fires the mission's one-shot naming call in the
@@ -2084,7 +2017,7 @@ func (h *missionAPI) promoteKB(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "no_artifacts", "mission has no artifacts to promote")
 		return
 	}
-	promoted, errs := destinations.PromoteMission(r.Context(), h.attachments, h.kbStore, h.kbIngest, h.kbEnrich, m, body.CollectionID)
+	promoted, errs := destinations.PromoteMission(r.Context(), h.rawAttachments, h.kbStore, h.kbIngest, h.kbEnrich, m, body.CollectionID)
 	if promoted == 0 {
 		msg := "no markdown artifacts were promoted"
 		if len(errs) > 0 {

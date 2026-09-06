@@ -291,11 +291,16 @@ func main() {
 	// below) can close over the same store the kb admin API and mission
 	// promotion hook use later in this function.
 	kbStore := kb.New(app.DB)
+	// captionImage converts an image's bytes into a plain-prose
+	// description: built once and shared by the KB enricher below and
+	// mission/schedule attachment resolution (issue #359) so both draw
+	// on the same vision-route mechanism.
+	captionImage := chat.CaptionImageOverGateway(gwc, app.Log)
 	// KB image captioning (issues #349/#350): default-off, gated on
 	// settings.KeyKBImageCaptioning; shared by the manual ingest funnel,
 	// the retry sweep, and mission promotion so none of the three diverge
 	// on what "captioned" means.
-	kbEnrich := api.NewKBEnricher(chat.CaptionImageOverGateway(gwc, app.Log), func(ctx context.Context) bool {
+	kbEnrich := api.NewKBEnricher(captionImage, func(ctx context.Context) bool {
 		return flags.Enabled(ctx, settings.KeyKBImageCaptioning)
 	}, app.Log)
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, packs, app.Log)
@@ -760,7 +765,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, pdfService)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, pdfService, captionImage)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

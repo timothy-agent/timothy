@@ -1204,6 +1204,11 @@ export interface MissionTemplate {
   // only valid for kind=general, rejected for kind=coding at schedule
   // create/update.
   light?: boolean
+  // attachments name documents, images, and audio clips (issue #359)
+  // resolved into markdown/caption/transcript once at schedule create/
+  // patch time; markdown is never sent over the wire (see
+  // api/schedules.go's stripTemplateAttachmentMarkdown).
+  attachments?: { id: string; name?: string; mime?: string }[]
 }
 
 // Schedule is a recurring cron trigger that fires mission_template

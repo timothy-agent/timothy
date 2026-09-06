@@ -48,10 +48,10 @@ type WorkPacket struct {
 	// the worker the content of what the user explicitly pinned at
 	// create time.
 	ReferencedContext string
-	// Attachments are the mission's create-time PDF documents ("pdf"
-	// Sources entries) -- reach every worker turn via Render, including
-	// a delegated executor's turn (executor packets also go through
-	// Render).
+	// Attachments are the mission's create-time documents, images, and
+	// audio clips ("pdf" Sources entries, issue #359) -- reach every
+	// worker turn via Render, including a delegated executor's turn
+	// (executor packets also go through Render).
 	Attachments []SourceEntry
 	// SkillsIndex is the rendered skill index for the mission's agent
 	// (skills.Index over the agent's allowlist), resolved at packet
@@ -292,9 +292,23 @@ func renderOpenFindings(findings []Finding, round, maxRounds int) string {
 	return b.String()
 }
 
+// attachmentLabel names an attachment's rendered section by mime
+// (issue #359): an image renders as its caption, an audio clip as its
+// transcript, everything else (pdf/text) as a document.
+func attachmentLabel(mime string) string {
+	switch {
+	case strings.HasPrefix(mime, "image/"):
+		return "Attached image %s (description):\n%s\n"
+	case strings.HasPrefix(mime, "audio/"):
+		return "Attached audio %s (transcript):\n%s\n"
+	default:
+		return "Attached document %s:\n%s\n"
+	}
+}
+
 // renderAttachments formats each attachment with markdown into a
-// "Attached document <name>:" section, neutralized like every other
-// model-reachable field — shared by WorkPacket.Render and the
+// section labeled by mime (attachmentLabel), neutralized like every
+// other model-reachable field, shared by WorkPacket.Render and the
 // discover/plan runner sessions (runner.go) so the three near-identical
 // loops stay in sync. An attachment with no markdown (a conversion
 // that somehow never ran) renders nothing.
@@ -308,7 +322,7 @@ func renderAttachments(atts []SourceEntry) string {
 		if name == "" {
 			name = a.ID
 		}
-		fmt.Fprintf(&b, "\nAttached document %s:\n%s\n", NeutralizeSlot(name), NeutralizeSlot(a.Markdown))
+		fmt.Fprintf(&b, "\n"+attachmentLabel(a.Mime), NeutralizeSlot(name), NeutralizeSlot(a.Markdown))
 	}
 	return b.String()
 }

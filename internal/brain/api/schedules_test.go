@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
@@ -32,7 +34,7 @@ func TestSchedulesEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerSchedules(m.Handle, nil, nil)
+	a.registerSchedules(m.Handle, nil, nil, nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/schedules"},
@@ -171,5 +173,97 @@ func TestSchedulePatchRejectsInvalidDestinationIDs(t *testing.T) {
 	h.patch(w, req)
 	if w.Code != 400 {
 		t.Fatalf("patch with a disabled destination id = %d, want 400", w.Code)
+	}
+}
+
+// TestResolveTemplateAttachments covers resolveTemplateAttachments'
+// reuse-vs-convert logic (issue #359): a new id is converted through
+// the resolver, an id already present in existing with non-empty
+// markdown is reused as-is (no reconversion), and an id missing from
+// want is simply absent from the result (a patch that drops it).
+func TestResolveTemplateAttachments(t *testing.T) {
+	t.Parallel()
+
+	t.Run("new id converted", func(t *testing.T) {
+		t.Parallel()
+		fa := &fakeMissionAttachments{byID: map[string]attachments.Attachment{
+			"a1": {ID: "a1", Mime: "text/plain"},
+		}, data: map[string][]byte{"a1": []byte("hello")}}
+		h := &scheduleAPI{attachments: &attachmentResolver{store: fa}}
+		out, err := h.resolveTemplateAttachments(t.Context(), []missions.SourceEntry{{ID: "a1", Name: "notes.txt"}}, nil)
+		if err != nil {
+			t.Fatalf("resolveTemplateAttachments: %v", err)
+		}
+		if len(out) != 1 || out[0].Markdown != "hello" {
+			t.Fatalf("out = %+v, want one converted entry", out)
+		}
+	})
+
+	t.Run("existing id with markdown reused without reconversion", func(t *testing.T) {
+		t.Parallel()
+		// A resolver whose store always errors on Get: if this were
+		// called for a1, the test would fail, confirming reuse skipped
+		// conversion.
+		h := &scheduleAPI{attachments: &attachmentResolver{store: &fakeMissionAttachments{}}}
+		existing := []missions.SourceEntry{{Source: "pdf", ID: "a1", Mime: "text/plain", Markdown: "already converted"}}
+		out, err := h.resolveTemplateAttachments(t.Context(), []missions.SourceEntry{{ID: "a1"}}, existing)
+		if err != nil {
+			t.Fatalf("resolveTemplateAttachments: %v", err)
+		}
+		if len(out) != 1 || out[0].Markdown != "already converted" {
+			t.Fatalf("out = %+v, want the existing entry reused verbatim", out)
+		}
+	})
+
+	t.Run("id missing from want is dropped", func(t *testing.T) {
+		t.Parallel()
+		h := &scheduleAPI{attachments: &attachmentResolver{store: &fakeMissionAttachments{}}}
+		existing := []missions.SourceEntry{
+			{Source: "pdf", ID: "a1", Markdown: "converted"},
+			{Source: "pdf", ID: "a2", Markdown: "converted2"},
+		}
+		out, err := h.resolveTemplateAttachments(t.Context(), []missions.SourceEntry{{ID: "a2"}}, existing)
+		if err != nil {
+			t.Fatalf("resolveTemplateAttachments: %v", err)
+		}
+		if len(out) != 1 || out[0].ID != "a2" {
+			t.Fatalf("out = %+v, want only a2", out)
+		}
+	})
+
+	t.Run("empty want returns nil", func(t *testing.T) {
+		t.Parallel()
+		h := &scheduleAPI{}
+		out, err := h.resolveTemplateAttachments(t.Context(), nil, nil)
+		if err != nil || out != nil {
+			t.Fatalf("resolveTemplateAttachments(nil) = %v, %v, want nil, nil", out, err)
+		}
+	})
+
+	t.Run("cap exceeded", func(t *testing.T) {
+		t.Parallel()
+		h := &scheduleAPI{attachments: &attachmentResolver{store: &fakeMissionAttachments{}}}
+		want := make([]missions.SourceEntry, maxMissionAttachments+1)
+		_, err := h.resolveTemplateAttachments(t.Context(), want, nil)
+		if err == nil || !strings.Contains(err.Error(), "too many attachments") {
+			t.Fatalf("resolveTemplateAttachments over cap = %v, want too-many-attachments error", err)
+		}
+	})
+}
+
+// TestStripTemplateAttachmentMarkdown confirms a schedule response
+// never carries a resolved attachment's markdown, the same rationale
+// as sanitizeMission's strip for a mission response.
+func TestStripTemplateAttachmentMarkdown(t *testing.T) {
+	t.Parallel()
+	sc := missions.Schedule{MissionTemplate: missions.MissionTemplate{Attachments: []missions.SourceEntry{
+		{ID: "a1", Mime: "text/plain", Name: "notes.txt", Markdown: "secret body"},
+	}}}
+	stripped := stripTemplateAttachmentMarkdown(sc)
+	if stripped.MissionTemplate.Attachments[0].Markdown != "" {
+		t.Fatal("stripTemplateAttachmentMarkdown left markdown on the response")
+	}
+	if stripped.MissionTemplate.Attachments[0].ID != "a1" {
+		t.Fatal("stripTemplateAttachmentMarkdown dropped the id/mime/name")
 	}
 }

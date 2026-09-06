@@ -1,19 +1,36 @@
-import { Attachment02Icon, Cancel01Icon, Loading03Icon, Pdf02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import {
+  Attachment02Icon,
+  Cancel01Icon,
+  File01Icon,
+  FileMusicIcon,
+  Image01Icon,
+  Loading03Icon,
+  Pdf02Icon,
+} from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useRef } from 'react'
 import { toast } from 'sonner'
 import { uploadAttachment } from '../../api/client'
 import {
-  isDocumentFile,
+  isMissionAttachmentFile,
   maxAttachmentBytes,
   maxAttachments,
   type PendingAttachment,
 } from '../Composer'
 import { Button } from '../ui/button'
 
-// MissionAttachments is the mission-create form's document attachment
-// picker (PDF, Markdown, text): an "Attach file" button plus a chip
-// strip (name, uploading spinner, remove button) — a simplified
+// attachmentChipIcon picks a chip's icon by mime, same per-type mapping
+// as ArtifactRefsSection.tsx's artifactChipIcon.
+function attachmentChipIcon(mime: string) {
+  if (mime.startsWith('image/')) return Image01Icon
+  if (mime.startsWith('audio/')) return FileMusicIcon
+  if (mime === 'text/plain' || mime === 'text/markdown') return File01Icon
+  return Pdf02Icon
+}
+
+// MissionAttachments is the mission-create form's attachment picker
+// (documents, images, audio, issue #359): an "Attach file" button plus
+// a chip strip (name, uploading spinner, remove button), a simplified
 // variant of Composer.tsx's uploadFiles/removeAttachment flow with no
 // paste/drag support, since a mission's create form isn't a message
 // box.
@@ -28,8 +45,8 @@ export function MissionAttachments({
 
   async function uploadFiles(files: File[]) {
     for (const file of files) {
-      if (!isDocumentFile(file)) {
-        toast.error(`${file.name || 'file'}: only PDF, Markdown, and text attachments are supported`)
+      if (!isMissionAttachmentFile(file)) {
+        toast.error(`${file.name || 'file'}: only document, image, and audio attachments are supported`)
         continue
       }
       if (file.size > maxAttachmentBytes) {
@@ -73,7 +90,7 @@ export function MissionAttachments({
       <input
         ref={inputRef}
         type="file"
-        accept="application/pdf,.md,.txt,text/plain,text/markdown"
+        accept="application/pdf,.md,.txt,text/plain,text/markdown,image/png,image/jpeg,image/webp,image/gif,audio/mpeg,audio/wav,audio/ogg"
         multiple
         className="hidden"
         onChange={(e) => {
@@ -93,7 +110,7 @@ export function MissionAttachments({
               key={a.id}
               className="group relative flex items-center gap-1.5 rounded-lg border border-border bg-muted/30 py-1 pr-1.5 pl-2 text-xs"
             >
-              <HugeiconsIcon icon={Pdf02Icon} className="size-3.5 text-muted-foreground" />
+              <HugeiconsIcon icon={attachmentChipIcon(a.mime)} className="size-3.5 text-muted-foreground" />
               <span className="max-w-40 truncate">{a.name ?? 'Document'}</span>
               {a.uploading ? (
                 <HugeiconsIcon icon={Loading03Icon} className="size-3 animate-spin text-muted-foreground" />

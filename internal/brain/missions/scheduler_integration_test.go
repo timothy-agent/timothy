@@ -184,6 +184,64 @@ func TestSchedulerFireUsesTemplateNameOverSlug(t *testing.T) {
 	}
 }
 
+// TestSchedulerFireCopiesTemplateAttachments confirms createFromTemplate
+// copies a template's pre-converted attachments (issue #359) onto the
+// fired mission's sources column, so a fire spends nothing to attach
+// them.
+func TestSchedulerFireCopiesTemplateAttachments(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+
+	db, err := store.db.Get()
+	if err != nil {
+		t.Fatalf("Get pool: %v", err)
+	}
+	tmpl := map[string]any{
+		"goal": marker + "scheduled run",
+		"kind": "general",
+		"attachments": []map[string]string{
+			{"source": "pdf", "id": "att1", "mime": "application/pdf", "name": "spec.pdf", "markdown": "converted body"},
+		},
+	}
+	tmplJSON, err := json.Marshal(tmpl)
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	var id string
+	err = db.QueryRow(ctx, `INSERT INTO schedules (name, cron, mission_template)
+		VALUES ($1, $2, $3) RETURNING id`, marker+"attach-schedule", "* * * * *", tmplJSON).Scan(&id)
+	if err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = db.Exec(cctx, "DELETE FROM schedules WHERE id = $1", id)
+	})
+	past := time.Now().Add(-2 * time.Minute)
+	if _, err := db.Exec(ctx, "UPDATE schedules SET created_at = $2 WHERE id = $1", id, past); err != nil {
+		t.Fatalf("backdate schedule: %v", err)
+	}
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	var missionID string
+	if err := db.QueryRow(ctx, `SELECT id FROM missions WHERE schedule_id = $1`, id).Scan(&missionID); err != nil {
+		t.Fatalf("query fired mission id: %v", err)
+	}
+	m, err := store.Get(ctx, missionID)
+	if err != nil {
+		t.Fatalf("get fired mission: %v", err)
+	}
+	atts := m.Attachments()
+	if len(atts) != 1 || atts[0].ID != "att1" || atts[0].Markdown != "converted body" {
+		t.Fatalf("fired mission attachments = %+v, want the template's one pre-converted entry", atts)
+	}
+}
+
 // TestSchedulerFireFiltersDestinationIDs confirms the fire-time
 // re-check (filterDestinationIDs) drops ids that no longer resolve
 // through destinationEnabled — missing/disabled destinations never

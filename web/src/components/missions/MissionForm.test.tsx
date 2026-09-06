@@ -274,10 +274,50 @@ describe('MissionForm: create mode, one-off mission', () => {
     )
   })
 
-  it('rejects an image attachment on the mission form', async () => {
+  it('accepts an image attachment and submits it on the payload', async () => {
+    vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att3', mime: 'image/png', size_bytes: 100 })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm4' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Describe the attached photo' } })
     const file = new File(['fake'], 'photo.png', { type: 'image/png' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await screen.findByText('photo.png')
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ attachments: [{ id: 'att3', name: 'photo.png' }] }),
+      ),
+    )
+  })
+
+  it('accepts an audio attachment and submits it on the payload', async () => {
+    vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att4', mime: 'audio/mpeg', size_bytes: 100 })
+    vi.mocked(createMission).mockResolvedValue({ id: 'm5' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Transcribe the attached note' } })
+    const file = new File(['fake'], 'note.mp3', { type: 'audio/mpeg' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+
+    await screen.findByText('note.mp3')
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ attachments: [{ id: 'att4', name: 'note.mp3' }] }),
+      ),
+    )
+  })
+
+  it('rejects a video attachment on the mission form', async () => {
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    const file = new File(['fake'], 'clip.mp4', { type: 'video/mp4' })
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
 
@@ -1251,6 +1291,32 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     expect(onDone).toHaveBeenCalledWith({ kind: 'schedule', id: 'sc1' })
   })
 
+  it('shows the attachment picker while repeating and submits it on the template', async () => {
+    vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att5', mime: 'application/pdf', size_bytes: 100 })
+    vi.mocked(createSchedule).mockResolvedValue({ id: 'sc2' })
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Digest the attached spec' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
+
+    const file = new File(['%PDF-1.4'], 'spec.pdf', { type: 'application/pdf' })
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [file] } })
+    await screen.findByText('spec.pdf')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+
+    await waitFor(() =>
+      expect(createSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mission_template: expect.objectContaining({
+            attachments: [{ id: 'att5', name: 'spec.pdf' }],
+          }),
+        }),
+      ),
+    )
+  })
+
   it('forces kind to general and locks it when repeat turns on with coding selected', async () => {
     vi.useFakeTimers()
     vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false, has_plan: false })
@@ -1455,6 +1521,33 @@ describe('MissionForm: edit mode', () => {
     expect(screen.getByLabelText('Expires')).toHaveTextContent('Aug 1, 2026, 12:30')
     expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
     expect(classifyMission).not.toHaveBeenCalled()
+  })
+
+  it('preloads the schedule template attachments and sends them back on save', async () => {
+    vi.mocked(patchSchedule).mockResolvedValue(schedule)
+    const seeded: Schedule = {
+      ...schedule,
+      mission_template: {
+        ...schedule.mission_template,
+        attachments: [{ id: 'att9', name: 'spec.pdf', mime: 'application/pdf' }],
+      },
+    }
+    renderForm(<MissionForm mode="edit" schedule={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await screen.findByDisplayValue('weekly-digest')
+    expect(await screen.findByText('spec.pdf')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+    await waitFor(() =>
+      expect(patchSchedule).toHaveBeenCalledWith(
+        's1',
+        expect.objectContaining({
+          mission_template: expect.objectContaining({
+            attachments: [{ id: 'att9', name: 'spec.pdf' }],
+          }),
+        }),
+      ),
+    )
   })
 
   it('auto-expands Advanced when the schedule has a non-default review route', async () => {

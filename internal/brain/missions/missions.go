@@ -325,12 +325,15 @@ const (
 //
 //   - "github": ConnectorID/RepoURL -- the repo this coding mission
 //     clones from instead of self-initializing an empty one.
-//   - "pdf": Name/Markdown -- an attached document, ID names an
-//     attachments-store row. Markdown is that PDF's markitdown
-//     conversion, snapshotted ONCE at create time -- the same rationale
-//     as chat's validateAttachments: re-converting on every turn would
-//     re-call the markitdown sidecar every turn, and any output drift
-//     would rewrite an earlier rendered prompt.
+//   - "pdf" (legacy kind name, also covers image/audio attachments
+//     since issue #359): Name/Mime/Markdown -- an attached document,
+//     image, or audio clip, ID names an attachments-store row.
+//     Markdown carries that attachment's markitdown conversion (pdf/
+//     text), vision caption (image), or whisper transcript (audio),
+//     snapshotted ONCE at create time -- the same rationale as chat's
+//     validateAttachments: re-converting on every turn would re-call
+//     the sidecar every turn, and any output drift would rewrite an
+//     earlier rendered prompt.
 //   - "mission" (as a parent lineage snapshot): MissionID/Digest -- the
 //     parent mission's outcome digest (OutcomeDigest), snapshotted at
 //     follow-up create time.

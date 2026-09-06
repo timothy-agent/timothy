@@ -318,9 +318,11 @@ export function MissionForm({
     () => (goal.trim() === '' ? 0 : goal.trim().split(/\s+/).length),
     [goal],
   )
-  // attachments, like goal, is never seeded from initial: a follow-up
-  // carries the parent's outcome digest as prompt context, not its
-  // documents; each new mission attaches its own.
+  // attachments, like goal, is never seeded from a follow-up's initial:
+  // a follow-up carries the parent's outcome digest as prompt context,
+  // not its documents; each new mission attaches its own. Edit mode
+  // seeds it from the schedule's own stored template attachments
+  // (issue #359, see the schedule-load effect below).
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   // references picked via the goal field's # mentions: component
   // state only, resolved server-side at create time.
@@ -717,6 +719,14 @@ export function MissionForm({
     setHarness(schedule.mission_template.harness ?? '')
     setEnvironment(schedule.mission_template.environment ?? '')
     setDestinationIDs(schedule.mission_template.destination_ids ?? [])
+    setAttachments(
+      (schedule.mission_template.attachments ?? []).map((a) => ({
+        id: a.id,
+        mime: a.mime ?? '',
+        previewUrl: '',
+        name: a.name,
+      })),
+    )
     setExpiresAt(schedule.expires_at ? schedule.expires_at.slice(0, 16) : '')
     setCronError(null)
   }, [mode, schedule])
@@ -846,7 +856,10 @@ export function MissionForm({
 
   const canSubmit =
     mode === 'edit'
-      ? scheduleName.trim() !== '' && goal.trim() !== '' && validCronShape(cron)
+      ? scheduleName.trim() !== '' &&
+        goal.trim() !== '' &&
+        validCronShape(cron) &&
+        !attachments.some((a) => a.uploading)
       : goal.trim() !== '' &&
         (!repeat || validCronShape(cron)) &&
         githubSourceReady &&
@@ -913,6 +926,10 @@ export function MissionForm({
         environment: kind === 'coding' ? environment || undefined : undefined,
         destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
         light: kind === 'general' ? light : undefined,
+        attachments:
+          attachments.length > 0
+            ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' }))
+            : undefined,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
     })
@@ -941,6 +958,10 @@ export function MissionForm({
           schedule.mission_template.kind === 'coding' ? environment || undefined : undefined,
         destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
         light: schedule.mission_template.kind === 'general' ? light : undefined,
+        attachments:
+          attachments.length > 0
+            ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' }))
+            : undefined,
       },
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
     })
@@ -1066,7 +1087,7 @@ export function MissionForm({
             </span>
           </label>
         )}
-        {mode === 'create' && !repeat && (
+        {(mode === 'create' || mode === 'edit') && (
           <MissionAttachments attachments={attachments} onChange={setAttachments} />
         )}
       </section>

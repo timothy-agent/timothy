@@ -99,6 +99,13 @@ type MissionTemplate struct {
 	// deleted or disabled between when the schedule was made and when
 	// it next fires.
 	DestinationIDs []string `json:"destination_ids,omitempty"`
+	// Attachments are this template's documents/images/audio clips
+	// (issue #359), resolved into markdown/caption/transcript at
+	// schedule create/patch time (api/schedules.go) rather than on
+	// every fire, so a fired mission spends nothing to attach them.
+	// createFromTemplate copies these straight onto the new mission's
+	// sources.
+	Attachments []SourceEntry `json:"attachments,omitempty"`
 }
 
 // AgentDefaults is the slice of an agents row a fired mission borrows
@@ -473,6 +480,16 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	if err != nil {
 		return fmt.Errorf("marshal destinations: %w", err)
 	}
+	// sources is NOT NULL; a nil Attachments marshals to "null" (store.go
+	// Create hits the same rule for its own sources column).
+	sources := t.Attachments
+	if sources == nil {
+		sources = []SourceEntry{}
+	}
+	sourcesJSON, err := json.Marshal(sources)
+	if err != nil {
+		return fmt.Errorf("marshal sources: %w", err)
+	}
 	plan, _ := json.Marshal(Plan{})
 	budgetCurrency := t.BudgetCurrency
 	if budgetCurrency == "" {
@@ -497,10 +514,10 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	// template (D-087, issue #456): a scheduler-fired mission runs
 	// unattended, so nobody is watching to approve its plan.
 	_, err = tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, auto_approve_tools, auto_approve_plan, plan, schedule_id, harness, environment, destinations, phase, flow)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, auto_approve_tools, auto_approve_plan, plan, schedule_id, harness, environment, sources, destinations, phase, flow)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
 		t.Goal, name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 3), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
-		promptOverlay, t.AutoApproveTools, true, plan, sc.ID, t.Harness, t.Environment, destinationsJSON, phase, flow)
+		promptOverlay, t.AutoApproveTools, true, plan, sc.ID, t.Harness, t.Environment, sourcesJSON, destinationsJSON, phase, flow)
 	return err
 }
 

@@ -97,9 +97,7 @@ export function isAllowedFile(file: File): boolean {
 }
 
 // isDocumentFile is isAllowedFile narrowed to document types (PDF,
-// Markdown, text): used where only documents are accepted, e.g.
-// mission attachments. Video/audio are chat-only (explicit decision):
-// excluded here even though allowedMimes carries them for the composer.
+// Markdown, text): used where only documents are accepted.
 export function isDocumentFile(file: File): boolean {
   return (
     isAllowedFile(file) &&
@@ -107,6 +105,14 @@ export function isDocumentFile(file: File): boolean {
     !file.type.startsWith('video/') &&
     !file.type.startsWith('audio/')
   )
+}
+
+// isMissionAttachmentFile is isAllowedFile narrowed to what missions
+// accept (issue #359): documents, images, and audio. Video stays
+// chat-only (explicit decision): excluded here even though
+// allowedMimes carries it for the composer.
+export function isMissionAttachmentFile(file: File): boolean {
+  return isAllowedFile(file) && !file.type.startsWith('video/')
 }
 
 // isDocumentAttachment mirrors the server's document (non-image)

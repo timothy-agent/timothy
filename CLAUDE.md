@@ -128,10 +128,14 @@ First run: `cp deploy/env.example deploy/.env` and set
   at create and rendered into discover/plan/work prompts. Worktree bases
   on the parent branch when reachable, else the repo default. Never
   reopen a terminal mission.
-- PDF attachments: converted via markitdown ONCE at create (prompt-
-  cache stability), markdown stored in the `attachments` jsonb column,
-  rendered neutralized into every prompt; capped at 8; API responses
-  strip the markdown. Images/audio unsupported.
+- Mission attachments (issue #359): PDF/text converted via markitdown,
+  images captioned via the vision route (`chat.CaptionImageOverGateway`),
+  audio transcribed via the whisper sidecar, all ONCE at create (prompt-
+  cache stability), stored on the mission's `sources` jsonb column,
+  rendered neutralized into every prompt labeled by mime (document/
+  image/audio); capped at 8; API responses strip the markdown. Schedule
+  templates carry the same attachments, resolved once at schedule
+  create/patch time so a fire never re-converts.
 - PDF export: POST /v1/missions/{id}/export-pdf renders workspace
   markdown (single file, or all files merged book-style) through
   `internal/brain/pdfgen`, which caches by content hash in
