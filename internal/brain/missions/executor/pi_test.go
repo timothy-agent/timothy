@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -260,6 +261,104 @@ func TestPiParser_AgentEndWillRetryIsNoise(t *testing.T) {
 	}
 }
 
+// TestPiParser_RPCModeIgnoresResponseAndQueueUpdate pins that rpc
+// mode's extra line types (issue #358) never surface as events, while
+// the rest of the stream (tool activity, terminal result) still parses
+// exactly as it does in json mode.
+func TestPiParser_RPCModeIgnoresResponseAndQueueUpdate(t *testing.T) {
+	lines := loadPiFixture(t, "rpc.ndjson")
+	p := piAdapter{}.NewParser()
+
+	want := []eventSummary{
+		{kind: KindSystem, textHead: "/w"},
+		{kind: KindTool, toolName: "write", status: "started"},
+		{kind: KindTool, toolName: "write", status: "finished"},
+		{kind: KindText, textHead: "{\"status\":\"DONE\",\"no"},
+		{kind: KindResult, textHead: "{\"status\":\"DONE\",\"no"},
+	}
+
+	var got []eventSummary
+	var resultCount int
+	for _, line := range lines {
+		ev, ok := p.ParseLine(line)
+		if !ok {
+			continue
+		}
+		got = append(got, summarize(ev))
+		if ev.Kind == KindResult {
+			resultCount++
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("event count = %d, want %d\ngot: %+v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i] != w {
+			t.Errorf("event[%d] = %+v, want %+v", i, got[i], w)
+		}
+	}
+	if resultCount != 1 {
+		t.Fatalf("KindResult count = %d, want exactly 1", resultCount)
+	}
+
+	stats := p.(ParserStats).Stats()
+	if stats.Unknown != len(lines)-len(want) {
+		t.Errorf("stats.Unknown = %d, want %d", stats.Unknown, len(lines)-len(want))
+	}
+}
+
+// TestPiAdapter_ImplementsSteerer pins that piAdapter satisfies
+// executor.Steerer (issue #358): the delegated runner type-asserts
+// adapters against this interface to decide whether mid-run steering
+// is even possible for a harness.
+func TestPiAdapter_ImplementsSteerer(t *testing.T) {
+	var _ Steerer = piAdapter{}
+}
+
+func TestPiAdapter_PromptCommand(t *testing.T) {
+	a := piAdapter{}
+	got := a.PromptCommand("do the thing")
+	want := `{"type":"prompt","message":"do the thing"}`
+	if got != want {
+		t.Errorf("PromptCommand = %s, want %s", got, want)
+	}
+}
+
+func TestPiAdapter_SteerCommand(t *testing.T) {
+	a := piAdapter{}
+	got := a.SteerCommand("focus on staging next")
+	want := `{"type":"steer","message":"focus on staging next"}`
+	if got != want {
+		t.Errorf("SteerCommand = %s, want %s", got, want)
+	}
+}
+
+// TestPiAdapter_CommandsEscapeQuotesAndNewlines pins that
+// PromptCommand/SteerCommand run their message through json.Marshal,
+// not string concatenation - a note carrying quotes or newlines (an
+// operator steering note is free text) must still produce one valid
+// JSON line.
+func TestPiAdapter_CommandsEscapeQuotesAndNewlines(t *testing.T) {
+	a := piAdapter{}
+	note := "she said \"hurry up\"\nand then left"
+	for _, cmd := range []string{a.PromptCommand(note), a.SteerCommand(note)} {
+		var decoded struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(cmd), &decoded); err != nil {
+			t.Fatalf("command %q does not decode as JSON: %v", cmd, err)
+		}
+		if decoded.Message != note {
+			t.Errorf("decoded message = %q, want %q", decoded.Message, note)
+		}
+		if strings.Contains(cmd, "\n") {
+			t.Errorf("command %q must be a single line, embedded newline must be escaped", cmd)
+		}
+	}
+}
+
 func TestPiAdapter_BuildInvocation(t *testing.T) {
 	a := piAdapter{}
 
@@ -381,7 +480,7 @@ func TestPiAdapter_BuildInvocation(t *testing.T) {
 			check: func(t *testing.T, inv Invocation) {
 				want := []string{
 					"pi",
-					"--mode", "json",
+					"--mode", "rpc",
 					"--no-extensions",
 					"--no-skills",
 					"--no-prompt-templates",
@@ -392,7 +491,6 @@ func TestPiAdapter_BuildInvocation(t *testing.T) {
 					"--tools", "read,bash,edit,write,grep,find,ls",
 					"--model", "timothy/sonnet",
 					"--append-system-prompt", "be nice" + piVerdictInstruction,
-					"@PROMPT@",
 				}
 				if len(inv.Argv) != len(want) {
 					t.Fatalf("argv = %v, want %v", inv.Argv, want)
@@ -401,6 +499,14 @@ func TestPiAdapter_BuildInvocation(t *testing.T) {
 					if inv.Argv[i] != want[i] {
 						t.Errorf("argv[%d] = %q, want %q", i, inv.Argv[i], want[i])
 					}
+				}
+				for _, a := range inv.Argv {
+					if a == "@PROMPT@" {
+						t.Fatal("rpc mode must not carry @PROMPT@ on argv, the prompt rides stdin")
+					}
+				}
+				if inv.PromptFile == "" {
+					t.Error("PromptFile must still be set so the runner writes prompt.md for the run dir record")
 				}
 			},
 		},

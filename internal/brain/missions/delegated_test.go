@@ -126,6 +126,12 @@ type fakeSandbox struct {
 	// #499): true (the default) simulates the same container instance
 	// still around; false simulates a recreated one, marker gone.
 	containerAlive bool
+
+	// steerAppends records every injectSteering `printf ... >> steer.jsonl`
+	// call, in order (issue #358). steerAppendErr, when non-nil, fails
+	// every such call instead of recording it.
+	steerAppends   []string
+	steerAppendErr error
 }
 
 func newFakeSandbox() *fakeSandbox {
@@ -145,6 +151,14 @@ func (s *fakeSandbox) Exec(ctx context.Context, missionID, environment, workdir,
 		return s.launch(command, env)
 	case strings.Contains(command, "tail -c +"):
 		return s.poll(command, out)
+	case strings.Contains(command, "steer.jsonl") && strings.HasPrefix(command, "printf "):
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.steerAppendErr != nil {
+			return 1, s.steerAppendErr
+		}
+		s.steerAppends = append(s.steerAppends, command)
+		return 0, nil
 	case strings.Contains(command, "kill -TERM"):
 		dir := singleQuoted(command, 0) // `.../pid` path's directory portion
 		s.mu.Lock()
@@ -758,7 +772,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	r.recordSpawned(context.Background(), m.ID, m.Harness, entry, runID, rdir, authMode, resumeDecision{reason: resumeReasonNoPriorRun})
-	if err := r.launch(context.Background(), m.ID, m.Environment, m.WorkRoot(), rdir, inv, time.Minute); err != nil {
+	if err := r.launch(context.Background(), m.ID, m.Environment, m.WorkRoot(), rdir, inv, time.Minute, false); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	// One poll tick's worth of progress, then the "process" (this test's
@@ -1402,6 +1416,190 @@ func TestDelegatedRunWorker_PiAdapter_CostNeverTrustedEvenOnAnthropicDriver(t *t
 	}
 	if payload.Usage.CostUSDBilled {
 		t.Fatal("cost_usd_billed = true for a pi run, want false regardless of driver == anthropic")
+	}
+}
+
+// --- scenario 7b: mid-run steering (issue #358) ---------------------------
+
+// TestDelegatedRunWorker_Steering_DeliversFreshNoteExactlyOnce pins the
+// core issue #358 contract for a Steerer adapter (pi): a note posted
+// after the run has started is appended to steer.jsonl exactly once,
+// recorded as one executor.steered event, and never redelivered on a
+// later poll once the watermark has advanced.
+func TestDelegatedRunWorker_Steering_DeliversFreshNoteExactlyOnce(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadPiDelegatedFixture(t, "happy.ndjson")
+	sandbox.seedChunk = 0 // one whole fixture line advanced per poll tick
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := piHarnessEntry("cred-ref-pi")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test-key", nil), sandbox, events, nil, &fakeLedger{})
+	reader := &fakeProgressReader{}
+	r.SetProgressReader(reader)
+	m := piTestMission("m1", t.TempDir())
+
+	// Posted before RunWorker even starts polling: the fixture takes many
+	// poll ticks to drain (450 lines, one per tick), which is plenty of
+	// time for the note to be picked up mid-run rather than missed
+	// entirely by a single poll.
+	reader.notes = append(reader.notes, ProgressNote{Note: operatorNotePrefix + "focus on staging next"})
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+
+	sandbox.mu.Lock()
+	appends := append([]string(nil), sandbox.steerAppends...)
+	sandbox.mu.Unlock()
+	if len(appends) != 1 {
+		t.Fatalf("steer.jsonl appended %d times, want exactly 1: %v", len(appends), appends)
+	}
+	if !strings.Contains(appends[0], "focus on staging next") {
+		t.Fatalf("steer append does not carry the note: %s", appends[0])
+	}
+	if !strings.Contains(appends[0], "steer.jsonl") {
+		t.Fatalf("steer append does not target steer.jsonl: %s", appends[0])
+	}
+
+	if events.count("executor.steered") != 1 {
+		t.Fatalf("executor.steered count = %d, want 1", events.count("executor.steered"))
+	}
+	steered, _ := events.last("executor.steered")
+	var payload struct {
+		Note    string `json:"note"`
+		Harness string `json:"harness"`
+	}
+	if err := json.Unmarshal(steered.Payload, &payload); err != nil {
+		t.Fatalf("decode executor.steered payload: %v", err)
+	}
+	if payload.Note != "focus on staging next" || payload.Harness != "pi" {
+		t.Fatalf("executor.steered payload = %+v, want note/harness set", payload)
+	}
+}
+
+// TestDelegatedRunWorker_Steering_SkipsNotesAlreadyInPacket pins the
+// watermark seed: an operator note already on the mission's progress
+// log (rendered into this turn's packet) is never redelivered as
+// mid-run steering, only notes posted after the turn started are.
+func TestDelegatedRunWorker_Steering_SkipsNotesAlreadyInPacket(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadPiDelegatedFixture(t, "happy.ndjson")
+	sandbox.seedChunk = 0
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := piHarnessEntry("cred-ref-pi")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test-key", nil), sandbox, events, nil, &fakeLedger{})
+	reader := &fakeProgressReader{}
+	r.SetProgressReader(reader)
+	m := piTestMission("m1", t.TempDir())
+	seen := ProgressNote{Note: operatorNotePrefix + "seen last turn"}
+	m.Progress = []ProgressNote{seen}
+	reader.notes = []ProgressNote{seen, {Note: operatorNotePrefix + "posted mid-run"}}
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test", Progress: m.Progress}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+
+	sandbox.mu.Lock()
+	appends := append([]string(nil), sandbox.steerAppends...)
+	sandbox.mu.Unlock()
+	if len(appends) != 1 {
+		t.Fatalf("steer.jsonl appended %d times, want 1 (only the mid-run note): %v", len(appends), appends)
+	}
+	if strings.Contains(appends[0], "seen last turn") || !strings.Contains(appends[0], "posted mid-run") {
+		t.Fatalf("wrong note delivered: %s", appends[0])
+	}
+	if !strings.Contains(appends[0], "Operator steering note (mid-run): ") {
+		t.Fatalf("steer line lacks the mid-run prefix: %s", appends[0])
+	}
+}
+
+// TestDelegatedRunWorker_Steering_NeverInjectsAfterTerminalEvent proves
+// that a note posted only after the run has already produced its result
+// event is never delivered - pi exits 0 on stdin EOF and a steer command
+// arriving after agent_end would start a brand-new agent run instead of
+// steering the current one (the verified fact this feature's whole
+// design rests on).
+func TestDelegatedRunWorker_Steering_NeverInjectsAfterTerminalEvent(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadPiDelegatedFixture(t, "happy.ndjson")
+	sandbox.seedChunk = 0
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := piHarnessEntry("cred-ref-pi")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test-key", nil), sandbox, events, nil, &fakeLedger{})
+	reader := &fakeProgressReader{}
+	r.SetProgressReader(reader)
+	m := piTestMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+
+	// The run already finished; a note posted now must never be injected
+	// (RunWorker has already returned, so nothing polls again, but this
+	// also pins that a run reaching a terminal event stops looking).
+	reader.notes = append(reader.notes, ProgressNote{Note: operatorNotePrefix + "too late"})
+
+	sandbox.mu.Lock()
+	appends := len(sandbox.steerAppends)
+	sandbox.mu.Unlock()
+	if appends != 0 {
+		t.Fatalf("steer.jsonl appended %d times, want 0 (note posted before run start, run had none to deliver)", appends)
+	}
+	if events.count("executor.steered") != 0 {
+		t.Fatal("executor.steered recorded despite no operator note ever being posted mid-run")
+	}
+}
+
+// TestDelegatedRunWorker_Steering_NonSteererAdapterNeverAppends proves a
+// non-Steerer adapter (claude-cli) never touches steer.jsonl even with
+// a ProgressReader wired and a fresh operator note available: the
+// feature is opt-in per adapter capability, not global.
+func TestDelegatedRunWorker_Steering_NonSteererAdapterNeverAppends(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedChunk = 40
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	reader := &fakeProgressReader{notes: []ProgressNote{{Note: operatorNotePrefix + "hurry up"}}}
+	r.SetProgressReader(reader)
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+
+	sandbox.mu.Lock()
+	appends := len(sandbox.steerAppends)
+	sandbox.mu.Unlock()
+	if appends != 0 {
+		t.Fatalf("steer.jsonl appended %d times for a non-Steerer adapter, want 0", appends)
+	}
+	if events.count("executor.steered") != 0 {
+		t.Fatal("executor.steered recorded for a non-Steerer adapter")
 	}
 }
 
@@ -2098,7 +2296,7 @@ func TestBuildLaunchCmdRealShell(t *testing.T) {
 		},
 		PromptFile: promptPath,
 	}
-	cmd, err := buildLaunchCmd(work, rdir, inv, time.Minute)
+	cmd, err := buildLaunchCmd(work, rdir, inv, time.Minute, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2127,6 +2325,98 @@ func TestBuildLaunchCmdRealShell(t *testing.T) {
 	b, err := os.ReadFile(exitPath) //nolint:gosec // G304: path under t.TempDir.
 	if err != nil || strings.TrimSpace(string(b)) != "0" {
 		t.Fatalf("exit_code = %q, err %v; want 0", b, err)
+	}
+}
+
+// TestBuildLaunchCmdStdinMode pins the composed command SHAPE for a
+// Steerer adapter's launch (issue #358): the CLI's stdin comes from
+// `( cat prompt.jsonl; tail -f steer.jsonl )` piped into `timeout`,
+// never the argv-only form buildLaunchCmd uses otherwise.
+func TestBuildLaunchCmdStdinMode(t *testing.T) {
+	inv := executor.Invocation{Argv: []string{"pi", "--mode", "rpc"}, PromptFile: "/w/prompt.md"}
+	cmd, err := buildLaunchCmd("/w", "/w/runs/r1", inv, time.Minute, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// buildLaunchCmd shQuotes the whole inner script as one unit, so the
+	// inner command's own single quotes come back escaped ('\'') inside
+	// the outer 'setsid sh -c ...' argument - checking for the
+	// distinctive stdin-pipe shape rather than an exact string keeps this
+	// test readable without hand-escaping the whole thing.
+	if !strings.Contains(cmd, "cat ") || !strings.Contains(cmd, "prompt.jsonl") ||
+		!strings.Contains(cmd, "tail -f") || !strings.Contains(cmd, "steer.jsonl") ||
+		!strings.Contains(cmd, "timeout -k 30 60") {
+		t.Fatalf("launch cmd does not carry the stdin-mode inner script: %s", cmd)
+	}
+}
+
+// TestBuildLaunchCmdRealShellStdinMode proves the stdin-mode launch
+// shape through a real /bin/sh (issue #358): a fake pi that echoes
+// every stdin line back must see the prompt.jsonl line first, then a
+// line appended to steer.jsonl AFTER the process has already started -
+// tail -f must still be holding stdin open for that append to arrive.
+func TestBuildLaunchCmdRealShellStdinMode(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid unavailable on this host; runs in the containerized suite")
+	}
+	work := t.TempDir()
+	rdir := filepath.Join(work, "runs", "test01")
+	if err := os.MkdirAll(rdir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rdir, "prompt.jsonl"), []byte(`{"type":"prompt","message":"hello"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rdir, "steer.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Stand-in CLI: echoes every stdin line back out, one per line, until
+	// it has seen two lines (the prompt, then one steer command) or a
+	// generous timeout.
+	cli := filepath.Join(work, "fakecli")
+	script := "#!/bin/sh\ni=0\nwhile [ $i -lt 2 ] && IFS= read -r line; do printf '%s\\n' \"$line\"; i=$((i+1)); done\n"
+	//nolint:gosec // G306: an executable stand-in script needs the exec bit.
+	if err := os.WriteFile(cli, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	inv := executor.Invocation{Argv: []string{cli}, PromptFile: filepath.Join(work, "prompt.md")}
+
+	cmd, err := buildLaunchCmd(work, rdir, inv, 10*time.Second, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("/bin/sh", "-c", cmd).CombinedOutput(); err != nil { //nolint:gosec // G204: executing the composed command is the point of the test.
+		t.Fatalf("launch command failed: %v: %s", err, out)
+	}
+
+	// Give the backgrounded process a moment to start and block on `tail
+	// -f`, then append the steer command - this is the exact append
+	// injectSteering issues on a live run.
+	time.Sleep(200 * time.Millisecond)
+	steerLine := `{"type":"steer","message":"focus on staging next"}`
+	if err := exec.Command("/bin/sh", "-c", //nolint:gosec // G204: same append shape injectSteering issues.
+		fmt.Sprintf("printf '%%s\\n' %s >> %s/steer.jsonl", shQuote(steerLine), shQuote(rdir))).Run(); err != nil {
+		t.Fatalf("steer append failed: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	exitPath := filepath.Join(rdir, "exit_code")
+	for {
+		if _, err := os.Stat(exitPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("exit_code never appeared")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	got, err := os.ReadFile(filepath.Join(rdir, "run.ndjson")) //nolint:gosec // G304: path under t.TempDir.
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"type":"prompt","message":"hello"}` + "\n" + steerLine + "\n"
+	if string(got) != want {
+		t.Fatalf("child stdin echo mismatch:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
@@ -2162,7 +2452,7 @@ func TestBuildLaunchCmdRealShell_ContainerMarker(t *testing.T) {
 	}
 	inv := executor.Invocation{Argv: []string{cli, "@PROMPT@"}, PromptFile: promptPath}
 
-	cmd, err := buildLaunchCmd(work, rdir, inv, time.Minute)
+	cmd, err := buildLaunchCmd(work, rdir, inv, time.Minute, false)
 	if err != nil {
 		t.Fatal(err)
 	}

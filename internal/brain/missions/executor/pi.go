@@ -97,9 +97,13 @@ func (piAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 
 	system := spec.SystemAppend + piVerdictInstruction
 
+	// issue #358: --mode rpc replaces --mode json. rpc mode takes the
+	// prompt as a JSON line on stdin (see PromptCommand), not on argv,
+	// so the @PROMPT@ placeholder is dropped; the runner still writes
+	// PromptFile to disk for the run dir's own record.
 	argv := []string{
 		"pi",
-		"--mode", "json",
+		"--mode", "rpc",
 		"--no-extensions",
 		"--no-skills",
 		"--no-prompt-templates",
@@ -110,7 +114,6 @@ func (piAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		"--tools", "read,bash,edit,write,grep,find,ls",
 		"--model", "timothy/" + spec.Model,
 		"--append-system-prompt", system,
-		"@PROMPT@", // substituted by the runner via PromptFile
 	}
 
 	agentDir := filepath.Join(filepath.Dir(spec.PromptPath), "pi-agent")
@@ -147,6 +150,37 @@ func (piAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		PromptFile: spec.PromptPath,
 		Files:      map[string]string{"pi-agent/models.json": string(models)},
 	}, nil
+}
+
+// piRPCCommand is one rpc-mode stdin command's wire shape: {"type":
+// "prompt"|"steer", "message": "..."} (issue #358). json.Marshal
+// handles quote/newline escaping, so PromptCommand/SteerCommand never
+// need to think about shell or JSON quoting themselves.
+type piRPCCommand struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// PromptCommand implements Steerer: the one stdin line that starts a
+// rpc-mode run with prompt.
+func (piAdapter) PromptCommand(prompt string) string {
+	return piMarshalRPCCommand("prompt", prompt)
+}
+
+// SteerCommand implements Steerer: the one stdin line that queues note
+// for the currently running agent, delivered as a user message after
+// the current tool calls finish and before the next LLM call.
+func (piAdapter) SteerCommand(note string) string {
+	return piMarshalRPCCommand("steer", note)
+}
+
+// piMarshalRPCCommand marshals a piRPCCommand; json.Marshal on a
+// struct with only string fields never errors, so the error is
+// discarded rather than threaded through Steerer's error-free
+// signature.
+func piMarshalRPCCommand(kind, message string) string {
+	b, _ := json.Marshal(piRPCCommand{Type: kind, Message: message})
+	return string(b)
 }
 
 // piModelsConfig/piProviderConfig/piModelConfig mirror pi's models.json
@@ -313,9 +347,10 @@ func (p *piParser) ParseLine(line []byte) (Event, bool) {
 		return p.buildTerminalEvent(a), true
 
 	default:
-		// message_start, message_update, turn_*, queue_update,
-		// compaction_*, agent_start, auto_retry_*, and any future type -
-		// all noise the harness never acts on.
+		// message_start, message_update, turn_*, queue_update, response
+		// (rpc mode's per-command ack, issue #358), compaction_*,
+		// agent_start, auto_retry_*, and any future type - all noise the
+		// harness never acts on.
 		p.stats.Unknown++
 		return Event{}, false
 	}

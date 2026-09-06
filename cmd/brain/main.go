@@ -1382,7 +1382,16 @@ func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gw
 		}
 	}
 	led := ledger.New(db, log, nil)
-	return missions.NewDelegatedRunner(native, gwc.ResolveRoute, resolveCred, sandboxMgr.ExecEnv, store, store.LastRunState, led, flags.ExecutorRunBudget, log)
+	runner := missions.NewDelegatedRunner(native, gwc.ResolveRoute, resolveCred, sandboxMgr.ExecEnv, store, store.LastRunState, led, flags.ExecutorRunBudget, log)
+	// issue #358: wires mid-run steering delivery for a Steerer
+	// adapter (pi), same setter/wiring pattern as nativeRunner's own
+	// SetProgressReader a few lines up in buildMissions.
+	if withSteering, ok := runner.(interface {
+		SetProgressReader(missions.ProgressReader)
+	}); ok {
+		withSteering.SetProgressReader(store)
+	}
+	return runner
 }
 
 // memoryProxy forwards the web's memory-management routes to memoryd

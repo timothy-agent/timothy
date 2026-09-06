@@ -6,6 +6,7 @@ import type {
   ExecutorResultPayload,
   ExecutorSkippedPayload,
   ExecutorSpawnedPayload,
+  ExecutorSteeredPayload,
   MissionEvent,
   MissionPermissionDeniedPayload,
   MissionPROpenedPayload,
@@ -321,6 +322,17 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
         {reason === 'no_usable_entry' && skip_reasons && skip_reasons.length > 0
           ? ` — ${skip_reasons.join(', ')}`
           : ''}
+      </span>
+    )
+  },
+  // executor.steered (issue #358): an operator note actually delivered
+  // to the running harness process mid-turn, distinct from
+  // mission.steered (the note's own posting, fires for every harness).
+  'executor.steered': (p) => {
+    const { note, harness } = p as ExecutorSteeredPayload
+    return (
+      <span className="text-amber-400">
+        Steering note delivered to the running {harness} agent: {note}
       </span>
     )
   },

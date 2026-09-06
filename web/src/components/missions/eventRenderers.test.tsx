@@ -324,6 +324,13 @@ describe('executor lifecycle event rendering', () => {
     expect(screen.getByText(/Harness skipped: no_usable_entry/)).toBeInTheDocument()
     expect(screen.getByText(/no credential configured/)).toBeInTheDocument()
   })
+
+  it('renders executor.steered with the harness and delivered note', () => {
+    render(<div>{renderEvent(event({ note: 'focus on staging next', harness: 'pi' }, 'executor.steered'))}</div>)
+    const row = screen.getByText(/Steering note delivered to the running pi agent: focus on staging next/)
+    expect(row).toBeInTheDocument()
+    expect(row).toHaveClass('text-amber-400')
+  })
 })
 
 describe('mission.turn rendering', () => {

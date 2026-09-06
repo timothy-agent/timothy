@@ -1025,6 +1025,15 @@ export interface ExecutorSkippedPayload {
   skip_reasons?: string[]
 }
 
+// ExecutorSteeredPayload is executor.steered's payload (issue #358): an
+// operator note delivered to an in-flight delegated run through its
+// Steerer adapter (pi's rpc-mode stdin), distinct from mission.steered
+// (the note's own posting) which fires regardless of harness.
+export interface ExecutorSteeredPayload {
+  note: string
+  harness: string
+}
+
 // MissionSteeredPayload is mission.steered's payload: operator
 // guidance injected into a running mission via POST .../note. phase is
 // the mission's phase when the note landed (issue #458); absent on

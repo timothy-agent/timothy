@@ -188,6 +188,20 @@ type Adapter interface {
 	ParseResult(ev Event) (Result, bool)
 }
 
+// Steerer is implemented by an adapter whose CLI accepts commands on
+// stdin while a run is in flight (issue #358): the delegated runner
+// keeps the run's stdin open and appends a SteerCommand line for every
+// fresh operator note it sees between polls, so guidance reaches the
+// agent mid-run instead of waiting for the next worker turn.
+type Steerer interface {
+	// PromptCommand returns the one JSON line that starts the run with
+	// prompt.
+	PromptCommand(prompt string) string
+	// SteerCommand returns the one JSON line that queues note for the
+	// currently running agent.
+	SteerCommand(note string) string
+}
+
 var registry = map[string]Adapter{}
 
 // Register adds an adapter under its own Harness() name. Panics on a

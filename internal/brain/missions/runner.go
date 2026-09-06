@@ -314,6 +314,8 @@ const operatorNotePrefix = "Operator note: "
 // operator notes past the watermark, and advances it by however many it
 // found. A poll error logs and returns nil rather than failing the
 // turn: steering is a best-effort mid-run nicety, not load-bearing.
+// Shares its watermark logic with the delegated runner's pi rpc-mode
+// injection (issue #358) via freshOperatorNotes.
 func (r *nativeRunner) steeringFor(missionID string, seeded []ProgressNote) func(ctx context.Context) []string {
 	if r.progressReader == nil {
 		return nil
@@ -325,23 +327,37 @@ func (r *nativeRunner) steeringFor(missionID string, seeded []ProgressNote) func
 			r.log.Warn("mission worker: poll steering notes failed", "mission_id", missionID, "error", err)
 			return nil
 		}
-		var operator []string
-		for _, n := range notes {
-			if strings.HasPrefix(n.Note, operatorNotePrefix) {
-				operator = append(operator, strings.TrimPrefix(n.Note, operatorNotePrefix))
-			}
-		}
-		if watermark >= len(operator) {
+		fresh, newWatermark := freshOperatorNotes(notes, watermark)
+		watermark = newWatermark
+		if len(fresh) == 0 {
 			return nil
 		}
-		fresh := operator[watermark:]
-		watermark = len(operator)
 		out := make([]string, len(fresh))
 		for i, note := range fresh {
 			out[i] = "Operator steering note (mid-run): " + note
 		}
 		return out
 	}
+}
+
+// freshOperatorNotes extracts the operator-authored notes in notes past
+// watermark (an index into the operator-only subsequence, not into
+// notes itself), stripping operatorNotePrefix, and returns them
+// alongside the advanced watermark. The shared primitive behind
+// nativeRunner.steeringFor and delegatedRunner's rpc-mode steer
+// injection (issue #358): both need "which operator notes are new since
+// last time" and nothing else.
+func freshOperatorNotes(notes []ProgressNote, watermark int) (fresh []string, newWatermark int) {
+	var operator []string
+	for _, n := range notes {
+		if strings.HasPrefix(n.Note, operatorNotePrefix) {
+			operator = append(operator, strings.TrimPrefix(n.Note, operatorNotePrefix))
+		}
+	}
+	if watermark >= len(operator) {
+		return nil, watermark
+	}
+	return operator[watermark:], len(operator)
 }
 
 // countOperatorNotes counts how many of notes are operator-authored

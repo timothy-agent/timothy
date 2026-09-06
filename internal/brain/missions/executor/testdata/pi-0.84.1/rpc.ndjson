@@ -1,0 +1,11 @@
+{"type":"response","command":"prompt","success":true}
+{"type":"session","version":3,"id":"SESSION_ID","timestamp":"2026-08-08T20:54:37.296Z","cwd":"/w"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"tool_execution_start","toolName":"write","args":{"path":"hello.txt","content":"hello"}}
+{"type":"tool_execution_end","toolName":"write"}
+{"type":"response","command":"steer","success":true}
+{"type":"queue_update","steering":["focus on staging next"],"followUp":[]}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"{\"status\":\"DONE\",\"note\":\"created hello.txt\"}"}],"usage":{"input":120,"output":40,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}}
+{"type":"turn_end"}
+{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"{\"status\":\"DONE\",\"note\":\"created hello.txt\"}"}],"usage":{"input":120,"output":40,"cacheRead":0,"cacheWrite":0},"stopReason":"stop"}],"willRetry":false}

@@ -13,7 +13,10 @@ session header's random UUID was replaced with the placeholder
 `SESSION_ID` for the same reason claude's fixtures do it, and `cwd` was
 already the container-relative `/w`, not a host path.
 
-Invocation shape (each fixture only differs in prompt/model endpoint):
+Invocation shape for `happy.ndjson`/`error.ndjson`/`no-verdict.ndjson`
+(each fixture only differs in prompt/model endpoint), recorded before
+`--mode rpc` (issue #358) replaced `--mode json` as the adapter's
+default:
 
 ```
 PI_CODING_AGENT_DIR=/w/pi-agent PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 NO_COLOR=1 \
@@ -21,6 +24,11 @@ PI_CODING_AGENT_DIR=/w/pi-agent PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETR
   --tools read,bash,edit,write,grep,find,ls --model timothy/qwen3:30b-a3b "<prompt>" \
   > run.ndjson 2> stderr.log
 ```
+
+`--mode rpc`'s own invocation drops the trailing `"<prompt>"` argv
+element (the prompt instead rides `{"type":"prompt","message":"..."}`
+on stdin, PromptCommand's output) - `rpc.ndjson` below is the only
+fixture recorded/built against that mode.
 
 - `happy.ndjson` — prompt: "Create a file named hello.txt ... end your
   final message with a single line containing only this exact JSON
@@ -42,3 +50,11 @@ PI_CODING_AGENT_DIR=/w/pi-agent PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETR
   output any JSON." The model answered in prose with `stopReason:
   "stop"` and no trailing JSON object anywhere in the final message.
   Exit code 0.
+- `rpc.ndjson` - hand-built, not recorded live (issue #358, mid-run
+  steering): `--mode rpc`'s stream is identical to `--mode json` except
+  for two extra line types this fixture adds around a `happy.ndjson`-
+  shaped run: `response` (the per-command ack `--mode rpc` emits for
+  each stdin command) and `queue_update` (emitted when a `steer`
+  command is accepted). Both must parse as noise, same as any other
+  unrecognized type; there is no `session` event difference from json
+  mode.
