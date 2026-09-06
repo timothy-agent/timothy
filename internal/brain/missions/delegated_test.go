@@ -66,12 +66,14 @@ type fakeRun struct {
 	remaining [][]byte
 	chunkLen  int // bytes appended per poll; 0 = whole fixture at once
 
-	written  []byte
-	exited   bool
-	exitCode int
-	killed   bool
-	idle     bool // never advances past what's already written, however often polled
-	env      map[string]string
+	written     []byte
+	exited      bool
+	exitCode    int
+	killed      bool
+	idle        bool // never advances past what's already written, however often polled
+	holdOpen    bool // stays alive once drained until stdinClosed (issue #358)
+	stdinClosed bool
+	env         map[string]string
 }
 
 // advance appends the next slice of the fixture to written, splitting
@@ -81,7 +83,7 @@ func (f *fakeRun) advance() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.idle || f.exited || len(f.remaining) == 0 {
-		if !f.idle && !f.exited && len(f.remaining) == 0 {
+		if !f.idle && !f.exited && len(f.remaining) == 0 && (!f.holdOpen || f.stdinClosed) {
 			f.exited = true
 		}
 		return
@@ -113,6 +115,11 @@ type fakeSandbox struct {
 	seedChunk    int
 	seedExitCode int
 	seedIdle     bool
+	// seedHoldOpen keeps a run alive after its fixture drains until the
+	// runner's closeStdin kill arrives (issue #358), modelling a Steerer
+	// run that only exits on stdin EOF.
+	seedHoldOpen bool
+	stdinCloses  int
 
 	launches   int
 	launchErr  error
@@ -158,6 +165,17 @@ func (s *fakeSandbox) Exec(ctx context.Context, missionID, environment, workdir,
 			return 1, s.steerAppendErr
 		}
 		s.steerAppends = append(s.steerAppends, command)
+		return 0, nil
+	case strings.Contains(command, "stdin.pid"):
+		dir := singleQuoted(command, 0)
+		s.mu.Lock()
+		s.stdinCloses++
+		if r := s.runs[dir]; r != nil {
+			r.mu.Lock()
+			r.stdinClosed = true
+			r.mu.Unlock()
+		}
+		s.mu.Unlock()
 		return 0, nil
 	case strings.Contains(command, "kill -TERM"):
 		dir := singleQuoted(command, 0) // `.../pid` path's directory portion
@@ -245,7 +263,7 @@ func (s *fakeSandbox) launch(command string, env map[string]string) (int, error)
 	dir := launchRunDir(command)
 	lines := make([][]byte, len(s.seedLines))
 	copy(lines, s.seedLines)
-	s.runs[dir] = &fakeRun{remaining: lines, chunkLen: s.seedChunk, exitCode: s.seedExitCode, idle: s.seedIdle, env: env}
+	s.runs[dir] = &fakeRun{remaining: lines, chunkLen: s.seedChunk, exitCode: s.seedExitCode, idle: s.seedIdle, holdOpen: s.seedHoldOpen, env: env}
 	return 0, nil
 }
 
@@ -1519,6 +1537,44 @@ func TestDelegatedRunWorker_Steering_SkipsNotesAlreadyInPacket(t *testing.T) {
 	}
 	if !strings.Contains(appends[0], "Operator steering note (mid-run): ") {
 		t.Fatalf("steer line lacks the mid-run prefix: %s", appends[0])
+	}
+}
+
+// TestDelegatedRunWorker_Steering_ClosesStdinAfterResult pins the exit
+// path of a Steerer run (issue #358): pi never exits while its stdin
+// feed is open, so once the result has arrived the runner must end the
+// feed (one stdin.pid kill), the process then exits, and the run
+// finishes done rather than waiting for the idle timeout.
+func TestDelegatedRunWorker_Steering_ClosesStdinAfterResult(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadPiDelegatedFixture(t, "happy.ndjson")
+	sandbox.seedChunk = 0
+	sandbox.seedExitCode = 0
+	sandbox.seedHoldOpen = true
+	events := &fakeEventSink{}
+	entry := piHarnessEntry("cred-ref-pi")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test-key", nil), sandbox, events, nil, &fakeLedger{})
+	r.SetProgressReader(&fakeProgressReader{})
+	r.idleTimeout = 2 * time.Second
+	m := piTestMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("Outcome = %q, want done", verdict.Outcome)
+	}
+	sandbox.mu.Lock()
+	closes := sandbox.stdinCloses
+	sandbox.mu.Unlock()
+	if closes != 1 {
+		t.Fatalf("stdin closed %d times, want exactly 1", closes)
+	}
+	if events.count("executor.idle_killed") != 0 {
+		t.Fatal("run hit the idle timeout instead of exiting on stdin EOF")
 	}
 }
 

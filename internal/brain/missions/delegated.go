@@ -739,9 +739,14 @@ func buildLaunchCmd(workdir, rdir string, inv executor.Invocation, runBudget tim
 	}
 	var inner string
 	if stdinMode {
+		// The feeder (prompt line, then tail -f steer.jsonl) writes into a
+		// fifo the CLI reads as stdin; its pid lands in stdin.pid so
+		// closeStdin can end the feed once the run's result has arrived,
+		// which gives the CLI EOF and lets it exit on its own. exec keeps
+		// tail's pid equal to the recorded one.
 		inner = fmt.Sprintf(
-			"( cat %s/prompt.jsonl; tail -f %s/steer.jsonl ) | timeout -k 30 %d %s > %s/run.ndjson 2> %s/stderr.log; echo $? > %s/exit_code",
-			shQuote(rdir), shQuote(rdir), int(runBudget/time.Second), argv, shQuote(rdir), shQuote(rdir), shQuote(rdir),
+			"rm -f %[1]s/stdin.fifo && mkfifo %[1]s/stdin.fifo && { ( cat %[1]s/prompt.jsonl; exec tail -f %[1]s/steer.jsonl ) > %[1]s/stdin.fifo & echo $! > %[1]s/stdin.pid; }; timeout -k 30 %[2]d %[3]s < %[1]s/stdin.fifo > %[1]s/run.ndjson 2> %[1]s/stderr.log; echo $? > %[1]s/exit_code; kill \"$(cat %[1]s/stdin.pid)\" 2>/dev/null",
+			shQuote(rdir), int(runBudget/time.Second), argv,
 		)
 	} else {
 		inner = fmt.Sprintf(
@@ -811,6 +816,9 @@ type pollState struct {
 	toolCalls    int
 	sawResult    bool
 	resultEvent  executor.Event
+	// stdinClosed marks that closeStdin already ended a Steerer run's
+	// stdin feed after its result arrived (issue #358).
+	stdinClosed bool
 	// reportedModel is the model the harness itself said it ran, from
 	// its KindSystem init line. Preferred over the route entry's model
 	// when recording usage: a self-paired harness's provider row carries
@@ -898,6 +906,14 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 			r.recordProgressThrottled(ctx, m.ID, runID, st)
 		}
 
+		// A Steerer run never exits on its own: its stdin feed holds the
+		// CLI open (issue #358). Once the result has arrived, end the feed
+		// so the CLI sees EOF, exits, and the next poll finishes normally.
+		if steerer != nil && st.sawResult && alive && !hasExit && !st.stdinClosed {
+			r.closeStdin(ctx, m, workRoot, rdir)
+			st.stdinClosed = true
+		}
+
 		if st.sawResult && hasExit {
 			return r.finish(ctx, m, entry, adapter, authMode, st, start, exitCode)
 		}
@@ -918,6 +934,19 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, workRoot
 			r.coolDown(m.Harness, entry)
 			return forcedRetryVerdict("the executor produced no output for the idle timeout and was killed"), st.textBuf.String(), nil
 		}
+	}
+}
+
+// closeStdin ends a Steerer run's stdin feed by killing the recorded
+// feeder pid (issue #358): the fifo's write side closes, the CLI reads
+// EOF and exits, and the run finishes through the regular exit path.
+// Best effort: a failure logs and leaves the idle timeout as the
+// fallback.
+func (r *delegatedRunner) closeStdin(ctx context.Context, m Mission, workRoot, rdir string) {
+	cmd := fmt.Sprintf("kill \"$(cat %s/stdin.pid)\" 2>/dev/null", shQuote(rdir))
+	var out bytes.Buffer
+	if code, err := r.sandboxExec(ctx, m.ID, m.Environment, workRoot, cmd, nil, launchTimeout, &out); err != nil || code != 0 {
+		r.log.Warn("delegated runner: close stdin failed", "mission_id", m.ID, "error", err, "exit_code", code)
 	}
 }
 
