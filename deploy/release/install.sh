@@ -73,14 +73,10 @@ fi
 echo "Downloading release assets..."
 fetch "${BASE_URL}/docker-compose.yml" docker-compose.yml
 fetch "${BASE_URL}/env.example" env.example
-# Releases before the inline searxng config still bind ./searxng; keep
-# the file coming for them, skip quietly once the asset is gone.
-mkdir -p searxng
-if fetch "${BASE_URL}/searxng-settings.yml" searxng/settings.yml.new 2>/dev/null; then
-  mv searxng/settings.yml.new searxng/settings.yml
-else
-  rm -f searxng/settings.yml.new
-fi
+# searxng's settings are inlined in the compose file we just fetched, so
+# the ./searxng bind from older installs is dead: nothing reads it, but an
+# operator editing it would expect otherwise. Drop it on upgrade.
+rm -f searxng/settings.yml
 rmdir searxng 2>/dev/null || true
 
 # --- .env ---
