@@ -88,7 +88,7 @@ upgrade.
 
 ```sh
 # searxng got its inline config (1 = the json format search_web needs)
-docker exec <searxng-container> grep -c json /etc/searxng/settings.yml
+docker exec <searxng-container> grep -c json /usr/local/searxng/settings.yml
 
 # proxy is routing to web
 curl -sI https://<domain>/ | head -1

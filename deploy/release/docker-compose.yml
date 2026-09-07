@@ -47,13 +47,18 @@ services:
     image: searxng/searxng@sha256:aaf56bb5ad737d48a8a375778d42eb4ab1757231e6b1eb7980e71d8dd5bdf0de
     environment:
       SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SETTINGS_PATH: /usr/local/searxng/settings.yml
     # Inline config, not a bind: Coolify rewrites relative bind sources
     # into its own data dir, docker then creates an empty directory and
-    # searxng crash-loops. Content is the top-level `configs:` block;
+    # searxng crash-loops. The target sits outside /etc/searxng, which is
+    # an image volume: on recreate compose inherits the old container's
+    # mount there, and an inherited read-only bind cannot take the file.
+    # The tmpfs blocks that inheritance. Content is the `configs:` block;
     # CI fails if it drifts from deploy/docker-compose.yml.
+    tmpfs: [/etc/searxng]
     configs:
       - source: searxng_settings
-        target: /etc/searxng/settings.yml
+        target: /usr/local/searxng/settings.yml
     # internal-only: no published ports; brain is the sole caller
 
   markitdown:
