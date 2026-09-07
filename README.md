@@ -99,7 +99,7 @@ Run the exact same command again:
 curl -fsSL https://raw.githubusercontent.com/timothy-agent/timothy/main/deploy/release/install.sh | sh
 ```
 
-The installer finds your existing install (`~/timothy`, `TIMOTHY_HOME`, or the directory you run it from), keeps all your secrets, bumps `TIMOTHY_VERSION` to the newest release, refreshes `docker-compose.yml` and the searxng config, pulls the new images (including the mission sandbox), and restarts the stack. Your data lives in Docker volumes and your secrets in `.env`; neither is touched. Database migrations run automatically when the new version starts. Downgrading is not supported once a newer version's migrations have run.
+The installer finds your existing install (`~/timothy`, `TIMOTHY_HOME`, or the directory you run it from), keeps all your secrets, bumps `TIMOTHY_VERSION` to the newest release, refreshes `docker-compose.yml`, pulls the new images (including the mission sandbox), and restarts the stack. Your data lives in Docker volumes and your secrets in `.env`; neither is touched. Database migrations run automatically when the new version starts. Downgrading is not supported once a newer version's migrations have run.
 
 The rest of this README covers building and running from source instead.
 
