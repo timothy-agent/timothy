@@ -1,35 +1,27 @@
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { CodeBlock } from '../CodeBlock'
-import { CopyButton } from '../Message'
-import { rehypePlugins, remarkPlugins } from '../../lib/markdown'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { markdownComponents, rehypePlugins, remarkPlugins } from '../../lib/markdown'
+import { Button } from '../ui/button'
 
-// Uses CodeBlock (not the plain MarkdownPre) so fenced code gets the
-// same highlighted, GitHub-style treatment as chat/file markdown.
+// ResultSection renders a mission's terminal evidence as markdown,
+// clamped to a scrollable height with a "Show all" toggle to remove
+// it — same rendering GoalSection/DiscoverSection use. Uses CodeBlock
+// (via markdownComponents) so fenced code gets the same highlighted,
+// GitHub-style treatment as chat/file markdown. The panel around it
+// owns the title and copy action.
 export function ResultSection({ evidence }: { evidence: string }) {
+  const [expanded, setExpanded] = useState(false)
+
   return (
-    <TooltipProvider>
-      <div className="relative rounded-lg border border-border bg-muted/30">
-        <div className="absolute right-2 top-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <CopyButton text={evidence} label="Copy result" alwaysVisible />
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Copy</TooltipContent>
-          </Tooltip>
-        </div>
-        <div className="prose prose-sm max-w-none p-3 pr-10 dark:prose-invert">
-          <ReactMarkdown
-            remarkPlugins={remarkPlugins}
-            rehypePlugins={rehypePlugins}
-            components={{ pre: CodeBlock }}
-          >
-            {evidence}
-          </ReactMarkdown>
-        </div>
+    <div className="space-y-2">
+      <div className={`prose prose-sm max-w-none dark:prose-invert ${expanded ? '' : 'max-h-96 overflow-y-auto'}`}>
+        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+          {evidence}
+        </ReactMarkdown>
       </div>
-    </TooltipProvider>
+      <Button variant="ghost" size="xs" onClick={() => setExpanded((v) => !v)}>
+        {expanded ? 'Show less' : 'Show all'}
+      </Button>
+    </div>
   )
 }

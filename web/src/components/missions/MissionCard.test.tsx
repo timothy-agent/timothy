@@ -130,6 +130,68 @@ describe('MissionCard needs-approval badge', () => {
   })
 })
 
+describe('MissionCard needs-answer badge', () => {
+  it('shows the badge when pending_input is set', () => {
+    renderCard({
+      ...baseMission,
+      pending_input: {
+        question: 'Which environment?',
+        kind: 'open',
+        proposed_default: 'staging',
+        asked_at: '2026-01-01T00:00:00Z',
+        phase: 'generate',
+      },
+    })
+    expect(screen.getByText('needs answer')).toBeInTheDocument()
+  })
+
+  it('omits the badge when pending_input is unset', () => {
+    renderCard({ ...baseMission })
+    expect(screen.queryByText('needs answer')).not.toBeInTheDocument()
+  })
+})
+
+describe('MissionCard phase step text', () => {
+  it('shows the phase step for a non-terminal mission', () => {
+    renderCard({ ...baseMission, phase: 'generate' })
+    expect(screen.getByText('Generate · 3 of 5')).toBeInTheDocument()
+  })
+
+  it('shows Done for a completed mission', () => {
+    renderCard({ ...baseMission, phase: 'done', status: 'done' })
+    expect(screen.getByText('Done')).toBeInTheDocument()
+  })
+})
+
+describe('MissionCard next run', () => {
+  it('shows the next run metadata item when given one', () => {
+    renderCard({ ...baseMission })
+    render(
+      <MemoryRouter>
+        <MissionCard mission={baseMission} nextRun="in 2h" />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText('Next run in 2h')).toBeInTheDocument()
+  })
+
+  it('omits the next run item when not given one', () => {
+    renderCard({ ...baseMission })
+    expect(screen.queryByText(/Next run/)).not.toBeInTheDocument()
+  })
+})
+
+describe('MissionCard cost', () => {
+  it('shows the cost when given one', () => {
+    renderCard({ ...baseMission })
+    render(
+      <MemoryRouter>
+        <MissionCard mission={baseMission} cost="$0.0421" />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText('$0.0421')).toBeInTheDocument()
+  })
+})
+
 describe('MissionCard removed fields', () => {
   it('never renders retries, unit progress, or the raw phase text', () => {
     renderCard({

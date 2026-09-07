@@ -7,8 +7,8 @@ import { Textarea } from '../ui/textarea'
 
 // MarkdownField is a controlled textarea with a Write/Preview toggle,
 // reusing GoalSection's markdown stack for Preview. Shared by
-// InputRequestBanner's open kind, the Intervene modal, and
-// PlanApprovalBanner's replan feedback, so all three text inputs a
+// InputRequestGate's open kind, the Intervene modal, and
+// PlanApprovalGate's replan feedback, so all three text inputs a
 // mission operator can markdown-format render the same way the goal
 // itself does.
 export function MarkdownField({
@@ -55,13 +55,13 @@ export function MarkdownField({
           rows={rows}
         />
       ) : value.trim() ? (
-        <div className="prose prose-sm min-h-16 max-w-none rounded-lg border border-input px-2.5 py-2 dark:prose-invert">
+        <div className="prose prose-sm min-h-16 max-w-none rounded-md border border-input px-2.5 py-2 dark:prose-invert">
           <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={{ pre: CodeBlock }}>
             {value}
           </ReactMarkdown>
         </div>
       ) : (
-        <div className="flex min-h-16 items-center rounded-lg border border-input px-2.5 py-2 text-sm text-muted-foreground">
+        <div className="flex min-h-16 items-center rounded-md border border-input px-2.5 py-2 text-sm text-muted-foreground">
           Nothing to preview
         </div>
       )}

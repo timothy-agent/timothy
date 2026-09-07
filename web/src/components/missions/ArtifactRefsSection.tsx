@@ -1,16 +1,16 @@
-import { File01Icon, FileMusicIcon, FileVideoIcon, Pdf02Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { File, FileText, Music, Video } from 'lucide-react'
 import { useState } from 'react'
 import type { MediaRef } from '../../api/types'
 import { AttachmentViewer, mimeLabel } from '../AttachmentViewer'
+import { Badge } from '../ui/badge'
 
 // artifactChipIcon picks a chip's icon by mime, same mapping as
 // Message.tsx's documentChipIcon.
 function artifactChipIcon(mime: string) {
-  if (mime.startsWith('video/')) return FileVideoIcon
-  if (mime.startsWith('audio/')) return FileMusicIcon
-  if (mime === 'text/plain' || mime === 'text/markdown') return File01Icon
-  return Pdf02Icon
+  if (mime.startsWith('video/')) return Video
+  if (mime.startsWith('audio/')) return Music
+  if (mime === 'text/plain' || mime === 'text/markdown') return FileText
+  return File
 }
 
 // ArtifactRefChips renders a terminal mission's artifact-store refs
@@ -24,18 +24,17 @@ export function ArtifactRefChips({ refs }: { refs: MediaRef[] }) {
   return (
     <>
       <div className="flex flex-wrap gap-1.5">
-        {refs.map((ref) => (
-          <button
-            key={ref.id}
-            type="button"
-            title={ref.name ?? ref.id.slice(0, 8)}
-            onClick={() => setViewerAttachment(ref)}
-            className="flex items-center gap-1 rounded-lg border border-zinc-950/10 bg-zinc-100 px-2 py-1 text-xs text-zinc-500 transition hover:bg-zinc-200 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
-          >
-            <HugeiconsIcon icon={artifactChipIcon(ref.mime)} className="size-3.5" />
-            {ref.name ?? mimeLabel(ref.mime)}
-          </button>
-        ))}
+        {refs.map((ref) => {
+          const Icon = artifactChipIcon(ref.mime)
+          return (
+            <Badge key={ref.id} variant="outline" size="sm" asChild>
+              <button type="button" title={ref.name ?? ref.id.slice(0, 8)} onClick={() => setViewerAttachment(ref)}>
+                <Icon className="size-3.5" aria-hidden />
+                {ref.name ?? mimeLabel(ref.mime)}
+              </button>
+            </Badge>
+          )
+        })}
       </div>
       <AttachmentViewer
         open={viewerAttachment !== null}

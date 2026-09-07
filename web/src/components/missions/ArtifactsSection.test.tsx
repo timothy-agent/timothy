@@ -32,6 +32,8 @@ import {
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
+  // jsdom lacks scrollIntoView; Radix Select calls it on open.
+  Element.prototype.scrollIntoView = vi.fn()
   vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
   vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['hello']))
   vi.mocked(fetchAttachmentBlob).mockResolvedValue(new Blob(['hello']))
@@ -79,6 +81,15 @@ describe('ArtifactsSection', () => {
     expect(screen.getByText('512 B')).toBeTruthy()
   })
 
+  it('marks the selected tree row with aria-current', async () => {
+    vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
+    render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)
+
+    const row = await screen.findByText('a.txt')
+    fireEvent.click(row)
+    expect(row.closest('button')).toHaveAttribute('aria-current', 'true')
+  })
+
   it('renders nothing while the workspace has no files', async () => {
     const { container } = render(
       <ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />,
@@ -91,7 +102,7 @@ describe('ArtifactsSection', () => {
     vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
     render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)
     await screen.findByText('big.bin')
-    expect(screen.getByText('Artifacts')).toBeTruthy()
+    expect(screen.getByText('Files')).toBeTruthy()
     expect(
       screen.getByRole('button', { name: 'Download the workspace as a zip archive' }),
     ).not.toBeDisabled()
@@ -127,7 +138,7 @@ describe('ArtifactsSection', () => {
 
   it('renders refs chips alone when the workspace is gone', () => {
     render(<ArtifactsSection missionId="m1" phase="terminal" workspace={undefined} refs={refs} />)
-    expect(screen.getByText('Artifacts')).toBeInTheDocument()
+    expect(screen.getByText('Files')).toBeInTheDocument()
     expect(screen.getByText('report.md')).toBeInTheDocument()
     expect(listMissionFiles).not.toHaveBeenCalled()
   })
@@ -136,14 +147,14 @@ describe('ArtifactsSection', () => {
     vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
     render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" refs={refs} />)
     await screen.findByText('big.bin')
-    expect(screen.getAllByText('Artifacts')).toHaveLength(1)
+    expect(screen.getAllByText('Files')).toHaveLength(1)
     expect(screen.queryByText('report.md')).toBeNull()
   })
 
   it('renders the panel (not chips) when the workspace has no files but has refs', async () => {
     render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" refs={refs} />)
     await waitFor(() => expect(vi.mocked(listMissionFiles)).toHaveBeenCalled())
-    expect(screen.getByText('Artifacts')).toBeInTheDocument()
+    expect(screen.getByText('Files')).toBeInTheDocument()
     expect(screen.getByText('No files yet.')).toBeInTheDocument()
     expect(screen.queryByText('report.md')).toBeNull()
   })
@@ -222,8 +233,8 @@ describe('ArtifactsSection', () => {
       fireEvent.click(screen.getByText('Promote to KB'))
       expect(await screen.findByText('Promote to knowledge base')).toBeInTheDocument()
 
-      const select = await screen.findByLabelText('Collection')
-      fireEvent.change(select, { target: { value: 'c1' } })
+      fireEvent.click(screen.getByRole('combobox'))
+      fireEvent.click(await screen.findByText('Reports'))
       fireEvent.click(screen.getByRole('button', { name: 'Promote' }))
 
       await waitFor(() => expect(promoteMissionToKB).toHaveBeenCalledWith('m1', 'c1'))

@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { vi } from 'vitest'
 import type { MissionEvent } from '../../api/types'
 import { TimelineSection } from './TimelineSection'
 
@@ -20,10 +21,17 @@ const events: MissionEvent[] = [
 ]
 
 describe('TimelineSection', () => {
-  it('renders inline by default', () => {
+  it('renders a themed log with no hard-coded dark surface', () => {
     render(<TimelineSection events={events} />)
     expect(screen.getByRole('button', { name: 'Fullscreen' })).toBeTruthy()
     expect(screen.queryByRole('dialog')).toBeNull()
+    const log = screen.getByRole('log', { name: 'Mission timeline' })
+    expect(log.className).not.toMatch(/zinc|amber-|green-|red-/)
+  })
+
+  it('shows an auto-follow Pause toggle', () => {
+    render(<TimelineSection events={events} />)
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeTruthy()
   })
 
   it('opens a fullscreen dialog with the same events on toggle', () => {
@@ -62,14 +70,10 @@ describe('TimelineSection', () => {
     await waitFor(() => expect(screen.getAllByText('Fullscreen').length).toBeGreaterThan(0))
   })
 
-  it('shows a "Copy" tooltip on the copy button', async () => {
+  it('scrolls the log container via the scroll-to-top/bottom controls', () => {
     render(<TimelineSection events={events} />)
-    const button = screen.getByRole('button', { name: 'Copy timeline' })
-
-    fireEvent.pointerEnter(button.parentElement!)
-    fireEvent.pointerMove(button.parentElement!)
-
-    await waitFor(() => expect(screen.getByText('Copy')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: 'Scroll to top' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
   })
 
   it('excludes executor.progress events from the rendered rows and count', () => {
@@ -127,6 +131,13 @@ const toolCallTraceEvents: MissionEvent[] = [
   },
 ]
 
+// openRow expands a Timeline row's own disclosure (EventLog nests a
+// row's payload/children behind its own trigger), so the tool-call
+// trace group inside becomes reachable.
+function openRow(name: RegExp | string) {
+  fireEvent.click(screen.getByRole('button', { name }))
+}
+
 describe('TimelineSection tool call trace', () => {
   it('excludes mission.tool_call events from the plain row count', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
@@ -135,26 +146,31 @@ describe('TimelineSection tool call trace', () => {
     expect(screen.getAllByText('1 event')).toHaveLength(1)
   })
 
-  it('shows the trace collapsed by default, with a toggle naming the count', () => {
+  it('shows the tool call rows collapsed by default, one click away', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    expect(screen.getByText('3 tool calls')).toBeTruthy()
-    expect(screen.queryByText('search_kb')).toBeNull()
+    // Collapsed turn row already names the count; opening it reveals
+    // the humanized tool call rows directly, no extra grouping click.
+    expect(screen.getByText(/3 tool calls/)).toBeTruthy()
+    expect(screen.queryByText('Search kb')).toBeNull()
+    openRow(/Turn \(generate\)/)
+    expect(screen.getByText('Search kb')).toBeTruthy()
+    expect(screen.getByText('Shell')).toBeTruthy()
+    expect(screen.getByText('Write file')).toBeTruthy()
   })
 
-  it('expands to show the ordered tool-call trace with outcome and duration', () => {
+  it('shows the raw tool name and arguments when a tool call row is expanded', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    fireEvent.click(screen.getByText('3 tool calls'))
+    openRow(/Turn \(generate\)/)
+    fireEvent.click(screen.getByText('Search kb'))
 
-    const names = screen.getAllByText(/search_kb|shell|write_file/).map((el) => el.textContent)
-    expect(names).toEqual(['search_kb', 'shell', 'write_file'])
+    expect(screen.getByText('search_kb')).toBeTruthy()
     expect(screen.getByText('{"query":"first"}')).toBeTruthy()
-    expect(screen.getByText('{"command":"ls"}')).toBeTruthy()
-    expect(screen.getByText('{"path":"x"}')).toBeTruthy()
   })
 
-  it('collapses again on a second toggle click', () => {
+  it('collapses a tool call row again on a second click', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    const toggle = screen.getByText('3 tool calls')
+    openRow(/Turn \(generate\)/)
+    const toggle = screen.getByText('Search kb')
     fireEvent.click(toggle)
     expect(screen.getByText('search_kb')).toBeTruthy()
     fireEvent.click(toggle)
@@ -188,7 +204,8 @@ describe('TimelineSection tool call trace', () => {
       },
     ]
     render(<TimelineSection events={withHits} />)
-    fireEvent.click(screen.getByText('1 tool call'))
+    openRow(/Turn \(generate\)/)
+    fireEvent.click(screen.getByText('Search kb'))
     expect(screen.getByText('Runbook · score 0.8123')).toBeTruthy()
   })
 
@@ -219,18 +236,20 @@ describe('TimelineSection tool call trace', () => {
       },
     ]
     render(<TimelineSection events={noHits} />)
-    fireEvent.click(screen.getByText('1 tool call'))
+    openRow(/Turn \(generate\)/)
+    fireEvent.click(screen.getByText('Search kb'))
     expect(screen.getByText('no hits')).toBeTruthy()
   })
 
   it('shows no hit list for a non-search_kb tool call', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    fireEvent.click(screen.getByText('3 tool calls'))
+    openRow(/Turn \(generate\)/)
+    fireEvent.click(screen.getByText('Shell'))
     expect(screen.queryByText('no hits')).toBeNull()
     expect(screen.queryByText(/score/)).toBeNull()
   })
 
-  it('shows no toggle for a turn with no tool calls', () => {
+  it('shows no tool call count for a turn with no tool calls', () => {
     const noCalls: MissionEvent[] = [
       {
         mission_id: 'm1',
@@ -246,8 +265,8 @@ describe('TimelineSection tool call trace', () => {
   })
 })
 
-describe('TimelineSection phase chips', () => {
-  it('chips each row with the phase most recently started before it', () => {
+describe('TimelineSection phase labels', () => {
+  it('labels each row with the phase most recently started before it', () => {
     const phaseEvents: MissionEvent[] = [
       {
         mission_id: 'm1',
@@ -283,19 +302,19 @@ describe('TimelineSection phase chips', () => {
       },
     ]
     render(<TimelineSection events={phaseEvents} />)
-    expect(screen.getAllByText('discover')).toHaveLength(2) // phase_started row + discover_complete row
-    expect(screen.getAllByText('plan')).toHaveLength(2) // phase_started row + plan_created row
+    expect(screen.getAllByText('discover ·')).toHaveLength(2) // phase_started row + discover_complete row
+    expect(screen.getAllByText('plan ·')).toHaveLength(2) // phase_started row + plan_created row
   })
 
-  it('chips rows from their own payload phase without any phase_started', () => {
+  it('labels rows from their own payload phase without any phase_started', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    expect(screen.getAllByText('generate').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('generate ·').length).toBeGreaterThan(0)
   })
 
-  it('chips initial-phase rows before the first transition with their own phase', () => {
+  it('labels initial-phase rows before the first transition with their own phase', () => {
     // A mission never emits phase_started for its initial phase, so
     // discover rows must take their phase from their own payloads, not
-    // from the first transition (the pre-fix bug chipped them "plan").
+    // from the first transition (the pre-fix bug labeled them "plan").
     const phaseEvents: MissionEvent[] = [
       {
         mission_id: 'm1',
@@ -324,8 +343,8 @@ describe('TimelineSection phase chips', () => {
     ]
     render(<TimelineSection events={phaseEvents} />)
     // provisioned (backfilled) + the discover turn
-    expect(screen.getAllByText('discover')).toHaveLength(2)
-    expect(screen.getAllByText('plan')).toHaveLength(1)
+    expect(screen.getAllByText('discover ·')).toHaveLength(2)
+    expect(screen.getAllByText('plan ·')).toHaveLength(1)
   })
 
   it('survives events with a null payload (mission.resumed)', () => {
@@ -348,10 +367,10 @@ describe('TimelineSection phase chips', () => {
       },
     ]
     render(<TimelineSection events={withNull} />)
-    expect(screen.getAllByText('generate').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('generate ·').length).toBeGreaterThan(0)
   })
 
-  it('renders no chip when no event carries a phase at all', () => {
+  it('renders no phase label when no event carries a phase at all', () => {
     const bare: MissionEvent[] = [
       {
         mission_id: 'm1',
@@ -363,6 +382,6 @@ describe('TimelineSection phase chips', () => {
       },
     ]
     render(<TimelineSection events={bare} />)
-    expect(screen.queryByText('discover')).toBeNull()
+    expect(screen.queryByText('discover ·')).toBeNull()
   })
 })

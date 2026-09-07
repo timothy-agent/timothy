@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Destination, Schedule } from '../api/types'
+import { TooltipProvider } from '../components/ui/tooltip'
 import { Automations } from './Automations'
 
 vi.mock('../api/client', () => ({
@@ -45,7 +46,11 @@ function renderPage() {
     ],
     { initialEntries: ['/automations'] },
   )
-  const result = render(<RouterProvider router={router} />)
+  const result = render(
+    <TooltipProvider>
+      <RouterProvider router={router} />
+    </TooltipProvider>,
+  )
   return { router, ...result }
 }
 

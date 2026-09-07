@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Destination, Mission, MissionEvent } from '../api/types'
+import { TooltipProvider } from '../components/ui/tooltip'
 import type { Signal } from '../lib/events'
 import { MissionDetail } from './MissionDetail'
 
@@ -126,12 +127,14 @@ const events: MissionEvent[] = [
 
 function renderPage(id = 'm1') {
   return render(
-    <MemoryRouter initialEntries={[`/missions/${id}`]}>
-      <Routes>
-        <Route path="/missions/:id" element={<MissionDetail />} />
-        <Route path="/missions" element={<div>Missions list</div>} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[`/missions/${id}`]}>
+        <Routes>
+          <Route path="/missions/:id" element={<MissionDetail />} />
+          <Route path="/missions" element={<div>Missions list</div>} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 
@@ -171,7 +174,7 @@ describe('MissionDetail spend', () => {
       ],
     })
     renderPage()
-    expect(await screen.findByText('$0.5000')).toBeTruthy()
+    expect(await screen.findByText('$0.5000 of $2.00')).toBeTruthy()
     expect(screen.getByText('7 calls')).toBeTruthy()
     expect(screen.getByText('120.0k→8.0k tok')).toBeTruthy()
     expect(screen.getByText('25% of budget')).toBeTruthy()
@@ -305,7 +308,7 @@ describe('MissionDetail spend', () => {
 
   it('hides the cost pills while the mission has no ledger rows', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/calls$/)).toBeNull()
   })
 
@@ -396,7 +399,7 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
   it('omits Retries when iteration is zero', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, iteration: 0 })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/Retries/)).toBeNull()
   })
 
@@ -480,7 +483,7 @@ describe('MissionDetail executor worktree summary (issue #500)', () => {
       },
     ])
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(await screen.findByText(/3 new · 1 modified · changed 2m ago/)).toBeTruthy()
   })
 
@@ -548,7 +551,7 @@ describe('MissionDetail harness pill', () => {
 
   it('omits the harness pill when no executor.spawned event exists', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/Claude Code/)).toBeNull()
     expect(screen.queryByLabelText(/harness$/)).toBeNull()
   })
@@ -572,7 +575,7 @@ describe('MissionDetail environment pill', () => {
 
   it('omits the environment pill when mission.environment is empty', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/^env ·/)).toBeNull()
   })
 })
@@ -615,7 +618,7 @@ describe('MissionDetail github destination badges', () => {
 
   it('omits both badges when no destination entries exist', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText('auto-push')).toBeNull()
     expect(screen.queryByText('auto-PR')).toBeNull()
   })
@@ -624,7 +627,7 @@ describe('MissionDetail github destination badges', () => {
 describe('MissionDetail destinations', () => {
   it('omits the Destinations section when the mission has none', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText('Destinations')).toBeNull()
   })
 
@@ -703,7 +706,7 @@ describe('MissionDetail created timestamp', () => {
 describe('MissionDetail', () => {
   it('renders mission header and plan, with no standalone progress section', async () => {
     renderPage()
-    expect(await screen.findByText('Fix the login bug')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Fix the login bug' })).toBeTruthy()
     expect(screen.getByText('Add validation')).toBeTruthy()
     // Progress notes live in the Timeline now — the markdown-card
     // section that duplicated them is gone.
@@ -712,7 +715,7 @@ describe('MissionDetail', () => {
 
   it('does not show a permission banner when none is pending', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/Allow/)).toBeNull()
   })
 
@@ -722,7 +725,7 @@ describe('MissionDetail', () => {
       repo_url: 'https://github.com/octocat/hello-world.git',
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     const link = screen.getByRole('link', { name: 'octocat/hello-world' })
     expect(link).toHaveAttribute('href', 'https://github.com/octocat/hello-world')
@@ -731,7 +734,7 @@ describe('MissionDetail', () => {
 
   it('omits the GitHub origin link when repo_url is not set', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('link', { name: /octocat/ })).toBeNull()
   })
 
@@ -740,7 +743,6 @@ describe('MissionDetail', () => {
     renderPage()
     const heading = await screen.findByRole('heading', { level: 1 })
     expect(heading.textContent).toBe('Fix Login Bug')
-    expect(screen.queryByText('Fix the login bug')).toBeNull()
   })
 
   it('falls back to the goal in the header when name is empty', async () => {
@@ -756,10 +758,10 @@ describe('MissionDetail', () => {
       goal: 'Fix the **login** bug on staging',
     })
     renderPage()
-    await screen.findByText('Fix Login Bug')
+    await screen.findByRole('heading', { name: 'Fix Login Bug' })
 
     expect(screen.getByText('Show goal')).toBeInTheDocument()
-    expect(screen.queryByText('login')).toBeNull()
+    expect(screen.getByText('login').closest('div')).toHaveClass('line-clamp-3')
 
     fireEvent.click(screen.getByText('Show goal'))
     expect(screen.getByText('login').tagName).toBe('STRONG')
@@ -767,15 +769,15 @@ describe('MissionDetail', () => {
 
   it('renders a plain-text goal in the goal section unchanged', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByText('Show goal'))
     expect(screen.getAllByText('Fix the login bug').length).toBeGreaterThan(0)
   })
 
   it('omits the Discover section when discover_notes is absent', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
-    expect(screen.queryByText('Discover')).toBeNull()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByRole('heading', { level: 2, name: 'Discover' })).toBeNull()
   })
 
   it('shows a collapsed Discover section above Plan when discover_notes is set', async () => {
@@ -784,12 +786,12 @@ describe('MissionDetail', () => {
       discover_notes: 'found **three** prior approaches',
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings.indexOf('Discover')).toBeGreaterThanOrEqual(0)
     expect(headings.indexOf('Discover')).toBeLessThan(headings.indexOf('Plan'))
-    expect(screen.queryByText('three')).toBeNull()
+    expect(screen.getByText('three').closest('div')).toHaveClass('line-clamp-3')
 
     fireEvent.click(screen.getByText('Show discovery'))
     expect(screen.getByText('three').tagName).toBe('STRONG')
@@ -797,7 +799,7 @@ describe('MissionDetail', () => {
 
   it('omits the Artifacts refs section when artifact_refs is absent', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText('att-1')).toBeNull()
   })
 
@@ -808,7 +810,7 @@ describe('MissionDetail', () => {
       artifact_refs: [{ id: 'att-1', mime: 'text/markdown', name: 'report.md' }],
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     expect(screen.getByText('report.md')).toBeInTheDocument()
   })
@@ -949,7 +951,7 @@ describe('MissionDetail', () => {
 
   it('renders known event kinds with their specific text and unknown kinds with the fallback', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(await screen.findByText('Mission created')).toBeTruthy()
     // Unknown kind falls back to rendering the raw kind string.
     expect(screen.getByText('mission.some_future_kind')).toBeTruthy()
@@ -960,7 +962,7 @@ describe('MissionDetail', () => {
 
   it('renders the timeline as a scrollable container with scroll-to-top/bottom controls', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('button', { name: 'Scroll to top' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
     expect(screen.getByText(`${events.length} events`)).toBeTruthy()
@@ -969,7 +971,7 @@ describe('MissionDetail', () => {
   it('shows resume for a paused mission and cancel for a non-terminal one', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'backoff' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
 
@@ -979,7 +981,7 @@ describe('MissionDetail', () => {
 
   it('sends a note for a working mission via the Intervene modal and closes on success', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
     const input = screen.getByPlaceholderText('Steer this mission (markdown supported)…')
     fireEvent.change(input, { target: { value: 'focus on staging next' } })
@@ -992,7 +994,7 @@ describe('MissionDetail', () => {
 
   it('shows the mission phase and status in the Intervene modal', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
     await screen.findByText((_, el) => el?.textContent === 'Currently in generate · working')
   })
@@ -1000,14 +1002,14 @@ describe('MissionDetail', () => {
   it('disables the Intervene button once the mission is terminal', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'idle' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('button', { name: 'Intervene' })).toBeDisabled()
   })
 
   it('offers the review route picker in the Intervene modal only while paused', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'infra', review_route: 'default' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
     expect(await screen.findByRole('combobox', { name: 'Review route' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
@@ -1015,7 +1017,7 @@ describe('MissionDetail', () => {
 
   it('omits the review route picker from the Intervene modal while working', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
     await screen.findByPlaceholderText('Steer this mission (markdown supported)…')
     expect(screen.queryByLabelText('Review route')).toBeNull()
@@ -1083,48 +1085,50 @@ describe('MissionDetail', () => {
       },
     ])
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText('every provider attempt failed: GLM 429')).toBeNull()
   })
 
   it('hides resume and cancel for a done mission', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
   })
 
   it('cancels a mission', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(cancelMission).toHaveBeenCalledWith('m1'))
   })
 
   it('hides delete for a non-terminal mission', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('button', { name: 'Delete mission' })).toBeNull()
   })
 
   it('hides Fork for a non-terminal mission', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('button', { name: 'Fork' })).toBeNull()
   })
 
   it('shows Fork for a done mission and navigates to a prefilled create form', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     render(
-      <MemoryRouter initialEntries={['/missions/m1']}>
-        <Routes>
-          <Route path="/missions/:id" element={<MissionDetail />} />
-          <Route path="/missions/new" element={<div>New mission page</div>} />
-        </Routes>
-      </MemoryRouter>,
+      <TooltipProvider>
+        <MemoryRouter initialEntries={['/missions/m1']}>
+          <Routes>
+            <Route path="/missions/:id" element={<MissionDetail />} />
+            <Route path="/missions/new" element={<div>New mission page</div>} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
     )
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Fork' }))
     await screen.findByText('New mission page')
   })
@@ -1132,7 +1136,7 @@ describe('MissionDetail', () => {
   it('links to the parent mission when parent_mission_id is set', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, parent_mission_id: 'parent-123' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('link', { name: /parent-1/ })).toHaveAttribute(
       'href',
       '/missions/parent-123',
@@ -1142,9 +1146,9 @@ describe('MissionDetail', () => {
   it('shows delete for a done mission and deletes on confirm', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Delete mission' }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteMission).toHaveBeenCalledWith('m1'))
     await screen.findByText('Missions list')
@@ -1153,7 +1157,7 @@ describe('MissionDetail', () => {
   it('ignores a signal for a different mission id', async () => {
     const sub = captureSubscribe()
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     vi.mocked(getMission).mockClear()
 
     sub.fireSignal({ kind: 'mission', id: 'some-other-mission' })
@@ -1167,7 +1171,7 @@ describe('MissionDetail', () => {
   it('refetches on a signal naming this mission, and on ready', async () => {
     const sub = captureSubscribe()
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     vi.mocked(getMission).mockClear()
 
     sub.fireSignal({ kind: 'mission', id: 'm1' })
@@ -1180,7 +1184,7 @@ describe('MissionDetail', () => {
   it('unsubscribes on unmount', async () => {
     const sub = captureSubscribe()
     const { unmount } = renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     unmount()
     expect(sub.unsubscribe).toHaveBeenCalled()
   })
@@ -1193,15 +1197,15 @@ describe('MissionDetail', () => {
       last_evidence: 'some evidence text',
     })
     renderPage()
-    expect(await screen.findByText('Result')).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Result' })).toBeTruthy()
     expect(screen.getByText('some evidence text')).toBeTruthy()
   })
 
   it('omits the Result section for a terminal mission with no evidence', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     renderPage()
-    await screen.findByText('Fix the login bug')
-    expect(screen.queryByText('Result')).toBeNull()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByRole('heading', { level: 2, name: 'Result' })).toBeNull()
   })
 
   it('renders a light mission Result section from final_output, not last_evidence', async () => {
@@ -1214,7 +1218,7 @@ describe('MissionDetail', () => {
       final_output: 'the complete deliverable',
     })
     renderPage()
-    expect(await screen.findByText('Result')).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Result' })).toBeTruthy()
     expect(screen.getByText('the complete deliverable')).toBeTruthy()
     expect(screen.queryByText('worker evidence text')).toBeNull()
   })
@@ -1228,8 +1232,8 @@ describe('MissionDetail', () => {
       last_evidence: 'worker evidence text',
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
-    expect(screen.queryByText('Result')).toBeNull()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByRole('heading', { level: 2, name: 'Result' })).toBeNull()
   })
 
   it('shows a recurring schedule strip when the mission fired from a schedule', async () => {
@@ -1253,7 +1257,7 @@ describe('MissionDetail', () => {
 
   it('omits the recurring strip for a one-off mission', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/Recurring ·/)).toBeNull()
   })
 })
@@ -1262,14 +1266,14 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
   it('shows Push branch and Push & open PR only for a mission with connector_id', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Push & open PR' })).toBeTruthy()
   })
 
   it('omits the push/PR buttons for a mission without connector_id', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('button', { name: 'Push branch' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Push & open PR' })).toBeNull()
   })
@@ -1278,7 +1282,7 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
     vi.mocked(pushMission).mockResolvedValue({ branch: 'mission/fix-login', remote_host: 'github.com' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
     await waitFor(() => expect(pushMission).toHaveBeenCalledWith('m1'))
@@ -1295,7 +1299,7 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
       number: 9,
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Push & open PR' }))
     await waitFor(() => expect(openMissionPR).toHaveBeenCalledWith('m1'))
@@ -1326,7 +1330,7 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
     vi.mocked(pushMission).mockRejectedValue(new Error('push failed'))
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
     await waitFor(() => expect(pushMission).toHaveBeenCalled())

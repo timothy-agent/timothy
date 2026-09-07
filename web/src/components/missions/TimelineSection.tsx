@@ -1,20 +1,15 @@
-import { ArrowDown01Icon, ArrowRight01Icon, ArrowUp01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { useEffect, useRef, useState } from 'react'
+import { useMemo, useRef } from 'react'
+import { ArrowDown, ArrowUp } from 'lucide-react'
 import type { MissionEvent, MissionKBHit, MissionToolCallPayload } from '../../api/types'
-import { CopyButton } from '../Message'
-import { Button } from '../ui/button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
-import { renderEvent, toolCallStatusClass } from './eventRenderers'
+import { Panel } from '../timothy/panel'
+import { CopyButton } from '../timothy/copy-button'
+import { IconButton } from '../timothy/icon-button'
+import { EventLog, type EventLogRow } from '../timothy/event-log'
+import { ToolCallCard } from '../chat/ToolCallCard'
+import { phaseLabel } from '../../lib/phaseColors'
+import { eventIcon, eventStatus, renderEvent, toolRunFromEvent } from './eventRenderers'
 import { FullscreenDialog, FullscreenToggle, useFullscreenPanel } from './FullscreenPanel'
-import { formatDuration } from '../../lib/format'
-import { phaseColors, phaseLabel } from '../../lib/phaseColors'
-
-// How close to the bottom (px) counts as "already following the tail"
-//: auto-scroll only kicks in within this margin, so a reader who has
-// scrolled up to read history never gets yanked back down by new
-// events arriving from the poll loop.
-const followThresholdPx = 48
+import { TooltipProvider } from '../ui/tooltip'
 
 // executor.progress fires on every byte the delegated CLI executor
 // writes: rendering one row per event would flood the timeline, so
@@ -48,18 +43,18 @@ function turnToolCalls(events: MissionEvent[]): Map<number, MissionEvent[]> {
   return byTurn
 }
 
-// rowPhases maps each rendered row's seq to the phase chip it should
-// show. A mission never emits phase_started for its INITIAL phase
-// (only transitions), so anchoring on the first phase_started would
-// mislabel every earlier row with the first TRANSITION's phase. Most
-// events carry their own payload.phase (turn, tool_call, input and
-// permission events); that is authoritative for the row and advances
-// the running phase, with phase_started marking transitions for the
-// payload-less rows between them. Leading rows before any signal
-// (e.g. provisioned) backfill from the first known phase. A mission
-// with no phase signal at all leaves every row unchipped.
+// rowPhases maps each rendered row's seq to the phase it should be
+// prefixed with. A mission never emits phase_started for its INITIAL
+// phase (only transitions), so anchoring on the first phase_started
+// would mislabel every earlier row with the first TRANSITION's phase.
+// Most events carry their own payload.phase (turn, tool_call, input
+// and permission events); that is authoritative for the row and
+// advances the running phase, with phase_started marking transitions
+// for the payload-less rows between them. Leading rows before any
+// signal (e.g. provisioned) backfill from the first known phase. A
+// mission with no phase signal at all leaves every row unlabeled.
 function rowPhases(rows: MissionEvent[]): Map<number, string> {
-  const chips = new Map<number, string>()
+  const phases = new Map<number, string>()
   let current = ''
   for (const e of rows) {
     // payload can be null (e.g. mission.resumed), never assume an object
@@ -67,63 +62,15 @@ function rowPhases(rows: MissionEvent[]): Map<number, string> {
     if (own !== '') {
       current = own
     }
-    chips.set(e.seq, current)
+    phases.set(e.seq, current)
   }
-  const first = rows.map((e) => chips.get(e.seq) ?? '').find((p) => p !== '')
+  const first = rows.map((e) => phases.get(e.seq) ?? '').find((p) => p !== '')
   if (first === undefined) return new Map()
   for (const e of rows) {
-    if (chips.get(e.seq) === '') chips.set(e.seq, first)
+    if (phases.get(e.seq) === '') phases.set(e.seq, first)
     else break
   }
-  return chips
-}
-
-// PhaseChip renders a small color-coded phase label (issue #473): one
-// consistent color per phase (lib/phaseColors), shared with anywhere
-// else a phase gets colored.
-function PhaseChip({ phase }: { phase: string }) {
-  const label = phaseLabel(phase)
-  const color = phaseColors[label]
-  if (!color) return null
-  return <span className={`mr-1.5 rounded px-1 py-0.5 text-[10px] font-semibold whitespace-nowrap ${color}`}>{label}</span>
-}
-
-// TurnTraceToggle renders the expand/collapse control and, when
-// expanded, the ordered tool-call trace for one mission.turn row.
-function TurnTraceToggle({ calls }: { calls: MissionEvent[] }) {
-  const [open, setOpen] = useState(false)
-  if (calls.length === 0) return null
-  return (
-    <div className="mt-0.5">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-center gap-1 text-zinc-500 hover:text-zinc-300"
-      >
-        <HugeiconsIcon icon={ArrowRight01Icon} className={`size-3 transition-transform ${open ? 'rotate-90' : ''}`} />
-        {calls.length} tool call{calls.length === 1 ? '' : 's'}
-      </button>
-      {open && (
-        <ol className="mt-1 space-y-0.5 border-l border-zinc-800 pl-3">
-          {calls.map((c) => {
-            const { tool, status, duration_ms, args_digest, kb_hits } = c.payload as MissionToolCallPayload
-            return (
-              <li key={c.seq} className="text-zinc-400">
-                <span className={toolCallStatusClass(status)}>{tool}</span> · {status} ·{' '}
-                {formatDuration(duration_ms)}
-                {args_digest && (
-                  <code className="ml-1 block truncate rounded bg-muted/20 px-1 py-0.5 text-[11px] text-zinc-500">
-                    {args_digest}
-                  </code>
-                )}
-                {kb_hits && <KBHitList hits={kb_hits} />}
-              </li>
-            )
-          })}
-        </ol>
-      )}
-    </div>
-  )
+  return phases
 }
 
 // KBHitList renders a search_kb call's returned hits (issue #413):
@@ -132,10 +79,10 @@ function TurnTraceToggle({ calls }: { calls: MissionEvent[] }) {
 // from a search that simply hasn't finished rendering.
 function KBHitList({ hits }: { hits: MissionKBHit[] }) {
   if (hits.length === 0) {
-    return <div className="ml-1 mt-0.5 rounded bg-muted/20 px-1 py-0.5 text-[11px] text-zinc-500">no hits</div>
+    return <div className="mt-0.5 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">no hits</div>
   }
   return (
-    <ol className="ml-1 mt-0.5 space-y-0.5 rounded bg-muted/20 px-1 py-0.5 text-[11px] text-zinc-500">
+    <ol className="mt-0.5 space-y-0.5 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
       {hits.map((h) => (
         <li key={h.document_id} className="truncate">
           {h.document_title || h.document_id} · score {h.score.toFixed(4)}
@@ -143,6 +90,20 @@ function KBHitList({ hits }: { hits: MissionKBHit[] }) {
       ))}
     </ol>
   )
+}
+
+// MissionToolCallCard renders one mission.tool_call event as the
+// shared chat ToolCallCard (issue #587): collapsed shows the
+// humanized action (e.g. "Search kb"), expanded shows the raw tool
+// name in mono plus arguments/digest, so the machine-readable
+// identifier stays discoverable without being the headline label. A
+// search_kb call's KB hits render as extra expanded content (issue
+// #413): the point of expanding is seeing the hits, not another
+// disclosure to click through.
+function MissionToolCallCard({ event }: { event: MissionEvent }) {
+  const run = toolRunFromEvent(event)
+  const { kb_hits } = event.payload as MissionToolCallPayload
+  return <ToolCallCard run={run}>{kb_hits && <KBHitList hits={kb_hits} />}</ToolCallCard>
 }
 
 // timelineText renders a plain-text version of the timeline for the
@@ -154,107 +115,82 @@ function timelineText(rows: MissionEvent[]): string {
 }
 
 export function TimelineSection({ events }: { events: MissionEvent[] }) {
-  const rows = events.filter(rowKind)
-  const toolCallsByTurn = turnToolCalls(events)
-  const phasesBySeq = rowPhases(rows)
-  const containerRef = useRef<HTMLDivElement>(null)
-  const wasAtBottomRef = useRef(true)
+  const rows = useMemo(() => events.filter(rowKind), [events])
+  const toolCallsByTurn = useMemo(() => turnToolCalls(events), [events])
+  const phasesBySeq = useMemo(() => rowPhases(rows), [rows])
+  const scrollRef = useRef<HTMLDivElement>(null)
   const { fullscreen, toggle, close } = useFullscreenPanel()
 
-  useEffect(() => {
-    const el = containerRef.current
-    if (el && wasAtBottomRef.current) {
-      el.scrollTop = el.scrollHeight
+  const logRows: EventLogRow[] = rows.map((e) => {
+    const calls = e.kind === 'mission.turn' ? (toolCallsByTurn.get(e.seq) ?? []) : []
+    const phase = phasesBySeq.get(e.seq)
+    const title = (
+      <>
+        {phase && <span className="text-muted-foreground">{phaseLabel(phase)} · </span>}
+        {renderEvent(e, rows)}
+        {calls.length > 0 && (
+          <span className="text-muted-foreground"> · {calls.length} tool call{calls.length === 1 ? '' : 's'}</span>
+        )}
+      </>
+    )
+    const payload = disclosurePayloadKinds.has(e.kind) ? e.payload : undefined
+    return {
+      id: String(e.seq),
+      time: new Date(e.created_at),
+      kind: e.kind,
+      icon: eventIcon(e.kind),
+      status: eventStatus(e.kind, e.payload),
+      title,
+      payload,
+      children:
+        calls.length > 0 ? (
+          <div className="space-y-1">
+            {calls.map((c) => (
+              <MissionToolCallCard key={c.seq} event={c} />
+            ))}
+          </div>
+        ) : undefined,
     }
-  }, [rows])
-
-  const handleScroll = () => {
-    const el = containerRef.current
-    if (!el) return
-    wasAtBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight <= followThresholdPx
-  }
+  })
 
   const scrollToTop = () => {
-    containerRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
-    wasAtBottomRef.current = false
+    scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+  const scrollToBottom = () => {
+    const el = scrollRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }
 
-  const scrollToBottom = () => {
-    const el = containerRef.current
-    if (!el) return
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
-    wasAtBottomRef.current = true
-  }
+  const toolbar = (
+    <>
+      <IconButton label="Scroll to top" icon={ArrowUp} size="xs" variant="ghost" onClick={scrollToTop} />
+      <IconButton label="Scroll to bottom" icon={ArrowDown} size="xs" variant="ghost" onClick={scrollToBottom} />
+    </>
+  )
+
+  const log = (
+    <div className={fullscreen ? 'flex min-h-0 flex-1' : undefined}>
+      <EventLog
+        rows={logRows}
+        scrollRef={scrollRef}
+        className={fullscreen ? 'h-full flex-1' : undefined}
+        ariaLabel="Mission timeline"
+        toolbar={toolbar}
+      />
+    </div>
+  )
+
+  const actions = (
+    <>
+      <CopyButton value={timelineText(rows)} label="Copy timeline" />
+      <FullscreenToggle fullscreen={fullscreen} onToggle={toggle} />
+    </>
+  )
 
   const panel = (
-    <div
-      className={
-        fullscreen
-          ? 'flex h-full flex-col overflow-hidden rounded-lg border border-border'
-          : 'overflow-hidden rounded-lg border border-border'
-      }
-    >
-      <div className="flex items-center justify-between border-b border-border bg-muted/50 px-3 py-1.5">
-        <span className="text-xs text-muted-foreground">
-          {rows.length} event{rows.length === 1 ? '' : 's'}
-        </span>
-        <div className="flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-xs" aria-label="Scroll to top" onClick={scrollToTop}>
-                <HugeiconsIcon icon={ArrowUp01Icon} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Scroll to top</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-xs" aria-label="Scroll to bottom" onClick={scrollToBottom}>
-                <HugeiconsIcon icon={ArrowDown01Icon} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Scroll to bottom</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <CopyButton text={timelineText(rows)} label="Copy timeline" alwaysVisible />
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Copy</TooltipContent>
-          </Tooltip>
-          <FullscreenToggle fullscreen={fullscreen} onToggle={toggle} />
-        </div>
-      </div>
-      <div
-        ref={containerRef}
-        onScroll={handleScroll}
-        className={
-          fullscreen
-            ? 'flex-1 overflow-y-auto bg-zinc-950 px-3 py-2 font-mono text-xs dark:bg-black'
-            : 'h-80 overflow-y-auto bg-zinc-950 px-3 py-2 font-mono text-xs dark:bg-black'
-        }
-      >
-        {rows.length === 0 ? (
-          <p className="text-zinc-500">No events yet.</p>
-        ) : (
-          <ol className="space-y-1">
-            {rows.map((e) => (
-              <li key={e.seq} className="flex gap-3 text-zinc-300">
-                <span className="w-24 shrink-0 whitespace-nowrap text-zinc-500">
-                  {new Date(e.created_at).toLocaleTimeString()}
-                </span>
-                <span className="flex-1 break-words">
-                  {phasesBySeq.has(e.seq) && <PhaseChip phase={phasesBySeq.get(e.seq)!} />}
-                  {renderEvent(e, rows)}
-                  {e.kind === 'mission.turn' && <TurnTraceToggle calls={toolCallsByTurn.get(e.seq) ?? []} />}
-                </span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
-    </div>
+    <Panel title="Timeline" density="operational" actions={actions} className={fullscreen ? 'flex h-full flex-col' : undefined}>
+      {log}
+    </Panel>
   )
 
   if (!fullscreen) return <TooltipProvider>{panel}</TooltipProvider>
@@ -266,3 +202,20 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
     </TooltipProvider>
   )
 }
+
+// disclosurePayloadKinds are the kinds whose own renderer output only
+// summarizes the payload: the row gets a disclosure with the raw
+// payload underneath. Everything else's renderer already shows every
+// field it has, so no extra disclosure.
+const disclosurePayloadKinds = new Set([
+  'mission.plan_created',
+  'mission.review_verdict',
+  'mission.blocked',
+  'mission.failed',
+  'mission.violation',
+  'mission.recovery',
+  'executor.result',
+  'mission.permission_requested',
+  'mission.steered',
+  'mission.route_changed',
+])

@@ -1,16 +1,16 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PlanUnit } from '../../api/types'
-import { PlanApprovalBanner } from './PlanApprovalBanner'
+import { PlanApprovalGate } from './PlanApprovalGate'
 
 afterEach(cleanup)
 
 const units: PlanUnit[] = [{ title: 'Add validation', verify_cmd: 'go test ./...', passes: false }]
 
-describe('PlanApprovalBanner', () => {
+describe('PlanApprovalGate', () => {
   it('renders the plan units and assumptions', () => {
     render(
-      <PlanApprovalBanner
+      <PlanApprovalGate
         units={units}
         assumptions={[{ assumption: 'no language version was specified', default: 'Python 3.12' }]}
         onApprove={vi.fn()}
@@ -22,29 +22,28 @@ describe('PlanApprovalBanner', () => {
     expect(screen.getByText(/no language version was specified/)).toBeInTheDocument()
   })
 
+  it('is a labeled region', () => {
+    render(<PlanApprovalGate units={units} onApprove={vi.fn()} onReplan={vi.fn()} onRediscover={vi.fn()} />)
+    expect(screen.getByRole('region', { name: 'Plan ready for review' })).toBeInTheDocument()
+  })
+
   it('calls onApprove when Approve is clicked', () => {
     const onApprove = vi.fn()
-    render(
-      <PlanApprovalBanner units={units} onApprove={onApprove} onReplan={vi.fn()} onRediscover={vi.fn()} />,
-    )
+    render(<PlanApprovalGate units={units} onApprove={onApprove} onReplan={vi.fn()} onRediscover={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
     expect(onApprove).toHaveBeenCalled()
   })
 
   it('calls onRediscover when Rediscover is clicked', () => {
     const onRediscover = vi.fn()
-    render(
-      <PlanApprovalBanner units={units} onApprove={vi.fn()} onReplan={vi.fn()} onRediscover={onRediscover} />,
-    )
+    render(<PlanApprovalGate units={units} onApprove={vi.fn()} onReplan={vi.fn()} onRediscover={onRediscover} />)
     fireEvent.click(screen.getByRole('button', { name: 'Rediscover' }))
     expect(onRediscover).toHaveBeenCalled()
   })
 
   it('reveals a textarea when Request replan is clicked, and submits its text', () => {
     const onReplan = vi.fn()
-    render(
-      <PlanApprovalBanner units={units} onApprove={vi.fn()} onReplan={onReplan} onRediscover={vi.fn()} />,
-    )
+    render(<PlanApprovalGate units={units} onApprove={vi.fn()} onReplan={onReplan} onRediscover={vi.fn()} />)
     expect(screen.queryByPlaceholderText(/Optional feedback/)).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Request replan' }))
@@ -57,9 +56,7 @@ describe('PlanApprovalBanner', () => {
 
   it('submits empty feedback when Send is clicked with no text typed', () => {
     const onReplan = vi.fn()
-    render(
-      <PlanApprovalBanner units={units} onApprove={vi.fn()} onReplan={onReplan} onRediscover={vi.fn()} />,
-    )
+    render(<PlanApprovalGate units={units} onApprove={vi.fn()} onReplan={onReplan} onRediscover={vi.fn()} />)
     fireEvent.click(screen.getByRole('button', { name: 'Request replan' }))
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(onReplan).toHaveBeenCalledWith('')
@@ -67,7 +64,7 @@ describe('PlanApprovalBanner', () => {
 
   it('shows a status line and hides the buttons once answered', () => {
     render(
-      <PlanApprovalBanner
+      <PlanApprovalGate
         units={units}
         answeredDecision="approve"
         onApprove={vi.fn()}

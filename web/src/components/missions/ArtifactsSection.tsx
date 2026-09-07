@@ -1,10 +1,4 @@
-import {
-  FolderZipIcon,
-  LibraryIcon,
-  Loading03Icon,
-  Pdf02Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { BookOpen, FileDown, FolderArchive, FolderOpen } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -20,7 +14,12 @@ import type { KbCollection, MediaRef, MissionFile } from '../../api/types'
 import { errText } from '../settings/util'
 import { Button } from '../ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { TooltipProvider } from '../ui/tooltip'
+import { EmptyState } from '../timothy/empty-state'
+import { Field } from '../timothy/field'
+import { IconButton } from '../timothy/icon-button'
+import { Panel } from '../timothy/panel'
 import { ArtifactRefChips } from './ArtifactRefsSection'
 import { buildFileTree, type FileTreeNode } from './fileTree'
 import { FileTreeView } from './FileTreeView'
@@ -85,24 +84,22 @@ function PromoteToKBDialog({
             ingestion finishes.
           </p>
         ) : (
-          <div className="space-y-1.5">
-            <label htmlFor="promote-kb-collection" className="text-sm font-medium">
-              Collection
-            </label>
-            <select
-              id="promote-kb-collection"
-              value={collectionId}
-              onChange={(e) => setCollectionId(e.target.value)}
-              className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-            >
-              <option value="">Select a collection…</option>
-              {(collections ?? []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
+          <Field label="Collection" htmlFor="promote-kb-collection">
+            {(controlProps) => (
+              <Select value={collectionId} onValueChange={setCollectionId}>
+                <SelectTrigger id={controlProps.id} className="w-full" aria-describedby={controlProps['aria-describedby']}>
+                  <SelectValue placeholder="Select a collection…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(collections ?? []).map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </Field>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
@@ -192,88 +189,58 @@ export function ArtifactsSection({
   // No live workspace: render the refs chips alone, no panel chrome.
   if (!hasWorkspace) {
     return (
-      <section>
-        <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-sm font-semibold tracking-tight">Artifacts</h2>
-          {canPromote && (
-            <Button variant="outline" size="sm" onClick={() => setPromoteOpen(true)}>
-              <HugeiconsIcon icon={LibraryIcon} />
-              Promote to KB
-            </Button>
-          )}
-        </div>
-        <ArtifactRefChips refs={refs} />
+      <TooltipProvider>
+        <Panel
+          title="Files"
+          density="operational"
+          actions={canPromote ? <Button variant="outline" size="sm" onClick={() => setPromoteOpen(true)}>Promote to KB</Button> : undefined}
+        >
+          <div className="p-3">
+            <ArtifactRefChips refs={refs} />
+          </div>
+        </Panel>
         <PromoteToKBDialog missionId={missionId} open={promoteOpen} onOpenChange={setPromoteOpen} />
-      </section>
+      </TooltipProvider>
     )
   }
 
-  const panel = (
-    <div
-      className={
-        fullscreen
-          ? 'flex h-full flex-col overflow-hidden rounded-lg border border-border'
-          : 'overflow-hidden rounded-lg border border-border'
-      }
-    >
-      <div className="flex items-center justify-between border-b border-border bg-muted/50 px-3 py-1.5">
-        <span className="text-xs text-muted-foreground">
-          {files.length} file{files.length === 1 ? '' : 's'}
-        </span>
-        <div className="flex items-center gap-1">
-          {canPromote && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Promote workspace markdown artifacts to the knowledge base"
-                  onClick={() => setPromoteOpen(true)}
-                >
-                  <HugeiconsIcon icon={LibraryIcon} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Promote to knowledge base</TooltipContent>
-            </Tooltip>
-          )}
-          {pdfExportEnabled && hasMarkdown && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="Export all workspace markdown as one merged PDF"
-                  onClick={exportAllPdf}
-                  disabled={exportingPdf}
-                >
-                  <HugeiconsIcon
-                    icon={exportingPdf ? Loading03Icon : Pdf02Icon}
-                    className={exportingPdf ? 'animate-spin' : undefined}
-                  />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Export all workspace markdown as one merged PDF</TooltipContent>
-            </Tooltip>
-          )}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Download the workspace as a zip archive"
-                onClick={downloadAll}
-                disabled={files.length === 0}
-              >
-                <HugeiconsIcon icon={FolderZipIcon} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Download the workspace as a zip archive</TooltipContent>
-          </Tooltip>
-          <FullscreenToggle fullscreen={fullscreen} onToggle={toggle} />
-        </div>
-      </div>
+  const actions = (
+    <>
+      <span className="mr-auto text-xs text-muted-foreground">
+        {files.length} file{files.length === 1 ? '' : 's'}
+      </span>
+      {canPromote && (
+        <IconButton
+          size="sm"
+          label="Promote workspace markdown artifacts to the knowledge base"
+          icon={BookOpen}
+          onClick={() => setPromoteOpen(true)}
+        />
+      )}
+      {pdfExportEnabled && hasMarkdown && (
+        <IconButton
+          size="sm"
+          label="Export all workspace markdown as one merged PDF"
+          icon={FileDown}
+          onClick={exportAllPdf}
+          loading={exportingPdf}
+        />
+      )}
+      <IconButton
+        size="sm"
+        label="Download the workspace as a zip archive"
+        icon={FolderArchive}
+        onClick={downloadAll}
+        disabled={files.length === 0}
+      />
+      <FullscreenToggle fullscreen={fullscreen} onToggle={toggle} />
+    </>
+  )
+
+  const body = (
+    <div className={fullscreen ? 'flex h-full flex-col' : undefined}>
       {files.length === 0 ? (
-        <p className="p-3 text-sm text-muted-foreground">No files yet.</p>
+        <EmptyState density="operational" icon={FolderOpen} title="No files yet." />
       ) : (
         <div className={fullscreen ? 'flex min-h-0 flex-1' : 'flex h-80'}>
           <div className="w-60 shrink-0 overflow-y-auto border-r border-border">
@@ -283,32 +250,35 @@ export function ArtifactsSection({
             {selected ? (
               <FileViewer missionId={missionId} file={selected} />
             ) : (
-              <p className="p-3 text-sm text-muted-foreground">Select a file to preview it.</p>
+              <p className="flex h-full items-center justify-center p-3 text-center text-sm text-muted-foreground">
+                Select a file to preview it.
+              </p>
             )}
           </div>
         </div>
       )}
       {truncated && (
-        <p className="border-t border-border px-3 py-1 text-xs text-muted-foreground">
-          list truncated
-        </p>
+        <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground">list truncated</p>
       )}
-      {error && <p className="px-3 py-1 text-xs text-muted-foreground">{error}</p>}
+      {error && <p className="border-t border-border px-3 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
+  )
+
+  const panel = (
+    <Panel title="Files" density="operational" actions={actions} className={fullscreen ? 'flex h-full flex-col' : undefined}>
+      {body}
+    </Panel>
   )
 
   return (
     <TooltipProvider>
-      <section>
-        <h2 className="mb-2 text-sm font-semibold tracking-tight">Artifacts</h2>
-        {fullscreen ? (
-          <FullscreenDialog open={fullscreen} onOpenChange={(o) => !o && close()}>
-            {panel}
-          </FullscreenDialog>
-        ) : (
-          panel
-        )}
-      </section>
+      {fullscreen ? (
+        <FullscreenDialog open={fullscreen} onOpenChange={(o) => !o && close()}>
+          {panel}
+        </FullscreenDialog>
+      ) : (
+        panel
+      )}
       <PromoteToKBDialog missionId={missionId} open={promoteOpen} onOpenChange={setPromoteOpen} />
     </TooltipProvider>
   )

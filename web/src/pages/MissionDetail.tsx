@@ -1,13 +1,4 @@
-import {
-  ArrowLeft01Icon,
-  CloudUploadIcon,
-  Delete02Icon,
-  GitBranchIcon,
-  GitPullRequestCreateIcon,
-  Message01Icon,
-  Pdf02Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { FileText, GitFork, GitPullRequest, MessageSquare, Trash2, Upload } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -40,17 +31,24 @@ import type {
   Schedule,
 } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
+import { CostDisplay } from '../components/missions/CostDisplay'
 import { DiscoverSection } from '../components/missions/DiscoverSection'
 import { FindingsSection } from '../components/missions/FindingsSection'
 import { GoalSection } from '../components/missions/GoalSection'
-import { InputRequestBanner } from '../components/missions/InputRequestBanner'
+import { HarnessIcon, harnessLabel } from '../components/missions/HarnessIcon'
+import { InputRequestGate } from '../components/missions/InputRequestGate'
 import { MarkdownField } from '../components/missions/MarkdownField'
-import { ReviewRoutePicker } from '../components/missions/ReviewRoutePicker'
-import { PermissionBanner } from '../components/missions/PermissionBanner'
-import { PlanApprovalBanner } from '../components/missions/PlanApprovalBanner'
+import { MissionPermissionGate } from '../components/missions/MissionPermissionGate'
+import { PhaseStepper } from '../components/missions/PhaseStepper'
+import { PlanApprovalGate } from '../components/missions/PlanApprovalGate'
 import { PlanSection } from '../components/missions/PlanSection'
 import { ResultSection } from '../components/missions/ResultSection'
+import { ReviewRoutePicker } from '../components/missions/ReviewRoutePicker'
 import { TimelineSection } from '../components/missions/TimelineSection'
+import { ModelBadge } from '../components/ModelBadge'
+import { envIcon } from '../components/icons/EnvIcons'
+import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
+import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import {
   Dialog,
@@ -59,16 +57,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
-import { ModelBadge } from '../components/ModelBadge'
-import { ClaudeCodeIcon } from '../components/icons/ClaudeCodeIcon'
-import { CursorIcon } from '../components/icons/CursorIcon'
-import { OpenAIIcon } from '../components/icons/OpenAIIcon'
-import { OpenCodeIcon } from '../components/icons/OpenCodeIcon'
-import { PiIcon } from '../components/icons/PiIcon'
-import { envIcon } from '../components/icons/EnvIcons'
-import { Badge } from '../components/ui/badge'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
 import { errText } from '../components/settings/util'
+import { ConfirmDialog } from '../components/timothy/confirm-dialog'
+import { CopyButton } from '../components/timothy/copy-button'
+import { Eyebrow, PageHeader } from '../components/timothy/page-header'
+import { PageShell } from '../components/timothy/page-shell'
+import { Panel } from '../components/timothy/panel'
+import { StatusBadge } from '../components/timothy/status-badge'
+import { missionStatus } from '../components/timothy/status'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
@@ -212,42 +208,14 @@ function latestExecutorSpawn(
   return null
 }
 
-// harnessDisplayName maps a registered harness id to the label shown
-// in the pill — mirrors MissionForm's executorChoices labels.
-const harnessDisplayNames: Record<string, string> = {
-  'claude-cli': 'Claude Code',
-  pi: 'pi',
-  'codex-cli': 'Codex CLI',
-  opencode: 'OpenCode',
-  'cursor-cli': 'Cursor CLI',
-}
-
-function harnessDisplayName(harness: string): string {
-  return harnessDisplayNames[harness] ?? harness
-}
-
-// HarnessIcon picks the pill's mark for a harness id, defaulting to
-// the Claude Code mark for ids without one of their own.
-function HarnessIcon({ harness }: { harness: string }) {
-  if (harness === 'pi') return <PiIcon />
-  if (harness === 'codex-cli') return <OpenAIIcon />
-  if (harness === 'opencode') return <OpenCodeIcon />
-  if (harness === 'cursor-cli') return <CursorIcon />
-  return <ClaudeCodeIcon />
-}
-
-// CostBadge renders the billed-cost pill: a plain Badge when there's
-// no unbilled (subscription) cost to note, or one wrapped in a Tooltip
-// showing that single line when there is.
-function CostBadge({ cost, currency, unbilledLine }: { cost: number; currency: string; unbilledLine: string | null }) {
-  const badge = <Badge variant="secondary">{money(cost, currency)}</Badge>
-  if (!unbilledLine) return badge
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{badge}</TooltipTrigger>
-      <TooltipContent>{unbilledLine}</TooltipContent>
-    </Tooltip>
-  )
+// statusLabel mirrors MissionCard's own rule for the header badge:
+// non-terminal statuses print as-is (underscores to spaces), phase=done
+// reads as "done", and phase=failed reads as "cancelled" (failure_reason)
+// or "failed".
+function statusLabel(mission: Mission): string {
+  if (mission.phase === 'done') return 'done'
+  if (mission.phase === 'failed') return mission.failure_reason === 'cancelled' ? 'cancelled' : 'failed'
+  return mission.status.replace(/_/g, ' ')
 }
 
 export function MissionDetail() {
@@ -391,14 +359,15 @@ export function MissionDetail() {
   if (!id) return null
   if (!mission) {
     return (
-      <div className="mx-auto w-full max-w-full px-8 py-6">
+      <PageShell>
         <p className="text-sm text-muted-foreground">Loading…</p>
-      </div>
+      </PageShell>
     )
   }
 
   const canResume = resumableStatuses.has(mission.status)
   const canCancel = !terminalPhases.has(mission.phase)
+  const isTerminal = terminalPhases.has(mission.phase)
   // isGitHubConnection: a coding mission cloned through a connector —
   // gets the two-button push affordance; every other mission keeps the
   // existing single push flow (currently: none rendered — see slice 3
@@ -418,13 +387,13 @@ export function MissionDetail() {
     .map((d) => (d.config as unknown as GitHubDestinationConfig).mode)
 
   const { turns, processingMs } = turnStats(events)
-  const executorActivity = terminalPhases.has(mission.phase) ? null : latestExecutorProgress(events)
+  const executorActivity = isTerminal ? null : latestExecutorProgress(events)
   const executorSpawn = latestExecutorSpawn(events)
   // A live mission's elapsed span runs to now, not its last updated_at
   // (which only moves on a state transition, not while a turn is
   // in-flight) — otherwise "Elapsed" would understate a mission stuck
   // mid-turn.
-  const elapsedEnd = terminalPhases.has(mission.phase) ? mission.updated_at : new Date().toISOString()
+  const elapsedEnd = isTerminal ? mission.updated_at : new Date().toISOString()
   const elapsedMs = new Date(elapsedEnd).getTime() - new Date(mission.created_at).getTime()
 
   // pause_message never carries real content (the state machine clears
@@ -611,406 +580,204 @@ export function MissionDetail() {
         : undefined
 
   return (
-    <div className="mx-auto w-full max-w-full space-y-6 px-8 py-6">
-      <Link
-        to="/missions"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Missions
-      </Link>
-
-      {mission.pending_permission && (
-        <PermissionBanner
-          tool={mission.pending_permission_tool}
-          args={mission.pending_permission_args}
-          danger={mission.pending_permission_danger}
-          rationale={mission.pending_permission_rationale}
-          answeredDecision={answeredDecision}
-          onDecide={(d) => void decidePermission(d)}
-          timeoutSeconds={mission.permission_timeout_seconds}
-        />
-      )}
-
-      {pendingPlanApproval && (
-        <PlanApprovalBanner
-          units={mission.plan?.units ?? []}
-          assumptions={mission.plan?.assumptions}
-          answeredDecision={answeredPlanDecision ?? undefined}
-          onApprove={() => void approvePlan()}
-          onReplan={(feedback) => void requestReplan(feedback)}
-          onRediscover={() => void rediscover()}
-        />
-      )}
-
-      {pendingInput && (
-        <InputRequestBanner
-          question={pendingInput.question}
-          kind={pendingInput.kind}
-          options={pendingInput.options}
-          proposedDefault={pendingInput.proposed_default}
-          answered={
-            answeredQuestion && answeredQuestion.question === pendingInput.question
-              ? answeredQuestion.answer
-              : undefined
-          }
-          onAnswer={(answer) => void answerQuestion(answer)}
-          askedAt={pendingInput.asked_at}
-        />
-      )}
-
-      <div className="border-b border-border pb-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">{missionDisplayName(mission)}</h1>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
-              <span className="capitalize">{mission.kind}</span>
-              <span>{mission.phase}</span>
-              <span>{mission.status.replace(/_/g, ' ')}</span>
-              <span title={new Date(mission.created_at).toLocaleString()}>
-                created {relativeTime(mission.created_at)}
-              </span>
-              {executorActivity && (
-                <span>
-                  harness: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
-                  {executorActivity.tool_calls} tool call{executorActivity.tool_calls === 1 ? '' : 's'}
-                  {executorActivity.worktree && (
-                    <>
-                      {' · '}
-                      {executorActivity.worktree.untracked} new · {executorActivity.worktree.modified} modified
-                      {executorActivity.worktree.newest_mtime > 0 &&
-                        ` · changed ${relativeTime(new Date(executorActivity.worktree.newest_mtime * 1000).toISOString())}`}
-                    </>
-                  )}
-                </span>
-              )}
-              {!terminalPhases.has(mission.phase) && mission.iteration > 0 && (
-                <span>Retries {mission.iteration}</span>
-              )}
-              {mission.budget_amount != null && (
-                <span>budget {money(mission.budget_amount, mission.budget_currency ?? 'USD')}</span>
-              )}
-              {mission.route && <span>route: {mission.route}</span>}
-              {mission.plan_route && <span>plan route: {mission.plan_route}</span>}
-            </div>
-            {mission.branch && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {mission.branch} @ {mission.base_commit?.slice(0, 8)}
-                {mission.repo_url && (
-                  <>
-                    {' · '}
-                    <a
-                      href={githubHTMLURL(mission.repo_url)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline underline-offset-2 hover:text-foreground"
-                    >
-                      {githubFullName(mission.repo_url)}
-                    </a>
-                  </>
-                )}
-                {prChip && (
-                  <>
-                    {' · '}
-                    <a
-                      href={prChip.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline underline-offset-2 hover:text-foreground"
-                    >
-                      PR #{prChip.number}
-                    </a>
-                  </>
-                )}
-              </p>
-            )}
-            {schedule && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Recurring · {describeCron(schedule.cron)} · next run {formatDate(schedule.next_run)}
-              </p>
-            )}
-            {mission.parent_mission_id && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                Follow-up of{' '}
-                <Link
-                  to={`/missions/${mission.parent_mission_id}`}
-                  className="underline underline-offset-2 hover:text-foreground"
-                >
-                  {mission.parent_mission_id.slice(0, 8)}
-                </Link>
-              </p>
-            )}
-            {mission.attachments && mission.attachments.length > 0 && (
-              // Plain chips, not download links: the download path would
-              // need the bearer-token blob flow client.ts's
-              // fetchAttachmentBlob/fetchBlobDownload use elsewhere, which
-              // felt like more plumbing than this summary line warrants.
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                {mission.attachments.map((a) => (
-                  <span
-                    key={a.id}
-                    className="inline-flex items-center gap-1 rounded-lg border border-border bg-muted/30 px-2 py-0.5 text-xs text-muted-foreground"
+    <PageShell>
+      <PageHeader
+        breadcrumbs={[{ label: 'Missions', href: '/missions' }, { label: missionDisplayName(mission) }]}
+        title={missionDisplayName(mission)}
+        meta={<StatusBadge status={missionStatus(mission)} label={statusLabel(mission)} />}
+        actions={
+          <>
+            {isGitHubConnection && mission.branch && (
+              <>
+                <Button variant="outline" size="icon" aria-label="Push branch" disabled={pushing} onClick={() => void push()}>
+                  <Upload aria-hidden />
+                </Button>
+                {!prChip && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="Push & open PR"
+                    disabled={openingPR}
+                    onClick={() => void openPR()}
                   >
-                    <HugeiconsIcon icon={Pdf02Icon} className="size-3" />
-                    {a.name ?? a.id.slice(0, 8)}
-                  </span>
-                ))}
-              </div>
+                    <GitPullRequest aria-hidden />
+                  </Button>
+                )}
+              </>
             )}
-            {mission.status === 'paused' && mission.pause_reason && (
-              <p className="mt-2 text-sm font-medium text-amber-700 dark:text-amber-400">
-                Paused: {pauseReasonLabels[mission.pause_reason] ?? mission.pause_reason}
-              </p>
+            {canResume && (
+              <Button disabled={busy} onClick={() => void resume()}>
+                Resume
+              </Button>
             )}
-            {pauseDetail && (
-              <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">{pauseDetail}</p>
+            <Button variant="outline" disabled={isTerminal} onClick={() => setIntervening(true)}>
+              <MessageSquare aria-hidden />
+              Intervene
+            </Button>
+            {canCancel && (
+              <Button variant="destructive" disabled={busy} onClick={() => void cancel()}>
+                Cancel
+              </Button>
             )}
-          </div>
-          <TooltipProvider>
-            <div className="flex shrink-0 gap-2">
-              {isGitHubConnection && mission.branch && (
-                <>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        aria-label="Push branch"
-                        disabled={pushing}
-                        onClick={() => void push()}
-                      >
-                        <HugeiconsIcon icon={CloudUploadIcon} />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>Push branch to GitHub</TooltipContent>
-                  </Tooltip>
-                  {!prChip && (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          aria-label="Push & open PR"
-                          disabled={openingPR}
-                          onClick={() => void openPR()}
-                        >
-                          <HugeiconsIcon icon={GitPullRequestCreateIcon} />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>Push and open a pull request</TooltipContent>
-                    </Tooltip>
-                  )}
-                </>
-              )}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span>
-                    <Button
-                      variant="outline"
-                      disabled={terminalPhases.has(mission.phase)}
-                      onClick={() => setIntervening(true)}
-                    >
-                      <HugeiconsIcon icon={Message01Icon} />
-                      Intervene
-                    </Button>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {terminalPhases.has(mission.phase)
-                    ? 'This mission has finished; there is nothing left to steer'
-                    : 'Send a note to steer this mission, whatever phase it is in'}
-                </TooltipContent>
-              </Tooltip>
-              {canResume && (
-                <Button variant="outline" disabled={busy} onClick={() => void resume()}>
-                  Resume
-                </Button>
-              )}
-              {canCancel && (
-                <Button variant="destructive" disabled={busy} onClick={() => void cancel()}>
-                  Cancel
-                </Button>
-              )}
-              {terminalPhases.has(mission.phase) && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      aria-label="Fork"
-                      onClick={() => navigate(`/missions/new?parent=${mission.id}`)}
-                    >
-                      <HugeiconsIcon icon={GitBranchIcon} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Fork this mission</TooltipContent>
-                </Tooltip>
-              )}
-              {terminalPhases.has(mission.phase) && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="destructive"
-                      size="icon"
-                      aria-label="Delete mission"
-                      disabled={busy}
-                      onClick={() => setConfirmDelete(true)}
-                    >
-                      <HugeiconsIcon icon={Delete02Icon} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Delete mission</TooltipContent>
-                </Tooltip>
-              )}
-            </div>
-          </TooltipProvider>
-        </div>
-        <div className="mt-2">
-          <GoalSection goal={mission.goal} />
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          {usage &&
-            usage.requests > 0 &&
-            usage.models
-              .filter((m) => !m.harness)
-              .map((m) => (
-                <ModelBadge
-                  key={`${m.provider}:${m.model}`}
-                  provider={m.provider}
-                  model={m.model}
-                  title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
-                />
-              ))}
-          {executorSpawn && (
-            <Badge
-              variant="secondary"
-              aria-label={`${harnessDisplayName(executorSpawn.harness)} harness`}
-              title={`Delegated CLI harness (${harnessDisplayName(executorSpawn.harness)}) that ran this mission's coding work, via ${executorSpawn.provider}`}
-            >
-              <HarnessIcon harness={executorSpawn.harness} />
-              {executorSpawn.model}
-            </Badge>
-          )}
-          {mission.environment &&
-            (() => {
-              const EnvIcon = envIcon(mission.environment)
-              const label = `${mission.environment} environment`
-              return (
-                <Badge
-                  variant="secondary"
-                  aria-label={EnvIcon ? label : undefined}
-                  title={EnvIcon ? label : "Sandbox environment this mission's container runs"}
-                >
-                  {EnvIcon ? <EnvIcon /> : `env · ${mission.environment}`}
-                </Badge>
-              )
-            })()}
-          {githubModes.includes('push') && (
-            <Badge variant="secondary" title="This mission pushes its branch automatically when it finishes">
-              auto-push
-            </Badge>
-          )}
-          {githubModes.includes('push_pr') && (
-            <Badge
-              variant="secondary"
-              title="This mission pushes its branch and opens a pull request automatically when it finishes"
-            >
-              auto-PR
-            </Badge>
-          )}
-          {usage && usage.requests > 0 && (
-            <Badge variant="secondary" title="input→output tokens; cached = input read from the provider's prompt cache">
-              {compact(usage.input_tokens)}→{compact(usage.output_tokens)} tok
-              {usage.cache_read_tokens ? ` · ${compact(usage.cache_read_tokens)} cached` : ''}
-            </Badge>
-          )}
-          {usage && usage.review_input_tokens ? (
-            <Badge
-              variant="secondary"
-              title={
-                usage.review_token_ceiling
-                  ? 'Input tokens spent on review turns against the per-mission review token ceiling'
-                  : 'Input tokens spent on review turns (no ceiling set)'
-              }
-            >
-              review {compact(usage.review_input_tokens)}
-              {usage.review_token_ceiling ? ` / ${compact(usage.review_token_ceiling)}` : ''} tok
-            </Badge>
-          ) : null}
-          <Badge variant="secondary" title="Time spent actively processing">
-            proc {formatDuration(processingMs)}
-          </Badge>
-          <Badge variant="secondary" title="Wall-clock time since the mission started">
-            total {formatDuration(elapsedMs)}
-          </Badge>
-          {usage && usage.requests > 0 && (
-            <TooltipProvider>
-              {usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0 ? (
-                Object.entries(usage.converted_cost_by_currency).map(([currency, cost]) => (
-                  <CostBadge
-                    key={currency}
-                    cost={cost}
-                    currency={currency}
-                    unbilledLine={unbilledTooltipLine(usage, currency)}
-                  />
-                ))
-              ) : (
-                Object.entries(usage.cost_by_currency).map(([currency, cost]) => (
-                  <CostBadge
-                    key={currency}
-                    cost={cost}
-                    currency={currency}
-                    unbilledLine={unbilledTooltipLine(usage, currency)}
-                  />
-                ))
-              )}
-            </TooltipProvider>
-          )}
-          <Badge variant="secondary">
-            {turns} turn{turns === 1 ? '' : 's'}
-          </Badge>
-          {usage && usage.requests > 0 && (
+            {isTerminal && (
+              <Button variant="ghost" size="icon" aria-label="Fork" onClick={() => navigate(`/missions/new?parent=${mission.id}`)}>
+                <GitFork aria-hidden />
+              </Button>
+            )}
+            {isTerminal && (
+              <Button
+                variant="destructive"
+                size="icon"
+                aria-label="Delete mission"
+                disabled={busy}
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Trash2 aria-hidden />
+              </Button>
+            )}
+          </>
+        }
+      >
+        <PhaseStepper phase={mission.phase} status={missionStatus(mission)} light={mission.light} />
+      </PageHeader>
+
+      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span title={new Date(mission.created_at).toLocaleString()}>created {relativeTime(mission.created_at)}</span>
+        {executorActivity && (
+          <span>
+            harness: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
+            {executorActivity.tool_calls} tool call{executorActivity.tool_calls === 1 ? '' : 's'}
+            {executorActivity.worktree && (
+              <>
+                {' · '}
+                {executorActivity.worktree.untracked} new · {executorActivity.worktree.modified} modified
+                {executorActivity.worktree.newest_mtime > 0 &&
+                  ` · changed ${relativeTime(new Date(executorActivity.worktree.newest_mtime * 1000).toISOString())}`}
+              </>
+            )}
+          </span>
+        )}
+        {!isTerminal && mission.iteration > 0 && <span>Retries {mission.iteration}</span>}
+        {mission.budget_amount != null && (
+          <span>budget {money(mission.budget_amount, mission.budget_currency ?? 'USD')}</span>
+        )}
+        {mission.route && <span>route: {mission.route}</span>}
+        {mission.plan_route && <span>plan route: {mission.plan_route}</span>}
+        <span className="capitalize">{mission.kind}</span>
+      </div>
+      {mission.branch && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {mission.branch} @ {mission.base_commit?.slice(0, 8)}
+          {mission.repo_url && (
             <>
-              <Badge variant="secondary">
-                {usage.requests} call{usage.requests === 1 ? '' : 's'}
-              </Badge>
-              {usage.unpriced_requests > 0 && (
-                <Badge
-                  variant="secondary"
-                  title="Some calls have no configured price; their cost is not included."
-                >
-                  {usage.unpriced_requests} unpriced call{usage.unpriced_requests === 1 ? '' : 's'}
-                </Badge>
-              )}
-              {mission.budget_amount != null &&
-                mission.budget_amount > 0 &&
-                (() => {
-                  const pct = budgetPercentSpent(usage, mission.budget_currency ?? 'USD', mission.budget_amount)
-                  return pct == null ? null : <Badge variant="secondary">{pct}% of budget</Badge>
-                })()}
+              {' · '}
+              <a
+                href={githubHTMLURL(mission.repo_url)}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                {githubFullName(mission.repo_url)}
+              </a>
             </>
           )}
+          {prChip && (
+            <>
+              {' · '}
+              <a
+                href={prChip.url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                PR #{prChip.number}
+              </a>
+            </>
+          )}
+        </p>
+      )}
+      {schedule && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Recurring · {describeCron(schedule.cron)} · next run {formatDate(schedule.next_run)}
+        </p>
+      )}
+      {mission.parent_mission_id && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Follow-up of{' '}
+          <Link to={`/missions/${mission.parent_mission_id}`} className="underline underline-offset-2 hover:text-foreground">
+            {mission.parent_mission_id.slice(0, 8)}
+          </Link>
+        </p>
+      )}
+      {mission.attachments && mission.attachments.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1.5">
+          {mission.attachments.map((a) => (
+            <Badge key={a.id} variant="outline" size="sm">
+              <FileText aria-hidden />
+              {a.name ?? a.id.slice(0, 8)}
+            </Badge>
+          ))}
         </div>
+      )}
+
+      {mission.status === 'paused' && mission.pause_reason && (
+        <Alert tone="warning" className="mt-4">
+          <AlertTitle>Paused: {pauseReasonLabels[mission.pause_reason] ?? mission.pause_reason}</AlertTitle>
+          {pauseDetail && <AlertDescription>{pauseDetail}</AlertDescription>}
+        </Alert>
+      )}
+
+      <div className="mt-6 space-y-4">
+        {mission.pending_permission && (
+          <MissionPermissionGate
+            tool={mission.pending_permission_tool}
+            args={mission.pending_permission_args}
+            danger={mission.pending_permission_danger}
+            rationale={mission.pending_permission_rationale}
+            answeredDecision={answeredDecision}
+            onDecide={(d) => void decidePermission(d)}
+            timeoutSeconds={mission.permission_timeout_seconds}
+          />
+        )}
+
+        {pendingPlanApproval && (
+          <PlanApprovalGate
+            units={mission.plan?.units ?? []}
+            assumptions={mission.plan?.assumptions}
+            answeredDecision={answeredPlanDecision ?? undefined}
+            onApprove={() => void approvePlan()}
+            onReplan={(feedback) => void requestReplan(feedback)}
+            onRediscover={() => void rediscover()}
+          />
+        )}
+
+        {pendingInput && (
+          <InputRequestGate
+            question={pendingInput.question}
+            kind={pendingInput.kind}
+            options={pendingInput.options}
+            proposedDefault={pendingInput.proposed_default}
+            answered={
+              answeredQuestion && answeredQuestion.question === pendingInput.question
+                ? answeredQuestion.answer
+                : undefined
+            }
+            onAnswer={(answer) => void answerQuestion(answer)}
+            askedAt={pendingInput.asked_at}
+          />
+        )}
       </div>
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete this mission?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This removes the mission, its events, and its workspace. This cannot be undone.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" disabled={busy} onClick={() => void remove()}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this mission?"
+        description="This removes the mission, its events, and its workspace. This cannot be undone."
+        confirmLabel="Delete"
+        destructive
+        loading={busy}
+        onConfirm={() => void remove()}
+      />
 
       <Dialog open={intervening} onOpenChange={setIntervening}>
         <DialogContent>
@@ -1048,116 +815,221 @@ export function MissionDetail() {
         </DialogContent>
       </Dialog>
 
-      {mission.discover_notes && (
-        <section>
-          <h2 className="mb-2 text-sm font-semibold tracking-tight">Discover</h2>
-          <DiscoverSection notes={mission.discover_notes} />
-        </section>
-      )}
+      <div className="mt-10 space-y-10">
+        <GoalSection goal={mission.goal} />
 
-      {(mission.plan?.units?.length ?? 0) > 0 && (
-        <section>
-          <h2 className="mb-2 text-sm font-semibold tracking-tight">Plan</h2>
-          <PlanSection units={mission.plan?.units ?? []} assumptions={mission.plan?.assumptions} />
-        </section>
-      )}
+        {mission.discover_notes && <DiscoverSection notes={mission.discover_notes} />}
 
-      {(mission.review_findings?.length ?? 0) > 0 && (
-        <section>
-          <h2 className="mb-2 text-sm font-semibold tracking-tight">Review findings</h2>
-          <FindingsSection findings={mission.review_findings ?? []} />
-        </section>
-      )}
-
-      {terminalPhases.has(mission.phase) &&
-        (runsPlanless(mission) ? mission.final_output : mission.last_evidence) && (
-          <section>
-            <h2 className="mb-2 text-sm font-semibold tracking-tight">Result</h2>
-            <ResultSection
-              evidence={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''}
-            />
-          </section>
+        {(mission.plan?.units?.length ?? 0) > 0 && (
+          <Panel title="Plan">
+            <PlanSection units={mission.plan?.units ?? []} assumptions={mission.plan?.assumptions} />
+          </Panel>
         )}
 
-      {mission.destinations && mission.destinations.length > 0 && (
-        <section>
-          <h2 className="mb-2 text-sm font-semibold tracking-tight">Destinations</h2>
-          <div className="space-y-1.5 rounded-lg border border-border p-3 text-sm">
-            {mission.destinations.map((d, i) => {
-              const row = d.destination_id ? destinationsByID.get(d.destination_id) : undefined
-              const isGitHub = row?.kind === 'github'
-              const mode = isGitHub ? (row.config as unknown as GitHubDestinationConfig).mode : undefined
-              return (
-                <div key={d.destination_id || `${d.destination}-${i}`} className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground uppercase">
-                    {row?.kind ?? d.destination ?? 'destination'}
-                  </span>
-                  {isGitHub ? (
-                    <span className="truncate">
-                      <span className="font-medium text-foreground">{row.name}</span>
-                      {d.repo_url && (
-                        <>
-                          {' · '}
-                          <a
-                            href={githubHTMLURL(d.repo_url)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="underline underline-offset-2 hover:text-foreground"
-                          >
-                            {githubFullName(d.repo_url)}
-                          </a>
-                        </>
-                      )}
-                      {mode && ` · ${mode === 'push_pr' ? 'push + PR' : 'push'}`}
-                      {d.branch && ` · ${d.branch}`}
-                      {d.pr_url && (
-                        <>
-                          {' · '}
-                          <a
-                            href={d.pr_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="underline underline-offset-2 hover:text-foreground"
-                          >
-                            PR #{d.pr_number}
-                          </a>
-                        </>
-                      )}
+        {(mission.review_findings?.length ?? 0) > 0 && (
+          <Panel title="Review findings">
+            <FindingsSection findings={mission.review_findings ?? []} />
+          </Panel>
+        )}
+
+        {isTerminal && (runsPlanless(mission) ? mission.final_output : mission.last_evidence) && (
+          <Panel
+            title="Result"
+            actions={<CopyButton value={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''} label="Copy result" />}
+          >
+            <ResultSection evidence={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''} />
+          </Panel>
+        )}
+
+        {mission.destinations && mission.destinations.length > 0 && (
+          <Panel title="Destinations">
+            <div className="divide-y divide-border">
+              {mission.destinations.map((d, i) => {
+                const row = d.destination_id ? destinationsByID.get(d.destination_id) : undefined
+                const isGitHub = row?.kind === 'github'
+                const mode = isGitHub ? (row.config as unknown as GitHubDestinationConfig).mode : undefined
+                return (
+                  <div key={d.destination_id || `${d.destination}-${i}`} className="flex items-center gap-2 py-2 text-sm">
+                    <span className="text-xs text-muted-foreground uppercase">
+                      {row?.kind ?? d.destination ?? 'destination'}
                     </span>
-                  ) : d.destination === 'kb' ? (
-                    <span className="text-muted-foreground">promoted to knowledge base</span>
-                  ) : (
-                    <span className="text-muted-foreground">{row?.name ?? d.destination_id}</span>
-                  )}
-                  {d.delivered_at && (
-                    <Badge variant="secondary" title={`Delivered ${formatDate(d.delivered_at)}`}>
-                      delivered
-                    </Badge>
-                  )}
-                  {d.error && (
-                    <Badge variant="destructive" title={d.error}>
-                      failed
-                    </Badge>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </section>
-      )}
+                    {isGitHub ? (
+                      <span className="truncate">
+                        <span className="font-medium text-foreground">{row.name}</span>
+                        {d.repo_url && (
+                          <>
+                            {' · '}
+                            <a
+                              href={githubHTMLURL(d.repo_url)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline underline-offset-2 hover:text-foreground"
+                            >
+                              {githubFullName(d.repo_url)}
+                            </a>
+                          </>
+                        )}
+                        {mode && ` · ${mode === 'push_pr' ? 'push + PR' : 'push'}`}
+                        {d.branch && ` · ${d.branch}`}
+                        {d.pr_url && (
+                          <>
+                            {' · '}
+                            <a
+                              href={d.pr_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline underline-offset-2 hover:text-foreground"
+                            >
+                              PR #{d.pr_number}
+                            </a>
+                          </>
+                        )}
+                      </span>
+                    ) : d.destination === 'kb' ? (
+                      <span className="text-muted-foreground">promoted to knowledge base</span>
+                    ) : (
+                      <span className="text-muted-foreground">{row?.name ?? d.destination_id}</span>
+                    )}
+                    {d.delivered_at && (
+                      <StatusBadge status="success" label="delivered" size="sm" />
+                    )}
+                    {d.error && <StatusBadge status="error" label="failed" size="sm" />}
+                  </div>
+                )
+              })}
+            </div>
+          </Panel>
+        )}
 
-      <ArtifactsSection
-        missionId={id}
-        missionName={mission.name}
-        phase={mission.phase}
-        workspace={mission.workspace}
-        refs={mission.artifact_refs ?? []}
-      />
+        <ArtifactsSection
+          missionId={id}
+          missionName={mission.name}
+          phase={mission.phase}
+          workspace={mission.workspace}
+          refs={mission.artifact_refs ?? []}
+        />
 
-      <section>
-        <h2 className="mb-2 text-sm font-semibold tracking-tight">Timeline</h2>
         <TimelineSection events={events} />
-      </section>
-    </div>
+
+        <Panel title="Cost">
+          <div className="space-y-4">
+            {usage &&
+              usage.requests > 0 &&
+              (usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0
+                ? Object.entries(usage.converted_cost_by_currency)
+                : Object.entries(usage.cost_by_currency)
+              ).map(([currency, cost]) => (
+                <CostDisplay
+                  key={currency}
+                  cost={cost}
+                  currency={currency}
+                  budget={mission.budget_amount != null && mission.budget_currency === currency ? mission.budget_amount : undefined}
+                  detail={unbilledTooltipLine(usage, currency)}
+                />
+              ))}
+            <div>
+              <Eyebrow>Usage</Eyebrow>
+              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {usage &&
+                  usage.requests > 0 &&
+                  usage.models
+                    .filter((m) => !m.harness)
+                    .map((m) => (
+                      <ModelBadge
+                        key={`${m.provider}:${m.model}`}
+                        provider={m.provider}
+                        model={m.model}
+                        title={`${m.requests} call${m.requests === 1 ? '' : 's'} via ${m.provider}`}
+                      />
+                    ))}
+                {executorSpawn && (
+                  <Badge
+                    variant="secondary"
+                    aria-label={`${harnessLabel(executorSpawn.harness)} harness`}
+                    title={`Delegated CLI harness (${harnessLabel(executorSpawn.harness)}) that ran this mission's coding work, via ${executorSpawn.provider}`}
+                  >
+                    <HarnessIcon harness={executorSpawn.harness} />
+                    {executorSpawn.model}
+                  </Badge>
+                )}
+                {mission.environment &&
+                  (() => {
+                    const EnvIcon = envIcon(mission.environment)
+                    const label = `${mission.environment} environment`
+                    return (
+                      <Badge
+                        variant="secondary"
+                        aria-label={EnvIcon ? label : undefined}
+                        title={EnvIcon ? label : "Sandbox environment this mission's container runs"}
+                      >
+                        {EnvIcon ? <EnvIcon /> : `env · ${mission.environment}`}
+                      </Badge>
+                    )
+                  })()}
+                {githubModes.includes('push') && (
+                  <Badge variant="secondary" title="This mission pushes its branch automatically when it finishes">
+                    auto-push
+                  </Badge>
+                )}
+                {githubModes.includes('push_pr') && (
+                  <Badge
+                    variant="secondary"
+                    title="This mission pushes its branch and opens a pull request automatically when it finishes"
+                  >
+                    auto-PR
+                  </Badge>
+                )}
+                {usage && usage.requests > 0 && (
+                  <Badge variant="secondary" title="input→output tokens; cached = input read from the provider's prompt cache">
+                    {compact(usage.input_tokens)}→{compact(usage.output_tokens)} tok
+                    {usage.cache_read_tokens ? ` · ${compact(usage.cache_read_tokens)} cached` : ''}
+                  </Badge>
+                )}
+                {usage && usage.review_input_tokens ? (
+                  <Badge
+                    variant="secondary"
+                    title={
+                      usage.review_token_ceiling
+                        ? 'Input tokens spent on review turns against the per-mission review token ceiling'
+                        : 'Input tokens spent on review turns (no ceiling set)'
+                    }
+                  >
+                    review {compact(usage.review_input_tokens)}
+                    {usage.review_token_ceiling ? ` / ${compact(usage.review_token_ceiling)}` : ''} tok
+                  </Badge>
+                ) : null}
+                <Badge variant="secondary" title="Time spent actively processing">
+                  proc {formatDuration(processingMs)}
+                </Badge>
+                <Badge variant="secondary" title="Wall-clock time since the mission started">
+                  total {formatDuration(elapsedMs)}
+                </Badge>
+                <Badge variant="secondary">
+                  {turns} turn{turns === 1 ? '' : 's'}
+                </Badge>
+                {usage && usage.requests > 0 && (
+                  <>
+                    <Badge variant="secondary">
+                      {usage.requests} call{usage.requests === 1 ? '' : 's'}
+                    </Badge>
+                    {usage.unpriced_requests > 0 && (
+                      <Badge variant="secondary" title="Some calls have no configured price; their cost is not included.">
+                        {usage.unpriced_requests} unpriced call{usage.unpriced_requests === 1 ? '' : 's'}
+                      </Badge>
+                    )}
+                    {mission.budget_amount != null &&
+                      mission.budget_amount > 0 &&
+                      (() => {
+                        const pct = budgetPercentSpent(usage, mission.budget_currency ?? 'USD', mission.budget_amount)
+                        return pct == null ? null : <Badge variant="secondary">{pct}% of budget</Badge>
+                      })()}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </Panel>
+      </div>
+    </PageShell>
   )
 }

@@ -1,13 +1,13 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { InputRequestBanner } from './InputRequestBanner'
+import { InputRequestGate } from './InputRequestGate'
 
 afterEach(cleanup)
 
-describe('InputRequestBanner', () => {
+describe('InputRequestGate', () => {
   it('renders the question as markdown', () => {
     render(
-      <InputRequestBanner
+      <InputRequestGate
         question="which **runtime** should this target?"
         kind="mcq"
         options={['node', 'python']}
@@ -18,10 +18,17 @@ describe('InputRequestBanner', () => {
     expect(screen.getByText('runtime').tagName).toBe('STRONG')
   })
 
+  it('is a labeled region', () => {
+    render(
+      <InputRequestGate question="continue?" kind="yes_no" proposedDefault="yes" onAnswer={vi.fn()} />,
+    )
+    expect(screen.getByRole('region', { name: 'Timothy has a question' })).toBeInTheDocument()
+  })
+
   it('renders mcq options with the proposed default marked, and answers on click', () => {
     const onAnswer = vi.fn()
     render(
-      <InputRequestBanner
+      <InputRequestGate
         question="which runtime should this target?"
         kind="mcq"
         options={['node', 'python']}
@@ -37,14 +44,7 @@ describe('InputRequestBanner', () => {
 
   it('renders yes/no buttons with the proposed default marked', () => {
     const onAnswer = vi.fn()
-    render(
-      <InputRequestBanner
-        question="continue?"
-        kind="yes_no"
-        proposedDefault="yes"
-        onAnswer={onAnswer}
-      />,
-    )
+    render(<InputRequestGate question="continue?" kind="yes_no" proposedDefault="yes" onAnswer={onAnswer} />)
     expect(screen.getByRole('button', { name: /Yes.*default/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /^No$/ }))
     expect(onAnswer).toHaveBeenCalledWith('no')
@@ -53,12 +53,7 @@ describe('InputRequestBanner', () => {
   it('renders an open MarkdownField and submits the drafted text unchanged', () => {
     const onAnswer = vi.fn()
     render(
-      <InputRequestBanner
-        question="what should the title be?"
-        kind="open"
-        proposedDefault="Untitled"
-        onAnswer={onAnswer}
-      />,
+      <InputRequestGate question="what should the title be?" kind="open" proposedDefault="Untitled" onAnswer={onAnswer} />,
     )
     const textarea = screen.getByRole('textbox')
     fireEvent.change(textarea, { target: { value: 'My **Report**' } })
@@ -69,12 +64,7 @@ describe('InputRequestBanner', () => {
   it('falls back to the proposed default when open text is left empty', () => {
     const onAnswer = vi.fn()
     render(
-      <InputRequestBanner
-        question="what should the title be?"
-        kind="open"
-        proposedDefault="Untitled"
-        onAnswer={onAnswer}
-      />,
+      <InputRequestGate question="what should the title be?" kind="open" proposedDefault="Untitled" onAnswer={onAnswer} />,
     )
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(onAnswer).toHaveBeenCalledWith('Untitled')
@@ -82,13 +72,7 @@ describe('InputRequestBanner', () => {
 
   it('shows a status line and hides the inputs once answered', () => {
     render(
-      <InputRequestBanner
-        question="continue?"
-        kind="yes_no"
-        proposedDefault="yes"
-        answered="yes"
-        onAnswer={vi.fn()}
-      />,
+      <InputRequestGate question="continue?" kind="yes_no" proposedDefault="yes" answered="yes" onAnswer={vi.fn()} />,
     )
     expect(screen.getByText(/Answered: yes/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Yes/ })).not.toBeInTheDocument()
@@ -96,18 +80,13 @@ describe('InputRequestBanner', () => {
 
   it('always names the proposed default, adding the timeout only when both are given', () => {
     const { rerender } = render(
-      <InputRequestBanner
-        question="continue?"
-        kind="yes_no"
-        proposedDefault="yes"
-        onAnswer={vi.fn()}
-      />,
+      <InputRequestGate question="continue?" kind="yes_no" proposedDefault="yes" onAnswer={vi.fn()} />,
     )
     expect(screen.getByText(/Auto-answers with the proposed default \(Yes\)/)).toBeInTheDocument()
     expect(screen.queryByText(/if unanswered for/)).not.toBeInTheDocument()
 
     rerender(
-      <InputRequestBanner
+      <InputRequestGate
         question="continue?"
         kind="yes_no"
         proposedDefault="yes"

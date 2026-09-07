@@ -1,5 +1,4 @@
-import { ArrowShrink01Icon, FullScreenIcon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Maximize2, Minimize2 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '../ui/button'
 import { Dialog, DialogContent } from '../ui/dialog'
@@ -8,9 +7,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 // FullscreenToggle renders one icon button that flips `fullscreen`.
 // Shared by TimelineSection/ArtifactsSection so both grow into the
 // same near-viewport Dialog instead of each hand-rolling an overlay.
-// Uses ArrowShrink01Icon (not Minimize01Icon, a hand-gesture glyph that
-// reads as garbled at this size) so the exit state stays a clean
-// corner-arrows mark, matching FullScreenIcon's style.
 export function FullscreenToggle({
   fullscreen,
   onToggle,
@@ -23,7 +19,7 @@ export function FullscreenToggle({
     <Tooltip>
       <TooltipTrigger asChild>
         <Button variant="ghost" size="icon-xs" aria-label={label} onClick={onToggle}>
-          <HugeiconsIcon icon={fullscreen ? ArrowShrink01Icon : FullScreenIcon} />
+          {fullscreen ? <Minimize2 /> : <Maximize2 />}
         </Button>
       </TooltipTrigger>
       <TooltipContent>{label}</TooltipContent>
