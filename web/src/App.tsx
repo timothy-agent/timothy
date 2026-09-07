@@ -72,6 +72,7 @@ import { Missions } from './pages/Missions'
 import { NewMission } from './pages/NewMission'
 import { Research } from './pages/Research'
 import { Settings, settingsAreas } from './pages/Settings'
+import { DesignSystem } from './pages/DesignSystem'
 
 // Analytics pulls in ECharts (a large dependency), so it stays a
 // lazily-loaded chunk rather than bundling into the initial app load.
@@ -466,7 +467,7 @@ function App() {
                 <Route
                   path="/chat/:id?"
                   element={
-                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-8">
+                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
                       <Chat onNeedToken={openToken} />
                     </div>
                   }
@@ -474,7 +475,7 @@ function App() {
                 <Route
                   path="/research/:id?"
                   element={
-                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-8">
+                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
                       <Research onNeedToken={openToken} />
                     </div>
                   }
@@ -507,6 +508,7 @@ function App() {
                 <Route path="/settings/*" element={<Settings />} />
                 {/* Old bookmark: Settings lived at one page with ?tab= before sub-routes. */}
                 <Route path="/settings" element={<Navigate to="/settings/providers" replace />} />
+                <Route path="/design" element={<DesignSystem />} />
               </Routes>
             </div>
             <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
