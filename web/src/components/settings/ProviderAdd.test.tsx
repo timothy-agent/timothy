@@ -193,7 +193,7 @@ describe('ProviderAdd credential reference placement', () => {
     renderPage('glm')
 
     await screen.findByPlaceholderText('paste key')
-    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
 
     expect(screen.queryByPlaceholderText('name (e.g. OPENAI_API_KEY)')).not.toBeInTheDocument()
   })
@@ -245,7 +245,7 @@ describe('ProviderAdd existing-credential picker', () => {
     renderPage('glm')
     await screen.findByLabelText('API key')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
 
     expect(screen.queryByLabelText('API key')).not.toBeInTheDocument()
     const select = await screen.findByLabelText('existing credential')
@@ -257,7 +257,7 @@ describe('ProviderAdd existing-credential picker', () => {
   it('choosing an existing ref sets credential_ref and skips the secret write on submit', async () => {
     renderPage('glm')
     await screen.findByLabelText('API key')
-    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
 
     fireEvent.click(await screen.findByLabelText('existing credential'))
     fireEvent.click(await screen.findByRole('option', { name: /ZAI_API_KEY/ }))

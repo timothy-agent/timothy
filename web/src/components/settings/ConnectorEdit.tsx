@@ -13,19 +13,13 @@ import {
 } from '../../api/client'
 import type { AdminConnector, GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
+import { Switch } from '../ui/switch'
+import { ConfirmDialog } from '../timothy/confirm-dialog'
+import { Field } from '../timothy/field'
 import { Input } from '../ui/input'
-import { slugify } from './AgentForm'
 import { ConnectorLogo } from './ConnectorLogo'
 import { presetFor } from './connectorPresets'
-import { Field, Toggle } from './shared'
-import { connectedAs, errText, isTimothyAuthError } from './util'
+import { connectedAs, errText, isTimothyAuthError, slugify } from './util'
 
 // oauthProviderLabel names the OAuth provider for a connector kind —
 // both google and microsoft share the same reconnect/test UI shape.
@@ -229,10 +223,10 @@ export function ConnectorEdit() {
               data off third-party models.
             </p>
           </div>
-          <Toggle
-            on={connector.sensitive}
-            onChange={toggleSensitive}
-            label={`${connector.name} sensitive`}
+          <Switch
+            checked={connector.sensitive}
+            onCheckedChange={toggleSensitive}
+            aria-label={`${connector.name} sensitive`}
           />
         </div>
 
@@ -321,19 +315,22 @@ export function ConnectorEdit() {
                     : 'Rotate bearer token'
               }
             >
-              <div className="mt-1.5 flex gap-2">
-                <Input
-                  type="password"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="paste new token"
-                  className="h-10"
-                  autoComplete="off"
-                />
-                <Button variant="outline" disabled={savingToken || !token} onClick={() => void rotateToken()}>
-                  Save
-                </Button>
-              </div>
+              {(props) => (
+                <div className="mt-1.5 flex gap-2">
+                  <Input
+                    id={props.id}
+                    type="password"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    placeholder="paste new token"
+                    className="h-10"
+                    autoComplete="off"
+                  />
+                  <Button variant="outline" disabled={savingToken || !token} onClick={() => void rotateToken()}>
+                    Save
+                  </Button>
+                </div>
+              )}
             </Field>
           </div>
         )}
@@ -348,10 +345,10 @@ export function ConnectorEdit() {
                   generates, so they show "Verified" on GitHub.
                 </p>
               </div>
-              <Toggle
-                on={Boolean(connector.config.sign_commits)}
-                onChange={(v) => void toggleSignCommits(v)}
-                label={`${connector.name} sign commits`}
+              <Switch
+                checked={Boolean(connector.config.sign_commits)}
+                onCheckedChange={(v) => void toggleSignCommits(v)}
+                aria-label={`${connector.name} sign commits`}
               />
             </div>
             {Boolean(connector.config.sign_commits) && (
@@ -360,17 +357,20 @@ export function ConnectorEdit() {
                 connector.config.signing_public_key ? (
                   <>
                     <Field label="Signing public key">
-                      <div className="mt-1.5 flex gap-2">
-                        <textarea
-                          readOnly
-                          value={connector.config.signing_public_key}
-                          rows={3}
-                          className="h-auto flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
-                        />
-                        <Button variant="outline" onClick={() => void copyPublicKey()}>
-                          Copy
-                        </Button>
-                      </div>
+                      {(props) => (
+                        <div className="mt-1.5 flex gap-2">
+                          <textarea
+                            id={props.id}
+                            readOnly
+                            value={connector.config.signing_public_key as string}
+                            rows={3}
+                            className="h-auto flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
+                          />
+                          <Button variant="outline" onClick={() => void copyPublicKey()}>
+                            Copy
+                          </Button>
+                        </div>
+                      )}
                     </Field>
                     <p className="text-sm text-muted-foreground">
                       Paste this into GitHub as a{' '}
@@ -396,25 +396,15 @@ export function ConnectorEdit() {
         )}
       </div>
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {connector.name}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Removes the connector; its tools disappear from the agent on the next reload. Stored
-            credentials stay in the secret store until cleared there.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${connector.name}?`}
+        description="Removes the connector; its tools disappear from the agent on the next reload. Stored credentials stay in the secret store until cleared there."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void remove()}
+      />
     </div>
   )
 }

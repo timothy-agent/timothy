@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { humanizeProbeDetail, probeFailureText, responsesSuffix } from './util'
+import { humanizeProbeDetail, probeFailureText, responsesSuffix, slugify } from './util'
+
+describe('slugify', () => {
+  it('lowercases and hyphenates non-alphanumeric runs', () => {
+    expect(slugify('My Homelab Agent!')).toBe('my-homelab-agent')
+  })
+
+  it('trims leading and trailing hyphens', () => {
+    expect(slugify('  --Infra--  ')).toBe('infra')
+  })
+})
 
 describe('humanizeProbeDetail', () => {
   it('extracts the message from an OpenAI-shaped JSON body', () => {

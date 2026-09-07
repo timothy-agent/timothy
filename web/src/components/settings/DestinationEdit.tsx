@@ -1,5 +1,6 @@
 import { ArrowLeft01Icon, Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { Eye, EyeOff } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -19,17 +20,13 @@ import {
   onCompleteChoices,
 } from '../../lib/githubDestination'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
+import { Switch } from '../ui/switch'
+import { ConfirmDialog } from '../timothy/confirm-dialog'
+import { IconButton } from '../timothy/icon-button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
-import { Field, Toggle } from './shared'
+import { Field } from '../timothy/field'
 import { errText } from './util'
 
 export function DestinationEdit() {
@@ -60,6 +57,7 @@ export function DestinationEdit() {
   const [botTokenMode, setBotTokenMode] = useState<CredentialMode>('new')
   const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
   const [savingToken, setSavingToken] = useState(false)
+  const [botTokenRevealed, setBotTokenRevealed] = useState(false)
 
   const refresh = useCallback(() => {
     listDestinations()
@@ -208,7 +206,7 @@ export function DestinationEdit() {
               Disabled destinations are skipped by mission delivery without an error.
             </p>
           </div>
-          <Toggle on={destination.enabled} onChange={toggleEnabled} label={`${destination.name} enabled`} />
+          <Switch checked={destination.enabled} onCheckedChange={toggleEnabled} aria-label={`${destination.name} enabled`} />
         </div>
 
         {destination.kind !== 'github' && (
@@ -302,7 +300,7 @@ export function DestinationEdit() {
                 </SelectContent>
               </Select>
             </div>
-            <Field label="Branch pattern" hint="optional">
+            <Field label="Branch pattern" description="optional" required={false}>
               <Input
                 value={branchPattern}
                 onChange={(e) => setBranchPattern(e.target.value)}
@@ -336,10 +334,10 @@ export function DestinationEdit() {
                   repository.
                 </p>
               </div>
-              <Toggle
-                on={createIfMissing}
-                onChange={setCreateIfMissing}
-                label="Create repository if missing"
+              <Switch
+                checked={createIfMissing}
+                onCheckedChange={setCreateIfMissing}
+                aria-label="Create repository if missing"
               />
             </div>
           </>
@@ -388,12 +386,22 @@ export function DestinationEdit() {
               </Field>
             ) : (
               <div className="space-y-1.5">
-                <Input
-                  value={botToken}
-                  onChange={(e) => setBotToken(e.target.value)}
-                  placeholder="123456:ABC-DEF..."
-                  className="h-10"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    type={botTokenRevealed ? 'text' : 'password'}
+                    value={botToken}
+                    onChange={(e) => setBotToken(e.target.value)}
+                    placeholder="123456:ABC-DEF..."
+                    className="h-10"
+                    autoComplete="off"
+                  />
+                  <IconButton
+                    label={botTokenRevealed ? 'Hide token' : 'Show token'}
+                    icon={botTokenRevealed ? EyeOff : Eye}
+                    variant="outline"
+                    onClick={() => setBotTokenRevealed((v) => !v)}
+                  />
+                </div>
                 <p className="text-xs text-muted-foreground">
                   Replaces the stored value of {destination.credential_ref}.
                 </p>
@@ -410,24 +418,15 @@ export function DestinationEdit() {
         )}
       </div>
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {destination.name}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Removes the destination. Refused while any in-progress mission still delivers to it.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${destination.name}?`}
+        description="Removes the destination. Refused while any in-progress mission still delivers to it."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void remove()}
+      />
     </div>
   )
 }

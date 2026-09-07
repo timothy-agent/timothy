@@ -8,20 +8,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select'
-import { Field, Toggle } from './shared'
+import { Switch } from '../ui/switch'
+import { Field } from '../timothy/field'
+import { slugify, UNSET } from './util'
 import { KnowledgePicker } from './KnowledgePicker'
 import { SkillsPicker } from './SkillsPicker'
 import { ToolsPicker } from './ToolsPicker'
 import { EXECUTOR_DEFAULT, executorChoices } from '../missions/MissionForm'
 import type { AdminAgent, AdminRoute } from '../../api/types'
-
-// slugify mirrors the backend's name rule: lowercase slug.
-export function slugify(v: string): string {
-  return v
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
 
 export interface AgentFormValue {
   name: string
@@ -116,7 +110,7 @@ export function AgentForm({
   return (
     <div className="grid gap-5">
       {isNew && (
-        <Field label="Name" hint="unique slug, immutable after creation">
+        <Field label="Name" description="unique slug, immutable after creation">
           <Input
             value={fields.name}
             onChange={(e) => fields.setName(e.target.value)}
@@ -125,7 +119,7 @@ export function AgentForm({
           />
         </Field>
       )}
-      <Field label="Description" hint="shown in the picker">
+      <Field label="Description" description="shown in the picker">
         <Input
           value={fields.description}
           onChange={(e) => fields.setDescription(e.target.value)}
@@ -133,7 +127,7 @@ export function AgentForm({
           className="mt-1.5 h-10"
         />
       </Field>
-      <Field label="Prompt overlay" hint="appended to the system prompt">
+      <Field label="Prompt overlay" description="appended to the system prompt">
         <Textarea
           value={fields.overlay}
           onChange={(e) => fields.setOverlay(e.target.value)}
@@ -144,56 +138,62 @@ export function AgentForm({
         />
       </Field>
       <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Route" hint="model chain">
+        <Field label="Route" description="model chain">
+          {(props) => (
+            <Select
+              value={fields.route || UNSET}
+              onValueChange={(v) => fields.setRoute(v === UNSET ? '' : v)}
+            >
+              <SelectTrigger id={props.id} className="mt-1.5 h-10 w-full" aria-label="agent route">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>default</SelectItem>
+                {routes
+                  .filter((r) => r.name !== 'default' && r.name !== 'embedding')
+                  .map((r) => (
+                    <SelectItem key={r.name} value={r.name}>
+                      {r.name}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+        <Field label="Memory">
+          {(props) => (
+            <div className="mt-2.5">
+              <Switch id={props.id} checked={fields.memory} onCheckedChange={fields.setMemory} aria-label="agent memory" />
+            </div>
+          )}
+        </Field>
+      </div>
+      <Field label="Harness" description="coding executor this agent's missions delegate to; inherit falls through to settings">
+        {(props) => (
           <Select
-            value={fields.route || 'default'}
-            onValueChange={(v) => fields.setRoute(v === 'default' ? '' : v)}
+            value={fields.harness || EXECUTOR_DEFAULT}
+            onValueChange={(v) => fields.setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
           >
-            <SelectTrigger className="mt-1.5 h-10 w-full" aria-label="agent route">
+            <SelectTrigger id={props.id} className="mt-1.5 h-10 w-full" aria-label="agent harness">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="default">default</SelectItem>
-              {routes
-                .filter((r) => r.name !== 'default' && r.name !== 'embedding')
-                .map((r) => (
-                  <SelectItem key={r.name} value={r.name}>
-                    {r.name}
-                  </SelectItem>
-                ))}
+              {executorChoices.map((c) => (
+                <SelectItem key={c.value} value={c.value}>
+                  {c.value === EXECUTOR_DEFAULT ? 'Inherit from settings' : c.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
-        </Field>
-        <Field label="Memory">
-          <div className="mt-2.5">
-            <Toggle on={fields.memory} onChange={fields.setMemory} label="agent memory" />
-          </div>
-        </Field>
-      </div>
-      <Field label="Harness" hint="coding executor this agent's missions delegate to; inherit falls through to settings">
-        <Select
-          value={fields.harness || EXECUTOR_DEFAULT}
-          onValueChange={(v) => fields.setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
-        >
-          <SelectTrigger className="mt-1.5 h-10 w-full" aria-label="agent harness">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {executorChoices.map((c) => (
-              <SelectItem key={c.value} value={c.value}>
-                {c.value === EXECUTOR_DEFAULT ? 'Inherit from settings' : c.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        )}
       </Field>
-      <Field label="Skills allowlist" hint="pick from the loaded skill packs; empty = none">
+      <Field label="Skills allowlist" description="pick from the loaded skill packs; empty = none">
         <SkillsPicker value={fields.skills} onChange={fields.setSkills} />
       </Field>
-      <Field label="Tools allowlist" hint="pick from the live tool surface; empty = none">
+      <Field label="Tools allowlist" description="pick from the live tool surface; empty = none">
         <ToolsPicker value={fields.tools} onChange={fields.setTools} />
       </Field>
-      <Field label="Knowledge allowlist" hint="search_kb always searches the whole knowledge base; these collections rank higher in results">
+      <Field label="Knowledge allowlist" description="search_kb always searches the whole knowledge base; these collections rank higher in results">
         <KnowledgePicker value={fields.knowledge} onChange={fields.setKnowledge} />
       </Field>
     </div>

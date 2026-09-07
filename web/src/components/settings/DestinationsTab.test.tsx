@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminConnector, Destination } from '../../api/types'
+import { TooltipProvider } from '../ui/tooltip'
 import { DestinationsTab } from './DestinationsTab'
 
 vi.mock('../../api/client', () => ({
@@ -84,11 +85,13 @@ const githubDestination: Destination = {
 
 function renderTab(entry = '/settings/destinations') {
   return render(
-    <MemoryRouter initialEntries={[entry]}>
-      <Routes>
-        <Route path="/settings/destinations/*" element={<DestinationsTab />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route path="/settings/destinations/*" element={<DestinationsTab />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 
@@ -157,10 +160,9 @@ describe('Destinations tab', () => {
 
     // Opens the confirm dialog.
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
-    // The dialog's own confirm button is the second "Delete" in the
-    // document once it's open (card's own button + dialog's).
-    const confirmButtons = await screen.findAllByRole('button', { name: 'Delete' })
-    fireEvent.click(confirmButtons[confirmButtons.length - 1])
+    // Scope to the dialog so the card's own Delete button isn't matched.
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
 
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith(
@@ -280,7 +282,7 @@ describe('Destinations tab', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Telegram/ }))
     fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-telegram' } })
     fireEvent.change(screen.getByPlaceholderText('123456789'), { target: { value: '123456' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
     fireEvent.click(await screen.findByLabelText('existing credential'))
     fireEvent.click(await screen.findByRole('option', { name: 'SHARED_BOT_TOKEN' }))
     fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
@@ -301,13 +303,7 @@ describe('Destinations tab', () => {
     vi.mocked(patchDestination).mockResolvedValue()
     vi.mocked(setSecret).mockResolvedValue()
 
-    render(
-      <MemoryRouter initialEntries={['/settings/destinations/d4']}>
-        <Routes>
-          <Route path="/settings/destinations/*" element={<DestinationsTab />} />
-        </Routes>
-      </MemoryRouter>,
-    )
+    renderTab('/settings/destinations/d4')
 
     const chatIDInput = await screen.findByDisplayValue('123456')
     fireEvent.change(chatIDInput, { target: { value: '987654' } })

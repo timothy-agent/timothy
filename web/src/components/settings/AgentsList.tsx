@@ -6,14 +6,8 @@ import { toast } from 'sonner'
 import { deleteAgent, listAgents, patchAgent, setDefaultAgent } from '../../api/client'
 import type { AdminAgent } from '../../api/types'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
-import { Toggle } from './shared'
+import { Switch } from '../ui/switch'
+import { ConfirmDialog } from '../timothy/confirm-dialog'
 import { errText } from './util'
 
 export function AgentsList() {
@@ -71,25 +65,15 @@ export function AgentsList() {
         ))}
       </div>
 
-      <Dialog open={confirmDelete !== null} onOpenChange={(o) => !o && setConfirmDelete(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {confirmDelete?.name}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Sessions that used this agent keep their history; new turns fall back to the default
-            agent. The default agent itself cannot be deleted.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        onOpenChange={(o) => !o && setConfirmDelete(null)}
+        title={`Delete ${confirmDelete?.name}?`}
+        description="Sessions that used this agent keep their history; new turns fall back to the default agent. The default agent itself cannot be deleted."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void remove()}
+      />
     </div>
   )
 }
@@ -132,7 +116,7 @@ function AgentCard({
             )}
           </div>
         </div>
-        <Toggle on={agent.enabled} onChange={toggle} label={`${agent.name} enabled`} />
+        <Switch checked={agent.enabled} onCheckedChange={toggle} aria-label={`${agent.name} enabled`} />
       </div>
 
       {agent.description && (

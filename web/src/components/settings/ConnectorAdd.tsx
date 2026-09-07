@@ -16,18 +16,9 @@ import { Input } from '../ui/input'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets } from './connectorPresets'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
-import { Field } from './shared'
+import { Field } from '../timothy/field'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { connectedAs, errText, isTimothyAuthError, secretDestination } from './util'
-
-// slugify turns a display name into a connector name (tool-name
-// prefix): lowercase slug, the backend rejects anything else.
-function slugify(v: string): string {
-  return v
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
+import { connectedAs, errText, isTimothyAuthError, secretDestination, slugify } from './util'
 
 // isValidPort reports whether an (optional) port field's text is a
 // valid TCP port: empty (field left blank) or digits only, 1-65535.
@@ -320,7 +311,7 @@ export function ConnectorAdd() {
       </div>
 
       <div className="grid max-w-3xl gap-5">
-        <Field label="Name" hint="lowercase slug, prefixes this connector's tool names">
+        <Field label="Name" description="lowercase slug, prefixes this connector's tool names">
           <Input
             value={name}
             onChange={(e) => {
@@ -439,7 +430,7 @@ export function ConnectorAdd() {
                   />
                 </Field>
                 <div className="grid grid-cols-2 gap-5">
-                  <Field label="SMTP host (optional)" hint="leave blank to disable sending">
+                  <Field label="SMTP host (optional)" description="leave blank to disable sending" required={false}>
                     <Input
                       value={imapSMTPHost}
                       onChange={(e) => {
@@ -466,7 +457,7 @@ export function ConnectorAdd() {
             )}
             {isCalDAV && (
               <>
-                <Field label="Calendar URL" hint="the calendar collection URL itself, no discovery">
+                <Field label="Calendar URL" description="the calendar collection URL itself, no discovery">
                   <Input
                     value={caldavURL}
                     onChange={(e) => {

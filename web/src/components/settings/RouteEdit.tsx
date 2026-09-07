@@ -18,7 +18,8 @@ import { Pipeline, type PipelineEntry } from './pipeline/Pipeline'
 import { reorder } from './pipeline/useReorderDrag'
 import { matchPreset } from './presets'
 import { ProviderMark } from './ProviderLogo'
-import { Field, Toggle } from './shared'
+import { Switch } from '../ui/switch'
+import { Field } from '../timothy/field'
 import { errText } from './util'
 
 const scoredStrategies = ['auto', 'price', 'latency']
@@ -120,7 +121,7 @@ export function RouteEdit() {
             <SelectItem value="latency">Fastest</SelectItem>
           </SelectContent>
         </Select>
-        <Toggle on={route.enabled} onChange={(v) => save({ enabled: v })} label={`${route.name} route enabled`} />
+        <Switch checked={route.enabled} onCheckedChange={(v) => save({ enabled: v })} aria-label={`${route.name} route enabled`} />
       </div>
 
       <div className="space-y-4">
@@ -182,46 +183,48 @@ function AddChainEntry({
 
   return (
     <Field label="Add a provider to this chain">
-      <div className="mt-1.5 flex flex-wrap items-center gap-2">
-        <Select
-          value={providerID}
-          onValueChange={(id) => {
-            setProviderID(id)
-            const p = providers.find((x) => x.id === id)
-            setModel(p?.default_model ?? '')
-          }}
-        >
-          <SelectTrigger className="h-10 w-44" aria-label="Provider">
-            <SelectValue placeholder="provider…" />
-          </SelectTrigger>
-          <SelectContent>
-            {providers.map((p) => (
-              <SelectItem key={p.id} value={p.id}>
-                <ProviderMark preset={matchPreset(p)} />
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <ModelInput
-          value={model}
-          onChange={setModel}
-          suggestions={suggestions}
-          placeholder="model id"
-          className="h-10 w-56"
-          ariaLabel="Model"
-        />
-        <Button
-          variant="outline"
-          disabled={!providerID || !model}
-          onClick={() => {
-            onAdd({ provider_id: providerID, model })
-            setModel('')
-          }}
-        >
-          Add
-        </Button>
-      </div>
+      {() => (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <Select
+            value={providerID}
+            onValueChange={(id) => {
+              setProviderID(id)
+              const p = providers.find((x) => x.id === id)
+              setModel(p?.default_model ?? '')
+            }}
+          >
+            <SelectTrigger className="h-10 w-44" aria-label="Provider">
+              <SelectValue placeholder="provider…" />
+            </SelectTrigger>
+            <SelectContent>
+              {providers.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  <ProviderMark preset={matchPreset(p)} />
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <ModelInput
+            value={model}
+            onChange={setModel}
+            suggestions={suggestions}
+            placeholder="model id"
+            className="h-10 w-56"
+            ariaLabel="Model"
+          />
+          <Button
+            variant="outline"
+            disabled={!providerID || !model}
+            onClick={() => {
+              onAdd({ provider_id: providerID, model })
+              setModel('')
+            }}
+          >
+            Add
+          </Button>
+        </div>
+      )}
     </Field>
   )
 }

@@ -22,7 +22,9 @@ import {
   SelectValue,
 } from '../ui/select'
 import { awsRegions } from './presets'
-import { ErrorBanner, Field } from './shared'
+import { Alert, AlertDescription } from '../ui/alert'
+import { BrandTile } from '../timothy/brand-tile'
+import { Field } from '../timothy/field'
 import { errText } from './util'
 
 // Brand colors for the official marks in ProviderLogo's sprite
@@ -91,7 +93,11 @@ export function SecretsTab() {
         means Timothy needs write access there, every key entered in the UI is written into it
         under a timothy/ prefix.
       </p>
-      <ErrorBanner message={error} />
+      {error && (
+        <Alert tone="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
       {cards.map((c) => (
         <div key={c.key}>{c.render()}</div>
       ))}
@@ -115,24 +121,13 @@ function BackendIcon({
   className?: string
 }) {
   if (logo) {
-    return (
-      <span
-        className={`${className} grid shrink-0 place-items-center rounded-lg text-white`}
-        style={{ backgroundColor: brandColor }}
-        aria-hidden="true"
-      >
-        <svg className="size-[60%] fill-current">
-          <use href={`#plogo-${logo}`} />
-        </svg>
-      </span>
-    )
+    return <BrandTile spriteId={`plogo-${logo}`} color={brandColor} className={className} />
   }
   return (
-    <span
-      className={`flex shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground ${className}`}
-    >
-      {icon && <HugeiconsIcon icon={icon} className="size-4.5" />}
-    </span>
+    <BrandTile
+      icon={icon ? <HugeiconsIcon icon={icon} className="size-4.5" /> : undefined}
+      className={className}
+    />
   )
 }
 
@@ -429,56 +424,70 @@ function VaultCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Bac
           />
         </Field>
         <Field label="Auth method">
-          <Select
-            value={cfg.auth}
-            onValueChange={(auth) => setCfg((v) => ({ ...v, auth }))}
-          >
-            <SelectTrigger className="mt-1 h-8 w-full text-xs" aria-label="vault auth method">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="token">Token</SelectItem>
-              <SelectItem value="approle">AppRole</SelectItem>
-            </SelectContent>
-          </Select>
+          {(props) => (
+            <Select
+              value={cfg.auth}
+              onValueChange={(auth) => setCfg((v) => ({ ...v, auth }))}
+            >
+              <SelectTrigger id={props.id} className="mt-1 h-8 w-full text-xs" aria-label="vault auth method">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="token">Token</SelectItem>
+                <SelectItem value="approle">AppRole</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
         </Field>
         {cfg.auth === 'token' ? (
-          <Field label="Token" className="sm:col-span-2">
-            <div className="mt-1 flex items-center gap-2">
-              <Input
-                type="password"
-                value={tokenPaste}
-                onChange={(e) => setTokenPaste(e.target.value)}
-                placeholder="paste to store/rotate"
-                className="h-8"
-                autoComplete="off"
-              />
-              <StoredBadge configured={tokenStored} />
-            </div>
-          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Token">
+              {(props) => (
+                <div className="mt-1 flex items-center gap-2">
+                  <Input
+                    id={props.id}
+                    type="password"
+                    value={tokenPaste}
+                    onChange={(e) => setTokenPaste(e.target.value)}
+                    placeholder="paste to store/rotate"
+                    className="h-8"
+                    autoComplete="off"
+                  />
+                  <StoredBadge configured={tokenStored} />
+                </div>
+              )}
+            </Field>
+          </div>
         ) : (
           <>
-            <Field label="Role ID" className="sm:col-span-2">
-              <Input
-                value={cfg.role_id}
-                onChange={(e) => setCfg((v) => ({ ...v, role_id: e.target.value }))}
-                placeholder="role-id"
-                className="mt-1 h-8"
-              />
-            </Field>
-            <Field label="Secret ID" className="sm:col-span-2">
-              <div className="mt-1 flex items-center gap-2">
+            <div className="sm:col-span-2">
+              <Field label="Role ID">
                 <Input
-                  type="password"
-                  value={secretIDPaste}
-                  onChange={(e) => setSecretIDPaste(e.target.value)}
-                  placeholder="paste to store/rotate"
-                  className="h-8"
-                  autoComplete="off"
+                  value={cfg.role_id}
+                  onChange={(e) => setCfg((v) => ({ ...v, role_id: e.target.value }))}
+                  placeholder="role-id"
+                  className="mt-1 h-8"
                 />
-                <StoredBadge configured={secretIDStored} />
-              </div>
-            </Field>
+              </Field>
+            </div>
+            <div className="sm:col-span-2">
+              <Field label="Secret ID">
+                {(props) => (
+                  <div className="mt-1 flex items-center gap-2">
+                    <Input
+                      id={props.id}
+                      type="password"
+                      value={secretIDPaste}
+                      onChange={(e) => setSecretIDPaste(e.target.value)}
+                      placeholder="paste to store/rotate"
+                      className="h-8"
+                      autoComplete="off"
+                    />
+                    <StoredBadge configured={secretIDStored} />
+                  </div>
+                )}
+              </Field>
+            </div>
           </>
         )}
       </div>
@@ -534,70 +543,83 @@ function ASMCard({ isDefault, onMakeDefault, onBackendsChanged, onError }: Backe
       />
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <Field label="Region">
-          <Select
-            value={cfg.region || ASM_REGION_CHAIN_DEFAULT}
-            onValueChange={(v) =>
-              setCfg((c) => ({ ...c, region: v === ASM_REGION_CHAIN_DEFAULT ? '' : v }))
-            }
-          >
-            <SelectTrigger className="mt-1 h-8 w-full text-xs" aria-label="aws region">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ASM_REGION_CHAIN_DEFAULT}>Chain default</SelectItem>
-              {awsRegions.map((r) => (
-                <SelectItem key={r.value} value={r.value}>
-                  {r.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {(props) => (
+            <Select
+              value={cfg.region || ASM_REGION_CHAIN_DEFAULT}
+              onValueChange={(v) =>
+                setCfg((c) => ({ ...c, region: v === ASM_REGION_CHAIN_DEFAULT ? '' : v }))
+              }
+            >
+              <SelectTrigger id={props.id} className="mt-1 h-8 w-full text-xs" aria-label="aws region">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ASM_REGION_CHAIN_DEFAULT}>Chain default</SelectItem>
+                {awsRegions.map((r) => (
+                  <SelectItem key={r.value} value={r.value}>
+                    {r.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </Field>
         <Field label="Auth method">
-          <Select value={cfg.auth} onValueChange={(auth) => setCfg((v) => ({ ...v, auth }))}>
-            <SelectTrigger className="mt-1 h-8 w-full text-xs" aria-label="aws auth method">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="chain">Credential chain</SelectItem>
-              <SelectItem value="profile">Named profile</SelectItem>
-              <SelectItem value="keys">Access keys</SelectItem>
-            </SelectContent>
-          </Select>
+          {(props) => (
+            <Select value={cfg.auth} onValueChange={(auth) => setCfg((v) => ({ ...v, auth }))}>
+              <SelectTrigger id={props.id} className="mt-1 h-8 w-full text-xs" aria-label="aws auth method">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="chain">Credential chain</SelectItem>
+                <SelectItem value="profile">Named profile</SelectItem>
+                <SelectItem value="keys">Access keys</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
         </Field>
         {cfg.auth === 'profile' && (
-          <Field label="Profile" className="sm:col-span-2">
-            <Input
-              value={cfg.profile}
-              onChange={(e) => setCfg((v) => ({ ...v, profile: e.target.value }))}
-              placeholder="profile name from ~/.aws"
-              className="mt-1 h-8"
-            />
-          </Field>
-        )}
-        {cfg.auth === 'keys' && (
-          <>
-            <Field label="Access key ID" className="sm:col-span-2">
+          <div className="sm:col-span-2">
+            <Field label="Profile">
               <Input
-                value={cfg.access_key_id}
-                onChange={(e) => setCfg((v) => ({ ...v, access_key_id: e.target.value }))}
-                placeholder="AKIA…"
+                value={cfg.profile}
+                onChange={(e) => setCfg((v) => ({ ...v, profile: e.target.value }))}
+                placeholder="profile name from ~/.aws"
                 className="mt-1 h-8"
               />
             </Field>
-            <Field label="Secret access key" className="sm:col-span-2">
-              <div className="mt-1 flex items-center gap-2">
+          </div>
+        )}
+        {cfg.auth === 'keys' && (
+          <>
+            <div className="sm:col-span-2">
+              <Field label="Access key ID">
                 <Input
-                  type="password"
-                  value={secretKeyPaste}
-                  onChange={(e) => setSecretKeyPaste(e.target.value)}
-                  placeholder="paste to store/rotate"
-                  className="h-8"
-                  autoComplete="off"
+                  value={cfg.access_key_id}
+                  onChange={(e) => setCfg((v) => ({ ...v, access_key_id: e.target.value }))}
+                  placeholder="AKIA…"
+                  className="mt-1 h-8"
                 />
-                <StoredBadge configured={secretKeyStored} />
-              </div>
-            </Field>
+              </Field>
+            </div>
+            <div className="sm:col-span-2">
+              <Field label="Secret access key">
+                {(props) => (
+                  <div className="mt-1 flex items-center gap-2">
+                    <Input
+                      id={props.id}
+                      type="password"
+                      value={secretKeyPaste}
+                      onChange={(e) => setSecretKeyPaste(e.target.value)}
+                      placeholder="paste to store/rotate"
+                      className="h-8"
+                      autoComplete="off"
+                    />
+                    <StoredBadge configured={secretKeyStored} />
+                  </div>
+                )}
+              </Field>
+            </div>
           </>
         )}
       </div>

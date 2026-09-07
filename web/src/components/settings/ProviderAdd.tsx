@@ -12,7 +12,7 @@ import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } f
 import { catalogMatchForID, catalogRowID, ModelInput, type ModelSuggestion, useCatalogSearch } from './ModelInput'
 import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
-import { Field } from './shared'
+import { Field } from '../timothy/field'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
 
@@ -352,35 +352,39 @@ export function ProviderAdd() {
 
         {isAnthropic && (
           <Field label="Auth">
-            <Select
-              value={anthropicAuth}
-              onValueChange={(v) => {
-                setAnthropicAuth(v as AnthropicAuthMode)
-                setKey('')
-                invalidate()
-              }}
-            >
-              <SelectTrigger className="mt-1.5 h-10 w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="api_key">API key</SelectItem>
-                <SelectItem value="oauth">Subscription token</SelectItem>
-              </SelectContent>
-            </Select>
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              {anthropicAuth === 'api_key' ? (
-                'Create an API key in the Anthropic Console (console.anthropic.com → API keys) and paste it here.'
-              ) : (
-                <>
-                  Uses your Claude Pro/Max subscription. On any machine with Claude Code installed, run{' '}
-                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">claude setup-token</code>,
-                  approve in the browser, and paste the generated token (starts with{' '}
-                  <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">sk-ant-oat…</code>). The
-                  token is long-lived (~1 year).
-                </>
-              )}
-            </p>
+            {(props) => (
+              <>
+                <Select
+                  value={anthropicAuth}
+                  onValueChange={(v) => {
+                    setAnthropicAuth(v as AnthropicAuthMode)
+                    setKey('')
+                    invalidate()
+                  }}
+                >
+                  <SelectTrigger id={props.id} className="mt-1.5 h-10 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="api_key">API key</SelectItem>
+                    <SelectItem value="oauth">Subscription token</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="mt-1.5 text-sm text-muted-foreground">
+                  {anthropicAuth === 'api_key' ? (
+                    'Create an API key in the Anthropic Console (console.anthropic.com → API keys) and paste it here.'
+                  ) : (
+                    <>
+                      Uses your Claude Pro/Max subscription. On any machine with Claude Code installed, run{' '}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">claude setup-token</code>,
+                      approve in the browser, and paste the generated token (starts with{' '}
+                      <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">sk-ant-oat…</code>). The
+                      token is long-lived (~1 year).
+                    </>
+                  )}
+                </p>
+              </>
+            )}
           </Field>
         )}
 
@@ -407,35 +411,42 @@ export function ProviderAdd() {
                   {keyError}
                 </p>
               )}
-              <Field label="Credential reference" className="mt-3">
-                <Input
-                  value={ref}
-                  onChange={(e) => {
-                    setRef(e.target.value)
-                    setRefEdited(true)
-                    invalidate()
-                  }}
-                  placeholder={isCursor ? 'name (e.g. CURSOR_API_KEY)' : 'name (e.g. CLAUDE_CODE_TOKEN)'}
-                  className="mt-1.5 h-10"
-                />
-              </Field>
+              <div className="mt-3">
+                <Field label="Credential reference">
+                  <Input
+                    value={ref}
+                    onChange={(e) => {
+                      setRef(e.target.value)
+                      setRefEdited(true)
+                      invalidate()
+                    }}
+                    placeholder={isCursor ? 'name (e.g. CURSOR_API_KEY)' : 'name (e.g. CLAUDE_CODE_TOKEN)'}
+                    className="mt-1.5 h-10"
+                  />
+                </Field>
+              </div>
               {!keyError && <p className="mt-1.5 text-sm text-muted-foreground">{secretDestination(defaultBackend, ref)}</p>}
             </div>
 
-            <Field label="Default model" hint="used when a mission's route chain doesn't specify one">
-              <Input
-                value={cliModel}
-                onChange={(e) => {
-                  setCliModel(e.target.value)
-                  invalidate()
-                }}
-                placeholder={isCursor ? 'composer-2.5' : 'claude-sonnet-4-6'}
-                className="mt-1.5 h-10"
-              />
-              {!isCursor && (
-                <p className="mt-1.5 text-sm text-muted-foreground">
-                  CLI aliases like sonnet, opus, or haiku also work.
-                </p>
+            <Field label="Default model" description="used when a mission's route chain doesn't specify one">
+              {(props) => (
+                <>
+                  <Input
+                    {...props}
+                    value={cliModel}
+                    onChange={(e) => {
+                      setCliModel(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder={isCursor ? 'composer-2.5' : 'claude-sonnet-4-6'}
+                    className="mt-1.5 h-10"
+                  />
+                  {!isCursor && (
+                    <p className="mt-1.5 text-sm text-muted-foreground">
+                      CLI aliases like sonnet, opus, or haiku also work.
+                    </p>
+                  )}
+                </>
               )}
             </Field>
           </div>
@@ -443,24 +454,26 @@ export function ProviderAdd() {
 
         {!isCli && isBedrock && (
           <Field label="Region">
-            <Select
-              value={region}
-              onValueChange={(v) => {
-                setRegion(v)
-                invalidate()
-              }}
-            >
-              <SelectTrigger className="mt-1.5 h-10 w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {bedrockRegions.map((r) => (
-                  <SelectItem key={r.value} value={r.value}>
-                    {r.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {(props) => (
+              <Select
+                value={region}
+                onValueChange={(v) => {
+                  setRegion(v)
+                  invalidate()
+                }}
+              >
+                <SelectTrigger id={props.id} className="mt-1.5 h-10 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {bedrockRegions.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>
+                      {r.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </Field>
         )}
 
@@ -481,32 +494,38 @@ export function ProviderAdd() {
           <div>
             <div className="grid gap-5 sm:grid-cols-2">
               <Field label="Access Key ID">
-                <Input
-                  type="password"
-                  value={accessKeyId}
-                  onChange={(e) => {
-                    setAccessKeyId(e.target.value)
-                    invalidate()
-                  }}
-                  placeholder="AKIA…"
-                  className="mt-1.5 h-10"
-                  autoComplete="off"
-                  aria-invalid={keyError != null}
-                />
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="password"
+                    value={accessKeyId}
+                    onChange={(e) => {
+                      setAccessKeyId(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder="AKIA…"
+                    className="mt-1.5 h-10"
+                    autoComplete="off"
+                    aria-invalid={keyError != null}
+                  />
+                )}
               </Field>
               <Field label="Secret Access Key">
-                <Input
-                  type="password"
-                  value={secretAccessKey}
-                  onChange={(e) => {
-                    setSecretAccessKey(e.target.value)
-                    invalidate()
-                  }}
-                  placeholder="wJalrXUtnFEMI/K7MDEN..."
-                  className="mt-1.5 h-10"
-                  autoComplete="off"
-                  aria-invalid={keyError != null}
-                />
+                {(props) => (
+                  <Input
+                    {...props}
+                    type="password"
+                    value={secretAccessKey}
+                    onChange={(e) => {
+                      setSecretAccessKey(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder="wJalrXUtnFEMI/K7MDEN..."
+                    className="mt-1.5 h-10"
+                    autoComplete="off"
+                    aria-invalid={keyError != null}
+                  />
+                )}
               </Field>
             </div>
             {keyError && (
@@ -515,18 +534,20 @@ export function ProviderAdd() {
                 {keyError}
               </p>
             )}
-            <Field label="Credential reference" className="mt-3">
-              <Input
-                value={ref}
-                onChange={(e) => {
-                  setRef(e.target.value)
-                  setRefEdited(true)
-                  invalidate()
-                }}
-                placeholder="name (e.g. BEDROCK_KEYS)"
-                className="mt-1.5 h-10"
-              />
-            </Field>
+            <div className="mt-3">
+              <Field label="Credential reference">
+                <Input
+                  value={ref}
+                  onChange={(e) => {
+                    setRef(e.target.value)
+                    setRefEdited(true)
+                    invalidate()
+                  }}
+                  placeholder="name (e.g. BEDROCK_KEYS)"
+                  className="mt-1.5 h-10"
+                />
+              </Field>
+            </div>
           </div>
         )}
         {!isCli && wantsKey && !bedrockSplit && (
@@ -573,18 +594,20 @@ export function ProviderAdd() {
                     {keyError}
                   </p>
                 )}
-                <Field label="Credential reference" className="mt-3">
-                  <Input
-                    value={ref}
-                    onChange={(e) => {
-                      setRef(e.target.value)
-                      setRefEdited(true)
-                      invalidate()
-                    }}
-                    placeholder="name (e.g. OPENAI_API_KEY)"
-                    className="mt-1.5 h-10"
-                  />
-                </Field>
+                <div className="mt-3">
+                  <Field label="Credential reference">
+                    <Input
+                      value={ref}
+                      onChange={(e) => {
+                        setRef(e.target.value)
+                        setRefEdited(true)
+                        invalidate()
+                      }}
+                      placeholder="name (e.g. OPENAI_API_KEY)"
+                      className="mt-1.5 h-10"
+                    />
+                  </Field>
+                </div>
                 {!keyError && (
                   <div className="mt-1.5 space-y-1 text-sm text-muted-foreground">
                     {preset.keyHint && (
@@ -614,7 +637,7 @@ export function ProviderAdd() {
         )}
 
         {!isCli && (
-          <Field label="Model" hint="validated with a one-token completion, becomes the default">
+          <Field label="Model" description="validated with a one-token completion, becomes the default">
             <ModelInput
               value={model}
               onChange={(v) => {

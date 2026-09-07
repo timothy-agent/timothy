@@ -6,8 +6,8 @@ import { toast } from 'sonner'
 import { createAgent, listRoutes } from '../../api/client'
 import type { AdminRoute } from '../../api/types'
 import { Button } from '../ui/button'
-import { AgentForm, slugify, useAgentForm } from './AgentForm'
-import { errText } from './util'
+import { AgentForm, useAgentForm } from './AgentForm'
+import { errText, slugify } from './util'
 
 export function AgentAdd() {
   const navigate = useNavigate()

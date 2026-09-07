@@ -1,3 +1,15 @@
+// sentinel Select value for "none / inherit / off" options, since
+// Radix Select rejects an empty string as an item value.
+export const UNSET = '__unset__'
+
+// slugify mirrors the backend's name rule: lowercase slug.
+export function slugify(v: string): string {
+  return v
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 // backendLabel names a secret's storage in UI copy.
 const backendLabels: Record<string, string> = {
   db: 'encrypted',

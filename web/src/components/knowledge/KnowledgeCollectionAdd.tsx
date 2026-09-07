@@ -4,11 +4,10 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { createKbCollection } from '../../api/client'
-import { slugify } from '../settings/AgentForm'
-import { Field } from '../settings/shared'
+import { Field } from '../timothy/field'
 import { Input } from '../ui/input'
 import { Button } from '../ui/button'
-import { errText } from '../settings/util'
+import { errText, slugify } from '../settings/util'
 
 export function KnowledgeCollectionAdd() {
   const navigate = useNavigate()
@@ -48,7 +47,7 @@ export function KnowledgeCollectionAdd() {
 
       <div className="max-w-3xl">
         <div className="grid gap-5">
-          <Field label="Name" hint="unique slug, immutable after creation">
+          <Field label="Name" description="unique slug, immutable after creation">
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -56,7 +55,7 @@ export function KnowledgeCollectionAdd() {
               className="mt-1.5 h-10"
             />
           </Field>
-          <Field label="Description" hint="what this collection covers">
+          <Field label="Description" description="what this collection covers">
             <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}

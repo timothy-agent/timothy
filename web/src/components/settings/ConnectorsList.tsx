@@ -4,9 +4,10 @@ import { toast } from 'sonner'
 import { listConnectors, patchConnector, testConnector } from '../../api/client'
 import type { AdminConnector, GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
+import { Switch } from '../ui/switch'
+import { Alert, AlertDescription } from '../ui/alert'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, presetFor } from './connectorPresets'
-import { Toggle } from './shared'
 import { connectedAs, errText, isTimothyAuthError } from './util'
 
 export function ConnectorsList() {
@@ -29,20 +30,24 @@ export function ConnectorsList() {
   return (
     <div className="mt-6 space-y-8">
       {oauthConnected && (
-        <div className="flex items-center gap-3 rounded-xl border border-good/30 bg-good-soft p-3 text-sm text-good">
-          <span>Account connected to “{oauthConnected}”. Enable it below to serve tools.</span>
-          <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
-            dismiss
-          </button>
-        </div>
+        <Alert tone="good">
+          <AlertDescription className="flex items-center gap-3">
+            <span>Account connected to “{oauthConnected}”. Enable it below to serve tools.</span>
+            <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
+              dismiss
+            </button>
+          </AlertDescription>
+        </Alert>
       )}
       {oauthError && (
-        <div className="flex items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
-          <span>Connection failed: {oauthError}</span>
-          <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
-            dismiss
-          </button>
-        </div>
+        <Alert tone="destructive">
+          <AlertDescription className="flex items-center gap-3">
+            <span>Connection failed: {oauthError}</span>
+            <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
+              dismiss
+            </button>
+          </AlertDescription>
+        </Alert>
       )}
 
       <section className="space-y-3">
@@ -155,7 +160,7 @@ function ConnectorCard({
           </div>
           <div className="text-xs text-muted-foreground uppercase">{preset.name}</div>
         </div>
-        <Toggle on={connector.enabled} onChange={toggle} label={`${connector.name} enabled`} />
+        <Switch checked={connector.enabled} onCheckedChange={toggle} aria-label={`${connector.name} enabled`} />
       </div>
 
       <div className="truncate text-xs text-muted-foreground">

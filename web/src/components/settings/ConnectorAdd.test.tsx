@@ -66,7 +66,7 @@ describe('ConnectorAdd existing-credential picker (github MCP token)', () => {
     renderPage('github')
 
     fireEvent.change(await screen.findByPlaceholderText('github-mcp'), { target: { value: 'github-mcp-2' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
     expect(screen.queryByPlaceholderText('ghp_… or github_pat_…')).not.toBeInTheDocument()
 
     fireEvent.click(await screen.findByLabelText('existing credential'))
@@ -80,7 +80,7 @@ describe('ConnectorAdd existing-credential picker (github MCP token)', () => {
 
   it('disables an OAuth token bundle ref with a managed-by-connector label', async () => {
     renderPage('github')
-    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
 
     fireEvent.click(await screen.findByLabelText('existing credential'))
     const option = await screen.findByRole('option', { name: /GMAIL_GOOGLE_OAUTH.*OAuth tokens \(managed by connector\)/ })

@@ -4,7 +4,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { deleteSecret, listSecretRefs, migrateAllSecrets, type SecretRefEntry } from '../../api/client'
 import { Button } from '../ui/button'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
+import { Alert, AlertDescription } from '../ui/alert'
+import { ConfirmDialog } from '../timothy/confirm-dialog'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { errText } from './util'
 
@@ -95,15 +96,17 @@ export function CredentialsTab() {
         can&apos;t be deleted until nothing references it.
       </p>
       {showMigrateAll && (
-        <div className="flex items-center gap-3 rounded-xl border border-border p-4">
-          <div className="min-w-0 flex-1 text-sm">
-            {elsewhereCount} credential{elsewhereCount === 1 ? '' : 's'} not yet in{' '}
-            {BACKEND_LABEL[defaultBackend] ?? defaultBackend}.
-          </div>
-          <Button size="sm" disabled={migrating} onClick={() => void migrateAll()}>
-            Migrate all to {BACKEND_LABEL[defaultBackend] ?? defaultBackend}
-          </Button>
-        </div>
+        <Alert tone="info">
+          <AlertDescription className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              {elsewhereCount} credential{elsewhereCount === 1 ? '' : 's'} not yet in{' '}
+              {BACKEND_LABEL[defaultBackend] ?? defaultBackend}.
+            </div>
+            <Button size="sm" disabled={migrating} onClick={() => void migrateAll()}>
+              Migrate all to {BACKEND_LABEL[defaultBackend] ?? defaultBackend}
+            </Button>
+          </AlertDescription>
+        </Alert>
       )}
       {loaded && refs.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
@@ -179,28 +182,16 @@ export function CredentialsTab() {
         </div>
       )}
 
-      <Dialog open={pendingDelete != null} onOpenChange={(open) => !open && setPendingDelete(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {pendingDelete}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This cannot be undone. The stored value is removed permanently.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" disabled={busy} onClick={() => setPendingDelete(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={busy}
-              onClick={() => pendingDelete && void remove(pendingDelete)}
-            >
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={pendingDelete != null}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+        title={`Delete ${pendingDelete}?`}
+        description="This cannot be undone. The stored value is removed permanently."
+        confirmLabel="Delete"
+        destructive
+        loading={busy}
+        onConfirm={() => pendingDelete && void remove(pendingDelete)}
+      />
     </div>
   )
 }

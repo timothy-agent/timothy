@@ -9,8 +9,9 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Input } from '../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { ErrorBanner, Toggle } from './shared'
-import { errText } from './util'
+import { Switch } from '../ui/switch'
+import { Alert, AlertDescription } from '../ui/alert'
+import { errText, UNSET } from './util'
 
 // FALLBACK_TIMEZONES stands in for Intl.supportedValuesOf('timeZone')
 // when that API is unavailable (older test environments): a short,
@@ -87,17 +88,21 @@ export function FeaturesTab() {
 
   return (
     <div className="mt-6 space-y-3">
-      <ErrorBanner message={error} />
+      {error && (
+        <Alert tone="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
       {Object.entries(featureCopy).map(([key, copy]) => (
         <div key={key} className="flex items-center gap-4 rounded-xl border border-border p-4">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium">{copy.label}</div>
             <p className="mt-0.5 text-xs text-muted-foreground">{copy.description}</p>
           </div>
-          <Toggle
-            on={flags?.[key] ?? true}
-            onChange={(v) => flip(key, v)}
-            label={copy.label}
+          <Switch
+            checked={flags?.[key] ?? true}
+            onCheckedChange={(v) => flip(key, v)}
+            aria-label={copy.label}
           />
         </div>
       ))}
@@ -130,13 +135,13 @@ function NotificationSoundCard() {
           app.
         </p>
       </div>
-      <Toggle
-        on={enabled}
-        onChange={(v) => {
+      <Switch
+        checked={enabled}
+        onCheckedChange={(v) => {
           setEnabled(v)
           setNotificationSoundEnabled(v)
         }}
-        label="Notification sound"
+        aria-label="Notification sound"
       />
     </div>
   )
@@ -198,8 +203,6 @@ function DefaultCurrencyCard({
   )
 }
 
-const CODING_EXECUTOR_NATIVE = '__native__'
-
 // DefaultCodingExecutorCard picks the delegated coding-CLI harness new
 // coding missions default to when the mission itself doesn't specify
 // one — mirrors DefaultCurrencyCard's shape, options are static since
@@ -234,14 +237,14 @@ function DefaultCodingExecutorCard({
         <div className="grid gap-1 text-xs text-muted-foreground">
           <span>Harness</span>
           <Select
-            value={executor || CODING_EXECUTOR_NATIVE}
-            onValueChange={(v) => setExecutor(v === CODING_EXECUTOR_NATIVE ? '' : v)}
+            value={executor || UNSET}
+            onValueChange={(v) => setExecutor(v === UNSET ? '' : v)}
           >
             <SelectTrigger className="h-10 w-56" aria-label="Default coding harness">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={CODING_EXECUTOR_NATIVE}>Native</SelectItem>
+              <SelectItem value={UNSET}>Native</SelectItem>
               <SelectItem value="claude-cli">Claude Code</SelectItem>
               <SelectItem value="pi">pi</SelectItem>
               <SelectItem value="codex-cli">Codex CLI</SelectItem>
@@ -425,8 +428,6 @@ function GitBranchPatternCard({
   )
 }
 
-const COMMIT_STYLE_DEFAULT = '__default__'
-
 // GitCommitStyleCard picks the default commit-message style new
 // missions' unit commits use — mirrors DefaultCodingExecutorCard's
 // shape, a fixed choice list.
@@ -459,14 +460,14 @@ function GitCommitStyleCard({
         <div className="grid gap-1 text-xs text-muted-foreground">
           <span>Style</span>
           <Select
-            value={style || COMMIT_STYLE_DEFAULT}
-            onValueChange={(v) => setStyle(v === COMMIT_STYLE_DEFAULT ? '' : v)}
+            value={style || UNSET}
+            onValueChange={(v) => setStyle(v === UNSET ? '' : v)}
           >
             <SelectTrigger className="h-10 w-56" aria-label="Default commit style">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={COMMIT_STYLE_DEFAULT}>Conventional (default)</SelectItem>
+              <SelectItem value={UNSET}>Conventional (default)</SelectItem>
               <SelectItem value="plain">Plain</SelectItem>
             </SelectContent>
           </Select>
@@ -480,8 +481,6 @@ function GitCommitStyleCard({
     </div>
   )
 }
-
-const SENSITIVE_ROUTE_OFF = '__off__'
 
 // SensitiveRouteCard picks the route a turn using a connector marked
 // "sensitive" (e.g. gmail) and its memory extraction/compaction
@@ -524,14 +523,14 @@ function SensitiveRouteCard({
           <div className="grid gap-1 text-xs text-muted-foreground">
             <span>Route</span>
             <Select
-              value={route || SENSITIVE_ROUTE_OFF}
-              onValueChange={(v) => setRoute(v === SENSITIVE_ROUTE_OFF ? '' : v)}
+              value={route || UNSET}
+              onValueChange={(v) => setRoute(v === UNSET ? '' : v)}
             >
               <SelectTrigger className="h-10 w-56" aria-label="Sensitive tool route">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={SENSITIVE_ROUTE_OFF}>Off (default)</SelectItem>
+                <SelectItem value={UNSET}>Off (default)</SelectItem>
                 {routes.map((r) => (
                   <SelectItem key={r.name} value={r.name}>
                     {r.name}

@@ -15,8 +15,8 @@ import type { AdminProvider, AdminRoute } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { Toggle } from './shared'
-import { errText } from './util'
+import { Switch } from '../ui/switch'
+import { errText, UNSET } from './util'
 
 const ROLES = [
   { key: 'default', label: 'Chat (default)' },
@@ -25,7 +25,6 @@ const ROLES = [
   { key: 'summarize', label: 'Summarize' },
 ]
 const CAPABILITIES = ['chat', 'embeddings', 'vision']
-const ROLE_UNSET = '__unset__'
 
 export function RoutesList() {
   const [routes, setRoutes] = useState<AdminRoute[]>([])
@@ -90,16 +89,16 @@ export function RoutesList() {
               <label key={role.key} className="grid gap-1 text-xs text-muted-foreground">
                 {role.label}
                 <Select
-                  value={bound?.name ?? ROLE_UNSET}
+                  value={bound?.name ?? UNSET}
                   onValueChange={(v) => {
-                    if (v !== ROLE_UNSET) assignRole(role.key, v)
+                    if (v !== UNSET) assignRole(role.key, v)
                   }}
                 >
                   <SelectTrigger className="h-10 w-full" aria-label={`${role.label} route`}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {!bound && <SelectItem value={ROLE_UNSET}>Unbound</SelectItem>}
+                    {!bound && <SelectItem value={UNSET}>Unbound</SelectItem>}
                     {routes.map((r) => (
                       <SelectItem key={r.name} value={r.name}>
                         {r.name}
@@ -176,7 +175,7 @@ export function RoutesList() {
                     {r.strategy || 'ordered'}
                   </span>
                   <span className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <Toggle on={r.enabled} onChange={(v) => toggle(r, v)} label={`${r.name} route enabled`} />
+                    <Switch checked={r.enabled} onCheckedChange={(v) => toggle(r, v)} aria-label={`${r.name} route enabled`} />
                     <button
                       type="button"
                       onClick={() => remove(r)}

@@ -3,6 +3,7 @@ import googleCalendarLogo from '../../assets/connectors/google-calendar.png'
 import googleDocsLogo from '../../assets/connectors/google-docs.png'
 import googleDriveLogo from '../../assets/connectors/google-drive.png'
 import outlookLogo from '../../assets/connectors/outlook.png'
+import { BrandTile } from '../timothy/brand-tile'
 import type { ConnectorPreset } from './connectorPresets'
 
 // Official product marks (full color), rendered at native size on a
@@ -39,32 +40,11 @@ export function ConnectorLogo({
   className?: string
 }) {
   if (!preset.logo) {
-    return (
-      <span
-        className={`${className} grid shrink-0 place-items-center rounded-lg border-[1.5px] border-dashed border-border text-muted-foreground`}
-        aria-hidden="true"
-      >
-        ⌁
-      </span>
-    )
+    return <BrandTile className={className} />
   }
   const pngLogo = pngLogos[preset.logo]
   if (pngLogo) {
-    return (
-      <span className={`${className} grid shrink-0 place-items-center rounded-lg bg-muted/40`} aria-hidden="true">
-        <img src={pngLogo} alt="" className="size-[70%] object-contain" />
-      </span>
-    )
+    return <BrandTile image={pngLogo} className={className} />
   }
-  return (
-    <span
-      className={`${className} grid shrink-0 place-items-center rounded-lg text-white`}
-      style={{ backgroundColor: preset.brandColor }}
-      aria-hidden="true"
-    >
-      <svg className="size-[55%] fill-current">
-        <use href={`#clogo-${preset.logo}`} />
-      </svg>
-    </span>
-  )
+  return <BrandTile spriteId={`clogo-${preset.logo}`} color={preset.brandColor} className={className} />
 }

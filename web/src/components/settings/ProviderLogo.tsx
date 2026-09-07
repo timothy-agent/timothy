@@ -1,4 +1,5 @@
 import { CursorIcon } from '../icons/CursorIcon'
+import { BrandTile } from '../timothy/brand-tile'
 import { providerPresets, type ProviderPreset } from './presets'
 
 // Official provider marks (lobehub icon set, monochrome variants),
@@ -60,37 +61,12 @@ export function ProviderLogo({
   className?: string
 }) {
   if (preset.id === 'cursor') {
-    return (
-      <span
-        className={`${className} grid shrink-0 place-items-center rounded-lg text-white`}
-        style={{ backgroundColor: preset.brandColor }}
-        aria-hidden="true"
-      >
-        <CursorIcon className="size-[60%]" />
-      </span>
-    )
+    return <BrandTile icon={<CursorIcon className="size-[60%]" />} color={preset.brandColor} className={className} />
   }
   if (!preset.logo) {
-    return (
-      <span
-        className={`${className} grid shrink-0 place-items-center rounded-lg border-[1.5px] border-dashed border-border text-muted-foreground`}
-        aria-hidden="true"
-      >
-        ⌁
-      </span>
-    )
+    return <BrandTile className={className} />
   }
-  return (
-    <span
-      className={`${className} grid shrink-0 place-items-center rounded-lg text-white`}
-      style={{ backgroundColor: preset.brandColor }}
-      aria-hidden="true"
-    >
-      <svg className="size-[60%] fill-current">
-        <use href={`#plogo-${preset.logo}`} />
-      </svg>
-    </span>
-  )
+  return <BrandTile spriteId={`plogo-${preset.logo}`} color={preset.brandColor} className={className} />
 }
 
 // presetForProviderName finds a preset from a chat message's provider

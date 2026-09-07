@@ -28,7 +28,7 @@ import type {
   Schedule,
 } from '../../api/types'
 import { useAgents, useRoutes } from '../AgentPicker'
-import { slugify } from '../settings/AgentForm'
+import { slugify } from '../settings/util'
 import { cronPresets, type CronPresetValue, presetFor } from '../../lib/schedules'
 import { CURRENCIES } from '../../lib/currencies'
 import { extractRepoMentions, matchRepo } from '../../lib/goalRepo'

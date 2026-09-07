@@ -16,19 +16,14 @@ import {
 } from '../../api/client'
 import type { AdminProvider, TestResult } from '../../api/types'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
+import { Switch } from '../ui/switch'
+import { ConfirmDialog } from '../timothy/confirm-dialog'
+import { Field } from '../timothy/field'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { catalogRowID, ModelInput, priceLabel, type ModelSuggestion, useCatalogSearch } from './ModelInput'
 import { bedrockRegions, matchPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
-import { Field, Toggle } from './shared'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { backendLabel, errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
 
@@ -141,25 +136,15 @@ export function ProviderEdit() {
         )}
       </div>
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {provider.name}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Removes the provider row and its models. Refused while an enabled route still points
-            at it.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${provider.name}?`}
+        description="Removes the provider row and its models. Refused while an enabled route still points at it."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void remove()}
+      />
     </div>
   )
 }
@@ -463,15 +448,15 @@ function ReasoningSection({ provider, onChanged }: { provider: AdminProvider; on
   return (
     <section className="space-y-4">
       <h2 className="text-sm font-semibold">Reasoning</h2>
-      <label className="flex items-center gap-3 text-sm">
-        <Toggle on={disabled} onChange={(v) => void toggle(v)} label="Disable reasoning" />
+      <div className="flex items-center gap-3 text-sm">
+        <Switch checked={disabled} onCheckedChange={(v) => void toggle(v)} aria-label="Disable reasoning" />
         <span className="text-muted-foreground">
           {saving ? 'Saving…' : 'Disable reasoning ("thinking") for every request to this provider.'}
         </span>
-      </label>
+      </div>
       <Field
         label="Request timeout"
-        hint={
+        description={
           timeoutSaving
             ? 'Saving…'
             : 'Go duration, e.g. "20m", empty uses the default. Enter or click away to save.'
@@ -521,19 +506,21 @@ function RegionSection({ provider, onChanged }: { provider: AdminProvider; onCha
   return (
     <section className="space-y-4">
       <h2 className="text-sm font-semibold">Region</h2>
-      <Field label="AWS region" hint={saving ? 'Saving…' : undefined}>
-        <Select value={region} onValueChange={(v) => void save(v)}>
-          <SelectTrigger className="mt-1.5 h-10 w-full max-w-72">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {bedrockRegions.map((r) => (
-              <SelectItem key={r.value} value={r.value}>
-                {r.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <Field label="AWS region" description={saving ? 'Saving…' : undefined}>
+        {(props) => (
+          <Select value={region} onValueChange={(v) => void save(v)}>
+            <SelectTrigger id={props.id} className="mt-1.5 h-10 w-full max-w-72">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {bedrockRegions.map((r) => (
+                <SelectItem key={r.value} value={r.value}>
+                  {r.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </Field>
     </section>
   )
@@ -577,7 +564,7 @@ function CatalogProviderSection({ provider, onChanged }: { provider: AdminProvid
       <h2 className="text-sm font-semibold">Catalog provider</h2>
       <Field
         label="LiteLLM provider"
-        hint={
+        description={
           saving
             ? 'Saving…'
             : 'Which LiteLLM provider section this provider\'s models are priced under. Empty infers it from driver/base URL.'
@@ -691,7 +678,7 @@ function CliModelsSection({ provider, onChanged }: { provider: AdminProvider; on
       </p>
       <Field
         label="Default model"
-        hint={saving ? 'Saving…' : isCursor ? undefined : 'An alias, or a full Anthropic model id.'}
+        description={saving ? 'Saving…' : isCursor ? undefined : 'An alias, or a full Anthropic model id.'}
       >
         <ModelInput
           value={defaultModel}
@@ -756,7 +743,7 @@ function DefaultModelSection({ provider, onChanged }: { provider: AdminProvider;
       <h2 className="text-sm font-semibold">Default model</h2>
       <Field
         label="Default model"
-        hint={saving ? 'Saving…' : 'Used when a route chain entry for this provider names no model.'}
+        description={saving ? 'Saving…' : 'Used when a route chain entry for this provider names no model.'}
       >
         <ModelInput
           value={defaultModel}

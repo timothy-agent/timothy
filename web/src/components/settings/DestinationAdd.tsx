@@ -1,5 +1,6 @@
 import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { Eye, EyeOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -13,17 +14,12 @@ import {
 } from '../../lib/githubDestination'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { Switch } from '../ui/switch'
+import { IconButton } from '../timothy/icon-button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
-import { Field, Toggle } from './shared'
-import { errText } from './util'
-
-function slugify(v: string): string {
-  return v
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
+import { Field } from '../timothy/field'
+import { errText, slugify } from './util'
 
 // DestinationAdd is kind-aware (email vs webhook vs telegram) and its
 // own page, mirroring ConnectorAdd's shape: the destination row is
@@ -52,6 +48,7 @@ export function DestinationAdd() {
   const [botToken, setBotToken] = useState('')
   const [botTokenMode, setBotTokenMode] = useState<CredentialMode>('new')
   const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
+  const [botTokenRevealed, setBotTokenRevealed] = useState(false)
 
   // github fields (reuses connectorID above for the picked connector)
   const [mode, setMode] = useState<'push' | 'push_pr'>('push')
@@ -180,7 +177,7 @@ export function DestinationAdd() {
       </div>
 
       <div className="grid max-w-3xl gap-5">
-        <Field label="Name" hint="lowercase slug">
+        <Field label="Name" description="lowercase slug">
           <Input
             value={name}
             onChange={(e) => {
@@ -220,7 +217,7 @@ export function DestinationAdd() {
                 </p>
               )}
             </div>
-            <Field label="To" hint="recipient address">
+            <Field label="To" description="recipient address">
               <Input
                 value={to}
                 onChange={(e) => {
@@ -234,7 +231,7 @@ export function DestinationAdd() {
           </>
         ) : kind === 'telegram' ? (
           <>
-            <Field label="Chat ID" hint="the numeric chat or channel id the bot posts to">
+            <Field label="Chat ID" description="the numeric chat or channel id the bot posts to">
               <Input
                 value={chatID}
                 onChange={(e) => {
@@ -267,15 +264,25 @@ export function DestinationAdd() {
                   />
                 </Field>
               ) : (
-                <Input
-                  value={botToken}
-                  onChange={(e) => {
-                    setBotToken(e.target.value)
-                    invalidate()
-                  }}
-                  placeholder="123456:ABC-DEF..."
-                  className="h-10"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    type={botTokenRevealed ? 'text' : 'password'}
+                    value={botToken}
+                    onChange={(e) => {
+                      setBotToken(e.target.value)
+                      invalidate()
+                    }}
+                    placeholder="123456:ABC-DEF..."
+                    className="h-10"
+                    autoComplete="off"
+                  />
+                  <IconButton
+                    label={botTokenRevealed ? 'Hide token' : 'Show token'}
+                    icon={botTokenRevealed ? EyeOff : Eye}
+                    variant="outline"
+                    onClick={() => setBotTokenRevealed((v) => !v)}
+                  />
+                </div>
               )}
             </div>
           </>
@@ -330,7 +337,7 @@ export function DestinationAdd() {
                 </SelectContent>
               </Select>
             </div>
-            <Field label="Branch pattern" hint="optional">
+            <Field label="Branch pattern" description="optional" required={false}>
               <Input
                 value={branchPattern}
                 onChange={(e) => {
@@ -370,13 +377,13 @@ export function DestinationAdd() {
                   repository.
                 </p>
               </div>
-              <Toggle
-                on={createIfMissing}
-                onChange={(v) => {
+              <Switch
+                checked={createIfMissing}
+                onCheckedChange={(v) => {
                   setCreateIfMissing(v)
                   invalidate()
                 }}
-                label="Create repository if missing"
+                aria-label="Create repository if missing"
               />
             </div>
           </>

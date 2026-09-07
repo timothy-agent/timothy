@@ -3,11 +3,12 @@ import { Link } from 'react-router'
 import type { Destination, Schedule } from '../../api/types'
 import { relativeTime, relativeTimeUntil } from '../../lib/format'
 import { describeCron } from '../../lib/schedules'
-import { DestinationKindIcon, Toggle } from '../settings/shared'
+import { DestinationKindIcon } from '../destinations/DestinationKindIcon'
 import { IconButton } from '../timothy/icon-button'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Card } from '../ui/card'
+import { Switch } from '../ui/switch'
 
 // ScheduleCard renders a schedule with the same anatomy as MissionCard
 // (14.9 "Automations reuse MissionCard with a Next run metadata
@@ -72,7 +73,7 @@ export function ScheduleCard({
         )}
       </div>
       <div className="mt-4 flex items-center gap-2 border-t border-border pt-3">
-        <Toggle on={schedule.enabled} onChange={onToggle} label={`${schedule.name} enabled`} />
+        <Switch checked={schedule.enabled} onCheckedChange={onToggle} aria-label={`${schedule.name} enabled`} />
         <Button size="sm" variant="outline" onClick={onEdit}>
           Edit
         </Button>

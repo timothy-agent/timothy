@@ -13,14 +13,9 @@ import {
 } from '../../api/client'
 import type { AdminConnector, Destination } from '../../api/types'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
-import { DestinationKindIcon, Toggle } from './shared'
+import { Switch } from '../ui/switch'
+import { ConfirmDialog } from '../timothy/confirm-dialog'
+import { DestinationKindIcon } from '../destinations/DestinationKindIcon'
 import { errText } from './util'
 
 export function DestinationsList() {
@@ -199,7 +194,7 @@ function DestinationCard({
           <div className="truncate text-sm font-semibold">{destination.name}</div>
           <div className="text-xs text-muted-foreground uppercase">{destination.kind}</div>
         </div>
-        <Toggle on={destination.enabled} onChange={toggle} label={`${destination.name} enabled`} />
+        <Switch checked={destination.enabled} onCheckedChange={toggle} aria-label={`${destination.name} enabled`} />
       </div>
 
       <div className="truncate text-xs text-muted-foreground">
@@ -234,24 +229,15 @@ function DestinationCard({
         </Button>
       </div>
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {destination.name}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Removes the destination. Refused while any in-progress mission still delivers to it.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${destination.name}?`}
+        description="Removes the destination. Refused while any in-progress mission still delivers to it."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void remove()}
+      />
     </div>
   )
 }

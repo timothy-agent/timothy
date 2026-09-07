@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { listSecretRefs, type SecretRefEntry } from '../../api/client'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { Field } from './shared'
+import { SegmentedControl } from '../timothy/segmented-control'
+import { Field } from '../timothy/field'
 
 export type CredentialMode = 'new' | 'existing'
 
@@ -38,20 +39,16 @@ export function CredentialModeToggle({
   labels?: { new: string; existing: string }
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-border p-0.5 text-sm">
-      {(['new', 'existing'] as const).map((m) => (
-        <button
-          key={m}
-          type="button"
-          onClick={() => onChange(m)}
-          className={`rounded-md px-2.5 py-1 font-medium transition ${
-            mode === m ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          {m === 'new' ? (labels?.new ?? 'New credential') : (labels?.existing ?? 'Use existing')}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      value={mode}
+      onChange={(v) => onChange(v as CredentialMode)}
+      options={[
+        { value: 'new', label: labels?.new ?? 'New credential' },
+        { value: 'existing', label: labels?.existing ?? 'Use existing' },
+      ]}
+      size="sm"
+      aria-label="Credential source"
+    />
   )
 }
 

@@ -12,9 +12,9 @@ import {
 import type { AdminProvider, CatalogSyncStatus, ProviderHealth, TestResult } from '../../api/types'
 import { relativeTime } from '../../lib/format'
 import { Button } from '../ui/button'
+import { Switch } from '../ui/switch'
 import { matchPreset, providerPresets } from './presets'
 import { ProviderLogo } from './ProviderLogo'
-import { Toggle } from './shared'
 import { errText, humanizeProbeDetail, isTimothyAuthDetail, isTimothyAuthError, responsesSuffix, timothyAuthErrorMessage } from './util'
 
 export function ProvidersList() {
@@ -155,7 +155,7 @@ function ProviderCard({
             )}
           </div>
         </div>
-        <Toggle on={provider.enabled} onChange={toggle} label={`${provider.name} enabled`} />
+        <Switch checked={provider.enabled} onCheckedChange={toggle} aria-label={`${provider.name} enabled`} />
       </div>
 
       {provider.default_model && (
