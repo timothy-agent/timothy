@@ -1,7 +1,7 @@
-import { ArrowLeft01Icon, Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { deleteAgent, listAgents, listRoutes, patchAgent } from '../../api/client'
 import type { AdminAgent, AdminRoute } from '../../api/types'
@@ -13,8 +13,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
 import { AgentForm, useAgentForm } from './AgentForm'
+import { settingsArea } from './settingsAreas'
 import { errText } from './util'
+
+const area = settingsArea('agents')
 
 export function AgentEdit() {
   const { id } = useParams()
@@ -76,31 +81,26 @@ export function AgentEdit() {
   }
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/agents"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Agents
-      </Link>
+    <PageShell width="form">
+      <PageHeader
+        title={agent.name}
+        description={agent.is_default ? 'Default agent' : 'Agent'}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/agents' },
+          { label: agent.name },
+        ]}
+        actions={
+          !agent.is_default && (
+            <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+              <HugeiconsIcon icon={Delete02Icon} />
+              Delete
+            </Button>
+          )
+        }
+      />
 
-      <div className="flex items-center justify-between border-b border-border pb-6">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight capitalize">{agent.name}</h1>
-          <p className="text-sm text-muted-foreground">
-            {agent.is_default ? 'Default agent' : 'Agent'}
-          </p>
-        </div>
-        {!agent.is_default && (
-          <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
-            <HugeiconsIcon icon={Delete02Icon} />
-            Delete
-          </Button>
-        )}
-      </div>
-
-      <div className="max-w-3xl">
+      <div>
         <AgentForm isNew={false} routes={routes} fields={fields} />
 
         <div className="flex gap-3 pt-6">
@@ -132,6 +132,6 @@ export function AgentEdit() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </PageShell>
   )
 }

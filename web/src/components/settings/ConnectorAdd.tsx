@@ -1,7 +1,5 @@
-import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   connectorOAuthStart,
@@ -13,12 +11,17 @@ import {
 import type { GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets } from './connectorPresets'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { Field } from '../timothy/field'
+import { settingsArea } from './settingsAreas'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { connectedAs, errText, isTimothyAuthError, secretDestination, slugify } from './util'
+
+const area = settingsArea('connectors')
 
 // isValidPort reports whether an (optional) port field's text is a
 // valid TCP port: empty (field left blank) or digits only, 1-65535.
@@ -293,24 +296,19 @@ export function ConnectorAdd() {
     (usingExistingClientSecret ? existingClientSecretRef !== '' : clientSecret !== '')
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/connectors"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Connectors
-      </Link>
+    <PageShell width="form">
+      <PageHeader
+        title={`Add ${preset.name}`}
+        description={`kind: ${preset.kind}`}
+        meta={<ConnectorLogo preset={preset} className="size-9" />}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/connectors' },
+          { label: `Add ${preset.name}` },
+        ]}
+      />
 
-      <div className="flex items-center gap-4 border-b border-border pb-6">
-        <ConnectorLogo preset={preset} className="size-12" />
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Add {preset.name}</h1>
-          <p className="text-sm text-muted-foreground">kind: {preset.kind}</p>
-        </div>
-      </div>
-
-      <div className="grid max-w-3xl gap-5">
+      <div className="grid gap-5">
         <Field label="Name" description="lowercase slug, prefixes this connector's tool names">
           <Input
             value={name}
@@ -601,6 +599,6 @@ export function ConnectorAdd() {
           </>
         )}
       </div>
-    </div>
+    </PageShell>
   )
 }

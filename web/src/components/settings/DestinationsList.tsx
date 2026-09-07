@@ -15,8 +15,13 @@ import type { AdminConnector, Destination } from '../../api/types'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { ConfirmDialog } from '../timothy/confirm-dialog'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
 import { DestinationKindIcon } from '../destinations/DestinationKindIcon'
+import { settingsArea } from './settingsAreas'
 import { errText } from './util'
+
+const area = settingsArea('destinations')
 
 export function DestinationsList() {
   const [destinations, setDestinations] = useState<Destination[]>([])
@@ -41,94 +46,101 @@ export function DestinationsList() {
   }, [])
 
   return (
-    <div className="mt-6 space-y-8">
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {destinations.length > 0 ? `Your destinations · ${destinations.length}` : 'Your destinations'}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Where mission results go. Attach one or more to a mission and its outcome digest
-          delivers there once it finishes.
-        </p>
-        {destinations.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-            No destinations yet, add one below.
-          </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {destinations.map((d) => (
-              <DestinationCard
-                key={d.id}
-                destination={d}
-                connectors={connectors}
-                onChanged={refresh}
-                onManage={() => navigate(`/settings/destinations/${d.id}`)}
-              />
-            ))}
-          </div>
-        )}
-      </section>
+    <PageShell>
+      <PageHeader
+        title={area.label}
+        description={area.description}
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
+      />
+      <div className="space-y-8">
+        <section className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {destinations.length > 0 ? `Your destinations · ${destinations.length}` : 'Your destinations'}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Where mission results go. Attach one or more to a mission and its outcome digest
+            delivers there once it finishes.
+          </p>
+          {destinations.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
+              No destinations yet, add one below.
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {destinations.map((d) => (
+                <DestinationCard
+                  key={d.id}
+                  destination={d}
+                  connectors={connectors}
+                  onChanged={refresh}
+                  onManage={() => navigate(`/settings/destinations/${d.id}`)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
 
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Add a destination
-        </h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <button
-            type="button"
-            onClick={() => navigate('/settings/destinations/new/email')}
-            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-          >
-            <HugeiconsIcon icon={Mail01Icon} className="size-9" />
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold">Email</span>
-              <span className="block truncate text-sm text-muted-foreground">
-                Sends via a connected Gmail account
+        <section className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Add a destination
+          </h2>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <button
+              type="button"
+              onClick={() => navigate('/settings/destinations/new/email')}
+              className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
+            >
+              <HugeiconsIcon icon={Mail01Icon} className="size-9" />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">Email</span>
+                <span className="block truncate text-sm text-muted-foreground">
+                  Sends via a connected Gmail account
+                </span>
               </span>
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/settings/destinations/new/webhook')}
-            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-          >
-            <HugeiconsIcon icon={GlobalIcon} className="size-9" />
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold">Webhook</span>
-              <span className="block truncate text-sm text-muted-foreground">
-                POSTs the digest as JSON or plain text
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/settings/destinations/new/webhook')}
+              className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
+            >
+              <HugeiconsIcon icon={GlobalIcon} className="size-9" />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">Webhook</span>
+                <span className="block truncate text-sm text-muted-foreground">
+                  POSTs the digest as JSON or plain text
+                </span>
               </span>
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/settings/destinations/new/telegram')}
-            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-          >
-            <TelegramIcon className="size-9" />
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold">Telegram</span>
-              <span className="block truncate text-sm text-muted-foreground">
-                Sends via a bot to a chat
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/settings/destinations/new/telegram')}
+              className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
+            >
+              <TelegramIcon className="size-9" />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">Telegram</span>
+                <span className="block truncate text-sm text-muted-foreground">
+                  Sends via a bot to a chat
+                </span>
               </span>
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/settings/destinations/new/github')}
-            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-          >
-            <DestinationKindIcon kind="github" className="size-9" />
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold">GitHub</span>
-              <span className="block truncate text-sm text-muted-foreground">
-                Pushes a branch or opens a PR via a connector
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/settings/destinations/new/github')}
+              className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
+            >
+              <DestinationKindIcon kind="github" className="size-9" />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">GitHub</span>
+                <span className="block truncate text-sm text-muted-foreground">
+                  Pushes a branch or opens a PR via a connector
+                </span>
               </span>
-            </span>
-          </button>
-        </div>
-      </section>
-    </div>
+            </button>
+          </div>
+        </section>
+      </div>
+    </PageShell>
   )
 }
 

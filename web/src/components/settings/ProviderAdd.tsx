@@ -1,20 +1,25 @@
-import { AlertCircleIcon, ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { AlertCircleIcon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { createProvider, searchCatalog, setSecret, validateProvider } from '../../api/client'
 import type { TestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { catalogMatchForID, catalogRowID, ModelInput, type ModelSuggestion, useCatalogSearch } from './ModelInput'
 import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { Field } from '../timothy/field'
+import { settingsArea } from './settingsAreas'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
+
+const area = settingsArea('providers')
 
 // refFor derives a credential ref for a named provider instance: the
 // preset's conventional storage-key name, or one from the user's name.
@@ -319,24 +324,19 @@ export function ProviderAdd() {
   }
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/providers"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Providers
-      </Link>
+    <PageShell width="form">
+      <PageHeader
+        title={`Add ${preset.name}`}
+        description={`driver: ${preset.driver}`}
+        meta={<ProviderLogo preset={preset} className="size-9" />}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/providers' },
+          { label: `Add ${preset.name}` },
+        ]}
+      />
 
-      <div className="flex items-center gap-4 border-b border-border pb-6">
-        <ProviderLogo preset={preset} className="size-12" />
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Add {preset.name}</h1>
-          <p className="text-sm text-muted-foreground">driver: {preset.driver}</p>
-        </div>
-      </div>
-
-      <div className="grid max-w-3xl gap-5">
+      <div className="grid gap-5">
         <Field label="Name (unique)">
           <Input
             value={name}
@@ -711,6 +711,6 @@ export function ProviderAdd() {
           </Button>
         </div>
       </div>
-    </div>
+    </PageShell>
   )
 }

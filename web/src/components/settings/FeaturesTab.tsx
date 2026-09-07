@@ -11,7 +11,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Switch } from '../ui/switch'
 import { Alert, AlertDescription } from '../ui/alert'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
+import { settingsArea } from './settingsAreas'
 import { errText, UNSET } from './util'
+
+const area = settingsArea('features')
 
 // FALLBACK_TIMEZONES stands in for Intl.supportedValuesOf('timeZone')
 // when that API is unavailable (older test environments): a short,
@@ -87,35 +92,42 @@ export function FeaturesTab() {
   }
 
   return (
-    <div className="mt-6 space-y-3">
-      {error && (
-        <Alert tone="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-      {Object.entries(featureCopy).map(([key, copy]) => (
-        <div key={key} className="flex items-center gap-4 rounded-xl border border-border p-4">
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium">{copy.label}</div>
-            <p className="mt-0.5 text-xs text-muted-foreground">{copy.description}</p>
+    <PageShell>
+      <PageHeader
+        title={area.label}
+        description={area.description}
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
+      />
+      <div className="space-y-3">
+        {error && (
+          <Alert tone="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        {Object.entries(featureCopy).map(([key, copy]) => (
+          <div key={key} className="flex items-center gap-4 rounded-xl border border-border p-4">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium">{copy.label}</div>
+              <p className="mt-0.5 text-xs text-muted-foreground">{copy.description}</p>
+            </div>
+            <Switch
+              checked={flags?.[key] ?? true}
+              onCheckedChange={(v) => flip(key, v)}
+              aria-label={copy.label}
+            />
           </div>
-          <Switch
-            checked={flags?.[key] ?? true}
-            onCheckedChange={(v) => flip(key, v)}
-            aria-label={copy.label}
-          />
-        </div>
-      ))}
-      {values && <SensitiveRouteCard values={values} onError={setError} onSaved={refresh} />}
-      {values && <TimezoneCard values={values} onError={setError} onSaved={refresh} />}
-      {values && <DefaultCurrencyCard values={values} onError={setError} onSaved={refresh} />}
-      {values && <DefaultCodingExecutorCard values={values} onError={setError} onSaved={refresh} />}
-      {values && <ExecutorRunBudgetCard values={values} onError={setError} onSaved={refresh} />}
-      {values && <ReviewTokenCeilingCard values={values} onError={setError} onSaved={refresh} />}
-      {values && <GitBranchPatternCard values={values} onError={setError} onSaved={refresh} />}
-      {values && <GitCommitStyleCard values={values} onError={setError} onSaved={refresh} />}
-      <NotificationSoundCard />
-    </div>
+        ))}
+        {values && <SensitiveRouteCard values={values} onError={setError} onSaved={refresh} />}
+        {values && <TimezoneCard values={values} onError={setError} onSaved={refresh} />}
+        {values && <DefaultCurrencyCard values={values} onError={setError} onSaved={refresh} />}
+        {values && <DefaultCodingExecutorCard values={values} onError={setError} onSaved={refresh} />}
+        {values && <ExecutorRunBudgetCard values={values} onError={setError} onSaved={refresh} />}
+        {values && <ReviewTokenCeilingCard values={values} onError={setError} onSaved={refresh} />}
+        {values && <GitBranchPatternCard values={values} onError={setError} onSaved={refresh} />}
+        {values && <GitCommitStyleCard values={values} onError={setError} onSaved={refresh} />}
+        <NotificationSoundCard />
+      </div>
+    </PageShell>
   )
 }
 

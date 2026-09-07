@@ -20,6 +20,7 @@ import { matchPreset } from './presets'
 import { ProviderMark } from './ProviderLogo'
 import { Switch } from '../ui/switch'
 import { Field } from '../timothy/field'
+import { PageShell } from '../timothy/page-shell'
 import { errText } from './util'
 
 const scoredStrategies = ['auto', 'price', 'latency']
@@ -87,65 +88,67 @@ export function RouteEdit() {
   }
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/routes"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Routes
-      </Link>
+    <PageShell width="full">
+      <div className="w-full space-y-6">
+        <Link
+          to="/settings/routes"
+          className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+        >
+          <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+          Routes
+        </Link>
 
-      <div className="flex flex-wrap items-center gap-4 border-b border-border pb-6">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-xl font-semibold tracking-tight">{route.name}</h1>
-          {serving ? (
-            <p className="text-sm text-muted-foreground">
-              serving <span className="text-foreground">{nameOf(serving.provider_id)}</span> /{' '}
-              <span className="font-mono text-foreground">{serving.model}</span>
-            </p>
-          ) : (
-            <p className="text-sm font-medium text-warning">
-              {route.enabled ? 'no usable provider' : 'disabled'}
-            </p>
-          )}
+        <div className="flex flex-wrap items-center gap-4 border-b border-border pb-6">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl font-semibold tracking-tight">{route.name}</h1>
+            {serving ? (
+              <p className="text-sm text-muted-foreground">
+                serving <span className="text-foreground">{nameOf(serving.provider_id)}</span> /{' '}
+                <span className="font-mono text-foreground">{serving.model}</span>
+              </p>
+            ) : (
+              <p className="text-sm font-medium text-warning">
+                {route.enabled ? 'no usable provider' : 'disabled'}
+              </p>
+            )}
+          </div>
+          <Select value={route.strategy || 'ordered'} onValueChange={(v) => save({ strategy: v })}>
+            <SelectTrigger className="h-10 w-36" aria-label={`${route.name} strategy`}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ordered">Ordered</SelectItem>
+              <SelectItem value="auto">Auto</SelectItem>
+              <SelectItem value="price">Cheapest</SelectItem>
+              <SelectItem value="latency">Fastest</SelectItem>
+            </SelectContent>
+          </Select>
+          <Switch checked={route.enabled} onCheckedChange={(v) => save({ enabled: v })} aria-label={`${route.name} route enabled`} />
         </div>
-        <Select value={route.strategy || 'ordered'} onValueChange={(v) => save({ strategy: v })}>
-          <SelectTrigger className="h-10 w-36" aria-label={`${route.name} strategy`}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="ordered">Ordered</SelectItem>
-            <SelectItem value="auto">Auto</SelectItem>
-            <SelectItem value="price">Cheapest</SelectItem>
-            <SelectItem value="latency">Fastest</SelectItem>
-          </SelectContent>
-        </Select>
-        <Switch checked={route.enabled} onCheckedChange={(v) => save({ enabled: v })} aria-label={`${route.name} route enabled`} />
-      </div>
 
-      <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <h2 className="text-sm font-semibold">Chain</h2>
-          {scored ? (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-              auto-sorted by score
-            </span>
-          ) : (
-            <span className="text-xs text-muted-foreground">drag cards to set priority</span>
-          )}
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm font-semibold">Chain</h2>
+            {scored ? (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+                auto-sorted by score
+              </span>
+            ) : (
+              <span className="text-xs text-muted-foreground">drag cards to set priority</span>
+            )}
+          </div>
+          <Pipeline
+            entries={displayEntries}
+            scored={scored}
+            serving={serving}
+            providers={providers}
+            onReorder={moveEntry}
+            onRemove={removeEntry}
+          />
+          <AddChainEntry providers={providers} onAdd={(entry) => save({ chain: [...route.chain, entry] })} />
         </div>
-        <Pipeline
-          entries={displayEntries}
-          scored={scored}
-          serving={serving}
-          providers={providers}
-          onReorder={moveEntry}
-          onRemove={removeEntry}
-        />
-        <AddChainEntry providers={providers} onAdd={(entry) => save({ chain: [...route.chain, entry] })} />
       </div>
-    </div>
+    </PageShell>
   )
 }
 

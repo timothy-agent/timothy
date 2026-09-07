@@ -1,6 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FeaturesTab } from './FeaturesTab'
+
+// FeaturesTab now renders PageHeader's breadcrumb links, which need a
+// Router context, so every render is wrapped in MemoryRouter.
+function renderTab() {
+  return render(
+    <MemoryRouter>
+      <FeaturesTab />
+    </MemoryRouter>,
+  )
+}
 
 vi.mock('../../api/client', () => ({
   getSettings: vi.fn(),
@@ -24,7 +35,7 @@ describe('FeaturesTab review token ceiling', () => {
       settings: {},
       values: { executor_run_budget_minutes: '90', mission_review_token_ceiling: '250000' },
     })
-    render(<FeaturesTab />)
+    renderTab()
     const input = (await screen.findByLabelText('Review token ceiling')) as HTMLInputElement
     expect(input.value).toBe('250000')
     expect(screen.getByLabelText('Harness run budget minutes')).toBeTruthy()
@@ -36,7 +47,7 @@ describe('FeaturesTab review token ceiling', () => {
 
   it('shows the default as a placeholder when unset', async () => {
     vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
-    render(<FeaturesTab />)
+    renderTab()
     const input = (await screen.findByLabelText('Review token ceiling')) as HTMLInputElement
     expect(input.value).toBe('')
     expect(input.placeholder).toBe('1500000')

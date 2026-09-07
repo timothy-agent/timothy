@@ -1,8 +1,6 @@
-import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
 import { Eye, EyeOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { createDestination, listConnectors, patchDestination, setSecret, testDestination } from '../../api/client'
 import type { AdminConnector } from '../../api/types'
@@ -16,10 +14,15 @@ import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Switch } from '../ui/switch'
 import { IconButton } from '../timothy/icon-button'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { Field } from '../timothy/field'
+import { settingsArea } from './settingsAreas'
 import { errText, slugify } from './util'
+
+const area = settingsArea('destinations')
 
 // DestinationAdd is kind-aware (email vs webhook vs telegram) and its
 // own page, mirroring ConnectorAdd's shape: the destination row is
@@ -158,25 +161,21 @@ export function DestinationAdd() {
 
   const tested = test?.ok === true
 
+  const destinationTitle = `Add ${kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : kind === 'github' ? 'GitHub' : 'Webhook'} destination`
+
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/destinations"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Destinations
-      </Link>
+    <PageShell width="form">
+      <PageHeader
+        title={destinationTitle}
+        description={`kind: ${kind}`}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/destinations' },
+          { label: destinationTitle },
+        ]}
+      />
 
-      <div className="border-b border-border pb-6">
-        <h1 className="text-xl font-semibold tracking-tight">
-          Add {kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : kind === 'github' ? 'GitHub' : 'Webhook'}{' '}
-          destination
-        </h1>
-        <p className="text-sm text-muted-foreground">kind: {kind}</p>
-      </div>
-
-      <div className="grid max-w-3xl gap-5">
+      <div className="grid gap-5">
         <Field label="Name" description="lowercase slug">
           <Input
             value={name}
@@ -456,6 +455,6 @@ export function DestinationAdd() {
           )}
         </div>
       </div>
-    </div>
+    </PageShell>
   )
 }

@@ -8,7 +8,12 @@ import type { AdminAgent } from '../../api/types'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { ConfirmDialog } from '../timothy/confirm-dialog'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
+import { settingsArea } from './settingsAreas'
 import { errText } from './util'
+
+const area = settingsArea('agents')
 
 export function AgentsList() {
   const [agents, setAgents] = useState<AdminAgent[]>([])
@@ -36,45 +41,52 @@ export function AgentsList() {
   }
 
   return (
-    <div className="mt-6 space-y-6">
-      <p className="text-sm text-muted-foreground">
-        Agents are who serves a session: a prompt overlay, a model chain (route), skill and tool
-        allowlists, and whether long-term memory participates. The default agent serves new
-        sessions unless the composer picks another.
-      </p>
-
-      <div className="flex items-center justify-between">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Agents · {agents.length}
-        </h2>
-        <Button onClick={() => navigate('/settings/agents/new')}>
-          <HugeiconsIcon icon={Add01Icon} />
-          New agent
-        </Button>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {agents.map((a) => (
-          <AgentCard
-            key={a.id}
-            agent={a}
-            onChanged={refresh}
-            onManage={() => navigate(`/settings/agents/${a.id}`)}
-            onDelete={() => setConfirmDelete(a)}
-          />
-        ))}
-      </div>
-
-      <ConfirmDialog
-        open={confirmDelete !== null}
-        onOpenChange={(o) => !o && setConfirmDelete(null)}
-        title={`Delete ${confirmDelete?.name}?`}
-        description="Sessions that used this agent keep their history; new turns fall back to the default agent. The default agent itself cannot be deleted."
-        confirmLabel="Delete"
-        destructive
-        onConfirm={() => void remove()}
+    <PageShell>
+      <PageHeader
+        title={area.label}
+        description={area.description}
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
       />
-    </div>
+      <div className="space-y-6">
+        <p className="text-sm text-muted-foreground">
+          Agents are who serves a session: a prompt overlay, a model chain (route), skill and tool
+          allowlists, and whether long-term memory participates. The default agent serves new
+          sessions unless the composer picks another.
+        </p>
+
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Agents · {agents.length}
+          </h2>
+          <Button onClick={() => navigate('/settings/agents/new')}>
+            <HugeiconsIcon icon={Add01Icon} />
+            New agent
+          </Button>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {agents.map((a) => (
+            <AgentCard
+              key={a.id}
+              agent={a}
+              onChanged={refresh}
+              onManage={() => navigate(`/settings/agents/${a.id}`)}
+              onDelete={() => setConfirmDelete(a)}
+            />
+          ))}
+        </div>
+
+        <ConfirmDialog
+          open={confirmDelete !== null}
+          onOpenChange={(o) => !o && setConfirmDelete(null)}
+          title={`Delete ${confirmDelete?.name}?`}
+          description="Sessions that used this agent keep their history; new turns fall back to the default agent. The default agent itself cannot be deleted."
+          confirmLabel="Delete"
+          destructive
+          onConfirm={() => void remove()}
+        />
+      </div>
+    </PageShell>
   )
 }
 

@@ -1,8 +1,8 @@
-import { ArrowLeft01Icon, Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Eye, EyeOff } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   deleteDestination,
@@ -23,11 +23,16 @@ import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { ConfirmDialog } from '../timothy/confirm-dialog'
 import { IconButton } from '../timothy/icon-button'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { Field } from '../timothy/field'
+import { settingsArea } from './settingsAreas'
 import { errText } from './util'
+
+const area = settingsArea('destinations')
 
 export function DestinationEdit() {
   const { id } = useParams()
@@ -178,27 +183,24 @@ export function DestinationEdit() {
   if (destination === undefined) return null
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/destinations"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Destinations
-      </Link>
+    <PageShell width="form">
+      <PageHeader
+        title={destination.name}
+        description={destination.kind}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/destinations' },
+          { label: destination.name },
+        ]}
+        actions={
+          <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+            <HugeiconsIcon icon={Delete02Icon} />
+            Delete
+          </Button>
+        }
+      />
 
-      <div className="flex items-center gap-4 border-b border-border pb-6">
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-xl font-semibold tracking-tight">{destination.name}</h1>
-          <p className="text-sm text-muted-foreground uppercase">{destination.kind}</p>
-        </div>
-        <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
-          <HugeiconsIcon icon={Delete02Icon} />
-          Delete
-        </Button>
-      </div>
-
-      <div className="grid max-w-3xl gap-5">
+      <div className="grid gap-5">
         <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
           <div className="min-w-0">
             <div className="text-sm font-medium">Enabled</div>
@@ -427,6 +429,6 @@ export function DestinationEdit() {
         destructive
         onConfirm={() => void remove()}
       />
-    </div>
+    </PageShell>
   )
 }

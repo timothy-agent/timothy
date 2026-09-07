@@ -1,13 +1,16 @@
-import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { createAgent, listRoutes } from '../../api/client'
 import type { AdminRoute } from '../../api/types'
 import { Button } from '../ui/button'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
 import { AgentForm, useAgentForm } from './AgentForm'
+import { settingsArea } from './settingsAreas'
 import { errText, slugify } from './util'
+
+const area = settingsArea('agents')
 
 export function AgentAdd() {
   const navigate = useNavigate()
@@ -44,23 +47,18 @@ export function AgentAdd() {
   }
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/agents"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Agents
-      </Link>
+    <PageShell width="form">
+      <PageHeader
+        title="New agent"
+        description="Who serves a session: prompt, route, skill and tool allowlists, memory."
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/agents' },
+          { label: 'New agent' },
+        ]}
+      />
 
-      <div className="border-b border-border pb-6">
-        <h1 className="text-xl font-semibold tracking-tight">New agent</h1>
-        <p className="text-sm text-muted-foreground">
-          Who serves a session: prompt, route, skill and tool allowlists, memory.
-        </p>
-      </div>
-
-      <div className="max-w-3xl">
+      <div>
         <AgentForm isNew routes={routes} fields={fields} />
 
         <div className="flex gap-3 pt-6">
@@ -72,6 +70,6 @@ export function AgentAdd() {
           </Button>
         </div>
       </div>
-    </div>
+    </PageShell>
   )
 }

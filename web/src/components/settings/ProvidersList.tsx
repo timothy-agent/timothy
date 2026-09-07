@@ -11,11 +11,16 @@ import {
 } from '../../api/client'
 import type { AdminProvider, CatalogSyncStatus, ProviderHealth, TestResult } from '../../api/types'
 import { relativeTime } from '../../lib/format'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { matchPreset, providerPresets } from './presets'
 import { ProviderLogo } from './ProviderLogo'
+import { settingsArea } from './settingsAreas'
 import { errText, humanizeProbeDetail, isTimothyAuthDetail, isTimothyAuthError, responsesSuffix, timothyAuthErrorMessage } from './util'
+
+const area = settingsArea('providers')
 
 export function ProvidersList() {
   const [providers, setProviders] = useState<AdminProvider[]>([])
@@ -33,56 +38,63 @@ export function ProvidersList() {
   useEffect(refresh, [refresh])
 
   return (
-    <div className="mt-6 space-y-8">
-      <CatalogStatusLine />
+    <PageShell>
+      <PageHeader
+        title={area.label}
+        description={area.description}
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
+      />
+      <div className="space-y-8">
+        <CatalogStatusLine />
 
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {providers.length > 0 ? `Your providers · ${providers.length}` : 'Your providers'}
-        </h2>
-        {providers.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-            No providers configured yet, add one below.
-          </div>
-        ) : (
+        <section className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {providers.length > 0 ? `Your providers · ${providers.length}` : 'Your providers'}
+          </h2>
+          {providers.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
+              No providers configured yet, add one below.
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {providers.map((p) => (
+                <ProviderCard
+                  key={p.id}
+                  provider={p}
+                  health={health[p.name]}
+                  onChanged={refresh}
+                  onManage={() => navigate(`/settings/providers/${p.id}`)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Add a provider
+          </h2>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {providers.map((p) => (
-              <ProviderCard
-                key={p.id}
-                provider={p}
-                health={health[p.name]}
-                onChanged={refresh}
-                onManage={() => navigate(`/settings/providers/${p.id}`)}
-              />
+            {providerPresets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => navigate(`/settings/providers/new/${preset.id}`)}
+                className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
+              >
+                <ProviderLogo preset={preset} className="size-9" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold">{preset.name}</span>
+                  <span className="block truncate text-sm text-muted-foreground">
+                    {preset.description}
+                  </span>
+                </span>
+              </button>
             ))}
           </div>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Add a provider
-        </h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {providerPresets.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => navigate(`/settings/providers/new/${preset.id}`)}
-              className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-            >
-              <ProviderLogo preset={preset} className="size-9" />
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">{preset.name}</span>
-                <span className="block truncate text-sm text-muted-foreground">
-                  {preset.description}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </section>
-    </div>
+        </section>
+      </div>
+    </PageShell>
   )
 }
 

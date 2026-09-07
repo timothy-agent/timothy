@@ -1,3 +1,4 @@
+import axe from 'axe-core'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -107,17 +108,21 @@ beforeEach(() => {
 })
 
 describe('Settings pages', () => {
-  it('renders the area as its own page with a heading', async () => {
+  it('renders the area as its own page with a single heading', async () => {
     renderPage('/settings/secrets')
     expect(await screen.findByText('HashiCorp Vault')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Secrets' })).toBeTruthy()
+    const h1s = screen.getAllByRole('heading', { level: 1 })
+    expect(h1s).toHaveLength(1)
+    expect(h1s[0]).toHaveTextContent('Secrets')
     expect(screen.queryByText('Your providers')).toBeNull()
   })
 
-  it('redirects /settings to providers', async () => {
+  it('redirects /settings to providers, with a single heading', async () => {
     renderPage('/settings')
     expect(await screen.findByText('healthy')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Providers' })).toBeTruthy()
+    const h1s = screen.getAllByRole('heading', { level: 1 })
+    expect(h1s).toHaveLength(1)
+    expect(h1s[0]).toHaveTextContent('Providers')
   })
 })
 
@@ -270,7 +275,7 @@ describe('Providers tab', () => {
   it('navigates to its own add page: bedrock asks for a region dropdown and a key', async () => {
     renderPage('/settings/providers')
     fireEvent.click(await screen.findByRole('button', { name: /AWS Bedrock/ }))
-    expect(await screen.findByText('Add AWS Bedrock')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Add AWS Bedrock' })).toBeTruthy()
     expect(screen.getByText('Region')).toBeTruthy()
     expect(screen.getByRole('combobox')).toBeTruthy()
     // Static keys are the only bedrock auth now: access key id + secret
@@ -389,5 +394,21 @@ describe('Provider manage page', () => {
     renderPage('/settings/providers')
     fireEvent.click(await screen.findByRole('button', { name: 'Manage' }))
     expect(await screen.findByDisplayValue('OpenAI')).toBeTruthy()
+  })
+})
+
+describe('Settings pages accessibility', () => {
+  it('has no axe violations on the providers list', async () => {
+    const { container } = renderPage('/settings/providers')
+    await screen.findByText('Your providers · 1')
+    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
+    expect(results.violations).toEqual([])
+  })
+
+  it('has no axe violations on the provider add page', async () => {
+    const { container } = renderPage('/settings/providers/new/glm')
+    await screen.findByRole('heading', { name: 'Add GLM (Z.ai)' })
+    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
+    expect(results.violations).toEqual([])
   })
 })

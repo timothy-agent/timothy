@@ -25,7 +25,12 @@ import { awsRegions } from './presets'
 import { Alert, AlertDescription } from '../ui/alert'
 import { BrandTile } from '../timothy/brand-tile'
 import { Field } from '../timothy/field'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
+import { settingsArea } from './settingsAreas'
 import { errText } from './util'
+
+const area = settingsArea('secrets')
 
 // Brand colors for the official marks in ProviderLogo's sprite
 // (plogo-aws, plogo-vault), matching their real product colors.
@@ -85,23 +90,30 @@ export function SecretsTab() {
   ].sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
 
   return (
-    <div className="mt-6 space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Where credentials live. Exactly one backend is the default: every key or token entered
-        anywhere (providers, connectors) is written there by Timothy. Timothy storage keeps
-        values encrypted in its own database; making Vault or AWS Secrets Manager the default
-        means Timothy needs write access there, every key entered in the UI is written into it
-        under a timothy/ prefix.
-      </p>
-      {error && (
-        <Alert tone="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-      {cards.map((c) => (
-        <div key={c.key}>{c.render()}</div>
-      ))}
-    </div>
+    <PageShell>
+      <PageHeader
+        title={area.label}
+        description={area.description}
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
+      />
+      <div className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Where credentials live. Exactly one backend is the default: every key or token entered
+          anywhere (providers, connectors) is written there by Timothy. Timothy storage keeps
+          values encrypted in its own database; making Vault or AWS Secrets Manager the default
+          means Timothy needs write access there, every key entered in the UI is written into it
+          under a timothy/ prefix.
+        </p>
+        {error && (
+          <Alert tone="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        {cards.map((c) => (
+          <div key={c.key}>{c.render()}</div>
+        ))}
+      </div>
+    </PageShell>
   )
 }
 

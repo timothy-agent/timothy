@@ -16,6 +16,7 @@ import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { ConfirmDialog } from '../timothy/confirm-dialog'
 import { Field } from '../timothy/field'
+import { PageShell } from '../timothy/page-shell'
 import { Input } from '../ui/input'
 import { ConnectorLogo } from './ConnectorLogo'
 import { presetFor } from './connectorPresets'
@@ -168,243 +169,245 @@ export function ConnectorEdit() {
   const isOAuth = connector.kind === 'google' || connector.kind === 'microsoft'
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/connectors"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Connectors
-      </Link>
-
-      <div className="flex items-center gap-4 border-b border-border pb-6">
-        <ConnectorLogo preset={preset} className="size-12" />
-        <div className="min-w-0 flex-1">
-          {renaming ? (
-            <Input
-              aria-label="Connector name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onBlur={() => void commitRename()}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur()
-                if (e.key === 'Escape') setRenaming(false)
-              }}
-              autoFocus
-              className="h-8 max-w-sm text-xl font-semibold tracking-tight"
-            />
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <h1 className="truncate text-xl font-semibold tracking-tight">{connector.name}</h1>
-              <button
-                type="button"
-                aria-label="Rename connector"
-                onClick={startRename}
-                className="shrink-0 text-muted-foreground hover:text-foreground"
-              >
-                <HugeiconsIcon icon={PencilEdit01Icon} className="size-4" />
-              </button>
-            </div>
-          )}
-          <p className="text-sm text-muted-foreground uppercase">{preset.name}</p>
-        </div>
-        <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
-          <HugeiconsIcon icon={Delete02Icon} />
-          Delete
-        </Button>
-      </div>
-
-      <div className="grid max-w-3xl gap-5">
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
-          <div className="min-w-0">
-            <div className="text-sm font-medium">Treat as sensitive</div>
-            <p className="text-sm text-muted-foreground">
-              Pins related turns to the privacy-floor route, keeping this connector's
-              data off third-party models.
-            </p>
-          </div>
-          <Switch
-            checked={connector.sensitive}
-            onCheckedChange={toggleSensitive}
-            aria-label={`${connector.name} sensitive`}
-          />
-        </div>
-
-        <h2 className="text-sm font-semibold">Connection</h2>
-
-        <div
-          className={
-            'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
-            (test?.ok
-              ? 'border-good/30 bg-good-soft text-good'
-              : test && !test.ok
-                ? 'border-destructive/30 bg-destructive/5 text-destructive'
-                : 'border-border bg-muted/40 text-muted-foreground')
-          }
+    <PageShell width="form">
+      <div className="w-full space-y-6">
+        <Link
+          to="/settings/connectors"
+          className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
         >
-          <span className="min-w-0 flex-1 font-medium">
-            {testing
-              ? 'Testing connection…'
-              : test?.ok
-                ? test.identity
-                  ? `${connectedAs(test.identity)}, ${test.identity.scopes}.`
-                  : 'Connection OK, tools are servable.'
-                : test && !test.ok
-                  ? `Failed: ${test.error}`
-                  : 'Not tested yet.'}
-          </span>
-          {test && !test.ok && isOAuth ? (
-            <Button size="sm" variant="outline" disabled={oauthBusy} onClick={() => void reconnectOAuth()}>
-              {oauthBusy ? 'Redirecting…' : 'Reconnect'}
-            </Button>
-          ) : (
-            <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
-              {testing ? 'Testing…' : 'Test connection'}
-            </Button>
-          )}
-        </div>
+          <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+          Connectors
+        </Link>
 
-        {test && !test.ok && connector.kind === 'github' && (
-          <p className="-mt-3 text-sm text-muted-foreground">
-            Paste a new personal access token below to replace it.
-          </p>
-        )}
-
-        {isOAuth ? (
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Scopes: {(connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')}
-            </p>
-            <Button variant="outline" disabled={oauthBusy} onClick={() => void reconnectOAuth()}>
-              {oauthBusy ? 'Redirecting…' : `Reconnect ${oauthProviderLabel(connector.kind)} account`}
-            </Button>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              {connector.kind === 'github' ? (
-                'Identity for mission clone/push/PR use, no chat tools.'
-              ) : connector.kind === 'imap' ? (
-                <>
-                  <span className="font-mono">
-                    {String(connector.config.username ?? '')} @ {String(connector.config.host ?? '')}
-                  </span>
-                  {typeof connector.config.smtp_host === 'string' && connector.config.smtp_host && (
-                    <>
-                      {' '}
-                      · SMTP: <span className="font-mono">{connector.config.smtp_host}</span>
-                    </>
-                  )}
-                </>
-              ) : connector.kind === 'caldav' ? (
-                <span className="font-mono">
-                  {String(connector.config.username ?? '')} @ {String(connector.config.url ?? '')}
-                </span>
-              ) : (
-                <>
-                  Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
-                </>
-              )}
-            </p>
-            <Field
-              label={
-                connector.kind === 'github'
-                  ? 'Rotate personal access token'
-                  : connector.kind === 'imap' || connector.kind === 'caldav'
-                    ? 'Rotate password'
-                    : 'Rotate bearer token'
-              }
-            >
-              {(props) => (
-                <div className="mt-1.5 flex gap-2">
-                  <Input
-                    id={props.id}
-                    type="password"
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    placeholder="paste new token"
-                    className="h-10"
-                    autoComplete="off"
-                  />
-                  <Button variant="outline" disabled={savingToken || !token} onClick={() => void rotateToken()}>
-                    Save
-                  </Button>
-                </div>
-              )}
-            </Field>
-          </div>
-        )}
-
-        {connector.kind === 'github' && (
-          <div className="space-y-3 border-t border-border pt-5">
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Sign commits</div>
-                <p className="text-sm text-muted-foreground">
-                  SSH-sign every mission commit made through this connector with a key Timothy
-                  generates, so they show "Verified" on GitHub.
-                </p>
-              </div>
-              <Switch
-                checked={Boolean(connector.config.sign_commits)}
-                onCheckedChange={(v) => void toggleSignCommits(v)}
-                aria-label={`${connector.name} sign commits`}
+        <div className="flex items-center gap-4 border-b border-border pb-6">
+          <ConnectorLogo preset={preset} className="size-12" />
+          <div className="min-w-0 flex-1">
+            {renaming ? (
+              <Input
+                aria-label="Connector name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onBlur={() => void commitRename()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur()
+                  if (e.key === 'Escape') setRenaming(false)
+                }}
+                autoFocus
+                className="h-8 max-w-sm text-xl font-semibold tracking-tight"
               />
-            </div>
-            {Boolean(connector.config.sign_commits) && (
-              <div className="space-y-2">
-                {typeof connector.config.signing_public_key === 'string' &&
-                connector.config.signing_public_key ? (
-                  <>
-                    <Field label="Signing public key">
-                      {(props) => (
-                        <div className="mt-1.5 flex gap-2">
-                          <textarea
-                            id={props.id}
-                            readOnly
-                            value={connector.config.signing_public_key as string}
-                            rows={3}
-                            className="h-auto flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
-                          />
-                          <Button variant="outline" onClick={() => void copyPublicKey()}>
-                            Copy
-                          </Button>
-                        </div>
-                      )}
-                    </Field>
-                    <p className="text-sm text-muted-foreground">
-                      Paste this into GitHub as a{' '}
-                      <a
-                        href="https://github.com/settings/ssh/new"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-medium text-primary underline underline-offset-2 hover:no-underline"
-                      >
-                        new SSH key →
-                      </a>{' '}
-                      with key type <span className="font-medium">Signing Key</span>.
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {signingBusy ? 'Generating key…' : 'No public key yet.'}
-                  </p>
-                )}
+            ) : (
+              <div className="flex items-center gap-1.5">
+                <h1 className="truncate text-xl font-semibold tracking-tight">{connector.name}</h1>
+                <button
+                  type="button"
+                  aria-label="Rename connector"
+                  onClick={startRename}
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
+                >
+                  <HugeiconsIcon icon={PencilEdit01Icon} className="size-4" />
+                </button>
               </div>
             )}
+            <p className="text-sm text-muted-foreground uppercase">{preset.name}</p>
           </div>
-        )}
-      </div>
+          <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+            <HugeiconsIcon icon={Delete02Icon} />
+            Delete
+          </Button>
+        </div>
 
-      <ConfirmDialog
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
-        title={`Delete ${connector.name}?`}
-        description="Removes the connector; its tools disappear from the agent on the next reload. Stored credentials stay in the secret store until cleared there."
-        confirmLabel="Delete"
-        destructive
-        onConfirm={() => void remove()}
-      />
-    </div>
+        <div className="grid max-w-3xl gap-5">
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">Treat as sensitive</div>
+              <p className="text-sm text-muted-foreground">
+                Pins related turns to the privacy-floor route, keeping this connector's
+                data off third-party models.
+              </p>
+            </div>
+            <Switch
+              checked={connector.sensitive}
+              onCheckedChange={toggleSensitive}
+              aria-label={`${connector.name} sensitive`}
+            />
+          </div>
+
+          <h2 className="text-sm font-semibold">Connection</h2>
+
+          <div
+            className={
+              'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
+              (test?.ok
+                ? 'border-good/30 bg-good-soft text-good'
+                : test && !test.ok
+                  ? 'border-destructive/30 bg-destructive/5 text-destructive'
+                  : 'border-border bg-muted/40 text-muted-foreground')
+            }
+          >
+            <span className="min-w-0 flex-1 font-medium">
+              {testing
+                ? 'Testing connection…'
+                : test?.ok
+                  ? test.identity
+                    ? `${connectedAs(test.identity)}, ${test.identity.scopes}.`
+                    : 'Connection OK, tools are servable.'
+                  : test && !test.ok
+                    ? `Failed: ${test.error}`
+                    : 'Not tested yet.'}
+            </span>
+            {test && !test.ok && isOAuth ? (
+              <Button size="sm" variant="outline" disabled={oauthBusy} onClick={() => void reconnectOAuth()}>
+                {oauthBusy ? 'Redirecting…' : 'Reconnect'}
+              </Button>
+            ) : (
+              <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
+                {testing ? 'Testing…' : 'Test connection'}
+              </Button>
+            )}
+          </div>
+
+          {test && !test.ok && connector.kind === 'github' && (
+            <p className="-mt-3 text-sm text-muted-foreground">
+              Paste a new personal access token below to replace it.
+            </p>
+          )}
+
+          {isOAuth ? (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Scopes: {(connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')}
+              </p>
+              <Button variant="outline" disabled={oauthBusy} onClick={() => void reconnectOAuth()}>
+                {oauthBusy ? 'Redirecting…' : `Reconnect ${oauthProviderLabel(connector.kind)} account`}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {connector.kind === 'github' ? (
+                  'Identity for mission clone/push/PR use, no chat tools.'
+                ) : connector.kind === 'imap' ? (
+                  <>
+                    <span className="font-mono">
+                      {String(connector.config.username ?? '')} @ {String(connector.config.host ?? '')}
+                    </span>
+                    {typeof connector.config.smtp_host === 'string' && connector.config.smtp_host && (
+                      <>
+                        {' '}
+                        · SMTP: <span className="font-mono">{connector.config.smtp_host}</span>
+                      </>
+                    )}
+                  </>
+                ) : connector.kind === 'caldav' ? (
+                  <span className="font-mono">
+                    {String(connector.config.username ?? '')} @ {String(connector.config.url ?? '')}
+                  </span>
+                ) : (
+                  <>
+                    Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
+                  </>
+                )}
+              </p>
+              <Field
+                label={
+                  connector.kind === 'github'
+                    ? 'Rotate personal access token'
+                    : connector.kind === 'imap' || connector.kind === 'caldav'
+                      ? 'Rotate password'
+                      : 'Rotate bearer token'
+                }
+              >
+                {(props) => (
+                  <div className="mt-1.5 flex gap-2">
+                    <Input
+                      id={props.id}
+                      type="password"
+                      value={token}
+                      onChange={(e) => setToken(e.target.value)}
+                      placeholder="paste new token"
+                      className="h-10"
+                      autoComplete="off"
+                    />
+                    <Button variant="outline" disabled={savingToken || !token} onClick={() => void rotateToken()}>
+                      Save
+                    </Button>
+                  </div>
+                )}
+              </Field>
+            </div>
+          )}
+
+          {connector.kind === 'github' && (
+            <div className="space-y-3 border-t border-border pt-5">
+              <div className="flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium">Sign commits</div>
+                  <p className="text-sm text-muted-foreground">
+                    SSH-sign every mission commit made through this connector with a key Timothy
+                    generates, so they show "Verified" on GitHub.
+                  </p>
+                </div>
+                <Switch
+                  checked={Boolean(connector.config.sign_commits)}
+                  onCheckedChange={(v) => void toggleSignCommits(v)}
+                  aria-label={`${connector.name} sign commits`}
+                />
+              </div>
+              {Boolean(connector.config.sign_commits) && (
+                <div className="space-y-2">
+                  {typeof connector.config.signing_public_key === 'string' &&
+                  connector.config.signing_public_key ? (
+                    <>
+                      <Field label="Signing public key">
+                        {(props) => (
+                          <div className="mt-1.5 flex gap-2">
+                            <textarea
+                              id={props.id}
+                              readOnly
+                              value={connector.config.signing_public_key as string}
+                              rows={3}
+                              className="h-auto flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
+                            />
+                            <Button variant="outline" onClick={() => void copyPublicKey()}>
+                              Copy
+                            </Button>
+                          </div>
+                        )}
+                      </Field>
+                      <p className="text-sm text-muted-foreground">
+                        Paste this into GitHub as a{' '}
+                        <a
+                          href="https://github.com/settings/ssh/new"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                        >
+                          new SSH key →
+                        </a>{' '}
+                        with key type <span className="font-medium">Signing Key</span>.
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      {signingBusy ? 'Generating key…' : 'No public key yet.'}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <ConfirmDialog
+          open={confirmDelete}
+          onOpenChange={setConfirmDelete}
+          title={`Delete ${connector.name}?`}
+          description="Removes the connector; its tools disappear from the agent on the next reload. Stored credentials stay in the secret store until cleared there."
+          confirmLabel="Delete"
+          destructive
+          onConfirm={() => void remove()}
+        />
+      </div>
+    </PageShell>
   )
 }

@@ -6,9 +6,14 @@ import type { AdminConnector, GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { Alert, AlertDescription } from '../ui/alert'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, presetFor } from './connectorPresets'
+import { settingsArea } from './settingsAreas'
 import { connectedAs, errText, isTimothyAuthError } from './util'
+
+const area = settingsArea('connectors')
 
 export function ConnectorsList() {
   const [connectors, setConnectors] = useState<AdminConnector[]>([])
@@ -28,83 +33,90 @@ export function ConnectorsList() {
   useEffect(refresh, [refresh])
 
   return (
-    <div className="mt-6 space-y-8">
-      {oauthConnected && (
-        <Alert tone="good">
-          <AlertDescription className="flex items-center gap-3">
-            <span>Account connected to “{oauthConnected}”. Enable it below to serve tools.</span>
-            <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
-              dismiss
-            </button>
-          </AlertDescription>
-        </Alert>
-      )}
-      {oauthError && (
-        <Alert tone="destructive">
-          <AlertDescription className="flex items-center gap-3">
-            <span>Connection failed: {oauthError}</span>
-            <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
-              dismiss
-            </button>
-          </AlertDescription>
-        </Alert>
-      )}
+    <PageShell>
+      <PageHeader
+        title={area.label}
+        description={area.description}
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
+      />
+      <div className="space-y-8">
+        {oauthConnected && (
+          <Alert tone="good">
+            <AlertDescription className="flex items-center gap-3">
+              <span>Account connected to “{oauthConnected}”. Enable it below to serve tools.</span>
+              <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
+                dismiss
+              </button>
+            </AlertDescription>
+          </Alert>
+        )}
+        {oauthError && (
+          <Alert tone="destructive">
+            <AlertDescription className="flex items-center gap-3">
+              <span>Connection failed: {oauthError}</span>
+              <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
+                dismiss
+              </button>
+            </AlertDescription>
+          </Alert>
+        )}
 
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {connectors.length > 0 ? `Your connectors · ${connectors.length}` : 'Your connectors'}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Integrations the agent can use as tools. A tool appears to the model once per capability
-          (e.g. <span className="font-mono text-xs">search_mail</span>) with an{' '}
-          <span className="font-mono text-xs">account</span> argument routing to the right
-          connector when more than one serves it; a name that would otherwise collide (with a
-          built-in tool, or across two MCP servers with different schemas) keeps its{' '}
-          <span className="font-mono text-xs">name_tool</span> form instead. Either way, tool
-          calls go through the same permission prompts as everything else.
-        </p>
-        {connectors.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-            No connectors yet, add one below.
-          </div>
-        ) : (
+        <section className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {connectors.length > 0 ? `Your connectors · ${connectors.length}` : 'Your connectors'}
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Integrations the agent can use as tools. A tool appears to the model once per capability
+            (e.g. <span className="font-mono text-xs">search_mail</span>) with an{' '}
+            <span className="font-mono text-xs">account</span> argument routing to the right
+            connector when more than one serves it; a name that would otherwise collide (with a
+            built-in tool, or across two MCP servers with different schemas) keeps its{' '}
+            <span className="font-mono text-xs">name_tool</span> form instead. Either way, tool
+            calls go through the same permission prompts as everything else.
+          </p>
+          {connectors.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
+              No connectors yet, add one below.
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {connectors.map((c) => (
+                <ConnectorCard
+                  key={c.id}
+                  connector={c}
+                  onChanged={refresh}
+                  onManage={() => navigate(`/settings/connectors/${c.id}`)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Add a connector
+          </h2>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {connectors.map((c) => (
-              <ConnectorCard
-                key={c.id}
-                connector={c}
-                onChanged={refresh}
-                onManage={() => navigate(`/settings/connectors/${c.id}`)}
-              />
+            {connectorPresets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => navigate(`/settings/connectors/new/${preset.id}`)}
+                className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
+              >
+                <ConnectorLogo preset={preset} className="size-9" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold">{preset.name}</span>
+                  <span className="block truncate text-sm text-muted-foreground">
+                    {preset.description}
+                  </span>
+                </span>
+              </button>
             ))}
           </div>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Add a connector
-        </h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {connectorPresets.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => navigate(`/settings/connectors/new/${preset.id}`)}
-              className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-            >
-              <ConnectorLogo preset={preset} className="size-9" />
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">{preset.name}</span>
-                <span className="block truncate text-sm text-muted-foreground">
-                  {preset.description}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </section>
-    </div>
+        </section>
+      </div>
+    </PageShell>
   )
 }
 

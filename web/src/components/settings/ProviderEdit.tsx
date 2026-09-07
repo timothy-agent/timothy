@@ -19,6 +19,7 @@ import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { ConfirmDialog } from '../timothy/confirm-dialog'
 import { Field } from '../timothy/field'
+import { PageShell } from '../timothy/page-shell'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { catalogRowID, ModelInput, priceLabel, type ModelSuggestion, useCatalogSearch } from './ModelInput'
@@ -78,74 +79,76 @@ export function ProviderEdit() {
   if (provider === undefined) return null
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/providers"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Providers
-      </Link>
+    <PageShell width="form">
+      <div className="w-full space-y-6">
+        <Link
+          to="/settings/providers"
+          className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+        >
+          <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+          Providers
+        </Link>
 
-      <div className="flex items-center gap-4 border-b border-border pb-6">
-        <ProviderLogo preset={matchPreset(provider)} className="size-12" />
-        <div className="min-w-0 flex-1">
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onBlur={saveName}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur()
-            }}
-            className="h-9 max-w-sm truncate border-transparent bg-transparent px-0 text-xl font-semibold tracking-tight shadow-none hover:border-border focus-visible:border-border focus-visible:bg-background focus-visible:px-3"
-            aria-label="Provider name"
-          />
-          <p className="text-sm text-muted-foreground">driver: {provider.driver}</p>
+        <div className="flex items-center gap-4 border-b border-border pb-6">
+          <ProviderLogo preset={matchPreset(provider)} className="size-12" />
+          <div className="min-w-0 flex-1">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={saveName}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+              }}
+              className="h-9 max-w-sm truncate border-transparent bg-transparent px-0 text-xl font-semibold tracking-tight shadow-none hover:border-border focus-visible:border-border focus-visible:bg-background focus-visible:px-3"
+              aria-label="Provider name"
+            />
+            <p className="text-sm text-muted-foreground">driver: {provider.driver}</p>
+          </div>
+          <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+            <HugeiconsIcon icon={Delete02Icon} />
+            Delete
+          </Button>
         </div>
-        <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
-          <HugeiconsIcon icon={Delete02Icon} />
-          Delete
-        </Button>
-      </div>
 
-      <div className="grid max-w-3xl gap-8">
-        {provider.driver === 'bedrock' ? (
-          <CredentialSection provider={provider} onChanged={refresh} bedrock />
-        ) : (
-          <CredentialSection
-            provider={provider}
-            onChanged={refresh}
-            defaultBackend={defaultBackend}
-            isCli={provider.kind === 'cli'}
-          />
-        )}
-        {provider.driver === 'bedrock' && <RegionSection provider={provider} onChanged={refresh} />}
-        {provider.kind !== 'cli' && (
-          <CatalogProviderSection provider={provider} onChanged={refresh} />
-        )}
-        {provider.driver === 'openaicompat' && (
-          <ReasoningSection provider={provider} onChanged={refresh} />
-        )}
-        {provider.kind === 'cli' ? (
-          <CliModelsSection provider={provider} onChanged={refresh} />
-        ) : (
-          <>
-            <DefaultModelSection provider={provider} onChanged={refresh} />
-            <ProviderCatalogSection provider={provider} />
-          </>
-        )}
-      </div>
+        <div className="grid max-w-3xl gap-8">
+          {provider.driver === 'bedrock' ? (
+            <CredentialSection provider={provider} onChanged={refresh} bedrock />
+          ) : (
+            <CredentialSection
+              provider={provider}
+              onChanged={refresh}
+              defaultBackend={defaultBackend}
+              isCli={provider.kind === 'cli'}
+            />
+          )}
+          {provider.driver === 'bedrock' && <RegionSection provider={provider} onChanged={refresh} />}
+          {provider.kind !== 'cli' && (
+            <CatalogProviderSection provider={provider} onChanged={refresh} />
+          )}
+          {provider.driver === 'openaicompat' && (
+            <ReasoningSection provider={provider} onChanged={refresh} />
+          )}
+          {provider.kind === 'cli' ? (
+            <CliModelsSection provider={provider} onChanged={refresh} />
+          ) : (
+            <>
+              <DefaultModelSection provider={provider} onChanged={refresh} />
+              <ProviderCatalogSection provider={provider} />
+            </>
+          )}
+        </div>
 
-      <ConfirmDialog
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
-        title={`Delete ${provider.name}?`}
-        description="Removes the provider row and its models. Refused while an enabled route still points at it."
-        confirmLabel="Delete"
-        destructive
-        onConfirm={() => void remove()}
-      />
-    </div>
+        <ConfirmDialog
+          open={confirmDelete}
+          onOpenChange={setConfirmDelete}
+          title={`Delete ${provider.name}?`}
+          description="Removes the provider row and its models. Refused while an enabled route still points at it."
+          confirmLabel="Delete"
+          destructive
+          onConfirm={() => void remove()}
+        />
+      </div>
+    </PageShell>
   )
 }
 
