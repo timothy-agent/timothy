@@ -36,20 +36,48 @@ describe('FeaturesTab review token ceiling', () => {
       values: { executor_run_budget_minutes: '90', mission_review_token_ceiling: '250000' },
     })
     renderTab()
-    const input = (await screen.findByLabelText('Review token ceiling')) as HTMLInputElement
+    const input = (await screen.findByRole('spinbutton', { name: 'Review token ceiling' })) as HTMLInputElement
     expect(input.value).toBe('250000')
-    expect(screen.getByLabelText('Harness run budget minutes')).toBeTruthy()
+    expect(screen.getByRole('spinbutton', { name: 'Harness run budget minutes' })).toBeTruthy()
+
+    const region = screen.getByRole('region', { name: 'Review token ceiling' })
+    const saveButton = within(region).getByRole('button', { name: 'Save' })
+    expect(saveButton).toBeDisabled()
 
     fireEvent.change(input, { target: { value: '0' } })
-    fireEvent.click(within(input.closest('div.rounded-xl') as HTMLElement).getByText('Save'))
+    expect(saveButton).toBeEnabled()
+    fireEvent.click(saveButton)
     await waitFor(() => expect(patchSettingValues).toHaveBeenCalledWith({ mission_review_token_ceiling: '0' }))
   })
 
   it('shows the default as a placeholder when unset', async () => {
     vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
     renderTab()
-    const input = (await screen.findByLabelText('Review token ceiling')) as HTMLInputElement
+    const input = (await screen.findByRole('spinbutton', { name: 'Review token ceiling' })) as HTMLInputElement
     expect(input.value).toBe('')
     expect(input.placeholder).toBe('1500000')
+  })
+
+  it('failed Save keeps the value and shows an alert with Retry', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: {},
+      values: { mission_review_token_ceiling: '250000' },
+    })
+    vi.mocked(patchSettingValues).mockRejectedValueOnce(new Error('network down'))
+    renderTab()
+
+    const input = (await screen.findByRole('spinbutton', { name: 'Review token ceiling' })) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '0' } })
+    const region = screen.getByRole('region', { name: 'Review token ceiling' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    const alert = await within(region).findByRole('alert')
+    expect(alert).toHaveTextContent('network down')
+    expect(input.value).toBe('0')
+
+    vi.mocked(patchSettingValues).mockResolvedValueOnce(undefined)
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(patchSettingValues).toHaveBeenCalledWith({ mission_review_token_ceiling: '0' }))
+    expect(within(region).queryByRole('alert')).toBeNull()
   })
 })

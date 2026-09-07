@@ -150,8 +150,8 @@ describe('Features tab sensitive tool route', () => {
     fireEvent.click(trigger)
     fireEvent.click(await screen.findByText('local'))
 
-    const card = trigger.closest('div.rounded-xl') as HTMLElement
-    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+    const region = screen.getByRole('region', { name: 'Sensitive tool route' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
       expect(patchSettingValues).toHaveBeenCalledWith({ sensitive_tool_route: 'local' }),
@@ -162,12 +162,12 @@ describe('Features tab sensitive tool route', () => {
     vi.mocked(listRoutes).mockRejectedValue(new Error('admin proxy unavailable'))
 
     renderPage('/settings/features')
-    const input = await screen.findByLabelText('Sensitive tool route')
+    const input = await screen.findByRole('textbox', { name: 'Sensitive tool route' })
     expect((input as HTMLInputElement).tagName).toBe('INPUT')
 
     fireEvent.change(input, { target: { value: 'local' } })
-    const card = input.closest('div.rounded-xl') as HTMLElement
-    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+    const region = screen.getByRole('region', { name: 'Sensitive tool route' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
       expect(patchSettingValues).toHaveBeenCalledWith({ sensitive_tool_route: 'local' }),
@@ -408,6 +408,17 @@ describe('Settings pages accessibility', () => {
   it('has no axe violations on the provider add page', async () => {
     const { container } = renderPage('/settings/providers/new/glm')
     await screen.findByRole('heading', { name: 'Add GLM (Z.ai)' })
+    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
+    expect(results.violations).toEqual([])
+  })
+
+  it('has no axe violations on the features page', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: { tools_enabled: true },
+      values: { sensitive_tool_route: '', timezone: '' },
+    })
+    const { container } = renderPage('/settings/features')
+    await screen.findByRole('region', { name: 'Timezone' })
     const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
     expect(results.violations).toEqual([])
   })
