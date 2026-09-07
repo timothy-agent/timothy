@@ -4,9 +4,14 @@
 resource from a Git source. The stack is nine containers, two networks
 and four volumes, so the single-Dockerfile resource type cannot host it.
 
-`docker-compose.yml` in this directory is `deploy/release/docker-compose.yml`
-adapted for a repo checkout behind Coolify's proxy; it pulls the same
-published `ghcr.io/timothy-agent/timothy-*` images and builds nothing.
+The compose is `deploy/release/docker-compose.yml`, the same file the
+installer uses; it pulls the published `ghcr.io/timothy-agent/timothy-*`
+images and builds nothing. It needs Docker Compose 2.23.1 or newer on the
+Coolify host: searxng's settings travel as an inline compose config
+(`configs.content`), the only form that survives Coolify. A relative bind
+is rewritten into Coolify's data directory and `configs.file:` fails with
+`bind source path does not exist: /artifacts/<uuid>/...`, because compose
+runs in a helper container the daemon cannot see.
 
 ## Before you start
 
@@ -23,9 +28,9 @@ in `brain`'s `depends_on` and run without missions.
 
 | Field | Value |
 |-------|-------|
-| Base Directory | `/deploy/coolify` |
+| Base Directory | `/deploy/release` |
 | Compose file | `docker-compose.yml` |
-| Branch | `main`, or a release tag |
+| Branch | a release tag (a compose from `main` with images from a tag can drift) |
 
 ## 2. Environment variables
 
@@ -61,9 +66,10 @@ unrecoverable.
 
 ## 3. Domain
 
-Assign the domain to the **`web`** service, port 8080. Nothing else is
-reachable from outside: `web`'s nginx proxies `/v1` to `brain` on the
-internal network, and no service publishes a host port.
+Assign the domain to the **`web`** service, port 8080. `web`'s nginx proxies
+`/v1` to `brain` on the internal network. The compose also publishes
+`WEB_PORT` (3300) and `BRAIN_PORT` (8300) on the host, as it does for a flat
+install; set both in the environment if those ports are taken.
 
 ## 4. Mission sandbox image
 
