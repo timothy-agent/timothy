@@ -419,7 +419,7 @@ describe('Settings pages accessibility', () => {
     })
     const { container } = renderPage('/settings/features')
     await screen.findByRole('region', { name: 'Timezone' })
-    const results = await axe.run(container, { rules: { |olor-contrast': { enabled: false } } })
+    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
     expect(results.violations).toEqual([])
   })
 
