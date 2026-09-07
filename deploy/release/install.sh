@@ -73,6 +73,15 @@ fi
 echo "Downloading release assets..."
 fetch "${BASE_URL}/docker-compose.yml" docker-compose.yml
 fetch "${BASE_URL}/env.example" env.example
+# Releases before the inline searxng config still bind ./searxng; keep
+# the file coming for them, skip quietly once the asset is gone.
+mkdir -p searxng
+if fetch "${BASE_URL}/searxng-settings.yml" searxng/settings.yml.new 2>/dev/null; then
+  mv searxng/settings.yml.new searxng/settings.yml
+else
+  rm -f searxng/settings.yml.new
+fi
+rmdir searxng 2>/dev/null || true
 
 # --- .env ---
 if [ -f .env ]; then
