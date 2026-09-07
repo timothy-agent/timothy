@@ -11,10 +11,9 @@ import {
 import { Switch } from '../ui/switch'
 import { Field } from '../timothy/field'
 import { slugify, UNSET } from './util'
-import { KnowledgePicker } from './KnowledgePicker'
-import { SkillsPicker } from './SkillsPicker'
-import { ToolsPicker } from './ToolsPicker'
+import { AllowlistPicker } from './AllowlistPicker'
 import { EXECUTOR_DEFAULT, executorChoices } from '../missions/MissionForm'
+import { listKbCollections, listSkills, listTools } from '../../api/client'
 import type { AdminAgent, AdminRoute } from '../../api/types'
 
 export interface AgentFormValue {
@@ -187,15 +186,42 @@ export function AgentForm({
           </Select>
         )}
       </Field>
-      <Field label="Skills allowlist" description="pick from the loaded skill packs; empty = none">
-        <SkillsPicker value={fields.skills} onChange={fields.setSkills} />
-      </Field>
-      <Field label="Tools allowlist" description="pick from the live tool surface; empty = none">
-        <ToolsPicker value={fields.tools} onChange={fields.setTools} />
-      </Field>
-      <Field label="Knowledge allowlist" description="search_kb always searches the whole knowledge base; these collections rank higher in results">
-        <KnowledgePicker value={fields.knowledge} onChange={fields.setKnowledge} />
-      </Field>
+      <AllowlistPicker
+        label="Skills allowlist"
+        description="pick from the loaded skill packs; empty = none"
+        value={fields.skills}
+        onChange={fields.setSkills}
+        load={async () =>
+          (await listSkills()).map((s) => ({ id: s.name, label: s.name, description: s.description }))
+        }
+        cacheKey="skills"
+        emptyText="No skill matches."
+        freeTextPlaceholder="research-brief, coding"
+      />
+      <AllowlistPicker
+        label="Tools allowlist"
+        description="pick from the live tool surface; empty = none"
+        value={fields.tools}
+        onChange={fields.setTools}
+        load={async () =>
+          (await listTools()).map((t) => ({ id: t.name, label: t.name, description: t.description }))
+        }
+        cacheKey="tools"
+        emptyText="No tool matches."
+        freeTextPlaceholder="search_web, fetch_url, shell"
+      />
+      <AllowlistPicker
+        label="Knowledge allowlist"
+        description="search_kb always searches the whole knowledge base; these collections rank higher in results"
+        value={fields.knowledge}
+        onChange={fields.setKnowledge}
+        load={async () =>
+          (await listKbCollections()).map((c) => ({ id: c.name, label: c.name, description: c.description }))
+        }
+        cacheKey="knowledge"
+        emptyText="No collection matches."
+        freeTextPlaceholder="product-docs, runbooks"
+      />
     </div>
   )
 }
