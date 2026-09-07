@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CatalogModel } from '../../api/types'
-import { catalogMatchForID, ModelInput } from './ModelInput'
+import { catalogMatchForID, ModelPicker } from './ModelPicker'
 
 afterEach(cleanup)
 
@@ -26,10 +26,10 @@ describe('catalogMatchForID', () => {
   })
 })
 
-describe('ModelInput', () => {
+describe('ModelPicker', () => {
   it('shows the friendly name primary and the raw id secondary', () => {
     render(
-      <ModelInput
+      <ModelPicker
         value=""
         onChange={vi.fn()}
         suggestions={[{ id: 'amazon.nova-lite-v1:0', name: 'Nova Lite' }]}
@@ -41,14 +41,14 @@ describe('ModelInput', () => {
   })
 
   it('shows only the id when a suggestion has no name', () => {
-    render(<ModelInput value="" onChange={vi.fn()} suggestions={[{ id: 'gpt-5.6-sol' }]} />)
+    render(<ModelPicker value="" onChange={vi.fn()} suggestions={[{ id: 'gpt-5.6-sol' }]} />)
     fireEvent.focus(screen.getByRole('textbox'))
     expect(screen.getByText('gpt-5.6-sol')).toBeInTheDocument()
   })
 
   it('filters suggestions by name as well as id', () => {
     render(
-      <ModelInput
+      <ModelPicker
         value="nova lite"
         onChange={vi.fn()}
         suggestions={[
@@ -64,7 +64,7 @@ describe('ModelInput', () => {
 
   it('shows a compact price label for a priced suggestion', () => {
     render(
-      <ModelInput
+      <ModelPicker
         value=""
         onChange={vi.fn()}
         suggestions={[{ id: 'gpt-5.6-sol', input_per_mtok: 1.25, output_per_mtok: 10 }]}
@@ -75,14 +75,14 @@ describe('ModelInput', () => {
   })
 
   it('shows "unpriced" when a suggestion has no price', () => {
-    render(<ModelInput value="" onChange={vi.fn()} suggestions={[{ id: 'gpt-5.6-sol' }]} />)
+    render(<ModelPicker value="" onChange={vi.fn()} suggestions={[{ id: 'gpt-5.6-sol' }]} />)
     fireEvent.focus(screen.getByRole('textbox'))
     expect(screen.getByText('unpriced')).toBeInTheDocument()
   })
 
   it('shows "free" when both prices are explicitly zero (a genuinely free model)', () => {
     render(
-      <ModelInput
+      <ModelPicker
         value=""
         onChange={vi.fn()}
         suggestions={[{ id: 'gpt-5.6-sol', input_per_mtok: 0, output_per_mtok: 0 }]}
@@ -94,7 +94,7 @@ describe('ModelInput', () => {
 
   it('shows N/A for the missing side when only one price is known', () => {
     render(
-      <ModelInput
+      <ModelPicker
         value=""
         onChange={vi.fn()}
         suggestions={[{ id: 'gpt-5.6-sol', input_per_mtok: 0.13, output_per_mtok: undefined }]}
@@ -106,7 +106,7 @@ describe('ModelInput', () => {
 
   it('renders an explicit zero side as $0, not N/A', () => {
     render(
-      <ModelInput
+      <ModelPicker
         value=""
         onChange={vi.fn()}
         suggestions={[{ id: 'gpt-5.6-sol', input_per_mtok: 0, output_per_mtok: 15 }]}
@@ -119,7 +119,7 @@ describe('ModelInput', () => {
   it('picking a suggestion submits the id, not the name', () => {
     const onChange = vi.fn()
     render(
-      <ModelInput
+      <ModelPicker
         value=""
         onChange={onChange}
         suggestions={[{ id: 'amazon.nova-lite-v1:0', name: 'Nova Lite' }]}
@@ -128,5 +128,56 @@ describe('ModelInput', () => {
     fireEvent.focus(screen.getByRole('textbox'))
     fireEvent.click(screen.getByText('Nova Lite'))
     expect(onChange).toHaveBeenCalledWith('amazon.nova-lite-v1:0')
+  })
+
+  it('ArrowDown then Enter picks the highlighted suggestion', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelPicker
+        value=""
+        onChange={onChange}
+        suggestions={[{ id: 'model-a' }, { id: 'model-b' }]}
+      />,
+    )
+    const input = screen.getByRole('textbox')
+    fireEvent.focus(input)
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledWith('model-a')
+  })
+
+  it('ArrowDown twice then Enter picks the second suggestion', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelPicker
+        value=""
+        onChange={onChange}
+        suggestions={[{ id: 'model-a' }, { id: 'model-b' }]}
+      />,
+    )
+    const input = screen.getByRole('textbox')
+    fireEvent.focus(input)
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledWith('model-b')
+  })
+
+  it('Escape closes the popover and keeps the typed text', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelPicker
+        value="model"
+        onChange={onChange}
+        suggestions={[{ id: 'model-a' }]}
+      />,
+    )
+    const input = screen.getByRole('textbox') as HTMLInputElement
+    fireEvent.focus(input)
+    expect(screen.getByRole('option', { name: /model-a/ })).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(screen.queryByRole('option', { name: /model-a/ })).not.toBeInTheDocument()
+    expect(input.value).toBe('model')
+    expect(onChange).not.toHaveBeenCalled()
   })
 })

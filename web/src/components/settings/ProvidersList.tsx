@@ -1,24 +1,22 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import {
-  catalogStatus,
-  listProviders,
-  patchProvider,
-  providersHealth,
-  refreshCatalog,
-  testProvider,
-} from '../../api/client'
-import type { AdminProvider, CatalogSyncStatus, ProviderHealth, TestResult } from '../../api/types'
+import { catalogStatus, listProviders, patchProvider, providersHealth, refreshCatalog } from '../../api/client'
+import type { AdminProvider, CatalogSyncStatus, ProviderHealth } from '../../api/types'
 import { relativeTime } from '../../lib/format'
-import { PageHeader } from '../timothy/page-header'
+import { PageHeader, SectionHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
+import { EmptyState } from '../timothy/empty-state'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
+import { AddPresetTile } from './AddPresetTile'
+import { EntityCard } from './EntityCard'
 import { matchPreset, providerPresets } from './presets'
 import { ProviderLogo } from './ProviderLogo'
 import { settingsArea } from './settingsAreas'
-import { errText, humanizeProbeDetail, isTimothyAuthDetail, isTimothyAuthError, responsesSuffix, timothyAuthErrorMessage } from './util'
+import { TestStatus } from './TestStatus'
+import { useProviderTest } from './useProviderTest'
+import { errText } from './util'
 
 const area = settingsArea('providers')
 
@@ -44,19 +42,15 @@ export function ProvidersList() {
         description={area.description}
         breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
       />
-      <div className="space-y-8">
+      <div className="space-y-10">
         <CatalogStatusLine />
 
-        <section className="space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {providers.length > 0 ? `Your providers · ${providers.length}` : 'Your providers'}
-          </h2>
+        <section className="space-y-4">
+          <SectionHeader title={providers.length > 0 ? `Your providers · ${providers.length}` : 'Your providers'} />
           {providers.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-              No providers configured yet, add one below.
-            </div>
+            <EmptyState title="No providers configured yet" description="Add one below to route work to it." />
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {providers.map((p) => (
                 <ProviderCard
                   key={p.id}
@@ -70,26 +64,17 @@ export function ProvidersList() {
           )}
         </section>
 
-        <section className="space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Add a provider
-          </h2>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <section className="space-y-4">
+          <SectionHeader title="Add a provider" />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {providerPresets.map((preset) => (
-              <button
+              <AddPresetTile
                 key={preset.id}
-                type="button"
-                onClick={() => navigate(`/settings/providers/new/${preset.id}`)}
-                className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-              >
-                <ProviderLogo preset={preset} className="size-9" />
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold">{preset.name}</span>
-                  <span className="block truncate text-sm text-muted-foreground">
-                    {preset.description}
-                  </span>
-                </span>
-              </button>
+                to={`/settings/providers/new/${preset.id}`}
+                title={preset.name}
+                description={preset.description}
+                tile={<ProviderLogo preset={preset} className="size-9" />}
+              />
             ))}
           </div>
         </section>
@@ -114,29 +99,7 @@ function ProviderCard({
 }) {
   const preset = matchPreset(provider)
   const isCli = provider.kind === 'cli'
-  const [testing, setTesting] = useState(false)
-  const [test, setTest] = useState<TestResult | null>(null)
-
-  const runTest = async () => {
-    setTesting(true)
-    setTest(null)
-    try {
-      const res = await testProvider(provider.id)
-      if (!res.ok && isTimothyAuthDetail(res.detail)) {
-        setTest(null)
-        return
-      }
-      setTest(res)
-    } catch (err) {
-      if (isTimothyAuthError(err)) {
-        setTest(null)
-        return
-      }
-      setTest({ ok: false, latency_ms: 0, model: '', detail: errText(err) })
-    } finally {
-      setTesting(false)
-    }
-  }
+  const test = useProviderTest(provider.id)
 
   const toggle = (enabled: boolean) => {
     patchProvider(provider.id, { enabled }).then(onChanged, (err: unknown) =>
@@ -144,67 +107,55 @@ function ProviderCard({
     )
   }
 
+  const healthLabel = isCli
+    ? `subscription · ${health?.healthy ? 'healthy' : 'auth failed'}`
+    : health?.healthy
+      ? 'healthy'
+      : 'credential missing'
+
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm transition hover:shadow-md">
-      <div className="flex items-center gap-3">
-        <ProviderLogo preset={preset} className="size-9" />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{provider.name}</div>
-          <div
-            className="flex items-center gap-1.5 text-xs text-muted-foreground"
-            title={isCli ? 'Health reflects the last delegated harness run, not a live probe.' : undefined}
-          >
-            {isCli ? (
-              <>
-                <span className={`size-1.5 shrink-0 rounded-full ${health?.healthy ? 'bg-good' : 'bg-destructive'}`} />
-                subscription · {health?.healthy ? 'healthy' : 'auth failed'}
-              </>
-            ) : (
-              <>
-                <span className={`size-1.5 shrink-0 rounded-full ${health?.healthy ? 'bg-good' : 'bg-destructive'}`} />
-                {health?.healthy ? 'healthy' : 'credential missing'}
-              </>
-            )}
-          </div>
+    <EntityCard
+      to={`/settings/providers/${provider.id}`}
+      title={provider.name}
+      tile={<ProviderLogo preset={preset} className="size-9" />}
+      summary={
+        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className={`size-1.5 shrink-0 rounded-full ${health?.healthy ? 'bg-good' : 'bg-destructive'}`} />
+          {healthLabel}
+          {provider.default_model && (
+            <span className="truncate">
+              · default <span className="font-mono text-foreground">{provider.default_model}</span>
+            </span>
+          )}
         </div>
-        <Switch checked={provider.enabled} onCheckedChange={toggle} aria-label={`${provider.name} enabled`} />
-      </div>
-
-      {provider.default_model && (
-        <div className="truncate text-xs text-muted-foreground">
-          default <span className="font-mono text-foreground">{provider.default_model}</span>
-        </div>
-      )}
-
-      {!isCli && test && (
-        <div
-          className={`rounded-lg border p-2 text-xs ${test.ok ? 'border-good/30 bg-good-soft text-good' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}
-        >
-          {test.ok
-            ? `OK, ${test.latency_ms} ms${responsesSuffix(test)}`
-            : isTimothyAuthDetail(test.detail)
-              ? timothyAuthErrorMessage
-              : `Failed: ${humanizeProbeDetail(test.detail ?? '')}`}
-        </div>
-      )}
-
-      <div className="mt-auto flex items-center gap-2 pt-1">
-        {!isCli && (
-          <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
-            {testing ? 'Testing…' : 'Test'}
+      }
+      status={!isCli && test.state !== 'idle' ? <TestStatus state={test.state} message={test.message} detail={test.detail} /> : undefined}
+      footer={
+        <>
+          <Switch checked={provider.enabled} onCheckedChange={toggle} aria-label={`${provider.name} enabled`} />
+          {!isCli && (
+            <Button
+              size="sm"
+              variant="test"
+              disabled={test.state === 'testing'}
+              onClick={() => void test.run()}
+              className="flex-1"
+            >
+              {test.state === 'testing' ? 'Testing…' : 'Test'}
+            </Button>
+          )}
+          <Button size="sm" variant="outline" onClick={onManage} className="flex-1">
+            Manage
           </Button>
-        )}
-        <Button size="sm" variant="outline" onClick={onManage} className="flex-1">
-          Manage
-        </Button>
-      </div>
-    </div>
+        </>
+      }
+    />
   )
 }
 
-// CatalogStatusLine reports the last model catalog sync — the local
+// CatalogStatusLine reports the last model catalog sync, the local
 // cache of known models + pricing "Suggest from catalog" (on each
-// provider's Manage page) matches against — with a manual Refresh.
+// provider's Manage page) matches against, with a manual Refresh.
 function CatalogStatusLine() {
   const [status, setStatus] = useState<CatalogSyncStatus | null>(null)
   const [refreshing, setRefreshing] = useState(false)
@@ -231,7 +182,7 @@ function CatalogStatusLine() {
   if (!status) return null
 
   return (
-    <div className="flex items-center justify-between rounded-xl border border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
+    <div className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
       <span>
         Model catalog: {status.entry_count.toLocaleString()} models
         {status.fetched_at ? `, synced ${relativeTime(status.fetched_at)}` : ', never synced'}

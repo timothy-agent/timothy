@@ -13,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select'
-import { catalogRowID, ModelInput, type ModelSuggestion, useCatalogSearch } from './ModelInput'
+import { catalogRowID, ModelPicker, type ModelSuggestion, useCatalogSearch } from './ModelPicker'
 import { Pipeline, type PipelineEntry } from './pipeline/Pipeline'
 import { reorder } from './pipeline/useReorderDrag'
 import { matchPreset } from './presets'
@@ -208,7 +208,7 @@ function AddChainEntry({
               ))}
             </SelectContent>
           </Select>
-          <ModelInput
+          <ModelPicker
             value={model}
             onChange={setModel}
             suggestions={suggestions}

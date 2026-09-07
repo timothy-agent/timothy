@@ -266,15 +266,15 @@ describe('Providers tab', () => {
     renderPage('/settings/providers')
     expect(await screen.findByText('Your providers · 1')).toBeTruthy()
     expect(screen.getByText('healthy')).toBeTruthy()
-    // Every preset is offered as a tile.
+    // Every preset is offered as a tile (a Link to its add page).
     for (const name of ['AWS Bedrock', 'GLM (Z.ai)', 'Grok (xAI)', 'Ollama', 'Custom endpoint']) {
-      expect(screen.getByRole('button', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })).toBeTruthy()
+      expect(screen.getByRole('link', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })).toBeTruthy()
     }
   })
 
   it('navigates to its own add page: bedrock asks for a region dropdown and a key', async () => {
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /AWS Bedrock/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /AWS Bedrock/ }))
     expect(await screen.findByRole('heading', { name: 'Add AWS Bedrock' })).toBeTruthy()
     expect(screen.getByText('Region')).toBeTruthy()
     expect(screen.getByRole('combobox')).toBeTruthy()
@@ -301,7 +301,7 @@ describe('Providers tab', () => {
     ])
 
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     const addButton = await screen.findByRole('button', { name: 'Add provider' })
     expect((addButton as HTMLButtonElement).disabled).toBe(true)
 
@@ -328,7 +328,7 @@ describe('Providers tab', () => {
 
   it('shows an inline error when testing without a key', async () => {
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
     expect(await screen.findByText(/An API key is required to test this provider/)).toBeTruthy()
     expect(validateProvider).not.toHaveBeenCalled()
@@ -339,7 +339,7 @@ describe('Providers tab', () => {
     vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'glm-4.7-flash' })
 
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gsk_abc' } })
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
@@ -362,7 +362,7 @@ describe('Providers tab', () => {
     ])
 
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     const input = await screen.findByPlaceholderText('paste key')
     // Every backend takes the raw key now, still masked.
     expect((input as HTMLInputElement).type).toBe('password')
@@ -379,7 +379,7 @@ describe('Providers tab', () => {
     })
 
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gsk_abc' } })
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
@@ -419,6 +419,13 @@ describe('Settings pages accessibility', () => {
     })
     const { container } = renderPage('/settings/features')
     await screen.findByRole('region', { name: 'Timezone' })
+    const results = await axe.run(container, { rules: { |olor-contrast': { enabled: false } } })
+    expect(results.violations).toEqual([])
+  })
+
+  it('has no axe violations on the provider edit page', async () => {
+    const { container } = renderPage('/settings/providers/p1')
+    await screen.findByDisplayValue('OpenAI')
     const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
     expect(results.violations).toEqual([])
   })

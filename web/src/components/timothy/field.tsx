@@ -94,22 +94,25 @@ export function Form({ className, children, ...props }: FormHTMLAttributes<HTMLF
 interface FormActionsProps {
   children: ReactNode
   destructive?: ReactNode
+  note?: ReactNode
   sticky?: boolean
   className?: string
 }
 
 // Right-aligned action row: destructive action far left, then the
-// rest in order, primary action rightmost (section 10.4).
-export function FormActions({ children, destructive, sticky, className }: FormActionsProps) {
+// rest in order, primary action rightmost (section 10.4). note (e.g.
+// "Unsaved changes") renders left of the buttons, 12px muted.
+export function FormActions({ children, destructive, note, sticky, className }: FormActionsProps) {
   return (
     <div
       className={cn(
-        'mt-8 flex justify-end gap-2',
+        'mt-8 flex items-center justify-end gap-2',
         sticky && 'sticky bottom-0 border-t border-border bg-background pt-4',
         className,
       )}
     >
       {destructive && <div className="mr-auto">{destructive}</div>}
+      {note && <span className={cn('text-xs text-muted-foreground', !destructive && 'mr-auto')}>{note}</span>}
       {children}
     </div>
   )

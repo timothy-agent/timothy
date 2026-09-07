@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminProvider } from '../../api/types'
-import { ProviderEdit } from './ProviderEdit'
+import { buildPatch, ProviderEdit } from './ProviderEdit'
 
 vi.mock('../../api/client', () => ({
   availableModels: vi.fn(),
@@ -11,6 +11,7 @@ vi.mock('../../api/client', () => ({
   deleteSecret: vi.fn(),
   listProviders: vi.fn(),
   listSecretBackends: vi.fn(),
+  listSecretRefs: vi.fn(),
   patchProvider: vi.fn(),
   secretStatus: vi.fn(),
   setSecret: vi.fn(),
@@ -22,9 +23,11 @@ import {
   catalogModelsForProvider,
   listProviders,
   listSecretBackends,
+  listSecretRefs,
   patchProvider,
   secretStatus,
   setSecret,
+  testProvider,
 } from '../../api/client'
 
 const bedrockProvider: AdminProvider = {
@@ -80,6 +83,13 @@ const openaicompatProvider: AdminProvider = {
   enabled: true,
 }
 
+// formSaveButton finds the configuration form's own Save button
+// (type="submit"), distinct from the independent credential panel's
+// Save button that renders alongside it for non-cli providers.
+function formSaveButton(): HTMLElement {
+  return screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') === 'submit')!
+}
+
 function renderPage(id = 'p1') {
   return render(
     <MemoryRouter initialEntries={[`/settings/providers/${id}`]}>
@@ -102,9 +112,258 @@ beforeEach(() => {
   vi.mocked(listSecretBackends).mockResolvedValue([
     { backend: 'db', configured: true, default: true },
   ])
+  vi.mocked(listSecretRefs).mockResolvedValue([])
 })
 
-describe('ProviderEdit default model section', () => {
+describe('buildPatch', () => {
+  it('carries name, credential_ref and default_model, and omits empty option keys', () => {
+    const patch = buildPatch(openaicompatProvider, {
+      name: 'Ollama',
+      credential_ref: '',
+      reasoningDisabled: false,
+      request_timeout: '',
+      region: 'us-east-1',
+      litellm_provider: '',
+      default_model: 'qwen3',
+    })
+    expect(patch).toEqual({
+      name: 'Ollama',
+      credential_ref: '',
+      default_model: 'qwen3',
+      options: {},
+    })
+  })
+
+  it('writes reasoning_effort = "none" only when staged on', () => {
+    const patch = buildPatch(openaicompatProvider, {
+      name: 'Ollama',
+      credential_ref: '',
+      reasoningDisabled: true,
+      request_timeout: '',
+      region: 'us-east-1',
+      litellm_provider: '',
+      default_model: 'qwen3',
+    })
+    expect(patch.options).toEqual({ reasoning_effort: 'none' })
+  })
+
+  it('writes request_timeout only when non-empty', () => {
+    const patch = buildPatch(openaicompatProvider, {
+      name: 'Ollama',
+      credential_ref: '',
+      reasoningDisabled: false,
+      request_timeout: '20m',
+      region: 'us-east-1',
+      litellm_provider: '',
+      default_model: 'qwen3',
+    })
+    expect(patch.options).toEqual({ request_timeout: '20m' })
+  })
+
+  it('always carries region for a bedrock provider', () => {
+    const patch = buildPatch(bedrockProvider, {
+      name: 'AWS Bedrock',
+      credential_ref: '',
+      reasoningDisabled: false,
+      request_timeout: '',
+      region: 'eu-west-1',
+      litellm_provider: '',
+      default_model: '',
+    })
+    expect(patch.options).toEqual({ region: 'eu-west-1' })
+  })
+
+  it('omits region for a non-bedrock provider', () => {
+    const patch = buildPatch(openaicompatProvider, {
+      name: 'Ollama',
+      credential_ref: '',
+      reasoningDisabled: false,
+      request_timeout: '',
+      region: 'eu-west-1',
+      litellm_provider: '',
+      default_model: 'qwen3',
+    })
+    expect(patch.options).toEqual({})
+  })
+
+  it('writes litellm_provider only when non-empty', () => {
+    const patch = buildPatch(openaicompatProvider, {
+      name: 'Ollama',
+      credential_ref: '',
+      reasoningDisabled: false,
+      request_timeout: '',
+      region: 'us-east-1',
+      litellm_provider: 'xai',
+      default_model: 'qwen3',
+    })
+    expect(patch.options).toEqual({ litellm_provider: 'xai' })
+  })
+
+  it('keeps an unrelated options key this form never shows', () => {
+    const patch = buildPatch(
+      { ...openaicompatProvider, options: { anthropic_base_url: 'https://example.test' } },
+      {
+        name: 'Ollama',
+        credential_ref: '',
+        reasoningDisabled: false,
+        request_timeout: '',
+        region: 'us-east-1',
+        litellm_provider: '',
+        default_model: 'qwen3',
+      },
+    )
+    expect(patch.options).toEqual({ anthropic_base_url: 'https://example.test' })
+  })
+
+  it('clears request_timeout without touching an unrelated key', () => {
+    const patch = buildPatch(
+      { ...openaicompatProvider, options: { request_timeout: '20m', anthropic_base_url: 'https://example.test' } },
+      {
+        name: 'Ollama',
+        credential_ref: '',
+        reasoningDisabled: false,
+        request_timeout: '',
+        region: 'us-east-1',
+        litellm_provider: '',
+        default_model: 'qwen3',
+      },
+    )
+    expect(patch.options).toEqual({ anthropic_base_url: 'https://example.test' })
+    expect(patch.options).not.toHaveProperty('request_timeout')
+  })
+
+  it('turning reasoning off removes reasoning_effort while keeping other keys', () => {
+    const patch = buildPatch(
+      { ...openaicompatProvider, options: { reasoning_effort: 'none', anthropic_base_url: 'https://example.test' } },
+      {
+        name: 'Ollama',
+        credential_ref: '',
+        reasoningDisabled: false,
+        request_timeout: '',
+        region: 'us-east-1',
+        litellm_provider: '',
+        default_model: 'qwen3',
+      },
+    )
+    expect(patch.options).toEqual({ anthropic_base_url: 'https://example.test' })
+    expect(patch.options).not.toHaveProperty('reasoning_effort')
+  })
+})
+
+describe('ProviderEdit staged form commit semantics', () => {
+  it('sends zero PATCH before Save', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    await screen.findByDisplayValue('Ollama')
+    fireEvent.click(await screen.findByRole('switch', { name: 'Disable reasoning' }))
+    fireEvent.change(screen.getByPlaceholderText('5m'), { target: { value: '20m' } })
+
+    expect(patchProvider).not.toHaveBeenCalled()
+  })
+
+  it('sends exactly one PATCH on Save containing every staged field', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p2')
+
+    await screen.findByDisplayValue('Ollama')
+    fireEvent.click(screen.getByRole('switch', { name: 'Disable reasoning' }))
+    fireEvent.change(screen.getByPlaceholderText('5m'), { target: { value: '20m' } })
+
+    fireEvent.click(formSaveButton())
+
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledTimes(1))
+    expect(patchProvider).toHaveBeenCalledWith('p2', {
+      name: 'Ollama',
+      credential_ref: '',
+      default_model: 'qwen3',
+      options: { reasoning_effort: 'none', request_timeout: '20m' },
+    })
+  })
+
+  it('shows the Unsaved changes note only while dirty, and disables Save until dirty', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    await screen.findByDisplayValue('Ollama')
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
+    expect(formSaveButton()).toBeDisabled()
+
+    fireEvent.change(screen.getByPlaceholderText('5m'), { target: { value: '20m' } })
+
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+    expect(formSaveButton()).not.toBeDisabled()
+  })
+
+  it('Cancel restores the loaded values and clears dirty', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    const input = (await screen.findByPlaceholderText('5m')) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '20m' } })
+    expect(input.value).toBe('20m')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(input.value).toBe('')
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
+    expect(patchProvider).not.toHaveBeenCalled()
+  })
+
+  it('a failed Save keeps the staged values and shows a retryable alert', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(patchProvider).mockRejectedValueOnce(new Error('server exploded')).mockResolvedValueOnce()
+    renderPage('p2')
+
+    const input = (await screen.findByPlaceholderText('5m')) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '20m' } })
+    fireEvent.click(formSaveButton())
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('server exploded')
+    expect(input.value).toBe('20m')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps the persisted name as the header title until Save succeeds', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    const nameInput = await screen.findByLabelText('Provider name')
+    fireEvent.change(nameInput, { target: { value: 'renamed' } })
+
+    expect(screen.getByRole('heading', { name: 'Ollama' })).toBeInTheDocument()
+  })
+
+  it('name is the first field in the configuration form', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    const nameInput = await screen.findByLabelText('Provider name')
+    expect(nameInput).toBeInTheDocument()
+  })
+
+  it('rebase keeps a touched field after a Test refetch', async () => {
+    vi.mocked(listProviders)
+      .mockResolvedValueOnce([openaicompatProvider])
+      .mockResolvedValueOnce([{ ...openaicompatProvider, options: { request_timeout: '30m' } }])
+    vi.mocked(testProvider).mockResolvedValue({ ok: true, latency_ms: 10, model: 'qwen3' })
+    renderPage('p2')
+
+    const input = (await screen.findByPlaceholderText('5m')) as HTMLInputElement
+    fireEvent.change(input, { target: { value: '99m' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    expect(input.value).toBe('99m')
+  })
+})
+
+describe('ProviderEdit default model field', () => {
   it('shows the current default model', async () => {
     vi.mocked(listProviders).mockResolvedValue([
       { ...bedrockProvider, default_model: 'us.amazon.nova-pro-v1:0' },
@@ -114,20 +373,21 @@ describe('ProviderEdit default model section', () => {
     expect(await screen.findByPlaceholderText('model id')).toHaveValue('us.amazon.nova-pro-v1:0')
   })
 
-  it('commits a typed model id on blur', async () => {
+  it('staging a typed model id then Save sends one PATCH with options.default_model', async () => {
     vi.mocked(patchProvider).mockResolvedValue()
     renderPage()
 
     const input = await screen.findByPlaceholderText('model id')
     fireEvent.change(input, { target: { value: 'us.amazon.nova-pro-v1:0' } })
-    fireEvent.blur(input)
+    expect(patchProvider).not.toHaveBeenCalled()
 
+    fireEvent.click(formSaveButton())
     await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith('p1', { default_model: 'us.amazon.nova-pro-v1:0' }),
+      expect(patchProvider).toHaveBeenCalledWith('p1', expect.objectContaining({ default_model: 'us.amazon.nova-pro-v1:0' })),
     )
   })
 
-  it('commits a picked catalog suggestion', async () => {
+  it('picking a suggestion stages it, and Save sends the PATCH', async () => {
     vi.mocked(catalogModelsForProvider).mockResolvedValue([
       {
         id: 'amazon.nova-lite-v1:0',
@@ -146,9 +406,11 @@ describe('ProviderEdit default model section', () => {
     fireEvent.change(input, { target: { value: 'nova-lite' } })
 
     fireEvent.click(await screen.findByRole('option', { name: /amazon\.nova-lite-v1:0/ }))
+    expect(patchProvider).not.toHaveBeenCalled()
 
+    fireEvent.click(formSaveButton())
     await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith('p1', { default_model: 'amazon.nova-lite-v1:0' }),
+      expect(patchProvider).toHaveBeenCalledWith('p1', expect.objectContaining({ default_model: 'amazon.nova-lite-v1:0' })),
     )
   })
 
@@ -162,8 +424,8 @@ describe('ProviderEdit default model section', () => {
   })
 })
 
-describe('ProviderEdit catalog models list', () => {
-  it('renders every fetched catalog model with a price label, no interactive controls', async () => {
+describe('ProviderEdit catalog models table', () => {
+  it('renders every fetched catalog model with a price, no interactive controls', async () => {
     vi.mocked(catalogModelsForProvider).mockResolvedValue([
       {
         id: 'amazon.nova-lite-v1:0',
@@ -192,7 +454,6 @@ describe('ProviderEdit catalog models list', () => {
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
     expect(screen.queryByRole('button', { name: 'Add' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /set.default/i })).not.toBeInTheDocument()
   })
 
   it('shows a message when the catalog has no matching models', async () => {
@@ -266,23 +527,24 @@ describe('ProviderEdit cursor-cli provider', () => {
     expect(screen.getByRole('option', { name: /^sonic/ })).toBeInTheDocument()
   })
 
-  it('falls back to free text with no error toast when the fetch fails', async () => {
+  it('falls back to free text with no error toast when the fetch fails, and stages it', async () => {
     vi.mocked(listProviders).mockResolvedValue([cursorProvider])
     vi.mocked(availableModels).mockRejectedValue(new Error('502'))
+    vi.mocked(patchProvider).mockResolvedValue()
     renderPage('p4')
 
     const input = await screen.findByPlaceholderText('composer-2.5')
     fireEvent.focus(input)
     fireEvent.change(input, { target: { value: 'anything' } })
-    fireEvent.blur(input)
 
-    await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p4', { default_model: 'anything' }))
+    fireEvent.click(formSaveButton())
+    await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p4', expect.objectContaining({ default_model: 'anything' })))
     expect(screen.queryByText(/could not/i)).not.toBeInTheDocument()
   })
 })
 
-describe('ProviderEdit reasoning section', () => {
-  it('omits the reasoning section for non-openaicompat drivers', async () => {
+describe('ProviderEdit reasoning field', () => {
+  it('omits the reasoning field for non-openaicompat drivers', async () => {
     vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
     renderPage('p1')
 
@@ -290,157 +552,32 @@ describe('ProviderEdit reasoning section', () => {
     expect(screen.queryByRole('switch', { name: 'Disable reasoning' })).toBeNull()
   })
 
-  it('writes options.reasoning_effort = "none" when the toggle is switched on', async () => {
+  it('reflects the staged value immediately with no pending spinner', async () => {
     vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
-    vi.mocked(patchProvider).mockResolvedValue()
     renderPage('p2')
 
     const toggle = await screen.findByRole('switch', { name: 'Disable reasoning' })
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     fireEvent.click(toggle)
-
-    await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith('p2', { options: { reasoning_effort: 'none' } }),
-    )
-  })
-
-  it('omits reasoning_effort entirely when the toggle is switched back off', async () => {
-    vi.mocked(listProviders).mockResolvedValue([
-      { ...openaicompatProvider, options: { reasoning_effort: 'none' } },
-    ])
-    vi.mocked(patchProvider).mockResolvedValue()
-    renderPage('p2')
-
-    const toggle = await screen.findByRole('switch', { name: 'Disable reasoning' })
     expect(toggle.getAttribute('aria-checked')).toBe('true')
-    fireEvent.click(toggle)
-
-    await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p2', { options: {} }))
-  })
-
-  it('writes options.request_timeout on blur', async () => {
-    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
-    vi.mocked(patchProvider).mockResolvedValue()
-    renderPage('p2')
-
-    const input = await screen.findByPlaceholderText('5m')
-    fireEvent.change(input, { target: { value: '20m' } })
-    fireEvent.blur(input)
-
-    await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith('p2', { options: { request_timeout: '20m' } }),
-    )
-  })
-
-  it('omits request_timeout entirely when cleared', async () => {
-    vi.mocked(listProviders).mockResolvedValue([
-      { ...openaicompatProvider, options: { request_timeout: '20m' } },
-    ])
-    vi.mocked(patchProvider).mockResolvedValue()
-    renderPage('p2')
-
-    const input = await screen.findByPlaceholderText('5m')
-    expect((input as HTMLInputElement).value).toBe('20m')
-    fireEvent.change(input, { target: { value: '' } })
-    fireEvent.blur(input)
-
-    await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p2', { options: {} }))
-  })
-
-  it('saves request_timeout on Enter, not just blur', async () => {
-    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
-    vi.mocked(patchProvider).mockResolvedValue()
-    renderPage('p2')
-
-    const input = await screen.findByPlaceholderText('5m')
-    fireEvent.change(input, { target: { value: '45m' } })
-    // jsdom doesn't blur on Enter by itself — the component calls
-    // currentTarget.blur() itself, which real browsers do too; fire the
-    // resulting blur here to observe that save path (not onBlur directly).
-    fireEvent.keyDown(input, { key: 'Enter' })
-    fireEvent.blur(input)
-
-    await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith('p2', { options: { request_timeout: '45m' } }),
-    )
-  })
-
-  it('resyncs the displayed request_timeout after a sibling field refetches the provider', async () => {
-    vi.mocked(listProviders)
-      .mockResolvedValueOnce([openaicompatProvider])
-      .mockResolvedValueOnce([{ ...openaicompatProvider, options: { request_timeout: '30m' } }])
-    vi.mocked(patchProvider).mockResolvedValue()
-    renderPage('p2')
-
-    const input = (await screen.findByPlaceholderText('5m')) as HTMLInputElement
-    expect(input.value).toBe('')
-
-    // A different field's save (e.g. the reasoning toggle) triggers the
-    // same refresh() this section relies on — it must pick up the new
-    // provider.options.request_timeout, not keep showing stale state.
-    const toggle = await screen.findByRole('switch', { name: 'Disable reasoning' })
-    fireEvent.click(toggle)
-
-    await waitFor(() => expect(input.value).toBe('30m'))
+    expect(patchProvider).not.toHaveBeenCalled()
   })
 })
 
-describe('ProviderEdit catalog provider section', () => {
-  it('shows the current value and saves an edit on blur', async () => {
-    vi.mocked(listProviders).mockResolvedValue([
-      { ...openaicompatProvider, options: { litellm_provider: 'ollama' } },
-    ])
-    vi.mocked(patchProvider).mockResolvedValue()
-    renderPage('p2')
-
-    const input = (await screen.findByPlaceholderText('e.g. xai, zai')) as HTMLInputElement
-    expect(input.value).toBe('ollama')
-
-    fireEvent.change(input, { target: { value: 'xai' } })
-    fireEvent.blur(input)
-
-    await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith('p2', { options: { litellm_provider: 'xai' } }),
-    )
-  })
-
-  it('omits litellm_provider entirely when cleared', async () => {
-    vi.mocked(listProviders).mockResolvedValue([
-      { ...openaicompatProvider, options: { litellm_provider: 'ollama' } },
-    ])
-    vi.mocked(patchProvider).mockResolvedValue()
-    renderPage('p2')
-
-    const input = await screen.findByPlaceholderText('e.g. xai, zai')
-    fireEvent.change(input, { target: { value: '' } })
-    fireEvent.blur(input)
-
-    await waitFor(() => expect(patchProvider).toHaveBeenCalledWith('p2', { options: {} }))
-  })
-
-  it('omits the section for a kind=cli provider', async () => {
-    vi.mocked(listProviders).mockResolvedValue([cliProvider])
-    renderPage('p3')
-
-    await screen.findByDisplayValue('Claude Code')
-    expect(screen.queryByPlaceholderText('e.g. xai, zai')).not.toBeInTheDocument()
-  })
-})
-
-describe('ProviderEdit region section', () => {
-  it('omits the region section for non-bedrock drivers', async () => {
+describe('ProviderEdit region field', () => {
+  it('omits the region field for non-bedrock drivers', async () => {
     vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
     renderPage('p2')
 
     await screen.findByDisplayValue('Ollama')
-    expect(screen.queryByText('Region')).toBeNull()
+    expect(screen.queryByText('AWS region')).toBeNull()
   })
 
   it('defaults the region dropdown to us-east-1 when options.region is unset', async () => {
     vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
     renderPage('p1')
 
-    expect(await screen.findByRole('combobox')).toHaveTextContent('us-east-1 (N. Virginia)')
+    expect(await screen.findByRole('combobox', { name: 'AWS region' })).toHaveTextContent('us-east-1 (N. Virginia)')
   })
 
   it('shows the stored region when options.region is set', async () => {
@@ -449,24 +586,26 @@ describe('ProviderEdit region section', () => {
     ])
     renderPage('p1')
 
-    expect(await screen.findByRole('combobox')).toHaveTextContent('eu-west-1 (Ireland)')
+    expect(await screen.findByRole('combobox', { name: 'AWS region' })).toHaveTextContent('eu-west-1 (Ireland)')
   })
 
-  it('writes options.region when a new region is picked', async () => {
+  it('picking a new region stages it, and Save sends the PATCH', async () => {
     vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
     vi.mocked(patchProvider).mockResolvedValue()
     renderPage('p1')
 
-    fireEvent.click(await screen.findByRole('combobox'))
-    fireEvent.click(await screen.findByText('ap-southeast-2 (Sydney)'))
+    fireEvent.click(await screen.findByRole('combobox', { name: 'AWS region' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'ap-southeast-2 (Sydney)' }))
+    expect(patchProvider).not.toHaveBeenCalled()
 
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
     await waitFor(() =>
-      expect(patchProvider).toHaveBeenCalledWith('p1', { options: { region: 'ap-southeast-2' } }),
+      expect(patchProvider).toHaveBeenCalledWith('p1', expect.objectContaining({ options: expect.objectContaining({ region: 'ap-southeast-2' }) })),
     )
   })
 })
 
-describe('ProviderEdit bedrock credential section', () => {
+describe('ProviderEdit bedrock credential panel', () => {
   it('renders two labeled key inputs instead of a generic key field', async () => {
     vi.mocked(listProviders).mockResolvedValue([bedrockProviderWithRef])
     renderPage('p1')
@@ -484,24 +623,25 @@ describe('ProviderEdit bedrock credential section', () => {
     expect(screen.queryByPlaceholderText('AKIA…')).not.toBeInTheDocument()
   })
 
-  it('disables Save until both access key id and secret access key are filled', async () => {
+  it('disables the panel Save until both access key id and secret access key are filled', async () => {
     vi.mocked(listProviders).mockResolvedValue([bedrockProviderWithRef])
     renderPage('p1')
 
     await screen.findByPlaceholderText('AKIA…')
-    const saveButton = screen.getByRole('button', { name: 'Save' })
-    expect(saveButton).toBeDisabled()
+    const saveButtons = screen.getAllByRole('button', { name: 'Save' })
+    const panelSave = saveButtons[saveButtons.length - 1]
+    expect(panelSave).toBeDisabled()
 
     fireEvent.change(screen.getByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
-    expect(saveButton).toBeDisabled()
+    expect(panelSave).toBeDisabled()
 
     fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), {
       target: { value: 'secretvalue123' },
     })
-    expect(saveButton).not.toBeDisabled()
+    expect(panelSave).not.toBeDisabled()
   })
 
-  it('rotates the stored secret with a JSON blob built from the two fields', async () => {
+  it('rotates the stored secret with a JSON blob built from the two fields, independent of the parent form', async () => {
     vi.mocked(listProviders).mockResolvedValue([bedrockProviderWithRef])
     vi.mocked(setSecret).mockResolvedValue()
     renderPage('p1')
@@ -512,7 +652,8 @@ describe('ProviderEdit bedrock credential section', () => {
     fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), {
       target: { value: 'rotatedsecret' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const saveButtons = screen.getAllByRole('button', { name: 'Save' })
+    fireEvent.click(saveButtons[saveButtons.length - 1])
 
     await waitFor(() => expect(setSecret).toHaveBeenCalled())
     const [ref, payload] = vi.mocked(setSecret).mock.calls[0]
@@ -521,6 +662,7 @@ describe('ProviderEdit bedrock credential section', () => {
       access_key_id: 'AKIAROTATED',
       secret_access_key: 'rotatedsecret',
     })
+    expect(patchProvider).not.toHaveBeenCalled()
   })
 
   it('mentions no JSON in the bedrock credential hint copy', async () => {

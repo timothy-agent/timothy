@@ -384,7 +384,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     await screen.findByText('CLI providers have no connection test.')
     expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument()
@@ -395,7 +395,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     fireEvent.change(await screen.findByPlaceholderText('sk-ant-oat…'), {
       target: { value: 'sk-ant-api03-notatoken' },
@@ -422,7 +422,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     expect(await screen.findByPlaceholderText('claude-sonnet-4-6')).toHaveValue('claude-sonnet-4-6')
 
@@ -440,7 +440,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     fireEvent.change(await screen.findByPlaceholderText('claude-sonnet-4-6'), {
       target: { value: 'opus' },
@@ -459,7 +459,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     expect(await screen.findByText(/claude setup-token/)).toBeInTheDocument()
     expect(screen.getByText(/long-lived/)).toBeInTheDocument()

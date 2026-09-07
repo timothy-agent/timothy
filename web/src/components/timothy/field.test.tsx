@@ -86,4 +86,14 @@ describe('FormActions', () => {
     )
     expect(screen.getByRole('button', { name: 'Delete' }).parentElement).toHaveClass('mr-auto')
   })
+
+  it('renders a note left of the buttons', () => {
+    render(
+      <FormActions note="Unsaved changes">
+        <button>Cancel</button>
+        <button>Save</button>
+      </FormActions>,
+    )
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+  })
 })
