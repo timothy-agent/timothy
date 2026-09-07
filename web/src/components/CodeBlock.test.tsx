@@ -342,4 +342,11 @@ describe('CodeBlock', () => {
     expect(screen.queryByTestId('shiki-html')).not.toBeInTheDocument()
     expect(mermaidRender).toHaveBeenCalledWith(expect.any(String), 'graph TD; A-->B;')
   })
+
+  it('scrolls a long line horizontally instead of wrapping it', () => {
+    renderMarkdown('```js\nconst x = 1;\n```')
+    const code = screen.getByText('const x = 1;')
+    const scroller = code.closest('.flex.overflow-x-auto')
+    expect(scroller).not.toBeNull()
+  })
 })

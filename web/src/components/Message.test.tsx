@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatEvent } from '../api/types'
 import { applyEvent, emptyAssistant, type AssistantState } from '../lib/chat'
 import { AssistantMessage, CompactionDivider, ErrorMessage, InterruptedMessage, UserMessage } from './Message'
+import { TooltipProvider } from './ui/tooltip'
 
 vi.mock('../api/client', () => ({
   fetchAttachmentBlob: vi.fn(),
@@ -30,7 +31,7 @@ describe('AssistantMessage', () => {
     expect(screen.getByText('world').tagName).toBe('STRONG')
   })
 
-  it('shows a reasoning-only activity line that opens the detail panel', () => {
+  it('shows an Activity button that opens the detail panel', () => {
     const msg = play([
       { type: 'reasoning_chunk', text: 'thinking…' },
       { type: 'chunk', text: 'answer' },
@@ -39,20 +40,20 @@ describe('AssistantMessage', () => {
     const onShowActivity = vi.fn()
     render(<AssistantMessage msg={msg} onShowActivity={onShowActivity} />)
 
-    const line = screen.getByTestId('activity-line')
-    expect(line).toHaveTextContent('Reasoning')
-    fireEvent.click(line)
+    const button = screen.getByTestId('show-activity')
+    expect(button).toHaveTextContent('Activity')
+    fireEvent.click(button)
     expect(onShowActivity).toHaveBeenCalledOnce()
   })
 
-  it('omits the activity line entirely when there is no onShowActivity handler', () => {
+  it('omits the Activity button entirely when there is no onShowActivity handler', () => {
     const msg = play([
       { type: 'reasoning_chunk', text: 'thinking…' },
       { type: 'chunk', text: 'answer' },
       { type: 'meta', session_id: 's' },
     ])
     render(<AssistantMessage msg={msg} />)
-    expect(screen.queryByTestId('activity-line')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('show-activity')).not.toBeInTheDocument()
   })
 
   it('renders retry and incomplete honestly', () => {
@@ -388,7 +389,7 @@ describe('copy buttons', () => {
 })
 
 describe('tool calls', () => {
-  it('tracks a tool call through start, end, and result', () => {
+  it('tracks a tool call through start, end, and result, rendering it as a ToolCallGroup', () => {
     const msg = play([
       { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
       { type: 'tool_end', tool_call: { id: 'c1', name: 'shell', input: { command: 'ls' } } },
@@ -403,16 +404,27 @@ describe('tool calls', () => {
     expect(msg.tools[0]).toMatchObject({ id: 'c1', status: 'ok', digest: 'notes.md' })
 
     render(<AssistantMessage msg={msg} onShowActivity={vi.fn()} />)
-    expect(screen.getByTestId('activity-line')).toHaveTextContent('Worked for 42ms · shell')
+    expect(screen.getByText('Shell')).toBeInTheDocument()
   })
 
   it('shows a running tool while streaming', () => {
     const msg = play([{ type: 'tool_start', tool_call: { id: 'c1', name: 'fetch_url' } }])
     render(<AssistantMessage msg={msg} onShowActivity={vi.fn()} />)
-    expect(screen.getByTestId('activity-line')).toHaveTextContent('Running fetch_url…')
+    expect(screen.getByText('Fetch url')).toBeInTheDocument()
   })
 
-  it('parks visibly while a permission request is pending', () => {
+  it('shows "2 tool calls" for a message with two tools', () => {
+    const msg = play([
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
+      { type: 'tool_result', tool_result: { id: 'c1', name: 'shell', status: 'ok', duration_ms: 5 } },
+      { type: 'tool_start', tool_call: { id: 'c2', name: 'search_web' } },
+      { type: 'tool_result', tool_result: { id: 'c2', name: 'search_web', status: 'ok', duration_ms: 5 } },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    expect(screen.getByText('2 tool calls')).toBeInTheDocument()
+  })
+
+  it('renders a pending permission as an inline ApprovalCard when onDecision is given', () => {
     const msg = play([
       { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
       {
@@ -428,8 +440,31 @@ describe('tool calls', () => {
       },
     ])
     expect(msg.permissions).toHaveLength(1)
+    render(
+      <TooltipProvider>
+        <AssistantMessage msg={msg} onDecision={vi.fn()} />
+      </TooltipProvider>,
+    )
+    expect(screen.getByRole('region')).toBeInTheDocument()
+  })
+
+  it('renders no permission card without an onDecision handler', () => {
+    const msg = play([
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
+      {
+        type: 'permission_request',
+        permission: {
+          id: 'p1',
+          call_id: 'c1',
+          tool: 'shell',
+          args: '{}',
+          danger_level: 'safe',
+          rationale: 'no standing grant',
+        },
+      },
+    ])
     render(<AssistantMessage msg={msg} />)
-    expect(screen.getByTestId('awaiting-approval')).toHaveTextContent('waiting for your approval')
+    expect(screen.queryByRole('region')).not.toBeInTheDocument()
   })
 
   it('clears pending permissions when the tool result lands', () => {
@@ -705,5 +740,27 @@ describe('UserMessage attachments', () => {
     fireEvent.click(screen.getByRole('img'))
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
     expect(screen.getByText('photo.png')).toBeInTheDocument()
+  })
+})
+
+describe('long unbroken content containment', () => {
+  it('wraps a 400-character unbroken token in the user bubble', () => {
+    const token = 'a'.repeat(400)
+    render(<UserMessage text={token} />)
+    const bubble = screen.getByText(token).closest('div')
+    expect(bubble?.className).toContain('[overflow-wrap:anywhere]')
+  })
+
+  it('renders a markdown table inside a horizontally scrolling wrapper', () => {
+    const msg = play([
+      {
+        type: 'chunk',
+        text: '| a | b |\n| --- | --- |\n| 1 | 2 |\n',
+      },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+    const table = screen.getByRole('table')
+    expect(table.parentElement?.className).toContain('overflow-x-auto')
   })
 })

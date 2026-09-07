@@ -1,17 +1,18 @@
 import {
-  Attachment02Icon,
-  ArrowDown01Icon,
-  ArrowUp01Icon,
-  Cancel01Icon,
-  FileMusicIcon,
-  FileVideoIcon,
-  Loading03Icon,
-  Mic01Icon,
-  Pdf02Icon,
-  StopIcon,
-  Tick02Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+  ArrowUp,
+  BookOpen,
+  Check,
+  ChevronDown,
+  FileAudio,
+  FileText,
+  FileVideo,
+  Link,
+  Mic,
+  Paperclip,
+  Sparkles,
+  Square,
+  X,
+} from 'lucide-react'
 import type { ClipboardEvent, DragEvent, KeyboardEvent, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -31,6 +32,10 @@ import {
   setTranscribeLanguage,
   TRANSCRIBE_LANGUAGES,
 } from '../lib/transcribeLanguage'
+import { cn } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { IconButton } from '@/components/timothy/icon-button'
+import { Spinner } from '@/components/timothy/spinner'
 import { AgentRoutePicker } from './AgentRoutePicker'
 import {
   DropdownMenu,
@@ -82,9 +87,9 @@ function maxBytesFor(mime: string): number {
 
 // documentChipIcon picks the composer's pending-chip icon by mime.
 function documentChipIcon(mime: string) {
-  if (mime.startsWith('video/')) return FileVideoIcon
-  if (mime.startsWith('audio/')) return FileMusicIcon
-  return Pdf02Icon
+  if (mime.startsWith('video/')) return FileVideo
+  if (mime.startsWith('audio/')) return FileAudio
+  return FileText
 }
 
 // isAllowedFile accepts a file when its reported type is in
@@ -261,9 +266,10 @@ export function Composer({
   const mentionRe = /(^|\s)#([a-zA-Z0-9_-]*)$/
 
   function optionClassName(highlighted: boolean): string {
-    return highlighted
-      ? 'block w-full truncate px-3 py-1.5 text-left text-sm bg-zinc-100 text-zinc-900 dark:bg-zinc-700 dark:text-white'
-      : 'block w-full truncate px-3 py-1.5 text-left text-sm text-zinc-700 hover:bg-zinc-50 dark:text-zinc-200 dark:hover:bg-zinc-700/50'
+    return cn(
+      'block h-8 w-full truncate rounded-md px-2 text-left text-sm text-foreground',
+      highlighted && 'bg-muted',
+    )
   }
 
   function filterOptions(cols: KbCollection[], query: string): KbCollection[] {
@@ -586,14 +592,14 @@ export function Composer({
     <div
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
-      className="relative rounded-2xl border border-zinc-950/10 bg-white shadow-sm transition focus-within:border-blue-500/50 focus-within:ring-4 focus-within:ring-blue-500/10 dark:border-white/10 dark:bg-zinc-800/60 dark:focus-within:border-blue-400/40"
+      className="relative rounded-md border border-input bg-card p-3 transition-[border-color,box-shadow] duration-100 ease-out focus-within:border-ring focus-within:ring-1 focus-within:ring-ring"
     >
       {popupOpen && (
-        <div className="absolute bottom-full left-2 z-50 mb-1 max-h-72 w-64 overflow-y-auto rounded-lg border border-zinc-950/10 bg-white py-1 shadow-lg dark:border-white/10 dark:bg-zinc-800">
+        <div className="absolute bottom-full left-2 z-50 mb-1 max-h-72 w-64 overflow-y-auto rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-overlay">
           {combinedOptions.map((opt, i) => (
             <div key={i}>
               {opt.header && (
-                <div className="px-3 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wider text-zinc-400 uppercase dark:text-zinc-500">
+                <div className="px-2 py-1.5 text-xs font-medium tracking-[0.04em] text-muted-foreground uppercase">
                   {opt.header}
                 </div>
               )}
@@ -603,41 +609,32 @@ export function Composer({
         </div>
       )}
       {((knowledge && knowledge.length > 0) || agentOnlyKnowledge.length > 0) && (
-        <div className="flex flex-wrap items-center gap-1 px-3 pt-2.5">
+        <div className="mb-2 flex flex-wrap items-center gap-1">
           {agentOnlyKnowledge.map((name) => (
-            <span
-              key={`agent-${name}`}
-              title="Always searched by this agent"
-              className="inline-flex items-center gap-1 rounded-full bg-zinc-100 py-1 px-2.5 text-xs font-medium text-zinc-500 dark:bg-zinc-700/60 dark:text-zinc-400"
-            >
-              #{name}
-            </span>
+            <Badge key={`agent-${name}`} variant="secondary" title="Always searched by this agent">
+              <BookOpen className="size-3" />#{name}
+            </Badge>
           ))}
           {knowledge?.map((name) => (
-            <span
-              key={name}
-              className="inline-flex items-center gap-1 rounded-full bg-violet-50 py-1 pr-1.5 pl-2.5 text-xs font-medium text-violet-700 dark:bg-violet-500/10 dark:text-violet-300"
-            >
-              #{name}
+            <Badge key={name} variant="secondary">
+              <BookOpen className="size-3" />#{name}
               <button
                 type="button"
                 onClick={() => removeKnowledge(name)}
                 aria-label={`Remove ${name} knowledge`}
-                className="flex size-4 items-center justify-center rounded-full text-violet-700/70 hover:bg-violet-100 hover:text-violet-900 dark:text-violet-300/70 dark:hover:bg-violet-500/20 dark:hover:text-violet-100"
+                className="flex size-4 items-center justify-center rounded-md hover:bg-muted"
               >
-                <HugeiconsIcon icon={Cancel01Icon} className="size-3" />
+                <X className="size-3" />
               </button>
-            </span>
+            </Badge>
           ))}
         </div>
       )}
       {references && references.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1 px-3 pt-2.5">
+        <div className="mb-2 flex flex-wrap items-center gap-1">
           {references.map((r) => (
-            <span
-              key={`${r.kind}-${r.id}`}
-              className="inline-flex max-w-48 items-center gap-1 rounded-full bg-blue-50 py-1 pr-1.5 pl-2.5 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300"
-            >
+            <Badge key={`${r.kind}-${r.id}`} variant="secondary" className="max-w-48">
+              <Link className="size-3 shrink-0" />
               <span className="truncate">
                 {referenceKindLabel[r.kind].replace(/s$/, '')}: {r.name}
               </span>
@@ -645,25 +642,28 @@ export function Composer({
                 type="button"
                 onClick={() => removeReferenceChip(r.kind, r.id)}
                 aria-label={`Remove ${r.name} reference`}
-                className="flex size-4 shrink-0 items-center justify-center rounded-full text-blue-700/70 hover:bg-blue-100 hover:text-blue-900 dark:text-blue-300/70 dark:hover:bg-blue-500/20 dark:hover:text-blue-100"
+                className="flex size-4 shrink-0 items-center justify-center rounded-md hover:bg-muted"
               >
-                <HugeiconsIcon icon={Cancel01Icon} className="size-3" />
+                <X className="size-3" />
               </button>
-            </span>
+            </Badge>
           ))}
         </div>
       )}
       {attachments.length > 0 && (
-        <div className="flex flex-wrap gap-2 px-3 pt-2.5">
+        <div className="mb-2 flex flex-wrap gap-2">
           {attachments.map((a) => (
             <div
               key={a.id}
-              className="group relative size-12 shrink-0 overflow-hidden rounded-lg border border-zinc-950/10 dark:border-white/10"
+              className="group relative size-12 shrink-0 overflow-hidden rounded-md border border-border"
               title={a.name}
             >
               {isDocumentAttachment(a.mime) ? (
-                <div className="flex size-full flex-col items-center justify-center gap-0.5 bg-zinc-100 text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400">
-                  <HugeiconsIcon icon={documentChipIcon(a.mime)} className="size-4" />
+                <div className="flex size-full flex-col items-center justify-center gap-0.5 bg-muted text-muted-foreground">
+                  {(() => {
+                    const Icon = documentChipIcon(a.mime)
+                    return <Icon className="size-4" />
+                  })()}
                   <span className="max-w-full truncate px-1 text-[9px]">{a.name ?? 'Document'}</span>
                 </div>
               ) : (
@@ -671,36 +671,37 @@ export function Composer({
               )}
               {a.uploading && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                  <HugeiconsIcon icon={Loading03Icon} className="size-4 animate-spin text-white" />
+                  <Spinner size="sm" className="text-white" />
                 </div>
               )}
               <button
                 type="button"
                 onClick={() => removeAttachment(a.id)}
                 aria-label={`Remove ${a.name ?? 'attachment'}`}
-                className="absolute top-0.5 right-0.5 flex size-4 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition group-hover:opacity-100"
+                className="absolute top-0.5 right-0.5 flex size-4 items-center justify-center rounded-md bg-black/60 text-white opacity-0 transition group-hover:opacity-100"
               >
-                <HugeiconsIcon icon={Cancel01Icon} className="size-2.5" />
+                <X className="size-2.5" />
               </button>
             </div>
           ))}
         </div>
       )}
       {skillHint && (
-        <div className="flex items-center gap-1 px-3 pt-2.5">
-          <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 py-1 pr-1.5 pl-2.5 text-xs font-medium text-blue-700 dark:bg-blue-500/10 dark:text-blue-300">
+        <div className="mb-2 flex items-center gap-1">
+          <Badge variant="secondary">
+            <Sparkles className="size-3" />
             {skillLabels[skillHint] ?? skillHint}
             {onRemoveSkillHint && (
               <button
                 type="button"
                 onClick={onRemoveSkillHint}
                 aria-label={`Remove ${skillLabels[skillHint] ?? skillHint} skill`}
-                className="flex size-4 items-center justify-center rounded-full text-blue-700/70 hover:bg-blue-100 hover:text-blue-900 dark:text-blue-300/70 dark:hover:bg-blue-500/20 dark:hover:text-blue-100"
+                className="flex size-4 items-center justify-center rounded-md hover:bg-muted"
               >
-                <HugeiconsIcon icon={Cancel01Icon} className="size-3" />
+                <X className="size-3" />
               </button>
             )}
-          </span>
+          </Badge>
         </div>
       )}
       <textarea
@@ -710,7 +711,7 @@ export function Composer({
         value={draft}
         autoFocus={autoFocus}
         placeholder={placeholder}
-        className="max-h-50 w-full resize-none bg-transparent px-4 pt-3.5 pb-1.5 text-base/6 text-zinc-900 outline-none placeholder:text-zinc-400 sm:text-sm/6 dark:text-white dark:placeholder:text-zinc-500"
+        className="min-h-6 max-h-50 w-full resize-none bg-transparent text-prose outline-none placeholder:text-muted-foreground"
         onChange={(e) => {
           onDraft(e.target.value)
           updateMention(e.target.value, e.target.selectionStart ?? e.target.value.length)
@@ -728,7 +729,7 @@ export function Composer({
           }
         }}
       />
-      <div className="flex items-center justify-between gap-2 px-2.5 pb-2.5">
+      <div className="mt-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           {!hidePicker && (
             <AgentRoutePicker agent={agent} onAgent={onAgent} route={route} onRoute={onRoute} />
@@ -747,47 +748,41 @@ export function Composer({
                   if (files.length > 0) void uploadFiles(files)
                 }}
               />
-              <button
-                type="button"
+              <IconButton
+                label="Attach image"
+                icon={Paperclip}
+                variant="ghost"
+                size="sm"
                 onClick={() => fileInputRef.current?.click()}
-                aria-label="Attach image"
                 disabled={disabled}
-                className="flex size-8 shrink-0 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600"
-              >
-                <HugeiconsIcon icon={Attachment02Icon} className="size-4" />
-              </button>
+                tooltip={false}
+              />
             </>
           )}
           {transcribeEnabled && (
             <>
-              <button
-                type="button"
-                onClick={recording ? stopRecording : startRecording}
-                aria-label={recording ? 'Stop recording' : 'Record voice input'}
+              <IconButton
+                label={recording ? 'Stop recording' : 'Record voice input'}
+                icon={Mic}
+                variant={recording ? 'destructive' : 'ghost'}
+                size="sm"
                 aria-pressed={recording}
+                onClick={recording ? stopRecording : startRecording}
                 disabled={disabled || transcribing}
-                className={
-                  recording
-                    ? 'flex size-8 shrink-0 animate-pulse items-center justify-center rounded-full bg-red-600 text-white transition hover:bg-red-500'
-                    : 'flex size-8 shrink-0 items-center justify-center rounded-full text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600'
-                }
-              >
-                <HugeiconsIcon
-                  icon={transcribing ? Loading03Icon : Mic01Icon}
-                  className={transcribing ? 'size-4 animate-spin' : 'size-4'}
-                />
-              </button>
+                loading={transcribing}
+                tooltip={false}
+              />
               <DropdownMenu>
                 <DropdownMenuTrigger
                   aria-label="Speech input language"
                   disabled={disabled || recording || transcribing}
-                  className="flex h-8 items-center gap-1 rounded-full px-2 text-xs text-zinc-500 transition hover:bg-zinc-100 disabled:text-zinc-300 dark:text-zinc-400 dark:hover:bg-zinc-700/50 dark:disabled:text-zinc-600"
+                  className="flex h-8 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground transition hover:bg-accent disabled:opacity-50"
                 >
                   <span>
                     {TRANSCRIBE_LANGUAGES.find((l) => l.code === transcribeLanguage)?.label ??
                       'Auto'}
                   </span>
-                  <HugeiconsIcon icon={ArrowDown01Icon} className="size-3 opacity-60" />
+                  <ChevronDown className="size-3 opacity-60" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-48 p-1.5">
                   <DropdownMenuItem
@@ -796,12 +791,10 @@ export function Composer({
                       setTranscribeLanguage('')
                     }}
                     data-selected={transcribeLanguage === '' || undefined}
-                    className="justify-between rounded-lg px-2.5 py-1.5 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+                    className="justify-between rounded-md px-2.5 py-1.5 data-selected:bg-muted"
                   >
                     <span className="text-sm">Auto-detect</span>
-                    {transcribeLanguage === '' && (
-                      <HugeiconsIcon icon={Tick02Icon} className="size-4" />
-                    )}
+                    {transcribeLanguage === '' && <Check className="size-4" />}
                   </DropdownMenuItem>
                   {TRANSCRIBE_LANGUAGES.map((l) => (
                     <DropdownMenuItem
@@ -811,12 +804,10 @@ export function Composer({
                         setTranscribeLanguage(l.code)
                       }}
                       data-selected={transcribeLanguage === l.code || undefined}
-                      className="justify-between rounded-lg px-2.5 py-1.5 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+                      className="justify-between rounded-md px-2.5 py-1.5 data-selected:bg-muted"
                     >
                       <span className="text-sm">{l.label}</span>
-                      {transcribeLanguage === l.code && (
-                        <HugeiconsIcon icon={Tick02Icon} className="size-4" />
-                      )}
+                      {transcribeLanguage === l.code && <Check className="size-4" />}
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
@@ -825,24 +816,16 @@ export function Composer({
           )}
         </div>
         {streaming && onStop ? (
-          <button
-            type="button"
-            onClick={onStop}
-            aria-label="Stop"
-            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-500"
-          >
-            <HugeiconsIcon icon={StopIcon} className="size-4" />
-          </button>
+          <IconButton label="Stop" icon={Square} variant="outline" onClick={onStop} tooltip={false} />
         ) : (
-          <button
-            type="button"
+          <IconButton
+            label="Send"
+            icon={ArrowUp}
+            variant="default"
             onClick={onSend}
-            aria-label="Send"
             disabled={disabled || (draft.trim() === '' && attachments.length === 0)}
-            className="flex size-9 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white transition hover:bg-blue-500 disabled:bg-zinc-200 disabled:text-zinc-400 dark:disabled:bg-zinc-700 dark:disabled:text-zinc-500"
-          >
-            <HugeiconsIcon icon={ArrowUp01Icon} className="size-4" />
-          </button>
+            tooltip={false}
+          />
         )}
       </div>
     </div>

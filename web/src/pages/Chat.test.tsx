@@ -140,7 +140,7 @@ describe('Chat route picker', () => {
 })
 
 describe('replayed permission asks', () => {
-  it('shows the approval modal for a still-unresolved replayed ask', async () => {
+  it('shows the approval card for a still-unresolved replayed ask', async () => {
     vi.mocked(getTranscript).mockResolvedValue({
       session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
       items: [
@@ -170,10 +170,10 @@ describe('replayed permission asks', () => {
       </MemoryRouter>,
     )
 
-    expect(await screen.findByTestId('permission-modal')).toBeInTheDocument()
+    expect(await screen.findByRole('region')).toBeInTheDocument()
   })
 
-  it('does not show a modal for a resolved replayed ask (server already dropped it)', async () => {
+  it('does not show an approval card for a resolved replayed ask (server already dropped it)', async () => {
     vi.mocked(getTranscript).mockResolvedValue({
       session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
       items: [{ seq: 1, kind: 'user', text: 'do the thing', created_at: '' }],
@@ -189,7 +189,7 @@ describe('replayed permission asks', () => {
     )
 
     await screen.findByText('do the thing')
-    expect(screen.queryByTestId('permission-modal')).not.toBeInTheDocument()
+    expect(screen.queryByRole('region')).not.toBeInTheDocument()
   })
 
   it('toasts and clears the prompt when approving a stale (404) replayed ask', async () => {
@@ -222,11 +222,11 @@ describe('replayed permission asks', () => {
       </MemoryRouter>,
     )
 
-    const modal = await screen.findByTestId('permission-modal')
-    fireEvent.click(within(modal).getByRole('button', { name: /Allow once/ }))
+    const card = await screen.findByRole('region')
+    fireEvent.click(within(card).getByRole('button', { name: /Allow once/ }))
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
-    expect(screen.queryByTestId('permission-modal')).not.toBeInTheDocument()
+    expect(screen.queryByRole('region')).not.toBeInTheDocument()
   })
 })
 
@@ -651,5 +651,91 @@ describe('composer references', () => {
     )
     // The chip strip clears after send, same as attachments/knowledge.
     expect(screen.queryByText(/Fix the flaky test/)).toBeNull()
+  })
+})
+
+describe('agent status line', () => {
+  it('shows "Writing" in the status line while a chunk stream is active', async () => {
+    let feed!: (ev: ChatEvent) => void
+    vi.mocked(chatStream).mockImplementation(
+      async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
+        opts.onSession?.('s1')
+        feed = onEvent
+        await new Promise<void>(() => {}) // never resolves: turn stays live
+      },
+    )
+
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(chatStream).toHaveBeenCalled())
+    feed({ type: 'chunk', text: 'partial answer' })
+
+    await waitFor(() => expect(screen.getByText('Writing')).toBeInTheDocument())
+  })
+
+  it('shows "Waiting for your approval" in the status line when a live permission is pending', async () => {
+    let feed!: (ev: ChatEvent) => void
+    vi.mocked(chatStream).mockImplementation(
+      async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
+        opts.onSession?.('s1')
+        feed = onEvent
+        await new Promise<void>(() => {}) // never resolves: turn stays live
+      },
+    )
+
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(chatStream).toHaveBeenCalled())
+    feed({
+      type: 'permission_request',
+      permission: {
+        id: 'perm-1',
+        call_id: 'call-1',
+        tool: 'shell',
+        args: '{}',
+        danger_level: 'safe',
+        rationale: 'runs a shell command',
+      },
+    })
+
+    await waitFor(() => expect(screen.getByText('Waiting for your approval')).toBeInTheDocument())
+  })
+
+  it('does not open the ApprovalDialog when the transcript is pinned to the bottom', async () => {
+    let feed!: (ev: ChatEvent) => void
+    vi.mocked(chatStream).mockImplementation(
+      async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
+        opts.onSession?.('s1')
+        feed = onEvent
+        await new Promise<void>(() => {}) // never resolves: turn stays live
+      },
+    )
+
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(chatStream).toHaveBeenCalled())
+    feed({
+      type: 'permission_request',
+      permission: {
+        id: 'perm-1',
+        call_id: 'call-1',
+        tool: 'shell',
+        args: '{}',
+        danger_level: 'safe',
+        rationale: 'runs a shell command',
+      },
+    })
+
+    await screen.findByRole('region') // inline card renders
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 })
