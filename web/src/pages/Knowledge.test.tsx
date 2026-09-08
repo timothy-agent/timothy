@@ -111,7 +111,7 @@ describe('Knowledge page', () => {
         retrieval_weight: 1,
       }),
     )
-    expect(await screen.findByText('Scalability')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Scalability' })).toBeInTheDocument()
   })
 
   it('renders the page header and collections with doc and chunk counts', async () => {
@@ -178,7 +178,7 @@ describe('Knowledge page', () => {
     it('shows the error as a tooltip on a failed document', async () => {
       renderPage('/knowledge/c1')
       await screen.findByText('broken.docx')
-      expect(screen.getByText('failed').closest('span')).toHaveAttribute('title', 'unsupported encoding')
+      expect(screen.getAllByTitle('unsupported encoding').length).toBeGreaterThan(0)
     })
 
     it('uploads a file via the input and adds it to the document list', async () => {

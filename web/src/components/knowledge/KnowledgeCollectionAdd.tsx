@@ -1,10 +1,9 @@
-import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { createKbCollection } from '../../api/client'
 import { Field } from '../timothy/field'
+import { PageHeader } from '../timothy/page-header'
 import { Input } from '../ui/input'
 import { Button } from '../ui/button'
 import { errText } from '../../lib/errors'
@@ -30,21 +29,12 @@ export function KnowledgeCollectionAdd() {
   }
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/knowledge"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Knowledge
-      </Link>
-
-      <div className="border-b border-border pb-6">
-        <h1 className="text-xl font-semibold tracking-tight">New collection</h1>
-        <p className="text-sm text-muted-foreground">
-          A named group of documents agents can search with search_kb.
-        </p>
-      </div>
+    <div className="w-full space-y-6">
+      <PageHeader
+        title="New collection"
+        description="A named group of documents agents can search with search_kb."
+        breadcrumbs={[{ label: 'Knowledge', href: '/knowledge' }, { label: 'New collection' }]}
+      />
 
       <div className="max-w-3xl">
         <div className="grid gap-5">
