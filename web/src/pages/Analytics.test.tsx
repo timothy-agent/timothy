@@ -137,9 +137,11 @@ describe('Analytics budget alert', () => {
   it('stays silent when the budget endpoint fails', async () => {
     vi.mocked(usageBudget).mockRejectedValue(new Error('gateway down'))
     renderPage()
-    // The shared widget-failure note appears; no budget banner.
-    await screen.findByText(/widgets failed to load/)
-    expect(screen.queryByRole('alert')).toBeNull()
+    // The shared widget-failure note appears as its own destructive
+    // alert; no separate budget banner.
+    const failureAlert = await screen.findByRole('alert')
+    expect(failureAlert).toHaveTextContent(/widgets failed to load/)
+    expect(screen.queryByText(/budget reached/)).toBeNull()
   })
 })
 
@@ -153,6 +155,22 @@ describe('Analytics spend tile', () => {
 
     fireEvent.click(screen.getByText('30 days'))
     await waitFor(() => expect(screen.getByText('Spend this month')).toBeInTheDocument())
+  })
+})
+
+describe('Analytics segmented controls', () => {
+  it('renders the range picker as a radiogroup with an aria-label', async () => {
+    renderPage()
+    const group = await screen.findByRole('radiogroup', { name: 'Range' })
+    expect(within(group).getByRole('radio', { name: 'Today' })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: '7 days' })).toBeInTheDocument()
+  })
+
+  it('renders each chart view toggle as a radiogroup with a per-chart aria-label', async () => {
+    renderPage()
+    const group = await screen.findByRole('radiogroup', { name: 'Spend by provider view' })
+    expect(within(group).getByRole('radio', { name: 'Bars' })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: 'Lines' })).toBeInTheDocument()
   })
 })
 
@@ -301,7 +319,7 @@ describe('Analytics chart legend selection', () => {
     )
     renderPage()
 
-    const chart = (await screen.findByText('Spend by provider')).closest('section')
+    const chart = (await screen.findByText('Spend by provider')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     // StatsLegend renders the series name as a plain text node with no
     // className, distinct from the "By provider"-style breakdown table
@@ -323,7 +341,7 @@ describe('Analytics chart legend selection', () => {
 
   it('ctrl-click toggles just that entry, independent of other legends', async () => {
     renderPage()
-    const chart = (await screen.findByText('Tokens consumption')).closest('section')
+    const chart = (await screen.findByText('Tokens consumption')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     const inputEntry = (await within(chart).findAllByText('input')).find((el) => el.className === '')
     if (!inputEntry) throw new Error('legend entry not found')
@@ -347,7 +365,7 @@ describe('Analytics chart legend selection', () => {
 // its most recently applied option — several charts render on the
 // page, each with its own init() call/instance.
 async function findChartOptionGetter(section: HTMLElement) {
-  const chartDiv = section.querySelector('.mt-3 > div')
+  const chartDiv = section.querySelector('div[style*="width"]')
   if (!chartDiv) throw new Error('chart container not found')
   const initMock = vi.mocked(echartsCore.init)
   await waitFor(() => expect(initMock.mock.calls.some((c) => c[0] === chartDiv)).toBe(true))
@@ -365,7 +383,7 @@ describe('Analytics bars/lines view toggle', () => {
       group === 'provider' ? [providerTotal] : [],
     )
     renderPage()
-    const chart = (await screen.findByText('Spend by provider')).closest('section')
+    const chart = (await screen.findByText('Spend by provider')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     const lastOption = await findChartOptionGetter(chart)
     await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
@@ -376,7 +394,7 @@ describe('Analytics bars/lines view toggle', () => {
 
   it('defaults to lines and switches the tokens-in/out chart to bars on click', async () => {
     renderPage()
-    const chart = (await screen.findByText('Tokens consumption')).closest('section')
+    const chart = (await screen.findByText('Tokens consumption')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     const lastOption = await findChartOptionGetter(chart)
     await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
@@ -390,7 +408,7 @@ describe('Analytics bars/lines view toggle', () => {
       group === 'model' ? [{ ...providerPoint, group: 'gpt-5.6-sol' }] : [],
     )
     renderPage()
-    const chart = (await screen.findByText('Tokens per model')).closest('section')
+    const chart = (await screen.findByText('Tokens per model')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     const lastOption = await findChartOptionGetter(chart)
     await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
@@ -401,7 +419,7 @@ describe('Analytics bars/lines view toggle', () => {
 
   it('has no toggle on the requests & errors panel', async () => {
     renderPage()
-    const chart = (await screen.findByText('Requests & error rate')).closest('section')
+    const chart = (await screen.findByText('Requests & error rate')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     expect(within(chart).queryByText('Bars')).toBeNull()
     expect(within(chart).queryByText('Lines')).toBeNull()
@@ -465,14 +483,14 @@ describe('Analytics zero-cost exclusion', () => {
     )
     renderPage()
 
-    const providerTable = (await screen.findByText('Cost breakdown by provider')).closest('section')
+    const providerTable = (await screen.findByText('Cost breakdown by provider')).closest('[data-density]') as HTMLElement | null
     if (!providerTable) throw new Error('provider cost table not found')
     expect(await within(providerTable).findByText('openai')).toBeInTheDocument()
     expect(within(providerTable).queryByText('local-llama')).toBeNull()
 
     // Same model, token-consumption chart: the free model's volume is
     // exactly the signal this chart exists to show, so it must render.
-    const tokenChart = (await screen.findByText('Tokens per model')).closest('section')
+    const tokenChart = (await screen.findByText('Tokens per model')).closest('[data-density]') as HTMLElement | null
     if (!tokenChart) throw new Error('token chart section not found')
     expect(await within(tokenChart).findByText('local-llama')).toBeInTheDocument()
   })
@@ -486,7 +504,7 @@ describe('Analytics zero-cost exclusion', () => {
     )
     renderPage()
 
-    const modelCostChart = (await screen.findByText('Spend by model')).closest('section')
+    const modelCostChart = (await screen.findByText('Spend by model')).closest('[data-density]') as HTMLElement | null
     if (!modelCostChart) throw new Error('model cost chart section not found')
     expect(await within(modelCostChart).findByText('gpt-5.6-sol')).toBeInTheDocument()
     expect(within(modelCostChart).queryByText('local-llama')).toBeNull()
