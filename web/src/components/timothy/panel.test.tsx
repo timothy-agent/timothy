@@ -18,6 +18,16 @@ describe('Panel', () => {
     expect(screen.getByRole('heading', { name: 'Timeline' })).toBeInTheDocument()
   })
 
+  it('applies bodyClassName to the body wrapper, keeping the padding', () => {
+    render(
+      <Panel title="Chart" bodyClassName="flex flex-1 flex-col">
+        <div>plot</div>
+      </Panel>,
+    )
+    const body = screen.getByText('plot').parentElement
+    expect(body).toHaveClass('flex', 'flex-1', 'flex-col', 'p-5', 'pt-0')
+  })
+
   it('defaults the title to an h2', () => {
     render(<Panel title="Goal">Body</Panel>)
     const heading = screen.getByRole('heading', { name: 'Goal', level: 2 })
