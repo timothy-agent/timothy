@@ -119,7 +119,7 @@ export function SessionList() {
         <Link
           to="/chat"
           aria-label="New chat"
-          className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-50"
+          className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
         >
           <HugeiconsIcon icon={Add01Icon} className="size-4" />
         </Link>

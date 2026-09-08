@@ -168,7 +168,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
         Permission requested: {String(tool ?? 'a tool call')}
         {dangerSuffix}
         {args ? (
-          <code className="ml-1 rounded bg-muted px-1 py-0.5 text-xs whitespace-pre-wrap">
+          <code className="ml-1 rounded-md bg-muted px-1 py-0.5 text-xs whitespace-pre-wrap">
             {truncateForDisplay(String(args))}
           </code>
         ) : null}
