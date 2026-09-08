@@ -1,5 +1,4 @@
-import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { ArrowLeft } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { listSchedules } from '../api/client'
@@ -55,7 +54,7 @@ export function EditSchedule() {
         to={`/automations/${id}`}
         className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
       >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
+        <ArrowLeft className="size-4" />
         Automation
       </Link>
 

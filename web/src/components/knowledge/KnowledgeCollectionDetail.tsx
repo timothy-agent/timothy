@@ -1,10 +1,4 @@
-import {
-  Delete02Icon,
-  Edit01Icon,
-  File02Icon,
-  ReloadIcon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { FileText, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -237,11 +231,11 @@ export function KnowledgeCollectionDetail() {
                 setEditing(true)
               }}
             >
-              <HugeiconsIcon icon={Edit01Icon} />
+              <Pencil />
               Rename
             </Button>
             <Button variant="destructive" onClick={() => setConfirmDeleteCollection(true)}>
-              <HugeiconsIcon icon={Delete02Icon} />
+              <Trash2 />
               Delete collection
             </Button>
           </>
@@ -278,7 +272,7 @@ export function KnowledgeCollectionDetail() {
                   <TableRow key={doc.id}>
                     <TableCell>
                       <div className="flex items-center gap-2">
-                        <HugeiconsIcon icon={File02Icon} className="size-4 shrink-0 text-muted-foreground" />
+                        <FileText className="size-4 shrink-0 text-muted-foreground" />
                         <span className="truncate">{doc.title}</span>
                       </div>
                       <DocumentErrorLine doc={doc} />
@@ -303,7 +297,7 @@ export function KnowledgeCollectionDetail() {
                           onClick={() => void reingest(doc)}
                           className="text-muted-foreground hover:text-foreground"
                         >
-                          <HugeiconsIcon icon={ReloadIcon} className="size-4" />
+                          <RefreshCw className="size-4" />
                         </button>
                         <button
                           type="button"
@@ -311,7 +305,7 @@ export function KnowledgeCollectionDetail() {
                           onClick={() => setConfirmDeleteDoc(doc)}
                           className="text-muted-foreground hover:text-destructive"
                         >
-                          <HugeiconsIcon icon={Delete02Icon} className="size-4" />
+                          <Trash2 className="size-4" />
                         </button>
                       </div>
                     </TableCell>

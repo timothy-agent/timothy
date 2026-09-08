@@ -54,6 +54,33 @@ describe('Sidebar nav', () => {
   })
 })
 
+// The footer's theme button picks its glyph from a map keyed on the
+// current theme. lucide stamps a `lucide-<kebab-name>` class on every
+// glyph, so asserting on it pins the mapping.
+describe('Theme toggle icon', () => {
+  it('shows the moon glyph on a dark theme', () => {
+    localStorage.setItem('timothy.theme', 'dark')
+    const { container } = renderAt('/')
+    expect(container.querySelector('.lucide-moon')).toBeInTheDocument()
+    expect(container.querySelector('.lucide-sun')).toBeNull()
+  })
+
+  it('shows the sun glyph on a light theme', () => {
+    localStorage.setItem('timothy.theme', 'light')
+    const { container } = renderAt('/')
+    expect(container.querySelector('.lucide-sun')).toBeInTheDocument()
+    expect(container.querySelector('.lucide-moon')).toBeNull()
+  })
+
+  it('swaps the glyph when the theme is cycled', () => {
+    localStorage.setItem('timothy.theme', 'light')
+    const { container } = renderAt('/')
+    expect(container.querySelector('.lucide-sun')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Light theme' }))
+    expect(container.querySelector('.lucide-moon')).toBeInTheDocument()
+  })
+})
+
 describe('Legacy edit schedule route', () => {
   it('redirects /missions/schedules/:id/edit to /automations/:id/edit', async () => {
     renderAt('/missions/schedules/s1/edit')

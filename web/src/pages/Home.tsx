@@ -1,10 +1,4 @@
-import {
-  Analytics01Icon,
-  InboxIcon,
-  RocketIcon,
-  Settings02Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Brain, ChartColumn, Library, Repeat, Rocket, Settings } from 'lucide-react'
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useAgents } from '../components/AgentPicker'
@@ -147,11 +141,41 @@ export function Home() {
       <div className="mt-10 mb-10 flex items-center gap-8">
         <button
           type="button"
+          onClick={() => navigate('/missions')}
+          className="group flex flex-col items-center gap-2"
+        >
+          <span className="flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+            <Rocket className="size-5.5" />
+          </span>
+          <span className="text-xs text-muted-foreground">Missions</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate('/automations')}
+          className="group flex flex-col items-center gap-2"
+        >
+          <span className="flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+            <Repeat className="size-5.5" />
+          </span>
+          <span className="text-xs text-muted-foreground">Automations</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate('/knowledge')}
+          className="group flex flex-col items-center gap-2"
+        >
+          <span className="flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+            <Library className="size-5.5" />
+          </span>
+          <span className="text-xs text-muted-foreground">Knowledge</span>
+        </button>
+        <button
+          type="button"
           onClick={() => navigate('/memory')}
           className="group flex flex-col items-center gap-2"
         >
           <span className="relative flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
-            <HugeiconsIcon icon={InboxIcon} className="size-5.5" />
+            <Brain className="size-5.5" />
             {pending > 0 && (
               <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-xs font-medium text-brand-foreground">
                 {pending}
@@ -162,21 +186,11 @@ export function Home() {
         </button>
         <button
           type="button"
-          onClick={() => navigate('/missions')}
-          className="group flex flex-col items-center gap-2"
-        >
-          <span className="flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
-            <HugeiconsIcon icon={RocketIcon} className="size-5.5" />
-          </span>
-          <span className="text-xs text-muted-foreground">Missions</span>
-        </button>
-        <button
-          type="button"
           onClick={() => navigate('/analytics')}
           className="group flex flex-col items-center gap-2"
         >
           <span className="flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
-            <HugeiconsIcon icon={Analytics01Icon} className="size-5.5" />
+            <ChartColumn className="size-5.5" />
           </span>
           <span className="text-xs text-muted-foreground">Analytics</span>
         </button>
@@ -186,7 +200,7 @@ export function Home() {
           className="group flex flex-col items-center gap-2"
         >
           <span className="flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
-            <HugeiconsIcon icon={Settings02Icon} className="size-5.5" />
+            <Settings className="size-5.5" />
           </span>
           <span className="text-xs text-muted-foreground">Settings</span>
         </button>

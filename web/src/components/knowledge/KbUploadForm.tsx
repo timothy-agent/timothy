@@ -1,5 +1,4 @@
-import { CloudUploadIcon, Loading03Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { CloudUpload, LoaderCircle } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type { KbDocument } from '../../api/types'
@@ -109,7 +108,7 @@ export function KbUploadForm({
             if (files.length > 0) void uploadFiles(files)
           }}
         />
-        <HugeiconsIcon icon={CloudUploadIcon} className="size-6 text-muted-foreground" />
+        <CloudUpload className="size-6 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">
           Drag files here or{' '}
           <button type="button" onClick={() => inputRef.current?.click()} className="text-brand underline">
@@ -119,7 +118,7 @@ export function KbUploadForm({
         </p>
         {Object.keys(uploading).length > 0 && (
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <HugeiconsIcon icon={Loading03Icon} className="size-3 animate-spin" />
+            <LoaderCircle className="size-3 animate-spin" />
             Uploading {Object.keys(uploading).length} file
             {Object.keys(uploading).length === 1 ? '' : 's'}…
           </p>
@@ -153,7 +152,7 @@ export function KbUploadForm({
         <Button type="submit" variant="outline" disabled={parseUrls(url).length === 0 || !!urlProgress}>
           {urlProgress ? (
             <>
-              <HugeiconsIcon icon={Loading03Icon} className="animate-spin" />
+              <LoaderCircle className="animate-spin" />
               adding {urlProgress.done}/{urlProgress.total}…
             </>
           ) : (

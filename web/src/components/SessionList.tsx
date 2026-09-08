@@ -1,14 +1,4 @@
-import {
-  Add01Icon,
-  Archive02Icon,
-  BubbleChatIcon,
-  Delete02Icon,
-  MoreHorizontalIcon,
-  PencilEdit01Icon,
-  Search01Icon,
-  Unarchive03Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Archive, ArchiveRestore, Ellipsis, MessageCircle, Plus, Search, SquarePen, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -121,14 +111,14 @@ export function SessionList() {
           aria-label="New chat"
           className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-accent-foreground"
         >
-          <HugeiconsIcon icon={Add01Icon} className="size-4" />
+          <Plus className="size-4" />
         </Link>
       </div>
 
       <SidebarGroup className="pt-0">
         <SidebarGroupContent>
           <div className="relative px-1">
-            <HugeiconsIcon icon={Search01Icon} className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               aria-label="Search sessions"
               value={query}
@@ -147,7 +137,7 @@ export function SessionList() {
               <SidebarMenuItem key={s.id}>
                 {editingId === s.id ? (
                   <div className="flex items-center gap-1.5 px-2 py-1.5">
-                    <HugeiconsIcon icon={BubbleChatIcon} className="size-3.5 shrink-0 text-muted-foreground" />
+                    <MessageCircle className="size-3.5 shrink-0 text-muted-foreground" />
                     <Input
                       aria-label="Session title"
                       value={title}
@@ -165,7 +155,7 @@ export function SessionList() {
                   <SidebarMenuButton asChild isActive={pathname === `/chat/${s.id}`} className="h-auto flex-col items-start gap-0.5 py-1.5">
                     <Link to={`/chat/${s.id}`}>
                       <span className="flex w-full items-center gap-1.5">
-                        <HugeiconsIcon icon={BubbleChatIcon} className="size-3.5 shrink-0 text-muted-foreground" />
+                        <MessageCircle className="size-3.5 shrink-0 text-muted-foreground" />
                         <span className="truncate font-medium">{s.title || 'New session'}</span>
                         {s.archived && <Badge variant="outline">archived</Badge>}
                       </span>
@@ -176,23 +166,23 @@ export function SessionList() {
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <SidebarMenuAction showOnHover aria-label={`Actions for ${s.title || 'session'}`}>
-                      <HugeiconsIcon icon={MoreHorizontalIcon} />
+                      <Ellipsis />
                     </SidebarMenuAction>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent side="right" align="start">
                     <DropdownMenuItem onClick={() => startRename(s)}>
-                      <HugeiconsIcon icon={PencilEdit01Icon} />
+                      <SquarePen />
                       Rename
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => void archive(s)}>
-                      <HugeiconsIcon icon={s.archived ? Unarchive03Icon : Archive02Icon} />
+                      {s.archived ? <ArchiveRestore /> : <Archive />}
                       {s.archived ? 'Unarchive' : 'Archive'}
                     </DropdownMenuItem>
                     <DropdownMenuItem
                       variant="destructive"
                       onClick={() => setConfirmDelete(s)}
                     >
-                      <HugeiconsIcon icon={Delete02Icon} />
+                      <Trash2 />
                       Delete
                     </DropdownMenuItem>
                   </DropdownMenuContent>

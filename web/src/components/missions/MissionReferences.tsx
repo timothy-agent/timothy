@@ -1,5 +1,4 @@
-import { Cancel01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { X } from 'lucide-react'
 import type { ComponentProps, KeyboardEvent } from 'react'
 import { useRef, useState } from 'react'
 import type { Reference } from '../../api/types'
@@ -167,7 +166,7 @@ export function GoalTextarea({
                 aria-label={`Remove ${r.name} reference`}
                 className="flex size-3.5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
               >
-                <HugeiconsIcon icon={Cancel01Icon} className="size-3" />
+                <X className="size-3" />
               </button>
             </span>
           ))}

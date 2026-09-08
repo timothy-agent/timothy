@@ -1,6 +1,4 @@
-import { PlusSignIcon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -157,7 +155,7 @@ export function RoutesList() {
               </Select>
             </div>
             <Button onClick={create} disabled={!newName.trim()}>
-              <HugeiconsIcon icon={PlusSignIcon} className="size-4" />
+              <Plus className="size-4" />
               Add route
             </Button>
           </div>

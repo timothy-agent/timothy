@@ -1,9 +1,8 @@
-import { Mail01Icon, GlobalIcon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Globe, Mail } from 'lucide-react'
 import { TelegramIcon } from '@/components/icons/TelegramIcon'
 import type { Destination } from '../../api/types'
 
-const destinationKindIcon = { email: Mail01Icon, webhook: GlobalIcon } as const
+const destinationKindIcon = { email: Mail, webhook: Globe } as const
 
 // DestinationKindIcon renders the small glyph identifying a
 // destination's kind — shared by the settings destinations list and
@@ -23,5 +22,6 @@ export function DestinationKindIcon({
       </svg>
     )
   }
-  return <HugeiconsIcon icon={destinationKindIcon[kind]} className={className} />
+  const Icon = destinationKindIcon[kind]
+  return <Icon className={className} />
 }
