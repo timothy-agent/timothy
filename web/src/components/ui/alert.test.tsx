@@ -33,4 +33,31 @@ describe('Alert', () => {
     )
     expect(screen.getByRole('status').querySelector('svg')).not.toBeInTheDocument()
   })
+
+  it('renders a custom icon override', () => {
+    render(
+      <Alert tone="good" icon={<span data-testid="custom-icon" />}>
+        <AlertTitle>Done</AlertTitle>
+      </Alert>,
+    )
+    expect(screen.getByTestId('custom-icon')).toBeInTheDocument()
+  })
+
+  it('falls back to neutral when tone is explicitly null', () => {
+    render(
+      <Alert tone={null}>
+        <AlertTitle>Note</AlertTitle>
+      </Alert>,
+    )
+    expect(screen.getByRole('status')).toHaveAttribute('data-tone', 'neutral')
+  })
+
+  it('has no icon for the default neutral tone', () => {
+    render(
+      <Alert>
+        <AlertTitle>Note</AlertTitle>
+      </Alert>,
+    )
+    expect(screen.getByRole('status').querySelector('svg')).not.toBeInTheDocument()
+  })
 })

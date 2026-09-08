@@ -121,6 +121,45 @@ describe('AutomationDetail', () => {
     expect(screen.queryByText('ops-inbox')).toBeNull()
   })
 
+  it('falls back to the raw destination id when it cannot be resolved', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([])
+    vi.mocked(listSchedules).mockResolvedValue([
+      { ...schedule, mission_template: { ...schedule.mission_template, destination_ids: ['unknown-id'] } },
+    ])
+    renderAt('s1')
+    expect(await screen.findByText('unknown-id')).toBeTruthy()
+  })
+
+  it('shows a disabled badge when the schedule is disabled', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([{ ...schedule, enabled: false }])
+    renderAt('s1')
+    expect(await screen.findByText('disabled')).toBeTruthy()
+  })
+
+  it('shows the last run time when set', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([{ ...schedule, last_run: '2026-07-20T08:00:00Z' }])
+    renderAt('s1')
+    expect(await screen.findByText(/Last run/)).toBeTruthy()
+  })
+
+  it('navigates to the edit page when Edit is clicked', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([schedule])
+    const router = createMemoryRouter(
+      [
+        { path: '/automations/:id', element: <AutomationDetail /> },
+        { path: '/automations/:id/edit', element: <div>edit page</div> },
+      ],
+      { initialEntries: ['/automations/s1'] },
+    )
+    render(
+      <TooltipProvider>
+        <RouterProvider router={router} />
+      </TooltipProvider>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/automations/s1/edit'))
+  })
+
   it('renames the automation: pencil click, edit, Enter saves the slugified name', async () => {
     vi.mocked(listSchedules).mockResolvedValue([schedule])
     vi.mocked(patchSchedule).mockResolvedValue({ ...schedule, name: 'new-name' })

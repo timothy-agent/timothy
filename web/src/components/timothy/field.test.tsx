@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react'
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { Field, FieldGroup, Form, FormActions } from './field'
@@ -67,6 +68,11 @@ describe('Field', () => {
     )
     expect(screen.getByRole('textbox')).toHaveAttribute('aria-invalid', 'true')
   })
+
+  it('renders plain string children as-is when not a valid element', () => {
+    render(<Field label="Static">{'just text' as unknown as ReactElement}</Field>)
+    expect(screen.getByText('just text')).toBeInTheDocument()
+  })
 })
 
 describe('FieldGroup', () => {
@@ -79,6 +85,15 @@ describe('FieldGroup', () => {
     const fieldset = screen.getByText('fields').closest('fieldset')
     expect(fieldset).toBeInTheDocument()
     expect(fieldset?.querySelector('legend')).toHaveTextContent('Account')
+  })
+
+  it('renders a description when given one', () => {
+    render(
+      <FieldGroup title="Account" description="Manage your account settings">
+        <p>fields</p>
+      </FieldGroup>,
+    )
+    expect(screen.getByText('Manage your account settings')).toBeInTheDocument()
   })
 })
 
@@ -113,5 +128,14 @@ describe('FormActions', () => {
       </FormActions>,
     )
     expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+  })
+
+  it('sticks to the bottom with a border when sticky', () => {
+    render(
+      <FormActions sticky>
+        <button>Save</button>
+      </FormActions>,
+    )
+    expect(screen.getByRole('button', { name: 'Save' }).parentElement).toHaveClass('sticky bottom-0')
   })
 })

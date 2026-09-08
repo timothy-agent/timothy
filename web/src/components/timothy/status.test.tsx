@@ -31,6 +31,14 @@ describe('missionStatus', () => {
   it('maps a cancelled failure to neutral', () => {
     expect(missionStatus({ phase: 'failed', status: 'cancelled' })).toBe('neutral')
   })
+
+  it('maps a non-terminal error status to error', () => {
+    expect(missionStatus({ phase: 'generate', status: 'error' })).toBe('error')
+  })
+
+  it('maps a non-terminal done status to success', () => {
+    expect(missionStatus({ phase: 'generate', status: 'done' })).toBe('success')
+  })
 })
 
 describe('toolCallStatus', () => {

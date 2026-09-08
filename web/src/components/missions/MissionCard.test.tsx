@@ -192,6 +192,30 @@ describe('MissionCard cost', () => {
   })
 })
 
+describe('MissionCard recurring badge', () => {
+  it('shows a recurring badge when schedule_id is set', () => {
+    renderCard({ ...baseMission, schedule_id: 's1' })
+    expect(screen.getByText('recurring')).toBeInTheDocument()
+  })
+
+  it('omits the recurring badge when schedule_id is unset', () => {
+    renderCard({ ...baseMission })
+    expect(screen.queryByText('recurring')).not.toBeInTheDocument()
+  })
+})
+
+describe('MissionCard pause message', () => {
+  it('shows the pause message when set', () => {
+    renderCard({ ...baseMission, pause_message: 'Waiting on budget approval' })
+    expect(screen.getByText('Waiting on budget approval')).toBeInTheDocument()
+  })
+
+  it('omits the pause message when unset', () => {
+    renderCard({ ...baseMission })
+    expect(screen.queryByText('Waiting on budget approval')).not.toBeInTheDocument()
+  })
+})
+
 describe('MissionCard removed fields', () => {
   it('never renders retries, unit progress, or the raw phase text', () => {
     renderCard({

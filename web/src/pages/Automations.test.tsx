@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Destination, Schedule } from '../api/types'
@@ -95,6 +95,34 @@ describe('Automations page', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
 
     await waitFor(() => expect(deleteSchedule).toHaveBeenCalledWith('s1'))
+  })
+
+  it('shows the last run time on the card when set', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([{ ...schedule, last_run: '2026-07-20T08:00:00Z' }])
+    renderPage()
+    expect(await screen.findByText(/Last run/)).toBeTruthy()
+  })
+
+  it('falls back to the raw destination id on the card when unresolved', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([])
+    vi.mocked(listSchedules).mockResolvedValue([
+      { ...schedule, mission_template: { ...schedule.mission_template, destination_ids: ['unknown-id'] } },
+    ])
+    renderPage()
+    expect(await screen.findByText('unknown-id')).toBeTruthy()
+  })
+
+  it('cancels a delete without calling deleteSchedule', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([schedule])
+    renderPage()
+    await screen.findByText('weekly-digest')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete weekly-digest' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(deleteSchedule).not.toHaveBeenCalled()
   })
 
   it('navigates to the automation detail page on card click', async () => {

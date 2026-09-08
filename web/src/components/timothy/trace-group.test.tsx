@@ -17,6 +17,16 @@ describe('TraceGroup', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByText('call detail')).toBeInTheDocument()
   })
+
+  it('appends the count to the summary when given', () => {
+    render(<TraceGroup summary="Tool calls" count={5} />)
+    expect(screen.getByText('Tool calls · 5')).toBeInTheDocument()
+  })
+
+  it('omits the count suffix when not given', () => {
+    render(<TraceGroup summary="Tool calls" />)
+    expect(screen.getByText('Tool calls')).toBeInTheDocument()
+  })
 })
 
 describe('TraceRow', () => {

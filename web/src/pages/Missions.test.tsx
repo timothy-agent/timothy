@@ -294,5 +294,28 @@ describe('Missions board', () => {
       expect(screen.queryByText('1 of 2')).toBeNull()
       expect(screen.queryByText('2 of 2')).toBeNull()
     })
+
+    it('shows a filters-no-match empty state with no create button in it', async () => {
+      vi.mocked(listMissions).mockResolvedValue([mission])
+      renderPage()
+      await screen.findByText('Fix the login bug')
+
+      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by kind' }))
+      fireEvent.click(await screen.findByRole('option', { name: 'Coding' }))
+
+      const empty = screen.getByText('No missions match the current filters.').closest('div')
+      expect(empty?.querySelector('button')).toBeNull()
+    })
+  })
+
+  it('shows a no-missions empty state with a working create button', async () => {
+    vi.mocked(listMissions).mockResolvedValue([])
+    const router = renderPage()
+    const heading = await screen.findByText('No missions yet, create one to get started.')
+
+    const createButton = heading.closest('div')?.querySelector('button')
+    expect(createButton).toBeTruthy()
+    fireEvent.click(createButton!)
+    await waitFor(() => expect(router.state.location.pathname).toBe('/missions/new'))
   })
 })

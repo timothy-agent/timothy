@@ -65,6 +65,16 @@ describe('FileViewer', () => {
     expect(img.getAttribute('src')).toBe('blob:mock')
   })
 
+  it('opens the raw image in a new tab via its object URL', async () => {
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['bytes']))
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    render(<FileViewer missionId="m1" file={file('logo.png')} />)
+
+    await screen.findByRole('img')
+    fireEvent.click(screen.getByRole('button', { name: 'Open raw file in a new tab' }))
+    expect(openSpy).toHaveBeenCalledWith('blob:mock', '_blank')
+  })
+
   it('renders pdf files inline in an iframe, retyped as application/pdf', async () => {
     vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['%PDF-1.4']))
     render(<FileViewer missionId="m1" file={file('report.pdf')} />)

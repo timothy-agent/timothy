@@ -20,4 +20,13 @@ describe('ToggleGroup', () => {
     expect(grid).toHaveAttribute('data-state', 'on')
     expect(list).toHaveAttribute('data-state', 'off')
   })
+
+  it('sizes items sm when the group size is sm', () => {
+    render(
+      <ToggleGroup type="single" size="sm" defaultValue="list">
+        <ToggleGroupItem value="list">List</ToggleGroupItem>
+      </ToggleGroup>,
+    )
+    expect(screen.getByText('List').className).toContain('h-7 px-2.5')
+  })
 })

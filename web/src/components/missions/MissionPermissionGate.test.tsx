@@ -51,4 +51,73 @@ describe('MissionPermissionGate', () => {
     expect(screen.getByText('Approved — command running…')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Allow once' })).not.toBeInTheDocument()
   })
+
+  it('shows a denied status line for a deny decision', () => {
+    renderGate({ tool: 'shell', onDecide: vi.fn(), answeredDecision: 'deny' })
+    expect(screen.getByText('Denied — returning to worker…')).toBeInTheDocument()
+  })
+
+  it('shows an unknown status line for an unknown decision', () => {
+    renderGate({ tool: 'shell', onDecide: vi.fn(), answeredDecision: 'unknown' })
+    expect(
+      screen.getByText('Answered — waiting for the worker to continue…'),
+    ).toBeInTheDocument()
+  })
+
+  it('renders no arguments block when args is undefined', () => {
+    renderGate({ tool: 'shell', onDecide: vi.fn() })
+    expect(screen.queryByText('Arguments')).not.toBeInTheDocument()
+  })
+
+  it('renders no arguments block when args is an empty string', () => {
+    renderGate({ tool: 'shell', args: '', onDecide: vi.fn() })
+    expect(screen.queryByText('Arguments')).not.toBeInTheDocument()
+  })
+
+  it('renders non-JSON args raw rather than throwing', () => {
+    renderGate({ tool: 'shell', args: 'not json', onDecide: vi.fn() })
+    expect(screen.getByText('not json', { exact: false })).toBeInTheDocument()
+  })
+
+  it('calls onDecide for the deny button', () => {
+    const onDecide = vi.fn()
+    renderGate({ tool: 'shell', onDecide })
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    expect(onDecide).toHaveBeenCalledWith('deny')
+  })
+
+  it('calls onDecide for the allow-for-session button', () => {
+    const onDecide = vi.fn()
+    renderGate({ tool: 'shell', onDecide })
+    fireEvent.click(screen.getByRole('button', { name: 'Allow for session' }))
+    expect(onDecide).toHaveBeenCalledWith('session')
+  })
+
+  it('uses a generic title when no tool is given', () => {
+    renderGate({ onDecide: vi.fn() })
+    expect(screen.getByText('Timothy wants to use this tool')).toBeInTheDocument()
+  })
+
+  it('does not show a destructive badge for a non-destructive request', () => {
+    renderGate({ tool: 'shell', danger: 'safe', onDecide: vi.fn() })
+    expect(screen.queryByText('destructive')).not.toBeInTheDocument()
+  })
+
+  it('answers the a/s/d keyboard shortcuts', () => {
+    const onDecide = vi.fn()
+    renderGate({ tool: 'shell', onDecide })
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'a' })
+    expect(onDecide).toHaveBeenCalledWith('once')
+    fireEvent.keyDown(screen.getByRole('region'), { key: 's' })
+    expect(onDecide).toHaveBeenCalledWith('session')
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'd' })
+    expect(onDecide).toHaveBeenCalledWith('deny')
+  })
+
+  it('ignores keyboard shortcuts once answered', () => {
+    const onDecide = vi.fn()
+    renderGate({ tool: 'shell', onDecide, answeredDecision: 'once' })
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'a' })
+    expect(onDecide).not.toHaveBeenCalled()
+  })
 })

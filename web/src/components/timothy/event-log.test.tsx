@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { EventLog, type EventLogRow } from './event-log'
 
@@ -90,5 +90,50 @@ describe('EventLog', () => {
       </TooltipProvider>,
     )
     expect(screen.getByText('1 new')).toBeInTheDocument()
+  })
+
+  it('clicking the "N new" badge jumps to the bottom and resumes following', () => {
+    Element.prototype.scrollTo = vi.fn()
+    const { rerender } = renderLog(
+      <EventLog rows={[row({ id: '1', time: new Date(), title: 'One' })]} />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Pause/ }))
+    rerender(
+      <TooltipProvider>
+        <EventLog
+          rows={[
+            row({ id: '1', time: new Date(), title: 'One' }),
+            row({ id: '2', time: new Date(), title: 'Two' }),
+          ]}
+        />
+      </TooltipProvider>,
+    )
+    const badge = screen.getByRole('button', { name: '1 new' })
+    fireEvent.click(badge)
+    expect(screen.getByRole('button', { name: /Pause/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByText('1 new')).not.toBeInTheDocument()
+  })
+
+  it('pauses following when the user scrolls away from the bottom', () => {
+    renderLog(<EventLog rows={[row({ id: '1', time: new Date(), title: 'One' })]} />)
+    const log = screen.getByRole('log')
+    Object.defineProperty(log, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(log, 'scrollTop', { value: 0, configurable: true })
+    Object.defineProperty(log, 'clientHeight', { value: 200, configurable: true })
+    fireEvent.scroll(log)
+    expect(screen.getByRole('button', { name: /Follow/ })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('calls onFollowChange instead of managing state internally when controlled', () => {
+    const onFollowChange = vi.fn()
+    renderLog(
+      <EventLog
+        rows={[row({ id: '1', time: new Date(), title: 'One' })]}
+        follow={true}
+        onFollowChange={onFollowChange}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Pause/ }))
+    expect(onFollowChange).toHaveBeenCalledWith(false)
   })
 })

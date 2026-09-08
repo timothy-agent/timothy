@@ -35,4 +35,13 @@ describe('FindingsSection', () => {
     expect(screen.getByText('+func handle(r *http.Request) {')).toBeInTheDocument()
     expect(screen.getByText('style nit').closest('li')).toHaveClass('line-through')
   })
+
+  it('labels a finding with no severity as blocking', () => {
+    render(
+      <FindingsSection
+        findings={[{ id: 'F3', unit: 0, title: 'no severity set', file: '', detail: '' }]}
+      />,
+    )
+    expect(screen.getByText('blocking')).toBeInTheDocument()
+  })
 })

@@ -31,6 +31,22 @@ describe('AssistantMessage', () => {
     expect(screen.getByText('world').tagName).toBe('STRONG')
   })
 
+  it('renders a Sources panel with linked citations for a finished answer', () => {
+    const msg = play([
+      {
+        type: 'chunk',
+        text: 'The answer.\n\n## Sources\n1. [Example](https://example.com)\n2. [Other](https://other.com)',
+      },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    expect(screen.getByText('Sources')).toBeInTheDocument()
+    const link = screen.getByRole('link', { name: 'Example' })
+    expect(link).toHaveAttribute('href', 'https://example.com')
+    expect(screen.getByRole('link', { name: 'Other' })).toHaveAttribute('href', 'https://other.com')
+  })
+
   it('shows an Activity button that opens the detail panel', () => {
     const msg = play([
       { type: 'reasoning_chunk', text: 'thinking…' },
@@ -232,6 +248,11 @@ describe('replay-only components', () => {
     render(<ErrorMessage text="context deadline exceeded" onRetry={onRetry} />)
     fireEvent.click(screen.getByTestId('retry-button'))
     expect(onRetry).toHaveBeenCalledOnce()
+  })
+
+  it('falls back to a generic message when the error text is empty', () => {
+    render(<ErrorMessage text="" />)
+    expect(screen.getByTestId('turn-failed')).toHaveTextContent('this turn failed')
   })
 })
 
@@ -713,6 +734,20 @@ describe('UserMessage attachments', () => {
     )
     expect(screen.getByText('quarterly-report.pdf')).toBeInTheDocument()
     expect(screen.getByText('MP3')).toBeInTheDocument()
+  })
+
+  it('renders a distinct chip icon for video and markdown documents', () => {
+    render(
+      <UserMessage
+        text="summarize this"
+        documents={[
+          { id: 'doc-1', mime: 'video/mp4' },
+          { id: 'doc-2', mime: 'text/markdown' },
+        ]}
+      />,
+    )
+    expect(screen.getByText('MP4')).toBeInTheDocument()
+    expect(screen.getByText('MD')).toBeInTheDocument()
   })
 
   it('opens the AttachmentViewer modal when a document chip is clicked', async () => {

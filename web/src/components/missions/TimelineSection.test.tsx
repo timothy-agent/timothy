@@ -74,6 +74,14 @@ describe('TimelineSection', () => {
     render(<TimelineSection events={events} />)
     expect(screen.getByRole('button', { name: 'Scroll to top' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
+
+    const scrollTo = vi.fn()
+    Element.prototype.scrollTo = scrollTo
+    fireEvent.click(screen.getByRole('button', { name: 'Scroll to top' }))
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Scroll to bottom' }))
+    expect(scrollTo).toHaveBeenCalledWith(expect.objectContaining({ behavior: 'smooth' }))
   })
 
   it('excludes executor.progress events from the rendered rows and count', () => {
@@ -247,6 +255,29 @@ describe('TimelineSection tool call trace', () => {
     fireEvent.click(screen.getByText('Shell'))
     expect(screen.queryByText('no hits')).toBeNull()
     expect(screen.queryByText(/score/)).toBeNull()
+  })
+
+  it('shows the singular "1 tool call" label for a turn with exactly one tool call', () => {
+    const oneCall: MissionEvent[] = [
+      {
+        mission_id: 'm1',
+        seq: 1,
+        kind: 'mission.tool_call',
+        payload: { phase: 'generate', tool: 'search_kb', args_digest: '{"query":"first"}', status: 'ok', duration_ms: 12 },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 2,
+        kind: 'mission.turn',
+        payload: { phase: 'generate', duration_ms: 500, ok: true, input: 'worker_done' },
+        provenance: 'harness',
+        created_at: '2026-01-01T00:00:01Z',
+      },
+    ]
+    render(<TimelineSection events={oneCall} />)
+    expect(screen.getByText(/1 tool call$/)).toBeTruthy()
   })
 
   it('shows no tool call count for a turn with no tool calls', () => {
