@@ -385,9 +385,9 @@ export function ProviderAdd() {
                     ) : (
                       <>
                         Uses your Claude Pro/Max subscription. On any machine with Claude Code installed, run{' '}
-                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">claude setup-token</code>,
+                        <code className="rounded-md bg-muted px-1 py-0.5 font-mono text-xs">claude setup-token</code>,
                         approve in the browser, and paste the generated token (starts with{' '}
-                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">sk-ant-oat…</code>). The
+                        <code className="rounded-md bg-muted px-1 py-0.5 font-mono text-xs">sk-ant-oat…</code>). The
                         token is long-lived (~1 year).
                       </>
                     )}

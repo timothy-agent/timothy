@@ -42,6 +42,7 @@ import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Textarea } from '../ui/textarea'
+import { SegmentedControl } from '../timothy/segmented-control'
 import { errText } from '../../lib/errors'
 import { envIcon } from '../icons/EnvIcons'
 import { type PendingAttachment } from '../Composer'
@@ -1116,34 +1117,18 @@ export function MissionForm({
             </p>
           </div>
 
-          <div className="inline-flex rounded-lg bg-muted p-1 text-sm">
-            <button
-              type="button"
-              onClick={() => {
-                setRepoSource('none')
-                setSourceProposed(false)
-              }}
-              aria-pressed={repoSource === 'none'}
-              className={`rounded-md px-3 py-1.5 font-medium transition ${
-                repoSource === 'none' ? 'bg-background shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              None
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setRepoSource('github')
-                setSourceProposed(false)
-              }}
-              aria-pressed={repoSource === 'github'}
-              className={`rounded-md px-3 py-1.5 font-medium transition ${
-                repoSource === 'github' ? 'bg-background shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              GitHub
-            </button>
-          </div>
+          <SegmentedControl
+            aria-label="Repository source"
+            value={repoSource}
+            onChange={(v) => {
+              setRepoSource(v as RepoSource)
+              setSourceProposed(false)
+            }}
+            options={[
+              { value: 'none', label: 'None' },
+              { value: 'github', label: 'GitHub' },
+            ]}
+          />
 
           {proposalNote && (
             <p className="text-xs text-muted-foreground">
@@ -1177,7 +1162,7 @@ export function MissionForm({
           )}
 
           {repoSource === 'github' && (
-            <div className="space-y-3 rounded-lg border border-border p-4">
+            <div className="space-y-3 rounded-md border border-border p-4">
               {githubConnectors === null ? (
                 <p className="text-sm text-muted-foreground">Loading connectors…</p>
               ) : githubConnectors.length === 0 ? (
@@ -1283,34 +1268,22 @@ export function MissionForm({
         </div>
 
         {mode === 'create' && (
-          <div className="inline-flex rounded-lg bg-muted p-1 text-sm">
-            <button
-              type="button"
-              onClick={() => setRepeat(false)}
-              aria-pressed={!repeat}
-              className={`rounded-md px-3 py-1.5 font-medium transition ${
-                !repeat ? 'bg-background shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              Run once
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setRepeat(true)
-                if (kind === 'coding') {
-                  setKind('general')
-                  setKindLocked(true)
-                }
-              }}
-              aria-pressed={repeat}
-              className={`rounded-md px-3 py-1.5 font-medium transition ${
-                repeat ? 'bg-background shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              Repeat on schedule
-            </button>
-          </div>
+          <SegmentedControl
+            aria-label="Schedule"
+            value={repeat ? 'repeat' : 'once'}
+            onChange={(v) => {
+              const next = v === 'repeat'
+              setRepeat(next)
+              if (next && kind === 'coding') {
+                setKind('general')
+                setKindLocked(true)
+              }
+            }}
+            options={[
+              { value: 'once', label: 'Run once' },
+              { value: 'repeat', label: 'Repeat on schedule' },
+            ]}
+          />
         )}
 
         {repeat && (
@@ -1537,7 +1510,7 @@ export function MissionForm({
             <p className="text-xs text-muted-foreground">
               Where this mission's result is delivered or pushed when it finishes.
             </p>
-            <div className="space-y-3 rounded-xl border border-border p-3">
+            <div className="space-y-3 rounded-md border border-border p-3">
               <div className="space-y-1.5">
                 {destinations.map((d) => (
                   <div key={d.id}>
@@ -1647,7 +1620,7 @@ export function MissionForm({
             {showAdvanced ? 'Hide advanced options' : 'Show advanced options'}
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <div className="mt-3 grid gap-4 rounded-lg border border-border p-4 sm:grid-cols-2">
+            <div className="mt-3 grid gap-4 rounded-md border border-border p-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="mission-route">Route</Label>
                 {routes === null ? (

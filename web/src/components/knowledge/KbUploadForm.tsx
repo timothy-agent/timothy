@@ -95,7 +95,7 @@ export function KbUploadForm({
           const files = [...e.dataTransfer.files]
           if (files.length > 0) void uploadFiles(files)
         }}
-        className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border p-6 text-center"
+        className="flex flex-col items-center gap-2 rounded-md border border-dashed border-border p-6 text-center"
       >
         <input
           ref={inputRef}

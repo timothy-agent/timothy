@@ -34,6 +34,12 @@ import type {
 import { estimateUnpriced, totalEstimate } from '../lib/costEstimate'
 import { compact, formatDuration, money } from '../lib/format'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
+import { PageShell } from '../components/timothy/page-shell'
+import { PageHeader } from '../components/timothy/page-header'
+import { Panel } from '../components/timothy/panel'
+import { SegmentedControl } from '../components/timothy/segmented-control'
+import { Alert, AlertDescription } from '../components/ui/alert'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 
 const ranges = [
   { key: 'today', label: 'Today', days: 0, bucket: 'hour' as const },
@@ -172,28 +178,18 @@ const bucketLabel = (iso: string, bucket: string) => {
 // panels — a compact segmented control matching the range picker's style.
 type ChartView = 'bars' | 'lines'
 
-function ViewToggle({ view, onChange }: { view: ChartView; onChange: (v: ChartView) => void }) {
-  const options: { key: ChartView; label: string }[] = [
-    { key: 'bars', label: 'Bars' },
-    { key: 'lines', label: 'Lines' },
-  ]
+function ViewToggle({ view, onChange, title }: { view: ChartView; onChange: (v: ChartView) => void; title: string }) {
   return (
-    <div className="flex rounded-lg border border-border p-0.5">
-      {options.map((o) => (
-        <button
-          key={o.key}
-          type="button"
-          onClick={() => onChange(o.key)}
-          className={
-            view === o.key
-              ? 'rounded-md bg-zinc-200/80 px-2 py-0.5 text-xs font-medium dark:bg-zinc-800'
-              : 'rounded-md px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground'
-          }
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      size="sm"
+      aria-label={`${title} view`}
+      value={view}
+      onChange={(v) => onChange(v as ChartView)}
+      options={[
+        { value: 'bars', label: 'Bars' },
+        { value: 'lines', label: 'Lines' },
+      ]}
+    />
   )
 }
 
@@ -443,44 +439,29 @@ export function Analytics() {
   const monthGauge = budget?.month.limit != null ? budget.month : null
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-full px-8 py-8">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Analytics</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Spend, tokens, and latency from the cost ledger.
-            </p>
-          </div>
-          <div className="flex rounded-lg border border-border p-0.5">
-            {ranges.map((r) => (
-              <button
-                key={r.key}
-                type="button"
-                onClick={() => setRange(r.key)}
-                className={
-                  range === r.key
-                    ? 'rounded-md bg-zinc-200/80 px-3 py-1 text-sm font-medium dark:bg-zinc-800'
-                    : 'rounded-md px-3 py-1 text-sm text-muted-foreground hover:text-foreground'
-                }
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
-        </div>
+    <PageShell>
+      <PageHeader
+        title="Analytics"
+        description="Spend, tokens, and latency from the cost ledger."
+        actions={
+          <SegmentedControl
+            aria-label="Range"
+            value={range}
+            onChange={setRange}
+            options={ranges.map((r) => ({ value: r.key, label: r.label }))}
+          />
+        }
+      />
 
-        {error && (
-          <div className="mt-6 rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-600 dark:text-red-400">
-            Could not load usage: {error}
-          </div>
-        )}
+      {error && (
+        <Alert tone="destructive" className="mb-6">
+          <AlertDescription>Could not load usage: {error}</AlertDescription>
+        </Alert>
+      )}
 
-        {budget && (budget.day.over || budget.month.over) && (
-          <div
-            role="alert"
-            className="mt-6 rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-400"
-          >
+      {budget && (budget.day.over || budget.month.over) && (
+        <Alert tone="warning" role="alert" className="mb-6">
+          <AlertDescription>
             {[
               budget.day.over && budget.day.limit != null
                 ? `Daily budget reached: ${money(budget.day.spend, budget.day.currency)} spent of ${money(budget.day.limit.amount, budget.day.limit.currency)}.`
@@ -491,270 +472,250 @@ export function Analytics() {
             ]
               .filter(Boolean)
               .join(' ')}
-          </div>
-        )}
+          </AlertDescription>
+        </Alert>
+      )}
 
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-          {tiles.map((t) => (
-            <div key={t.label} className="rounded-xl border border-border p-4">
-              <div className="text-xs text-muted-foreground">{t.label}</div>
-              <div className="mt-1.5 text-2xl font-semibold tracking-tight">
-                {t.value}
-                {'annotation' in t && t.annotation && (
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">
-                          +{t.annotation}
-                        </span>
-                      </TooltipTrigger>
-                      <TooltipContent>unbilled</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                )}
-              </div>
-              {t.hint && <div className="mt-0.5 text-xs text-muted-foreground">{t.hint}</div>}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+        {tiles.map((t) => (
+          <Panel key={t.label}>
+            <div className="text-xs text-muted-foreground">{t.label}</div>
+            <div className="mt-1.5 text-2xl font-semibold tracking-tight">
+              {t.value}
+              {'annotation' in t && t.annotation && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+                        +{t.annotation}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>unbilled</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
             </div>
-          ))}
-        </div>
+            {t.hint && <div className="mt-0.5 text-xs text-muted-foreground">{t.hint}</div>}
+          </Panel>
+        ))}
+      </div>
 
-        {otherSummaries.length > 0 && (
-          <p className="mt-3 text-xs text-muted-foreground">
-            Also in range:{' '}
-            {otherSummaries.map((o) => primaryMoney(o, o.cost)).join(', ')} (shown separately —
-            never summed with the totals above).
-          </p>
-        )}
+      {otherSummaries.length > 0 && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Also in range:{' '}
+          {otherSummaries.map((o) => primaryMoney(o, o.cost)).join(', ')} (shown separately —
+          never summed with the totals above).
+        </p>
+      )}
 
-        {s && s.unpriced_requests > 0 && (
-          <p className="mt-3 text-xs text-muted-foreground">
-            {compact(s.unpriced_requests)} call{s.unpriced_requests === 1 ? '' : 's'} in range
-            {' '}had no configured price and are excluded from spend
-            {estimatedTotal > 0 && <>, roughly ≈{money(estimatedTotal)} at catalog prices</>}.
-          </p>
-        )}
+      {s && s.unpriced_requests > 0 && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          {compact(s.unpriced_requests)} call{s.unpriced_requests === 1 ? '' : 's'} in range
+          {' '}had no configured price and are excluded from spend
+          {estimatedTotal > 0 && <>, roughly ≈{money(estimatedTotal)} at catalog prices</>}.
+        </p>
+      )}
 
-        <section className="mt-6 rounded-xl border border-border p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Spend by provider</h2>
-            <ViewToggle view={costView} onChange={setCostView} />
-          </div>
-          <div className="mt-3">
-            <EChart
-              option={(costView === 'bars' ? stackedBarsOption : multiLineOption)(
-                cost.rows,
-                cost.groups,
-                costLegend.hidden,
-                (g) => colorOf(g, cost.groups),
-                (v) => bucketLabel(v, bucket),
-                chartMoney,
-              )}
-            />
-          </div>
-          <StatsLegend
-            rows={cost.rows}
-            groups={cost.groups}
-            colorOf={(g) => colorOf(g, cost.groups)}
-            hidden={costLegend.hidden}
-            onSelect={costLegend.onSelect}
-            valueLabel={chartMoney}
-          />
-        </section>
-
-        <section className="mt-6 rounded-xl border border-border p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Spend by model</h2>
-            <ViewToggle view={modelCostView} onChange={setModelCostView} />
-          </div>
-          <div className="mt-3">
-            <EChart
-              option={(modelCostView === 'bars' ? stackedBarsOption : multiLineOption)(
-                modelCost.rows,
-                modelCost.groups,
-                modelCostLegend.hidden,
-                (g) => colorOf(g, modelCost.groups),
-                (v) => bucketLabel(v, bucket),
-                chartMoney,
-              )}
-            />
-          </div>
-          <StatsLegend
-            rows={modelCost.rows}
-            groups={modelCost.groups}
-            colorOf={(g) => colorOf(g, modelCost.groups)}
-            hidden={modelCostLegend.hidden}
-            onSelect={modelCostLegend.onSelect}
-            valueLabel={chartMoney}
-          />
-          {modelCost.groups.length === 0 && data && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              No priced model usage in range (free/unpriced models are excluded from cost views).
-            </p>
+      <Panel
+        className="mt-6"
+        title="Spend by provider"
+        actions={<ViewToggle view={costView} onChange={setCostView} title="Spend by provider" />}
+      >
+        <EChart
+          option={(costView === 'bars' ? stackedBarsOption : multiLineOption)(
+            cost.rows,
+            cost.groups,
+            costLegend.hidden,
+            (g) => colorOf(g, cost.groups),
+            (v) => bucketLabel(v, bucket),
+            chartMoney,
           )}
-        </section>
+        />
+        <StatsLegend
+          rows={cost.rows}
+          groups={cost.groups}
+          colorOf={(g) => colorOf(g, cost.groups)}
+          hidden={costLegend.hidden}
+          onSelect={costLegend.onSelect}
+          valueLabel={chartMoney}
+        />
+      </Panel>
 
-        <section className="mt-6 rounded-xl border border-border p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Tokens per model</h2>
-            <ViewToggle view={modelTokensView} onChange={setModelTokensView} />
-          </div>
-          <div className="mt-3">
-            <EChart
-              option={(modelTokensView === 'bars' ? stackedBarsOption : multiLineOption)(
-                modelTokens.rows,
-                modelTokens.groups,
-                modelTokensLegend.hidden,
-                (g) => colorOf(g, modelTokens.groups),
-                (v) => bucketLabel(v, bucket),
-                compact,
-              )}
-            />
-          </div>
-          <StatsLegend
-            rows={modelTokens.rows}
-            groups={modelTokens.groups}
-            colorOf={(g) => colorOf(g, modelTokens.groups)}
-            hidden={modelTokensLegend.hidden}
-            onSelect={modelTokensLegend.onSelect}
-            valueLabel={compact}
-          />
-        </section>
+      <Panel
+        className="mt-6"
+        title="Spend by model"
+        actions={<ViewToggle view={modelCostView} onChange={setModelCostView} title="Spend by model" />}
+      >
+        <EChart
+          option={(modelCostView === 'bars' ? stackedBarsOption : multiLineOption)(
+            modelCost.rows,
+            modelCost.groups,
+            modelCostLegend.hidden,
+            (g) => colorOf(g, modelCost.groups),
+            (v) => bucketLabel(v, bucket),
+            chartMoney,
+          )}
+        />
+        <StatsLegend
+          rows={modelCost.rows}
+          groups={modelCost.groups}
+          colorOf={(g) => colorOf(g, modelCost.groups)}
+          hidden={modelCostLegend.hidden}
+          onSelect={modelCostLegend.onSelect}
+          valueLabel={chartMoney}
+        />
+        {modelCost.groups.length === 0 && data && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            No priced model usage in range (free/unpriced models are excluded from cost views).
+          </p>
+        )}
+      </Panel>
 
-        <section className="mt-6 rounded-xl border border-border p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-medium">Tokens consumption</h2>
-            <ViewToggle view={tokensView} onChange={setTokensView} />
-          </div>
-          <div className="mt-3">
-            <EChart
-              option={(tokensView === 'bars' ? stackedBarsOption : areaLinesOption)(
-                tokens as unknown as Record<string, number | string>[],
-                ['input', 'output'],
-                tokensLegend.hidden,
-                (g) => (g === 'input' ? palette[0] : palette[2]),
-                (v) => bucketLabel(v, bucket),
-                compact,
-              )}
-            />
-          </div>
-          <StatsLegend
-            rows={tokens as unknown as Record<string, number | string>[]}
-            groups={['input', 'output']}
-            colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
-            hidden={tokensLegend.hidden}
-            onSelect={tokensLegend.onSelect}
-            valueLabel={compact}
-          />
-        </section>
+      <Panel
+        className="mt-6"
+        title="Tokens per model"
+        actions={<ViewToggle view={modelTokensView} onChange={setModelTokensView} title="Tokens per model" />}
+      >
+        <EChart
+          option={(modelTokensView === 'bars' ? stackedBarsOption : multiLineOption)(
+            modelTokens.rows,
+            modelTokens.groups,
+            modelTokensLegend.hidden,
+            (g) => colorOf(g, modelTokens.groups),
+            (v) => bucketLabel(v, bucket),
+            compact,
+          )}
+        />
+        <StatsLegend
+          rows={modelTokens.rows}
+          groups={modelTokens.groups}
+          colorOf={(g) => colorOf(g, modelTokens.groups)}
+          hidden={modelTokensLegend.hidden}
+          onSelect={modelTokensLegend.onSelect}
+          valueLabel={compact}
+        />
+      </Panel>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <section className="flex flex-col rounded-xl border border-border p-4">
-            <h2 className="text-sm font-medium">Latency per provider</h2>
-            {data && data.latency.length > 0 ? (
-              <div className="mt-3 min-h-[240px] flex-1">
-                <EChart
-                  fill
-                  option={latencyBarsOption(
-                    data.latency,
-                    { p50: '#2a78d6', p95: '#eda100', p99: '#e34948' },
-                    (ms) => formatDuration(Math.round(ms)),
-                  )}
-                />
-              </div>
-            ) : (
-              <p className="mt-3 py-6 text-center text-sm text-muted-foreground">No requests in range.</p>
-            )}
-          </section>
+      <Panel
+        className="mt-6"
+        title="Tokens consumption"
+        actions={<ViewToggle view={tokensView} onChange={setTokensView} title="Tokens consumption" />}
+      >
+        <EChart
+          option={(tokensView === 'bars' ? stackedBarsOption : areaLinesOption)(
+            tokens as unknown as Record<string, number | string>[],
+            ['input', 'output'],
+            tokensLegend.hidden,
+            (g) => (g === 'input' ? palette[0] : palette[2]),
+            (v) => bucketLabel(v, bucket),
+            compact,
+          )}
+        />
+        <StatsLegend
+          rows={tokens as unknown as Record<string, number | string>[]}
+          groups={['input', 'output']}
+          colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
+          hidden={tokensLegend.hidden}
+          onSelect={tokensLegend.onSelect}
+          valueLabel={compact}
+        />
+      </Panel>
 
-          <section className="flex flex-col rounded-xl border border-border p-4">
-            <h2 className="text-sm font-medium">Spend share by provider</h2>
-            <div className="mt-3 min-h-[240px] flex-1">
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <Panel title="Latency per provider" className="flex flex-col">
+          {data && data.latency.length > 0 ? (
+            <div className="min-h-[240px] flex-1">
               <EChart
                 fill
-                option={donutOption(
-                  // Converted-first, same as the bar chart's chartCost:
-                  // slices plot the default-currency figure when a rate
-                  // exists; a slice with no stored rate keeps its raw
-                  // amount and labels it in its OWN currency (D-013:
-                  // never mislabel one currency's amount as another's).
-                  (data?.providerTotals ?? [])
-                    .filter((g) => (g.converted_amount ?? g.cost) > 0)
-                    .map((g) => ({
-                      group: g.group,
-                      cost: g.converted_amount ?? g.cost,
-                      label: money(g.converted_amount ?? g.cost, g.converted_currency ?? g.currency),
-                    })),
-                  (g) => colorOf(g, cost.groups),
-                  chartMoney,
+                option={latencyBarsOption(
+                  data.latency,
+                  { p50: '#2a78d6', p95: '#eda100', p99: '#e34948' },
+                  (ms) => formatDuration(Math.round(ms)),
                 )}
               />
             </div>
-            {pricedProviders.size === 0 && data && (
-              <p className="mt-2 text-xs text-muted-foreground">No priced spend in range.</p>
-            )}
-          </section>
-        </div>
+          ) : (
+            <p className="py-6 text-center text-sm text-muted-foreground">No requests in range.</p>
+          )}
+        </Panel>
 
-        <section className="mt-6 rounded-xl border border-border p-4">
-          <h2 className="text-sm font-medium">Requests &amp; error rate</h2>
-          <div className="mt-3">
+        <Panel title="Spend share by provider" className="flex flex-col">
+          <div className="min-h-[240px] flex-1">
             <EChart
-              option={requestsErrorsOption(
-                requestsErrors,
-                (v) => bucketLabel(v, bucket),
-                palette[0],
-                palette[7],
+              fill
+              option={donutOption(
+                // Converted-first, same as the bar chart's chartCost:
+                // slices plot the default-currency figure when a rate
+                // exists; a slice with no stored rate keeps its raw
+                // amount and labels it in its OWN currency (D-013:
+                // never mislabel one currency's amount as another's).
+                (data?.providerTotals ?? [])
+                  .filter((g) => (g.converted_amount ?? g.cost) > 0)
+                  .map((g) => ({
+                    group: g.group,
+                    cost: g.converted_amount ?? g.cost,
+                    label: money(g.converted_amount ?? g.cost, g.converted_currency ?? g.currency),
+                  })),
+                (g) => colorOf(g, cost.groups),
+                chartMoney,
               )}
             />
           </div>
-        </section>
-
-        {(dayGauge || monthGauge) && (
-          <div className="mt-6 grid gap-6 sm:grid-cols-2">
-            {dayGauge && dayGauge.limit && (
-              <section className="rounded-xl border border-border p-4">
-                <h2 className="text-sm font-medium">Daily budget</h2>
-                <div className="mt-3">
-                  <EChart
-                    option={gaugeOption(
-                      dayGauge.spend,
-                      dayGauge.limit.amount,
-                      '#1baf7a',
-                      '#e34948',
-                      (v) => money(v, dayGauge.limit!.currency),
-                    )}
-                    height={200}
-                  />
-                </div>
-              </section>
-            )}
-            {monthGauge && monthGauge.limit && (
-              <section className="rounded-xl border border-border p-4">
-                <h2 className="text-sm font-medium">Monthly budget</h2>
-                <div className="mt-3">
-                  <EChart
-                    option={gaugeOption(
-                      monthGauge.spend,
-                      monthGauge.limit.amount,
-                      '#1baf7a',
-                      '#e34948',
-                      (v) => money(v, monthGauge.limit!.currency),
-                    )}
-                    height={200}
-                  />
-                </div>
-              </section>
-            )}
-          </div>
-        )}
-
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <ProviderCostTable rows={data?.providerTotals ?? []} />
-          <BreakdownTable title="Cost breakdown by model" rows={data ? totals(data.byModel) : []} estimates={estimates} />
-        </div>
-
+          {pricedProviders.size === 0 && data && (
+            <p className="mt-2 text-xs text-muted-foreground">No priced spend in range.</p>
+          )}
+        </Panel>
       </div>
-    </div>
+
+      <Panel className="mt-6" title="Requests & error rate">
+        <EChart
+          option={requestsErrorsOption(
+            requestsErrors,
+            (v) => bucketLabel(v, bucket),
+            palette[0],
+            palette[7],
+          )}
+        />
+      </Panel>
+
+      {(dayGauge || monthGauge) && (
+        <div className="mt-6 grid gap-6 sm:grid-cols-2">
+          {dayGauge && dayGauge.limit && (
+            <Panel title="Daily budget">
+              <EChart
+                option={gaugeOption(
+                  dayGauge.spend,
+                  dayGauge.limit.amount,
+                  '#1baf7a',
+                  '#e34948',
+                  (v) => money(v, dayGauge.limit!.currency),
+                )}
+                height={200}
+              />
+            </Panel>
+          )}
+          {monthGauge && monthGauge.limit && (
+            <Panel title="Monthly budget">
+              <EChart
+                option={gaugeOption(
+                  monthGauge.spend,
+                  monthGauge.limit.amount,
+                  '#1baf7a',
+                  '#e34948',
+                  (v) => money(v, monthGauge.limit!.currency),
+                )}
+                height={200}
+              />
+            </Panel>
+          )}
+        </div>
+      )}
+
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <ProviderCostTable rows={data?.providerTotals ?? []} />
+        <BreakdownTable title="Cost breakdown by model" rows={data ? totals(data.byModel) : []} estimates={estimates} />
+      </div>
+    </PageShell>
   )
 }
 
@@ -768,15 +729,14 @@ function BreakdownTable({
   estimates?: Map<string, number>
 }) {
   return (
-    <section className="rounded-xl border border-border p-4">
-      <h2 className="text-sm font-medium">{title}</h2>
-      <table className="mt-3 w-full text-sm">
-        <tbody>
+    <Panel title={title} density="operational">
+      <Table>
+        <TableBody>
           {rows.map((t) => (
-            <tr key={`${t.group} ${t.currency}`} className="border-t border-border/60">
-              <td className="max-w-36 truncate py-2 pr-2">{t.group}</td>
-              <td className="py-2 text-right text-muted-foreground">{compact(t.tokens)} tok</td>
-              <td className="py-2 text-right font-medium">
+            <TableRow key={`${t.group} ${t.currency}`}>
+              <TableCell className="max-w-36 truncate">{t.group}</TableCell>
+              <TableCell numeric className="text-muted-foreground">{compact(t.tokens)} tok</TableCell>
+              <TableCell numeric className="font-medium">
                 {primaryMoney(t, t.cost)}
                 {secondaryMoney(t, t.cost) && (
                   <span className="ml-1 text-xs font-normal text-muted-foreground">
@@ -791,17 +751,17 @@ function BreakdownTable({
                     +≈{money(estimates?.get(t.group) ?? 0, t.currency)}
                   </span>
                 )}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
           {rows.length === 0 && (
-            <tr>
-              <td className="py-6 text-center text-muted-foreground">Nothing in range.</td>
-            </tr>
+            <TableRow>
+              <TableCell className="py-6 text-center text-muted-foreground">Nothing in range.</TableCell>
+            </TableRow>
           )}
-        </tbody>
-      </table>
-    </section>
+        </TableBody>
+      </Table>
+    </Panel>
   )
 }
 
@@ -845,56 +805,49 @@ function ProviderCostTable({ rows }: { rows: GroupTotal[] }) {
   const sortIndicator = (key: SortKey) => (sortKey === key ? (asc ? ' ▲' : ' ▼') : '')
 
   return (
-    <section className="rounded-xl border border-border p-4">
-      <h2 className="text-sm font-medium">Cost breakdown by provider</h2>
-      <table className="mt-3 w-full text-sm">
-        <thead>
-          <tr className="text-left text-xs text-muted-foreground">
-            <th className="cursor-pointer pb-2 font-medium" onClick={() => toggleSort('group')}>
+    <Panel title="Cost breakdown by provider" density="operational">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="cursor-pointer" onClick={() => toggleSort('group')}>
               Provider{sortIndicator('group')}
-            </th>
-            <th
-              className="cursor-pointer pb-2 text-right font-medium"
-              onClick={() => toggleSort('requests')}
-            >
+            </TableHead>
+            <TableHead numeric className="cursor-pointer" onClick={() => toggleSort('requests')}>
               Requests{sortIndicator('requests')}
-            </th>
-            <th
-              className="cursor-pointer pb-2 text-right font-medium"
-              onClick={() => toggleSort('cost')}
-            >
+            </TableHead>
+            <TableHead numeric className="cursor-pointer" onClick={() => toggleSort('cost')}>
               Cost{sortIndicator('cost')}
-            </th>
-            <th className="pb-2 text-right font-medium">% of total</th>
-          </tr>
-        </thead>
-        <tbody>
+            </TableHead>
+            <TableHead numeric>% of total</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {sorted.map((r) => (
-            <tr key={r.group} className="border-t border-border/60">
-              <td className="max-w-28 truncate py-2 pr-2">{r.group}</td>
-              <td className="py-2 text-right text-muted-foreground">{compact(r.requests)}</td>
-              <td className="py-2 text-right font-medium">
+            <TableRow key={r.group}>
+              <TableCell className="max-w-28 truncate">{r.group}</TableCell>
+              <TableCell numeric className="text-muted-foreground">{compact(r.requests)}</TableCell>
+              <TableCell numeric className="font-medium">
                 {primaryMoney(r, r.cost)}
                 {secondaryMoney(r, r.cost) && (
                   <span className="ml-1 text-xs font-normal text-muted-foreground">
                     ({secondaryMoney(r, r.cost)})
                   </span>
                 )}
-              </td>
-              <td className="py-2 text-right text-muted-foreground">
+              </TableCell>
+              <TableCell numeric className="text-muted-foreground">
                 {totalCost > 0 ? `${((r.cost / totalCost) * 100).toFixed(0)}%` : 'N/A'}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
           {sorted.length === 0 && (
-            <tr>
-              <td colSpan={4} className="py-6 text-center text-muted-foreground">
+            <TableRow>
+              <TableCell colSpan={4} className="py-6 text-center text-muted-foreground">
                 Nothing in range.
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           )}
-        </tbody>
-      </table>
-    </section>
+        </TableBody>
+      </Table>
+    </Panel>
   )
 }

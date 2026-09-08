@@ -20,11 +20,14 @@ vi.mock('../api/client', () => ({
   deleteKbDocument: vi.fn(),
   reingestKbDocument: vi.fn(),
   addKbDocumentFromUrl: vi.fn(),
+  uploadKbDocumentAuto: vi.fn(),
+  addKbDocumentFromUrlAuto: vi.fn(),
 }))
 
 import {
   addKbDocumentFromUrl,
   createKbCollection,
+  deleteKbCollection,
   deleteKbDocument,
   getKbCollection,
   listKbCollections,
@@ -111,7 +114,7 @@ describe('Knowledge page', () => {
         retrieval_weight: 1,
       }),
     )
-    expect(await screen.findByText('Scalability')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Scalability' })).toBeInTheDocument()
   })
 
   it('renders the page header and collections with doc and chunk counts', async () => {
@@ -140,6 +143,37 @@ describe('Knowledge page', () => {
     renderPage()
     expect(await screen.findByText(/No collections yet/)).toBeTruthy()
     expect(screen.getAllByRole('button', { name: 'New collection' }).length).toBeGreaterThan(0)
+  })
+
+  it('navigates to the auto-add page from the "Add to Knowledgebase" header action', async () => {
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: /Add to Knowledgebase/ }))
+    expect(await screen.findByRole('heading', { name: 'Add to Knowledgebase' })).toBeTruthy()
+  })
+
+  it('navigates to the create-collection page from the empty state\'s "New collection" button', async () => {
+    vi.mocked(listKbCollections).mockResolvedValue([])
+    renderPage()
+    const buttons = await screen.findAllByRole('button', { name: 'New collection' })
+    // Both the header action and the empty-state action render "New collection";
+    // the empty state's is the last one in document order.
+    fireEvent.click(buttons[buttons.length - 1])
+    expect(await screen.findByRole('heading', { name: 'New collection' })).toBeTruthy()
+  })
+
+  it('navigates to a collection\'s detail page when its card is clicked', async () => {
+    vi.mocked(getKbCollection).mockResolvedValue(productDocs)
+    vi.mocked(listKbDocuments).mockResolvedValue([])
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'product-docs' }))
+    expect(await screen.findByRole('heading', { name: 'product-docs' })).toBeTruthy()
+  })
+
+  it('uses singular "doc"/"chunk" for a count of exactly one', async () => {
+    vi.mocked(listKbCollections).mockResolvedValue([{ ...productDocs, doc_count: 1, chunk_count: 1 }])
+    renderPage()
+    expect(await screen.findByText(/1 doc · 1 chunk/)).toBeTruthy()
+    expect(screen.queryByText(/1 docs/)).toBeNull()
   })
 
   it('creates a collection and navigates to its detail page', async () => {
@@ -178,7 +212,7 @@ describe('Knowledge page', () => {
     it('shows the error as a tooltip on a failed document', async () => {
       renderPage('/knowledge/c1')
       await screen.findByText('broken.docx')
-      expect(screen.getByText('failed').closest('span')).toHaveAttribute('title', 'unsupported encoding')
+      expect(screen.getAllByTitle('unsupported encoding').length).toBeGreaterThan(0)
     })
 
     it('uploads a file via the input and adds it to the document list', async () => {
@@ -274,6 +308,32 @@ describe('Knowledge page', () => {
       fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
 
       await waitFor(() => expect(deleteKbDocument).toHaveBeenCalledWith('d1'))
+    })
+
+    it('deletes the collection after confirmation and navigates back to the list', async () => {
+      vi.mocked(deleteKbCollection).mockResolvedValue()
+      renderPage('/knowledge/c1')
+      await screen.findByText('onboarding.pdf')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Delete collection' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+      await waitFor(() => expect(deleteKbCollection).toHaveBeenCalledWith('c1'))
+      expect(await screen.findByText(/No collections yet|product-docs/)).toBeTruthy()
+    })
+
+    it('prefills the rename form with an empty description and default weight when unset', async () => {
+      vi.mocked(getKbCollection).mockResolvedValue({
+        ...productDocs,
+        description: null,
+        retrieval_weight: null,
+      } as unknown as KbCollection)
+      renderPage('/knowledge/c1')
+
+      fireEvent.click(await screen.findByRole('button', { name: /Rename/ }))
+      const descInput = await screen.findByLabelText('Collection description')
+      expect(descInput).toHaveValue('')
+      expect(await screen.findByLabelText('Retrieval weight')).toHaveValue(1)
     })
   })
 })

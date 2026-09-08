@@ -142,7 +142,7 @@ export function AttachmentViewer({
             </DialogClose>
           </div>
         </div>
-        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-zinc-950/2 dark:bg-black/40">
+        <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/40">
           {failed && (
             <div className="flex flex-col items-center gap-2 text-muted-foreground">
               <HugeiconsIcon icon={ImageNotFound01Icon} className="size-8" />

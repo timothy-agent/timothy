@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BudgetStatus, GroupTotal, UsagePoint, UsageSummary } from '../api/types'
 import { Analytics, sortGroupsByTotal } from './Analytics'
 import * as echartsCore from 'echarts/core'
+import { formatDuration } from '../lib/format'
 
 vi.mock('../api/client', () => ({
   catalogPrices: vi.fn(),
@@ -137,9 +138,11 @@ describe('Analytics budget alert', () => {
   it('stays silent when the budget endpoint fails', async () => {
     vi.mocked(usageBudget).mockRejectedValue(new Error('gateway down'))
     renderPage()
-    // The shared widget-failure note appears; no budget banner.
-    await screen.findByText(/widgets failed to load/)
-    expect(screen.queryByRole('alert')).toBeNull()
+    // The shared widget-failure note appears as its own destructive
+    // alert; no separate budget banner.
+    const failureAlert = await screen.findByRole('alert')
+    expect(failureAlert).toHaveTextContent(/widgets failed to load/)
+    expect(screen.queryByText(/budget reached/)).toBeNull()
   })
 })
 
@@ -153,6 +156,22 @@ describe('Analytics spend tile', () => {
 
     fireEvent.click(screen.getByText('30 days'))
     await waitFor(() => expect(screen.getByText('Spend this month')).toBeInTheDocument())
+  })
+})
+
+describe('Analytics segmented controls', () => {
+  it('renders the range picker as a radiogroup with an aria-label', async () => {
+    renderPage()
+    const group = await screen.findByRole('radiogroup', { name: 'Range' })
+    expect(within(group).getByRole('radio', { name: 'Today' })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: '7 days' })).toBeInTheDocument()
+  })
+
+  it('renders each chart view toggle as a radiogroup with a per-chart aria-label', async () => {
+    renderPage()
+    const group = await screen.findByRole('radiogroup', { name: 'Spend by provider view' })
+    expect(within(group).getByRole('radio', { name: 'Bars' })).toBeInTheDocument()
+    expect(within(group).getByRole('radio', { name: 'Lines' })).toBeInTheDocument()
   })
 })
 
@@ -301,7 +320,7 @@ describe('Analytics chart legend selection', () => {
     )
     renderPage()
 
-    const chart = (await screen.findByText('Spend by provider')).closest('section')
+    const chart = (await screen.findByText('Spend by provider')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     // StatsLegend renders the series name as a plain text node with no
     // className, distinct from the "By provider"-style breakdown table
@@ -323,7 +342,7 @@ describe('Analytics chart legend selection', () => {
 
   it('ctrl-click toggles just that entry, independent of other legends', async () => {
     renderPage()
-    const chart = (await screen.findByText('Tokens consumption')).closest('section')
+    const chart = (await screen.findByText('Tokens consumption')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     const inputEntry = (await within(chart).findAllByText('input')).find((el) => el.className === '')
     if (!inputEntry) throw new Error('legend entry not found')
@@ -347,7 +366,7 @@ describe('Analytics chart legend selection', () => {
 // its most recently applied option — several charts render on the
 // page, each with its own init() call/instance.
 async function findChartOptionGetter(section: HTMLElement) {
-  const chartDiv = section.querySelector('.mt-3 > div')
+  const chartDiv = section.querySelector('div[style*="width"]')
   if (!chartDiv) throw new Error('chart container not found')
   const initMock = vi.mocked(echartsCore.init)
   await waitFor(() => expect(initMock.mock.calls.some((c) => c[0] === chartDiv)).toBe(true))
@@ -365,7 +384,7 @@ describe('Analytics bars/lines view toggle', () => {
       group === 'provider' ? [providerTotal] : [],
     )
     renderPage()
-    const chart = (await screen.findByText('Spend by provider')).closest('section')
+    const chart = (await screen.findByText('Spend by provider')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     const lastOption = await findChartOptionGetter(chart)
     await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
@@ -376,7 +395,7 @@ describe('Analytics bars/lines view toggle', () => {
 
   it('defaults to lines and switches the tokens-in/out chart to bars on click', async () => {
     renderPage()
-    const chart = (await screen.findByText('Tokens consumption')).closest('section')
+    const chart = (await screen.findByText('Tokens consumption')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     const lastOption = await findChartOptionGetter(chart)
     await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
@@ -390,7 +409,7 @@ describe('Analytics bars/lines view toggle', () => {
       group === 'model' ? [{ ...providerPoint, group: 'gpt-5.6-sol' }] : [],
     )
     renderPage()
-    const chart = (await screen.findByText('Tokens per model')).closest('section')
+    const chart = (await screen.findByText('Tokens per model')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     const lastOption = await findChartOptionGetter(chart)
     await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
@@ -401,7 +420,7 @@ describe('Analytics bars/lines view toggle', () => {
 
   it('has no toggle on the requests & errors panel', async () => {
     renderPage()
-    const chart = (await screen.findByText('Requests & error rate')).closest('section')
+    const chart = (await screen.findByText('Requests & error rate')).closest('[data-density]') as HTMLElement | null
     if (!chart) throw new Error('chart section not found')
     expect(within(chart).queryByText('Bars')).toBeNull()
     expect(within(chart).queryByText('Lines')).toBeNull()
@@ -465,14 +484,14 @@ describe('Analytics zero-cost exclusion', () => {
     )
     renderPage()
 
-    const providerTable = (await screen.findByText('Cost breakdown by provider')).closest('section')
+    const providerTable = (await screen.findByText('Cost breakdown by provider')).closest('[data-density]') as HTMLElement | null
     if (!providerTable) throw new Error('provider cost table not found')
     expect(await within(providerTable).findByText('openai')).toBeInTheDocument()
     expect(within(providerTable).queryByText('local-llama')).toBeNull()
 
     // Same model, token-consumption chart: the free model's volume is
     // exactly the signal this chart exists to show, so it must render.
-    const tokenChart = (await screen.findByText('Tokens per model')).closest('section')
+    const tokenChart = (await screen.findByText('Tokens per model')).closest('[data-density]') as HTMLElement | null
     if (!tokenChart) throw new Error('token chart section not found')
     expect(await within(tokenChart).findByText('local-llama')).toBeInTheDocument()
   })
@@ -486,9 +505,153 @@ describe('Analytics zero-cost exclusion', () => {
     )
     renderPage()
 
-    const modelCostChart = (await screen.findByText('Spend by model')).closest('section')
+    const modelCostChart = (await screen.findByText('Spend by model')).closest('[data-density]') as HTMLElement | null
     if (!modelCostChart) throw new Error('model cost chart section not found')
     expect(await within(modelCostChart).findByText('gpt-5.6-sol')).toBeInTheDocument()
     expect(within(modelCostChart).queryByText('local-llama')).toBeNull()
+  })
+})
+
+describe('Analytics multi-currency summaries', () => {
+  it('lists non-primary currencies separately below the tiles, never summed with the total', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([
+      summary,
+      { ...summary, currency: 'EUR', cost: 5, requests: 2 },
+    ])
+    renderPage()
+    const note = await screen.findByText(/Also in range:/)
+    expect(note).toHaveTextContent('€5.00')
+    expect(note).toHaveTextContent('shown separately')
+    // The primary tile stays at its own currency's total, unaffected by the EUR row.
+    expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0)
+  })
+
+  it('omits the note when only one currency is present', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
+    expect(screen.queryByText(/Also in range:/)).toBeNull()
+  })
+})
+
+describe('Analytics unpriced note without a catalog estimate', () => {
+  it('omits the "roughly ≈" clause when the estimate resolves to zero', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([{ ...summary, unpriced_requests: 3 }])
+    renderPage()
+    const note = await screen.findByText(/had no configured price/)
+    expect(note).toHaveTextContent('3 calls in range')
+    expect(note).not.toHaveTextContent('roughly')
+  })
+
+  it('uses singular "call" for exactly one unpriced request', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([{ ...summary, unpriced_requests: 1 }])
+    renderPage()
+    const note = await screen.findByText(/had no configured price/)
+    expect(note).toHaveTextContent('1 call in range')
+  })
+})
+
+describe('Analytics spend-by-model view toggle', () => {
+  it('defaults to lines and switches to bars on click', async () => {
+    vi.mocked(usageSeries).mockImplementation(async (_from, _to, _bucket, group) =>
+      group === 'model' ? [{ ...providerPoint, group: 'gpt-5.6-sol' }] : [],
+    )
+    vi.mocked(usageTotals).mockImplementation(async (_from, _to, group) =>
+      group === 'model' ? [{ ...providerTotal, group: 'gpt-5.6-sol' }] : [],
+    )
+    renderPage()
+    const chart = (await screen.findByText('Spend by model')).closest('[data-density]') as HTMLElement | null
+    if (!chart) throw new Error('chart section not found')
+    const lastOption = await findChartOptionGetter(chart)
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
+
+    fireEvent.click(within(chart).getByText('Bars'))
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('bar'))
+  })
+})
+
+describe('Analytics latency panel', () => {
+  it('shows a placeholder when there are no requests in range', async () => {
+    vi.mocked(usageLatency).mockResolvedValue([])
+    renderPage()
+    const chart = (await screen.findByText('Latency per provider')).closest('[data-density]') as HTMLElement | null
+    if (!chart) throw new Error('chart section not found')
+    expect(await within(chart).findByText('No requests in range.')).toBeInTheDocument()
+  })
+
+  it('renders the latency chart when requests exist, formatting the axis in duration units', async () => {
+    vi.mocked(usageLatency).mockResolvedValue([
+      { provider: 'openai', p50_ms: 250, p95_ms: 900, p99_ms: 1500, requests: 10 },
+    ])
+    renderPage()
+    const chart = (await screen.findByText('Latency per provider')).closest('[data-density]') as HTMLElement | null
+    if (!chart) throw new Error('chart section not found')
+    expect(within(chart).queryByText('No requests in range.')).toBeNull()
+    const lastOption = await findChartOptionGetter(chart)
+    await waitFor(() => expect(lastOption()).toBeTruthy())
+    const option = lastOption() as { xAxis: { axisLabel: { formatter: (v: number) => string } } }
+    expect(option.xAxis.axisLabel.formatter(1500)).toBe(formatDuration(1500))
+  })
+})
+
+describe('Analytics provider cost table sorting', () => {
+  // cost puts openai first by default (cost desc); alphabetical sort puts anthropic
+  // first, so the two orders are distinguishable in the assertions below.
+  const rowA: GroupTotal = { ...providerTotal, group: 'anthropic', cost: 1, requests: 1 }
+  const rowB: GroupTotal = { ...providerTotal, group: 'openai', cost: 3, requests: 5 }
+
+  function providerTable() {
+    return screen.getByText('Cost breakdown by provider').closest('[data-density]') as HTMLElement
+  }
+
+  function providerRows() {
+    return within(providerTable())
+      .getAllByRole('row')
+      .slice(1) // drop the header row
+      .map((row) => within(row).getAllByRole('cell')[0].textContent)
+  }
+
+  beforeEach(() => {
+    vi.mocked(usageTotals).mockImplementation(async (_from, _to, group) =>
+      group === 'provider' ? [rowA, rowB] : [],
+    )
+  })
+
+  it('defaults to sorting by cost descending', async () => {
+    renderPage()
+    await screen.findByText('Cost breakdown by provider')
+    expect(providerRows()).toEqual(['openai', 'anthropic'])
+  })
+
+  it('sorts by provider name descending on header click, and toggles ascending on a second click', async () => {
+    renderPage()
+    await screen.findByText('Cost breakdown by provider')
+    // Switching to a new sort key defaults to descending: openai before anthropic alphabetically.
+    fireEvent.click(within(providerTable()).getByText('Provider', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['openai', 'anthropic']))
+
+    fireEvent.click(within(providerTable()).getByText('Provider', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['anthropic', 'openai']))
+  })
+
+  it('sorts by requests on header click', async () => {
+    renderPage()
+    await screen.findByText('Cost breakdown by provider')
+    fireEvent.click(within(providerTable()).getByText('Requests', { exact: false, selector: 'th' }))
+    // Switching to a new sort key defaults to descending: openai (5) before anthropic (1).
+    await waitFor(() => expect(providerRows()).toEqual(['openai', 'anthropic']))
+  })
+
+  it('sorts by cost on header click, toggling ascending on a second click', async () => {
+    renderPage()
+    await screen.findByText('Cost breakdown by provider')
+    // Sort by requests first so a "Cost" click is a genuine key change.
+    fireEvent.click(within(providerTable()).getByText('Requests', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['openai', 'anthropic']))
+
+    fireEvent.click(within(providerTable()).getByText('Cost', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['openai', 'anthropic']))
+
+    fireEvent.click(within(providerTable()).getByText('Cost', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['anthropic', 'openai']))
   })
 })

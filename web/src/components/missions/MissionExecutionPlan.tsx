@@ -128,7 +128,7 @@ export function MissionExecutionPlan(props: MissionExecutionPlanProps) {
   const unusable = unusablePhases(plan)
 
   return (
-    <div className="rounded-lg border border-border p-4">
+    <div className="rounded-md border border-border p-4">
       <div className="text-sm font-semibold">{title}</div>
       <div className="mt-2 divide-y divide-border">
         {phaseOrder.map((key) => {
