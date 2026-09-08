@@ -11,7 +11,6 @@ import {
 import { Switch } from '../ui/switch'
 import { Field, FieldGroup } from '../timothy/field'
 import { UNSET } from './util'
-import { slugify } from '../../lib/slugify'
 import { AllowlistPicker } from './AllowlistPicker'
 import { EXECUTOR_DEFAULT, executorChoices } from '../missions/MissionForm'
 import { listKbCollections, listSkills, listTools } from '../../api/client'
@@ -55,7 +54,7 @@ export function useAgentForm() {
 
   return {
     value,
-    canSubmit: slugify(name) !== '',
+    canSubmit: name.trim() !== '',
     fields: {
       name,
       setName,
@@ -79,10 +78,11 @@ export function useAgentForm() {
   }
 }
 
-export type AgentStagedValue = Omit<AgentFormValue, 'name'>
+export type AgentStagedValue = AgentFormValue
 
 function baselineFrom(agent: AdminAgent): AgentStagedValue {
   return {
+    name: agent.name,
     description: agent.description,
     overlay: agent.prompt_overlay,
     route: agent.route,
@@ -108,8 +108,8 @@ export function useAgentEditForm(agent: AdminAgent) {
     rebase: (next: AdminAgent) => staged.rebase(baselineFrom(next)),
     value: staged.values,
     fields: {
-      name: agent.name,
-      setName: () => undefined,
+      name: staged.values.name,
+      setName: (v: string) => staged.setField('name', v),
       description: staged.values.description,
       setDescription: (v: string) => staged.setField('description', v),
       overlay: staged.values.overlay,
@@ -131,29 +131,24 @@ export function useAgentEditForm(agent: AdminAgent) {
 }
 
 // AgentForm renders the shared field set for both create and edit:
-// name is a one-time slug fixed at creation (it lives in ledger rows
-// and event payloads), so it's the only field Add shows that Edit
-// doesn't.
+// name is plain text, editable on both pages (the uuid is the stable
+// key, not the name).
 export function AgentForm({
-  isNew,
   routes,
   fields,
 }: {
-  isNew: boolean
   routes: AdminRoute[]
   fields: ReturnType<typeof useAgentForm>['fields'] | ReturnType<typeof useAgentEditForm>['fields']
 }) {
   return (
     <FieldGroup>
-      {isNew && (
-        <Field label="Name" description="unique slug, immutable after creation">
-          <Input
-            value={fields.name}
-            onChange={(e) => fields.setName(e.target.value)}
-            placeholder="infra, homelab, writer…"
-          />
-        </Field>
-      )}
+      <Field label="Name" description="unique, case-insensitive">
+        <Input
+          value={fields.name}
+          onChange={(e) => fields.setName(e.target.value)}
+          placeholder="Infra, Homelab, Writer…"
+        />
+      </Field>
       <Field label="Description" description="shown in the picker">
         <Input
           value={fields.description}

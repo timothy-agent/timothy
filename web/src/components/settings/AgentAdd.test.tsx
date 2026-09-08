@@ -44,22 +44,22 @@ describe('AgentAdd', () => {
     const create = await screen.findByRole('button', { name: 'Create agent' })
     expect((create as HTMLButtonElement).disabled).toBe(true)
 
-    fireEvent.change(screen.getByPlaceholderText('infra, homelab, writer…'), { target: { value: 'infra' } })
+    fireEvent.change(screen.getByPlaceholderText('Infra, Homelab, Writer…'), { target: { value: 'infra' } })
     expect((create as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('creates the agent with slugified name and navigates to the list', async () => {
+  it('creates the agent with the plain-text name and navigates to the list', async () => {
     vi.mocked(createAgent).mockResolvedValue('a-new')
     renderAdd()
 
-    fireEvent.change(await screen.findByPlaceholderText('infra, homelab, writer…'), {
+    fireEvent.change(await screen.findByPlaceholderText('Infra, Homelab, Writer…'), {
       target: { value: 'My Infra Agent' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Create agent' }))
 
     await waitFor(() =>
       expect(createAgent).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'my-infra-agent', enabled: true, memory: true, harness: '' }),
+        expect.objectContaining({ name: 'My Infra Agent', enabled: true, memory: true, harness: '' }),
       ),
     )
     expect(await screen.findByText('agents list')).toBeTruthy()
@@ -69,7 +69,7 @@ describe('AgentAdd', () => {
     vi.mocked(createAgent).mockRejectedValue(new Error('name already exists'))
     renderAdd()
 
-    fireEvent.change(await screen.findByPlaceholderText('infra, homelab, writer…'), { target: { value: 'infra' } })
+    fireEvent.change(await screen.findByPlaceholderText('Infra, Homelab, Writer…'), { target: { value: 'infra' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create agent' }))
 
     await waitFor(() =>
@@ -81,7 +81,7 @@ describe('AgentAdd', () => {
   it('Cancel navigates to the agents list with no create call', async () => {
     renderAdd()
 
-    await screen.findByPlaceholderText('infra, homelab, writer…')
+    await screen.findByPlaceholderText('Infra, Homelab, Writer…')
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     expect(await screen.findByText('agents list')).toBeTruthy()
@@ -103,7 +103,7 @@ describe('AgentAdd', () => {
     vi.mocked(createAgent).mockResolvedValue('a-new')
     renderAdd()
 
-    fireEvent.change(await screen.findByPlaceholderText('infra, homelab, writer…'), { target: { value: 'infra' } })
+    fireEvent.change(await screen.findByPlaceholderText('Infra, Homelab, Writer…'), { target: { value: 'infra' } })
     fireEvent.change(
       screen.getByPlaceholderText('Instructions, persona, house rules… Markdown supported.'),
       { target: { value: 'Be careful.' } },
@@ -131,7 +131,7 @@ describe('AgentAdd', () => {
     vi.mocked(createAgent).mockResolvedValue('a-new')
     renderAdd()
 
-    fireEvent.change(await screen.findByPlaceholderText('infra, homelab, writer…'), { target: { value: 'infra' } })
+    fireEvent.change(await screen.findByPlaceholderText('Infra, Homelab, Writer…'), { target: { value: 'infra' } })
     fireEvent.click(screen.getByRole('combobox', { name: 'agent harness' }))
     fireEvent.click(await screen.findByRole('option', { name: 'Claude Code' }))
     fireEvent.click(screen.getByRole('button', { name: 'Create agent' }))

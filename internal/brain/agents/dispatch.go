@@ -14,32 +14,32 @@ import (
 type Classify func(ctx context.Context, prompt string) (string, error)
 
 // Dispatch picks the agent whose profile best fits message, among
-// candidates (only enabled agents should be passed in). A single
-// candidate is returned without calling classify — there's nothing to
-// choose between. Any classifier failure or an out-of-range/unparsable
-// answer falls back to fallbackName (typically the default agent):
-// dispatch is an ergonomics layer, never a hard gate on serving a
-// session.
-func Dispatch(ctx context.Context, classify Classify, message string, candidates []Agent, fallbackName string) string {
+// candidates (only enabled agents should be passed in), and returns
+// its id. A single candidate is returned without calling classify:
+// there's nothing to choose between. Any classifier failure or an
+// out-of-range/unparsable answer falls back to fallbackID (typically
+// the default agent's id): dispatch is an ergonomics layer, never a
+// hard gate on serving a session.
+func Dispatch(ctx context.Context, classify Classify, message string, candidates []Agent, fallbackID string) string {
 	if len(candidates) == 0 {
-		return fallbackName
+		return fallbackID
 	}
 	if len(candidates) == 1 {
-		return candidates[0].Name
+		return candidates[0].ID
 	}
 	if classify == nil {
-		return fallbackName
+		return fallbackID
 	}
 
 	reply, err := classify(ctx, dispatchPrompt(message, candidates))
 	if err != nil {
-		return fallbackName
+		return fallbackID
 	}
 	idx, ok := parseChoice(reply, len(candidates))
 	if !ok {
-		return fallbackName
+		return fallbackID
 	}
-	return candidates[idx].Name
+	return candidates[idx].ID
 }
 
 // dispatchPrompt lists each candidate as "N. name: description" (or

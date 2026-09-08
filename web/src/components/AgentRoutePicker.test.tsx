@@ -87,7 +87,7 @@ describe('AgentRoutePicker', () => {
     const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)
     vi.mocked(listRoutes).mockResolvedValue(routes)
-    render(<AgentRoutePicker agent="general" onAgent={vi.fn()} route="local" onRoute={vi.fn()} />)
+    render(<AgentRoutePicker agent="1" onAgent={vi.fn()} route="local" onRoute={vi.fn()} />)
 
     const trigger = await screen.findByRole('button', { name: 'Agent and route' })
     await waitFor(() => expect(trigger).toHaveTextContent('general · local'))
@@ -102,7 +102,7 @@ describe('AgentRoutePicker', () => {
     ])
     render(
       <AgentRoutePicker
-        agent="general"
+        agent="1"
         onAgent={vi.fn()}
         route="disabled-route"
         onRoute={vi.fn()}
@@ -190,6 +190,6 @@ describe('AgentRoutePicker', () => {
     await screen.findByRole('button', { name: 'Agent and route' })
     openMenu('Agent and route')
     fireEvent.click(await screen.findByText('researcher'))
-    expect(onAgent).toHaveBeenCalledWith('researcher')
+    expect(onAgent).toHaveBeenCalledWith('2')
   })
 })

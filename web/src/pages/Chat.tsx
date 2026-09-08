@@ -106,9 +106,9 @@ export function Chat({
   // The serving agent's own bound collections: always searched, never
   // pinned by the user. Re-derived from the live agent selection (not
   // snapshotted) so switching agents mid-session updates the chips.
-  // Same fallback as AgentRoutePicker: an empty/unmatched agent name
+  // Same fallback as AgentRoutePicker: an empty/unmatched agent id
   // resolves to the default agent, the one that actually serves it.
-  const servingAgent = agents.find((a) => a.name === agent) ?? agents.find((a) => a.is_default)
+  const servingAgent = agents.find((a) => a.id === agent) ?? agents.find((a) => a.is_default)
   const agentKnowledge = servingAgent?.knowledge ?? []
   const [loadError, setLoadError] = useState<string | null>(null)
   const [streaming, setStreaming] = useState(false)

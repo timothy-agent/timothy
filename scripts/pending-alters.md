@@ -34,3 +34,19 @@ COMMIT;
 `mission_events` is append-only and is deliberately left alone: its
 historical rows keep whatever phase string they were written with, and
 `parsePhase` translates them on read.
+
+## Plain-text renameable agent names (issue #615)
+
+`agents.name` is now a trimmed, case-insensitive-unique display name
+instead of a lowercase-slug column constraint. Drop the old UNIQUE
+constraint and add the trimmed case-insensitive index.
+
+```sql
+BEGIN;
+
+ALTER TABLE agents DROP CONSTRAINT agents_name_key;
+
+CREATE UNIQUE INDEX IF NOT EXISTS agents_name_ci ON agents (lower(btrim(name)));
+
+COMMIT;
+```

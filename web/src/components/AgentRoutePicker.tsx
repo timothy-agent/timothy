@@ -34,7 +34,7 @@ export function AgentRoutePicker({
   const isAuto = agent === AUTO_AGENT
   const current = isAuto
     ? null
-    : (agents.find((a) => a.name === agent) ?? agents.find((a) => a.is_default) ?? null)
+    : (agents.find((a) => a.id === agent) ?? agents.find((a) => a.is_default) ?? null)
   const showRoutes = Boolean(onRoute) && routes !== null
   const isRouteAuto = !route
   const currentRoute = isRouteAuto
@@ -79,17 +79,17 @@ export function AgentRoutePicker({
           {isAuto && <Check className="mt-1 size-4 shrink-0" />}
         </DropdownMenuItem>
         {agents.map((a) => {
-          const selected = a.name === (current?.name ?? '')
+          const selected = a.id === (current?.id ?? '')
           return (
             <DropdownMenuItem
               key={a.id}
-              onSelect={() => onAgent(a.name)}
+              onSelect={() => onAgent(a.id)}
               data-selected={selected || undefined}
               className="h-auto items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium capitalize">{a.name}</span>
+                  <span className="text-sm font-medium">{a.name}</span>
                   {a.is_default && <Badge variant="outline">Default</Badge>}
                 </div>
                 {a.description && (

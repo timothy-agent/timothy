@@ -139,6 +139,7 @@ type Service struct {
 	memory         MemoryExtract   // nil: long-term memory off
 	recall         MemoryRetrieve  // nil: no memory injection
 	agents         AgentResolver   // nil: zero-value agent (no skills/tools but retrieve_output, default route, memory on)
+	agentsByName   AgentResolver   // nil: Retry can't fall back to a pre-#615 name-keyed session event
 	candidates     AgentCandidates // nil: auto-dispatch falls back to default
 	classify       agents.Classify // nil: auto-dispatch falls back to default
 	budget         func(context.Context) int
@@ -319,6 +320,15 @@ func (s *Service) SetAutoDispatch(candidates AgentCandidates, classify agents.Cl
 	s.candidates, s.classify = candidates, classify
 }
 
+// SetAgentResolverByName wires the read-time compatibility path Retry
+// uses when a session's last user_message carries an agent name from
+// before agents were addressed by id (issue #615): resolved only when
+// the id lookup misses. Optional: nil means such old rows fail Retry
+// with unknown agent, same as any other genuinely-unknown value.
+func (s *Service) SetAgentResolverByName(resolver AgentResolver) {
+	s.agentsByName = resolver
+}
+
 // SetApprovalGrants wires the standing-grant seeder: once wired, a
 // turn served by an agent with a non-empty ApprovalAllowlist gets
 // those tools granted for its session before the turn runs, extending
@@ -375,9 +385,9 @@ func (s *Service) seedApprovalGrants(ctx context.Context, sessionID string, prof
 // gates packs per turn, nil allows all. The assembled system prompt
 // only changes when a setting does, so provider prompt caches (D-018)
 // stay warm in the steady state.
-// AgentResolver returns the profile serving a named agent; empty name
-// resolves the default. False = unknown (non-empty) name.
-type AgentResolver func(ctx context.Context, name string) (agents.Agent, bool)
+// AgentResolver returns the profile serving an agent id; empty id
+// resolves the default. False = unknown (non-empty) id.
+type AgentResolver func(ctx context.Context, id string) (agents.Agent, bool)
 
 // AgentCandidates lists the enabled agents auto-dispatch (D-034
 // follow-up) chooses among; nil or empty means dispatch always falls
@@ -416,7 +426,7 @@ func (s *Service) SetTurnTimeout(d time.Duration) error {
 	return nil
 }
 
-// dispatchAgent resolves the "auto" sentinel to a real agent name via
+// dispatchAgent resolves the "auto" sentinel to a real agent id via
 // agents.Dispatch. classify is built here (not injected verbatim as
 // Classify) so it always drains through this service's own Gateway:
 // a fresh call, not a lingering handle from setup time.
@@ -855,7 +865,10 @@ type AttachmentRef struct {
 type Request struct {
 	SessionID string `json:"session_id,omitempty"`
 	Message   string `json:"message"`
-	// Agent names who serves this turn; empty = the default agent.
+	// Agent is the id of who serves this turn, the autoAgentName
+	// sentinel, or empty for the default agent. A name is not accepted
+	// (issue #615): an agent's name is a renameable display label now,
+	// not a stable reference.
 	Agent     string `json:"agent,omitempty"`
 	Route     string `json:"route,omitempty"`
 	ModelHint string `json:"model_hint,omitempty"`
@@ -900,16 +913,16 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		return "", nil, err
 	}
 	documents = append(documents, referenceDocs...)
-	agentName := req.Agent
-	if agentName == autoAgentName {
-		agentName = s.dispatchAgent(ctx, req.Message)
+	agentID := req.Agent
+	if agentID == autoAgentName {
+		agentID = s.dispatchAgent(ctx, req.Message)
 	}
 	profile := agents.Agent{Memory: true}
 	if s.agents != nil {
 		var known bool
-		profile, known = s.agents(ctx, agentName)
+		profile, known = s.agents(ctx, agentID)
 		if !known {
-			return "", nil, fmt.Errorf("chat: %w: unknown agent %q", ErrBadRequest, agentName)
+			return "", nil, fmt.Errorf("chat: %w: unknown agent %q", ErrBadRequest, agentID)
 		}
 	}
 	var skillBody string
@@ -996,7 +1009,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	bc.setCancel(cancel)
 
 	if _, err := s.log.Append(turnCtx, sessionID, session.KindUserMessage, session.UserMessage{
-		Text: req.Message, Route: route, Agent: profile.Name, ModelHint: modelHint, Images: images, Documents: documents,
+		Text: req.Message, Route: route, Agent: profile.ID, ModelHint: modelHint, Images: images, Documents: documents,
 	}); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
@@ -1212,6 +1225,13 @@ func (s *Service) Retry(ctx context.Context, sessionID string) (string, <-chan s
 	if s.agents != nil {
 		var known bool
 		profile, known = s.agents(ctx, last.Agent)
+		// last.Agent is an id for every turn persisted since issue #615;
+		// a miss falls back to a name lookup for session events written
+		// before that (read-time compatibility, same idea as missions'
+		// parsePhase).
+		if !known && s.agentsByName != nil {
+			profile, known = s.agentsByName(ctx, last.Agent)
+		}
 		if !known {
 			return sessionID, nil, fmt.Errorf("chat: %w: unknown agent %q", ErrBadRequest, last.Agent)
 		}
@@ -1359,7 +1379,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	}
 	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{
 		Route:      route,
-		Agent:      profile.Name,
+		Agent:      profile.ID,
 		ToolAllow:  resolveToolAllow(profile),
 		ExtraTools: extraTools,
 		Purpose:    "chat",

@@ -4,9 +4,11 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,8 +73,20 @@ func TestAgentCRUDAndResolve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := s.Create(ctx, Agent{Name: "Bad Name!"}); err == nil {
-		t.Fatal("invalid name accepted")
+	// Plain text is accepted now: spaces, capitals, punctuation (issue
+	// #615). Only empty and over-length names are rejected.
+	if _, err := s.Create(ctx, Agent{Name: marker + "Research Bot!"}); err != nil {
+		t.Fatalf("Create with spaces/capitals/punctuation rejected: %v", err)
+	}
+	if _, err := s.Create(ctx, Agent{Name: "  "}); err == nil {
+		t.Fatal("blank name accepted")
+	}
+	if _, err := s.Create(ctx, Agent{Name: strings.Repeat("a", 65)}); err == nil {
+		t.Fatal("65-rune name accepted")
+	}
+	// A case-insensitive duplicate (after trim) is rejected.
+	if _, err := s.Create(ctx, Agent{Name: "  " + strings.ToUpper(name) + "  "}); !errors.Is(err, ErrNameConflict) {
+		t.Fatalf("Create duplicate name = %v, want ErrNameConflict", err)
 	}
 
 	a, ok := s.Resolve(ctx, name)
@@ -129,6 +143,33 @@ func TestAgentCRUDAndResolve(t *testing.T) {
 	}
 	if a, _ := s.Resolve(ctx, name); a.Route != "default" {
 		t.Fatalf("patched route = %q (cache must invalidate)", a.Route)
+	}
+
+	// Patch renames the agent and audits before/after (issue #615).
+	renamed := marker + "Renamed Researcher"
+	if err := s.Patch(ctx, id, Patch{Name: &renamed}); err != nil {
+		t.Fatalf("Patch rename: %v", err)
+	}
+	if byID, ok := s.ResolveByID(ctx, id); !ok || byID.Name != renamed {
+		t.Fatalf("ResolveByID after rename = %+v ok=%v, want %s", byID, ok, renamed)
+	}
+	db, _ := s.db.Get()
+	var before, after []byte
+	if err := db.QueryRow(ctx, `SELECT before, after FROM admin_audit
+		WHERE entity = 'agent' AND entity_id = $1 AND action = 'update'
+		ORDER BY ts DESC LIMIT 1`, id).Scan(&before, &after); err != nil {
+		t.Fatalf("audit query: %v", err)
+	}
+	if !strings.Contains(string(before), name) || !strings.Contains(string(after), renamed) {
+		t.Fatalf("rename audit before=%s after=%s, want before to mention %s and after %s", before, after, name, renamed)
+	}
+	name = renamed
+
+	// Patch rejects a case-insensitive duplicate rename onto the seeded
+	// default's name.
+	dup := "  " + strings.ToUpper("general") + " "
+	if err := s.Patch(ctx, id, Patch{Name: &dup}); !errors.Is(err, ErrNameConflict) {
+		t.Fatalf("Patch duplicate name = %v, want ErrNameConflict", err)
 	}
 
 	// The seeded default is protected; moving the flag frees it.

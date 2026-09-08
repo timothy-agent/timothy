@@ -412,7 +412,7 @@ CREATE TABLE IF NOT EXISTS connectors (
 -- default: the zero-click choice a new session gets.
 CREATE TABLE IF NOT EXISTS agents (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name           text UNIQUE NOT NULL,
+    name           text NOT NULL,
     description    text NOT NULL DEFAULT '',
     prompt_overlay text NOT NULL DEFAULT '',
     route          text NOT NULL DEFAULT '',
@@ -442,6 +442,11 @@ CREATE TABLE IF NOT EXISTS agents (
 
 CREATE UNIQUE INDEX IF NOT EXISTS agents_one_default
     ON agents ((true)) WHERE is_default;
+
+-- Case-insensitive unique name, trimmed: agents.name is a plain-text
+-- display name (issue #615), not a slug, so uniqueness is enforced
+-- here rather than as a column constraint.
+CREATE UNIQUE INDEX IF NOT EXISTS agents_name_ci ON agents (lower(btrim(name)));
 
 -- Seed exactly one agent: 'general', because exactly one default
 -- agent must exist. Every other agent is created by the operator in

@@ -11,11 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -59,20 +62,29 @@ type Agent struct {
 	Knowledge []string `json:"knowledge"`
 }
 
-// namePattern mirrors connectors: a lowercase slug that survives in
-// URLs, ledger rows, and event payloads.
-var namePattern = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`)
+// validateName trims a.Name and checks it against the plain-text rule
+// (issue #615): 1..64 runes, any printable character, no control
+// characters. Returns the trimmed name.
+func validateName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if utf8.RuneCountInString(name) > 64 {
+		return "", fmt.Errorf("name must be at most 64 characters")
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", fmt.Errorf("name must not contain control characters")
+		}
+	}
+	return name, nil
+}
 
-func validate(a Agent) error {
-	if !namePattern.MatchString(a.Name) {
-		return fmt.Errorf("name must be a lowercase slug (a-z, 0-9, - or _)")
-	}
-	if len(a.Name) > 64 {
-		return fmt.Errorf("name must be at most 64 characters")
-	}
-	if a.Harness != "" {
-		if _, ok := executor.Lookup(a.Harness); !ok {
-			return fmt.Errorf("harness: unknown harness %q", a.Harness)
+func validateHarness(harness string) error {
+	if harness != "" {
+		if _, ok := executor.Lookup(harness); !ok {
+			return fmt.Errorf("harness: unknown harness %q", harness)
 		}
 	}
 	return nil
@@ -80,8 +92,9 @@ func validate(a Agent) error {
 
 // Sentinel errors the HTTP layer maps onto status codes.
 var (
-	ErrNotFound = errors.New("not found")
-	ErrInUse    = errors.New("in use")
+	ErrNotFound     = errors.New("not found")
+	ErrInUse        = errors.New("in use")
+	ErrNameConflict = errors.New("an agent with this name already exists")
 )
 
 const cacheTTL = 10 * time.Second
@@ -175,6 +188,11 @@ func (s *Store) Enabled(ctx context.Context) []Agent {
 // a vanished agent) resolves to the default. The bool reports whether
 // the requested name actually resolved — false only when a non-empty
 // name matched nothing.
+//
+// Callers should prefer ResolveByID: this is now the read-time
+// compatibility path for session_events/cost_ledger rows written
+// before agents were addressed by id (issue #615), same idea as
+// missions' parsePhase.
 func (s *Store) Resolve(ctx context.Context, name string) (Agent, bool) {
 	byName, def := s.load(ctx)
 	if name == "" {
@@ -252,9 +270,16 @@ func (s *Store) invalidate() {
 	s.mu.Unlock()
 }
 
-// Create inserts an agent and audits.
+// Create inserts an agent and audits. name is trimmed; a case-
+// insensitive duplicate (agents_name_ci) reports ErrNameConflict
+// rather than a raw pg error.
 func (s *Store) Create(ctx context.Context, a Agent) (string, error) {
-	if err := validate(a); err != nil {
+	name, err := validateName(a.Name)
+	if err != nil {
+		return "", err
+	}
+	a.Name = name
+	if err := validateHarness(a.Harness); err != nil {
 		return "", err
 	}
 	db, err := s.db.Get()
@@ -270,6 +295,9 @@ func (s *Store) Create(ctx context.Context, a Agent) (string, error) {
 		a.Name, a.Description, a.PromptOverlay, a.Route, skills, tools, a.Memory, a.Enabled,
 		a.ReviewRoute, appr, knowledge, a.Harness).Scan(&id)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return "", ErrNameConflict
+		}
 		return "", fmt.Errorf("agents create: %w", err)
 	}
 	s.audit(ctx, "create", id, nil, a)
@@ -277,9 +305,15 @@ func (s *Store) Create(ctx context.Context, a Agent) (string, error) {
 	return id, nil
 }
 
-// Patch applies a partial update. Name is immutable (it lives in
-// ledger rows and event payloads); is_default moves via SetDefault.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// Patch applies a partial update. is_default moves via SetDefault. A
+// non-nil Name renames the agent (audited with before/after).
 type Patch struct {
+	Name              *string   `json:"name"`
 	Description       *string   `json:"description"`
 	PromptOverlay     *string   `json:"prompt_overlay"`
 	Route             *string   `json:"route"`
@@ -294,9 +328,16 @@ type Patch struct {
 }
 
 func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
-	if p.Harness != nil && *p.Harness != "" {
-		if _, ok := executor.Lookup(*p.Harness); !ok {
-			return fmt.Errorf("harness: unknown harness %q", *p.Harness)
+	if p.Name != nil {
+		name, err := validateName(*p.Name)
+		if err != nil {
+			return err
+		}
+		p.Name = &name
+	}
+	if p.Harness != nil {
+		if err := validateHarness(*p.Harness); err != nil {
+			return err
 		}
 	}
 	db, err := s.db.Get()
@@ -315,6 +356,9 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 		return fmt.Errorf("agent %s: %w", id, ErrNotFound)
 	}
 	after := before
+	if p.Name != nil {
+		after.Name = *p.Name
+	}
 	if p.Description != nil {
 		after.Description = *p.Description
 	}
@@ -351,15 +395,18 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 	if p.Harness != nil {
 		after.Harness = *p.Harness
 	}
-	if _, err := tx.Exec(ctx, `UPDATE agents SET description = $2, prompt_overlay = $3,
-			route = $4, skills = $5, tools = $6, memory = $7, enabled = $8,
-			review_route = $9, approval_allowlist = $10, knowledge = $11,
-			harness = $12, updated_at = now()
+	if _, err := tx.Exec(ctx, `UPDATE agents SET name = $2, description = $3, prompt_overlay = $4,
+			route = $5, skills = $6, tools = $7, memory = $8, enabled = $9,
+			review_route = $10, approval_allowlist = $11, knowledge = $12,
+			harness = $13, updated_at = now()
 		WHERE id = $1`,
-		id, after.Description, after.PromptOverlay, after.Route,
+		id, after.Name, after.Description, after.PromptOverlay, after.Route,
 		jsonArr(after.Skills), jsonArr(after.Tools), after.Memory, after.Enabled,
 		after.ReviewRoute, jsonArr(after.ApprovalAllowlist), jsonArr(after.Knowledge),
 		after.Harness); err != nil {
+		if isUniqueViolation(err) {
+			return ErrNameConflict
+		}
 		return fmt.Errorf("agents patch: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
