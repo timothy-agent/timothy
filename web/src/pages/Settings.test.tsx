@@ -22,6 +22,8 @@ vi.mock('../api/client', async (importOriginal) => {
     listAgents: vi.fn(),
     listProviders: vi.fn(),
     listRoutes: vi.fn(),
+    listSecretRefs: vi.fn(),
+    migrateAllSecrets: vi.fn(),
     patchAgent: vi.fn(),
     setDefaultAgent: vi.fn(),
     listSecretBackends: vi.fn(),
@@ -51,12 +53,15 @@ import {
   listProviders,
   listRoutes,
   listSecretBackends,
+  listSecretRefs,
   patchSettingValues,
   providersHealth,
+  putSecretBackendConfig,
   searchCatalog,
   secretStatus,
   setDefaultSecretBackend,
   setSecret,
+  testSecretBackend,
   usageBudget,
   validateProvider,
 } from '../api/client'
@@ -95,6 +100,7 @@ beforeEach(() => {
   ])
   vi.mocked(secretStatus).mockResolvedValue({ configured: true, backend: 'db' })
   vi.mocked(getSecretBackendConfig).mockResolvedValue({})
+  vi.mocked(listSecretRefs).mockResolvedValue([])
   vi.mocked(searchCatalog).mockResolvedValue([])
   vi.mocked(listAgents).mockResolvedValue([
     { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
@@ -258,6 +264,37 @@ describe('Secrets tab default backend', () => {
     )
     fireEvent.click(enabled!)
     await waitFor(() => expect(setDefaultSecretBackend).toHaveBeenCalledWith('vault'))
+  })
+
+  it('renders a failed Vault test as a typed alert with the cause', async () => {
+    vi.mocked(getSecretBackendConfig).mockResolvedValue({ address: 'http://vault:8200' })
+    vi.mocked(listSecretBackends).mockResolvedValue([
+      { backend: 'db', configured: true, default: true },
+      { backend: 'vault', configured: true, default: false },
+      { backend: 'asm', configured: false, default: false },
+    ])
+    vi.mocked(testSecretBackend).mockResolvedValue({ ok: false, error: 'connection refused' })
+
+    renderPage('/settings/secrets')
+    const testButtons = await screen.findAllByRole('button', { name: 'Test' })
+    fireEvent.click(testButtons[0])
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('connection refused')
+  })
+
+  it('keeps the entered Vault fields and shows a Retry alert when Save fails', async () => {
+    vi.mocked(putSecretBackendConfig).mockRejectedValue(new Error('write forbidden'))
+
+    renderPage('/settings/secrets')
+    const address = await screen.findByPlaceholderText('https://vault.internal:8200')
+    fireEvent.change(address, { target: { value: 'https://vault.internal:8200' } })
+    const saveButtons = await screen.findAllByRole('button', { name: 'Save' })
+    fireEvent.click(saveButtons[0])
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('write forbidden')
+    expect(address).toHaveValue('https://vault.internal:8200')
   })
 })
 
@@ -426,6 +463,23 @@ describe('Settings pages accessibility', () => {
   it('has no axe violations on the provider edit page', async () => {
     const { container } = renderPage('/settings/providers/p1')
     await screen.findByDisplayValue('OpenAI')
+    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
+    expect(results.violations).toEqual([])
+  })
+
+  it('has no axe violations on the credentials page', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { name: 'OPENAI_API_KEY', backend: 'db', referenced_by: [], system: false },
+    ])
+    const { container } = renderPage('/settings/credentials')
+    await screen.findByText('OPENAI_API_KEY')
+    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
+    expect(results.violations).toEqual([])
+  })
+
+  it('has no axe violations on the secrets page', async () => {
+    const { container } = renderPage('/settings/secrets')
+    await screen.findByText('HashiCorp Vault')
     const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
     expect(results.violations).toEqual([])
   })

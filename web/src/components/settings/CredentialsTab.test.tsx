@@ -2,14 +2,18 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecretRefEntry } from '../../api/client'
+import { TooltipProvider } from '../ui/tooltip'
 import { CredentialsTab } from './CredentialsTab'
 
 // CredentialsTab now renders PageHeader's breadcrumb links, which need
-// a Router context, so every render is wrapped in MemoryRouter.
+// a Router context, and its delete IconButton renders a tooltip, which
+// needs a TooltipProvider, so every render is wrapped in both.
 function renderTab() {
   return render(
     <MemoryRouter>
-      <CredentialsTab />
+      <TooltipProvider>
+        <CredentialsTab />
+      </TooltipProvider>
     </MemoryRouter>,
   )
 }
