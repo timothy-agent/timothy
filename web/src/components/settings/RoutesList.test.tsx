@@ -1,7 +1,9 @@
+import axe from 'axe-core'
 import { cleanup, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminProvider, AdminRoute } from '../../api/types'
+import { TooltipProvider } from '../ui/tooltip'
 import { RoutesList } from './RoutesList'
 
 vi.mock('../../api/client', () => ({
@@ -34,9 +36,11 @@ beforeEach(() => {
 
 function renderList() {
   return render(
-    <MemoryRouter>
-      <RoutesList />
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter>
+        <RoutesList />
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 
@@ -75,5 +79,22 @@ describe('RoutesList serving states', () => {
     vi.mocked(listRoutes).mockResolvedValue([base])
     renderList()
     expect(await screen.findByText('stats loading…')).toBeInTheDocument()
+  })
+})
+
+describe('RoutesList accessibility', () => {
+  it('has no axe violations', async () => {
+    vi.mocked(listRoutes).mockResolvedValue([
+      {
+        ...base,
+        role: 'default',
+        resolved: [{ provider_id: 'p1', provider_name: 'anthropic', model: 'sonnet', usable: true }],
+        serving: { provider_id: 'p1', model: 'sonnet' },
+      },
+    ])
+    const { container } = renderList()
+    await screen.findByText(/serving/)
+    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
+    expect(results.violations).toEqual([])
   })
 })
