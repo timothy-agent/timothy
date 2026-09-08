@@ -50,7 +50,7 @@ func TestDriverPromotesToKBOnDone(t *testing.T) {
 	rec := &recordingPromoteKB{}
 	d.SetPromoteKB(rec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	if got := rec.count(); got != 1 {
 		t.Fatalf("promote kb calls = %d, want 1", got)

@@ -964,7 +964,7 @@ func TestApplyTransitionPersistsUnitVerifyState(t *testing.T) {
 // state, not in-memory only: a mission created with auto_approve_plan
 // false, parked on PauseApproval via ApplyTransition, survives a fresh
 // Get exactly as parked (same as a process restart would see), then
-// the approve verb's own transition unparks it to generate.
+// the approve verb's own transition unparks it to build.
 func TestPlanApprovalParkRoundTrip(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
@@ -1009,7 +1009,7 @@ func TestPlanApprovalParkRoundTrip(t *testing.T) {
 		t.Fatalf("Get after approve: %v", err)
 	}
 	if approved.Phase != PhaseBuild || approved.Status != StatusIdle || approved.PauseReason != "" {
-		t.Fatalf("mission after approve = %s/%s/%s, want generate/idle/<none>", approved.Phase, approved.Status, approved.PauseReason)
+		t.Fatalf("mission after approve = %s/%s/%s, want build/idle/<none>", approved.Phase, approved.Status, approved.PauseReason)
 	}
 }
 

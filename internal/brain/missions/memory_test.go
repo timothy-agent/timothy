@@ -38,7 +38,7 @@ func TestOutcomeDigest(t *testing.T) {
 				"review verdict: approved", "review findings: looks good",
 				"terminal state: done",
 			},
-			wantExcludes: []string{"duration_ms", "\"phase\":\"generate\""},
+			wantExcludes: []string{"duration_ms", "\"phase\":\"build\""},
 		},
 		{
 			name: "review skipped",
@@ -177,7 +177,7 @@ func TestDriverExtractsMemoryOnDone(t *testing.T) {
 	rec := &recordingExtract{}
 	d.SetMemoryExtract(rec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	waitForCalls(t, rec, 1)
 

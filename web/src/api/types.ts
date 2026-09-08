@@ -722,7 +722,7 @@ export interface ReviewFinding {
 }
 
 // Mission is one long-running, agent-driven unit of work
-// (internal/brain/missions): discover -> plan -> generate -> prove ->
+// (internal/brain/missions): discover -> plan -> build -> prove ->
 // result under a state machine.
 export interface Mission {
   id: string
@@ -735,7 +735,7 @@ export interface Mission {
   kind: 'coding' | 'general'
   agent_id?: string
   // Mission phase pipeline (D-086, issue #455): discover -> plan ->
-  // generate -> prove -> result -> done|failed. explore/execute/review
+  // build -> prove -> result -> done|failed. explore/execute/review/generate
   // are the pre-rename names, still possible on a mission whose row
   // predates the data migration in scripts/pending-alters.md.
   phase: 'discover' | 'plan' | 'build' | 'prove' | 'result' | 'done' | 'failed' | 'explore' | 'execute' | 'review' | 'generate'
@@ -792,7 +792,7 @@ export interface Mission {
   // route_model/plan_route_model/review_route_model pin one phase axis
   // to one exact chain entry ("provider name/model") in the route it
   // would otherwise resolve: "" or absent keeps the first-usable walk.
-  // Precedence mirrors the route fields: route_model backs generate,
+  // Precedence mirrors the route fields: route_model backs build,
   // plan_route_model backs discover/plan, review_route_model falls back
   // review_route_model > plan_route_model > route_model.
   route_model?: string
@@ -825,7 +825,7 @@ export interface Mission {
   last_evidence?: string
   auto_approve_tools: boolean
   // auto_approve_plan: true (default) advances straight from plan to
-  // generate; false parks the mission (status: "paused", pause_reason:
+  // build; false parks the mission (status: "paused", pause_reason:
   // "approval") once the plan phase produces a plan, until an operator
   // approves, replans, or sends it back to discover.
   auto_approve_plan: boolean
@@ -858,7 +858,7 @@ export interface Mission {
   // never sent over the wire (see api/missions.go's sanitizeMission).
   attachments?: { id: string; mime: string; name?: string }[]
   // light marks a mission that skips discover/plan/prove (D-069):
-  // kind=general only, born in phase=generate, one bare worker turn.
+  // kind=general only, born in phase=build, one bare worker turn.
   // final_output is that worker's verbatim final message: the
   // deliverable itself, absent/empty until the mission reaches done.
   // Invariant: final_output is only ever populated when light is true

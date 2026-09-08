@@ -1375,7 +1375,7 @@ func TestExecutionPlanNotFoundWhenResolveRouteNil(t *testing.T) {
 
 // TestExecutionPlanRouteSourceExplicit confirms an explicit ?route=
 // wins the base route and propagates unchanged to discover/plan (no
-// plan_route override) and generate; prove carries the same route
+// plan_route override) and build; prove carries the same route
 // value but its own provenance label is "inherited-from-build"
 // (prove never itself set), not "explicit".
 func TestExecutionPlanRouteSourceExplicit(t *testing.T) {
@@ -1484,7 +1484,7 @@ func TestExecutionPlanRouteSourceNone(t *testing.T) {
 }
 
 // TestExecutionPlanOversightRoutes confirms plan_route, when set,
-// covers discover/plan/prove (oversight phases) while generate stays on
+// covers discover/plan/prove (oversight phases) while build stays on
 // the base route, and review_route independently overrides prove
 // alone (precedence: review_route > plan_route > route).
 func TestExecutionPlanOversightRoutes(t *testing.T) {
@@ -1499,7 +1499,7 @@ func TestExecutionPlanOversightRoutes(t *testing.T) {
 	}
 
 	// plan_route alone covers discover/plan/prove's route value,
-	// generate keeps base. discover/plan carry plan_route's own
+	// build keeps base. discover/plan carry plan_route's own
 	// "explicit" provenance; prove's value matches but its provenance
 	// is "inherited-from-plan" (prove never itself set plan_route).
 	byPhase := getExecutionPlan(t, h, "kind=general&route=base&plan_route=strong")
@@ -1535,8 +1535,8 @@ func TestExecutionPlanOversightRoutes(t *testing.T) {
 }
 
 // TestExecutionPlanHarnessAxis confirms kind=coding with a harness set
-// resolves generate on the harness axis, and kind=general with the same
-// harness set never delegates (D-072's canDelegate rule): generate
+// resolves build on the harness axis, and kind=general with the same
+// harness set never delegates (D-072's canDelegate rule): build
 // stays native regardless.
 func TestExecutionPlanHarnessAxis(t *testing.T) {
 	t.Parallel()
@@ -1616,7 +1616,7 @@ func TestExecutionPlanHarnessSourceAgent(t *testing.T) {
 }
 
 // TestExecutionPlanLightSkipsOversightOnly confirms light=true skips
-// discover/plan/prove with the fixed reason while generate is never
+// discover/plan/prove with the fixed reason while build is never
 // skipped.
 func TestExecutionPlanLightSkipsOversightOnly(t *testing.T) {
 	t.Parallel()

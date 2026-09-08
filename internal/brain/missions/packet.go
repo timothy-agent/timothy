@@ -62,13 +62,13 @@ type WorkPacket struct {
 	// load_skill tool, so RenderForDelegated never includes it.
 	SkillsIndex string
 	// Light marks a mission that runs build planless (D-069's
-	// original light behavior, plus flow=discover_generate, D-090,
+	// original light behavior, plus flow=discover_build, D-090,
 	// issue #459): Render uses lightSystemPreamble instead of
 	// nativeSystemPreamble, and Plan is always empty so the Plan block
 	// never renders.
 	Light bool
 	// DiscoverNotes carries the discover phase's findings into a planless
-	// worker turn (D-090): only ever set for flow=discover_generate,
+	// worker turn (D-090): only ever set for flow=discover_build,
 	// which runs discover before its planless build pass; a D-069
 	// light mission never visits discover, so this stays empty for it.
 	// Rendered the same "Discovery findings:" way PlanSession's own

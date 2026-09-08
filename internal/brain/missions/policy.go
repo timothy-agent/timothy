@@ -75,7 +75,7 @@ type missionPolicy struct {
 // skipsPlanning; flow=no_prove forces alwaysReview false on a
 // general-shaped policy, since skipping the LLM reviewer is the whole
 // point of choosing it (CheckArtifacts in verifier.go still runs via
-// routeVerified either way). flow=discover_generate does NOT need this
+// routeVerified either way). flow=discover_build does NOT need this
 // override: it never reaches routeVerified at all, its build turn
 // takes the same planless short-circuit as flow=light
 // (Mission.RunsPlanless), which never consults alwaysReview. Coding
@@ -137,7 +137,7 @@ func missionPolicyFor(m Mission) missionPolicy {
 // FlowDiscoverBuild (D-090, issue #459) shares this exact worker
 // behavior with FlowLight, the only difference being it runs discover
 // first; unlike FlowLight (missionPolicy.skipsPlanning), it is NOT
-// used by initialPhase: a discover_generate mission is still born in
+// used by initialPhase: a discover_build mission is still born in
 // PhaseDiscover, only build itself runs planless. Exported: read
 // outside this package by destinations.renderPayload, which needs the
 // same "final_output IS the result" gate memory.go's digest uses.

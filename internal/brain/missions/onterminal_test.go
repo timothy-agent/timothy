@@ -54,7 +54,7 @@ func TestDriverFiresOnTerminalForWorkflowMission(t *testing.T) {
 	rec := &recordingOnTerminal{}
 	d.SetOnTerminal(rec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	waitForOnTerminalCalls(t, rec, 1)
 	if rec.calls[0] != "m1" {

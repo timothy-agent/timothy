@@ -26,7 +26,7 @@ func TestDriverCopiesArtifactsBeforeDestinationDelivery(t *testing.T) {
 	deliverRec := &recordingDeliver{}
 	d.SetDestinationDeliver(deliverRec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	if got := deliverRec.count(); got != 1 {
 		t.Fatalf("deliver calls = %d, want 1", got)

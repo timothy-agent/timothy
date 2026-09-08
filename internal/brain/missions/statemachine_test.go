@@ -96,15 +96,15 @@ func TestStep(t *testing.T) {
 		},
 		{
 			// D-090, issue #459: flow=discover_build routes discover's
-			// completion straight to generate, never plan.
-			name:  "flow=discover_build: phase_complete advances discover straight to generate, skipping plan",
+			// completion straight to build, never plan.
+			name:  "flow=discover_build: phase_complete advances discover straight to build, skipping plan",
 			state: StepState{Phase: PhaseDiscover, Status: StatusWorking, Flow: FlowDiscoverBuild, Iteration: 2, ConsecutiveFailures: 1},
 			input: StepInput{Input: InputPhaseComplete},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhaseBuild, Status: StatusIdle, Flow: FlowDiscoverBuild},
 		},
 		{
-			name:  "phase_complete advances plan to generate when auto_approve_plan is true",
+			name:  "phase_complete advances plan to build when auto_approve_plan is true",
 			state: StepState{Phase: PhasePlan, Status: StatusWorking, AutoApprovePlan: true},
 			input: StepInput{Input: InputPhaseComplete},
 			cfg:   DefaultConfig,
@@ -118,7 +118,7 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
 		},
 		{
-			name:  "phase_complete advances generate to prove",
+			name:  "phase_complete advances build to prove",
 			state: StepState{Phase: PhaseBuild, Status: StatusWorking},
 			input: StepInput{Input: InputPhaseComplete},
 			cfg:   DefaultConfig,
@@ -191,7 +191,7 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc"},
 		},
 		{
-			name:  "worker_retry with a new fingerprint returns to generate, stall count resets to 1",
+			name:  "worker_retry with a new fingerprint returns to build, stall count resets to 1",
 			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 0, LastGapFingerprint: ""},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0"},
 			cfg:   DefaultConfig,
@@ -212,7 +212,7 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "verify_failed:unit_1"},
 		},
 		{
-			name:  "review_approve on a non-last unit returns to generate",
+			name:  "review_approve on a non-last unit returns to build",
 			state: StepState{Phase: PhaseProve, Status: StatusWorking, StallCount: 1, LastGapFingerprint: "x", Units: []PlanUnit{{}}},
 			input: StepInput{Input: InputReviewApprove},
 			cfg:   DefaultConfig,
@@ -226,7 +226,7 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseResult, Status: StatusIdle},
 		},
 		{
-			name:  "review_rework with no findings returns to generate and counts the round",
+			name:  "review_rework with no findings returns to build and counts the round",
 			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8},
 			input: StepInput{Input: InputReviewRework},
 			cfg:   DefaultConfig,
@@ -240,7 +240,7 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseBuild, Status: StatusIdle, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc", ReworkRounds: 1},
 		},
 		{
-			name:  "review_rework reaching max_iterations parks review_exhausted in generate instead of failing",
+			name:  "review_rework reaching max_iterations parks review_exhausted in build instead of failing",
 			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 1},
 			input: StepInput{Input: InputReviewRework},
 			cfg:   DefaultConfig,
@@ -342,7 +342,7 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseResult, Status: StatusPaused, PauseReason: PauseInfra},
 		},
 		{
-			name:  "plan_approve from an approval park advances to generate",
+			name:  "plan_approve from an approval park advances to build",
 			state: StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
 			input: StepInput{Input: InputPlanApprove},
 			cfg:   DefaultConfig,
@@ -505,7 +505,7 @@ func TestStepLightApproveGoesResult(t *testing.T) {
 }
 
 // TestStepDiscoverGenerateApproveGoesResult confirms a discover_build
-// mission (generate turn takes the same planless short-circuit as
+// mission (build turn takes the same planless short-circuit as
 // light, empty plan so every unit counts as passed) advances to the
 // result phase on review_approve exactly like light, D-090.
 func TestStepDiscoverGenerateApproveGoesResult(t *testing.T) {
@@ -606,7 +606,7 @@ func TestStepAppliesVerification(t *testing.T) {
 			wantPhase: PhaseBuild, wantEvents: []string{"mission.retry"},
 		},
 		{
-			name:  "phase_complete marks a passing unit harness-passed and stays in generate while a unit is pending (D-096)",
+			name:  "phase_complete marks a passing unit harness-passed and stays in build while a unit is pending (D-096)",
 			state: StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}},
 			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
 			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}, {Title: "b"}},
@@ -757,7 +757,7 @@ func TestStepLightStallNeverReplans(t *testing.T) {
 
 // TestStepDiscoverGenerateStallNeverReplans mirrors
 // TestStepLightStallNeverReplans for flow=discover_build (D-090,
-// issue #459): its generate turn never visits PhasePlan either, so the
+// issue #459): its build turn never visits PhasePlan either, so the
 // same replan-skip must apply.
 func TestStepDiscoverGenerateStallNeverReplans(t *testing.T) {
 	got := Step(
@@ -791,7 +791,7 @@ func TestParsePhase(t *testing.T) {
 // TestParsePhaseLegacyMapping is the table test for legacy phase name
 // tolerance: a row (or historical mission_events payload) still
 // carrying a pre-rename value (slice 1's explore/execute/review, or
-// #611's generate) must parse to its current equivalent, so a new
+// #611's build) must parse to its current equivalent, so a new
 // binary reads old rows correctly before the data migration in
 // scripts/pending-alters.md runs, and old event history keeps
 // displaying after a rollback.
@@ -930,7 +930,7 @@ func TestStepAskUserParksWithoutEvent(t *testing.T) {
 		t.Fatalf("Status = %s, want waiting_for_input", got.Next.Status)
 	}
 	if got.Next.Phase != PhaseBuild {
-		t.Fatalf("Phase = %s, want generate (unchanged)", got.Next.Phase)
+		t.Fatalf("Phase = %s, want build (unchanged)", got.Next.Phase)
 	}
 	if len(got.Events) != 0 {
 		t.Fatalf("Events = %+v, want none: the store already recorded mission.input_requested", got.Events)
@@ -979,7 +979,7 @@ func TestStepReworkAssignsFindingIDsInOrder(t *testing.T) {
 		t.Fatalf("ReviewFindings = %+v, want %+v", got.Next.ReviewFindings, want)
 	}
 	if got.Next.ReworkRounds != 1 || got.Next.Phase != PhaseBuild || got.Next.Status != StatusIdle {
-		t.Fatalf("Next = %+v, want rework round 1 back in generate/idle", got.Next)
+		t.Fatalf("Next = %+v, want rework round 1 back in build/idle", got.Next)
 	}
 	ev := eventOfKind(got.Events, "mission.review_verdict")
 	if ev == nil || !reflect.DeepEqual(ev.Payload["open"], []string{"F1", "F2"}) || ev.Payload["round"] != 1 {
@@ -1087,7 +1087,7 @@ func TestStepPhaseCompleteKeepsReworkRounds(t *testing.T) {
 }
 
 // TestStepPhaseCompleteRoutesOnPendingUnits pins the D-096 routing: a
-// generate completion stays in generate (counters reset, next unit
+// build completion stays in build (counters reset, next unit
 // named) while any unit lacks harness evidence and nothing is open,
 // enters prove once every unit is harness-passed, and enters prove
 // regardless when a finding is open (a rework must be re-reviewed).
@@ -1100,14 +1100,14 @@ func TestStepPhaseCompleteRoutesOnPendingUnits(t *testing.T) {
 		StepInput{Input: InputPhaseComplete}, DefaultConfig,
 	)
 	if pending.Next.Phase != PhaseBuild || pending.Next.Status != StatusIdle || pending.Next.Iteration != 0 || pending.Next.ConsecutiveFailures != 0 {
-		t.Fatalf("Next = %+v, want generate/idle with counters reset", pending.Next)
+		t.Fatalf("Next = %+v, want build/idle with counters reset", pending.Next)
 	}
 	ev := eventOfKind(pending.Events, "mission.generate_continued")
 	if ev == nil || ev.Payload["next_unit"] != 1 || ev.Payload["pending_units"] != 2 {
 		t.Fatalf("events = %+v, want generate_continued naming unit 1 with 2 pending", pending.Events)
 	}
 	if eventOfKind(pending.Events, "mission.phase_started") != nil {
-		t.Fatal("staying in generate must not emit phase_started")
+		t.Fatal("staying in build must not emit phase_started")
 	}
 
 	allPassed := Step(
@@ -1199,7 +1199,7 @@ func TestStepPhaseCompleteScoresUntouchedFindings(t *testing.T) {
 }
 
 // TestStepReworkParksExhaustedWithIDsInDetail: the third rework at the
-// default ceiling parks (never fails), in generate, naming every open
+// default ceiling parks (never fails), in build, naming every open
 // finding by id and title.
 func TestStepReworkParksExhaustedWithIDsInDetail(t *testing.T) {
 	got := Step(
@@ -1210,7 +1210,7 @@ func TestStepReworkParksExhaustedWithIDsInDetail(t *testing.T) {
 		DefaultConfig,
 	)
 	if got.Next.Phase != PhaseBuild || got.Next.Status != StatusPaused || got.Next.PauseReason != PauseReviewExhausted {
-		t.Fatalf("Next = %+v, want paused review_exhausted in generate", got.Next)
+		t.Fatalf("Next = %+v, want paused review_exhausted in build", got.Next)
 	}
 	if got.Next.ReworkRounds != 3 {
 		t.Fatalf("ReworkRounds = %d, want 3", got.Next.ReworkRounds)
@@ -1241,7 +1241,7 @@ func TestStepReworkStallsOnUntouchedFile(t *testing.T) {
 		DefaultConfig,
 	)
 	if stalled.Next.Phase != PhaseBuild || stalled.Next.PauseReason != PauseNoProgress {
-		t.Fatalf("Next = %+v, want paused no_progress in generate", stalled.Next)
+		t.Fatalf("Next = %+v, want paused no_progress in build", stalled.Next)
 	}
 	ev := eventOfKind(stalled.Events, "mission.paused")
 	if ev == nil || !reflect.DeepEqual(ev.Payload["findings"], []string{"F1"}) {

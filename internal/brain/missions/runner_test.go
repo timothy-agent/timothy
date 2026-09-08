@@ -821,7 +821,7 @@ func TestPlanSessionPromptsLengthAwareSplitting(t *testing.T) {
 // goal already carries the plan, must not redesign or add scope)
 // instead of the design-from-scratch opening, while the shared
 // unit-shape rules (artifacts/criteria/verify_cmd/infeasible) still
-// apply either way so generate/prove need no changes.
+// apply either way so build/prove need no changes.
 func TestPlanSessionTranscribeMode(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
@@ -1658,7 +1658,7 @@ func TestPhaseRoute(t *testing.T) {
 	}{
 		{"discover uses oversight route", Mission{Phase: PhaseDiscover, Route: "mini", PlanRoute: "strong"}, "strong"},
 		{"plan uses oversight route", Mission{Phase: PhasePlan, Route: "mini", PlanRoute: "strong"}, "strong"},
-		{"generate uses worker route", Mission{Phase: PhaseBuild, Route: "mini", EscalationRoute: "coding", ConsecutiveFailures: 1}, "coding"},
+		{"build uses worker route", Mission{Phase: PhaseBuild, Route: "mini", EscalationRoute: "coding", ConsecutiveFailures: 1}, "coding"},
 		{"prove uses review route", Mission{Phase: PhaseProve, Route: "mini", ReviewRoute: "reviewer"}, "reviewer"},
 		{"result runs no LLM turn", Mission{Phase: PhaseResult, Route: "mini"}, ""},
 	}
@@ -2014,7 +2014,7 @@ func TestRunWorkerReportsPermissionDenied(t *testing.T) {
 // TestRunWorkerEmitsToolCallTraceInOrder covers issue #369's acceptance
 // criterion 1: every finished tool call in a worker turn reaches the
 // mission via parkNotifier as a mission.tool_call trace entry, in call
-// order, tagged with the generate phase and the correct outcome
+// order, tagged with the build phase and the correct outcome
 // classification (ok/denied/error).
 func TestRunWorkerEmitsToolCallTraceInOrder(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
@@ -2347,7 +2347,7 @@ func TestDiscoverSessionStreamErrorPropagates(t *testing.T) {
 
 // TestDiscoverSessionGetsShellButNotWriteFile confirms the discover
 // turn's ExtraTools include a mission-scoped shell (for read-only
-// exploration) but never write_file: the generate phase does the
+// exploration) but never write_file: the build phase does the
 // actual work, discover must not create or modify files.
 func TestDiscoverSessionGetsShellButNotWriteFile(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{

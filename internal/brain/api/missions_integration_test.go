@@ -291,8 +291,8 @@ func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
 }
 
 // TestMissionsNoteAcceptedOnEveryNonTerminalPhase confirms the note
-// endpoint (D-089, issue #458) is not generate-only: discover, plan,
-// prove, and generate all accept a note, and the mission.steered event
+// endpoint (D-089, issue #458) is not build-only: discover, plan,
+// prove, and build all accept a note, and the mission.steered event
 // records which phase it landed in.
 func TestMissionsNoteAcceptedOnEveryNonTerminalPhase(t *testing.T) {
 	store := testMissionStore(t)
@@ -524,7 +524,7 @@ func TestMissionsApprovePlanRejectedWhenNotParked(t *testing.T) {
 
 // TestMissionsApprovePlanAdvancesToGenerate confirms the full round
 // trip: a mission parked on PauseApproval, approve-plan advances it to
-// generate.
+// build.
 func TestMissionsApprovePlanAdvancesToGenerate(t *testing.T) {
 	store := testMissionStore(t)
 	ctx := context.Background()
@@ -559,7 +559,7 @@ func TestMissionsApprovePlanAdvancesToGenerate(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if got.Phase != missions.PhaseBuild || got.Status != missions.StatusIdle && got.Status != missions.StatusWorking {
-		t.Fatalf("mission after approve-plan = %s/%s, want generate/idle-or-working (Drive may have already claimed it)", got.Phase, got.Status)
+		t.Fatalf("mission after approve-plan = %s/%s, want build/idle-or-working (Drive may have already claimed it)", got.Phase, got.Status)
 	}
 }
 

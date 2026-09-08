@@ -280,7 +280,7 @@ type scriptedRunner struct {
 	// caller that doesn't care about the raw text.
 	workerText string
 	// workerPackets records the WorkPacket RunWorker was called with,
-	// one entry per call: lets a test assert the generate phase's
+	// one entry per call: lets a test assert the build phase's
 	// packet actually carried what the driver built (e.g. DiscoverNotes
 	// for flow=discover_build, D-090).
 	workerPackets  []WorkPacket
@@ -427,7 +427,7 @@ func TestDriverHappyPathToDone(t *testing.T) {
 	}
 	d := testDriver(store, runner)
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseDone || m.Status != StatusDone {
@@ -739,7 +739,7 @@ func TestDriverPlanCreatedEventOmitsEmptyAssumptions(t *testing.T) {
 // TestDriverPlanApprovalGateParks confirms D-087 (issue #456): a plan
 // phase turn on a mission with AutoApprovePlan=false parks on
 // PauseApproval with the plan already stored, instead of advancing to
-// generate; no worker turn runs (scriptedRunner has no workerVerdicts
+// build; no worker turn runs (scriptedRunner has no workerVerdicts
 // scripted, so a stray runExecute call would fail the test via an
 // unscripted-call panic/error).
 func TestDriverPlanApprovalGateParks(t *testing.T) {
@@ -761,10 +761,10 @@ func TestDriverPlanApprovalGateParks(t *testing.T) {
 }
 
 // TestDriverDecidePlanApprove confirms DecidePlan's approve verb
-// unparks a PauseApproval mission straight to generate. Scripts a
+// unparks a PauseApproval mission straight to build. Scripts a
 // workerVerdicts entry (blocked) so the background Drive goroutine
 // DecidePlan kicks off, which continues into the now-unparked
-// generate phase, settles cleanly instead of panicking on an
+// build phase, settles cleanly instead of panicking on an
 // unscripted RunWorker call once it runs past this assertion.
 func TestDriverDecidePlanApprove(t *testing.T) {
 	store := newFakeStore()
@@ -787,7 +787,7 @@ func TestDriverDecidePlanApprove(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if got.Phase != PhaseBuild || got.Status != StatusIdle || got.PauseReason != "" {
-		t.Fatalf("mission after approve = %s/%s/%s, want generate/idle/<none>", got.Phase, got.Status, got.PauseReason)
+		t.Fatalf("mission after approve = %s/%s/%s, want build/idle/<none>", got.Phase, got.Status, got.PauseReason)
 	}
 }
 
@@ -806,7 +806,7 @@ func TestDriverDecidePlanReplanRejectedWhenNotParked(t *testing.T) {
 	}
 	got := store.missions["m1"]
 	if got.Phase != PhaseBuild || got.Status != StatusWorking {
-		t.Fatalf("mission after rejected decide = %s/%s, want untouched generate/working", got.Phase, got.Status)
+		t.Fatalf("mission after rejected decide = %s/%s, want untouched build/working", got.Phase, got.Status)
 	}
 }
 
@@ -1069,9 +1069,9 @@ func TestDriverLightDoneFallsBackToFullTextWhenFinalMessageEmpty(t *testing.T) {
 
 // TestDriverDiscoverGenerateVisitsExactlyDiscoverGenerateResult drives
 // a flow=discover_build mission (D-090, issue #459) end to end and
-// confirms its exact phase/event sequence: discover -> generate ->
+// confirms its exact phase/event sequence: discover -> build ->
 // result -> done, with no plan_created and no review round of any
-// kind. The generate turn takes the same planless short-circuit as
+// kind. The build turn takes the same planless short-circuit as
 // light (mission.review_skipped, reason=discover_build), never
 // mission.review_verdict or mission.plan_created.
 func TestDriverDiscoverGenerateVisitsExactlyDiscoverGenerateResult(t *testing.T) {
@@ -1085,8 +1085,8 @@ func TestDriverDiscoverGenerateVisitsExactlyDiscoverGenerateResult(t *testing.T)
 	}
 	d := testDriver(store, runner)
 
-	// discover -> generate (phase_complete routes straight to generate,
-	// never plan) -> generate's own turn (planless short-circuit to
+	// discover -> build (phase_complete routes straight to build,
+	// never plan) -> build's own turn (planless short-circuit to
 	// result) -> result's own deterministic step -> done.
 	driveN(t, d, "m1", 4)
 
@@ -1142,7 +1142,7 @@ func TestDriverDiscoverGenerateVisitsExactlyDiscoverGenerateResult(t *testing.T)
 }
 
 // TestDriverDiscoverGenerateDiscoverNotesReachThePlanlessPacket confirms
-// discover's findings (Mission.DiscoverNotes) reach the generate turn's
+// discover's findings (Mission.DiscoverNotes) reach the build turn's
 // WorkPacket for flow=discover_build, the whole point of running
 // discover before a planless pass. Light: true is also asserted, same
 // worker path as a D-069 light mission.
@@ -1176,7 +1176,7 @@ func TestDriverDiscoverGenerateDiscoverNotesReachThePlanlessPacket(t *testing.T)
 // flow=full mission's packet never carries DiscoverNotes, even when the
 // mission has them stored (every mission that visits discover does):
 // WorkPacket.DiscoverNotes is meant for a planless worker turn only
-// (D-090), and a full-flow generate turn gets its own Plan block
+// (D-090), and a full-flow build turn gets its own Plan block
 // instead.
 func TestDriverPacketOmitsDiscoverNotesForNonPlanlessFlow(t *testing.T) {
 	store := newFakeStore()
@@ -1254,7 +1254,7 @@ func TestDriverNoProveStillReviewsWithoutArtifacts(t *testing.T) {
 // TestDriverNoProveStillChecksArtifacts confirms flow=no_prove skips
 // only the LLM reviewer, never the harness's own CheckArtifacts: a
 // worker claiming done without writing its declared artifact must
-// still be sent back to generate, exactly as TestDriverArtifactCheck-
+// still be sent back to build, exactly as TestDriverArtifactCheck-
 // BlocksTautologicalDone asserts for flow=full. passes flips only on
 // harness evidence, regardless of flow.
 func TestDriverNoProveStillChecksArtifacts(t *testing.T) {
@@ -1273,7 +1273,7 @@ func TestDriverNoProveStillChecksArtifacts(t *testing.T) {
 
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseBuild || m.Plan.Units[0].Passes {
-		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
+		t.Fatalf("mission = phase %s passes %v, want back in build with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
 	}
 	if m.Iteration == 0 {
 		t.Fatal("a failed artifact check must cost an iteration under no_prove too")
@@ -1351,7 +1351,7 @@ func TestDriverReworkOpensFindingsAndParksWhenExhausted(t *testing.T) {
 		}
 		m, _ := store.Get(context.Background(), "m1")
 		if m.Phase != PhaseBuild || m.Status != StatusIdle {
-			t.Fatalf("after rework %d: phase %q status %q, want generate/idle", round, m.Phase, m.Status)
+			t.Fatalf("after rework %d: phase %q status %q, want build/idle", round, m.Phase, m.Status)
 		}
 		if m.ReworkRounds != round {
 			t.Fatalf("after rework %d: ReworkRounds = %d", round, m.ReworkRounds)
@@ -2626,7 +2626,7 @@ func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
 
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseBuild || m.Plan.Units[0].Passes {
-		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
+		t.Fatalf("mission = phase %s passes %v, want back in build with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
 	}
 	if m.Iteration == 0 {
 		t.Fatal("a failed artifact check must cost an iteration")
@@ -2658,7 +2658,7 @@ func TestDriverCitationCheckBlocksInvokedCitation(t *testing.T) {
 
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseBuild || m.Plan.Units[0].Passes {
-		t.Fatalf("mission = phase %s passes %v, want back in generate with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
+		t.Fatalf("mission = phase %s passes %v, want back in build with the unit NOT passed", m.Phase, m.Plan.Units[0].Passes)
 	}
 	if u := m.Plan.Units[0]; u.VerifyCheck != "citations" || !strings.Contains(u.VerifyExcerpt, "citation check failed") {
 		t.Fatalf("unit = %+v, want the citation failure recorded on it for the next worker packet", u)
@@ -2689,7 +2689,7 @@ func TestDriverCitationCheckSkippedForCodingMission(t *testing.T) {
 	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
 	d.retryDelayFn = func(int) time.Duration { return 0 }
 
-	driveN(t, d, "m1", 3) // generate -> prove -> result -> done
+	driveN(t, d, "m1", 3) // build -> prove -> result -> done
 
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseDone || m.Status != StatusDone {
@@ -2703,7 +2703,7 @@ func TestDriverCitationCheckSkippedForCodingMission(t *testing.T) {
 // batch pass after unit 1's turn must catch this, flip unit 0 back to
 // pending (Passes and HarnessPassed both false, Regressed set, the
 // excerpt attached), append mission.unit_regressed, route back to
-// generate (worker_retry) instead of approving unit 1, and name the
+// build (worker_retry) instead of approving unit 1, and name the
 // regression in the next worker packet's current-unit block.
 func TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing(t *testing.T) {
 	root := t.TempDir()
@@ -2749,7 +2749,7 @@ func TestDriverRegressionFlipsUnitAndRetriesInsteadOfAdvancing(t *testing.T) {
 
 	m, _ = store.Get(context.Background(), "m1")
 	if m.Phase != PhaseBuild {
-		t.Fatalf("mission phase = %q, want generate (regression routes back to work, not forward)", m.Phase)
+		t.Fatalf("mission phase = %q, want build (regression routes back to work, not forward)", m.Phase)
 	}
 	u := m.Plan.Units[0]
 	if u.Passes || u.HarnessPassed || !u.Regressed || u.VerifyCheck != "artifacts" || !strings.Contains(u.VerifyExcerpt, "a.md: not found") {
@@ -2806,7 +2806,7 @@ func TestDriverBatchVerifyPassesLaterUnitInSameTurn(t *testing.T) {
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote both"}}}
 	d := testDriver(store, runner)
 
-	driveN(t, d, "m1", 3) // generate -> result -> done
+	driveN(t, d, "m1", 3) // build -> result -> done
 
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseDone {
@@ -2847,7 +2847,7 @@ func TestDriverCodingVerifyFailureRetriesBeforeReview(t *testing.T) {
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseBuild || m.Iteration != 1 {
-		t.Fatalf("mission = phase %s iteration %d, want another generate turn (worker_retry)", m.Phase, m.Iteration)
+		t.Fatalf("mission = phase %s iteration %d, want another build turn (worker_retry)", m.Phase, m.Iteration)
 	}
 	if len(runner.reviewCalls) != 0 {
 		t.Fatal("a review round ran on work the harness had already failed")
@@ -2861,7 +2861,7 @@ func TestDriverCodingVerifyFailureRetriesBeforeReview(t *testing.T) {
 }
 
 // TestDriverSkipsGenerateWhenAllUnitsHarnessPassed confirms the D-094
-// short-circuit: a mission entering generate with every unit
+// short-circuit: a mission entering build with every unit
 // harness-verified and no finding open never runs a worker turn; it
 // records mission.generate_skipped and moves to prove.
 func TestDriverSkipsGenerateWhenAllUnitsHarnessPassed(t *testing.T) {
@@ -3615,7 +3615,7 @@ func TestDriverLegacyPlanReviewsAgainstGoal(t *testing.T) {
 // worktree: the packet's diff is restricted to the reviewed unit's
 // scope while the stat covers every changed file, and a blocking
 // finding naming a changed file outside the scope, with evidence,
-// survives the gate and sends the mission back to generate.
+// survives the gate and sends the mission back to build.
 func TestDriverReviewPacketScopedDiffAndGate(t *testing.T) {
 	root, base := codingWorktree(t)
 	wt := filepath.Join(root, "wt")
@@ -3657,7 +3657,7 @@ func TestDriverReviewPacketScopedDiffAndGate(t *testing.T) {
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseBuild || len(OpenFindings(m.ReviewFindings)) != 1 || !m.ReviewFindings[0].Blocking() {
-		t.Fatalf("mission phase %q findings %+v, want generate with the blocking finding kept", m.Phase, m.ReviewFindings)
+		t.Fatalf("mission phase %q findings %+v, want build with the blocking finding kept", m.Phase, m.ReviewFindings)
 	}
 	for _, ev := range store.events["m1"] {
 		if ev.Kind == "mission.finding_demoted" {
@@ -3734,7 +3734,7 @@ func TestDriverFindingsOnlyReReview(t *testing.T) {
 	m, _ := store.Get(context.Background(), "m1")
 	head := strings.TrimSpace(gitRun(t, wt, "rev-parse", "HEAD"))
 	if m.Phase != PhaseBuild || m.Plan.LastReviewCommit != head || m.Plan.LastReviewAt.IsZero() {
-		t.Fatalf("after round 1: phase %q last_review_commit %q last_review_at %v, want generate with HEAD %s and a round time", m.Phase, m.Plan.LastReviewCommit, m.Plan.LastReviewAt, head)
+		t.Fatalf("after round 1: phase %q last_review_commit %q last_review_at %v, want build with HEAD %s and a round time", m.Phase, m.Plan.LastReviewCommit, m.Plan.LastReviewAt, head)
 	}
 	full := runner.reviewCalls[0]
 	if full.FindingsOnly || full.Diff == "" || full.DiffStat == "" {
@@ -3863,7 +3863,7 @@ func TestDriverTwoUnitPlanReviewsOnce(t *testing.T) {
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseBuild || !m.Plan.Units[0].HarnessPassed || m.Plan.Units[0].Passes || m.Plan.Units[1].HarnessPassed {
-		t.Fatalf("after turn 1: phase %q units %+v, want generate with only unit 0 harness-passed", m.Phase, m.Plan.Units)
+		t.Fatalf("after turn 1: phase %q units %+v, want build with only unit 0 harness-passed", m.Phase, m.Plan.Units)
 	}
 	if len(runner.reviewCalls) != 0 || countEvents(store, "m1", "mission.generate_continued") != 1 {
 		t.Fatalf("after turn 1: %d reviews, %d generate_continued events, want 0 and 1", len(runner.reviewCalls), countEvents(store, "m1", "mission.generate_continued"))

@@ -218,7 +218,7 @@ func TestDelegatedRunReview_FallsBackToNative(t *testing.T) {
 
 // TestDelegatedRunWorker_EventsCarryPhaseBuild pins the worker side
 // of issue #582's phase field: every worker run's executor events say
-// generate, so the timeline can tell them from review runs.
+// build, so the timeline can tell them from review runs.
 func TestDelegatedRunWorker_EventsCarryPhaseBuild(t *testing.T) {
 	sandbox := newFakeSandbox()
 	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
@@ -239,7 +239,7 @@ func TestDelegatedRunWorker_EventsCarryPhaseBuild(t *testing.T) {
 		var payload map[string]any
 		_ = json.Unmarshal(ev.Payload, &payload)
 		if payload["phase"] != "build" {
-			t.Fatalf("%s phase = %v, want generate", kind, payload["phase"])
+			t.Fatalf("%s phase = %v, want build", kind, payload["phase"])
 		}
 	}
 }

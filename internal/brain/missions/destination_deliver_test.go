@@ -65,7 +65,7 @@ func TestDriverDeliversToDestinationsOnDone(t *testing.T) {
 	rec := &recordingDeliver{}
 	d.SetDestinationDeliver(rec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	if got := rec.count(); got != 1 {
 		t.Fatalf("deliver calls = %d, want 1", got)
@@ -141,7 +141,7 @@ func TestDriverBackfillsNameBeforeDestinationDelivery(t *testing.T) {
 	deliverRec := &recordingDeliver{}
 	d.SetDestinationDeliver(deliverRec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	if got := deliverRec.count(); got != 1 {
 		t.Fatalf("deliver calls = %d, want 1", got)
@@ -187,7 +187,7 @@ func TestDriverParksInResultOnDeliveryFailure(t *testing.T) {
 	rec := &recordingDeliver{err: errors.New("destination unreachable")}
 	d.SetDestinationDeliver(rec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result(parked)
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result(parked)
 
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseResult {

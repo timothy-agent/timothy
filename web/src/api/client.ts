@@ -1224,7 +1224,7 @@ export interface CreateMissionInput {
   budget_currency?: string
   auto_approve_tools?: boolean
   // auto_approve_plan: omit (or true) advances straight from plan to
-  // generate; false parks the mission awaiting operator approval once
+  // build; false parks the mission awaiting operator approval once
   // the plan phase produces a plan.
   auto_approve_plan?: boolean
   // harness names the delegated coding-CLI executor a coding mission
@@ -1276,7 +1276,7 @@ export interface CreateMissionInput {
   // maps to "light" when light is true, else "full", the pre-#459
   // default. "no_prove" keeps discover/plan but skips only the LLM
   // reviewer. "discover_build" is a true planless flow: discover
-  // runs, then a single planless generate pass (no plan, no review),
+  // runs, then a single planless build pass (no plan, no review),
   // same worker behavior as light. Only "full" is valid when
   // kind === 'coding'.
   flow?: 'full' | 'discover_build' | 'no_prove' | 'light'
@@ -1311,7 +1311,7 @@ export async function getMissionExecutorOptions(route?: string): Promise<Executo
 }
 
 // getMissionExecutionPlan resolves all five mission phases (discover,
-// plan, generate, prove, escalate) server-side for the given create
+// plan, build, prove, escalate) server-side for the given create
 // inputs, so the frontend never mirrors route/harness precedence
 // itself. Params match the create form's own fields; all optional.
 export async function getMissionExecutionPlan(params: {
@@ -1440,7 +1440,7 @@ export async function answerMissionPermission(
 }
 
 // approveMissionPlan approves a mission parked on plan approval
-// (pause_reason: "approval"): the mission moves to phase=generate.
+// (pause_reason: "approval"): the mission moves to phase=build.
 export async function approveMissionPlan(id: string): Promise<void> {
   await request<void>(`/v1/missions/${id}/approve-plan`, { method: 'POST' })
 }

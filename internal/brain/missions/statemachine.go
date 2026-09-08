@@ -36,7 +36,7 @@ var phaseOrder = []Phase{PhaseDiscover, PhasePlan, PhaseBuild, PhaseProve}
 // discoverBuildPhaseOrder is FlowDiscoverBuild's own pipeline
 // (D-090, issue #459): discover runs as normal, but its completion
 // routes straight to build, skipping plan entirely: a true
-// planless flow, not merely a review skip. Generate's own exit takes
+// planless flow, not merely a review skip. Build's own exit takes
 // the same light-style short-circuit runExecute uses for Light
 // missions (straight to InputReviewApprove, never InputPhaseComplete),
 // so this slice never needs a build successor.
@@ -713,7 +713,7 @@ func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 		}
 		s.LastGapFingerprint = in.GapFingerprint
 		// D-069/D-090: a mission that never visits PhasePlan (light, or
-		// flow=discover_generate) skips the replan/no-progress-pause
+		// flow=discover_build) skips the replan/no-progress-pause
 		// brake entirely and falls straight through to the plain
 		// retry/max_iterations path below, same as stepWorkerFailed's
 		// backoff ceiling.
@@ -1113,7 +1113,7 @@ func stepResultComplete(s StepState) Transition {
 	s.Phase = PhaseDone
 	s.Status = StatusDone
 	// verified: false for a planless mission (flow=light, or
-	// flow=discover_generate, D-090), both of which reach done with zero
+	// flow=discover_build, D-090), both of which reach done with zero
 	// harness verification (no plan units, no CheckArtifacts/RunVerify);
 	// distinguishes that in the event log from a harness-verified done.
 	verified := s.Flow != FlowLight && s.Flow != FlowDiscoverBuild
