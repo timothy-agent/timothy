@@ -175,11 +175,11 @@ const pauseReasonLabels: Record<string, string> = {
 }
 
 // runsPlanless mirrors missions.Mission.RunsPlanless (D-090, issue
-// #459): light and flow=discover_generate both run generate with no
+// #459): light and flow=discover_build both run build with no
 // plan, no review; the worker's final message is the deliverable
 // (final_output), not last_evidence.
 function runsPlanless(mission: Mission): boolean {
-  return !!mission.light || mission.flow === 'discover_generate'
+  return !!mission.light || mission.flow === 'discover_build'
 }
 
 // latestPROpened finds the most recent mission.pr_opened event so the

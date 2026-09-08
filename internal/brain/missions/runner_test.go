@@ -821,7 +821,7 @@ func TestPlanSessionPromptsLengthAwareSplitting(t *testing.T) {
 // goal already carries the plan, must not redesign or add scope)
 // instead of the design-from-scratch opening, while the shared
 // unit-shape rules (artifacts/criteria/verify_cmd/infeasible) still
-// apply either way so generate/prove need no changes.
+// apply either way so build/prove need no changes.
 func TestPlanSessionTranscribeMode(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
 		{toolEndEvent(planToolName, `{"units":[{"title":"Add validation","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"go test ./...","passes":true}]}`)},
@@ -1551,7 +1551,7 @@ func TestRunTurnCarriesServedProviderAndModel(t *testing.T) {
 		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`), doneEventMeta("OpenAI Responses", "gpt-5.3-codex")},
 	}}
 	r := newTestRunner(agent)
-	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate)
+	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseBuild)
 	if err != nil {
 		t.Fatalf("runTurn: %v", err)
 	}
@@ -1568,7 +1568,7 @@ func TestRunTurnOmitsProviderModelWhenNeverServed(t *testing.T) {
 		{{Type: stream.EventError, Err: &stream.StreamError{Message: "boom"}}},
 	}}
 	r := newTestRunner(agent)
-	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate)
+	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseBuild)
 	if err == nil {
 		t.Fatal("runTurn: expected an error")
 	}
@@ -1658,7 +1658,7 @@ func TestPhaseRoute(t *testing.T) {
 	}{
 		{"discover uses oversight route", Mission{Phase: PhaseDiscover, Route: "mini", PlanRoute: "strong"}, "strong"},
 		{"plan uses oversight route", Mission{Phase: PhasePlan, Route: "mini", PlanRoute: "strong"}, "strong"},
-		{"generate uses worker route", Mission{Phase: PhaseGenerate, Route: "mini", EscalationRoute: "coding", ConsecutiveFailures: 1}, "coding"},
+		{"build uses worker route", Mission{Phase: PhaseBuild, Route: "mini", EscalationRoute: "coding", ConsecutiveFailures: 1}, "coding"},
 		{"prove uses review route", Mission{Phase: PhaseProve, Route: "mini", ReviewRoute: "reviewer"}, "reviewer"},
 		{"result runs no LLM turn", Mission{Phase: PhaseResult, Route: "mini"}, ""},
 	}
@@ -2014,7 +2014,7 @@ func TestRunWorkerReportsPermissionDenied(t *testing.T) {
 // TestRunWorkerEmitsToolCallTraceInOrder covers issue #369's acceptance
 // criterion 1: every finished tool call in a worker turn reaches the
 // mission via parkNotifier as a mission.tool_call trace entry, in call
-// order, tagged with the generate phase and the correct outcome
+// order, tagged with the build phase and the correct outcome
 // classification (ok/denied/error).
 func TestRunWorkerEmitsToolCallTraceInOrder(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{
@@ -2029,9 +2029,9 @@ func TestRunWorkerEmitsToolCallTraceInOrder(t *testing.T) {
 		t.Fatalf("RunWorker: %v", err)
 	}
 	want := []toolCallRecord{
-		{"m1", "generate", "search_kb", `{"query":"first"}`, "ok", 12, nil},
-		{"m1", "generate", "shell", `{"command":"rm -rf /"}`, "denied", 3, nil},
-		{"m1", "generate", "write_file", `{"path":"x"}`, "error", 40, nil},
+		{"m1", "build", "search_kb", `{"query":"first"}`, "ok", 12, nil},
+		{"m1", "build", "shell", `{"command":"rm -rf /"}`, "denied", 3, nil},
+		{"m1", "build", "write_file", `{"path":"x"}`, "error", 40, nil},
 	}
 	if len(parker.toolCalls) != len(want) {
 		t.Fatalf("toolCalls = %+v, want %d entries", parker.toolCalls, len(want))
@@ -2347,7 +2347,7 @@ func TestDiscoverSessionStreamErrorPropagates(t *testing.T) {
 
 // TestDiscoverSessionGetsShellButNotWriteFile confirms the discover
 // turn's ExtraTools include a mission-scoped shell (for read-only
-// exploration) but never write_file: the generate phase does the
+// exploration) but never write_file: the build phase does the
 // actual work, discover must not create or modify files.
 func TestDiscoverSessionGetsShellButNotWriteFile(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -2417,7 +2417,7 @@ func TestRunTurnBareCloseIsError(t *testing.T) {
 		textEvent("partial work"),
 	}}}
 	r := newTestRunner(agent)
-	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate)
+	res, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseBuild)
 	if err == nil || !strings.Contains(err.Error(), "without a terminal event") {
 		t.Fatalf("err = %v, want no-terminal error", err)
 	}
@@ -2435,7 +2435,7 @@ func TestRunTurnIncompleteIsError(t *testing.T) {
 		{Type: stream.EventIncomplete, Text: "stream ended without a terminal event"},
 	}}}
 	r := newTestRunner(agent)
-	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
+	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseBuild); err == nil || !strings.Contains(err.Error(), "incomplete stream") {
 		t.Fatalf("err = %v, want incomplete-stream error", err)
 	}
 }
@@ -2448,7 +2448,7 @@ func TestRunTurnNilErrErrorEvent(t *testing.T) {
 		{Type: stream.EventError},
 	}}}
 	r := newTestRunner(agent)
-	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate); err == nil || !strings.Contains(err.Error(), "provider stream error") {
+	if _, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseBuild); err == nil || !strings.Contains(err.Error(), "provider stream error") {
 		t.Fatalf("err = %v, want generic provider stream error", err)
 	}
 }
@@ -2483,7 +2483,7 @@ func TestRunTurnTimesOutOnHungStream(t *testing.T) {
 	done := make(chan struct{})
 	var err error
 	go func() {
-		_, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseGenerate)
+		_, err = r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseBuild)
 		close(done)
 	}()
 	select {

@@ -26,7 +26,7 @@ func TestDriverCopiesArtifactsBeforeDestinationDelivery(t *testing.T) {
 	deliverRec := &recordingDeliver{}
 	d.SetDestinationDeliver(deliverRec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	if got := deliverRec.count(); got != 1 {
 		t.Fatalf("deliver calls = %d, want 1", got)
@@ -48,7 +48,7 @@ func TestDriverCopiesArtifactsBeforeDestinationDelivery(t *testing.T) {
 // never runs.
 func TestDriverSkipsArtifactCopyOnFailed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "nope"}},
 	}

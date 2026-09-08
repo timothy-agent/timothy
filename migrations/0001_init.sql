@@ -540,7 +540,7 @@ CREATE TABLE IF NOT EXISTS workflow_run_events (
 -- Missions are long-running, agent-driven units of work distinct from
 -- chat sessions: a mission survives across many model turns, tracks a
 -- plan and progress log, and drives itself through a fixed phase
--- pipeline (discover -> plan -> generate -> prove -> result ->
+-- pipeline (discover -> plan -> build -> prove -> result ->
 -- done|failed) under a state machine (internal/brain/missions).
 --
 -- phase and status are deliberately NOT CHECK-constrained. A future
@@ -594,14 +594,14 @@ CREATE TABLE IF NOT EXISTS missions (
     budget_amount         numeric(12,2),
     -- Currency budget_amount is denominated in.
     budget_currency       char(3) NOT NULL DEFAULT 'USD',
-    -- Model route worker/generate turns run on.
+    -- Model route worker/build turns run on.
     route                 text NOT NULL DEFAULT '',
     -- Model route the prove phase's reviewer runs on; '' falls back
     -- through plan_route to route (runner.go's reviewRoute).
     review_route          text NOT NULL DEFAULT '',
     -- PlanRoute, when set, is the route oversight phases (discover, plan,
-    -- replan) run on instead of route -- "GLM plans, local generates":
-    -- worker/generate turns keep running on route while oversight runs on
+    -- replan) run on instead of route -- "GLM plans, local builds":
+    -- worker/build turns keep running on route while oversight runs on
     -- a stronger model. '' (the default) means route covers everything,
     -- exact prior behavior. review_route still overrides for prove
     -- specifically: precedence there is review_route > plan_route >
@@ -612,7 +612,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- otherwise resolve, as "provider name/model" (router.go's
     -- splitProviderModelHint) -- '' means today's first-usable walk.
     -- Precedence mirrors the route helpers exactly: route_model backs
-    -- generate (workerRoute), plan_route_model backs discover/plan
+    -- build (workerRoute), plan_route_model backs discover/plan
     -- (oversightRoute), review_route_model falls back review_route_model
     -- > plan_route_model > route_model (runner.go's reviewRouteModel).
     -- Escalation is never pinned: it is a failure-path fallback and a
@@ -703,7 +703,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- classified commands still always ask, unaffected by this column
     -- or any grant.
     auto_approve_tools    boolean NOT NULL DEFAULT true,
-    -- D-087 (issue #456): true (default) advances plan -> generate the
+    -- D-087 (issue #456): true (default) advances plan -> build the
     -- moment a plan lands, byte-identical to every mission before this
     -- column existed. false parks the mission on pause_reason='approval'
     -- instead, waiting for an operator approve/replan/rediscover verb --
@@ -715,7 +715,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- mission never touches tracked files -- its diff is
     -- always empty, so the reviewer previously had zero evidence to
     -- judge and rejected every round. This carries the worker's own
-    -- mission_status evidence text forward from generate to prove,
+    -- mission_status evidence text forward from build to prove,
     -- alongside (not instead of) the diff for coding missions.
     last_evidence         text NOT NULL DEFAULT '',
     -- The discover phase's findings, carried into the plan phase's
@@ -796,17 +796,17 @@ CREATE TABLE IF NOT EXISTS missions (
     asks_used              integer NOT NULL DEFAULT 0,
     -- D-090 (issue #459): the phase set this mission runs, chosen once
     -- at create time and never model-mutable. 'full' is
-    -- discover->plan->generate->prove->result (the pre-#459 default);
-    -- 'discover_generate' skips plan (generate runs planless, same as
+    -- discover->plan->build->prove->result (the pre-#459 default);
+    -- 'discover_build' skips plan (build runs planless, same as
     -- light) and prove; 'no_prove' keeps plan but skips the LLM
-    -- reviewer round (harness CheckArtifacts still runs on generate's
+    -- reviewer round (harness CheckArtifacts still runs on build's
     -- exit); 'light' is the existing D-069 behavior (general kind only:
-    -- born in phase=generate, one bare worker turn, the final worker
+    -- born in phase=build, one bare worker turn, the final worker
     -- message is the deliverable). flow is the single source of truth
     -- for D-069 code paths (issue #479 dropped the redundant light
     -- column).
     flow                  text NOT NULL DEFAULT 'full'
-        CHECK (flow IN ('full', 'discover_generate', 'no_prove', 'light')),
+        CHECK (flow IN ('full', 'discover_build', 'no_prove', 'light')),
     -- has_plan (D-102, issue #496): the goal already carries the
     -- operator's own plan, so the plan turn transcribes it into units
     -- instead of designing one from scratch. false (default) is

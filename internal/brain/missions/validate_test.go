@@ -217,16 +217,16 @@ func TestValidateCreate(t *testing.T) {
 			m.Flow = FlowNoProve
 			return m
 		}, ValidateDeps{}, false},
-		{"discover_generate on general accepted", func(m Mission) Mission {
-			m.Flow = FlowDiscoverGenerate
+		{"discover_build on general accepted", func(m Mission) Mission {
+			m.Flow = FlowDiscoverBuild
 			return m
 		}, ValidateDeps{}, false},
 		{"no_prove on coding rejected", func(m Mission) Mission {
 			m.Kind, m.Flow = "coding", FlowNoProve
 			return m
 		}, ValidateDeps{}, true},
-		{"discover_generate on coding rejected", func(m Mission) Mission {
-			m.Kind, m.Flow = "coding", FlowDiscoverGenerate
+		{"discover_build on coding rejected", func(m Mission) Mission {
+			m.Kind, m.Flow = "coding", FlowDiscoverBuild
 			return m
 		}, ValidateDeps{}, true},
 	}

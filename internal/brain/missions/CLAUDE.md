@@ -12,19 +12,19 @@ CLAUDE.md so other work does not pay for it every session.
   `scheduler.go`, `notify.go`, `sweep.go`, `memory.go`. Schema:
   `migrations/0001_init.sql` (edited in place pre-release, never new
   ALTER migrations).
-- Mission phases (D-086, issue #455): discover -> plan -> generate ->
-  prove -> result -> done|failed. `parsePhase` (statemachine.go) still
-  accepts the pre-rename names (explore/execute/review) at read time,
-  mapping them to discover/generate/prove, so a new binary reads old
-  rows safely before the data migration in `scripts/pending-alters.md`
-  runs; historical `mission_events` payloads keep their old phase
+- Mission phases (D-086 issue #455, renamed again by issue #611):
+  discover -> plan -> build -> prove -> result -> done|failed.
+  `parsePhase` (statemachine.go) still accepts the pre-rename names
+  (explore/execute/review, and generate) at read time, mapping them to
+  discover/build/prove, so a new binary reads old rows safely before
+  the data migration in `scripts/pending-alters.md` runs; historical `mission_events` payloads keep their old phase
   names forever, tolerated by the web timeline renderer. Result is
   deterministic harness code (zero LLM turns): destinations delivery
   (including github push/PR, issue #561), artifact copy, and KB
   promotion all run there now, not on the old done transition; a
   failure parks the mission IN result with a visible pause reason
   instead of being lost.
-- Light missions (D-069, kind=general only): born in phase=generate,
+- Light missions (D-069, kind=general only): born in phase=build,
   skip discover/plan/prove; the deliverable travels in mission_status's
   `final_output` argument (reasoning models emit tool calls with no
   plain text). Digest schedules run light.
@@ -64,7 +64,7 @@ CLAUDE.md so other work does not pay for it every session.
   must exist, non-empty, inside the workspace) runs BEFORE any
   model-authored `verify_cmd`. `passes` flags flip only on harness
   evidence, never on model claims.
-- Batch verification (D-094, issue #518): after every generate turn
+- Batch verification (D-094, issue #518): after every build turn
   `verifier.verifyAll` checks every unit (unverified ones fully,
   already-passed ones as the regression subset) and the driver hands
   the outcomes to `Step` via `StepInput.Verified`; `applyVerification`
@@ -72,8 +72,10 @@ CLAUDE.md so other work does not pay for it every session.
   the plan units, persisted only by `ApplyTransition`. A failing or
   regressed unit costs a worker turn (`worker_retry`), never a review;
   `stepReviewApprove` flips `passes` on harness-passed units only; a
-  generate phase with every unit harness-passed and no open finding
-  skips the worker turn (`mission.generate_skipped`).
+  build phase with every unit harness-passed and no open finding
+  skips the worker turn (`mission.generate_skipped`: event type
+  names are stable identifiers and keep their pre-#611 spelling, the
+  same way `mission.review_*` survived the review -> prove rename).
 - Unit criteria and scoped review (D-095, issue #520): every plan unit
   carries `criteria` (2 to 6 lines, `parsePlan` rejects the plan with
   `plan_invalid` otherwise, one planner retry) and `scope` (paths,
@@ -89,8 +91,8 @@ CLAUDE.md so other work does not pay for it every session.
   and no unresolved prior blocking one counts as approval. Light
   missions never plan, so none of this applies to them.
 - One review round, findings-only re-review (D-096, issue #524): a
-  generate turn that leaves units without harness evidence and no
-  finding open stays in generate (`mission.generate_continued`); prove
+  build turn that leaves units without harness evidence and no
+  finding open stays in build (`mission.generate_continued`); prove
   runs one full round once every unit is harness-passed (or a finding
   is open). A rework records the worktree HEAD in the plan jsonb as
   `last_review_commit` (written only by `ApplyTransition`); every later

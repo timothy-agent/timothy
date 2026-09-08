@@ -1,6 +1,6 @@
 // Package missions implements Phase 1 of the mission engine: an
 // agent-driven, long-running unit of work that walks a fixed phase
-// pipeline (discover -> plan -> generate -> prove -> result ->
+// pipeline (discover -> plan -> build -> prove -> result ->
 // done|failed) under a pure state machine, executed by native
 // (in-process) model turns via loop.Agent. Delegated CLI executors
 // (claude/codex subprocess shelling) are explicitly out of scope for
@@ -114,7 +114,7 @@ type Mission struct {
 	// Flow is the phase set this mission runs (D-090, issue #459),
 	// chosen once at create time, snapshotted here, never model-
 	// mutable. FlowLight (D-069, general kind only) skips discover/plan/
-	// prove entirely: born in phase=generate, one bare worker turn, the
+	// prove entirely: born in phase=build, one bare worker turn, the
 	// final worker message is the deliverable, then result/done. Flow is
 	// the single source of truth (issue #479 dropped the redundant light
 	// column); code that means "light mission" tests Flow == FlowLight.
@@ -173,7 +173,7 @@ type Mission struct {
 	// regardless of any grant, so this cannot weaken that guarantee.
 	AutoApproveTools bool `json:"auto_approve_tools"`
 	// AutoApprovePlan, when true (the default), advances straight from
-	// plan to generate the moment a plan lands, exactly as every
+	// plan to build the moment a plan lands, exactly as every
 	// mission has always worked. false parks the mission on
 	// PauseApproval instead (D-087, issue #456), waiting for an
 	// operator to approve/replan/rediscover. Snapshotted at create

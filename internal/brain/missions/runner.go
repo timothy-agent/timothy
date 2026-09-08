@@ -566,7 +566,7 @@ func (r *nativeRunner) missionTools(m Mission) []*tools.Tool {
 // mission's own directory, routed through the mission's sandbox
 // container: shared by missionTools (worker/reviewer, paired with
 // write_file) and DiscoverSession (shell only, read-only exploration:
-// the generate phase does the actual work, so discover never gets
+// the build phase does the actual work, so discover never gets
 // write_file). Returns nil when the mission has no work root yet
 // (WorkRoot's Workspace/Worktree both empty).
 func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
@@ -1005,14 +1005,14 @@ func reviewRoute(m Mission) string {
 
 // phaseRoute reports the route a mission's just-run phase actually
 // used, mirroring the same helper each phase's request builder calls
-// (discover/plan -> oversightRoute, generate -> workerRoute, prove ->
+// (discover/plan -> oversightRoute, build -> workerRoute, prove ->
 // reviewRoute). Used only for the mission.turn event's telemetry
 // (issue #473); result runs no LLM turn, so it reports "".
 func phaseRoute(m Mission) string {
 	switch m.Phase {
 	case PhaseDiscover, PhasePlan:
 		return oversightRoute(m)
-	case PhaseGenerate:
+	case PhaseBuild:
 		return workerRoute(m)
 	case PhaseProve:
 		return reviewRoute(m)
@@ -1072,7 +1072,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		extra = append(extra, t)
 	}
 	extra = append(extra, r.connectorReadTools(ctx, m)...)
-	if t := r.askUserTool(m, PhaseGenerate); t != nil {
+	if t := r.askUserTool(m, PhaseBuild); t != nil {
 		extra = append(extra, t)
 	}
 	req := loop.Request{
@@ -1094,7 +1094,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		Steering: r.steeringFor(m.ID, packet.Progress),
 	}
 
-	res, err := r.runTurn(ctx, req, missionStatusToolName, PhaseGenerate)
+	res, err := r.runTurn(ctx, req, missionStatusToolName, PhaseBuild)
 	text, seenURLs := res.text, res.seenURLs
 	if err != nil {
 		return WorkerVerdict{}, text, err
@@ -1115,7 +1115,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		provider.Message{Role: "assistant", Content: text},
 		provider.Message{Role: "user", Content: "[system] You must end your turn with exactly one mission_status tool call: done, retry, or blocked."},
 	)
-	recoverRes, err := r.runTurn(ctx, recoverReq, missionStatusToolName, PhaseGenerate)
+	recoverRes, err := r.runTurn(ctx, recoverReq, missionStatusToolName, PhaseBuild)
 	recoverText := recoverRes.text
 	seenURLs = append(seenURLs, recoverRes.seenURLs...)
 	if err != nil {
@@ -1198,7 +1198,7 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 // failure. provider/model (issue #507) are who served the turn that
 // produced the returned notes; empty when the turn errored.
 func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, servedProvider, servedModel string, err error) {
-	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the generate phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx)
+	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if pc := m.ParentContext(); pc != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(pc)
@@ -1313,7 +1313,7 @@ func (r *nativeRunner) discoverEnvironmentNudge(m Mission) string {
 // than base (issue #495); the driver recreates the sandbox container
 // afterwards. A stack the sandbox has no image for is prefixed onto
 // the findings so the planner budgets a bootstrap unit instead of
-// finding out at generate time.
+// finding out at build time.
 func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, report discoverReport) string {
 	if m.Kind == KindCoding && m.Environment == "" && r.environmentSink != nil {
 		env := strings.ToLower(strings.TrimSpace(report.Environment))
@@ -1600,7 +1600,7 @@ func renderReviewContent(p ReviewPacket) string {
 // criteria, scope, verify_cmd's POSIX-shell/no-substitution/content-
 // check rules, workspace-relative paths, the infeasible escape hatch
 // (D-077), and assumptions. Kept as one shared string so
-// generate/prove's unit parsing (parsePlan) never has to distinguish
+// build/prove's unit parsing (parsePlan) never has to distinguish
 // which mode produced a plan.
 const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. The harness commits each unit's files itself after the worker turn, so criteria and verify_cmd must judge file CONTENT only, never git status, staging, untracked, or uncommitted state. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
 
@@ -1609,7 +1609,7 @@ const planUnitShapeRules = " Every unit must list at least one artifact, the wor
 // true (D-102, issue #496), transcribe mode -- the goal already
 // contains the operator's own plan, so the model converts it into
 // units faithfully instead of redesigning it. Either way the unit
-// shape (planUnitShapeRules) is identical, so generate/prove need no
+// shape (planUnitShapeRules) is identical, so build/prove need no
 // changes: the same D-077 infeasible and D-095 criteria checks apply
 // to a transcribed plan as to a designed one.
 func planSystemPrompt(hasPlan bool) string {

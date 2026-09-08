@@ -50,13 +50,13 @@ func TestPolicyFor(t *testing.T) {
 			want: missionPolicy{needsWorktree: false, alwaysReview: false, checksCitations: true, canDelegate: false, skipsPlanning: false, canPush: false},
 		},
 		{
-			// discover_generate never reaches routeVerified (its generate
+			// discover_build never reaches routeVerified (its build
 			// turn takes the planless short-circuit instead), so policyFor
 			// does not special-case it: this is the plain general policy,
 			// same as flow=full; alwaysReview is false here only because
 			// that is KindGeneral's own baseline, not a flow override.
-			name: "general discover_generate: policyFor has no special case",
-			kind: KindGeneral, flow: FlowDiscoverGenerate,
+			name: "general discover_build: policyFor has no special case",
+			kind: KindGeneral, flow: FlowDiscoverBuild,
 			want: missionPolicy{needsWorktree: false, alwaysReview: false, checksCitations: true, canDelegate: false, skipsPlanning: false, canPush: false},
 		},
 	}
@@ -88,7 +88,7 @@ func TestInitialPhase(t *testing.T) {
 	}{
 		{name: "coding starts at discover", kind: KindCoding, flow: FlowFull, want: PhaseDiscover},
 		{name: "general starts at discover", kind: KindGeneral, flow: FlowFull, want: PhaseDiscover},
-		{name: "light general starts at generate", kind: KindGeneral, flow: FlowLight, want: PhaseGenerate},
+		{name: "light general starts at build", kind: KindGeneral, flow: FlowLight, want: PhaseBuild},
 		{name: "unknown kind starts at discover even if light requested", kind: "bogus", flow: FlowLight, want: PhaseDiscover},
 	}
 	for _, tc := range cases {

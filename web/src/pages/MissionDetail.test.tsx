@@ -79,7 +79,7 @@ const baseMission: Mission = {
   id: 'm1',
   goal: 'Fix the login bug',
   kind: 'coding',
-  phase: 'generate',
+  phase: 'build',
   status: 'working',
   branch: 'mission/fix-login',
   base_commit: 'abc123def456',
@@ -425,7 +425,7 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
         mission_id: 'm1',
         seq: 5,
         kind: 'mission.turn',
-        payload: { phase: 'generate', duration_ms: 30_000, ok: true },
+        payload: { phase: 'build', duration_ms: 30_000, ok: true },
         provenance: 'live',
         created_at: '2026-01-01T00:04:00Z',
       },
@@ -433,7 +433,7 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
         mission_id: 'm1',
         seq: 6,
         kind: 'mission.turn',
-        payload: { phase: 'generate', duration_ms: 17_500, ok: true },
+        payload: { phase: 'build', duration_ms: 17_500, ok: true },
         provenance: 'live',
         created_at: '2026-01-01T00:05:00Z',
       },
@@ -450,7 +450,7 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
         mission_id: 'm1',
         seq: 5,
         kind: 'mission.turn',
-        payload: { phase: 'generate', duration_ms: 1000, ok: true },
+        payload: { phase: 'build', duration_ms: 1000, ok: true },
         provenance: 'live',
         created_at: '2026-01-01T00:04:00Z',
       },
@@ -1005,7 +1005,7 @@ describe('MissionDetail', () => {
     renderPage()
     await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
-    await screen.findByText((_, el) => el?.textContent === 'Currently in generate · working')
+    await screen.findByText((_, el) => el?.textContent === 'Currently in build · working')
   })
 
   it('disables the Intervene button once the mission is terminal', async () => {
@@ -1468,7 +1468,7 @@ describe('MissionDetail plan approval gate', () => {
     const approveButton = await screen.findByRole('button', { name: 'Approve' })
     fireEvent.click(approveButton)
     await waitFor(() => expect(approveMissionPlan).toHaveBeenCalledWith('m1'))
-    expect(await screen.findByText('Approved, moving to generate…')).toBeTruthy()
+    expect(await screen.findByText('Approved, moving to build…')).toBeTruthy()
   })
 
   it('requests a replan with feedback', async () => {
@@ -1510,7 +1510,7 @@ describe('MissionDetail pending input gate', () => {
         kind: 'open',
         proposed_default: 'staging',
         asked_at: '2026-01-01T00:00:00Z',
-        phase: 'generate',
+        phase: 'build',
       },
     })
     renderPage()

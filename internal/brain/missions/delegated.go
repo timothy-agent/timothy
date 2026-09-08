@@ -717,7 +717,7 @@ var (
 
 // cliRun is the per-run context the shared D-052 protocol threads
 // through launch, poll, finish and bookkeeping (issue #582): a worker
-// run (phase generate) and a review run (phase prove) differ only in
+// run (phase build) and a review run (phase prove) differ only in
 // these fields. Every executor.* event a run records carries phase.
 type cliRun struct {
 	phase    string
@@ -734,7 +734,7 @@ type cliRun struct {
 // workerRun builds the cliRun for a worker turn.
 func workerRun(m Mission, entry gwclient.ResolvedRouteEntry, adapter executor.Adapter, authMode executor.AuthMode) cliRun {
 	return cliRun{
-		phase: string(PhaseGenerate), harness: m.Harness, entry: entry, adapter: adapter,
+		phase: string(PhaseBuild), harness: m.Harness, entry: entry, adapter: adapter,
 		authMode: authMode, route: workerRoute(m), agent: "mission-worker", steer: true,
 	}
 }
@@ -753,7 +753,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 	authMode, apiKey, err := r.resolveCredential(ctx, entry.CredentialRef, adapter.Capabilities())
 	if err != nil {
 		r.coolDown(m.Harness, entry)
-		r.recordAuthFailed(ctx, m.ID, string(PhaseGenerate), m.Harness)
+		r.recordAuthFailed(ctx, m.ID, string(PhaseBuild), m.Harness)
 		return WorkerVerdict{}, "", err
 	}
 	run := workerRun(m, entry, adapter, authMode)
@@ -864,7 +864,7 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 	probeCmd := fmt.Sprintf("cd %s && { [ -f exit_code ] || [ -f pid ]; }", shQuote(state.RunDir))
 	code, perr := r.sandboxExec(ctx, m.ID, m.Environment, workRoot, probeCmd, nil, launchTimeout, &probe)
 	if perr != nil || code != 0 {
-		r.recordDied(ctx, m.ID, string(PhaseGenerate), "lost_run", nil, "run directory or pid missing after restart")
+		r.recordDied(ctx, m.ID, string(PhaseBuild), "lost_run", nil, "run directory or pid missing after restart")
 		return true, forcedRetryVerdict("the executor's run was lost across a restart"), "", nil
 	}
 
@@ -1252,7 +1252,7 @@ func (r *delegatedRunner) injectSteering(ctx context.Context, m Mission, workRoo
 			return delivered
 		}
 		delivered++
-		r.recordEventForce(ctx, m.ID, "executor.steered", map[string]any{"note": note, "harness": m.Harness, "phase": string(PhaseGenerate)})
+		r.recordEventForce(ctx, m.ID, "executor.steered", map[string]any{"note": note, "harness": m.Harness, "phase": string(PhaseBuild)})
 	}
 	return newWatermark
 }
@@ -1684,7 +1684,7 @@ func (r *delegatedRunner) recordAuthFailed(ctx context.Context, missionID, phase
 // skip_reasons); nil for unknown_harness, which needs nothing beyond
 // harness+reason.
 func (r *delegatedRunner) recordSkipped(ctx context.Context, missionID, harness, reason string, extra map[string]any) {
-	payload := map[string]any{"harness": harness, "reason": reason, "phase": string(PhaseGenerate)}
+	payload := map[string]any{"harness": harness, "reason": reason, "phase": string(PhaseBuild)}
 	for k, v := range extra {
 		payload[k] = v
 	}

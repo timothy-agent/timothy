@@ -50,7 +50,7 @@ func TestDriverPromotesToKBOnDone(t *testing.T) {
 	rec := &recordingPromoteKB{}
 	d.SetPromoteKB(rec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	if got := rec.count(); got != 1 {
 		t.Fatalf("promote kb calls = %d, want 1", got)
@@ -62,7 +62,7 @@ func TestDriverPromotesToKBOnDone(t *testing.T) {
 
 func TestDriverSkipsPromoteKBOnFailed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, Destinations: []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1, Destinations: []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "nope"}},
 	}

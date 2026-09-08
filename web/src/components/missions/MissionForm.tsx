@@ -58,18 +58,18 @@ type Kind = 'coding' | 'general'
 // Flow selects the phase set a mission runs (D-090, issue #459); only
 // meaningful on kind=general (coding always stays 'full', enforced
 // server-side).
-type Flow = 'full' | 'discover_generate' | 'no_prove' | 'light'
+type Flow = 'full' | 'discover_build' | 'no_prove' | 'light'
 
 const flowChoices: { value: Flow; label: string; description: string }[] = [
-  { value: 'full', label: 'Full', description: 'Discover, plan, generate, review.' },
+  { value: 'full', label: 'Full', description: 'Discover, plan, build, review.' },
   {
     value: 'no_prove',
     label: 'No review',
     description: 'Discover and plan run, but the LLM reviewer is skipped.',
   },
   {
-    value: 'discover_generate',
-    label: 'Discover + generate',
+    value: 'discover_build',
+    label: 'Discover + build',
     description: 'Discovers first, then a single planless pass; the final message is the result.',
   },
   { value: 'light', label: 'Light', description: "Single pass; the worker's final message is the result." },
@@ -204,17 +204,17 @@ function defaultHarnessLabel(defaultHarnessName: string): string {
 // string before the plan has loaded.
 function defaultPlanRouteLabel(plan: ExecutionPlanPhase[] | null): string {
   const phase = plan?.find((p) => p.phase === 'plan')
-  if (!phase?.route) return 'Same as generate route'
-  return `Same as generate route (${phase.route})`
+  if (!phase?.route) return 'Same as build route'
+  return `Same as build route (${phase.route})`
 }
 
 // defaultReviewRouteLabel names what leaving Review route on
-// "Default" resolves to: either the plan or the generate route,
+// "Default" resolves to: either the plan or the build route,
 // whichever the prove phase actually inherited from.
 function defaultReviewRouteLabel(plan: ExecutionPlanPhase[] | null): string {
   const phase = plan?.find((p) => p.phase === 'prove')
-  if (!phase?.route) return 'Default (same as plan/generate route)'
-  const from = phase.route_source === 'inherited-from-generate' ? 'generate' : 'plan'
+  if (!phase?.route) return 'Default (same as plan/build route)'
+  const from = phase.route_source === 'inherited-from-build' ? 'build' : 'plan'
   return `Same as ${from} route (${phase.route})`
 }
 
@@ -1686,7 +1686,7 @@ export function MissionForm({
                     id="mission-plan-route"
                     value={planRoute}
                     onChange={(e) => setPlanRoute(e.target.value)}
-                    placeholder="Same as generate route"
+                    placeholder="Same as build route"
                   />
                 ) : (
                   <Select
@@ -1707,8 +1707,8 @@ export function MissionForm({
                   </Select>
                 )}
                 <p className="text-xs text-muted-foreground">
-                  Discover, plan, and prove run on this route instead of the generate route above,
-                  e.g. a strong model plans while a cheap/local route generates.
+                  Discover, plan, and prove run on this route instead of the build route above,
+                  e.g. a strong model plans while a cheap/local route builds.
                 </p>
               </div>
               {mode === 'create' && !repeat && (

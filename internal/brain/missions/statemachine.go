@@ -15,7 +15,7 @@ type Phase string
 const (
 	PhaseDiscover Phase = "discover"
 	PhasePlan     Phase = "plan"
-	PhaseGenerate Phase = "generate"
+	PhaseBuild    Phase = "build"
 	PhaseProve    Phase = "prove"
 	// PhaseResult runs deterministic delivery/copy/promote/on_complete
 	// work with zero LLM turns (slice 1 of the phase redesign): the last
@@ -31,16 +31,16 @@ const (
 // reaches result via InputPhaseComplete, only via
 // stepReviewApprove/routeVerified once the plan's last unit is
 // verified (reviewSkippedOrProvePassTransition).
-var phaseOrder = []Phase{PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve}
+var phaseOrder = []Phase{PhaseDiscover, PhasePlan, PhaseBuild, PhaseProve}
 
-// discoverGeneratePhaseOrder is FlowDiscoverGenerate's own pipeline
+// discoverBuildPhaseOrder is FlowDiscoverBuild's own pipeline
 // (D-090, issue #459): discover runs as normal, but its completion
-// routes straight to generate, skipping plan entirely: a true
-// planless flow, not merely a review skip. Generate's own exit takes
+// routes straight to build, skipping plan entirely: a true
+// planless flow, not merely a review skip. Build's own exit takes
 // the same light-style short-circuit runExecute uses for Light
 // missions (straight to InputReviewApprove, never InputPhaseComplete),
-// so this slice never needs a generate successor.
-var discoverGeneratePhaseOrder = []Phase{PhaseDiscover, PhaseGenerate}
+// so this slice never needs a build successor.
+var discoverBuildPhaseOrder = []Phase{PhaseDiscover, PhaseBuild}
 
 // Terminal reports whether phase ends the mission.
 func (p Phase) Terminal() bool {
@@ -50,12 +50,12 @@ func (p Phase) Terminal() bool {
 // nextPhase returns what phase follows p in flow's pipeline, and
 // whether p has a successor (PhaseProve's success case is handled by
 // the caller, since it depends on whether the reviewed unit was last).
-// FlowDiscoverGenerate walks its own shorter pipeline (D-090); every
+// FlowDiscoverBuild walks its own shorter pipeline (D-090); every
 // other flow, including the zero value, walks phaseOrder.
 func nextPhase(flow Flow, p Phase) (Phase, bool) {
 	order := phaseOrder
-	if flow == FlowDiscoverGenerate {
-		order = discoverGeneratePhaseOrder
+	if flow == FlowDiscoverBuild {
+		order = discoverBuildPhaseOrder
 	}
 	for i, cur := range order {
 		if cur == p && i+1 < len(order) {
@@ -72,20 +72,21 @@ func nextPhase(flow Flow, p Phase) (Phase, bool) {
 // strictness, each call site choosing the safe fallback for its own
 // context.
 //
-// Legacy mapping (slice 1 of the phase redesign): explore/execute/
-// review are the pre-rename phase names, still readable from rows a
-// data migration hasn't touched yet or from historical mission_events
-// payloads after a rollback. Drop this branch once the migration in
-// scripts/pending-alters.md has run everywhere and the first stable
-// release ships.
+// Legacy mapping: explore/execute/review are the slice-1 pre-rename
+// names and generate is build's own (issue #611), all still readable
+// from rows a data migration hasn't touched yet or from historical
+// mission_events payloads after a rollback. execute maps straight to
+// build, having been renamed twice. Drop this branch once the
+// migrations in scripts/pending-alters.md have run everywhere and the
+// first stable release ships.
 func parsePhase(raw string) (Phase, bool) {
 	switch Phase(raw) {
-	case PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve, PhaseResult, PhaseDone, PhaseFailed:
+	case PhaseDiscover, PhasePlan, PhaseBuild, PhaseProve, PhaseResult, PhaseDone, PhaseFailed:
 		return Phase(raw), true
 	case "explore":
 		return PhaseDiscover, true
-	case "execute":
-		return PhaseGenerate, true
+	case "execute", "generate":
+		return PhaseBuild, true
 	case "review":
 		return PhaseProve, true
 	default:
@@ -167,7 +168,7 @@ const (
 	InputCancel       Input = "cancel"
 	// InputPlanInfeasible fires when the planner reports the goal cannot
 	// be achieved as stated (D-077); valid only in PhasePlan, fails the
-	// mission instead of letting a rewritten goal reach generate.
+	// mission instead of letting a rewritten goal reach build.
 	InputPlanInfeasible Input = "plan_infeasible"
 	// InputResultComplete/InputResultFailed report the result phase's
 	// own deterministic step outcome (driver-run, zero LLM turns): valid
@@ -178,7 +179,7 @@ const (
 	InputResultFailed   Input = "result_failed"
 	// InputPlanApprove/InputPlanReplan/InputPlanRediscover are the three
 	// operator verbs that resolve a PauseApproval park (D-087): approve
-	// advances straight to generate on the plan as landed; replan
+	// advances straight to build on the plan as landed; replan
 	// re-enters PhasePlan with optional feedback folded into the next
 	// planning prompt; rediscover re-enters PhaseDiscover. Valid only
 	// when the mission is paused for PauseApproval; a no-op transition
@@ -230,7 +231,7 @@ type StepState struct {
 	RateAsOf           string
 	// Units is the plan's unit list (D-094): applyVerification records
 	// each batch verify outcome on it and stepReviewApprove flips
-	// Passes on the harness-passed ones, deciding between generate
+	// Passes on the harness-passed ones, deciding between build
 	// (units left) and result (all passed). Always copied before a
 	// write: it shares its backing array with the Mission row. An empty
 	// plan counts as all passed (planless flows).
@@ -242,19 +243,19 @@ type StepState struct {
 	ReplanUsed bool
 	// Flow is the phase set this mission runs (D-090, issue #459):
 	// nextPhase consults it so discover's completion routes straight to
-	// generate for FlowDiscoverGenerate, skipping plan, the same way
-	// FlowLight skips discover/plan by being born in PhaseGenerate
+	// build for FlowDiscoverBuild, skipping plan, the same way
+	// FlowLight skips discover/plan by being born in PhaseBuild
 	// (D-069), so a stall can never replan into PhasePlan for either.
 	// Empty (a zero-value StepState, every fixture that predates this
 	// field) behaves exactly like FlowFull.
 	Flow Flow
 	// AutoApprovePlan gates the plan phase's success transition
 	// (D-087, issue #456): true (the default) advances straight to
-	// generate, byte-identical to pre-#456 behavior. false parks the
+	// build, byte-identical to pre-#456 behavior. false parks the
 	// mission on PauseApproval instead, waiting for one of the three
 	// operator verbs. FlowLight missions never visit PhasePlan, so this
 	// flag has no effect on them regardless of its value; neither does
-	// FlowDiscoverGenerate, which also never visits PhasePlan.
+	// FlowDiscoverBuild, which also never visits PhasePlan.
 	AutoApprovePlan bool
 	// ReviewFindings is the mission's whole findings ledger (D-092,
 	// issue #512): open ones drive rework, resolved ones stay for the
@@ -281,12 +282,12 @@ type StepState struct {
 }
 
 // neverVisitsPlan reports whether s's mission can never be in
-// PhasePlan: FlowLight (born in PhaseGenerate) and FlowDiscoverGenerate
-// (discover's completion routes straight to generate, D-090) both
+// PhasePlan: FlowLight (born in PhaseBuild) and FlowDiscoverBuild
+// (discover's completion routes straight to build, D-090) both
 // qualify. Used wherever plan-specific state (the stall/replan brake)
 // must be skipped for a mission structurally incapable of reaching it.
 func (s StepState) neverVisitsPlan() bool {
-	return s.Flow == FlowLight || s.Flow == FlowDiscoverGenerate
+	return s.Flow == FlowLight || s.Flow == FlowDiscoverBuild
 }
 
 // StepInput bundles the triggering Input with whatever data it
@@ -315,7 +316,7 @@ type StepInput struct {
 	ReviewAt time.Time
 	// TouchedFiles is every workspace-relative path the worker turn
 	// that just ended changed (git diff --name-only against the
-	// pre-turn HEAD), set on InputPhaseComplete from generate. nil means
+	// pre-turn HEAD), set on InputPhaseComplete from build. nil means
 	// unknown (no worktree), and the untouched counters stay put; an
 	// empty non-nil slice means the turn changed nothing.
 	TouchedFiles []string
@@ -526,33 +527,33 @@ func stepResume(s StepState) Transition {
 }
 
 // stepPhaseComplete advances discover/plan to the next phase in the
-// mission's flow. generate's completion goes through prove (a worker
+// mission's flow. build's completion goes through prove (a worker
 // verdict of DONE requests review, it doesn't itself complete the
 // phase: the driver routes DONE into a review round, whose outcome
 // arrives as InputReviewApprove/InputReviewRework, not
-// InputPhaseComplete), except FlowDiscoverGenerate (D-090, issue
-// #459), whose generate exit takes the same light-style short-circuit
+// InputPhaseComplete), except FlowDiscoverBuild (D-090, issue
+// #459), whose build exit takes the same light-style short-circuit
 // straight to InputReviewApprove that Light missions use, so it never
-// reaches this function from PhaseGenerate either.
+// reaches this function from PhaseBuild either.
 //
 // The plan phase's own completion forks on AutoApprovePlan (D-087,
 // issue #456): true is the byte-identical default, straight through to
 // nextPhase like every other phase. false parks the mission instead:
 // the plan already landed (runPlan's own SetPlan ran before this
 // input arrives), so the park shows the real plan, not a stale one.
-// FlowDiscoverGenerate never visits PhasePlan, so this check never
+// FlowDiscoverBuild never visits PhasePlan, so this check never
 // applies to it: discover's own completion routes straight to
-// generate via nextPhase's flow-aware pipeline.
+// build via nextPhase's flow-aware pipeline.
 //
-// A generate completion with open findings (a rework turn, D-092) also
+// A build completion with open findings (a rework turn, D-092) also
 // scores the turn against them: every open finding whose file the
 // worker never touched counts one more untouched round (the id-based
 // stall input stepReviewRework reads), and the blocking ones are named
 // in mission.rework_untouched. ReworkRounds is deliberately NOT reset
 // here: the review cycle is still running.
 //
-// A generate completion with units still lacking harness evidence and
-// no finding open stays in generate for the next unit (D-096, issue
+// A build completion with units still lacking harness evidence and
+// no finding open stays in build for the next unit (D-096, issue
 // #524): prove runs one round over the whole change set once every unit
 // is harness-passed, instead of one round per unit. Open findings send
 // the turn to prove regardless: a rework must be re-reviewed.
@@ -568,7 +569,7 @@ func stepPhaseComplete(s StepState, in StepInput) Transition {
 		return Transition{Next: s}
 	}
 	var events []EventDraft
-	if s.Phase == PhaseGenerate && in.TouchedFiles != nil {
+	if s.Phase == PhaseBuild && in.TouchedFiles != nil {
 		var untouched []Finding
 		s.ReviewFindings, untouched = markUntouched(s.ReviewFindings, in.TouchedFiles)
 		if len(untouched) > 0 {
@@ -577,7 +578,7 @@ func stepPhaseComplete(s StepState, in StepInput) Transition {
 			}})
 		}
 	}
-	if s.Phase == PhaseGenerate && len(OpenFindings(s.ReviewFindings)) == 0 {
+	if s.Phase == PhaseBuild && len(OpenFindings(s.ReviewFindings)) == 0 {
 		if pending := unverifiedUnits(s.Units); len(pending) > 0 {
 			s.Status = StatusIdle
 			s.Iteration = 0
@@ -597,7 +598,7 @@ func stepPhaseComplete(s StepState, in StepInput) Transition {
 }
 
 // stepPlanApprove is the approve verb (D-087): valid only while parked
-// on PauseApproval, advances straight to generate on the plan as it
+// on PauseApproval, advances straight to build on the plan as it
 // landed: the same nextPhase(PhasePlan) step stepPhaseComplete would
 // have taken had AutoApprovePlan been true. Any other state is a no-op
 // (the API layer rejects the request with 409 before Step ever sees
@@ -608,7 +609,7 @@ func stepPlanApprove(s StepState) Transition {
 	}
 	s.Status = StatusIdle
 	s.PauseReason = ""
-	s.Phase = PhaseGenerate
+	s.Phase = PhaseBuild
 	s.Iteration = 0
 	s.ConsecutiveFailures = 0
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.plan_approved", Payload: map[string]any{}}}}
@@ -712,7 +713,7 @@ func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 		}
 		s.LastGapFingerprint = in.GapFingerprint
 		// D-069/D-090: a mission that never visits PhasePlan (light, or
-		// flow=discover_generate) skips the replan/no-progress-pause
+		// flow=discover_build) skips the replan/no-progress-pause
 		// brake entirely and falls straight through to the plain
 		// retry/max_iterations path below, same as stepWorkerFailed's
 		// backoff ceiling.
@@ -757,7 +758,7 @@ func replanTransition(s StepState, in StepInput) Transition {
 // stepReviewApprove clears the stall counter (progress was made),
 // flips Passes on every harness-passed unit (D-094: approval, whether a
 // reviewer's or the review-skip fast path's, only ever lands on harness
-// evidence), and either moves on to generate (units left) or advances
+// evidence), and either moves on to build (units left) or advances
 // to the result phase (all passed).
 func stepReviewApprove(s StepState) Transition {
 	s.StallCount = 0
@@ -770,7 +771,7 @@ func stepReviewApprove(s StepState) Transition {
 	if allPassed(s.Units) {
 		return reviewSkippedOrProvePassTransition(s)
 	}
-	s.Phase = PhaseGenerate
+	s.Phase = PhaseBuild
 	s.Status = StatusIdle
 	s.Iteration = 0
 	s.ConsecutiveFailures = 0
@@ -887,8 +888,8 @@ func reviewSkippedOrProvePassTransition(s StepState) Transition {
 }
 
 // stepReviewRework merges the round's findings into the ledger (D-092)
-// and sends the mission back to generate for another attempt, unless
-// one of two brakes fires first. Both park IN generate, so a resume
+// and sends the mission back to build for another attempt, unless
+// one of two brakes fires first. Both park IN build, so a resume
 // buys exactly one more worker turn against the open findings rather
 // than an immediate re-review of unchanged work:
 //  1. stall: an open blocking finding whose file the worker left
@@ -913,7 +914,7 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 		s.LastReviewAt = in.ReviewAt
 	}
 	open := OpenFindings(s.ReviewFindings)
-	s.Phase = PhaseGenerate
+	s.Phase = PhaseBuild
 	s.Status = StatusIdle
 	if stalled := stalledFindings(open, cfg.StallRounds); len(stalled) > 0 {
 		return Transition{
@@ -1112,10 +1113,10 @@ func stepResultComplete(s StepState) Transition {
 	s.Phase = PhaseDone
 	s.Status = StatusDone
 	// verified: false for a planless mission (flow=light, or
-	// flow=discover_generate, D-090), both of which reach done with zero
+	// flow=discover_build, D-090), both of which reach done with zero
 	// harness verification (no plan units, no CheckArtifacts/RunVerify);
 	// distinguishes that in the event log from a harness-verified done.
-	verified := s.Flow != FlowLight && s.Flow != FlowDiscoverGenerate
+	verified := s.Flow != FlowLight && s.Flow != FlowDiscoverBuild
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.done", Payload: map[string]any{"verified": verified}}}}
 }
 

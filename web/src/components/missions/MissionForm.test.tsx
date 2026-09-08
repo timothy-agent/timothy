@@ -1501,7 +1501,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
 })
 
 describe('MissionForm: plan route', () => {
-  it('renders the Plan route select in Advanced, defaulted to "Same as generate route"', async () => {
+  it('renders the Plan route select in Advanced, defaulted to "Same as build route"', async () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
@@ -1509,7 +1509,7 @@ describe('MissionForm: plan route', () => {
     await screen.findByLabelText('Review route')
 
     expect(screen.getByLabelText('Plan route')).toBeInTheDocument()
-    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as generate route')
+    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as build route')
   })
 
   it('submits plan_route when a route other than the default is picked', async () => {
@@ -1724,7 +1724,7 @@ const fivePhases: ExecutionPlanPhase[] = [
   }),
   makePhase({ phase: 'plan' }),
   makePhase({
-    phase: 'generate',
+    phase: 'build',
     axis: 'harness',
     harness: 'claude-cli',
     harness_source: 'settings',
@@ -1757,11 +1757,11 @@ describe('MissionForm: execution plan', () => {
     // No pin set on either phase: the select shows "Auto" naming the
     // entry the server marked selected.
     expect(screen.getByLabelText('Discover model')).toHaveTextContent('Autoglm-5.3')
-    expect(screen.getByLabelText('Generate model')).toHaveTextContent('Autosonnet-5')
+    expect(screen.getByLabelText('Build model')).toHaveTextContent('Autosonnet-5')
     fireEvent.click(screen.getByLabelText('Discover model'))
     expect(await screen.findByRole('option', { name: 'glm-5.3' })).toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Discover model'))
-    fireEvent.click(screen.getByLabelText('Generate model'))
+    fireEvent.click(screen.getByLabelText('Build model'))
     expect(await screen.findByRole('option', { name: 'sonnet-5' })).toBeInTheDocument()
     expect(screen.getByText('$0.60/$2.20 per Mtok')).toBeInTheDocument()
     expect(screen.getByText('Naming and memory extraction use the summarize route.')).toBeInTheDocument()
@@ -1825,17 +1825,17 @@ describe('MissionForm: execution plan', () => {
     expect(screen.queryByText(/per Mtok/)).not.toBeInTheDocument()
   })
 
-  it('picking an entry in the generate model select submits route_model, and Auto omits it', async () => {
+  it('picking an entry in the build model select submits route_model, and Auto omits it', async () => {
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
     vi.mocked(createMission).mockResolvedValue({ id: 'm-pin' } as Mission)
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    await screen.findByLabelText('Generate model')
+    await screen.findByLabelText('Build model')
 
-    fireEvent.click(screen.getByLabelText('Generate model'))
+    fireEvent.click(screen.getByLabelText('Build model'))
     fireEvent.click(await screen.findByRole('option', { name: 'sonnet-5' }))
-    expect(screen.getByLabelText('Generate model')).toHaveTextContent('sonnet-5')
+    expect(screen.getByLabelText('Build model')).toHaveTextContent('sonnet-5')
 
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
     await waitFor(() =>
@@ -1851,7 +1851,7 @@ describe('MissionForm: execution plan', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    await screen.findByLabelText('Generate model')
+    await screen.findByLabelText('Build model')
 
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
     await waitFor(() =>
@@ -1864,20 +1864,20 @@ describe('MissionForm: execution plan', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    await screen.findByLabelText('Generate model')
+    await screen.findByLabelText('Build model')
 
-    fireEvent.click(screen.getByLabelText('Generate model'))
+    fireEvent.click(screen.getByLabelText('Build model'))
     fireEvent.click(await screen.findByRole('option', { name: 'sonnet-5' }))
-    expect(screen.getByLabelText('Generate model')).toHaveTextContent('sonnet-5')
+    expect(screen.getByLabelText('Build model')).toHaveTextContent('sonnet-5')
 
-    fireEvent.click(screen.getByLabelText('Generate model'))
+    fireEvent.click(screen.getByLabelText('Build model'))
     fireEvent.click(await screen.findByRole('option', { name: 'Autosonnet-5' }))
-    expect(screen.getByLabelText('Generate model')).toHaveTextContent('Autosonnet-5')
+    expect(screen.getByLabelText('Build model')).toHaveTextContent('Autosonnet-5')
   })
 
   it('shows live default labels for plan, prove, and escalation route selects', async () => {
     const plan = fivePhases.map((p) => {
-      if (p.phase === 'plan') return { ...p, route: 'coding', route_source: 'inherited-from-generate' }
+      if (p.phase === 'plan') return { ...p, route: 'coding', route_source: 'inherited-from-build' }
       if (p.phase === 'prove') return { ...p, route: 'coding', route_source: 'inherited-from-plan' }
       return p
     })
@@ -1889,7 +1889,7 @@ describe('MissionForm: execution plan', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
     await screen.findByLabelText('Review route')
 
-    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as generate route (coding)')
+    expect(screen.getByLabelText('Plan route')).toHaveTextContent('Same as build route (coding)')
     expect(screen.getByLabelText('Review route')).toHaveTextContent('Same as plan route (coding)')
     expect(screen.getByLabelText('Escalation route')).toHaveTextContent(
       'Off (no escalation on failure)',

@@ -92,7 +92,7 @@ func TestAskUserToolExecute(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			parker := &fakeAskUserParker{}
-			tool := AskUserTool("m1", PhaseGenerate, tc.asksUsed, tc.budget, parker)
+			tool := AskUserTool("m1", PhaseBuild, tc.asksUsed, tc.budget, parker)
 			_, err := tool.Execute(context.Background(), json.RawMessage(tc.args))
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Execute() error = %v, wantErr %v", err, tc.wantErr)
@@ -105,8 +105,8 @@ func TestAskUserToolExecute(t *testing.T) {
 				if parker.parked[0].ProposedDefault != tc.wantDefault {
 					t.Fatalf("ProposedDefault = %q, want %q", parker.parked[0].ProposedDefault, tc.wantDefault)
 				}
-				if parker.parked[0].Phase != PhaseGenerate {
-					t.Fatalf("Phase = %q, want generate", parker.parked[0].Phase)
+				if parker.parked[0].Phase != PhaseBuild {
+					t.Fatalf("Phase = %q, want build", parker.parked[0].Phase)
 				}
 			}
 		})

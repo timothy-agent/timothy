@@ -7,7 +7,7 @@ describe('missionStatus', () => {
   })
 
   it('maps running phases to working', () => {
-    for (const phase of ['discover', 'plan', 'generate', 'prove']) {
+    for (const phase of ['discover', 'plan', 'build', 'prove']) {
       expect(missionStatus({ phase, status: 'working' })).toBe('working')
     }
   })
@@ -33,11 +33,11 @@ describe('missionStatus', () => {
   })
 
   it('maps a non-terminal error status to error', () => {
-    expect(missionStatus({ phase: 'generate', status: 'error' })).toBe('error')
+    expect(missionStatus({ phase: 'build', status: 'error' })).toBe('error')
   })
 
   it('maps a non-terminal done status to success', () => {
-    expect(missionStatus({ phase: 'generate', status: 'done' })).toBe('success')
+    expect(missionStatus({ phase: 'build', status: 'done' })).toBe('success')
   })
 })
 

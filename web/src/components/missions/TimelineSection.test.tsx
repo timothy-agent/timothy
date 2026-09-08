@@ -109,7 +109,7 @@ const toolCallTraceEvents: MissionEvent[] = [
     mission_id: 'm1',
     seq: 1,
     kind: 'mission.tool_call',
-    payload: { phase: 'generate', tool: 'search_kb', args_digest: '{"query":"first"}', status: 'ok', duration_ms: 12 },
+    payload: { phase: 'build', tool: 'search_kb', args_digest: '{"query":"first"}', status: 'ok', duration_ms: 12 },
     provenance: 'harness',
     created_at: '2026-01-01T00:00:00Z',
   },
@@ -117,7 +117,7 @@ const toolCallTraceEvents: MissionEvent[] = [
     mission_id: 'm1',
     seq: 2,
     kind: 'mission.tool_call',
-    payload: { phase: 'generate', tool: 'shell', args_digest: '{"command":"ls"}', status: 'denied', duration_ms: 3 },
+    payload: { phase: 'build', tool: 'shell', args_digest: '{"command":"ls"}', status: 'denied', duration_ms: 3 },
     provenance: 'harness',
     created_at: '2026-01-01T00:00:01Z',
   },
@@ -125,7 +125,7 @@ const toolCallTraceEvents: MissionEvent[] = [
     mission_id: 'm1',
     seq: 3,
     kind: 'mission.tool_call',
-    payload: { phase: 'generate', tool: 'write_file', args_digest: '{"path":"x"}', status: 'error', duration_ms: 40 },
+    payload: { phase: 'build', tool: 'write_file', args_digest: '{"path":"x"}', status: 'error', duration_ms: 40 },
     provenance: 'harness',
     created_at: '2026-01-01T00:00:02Z',
   },
@@ -133,7 +133,7 @@ const toolCallTraceEvents: MissionEvent[] = [
     mission_id: 'm1',
     seq: 4,
     kind: 'mission.turn',
-    payload: { phase: 'generate', duration_ms: 500, ok: true, input: 'worker_done' },
+    payload: { phase: 'build', duration_ms: 500, ok: true, input: 'worker_done' },
     provenance: 'harness',
     created_at: '2026-01-01T00:00:03Z',
   },
@@ -160,7 +160,7 @@ describe('TimelineSection tool call trace', () => {
     // the humanized tool call rows directly, no extra grouping click.
     expect(screen.getByText(/3 tool calls/)).toBeTruthy()
     expect(screen.queryByText('Search kb')).toBeNull()
-    openRow(/Turn \(generate\)/)
+    openRow(/Turn \(build\)/)
     expect(screen.getByText('Search kb')).toBeTruthy()
     expect(screen.getByText('Shell')).toBeTruthy()
     expect(screen.getByText('Write file')).toBeTruthy()
@@ -168,7 +168,7 @@ describe('TimelineSection tool call trace', () => {
 
   it('shows the raw tool name and arguments when a tool call row is expanded', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    openRow(/Turn \(generate\)/)
+    openRow(/Turn \(build\)/)
     fireEvent.click(screen.getByText('Search kb'))
 
     expect(screen.getByText('search_kb')).toBeTruthy()
@@ -177,7 +177,7 @@ describe('TimelineSection tool call trace', () => {
 
   it('collapses a tool call row again on a second click', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    openRow(/Turn \(generate\)/)
+    openRow(/Turn \(build\)/)
     const toggle = screen.getByText('Search kb')
     fireEvent.click(toggle)
     expect(screen.getByText('search_kb')).toBeTruthy()
@@ -192,7 +192,7 @@ describe('TimelineSection tool call trace', () => {
         seq: 1,
         kind: 'mission.tool_call',
         payload: {
-          phase: 'generate',
+          phase: 'build',
           tool: 'search_kb',
           args_digest: '{"query":"deploy"}',
           status: 'ok',
@@ -206,13 +206,13 @@ describe('TimelineSection tool call trace', () => {
         mission_id: 'm1',
         seq: 2,
         kind: 'mission.turn',
-        payload: { phase: 'generate', duration_ms: 500, ok: true, input: 'worker_done' },
+        payload: { phase: 'build', duration_ms: 500, ok: true, input: 'worker_done' },
         provenance: 'harness',
         created_at: '2026-01-01T00:00:01Z',
       },
     ]
     render(<TimelineSection events={withHits} />)
-    openRow(/Turn \(generate\)/)
+    openRow(/Turn \(build\)/)
     fireEvent.click(screen.getByText('Search kb'))
     expect(screen.getByText('Runbook · score 0.8123')).toBeTruthy()
   })
@@ -224,7 +224,7 @@ describe('TimelineSection tool call trace', () => {
         seq: 1,
         kind: 'mission.tool_call',
         payload: {
-          phase: 'generate',
+          phase: 'build',
           tool: 'search_kb',
           args_digest: '{"query":"nothing"}',
           status: 'ok',
@@ -238,20 +238,20 @@ describe('TimelineSection tool call trace', () => {
         mission_id: 'm1',
         seq: 2,
         kind: 'mission.turn',
-        payload: { phase: 'generate', duration_ms: 200, ok: true, input: 'worker_done' },
+        payload: { phase: 'build', duration_ms: 200, ok: true, input: 'worker_done' },
         provenance: 'harness',
         created_at: '2026-01-01T00:00:01Z',
       },
     ]
     render(<TimelineSection events={noHits} />)
-    openRow(/Turn \(generate\)/)
+    openRow(/Turn \(build\)/)
     fireEvent.click(screen.getByText('Search kb'))
     expect(screen.getByText('no hits')).toBeTruthy()
   })
 
   it('shows no hit list for a non-search_kb tool call', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    openRow(/Turn \(generate\)/)
+    openRow(/Turn \(build\)/)
     fireEvent.click(screen.getByText('Shell'))
     expect(screen.queryByText('no hits')).toBeNull()
     expect(screen.queryByText(/score/)).toBeNull()
@@ -263,7 +263,7 @@ describe('TimelineSection tool call trace', () => {
         mission_id: 'm1',
         seq: 1,
         kind: 'mission.tool_call',
-        payload: { phase: 'generate', tool: 'search_kb', args_digest: '{"query":"first"}', status: 'ok', duration_ms: 12 },
+        payload: { phase: 'build', tool: 'search_kb', args_digest: '{"query":"first"}', status: 'ok', duration_ms: 12 },
         provenance: 'harness',
         created_at: '2026-01-01T00:00:00Z',
       },
@@ -271,7 +271,7 @@ describe('TimelineSection tool call trace', () => {
         mission_id: 'm1',
         seq: 2,
         kind: 'mission.turn',
-        payload: { phase: 'generate', duration_ms: 500, ok: true, input: 'worker_done' },
+        payload: { phase: 'build', duration_ms: 500, ok: true, input: 'worker_done' },
         provenance: 'harness',
         created_at: '2026-01-01T00:00:01Z',
       },
@@ -339,8 +339,8 @@ describe('TimelineSection phase labels', () => {
 
   it('labels rows from their own payload phase without any phase_started', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    expect(screen.getAllByText('generate').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('generate')[0]).toHaveClass('text-blue-700')
+    expect(screen.getAllByText('build').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('build')[0]).toHaveClass('text-blue-700')
   })
 
   it('labels initial-phase rows before the first transition with their own phase', () => {
@@ -385,7 +385,7 @@ describe('TimelineSection phase labels', () => {
         mission_id: 'm1',
         seq: 1,
         kind: 'mission.turn',
-        payload: { phase: 'generate', duration_ms: 10, ok: true, input: 'worker_done' },
+        payload: { phase: 'build', duration_ms: 10, ok: true, input: 'worker_done' },
         provenance: 'harness',
         created_at: '2026-01-01T00:00:00Z',
       },
@@ -399,7 +399,7 @@ describe('TimelineSection phase labels', () => {
       },
     ]
     render(<TimelineSection events={withNull} />)
-    expect(screen.getAllByText('generate').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('build').length).toBeGreaterThan(0)
   })
 
   it('renders no phase label when no event carries a phase at all', () => {

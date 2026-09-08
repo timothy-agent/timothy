@@ -1018,7 +1018,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		"phase": string(m.Phase), "duration_ms": turnMs,
 		"ok": err == nil, "input": string(in.Input), "reason": in.Reason,
 	}
-	if m.Phase == PhaseGenerate && workerRoute(m) != m.Route {
+	if m.Phase == PhaseBuild && workerRoute(m) != m.Route {
 		payload["escalated_route"] = workerRoute(m)
 	}
 	// Route/agent context (issue #473): route is the mission's own
@@ -1334,11 +1334,11 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 // its outcome maps to. It does not itself decide pass/fail semantics
 // beyond what each phase's contract already defines (worker sentinel,
 // review verdict, planner output). Light missions (D-069) are born in
-// PhaseGenerate and short-circuit out of runExecute's done branch
+// PhaseBuild and short-circuit out of runExecute's done branch
 // straight to InputReviewApprove, so they never reach the discover/plan/
-// prove cases below by construction. flow=discover_generate (D-090,
+// prove cases below by construction. flow=discover_build (D-090,
 // issue #459) DOES reach PhaseDiscover (it runs discover as normal),
-// but its own PhaseGenerate turn takes the same planless short-circuit
+// but its own PhaseBuild turn takes the same planless short-circuit
 // as light, so it never reaches PhasePlan or PhaseProve either.
 func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 	switch m.Phase {
@@ -1346,7 +1346,7 @@ func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 		return d.runDiscover(ctx, m)
 	case PhasePlan:
 		return d.runPlan(ctx, m)
-	case PhaseGenerate:
+	case PhaseBuild:
 		return d.runExecute(ctx, m)
 	case PhaseProve:
 		return d.runReview(ctx, m)
@@ -1364,8 +1364,8 @@ func (d *Driver) runPhase(ctx context.Context, m Mission) (StepInput, error) {
 const discoverNotesCap = 8000
 
 // runDiscover runs one discover turn: a tool-using session that
-// explores the goal before planning (or, for flow=discover_generate,
-// D-090, the planless generate pass) commits to a shape. The findings
+// explores the goal before planning (or, for flow=discover_build,
+// D-090, the planless build pass) commits to a shape. The findings
 // are stored on the mission (SetDiscoverNotes) so the next phase's own
 // (separate) Advance call reads them back via a fresh Get.
 func (d *Driver) runDiscover(ctx context.Context, m Mission) (StepInput, error) {
@@ -1589,7 +1589,7 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		}
 		if m.RunsPlanless() {
 			// D-069/D-090: a planless mission (light, or
-			// flow=discover_generate) has no plan/artifacts for
+			// flow=discover_build) has no plan/artifacts for
 			// routeVerified to check (it would bail into review for want
 			// of them); the worker's final message IS the deliverable,
 			// so approve directly instead. FinalMessage is the text
@@ -1612,8 +1612,8 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 				d.log.Warn("driver: record final output failed", "mission_id", m.ID, "error", err)
 			}
 			reason := "light"
-			if m.Flow == FlowDiscoverGenerate {
-				reason = "discover_generate"
+			if m.Flow == FlowDiscoverBuild {
+				reason = "discover_build"
 			}
 			if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{"reason": reason, "verified": false}); err != nil {
 				d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
@@ -2009,7 +2009,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 		// runs again (no citations: the worker turn's seenURLs are gone)
 		// and a unit failing it, reviewed or regressed, routes through the
 		// SAME rework path a reviewer's own rejection takes, as a
-		// harness-authored blocking finding (D-092): back to generate with
+		// harness-authored blocking finding (D-092): back to build with
 		// the failure in the worker's packet, counted against the rework
 		// ceiling, and deduplicated by title so the same failing verify
 		// never opens a second finding.
@@ -2067,8 +2067,8 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		Light: m.RunsPlanless(), Location: loc,
 		Findings: m.ReviewFindings, ReworkRound: m.ReworkRounds, MaxRounds: m.MaxIterations,
 	}
-	// D-090: only flow=discover_generate ever has discover notes AND
-	// runs planless at the same time (Light is born in PhaseGenerate,
+	// D-090: only flow=discover_build ever has discover notes AND
+	// runs planless at the same time (Light is born in PhaseBuild,
 	// never visits discover); gating on p.Light here is redundant but
 	// harmless, m.DiscoverNotes is simply empty for every other case.
 	if p.Light {

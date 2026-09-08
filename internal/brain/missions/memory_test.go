@@ -27,7 +27,7 @@ func TestOutcomeDigest(t *testing.T) {
 				Plan:          Plan{Units: []PlanUnit{{Title: "write widget.go", Passes: true}}},
 			},
 			events: []Event{
-				{Kind: "mission.turn", Payload: json.RawMessage(`{"phase":"generate","duration_ms":500}`)},
+				{Kind: "mission.turn", Payload: json.RawMessage(`{"phase":"build","duration_ms":500}`)},
 				{Kind: "mission.review_verdict", Payload: json.RawMessage(`{"decision":"approved","findings":"looks good"}`)},
 			},
 			terminal: PhaseDone,
@@ -38,7 +38,7 @@ func TestOutcomeDigest(t *testing.T) {
 				"review verdict: approved", "review findings: looks good",
 				"terminal state: done",
 			},
-			wantExcludes: []string{"duration_ms", "\"phase\":\"generate\""},
+			wantExcludes: []string{"duration_ms", "\"phase\":\"build\""},
 		},
 		{
 			name: "review skipped",
@@ -177,7 +177,7 @@ func TestDriverExtractsMemoryOnDone(t *testing.T) {
 	rec := &recordingExtract{}
 	d.SetMemoryExtract(rec.fn())
 
-	driveN(t, d, "m1", 5) // discover -> plan -> generate -> prove -> result -> done
+	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
 	waitForCalls(t, rec, 1)
 
@@ -189,7 +189,7 @@ func TestDriverExtractsMemoryOnDone(t *testing.T) {
 
 func TestDriverExtractsMemoryOnFailed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, SessionID: "sess-1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1, SessionID: "sess-1"})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "nope"}},
 	}

@@ -34,7 +34,7 @@ const mission: Mission = {
   id: 'm1',
   goal: 'Fix the login bug',
   kind: 'general',
-  phase: 'generate',
+  phase: 'build',
   status: 'working',
   plan: { units: [] },
   progress: [],

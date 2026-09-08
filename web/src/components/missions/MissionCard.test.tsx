@@ -10,7 +10,7 @@ const baseMission: Mission = {
   id: 'm1',
   goal: 'Fix the login bug on the staging server before Friday',
   kind: 'general',
-  phase: 'generate',
+  phase: 'build',
   status: 'working',
   plan: { units: [] },
   progress: [],
@@ -56,7 +56,7 @@ describe('MissionCard name fallback', () => {
 
 describe('MissionCard status pill', () => {
   it('shows the raw status for a non-terminal mission', () => {
-    renderCard({ ...baseMission, status: 'working', phase: 'generate' })
+    renderCard({ ...baseMission, status: 'working', phase: 'build' })
     expect(screen.getByText('working')).toBeInTheDocument()
   })
 
@@ -139,7 +139,7 @@ describe('MissionCard needs-answer badge', () => {
         kind: 'open',
         proposed_default: 'staging',
         asked_at: '2026-01-01T00:00:00Z',
-        phase: 'generate',
+        phase: 'build',
       },
     })
     expect(screen.getByText('needs answer')).toBeInTheDocument()
@@ -153,8 +153,8 @@ describe('MissionCard needs-answer badge', () => {
 
 describe('MissionCard phase step text', () => {
   it('shows the phase step for a non-terminal mission', () => {
-    renderCard({ ...baseMission, phase: 'generate' })
-    expect(screen.getByText('Generate · 3 of 5')).toBeInTheDocument()
+    renderCard({ ...baseMission, phase: 'build' })
+    expect(screen.getByText('Build · 3 of 5')).toBeInTheDocument()
   })
 
   it('drops the phase text once the mission is terminal, leaving the badge to say so', () => {
@@ -222,12 +222,12 @@ describe('MissionCard removed fields', () => {
   it('never renders retries, unit progress, or the raw phase text', () => {
     renderCard({
       ...baseMission,
-      phase: 'generate',
+      phase: 'build',
       iteration: 3,
       plan: { units: [{ title: 'a', verify_cmd: '', passes: true }, { title: 'b', verify_cmd: '', passes: false }] },
     })
     expect(screen.queryByText(/Retries/)).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+\/\d+ units/)).not.toBeInTheDocument()
-    expect(screen.queryByText('generate')).not.toBeInTheDocument()
+    expect(screen.queryByText('build')).not.toBeInTheDocument()
   })
 })

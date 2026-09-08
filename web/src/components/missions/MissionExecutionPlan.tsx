@@ -19,12 +19,12 @@ function pinValue(entry: ExecutionPlanEntry): string {
 const phaseLabels: Record<string, string> = {
   discover: 'Discover',
   plan: 'Plan',
-  generate: 'Generate',
+  build: 'Build',
   prove: 'Prove',
   escalate: 'Escalate',
 }
 
-const phaseOrder = ['discover', 'plan', 'generate', 'prove', 'escalate']
+const phaseOrder = ['discover', 'plan', 'build', 'prove', 'escalate']
 
 // routeSourceLabels renders each provenance value human-readable, in
 // parentheses next to the route name. 'off'/'none' render nothing —
@@ -35,7 +35,7 @@ const routeSourceLabels: Record<string, string> = {
   'named-coding': 'coding route',
   'default-role': 'default route',
   'inherited-from-plan': 'same as plan route',
-  'inherited-from-generate': 'same as generate route',
+  'inherited-from-build': 'same as build route',
 }
 
 function routeLabel(phase: ExecutionPlanPhase): string | null {
@@ -64,7 +64,7 @@ function priceLabel(phase: ExecutionPlanPhase): string | null {
 }
 
 // modelPinFor/onModelPinChangeFor map a phase key to the pin state that
-// backs it: generate uses route_model, discover/plan use plan_route_model
+// backs it: build uses route_model, discover/plan use plan_route_model
 // (they share oversightRoute), prove uses review_route_model. Escalate
 // is never pinned — it's a failure-path fallback (runner.go's
 // workerModel clears route_model once escalated), so it gets no select.
@@ -73,7 +73,7 @@ function modelPinFor(phaseKey: string, props: MissionExecutionPlanProps): string
     case 'discover':
     case 'plan':
       return props.planRouteModel ?? ''
-    case 'generate':
+    case 'build':
       return props.routeModel ?? ''
     case 'prove':
       return props.reviewRouteModel ?? ''
@@ -90,7 +90,7 @@ function onModelPinChangeFor(
     case 'discover':
     case 'plan':
       return props.onPlanRouteModelChange ?? null
-    case 'generate':
+    case 'build':
       return props.onRouteModelChange ?? null
     case 'prove':
       return props.onReviewRouteModelChange ?? null

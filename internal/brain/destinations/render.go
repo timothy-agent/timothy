@@ -81,7 +81,7 @@ func Render(m missions.Mission, webBaseURL string, events []missions.Event, loc 
 	}
 	body := "Mission complete: " + name
 	if m.RunsPlanless() && m.FinalOutput != "" {
-		// D-069/D-090: a planless mission (light, or flow=discover_generate)
+		// D-069/D-090: a planless mission (light, or flow=discover_build)
 		// has no plan/artifacts, only its final worker message; that IS the
 		// result recipients want, not a completion line pointing them
 		// elsewhere.
