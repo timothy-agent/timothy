@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminProvider } from '../../api/types'
 import { buildPatch, ProviderEdit } from './ProviderEdit'
 
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
+
 vi.mock('../../api/client', () => ({
   availableModels: vi.fn(),
   catalogModelsForProvider: vi.fn(),
@@ -21,6 +23,8 @@ vi.mock('../../api/client', () => ({
 import {
   availableModels,
   catalogModelsForProvider,
+  deleteProvider,
+  deleteSecret,
   listProviders,
   listSecretBackends,
   listSecretRefs,
@@ -29,6 +33,7 @@ import {
   setSecret,
   testProvider,
 } from '../../api/client'
+import { toast } from 'sonner'
 
 const bedrockProvider: AdminProvider = {
   id: 'p1',
@@ -361,6 +366,182 @@ describe('ProviderEdit staged form commit semantics', () => {
 
     expect(input.value).toBe('99m')
   })
+
+  it('a failed test shows the raw detail behind a Details disclosure', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(testProvider).mockResolvedValue({
+      ok: false,
+      latency_ms: 5,
+      model: 'qwen3',
+      detail: 'connection refused',
+    })
+    renderPage('p2')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/Failed after 5 ms/)
+
+    expect(screen.queryByText('connection refused')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }))
+    expect(screen.getByText('connection refused')).toBeInTheDocument()
+  })
+
+  it('stays on the not-tested-yet state when the probe reports a Timothy auth failure', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(testProvider).mockResolvedValue({
+      ok: false,
+      latency_ms: 0,
+      model: 'qwen3',
+      detail: 'missing or invalid bearer token',
+    })
+    renderPage('p2')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(testProvider).toHaveBeenCalled())
+    expect(await screen.findByText('Not tested yet.')).toBeInTheDocument()
+  })
+
+  it('stays on the not-tested-yet state when testProvider throws a Timothy auth error', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(testProvider).mockRejectedValue({ status: 401, message: 'missing or invalid bearer token' })
+    renderPage('p2')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(testProvider).toHaveBeenCalled())
+    expect(await screen.findByText('Not tested yet.')).toBeInTheDocument()
+  })
+
+  it('renders a failed status when testProvider throws a plain error', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(testProvider).mockRejectedValue(new Error('socket hang up'))
+    renderPage('p2')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+
+    expect(await screen.findByText(/socket hang up/)).toBeInTheDocument()
+  })
+
+  it('re-runs the test from the failed status action button', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(testProvider)
+      .mockResolvedValueOnce({ ok: false, latency_ms: 5, model: 'qwen3', detail: 'connection refused' })
+      .mockResolvedValueOnce({ ok: true, latency_ms: 8, model: 'qwen3' })
+    renderPage('p2')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/Failed after 5 ms/)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+    expect(testProvider).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('ProviderEdit load failure', () => {
+  it('reports a toast when listProviders rejects, and renders nothing', async () => {
+    vi.mocked(listProviders).mockRejectedValue(new Error('network down'))
+    const { container } = renderPage('p1')
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load provider', { description: 'network down' }),
+    )
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('ProviderEdit delete flow', () => {
+  it('opens the confirm dialog on Delete and removes the provider on confirm', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(deleteProvider).mockResolvedValue()
+    renderPage('p2')
+
+    await screen.findByDisplayValue('Ollama')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(await screen.findByText('Delete Ollama?')).toBeInTheDocument()
+
+    const confirmButtons = await screen.findAllByRole('button', { name: 'Delete' })
+    fireEvent.click(confirmButtons[confirmButtons.length - 1])
+    await waitFor(() => expect(deleteProvider).toHaveBeenCalledWith('p2'))
+  })
+
+  it('closes the confirm dialog and shows a toast when delete fails', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(deleteProvider).mockRejectedValue(new Error('in use by a route'))
+    renderPage('p2')
+
+    await screen.findByDisplayValue('Ollama')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not remove provider', { description: 'in use by a route' }),
+    )
+    expect(screen.queryByText('Delete Ollama?')).not.toBeInTheDocument()
+  })
+})
+
+describe('ProviderEdit credential_ref and litellm_provider fields', () => {
+  it('staging credential_ref then Save sends the new value', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { name: 'OTHER_KEY', backend: 'db', referenced_by: [] },
+    ])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p2')
+
+    await screen.findByDisplayValue('Ollama')
+    fireEvent.click(screen.getByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /OTHER_KEY/ }))
+
+    fireEvent.click(formSaveButton())
+    await waitFor(() =>
+      expect(patchProvider).toHaveBeenCalledWith('p2', expect.objectContaining({ credential_ref: 'OTHER_KEY' })),
+    )
+  })
+
+  it('staging the LiteLLM provider field then Save sends it in options', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p2')
+
+    const input = await screen.findByPlaceholderText('e.g. xai, zai')
+    fireEvent.change(input, { target: { value: 'zai' } })
+    fireEvent.click(formSaveButton())
+
+    await waitFor(() =>
+      expect(patchProvider).toHaveBeenCalledWith('p2', expect.objectContaining({ options: expect.objectContaining({ litellm_provider: 'zai' }) })),
+    )
+  })
+})
+
+describe('ProviderEdit credential panel clear/save', () => {
+  const withRef = { ...openaicompatProvider, credential_ref: 'OLLAMA_API_KEY' }
+
+  it('clears a configured key and refreshes secret status', async () => {
+    vi.mocked(listProviders).mockResolvedValue([withRef])
+    vi.mocked(secretStatus).mockResolvedValue({ configured: true, backend: 'db' })
+    vi.mocked(deleteSecret).mockResolvedValue()
+    renderPage('p2')
+
+    const clearButton = await screen.findByRole('button', { name: 'clear' })
+    fireEvent.click(clearButton)
+
+    await waitFor(() => expect(deleteSecret).toHaveBeenCalledWith('OLLAMA_API_KEY'))
+  })
+
+  it('typing a key and Save rotates the stored secret for a non-bedrock provider', async () => {
+    vi.mocked(listProviders).mockResolvedValue([withRef])
+    vi.mocked(setSecret).mockResolvedValue()
+    renderPage('p2')
+
+    const input = await screen.findByPlaceholderText('paste key')
+    fireEvent.change(input, { target: { value: 'new-key-value' } })
+    const saveButtons = screen.getAllByRole('button', { name: 'Save' })
+    fireEvent.click(saveButtons[saveButtons.length - 1])
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('OLLAMA_API_KEY', 'new-key-value'))
+  })
 })
 
 describe('ProviderEdit default model field', () => {
@@ -499,6 +680,25 @@ describe('ProviderEdit cli (subscription) provider', () => {
     expect(screen.getByRole('option', { name: /^sonnet/ })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: /^opus/ })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: /^haiku/ })).toBeInTheDocument()
+  })
+
+  it('adds a catalog model not already among the CLI aliases to the suggestion list', async () => {
+    vi.mocked(catalogModelsForProvider).mockResolvedValue([
+      {
+        id: 'claude-opus-4-6-20261015',
+        model_key: 'claude-opus-4-6-20261015',
+        litellm_provider: 'anthropic',
+        mode: 'chat',
+      },
+    ])
+    vi.mocked(listProviders).mockResolvedValue([cliProvider])
+    renderPage('p3')
+
+    const input = await screen.findByPlaceholderText('sonnet')
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.focus(input)
+
+    expect(await screen.findByRole('option', { name: /claude-opus-4-6-20261015/ })).toBeInTheDocument()
   })
 
   it('hides the Test connection button since there is no chat driver to probe', async () => {

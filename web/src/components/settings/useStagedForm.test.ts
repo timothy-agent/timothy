@@ -54,4 +54,16 @@ describe('useStagedForm', () => {
     act(() => result.current.setField('chain', [{ id: 2 }]))
     expect(result.current.dirty).toBe(true)
   })
+
+  it('is dirty when a field changes type from the baseline', () => {
+    const { result } = renderHook(() => useStagedForm<{ v: string | number }>({ v: '1' }))
+    act(() => result.current.setField('v', 1))
+    expect(result.current.dirty).toBe(true)
+  })
+
+  it('is dirty when an object field gains or loses a key', () => {
+    const { result } = renderHook(() => useStagedForm({ opts: { a: 1 } as Record<string, number> }))
+    act(() => result.current.setField('opts', { a: 1, b: 2 }))
+    expect(result.current.dirty).toBe(true)
+  })
 })

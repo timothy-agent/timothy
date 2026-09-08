@@ -275,6 +275,35 @@ describe('ProviderAdd existing-credential picker', () => {
     expect(setSecret).not.toHaveBeenCalled()
     expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({ credential_ref: 'ZAI_API_KEY' })
   })
+
+  it('disables a signing-key managed ref in the existing-credential list', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      {
+        name: 'ZAI_API_KEY',
+        backend: 'db',
+        referenced_by: [{ kind: 'connector', name: 'github-mcp', role: 'signing_key' }],
+      },
+    ])
+    renderPage('glm')
+    await screen.findByLabelText('API key')
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
+
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    const option = await screen.findByRole('option', { name: /signing key \(managed\)/ })
+    expect(option).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('toggles the reveal state of the new-credential paste field', async () => {
+    renderPage('glm')
+    const input = await screen.findByLabelText('API key')
+    expect(input).toHaveAttribute('type', 'password')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show token' }))
+    expect(input).toHaveAttribute('type', 'text')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide token' }))
+    expect(input).toHaveAttribute('type', 'password')
+  })
 })
 
 describe('ProviderAdd bedrock credential inputs', () => {
@@ -505,6 +534,18 @@ describe('ProviderAdd cursor preset', () => {
       credential_ref: 'CURSOR_API_KEY',
       default_model: 'composer-2.5',
     })
+  })
+
+  it('editing the credential reference field for a CLI preset stages the custom ref name', async () => {
+    renderPage('cursor')
+
+    fireEvent.change(screen.getByPlaceholderText('paste key'), { target: { value: 'any-cursor-key' } })
+    fireEvent.change(screen.getByPlaceholderText('name (e.g. CURSOR_API_KEY)'), { target: { value: 'MY_CURSOR_REF' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('MY_CURSOR_REF', 'any-cursor-key')
+    expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({ credential_ref: 'MY_CURSOR_REF' })
   })
 })
 
