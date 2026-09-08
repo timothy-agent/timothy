@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Input } from '../ui/input'
 import { Textarea } from '../ui/textarea'
 import {
@@ -30,32 +30,16 @@ export interface AgentFormValue {
   harness: string
 }
 
-export function useAgentForm(agent?: AdminAgent) {
-  const [name, setName] = useState(agent?.name ?? '')
-  const [description, setDescription] = useState(agent?.description ?? '')
-  const [overlay, setOverlay] = useState(agent?.prompt_overlay ?? '')
-  const [route, setRoute] = useState(agent?.route ?? '')
-  const [skills, setSkills] = useState<string[]>(agent?.skills ?? [])
-  const [tools, setTools] = useState<string[]>(agent?.tools ?? [])
-  const [knowledge, setKnowledge] = useState<string[]>(agent?.knowledge ?? [])
-  const [memory, setMemory] = useState(agent?.memory ?? true)
-  const [harness, setHarness] = useState(agent?.harness ?? '')
-
-  // Edit loads its agent asynchronously, after this hook has already
-  // mounted with blank defaults: useState's initializer only runs
-  // once, so the fields never pick up the fetched agent without this.
-  useEffect(() => {
-    if (!agent) return
-    setName(agent.name)
-    setDescription(agent.description)
-    setOverlay(agent.prompt_overlay)
-    setRoute(agent.route)
-    setSkills(agent.skills)
-    setTools(agent.tools)
-    setKnowledge(agent.knowledge ?? [])
-    setMemory(agent.memory)
-    setHarness(agent.harness ?? '')
-  }, [agent])
+export function useAgentForm() {
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [overlay, setOverlay] = useState('')
+  const [route, setRoute] = useState('')
+  const [skills, setSkills] = useState<string[]>([])
+  const [tools, setTools] = useState<string[]>([])
+  const [knowledge, setKnowledge] = useState<string[]>([])
+  const [memory, setMemory] = useState(true)
+  const [harness, setHarness] = useState('')
 
   const value: AgentFormValue = {
     name,
@@ -71,7 +55,7 @@ export function useAgentForm(agent?: AdminAgent) {
 
   return {
     value,
-    canSubmit: agent ? true : slugify(name) !== '',
+    canSubmit: slugify(name) !== '',
     fields: {
       name,
       setName,

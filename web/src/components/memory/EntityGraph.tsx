@@ -88,7 +88,7 @@ export function EntityGraph({
   return (
     <div className="space-y-2">
       <div
-        className="rounded-xl border border-border bg-card"
+        className="rounded-md border border-border bg-card"
         data-testid="entity-graph"
         role="img"
         aria-label="Entity knowledge graph"
