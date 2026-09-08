@@ -11,7 +11,11 @@ import type { MemoryItem, RetrievedMemory } from '../api/types'
 import { ChainDialog } from '../components/memory/ChainDialog'
 import { GraphTab } from '../components/memory/GraphTab'
 import { TypeBadge } from '../components/memory/TypeBadge'
+import { Eyebrow, PageHeader } from '../components/timothy/page-header'
+import { PageShell } from '../components/timothy/page-shell'
+import { SegmentedControl } from '../components/timothy/segmented-control'
 import { Button } from '../components/ui/button'
+import { Card } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import {
   Select,
@@ -47,7 +51,7 @@ function QueueCard({
   }
 
   return (
-    <div className="rounded-lg border p-4 space-y-3" data-testid="queue-card">
+    <Card className="space-y-3" data-testid="queue-card">
       <div className="flex items-center gap-2">
         <TypeBadge type={memory.type} />
         <span className="text-xs text-muted-foreground">
@@ -96,7 +100,7 @@ function QueueCard({
           </>
         )}
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -218,11 +222,11 @@ function Browser() {
 
       {results !== null && (
         <div className="space-y-2" data-testid="search-results">
-          <h3 className="text-sm font-medium text-muted-foreground">
+          <Eyebrow>
             {results.length === 0 ? 'Nothing retrieved.' : 'Retrieved (best first / runner-up last)'}
-          </h3>
+          </Eyebrow>
           {results.map((m) => (
-            <div key={m.id} className="rounded border p-3 text-sm flex items-start gap-2">
+            <div key={m.id} className="rounded-md border p-4 text-sm flex items-start gap-2">
               <TypeBadge type={m.type} />
               <span className="flex-1">{m.content}</span>
               <button
@@ -239,9 +243,9 @@ function Browser() {
 
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-medium text-muted-foreground">Browse</h3>
+          <Eyebrow>Browse</Eyebrow>
           <Select value={status} onValueChange={(v) => setStatus(v as MemoryItem['status'])}>
-            <SelectTrigger className="h-8 w-32" data-testid="status-filter">
+            <SelectTrigger className="h-8 w-32" data-testid="status-filter" aria-label="Filter by status">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -256,7 +260,7 @@ function Browser() {
           <p className="text-sm text-muted-foreground">No {status} memories.</p>
         ) : (
           browse.map((m) => (
-            <div key={m.id} className="rounded border p-3 text-sm flex items-start gap-2">
+            <div key={m.id} className="rounded-md border p-4 text-sm flex items-start gap-2">
               <TypeBadge type={m.type} />
               <span className="flex-1">{m.content}</span>
               <button
@@ -272,7 +276,7 @@ function Browser() {
       </div>
 
       <div className="space-y-2">
-        <h3 className="text-sm font-medium text-muted-foreground">Remember something</h3>
+        <Eyebrow>Remember something</Eyebrow>
         <div className="flex items-center gap-2">
           <Input
             placeholder="Timothy, remember…"
@@ -283,7 +287,7 @@ function Browser() {
             className="h-10"
           />
           <Select value={newType} onValueChange={setNewType}>
-            <SelectTrigger className="h-10 w-36">
+            <SelectTrigger className="h-10 w-36" aria-label="Memory type">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -323,26 +327,19 @@ export function Memory() {
   const [tab, setTab] = useState<(typeof tabs)[number]['id']>('queue')
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-full space-y-6 p-6">
-        <div className="flex items-center gap-2">
-          <h1 className="text-lg font-semibold">Memory</h1>
-          <div className="ml-auto flex gap-1 rounded-lg border p-0.5">
-            {tabs.map((t) => (
-              <Button
-                key={t.id}
-                size="sm"
-                variant={tab === t.id ? 'secondary' : 'ghost'}
-                onClick={() => setTab(t.id)}
-                data-testid={`tab-${t.id}`}
-              >
-                {t.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-        {tab === 'queue' ? <Queue /> : tab === 'browser' ? <Browser /> : <GraphTab />}
-      </div>
-    </div>
+    <PageShell>
+      <PageHeader
+        title="Memory"
+        actions={
+          <SegmentedControl
+            aria-label="Memory view"
+            value={tab}
+            onChange={(v) => setTab(v as (typeof tabs)[number]['id'])}
+            options={tabs.map((t) => ({ value: t.id, label: t.label }))}
+          />
+        }
+      />
+      {tab === 'queue' ? <Queue /> : tab === 'browser' ? <Browser /> : <GraphTab />}
+    </PageShell>
   )
 }

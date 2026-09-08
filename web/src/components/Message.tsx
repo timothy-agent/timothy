@@ -356,7 +356,7 @@ export function UserMessage({
       <div className="group/message flex w-full min-w-0 items-end justify-end gap-1">
         <CopyButton text={text} label="Copy message" />
         {text !== '' && (
-          <div className="prose prose-sm ml-auto min-w-0 max-w-[85%] break-words rounded-md bg-muted px-4 py-3 text-prose text-foreground [overflow-wrap:anywhere]">
+          <div className="prose ml-auto min-w-0 max-w-[85%] break-words rounded-md bg-muted px-4 py-3 text-prose text-foreground [overflow-wrap:anywhere]">
             <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
               {text}
             </ReactMarkdown>
@@ -403,7 +403,7 @@ export function InterruptedMessage({ text }: { text: string }) {
       className="group/message flex w-full flex-col gap-2 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
       data-testid="interrupted"
     >
-      <div className="prose prose-sm min-w-0 max-w-none break-words text-foreground [overflow-wrap:anywhere]">
+      <div className="prose min-w-0 max-w-none break-words text-foreground [overflow-wrap:anywhere]">
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
@@ -509,7 +509,7 @@ export function AssistantMessage({
       <div className="flex min-w-0 max-w-full items-center gap-2.5">
         <span
           aria-hidden
-          className="inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-brand text-[11px] font-semibold text-brand-foreground"
+          className="inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-brand text-xs font-semibold text-brand-foreground"
         >
           T
         </span>
@@ -528,7 +528,7 @@ export function AssistantMessage({
 
       <div
         className={cn(
-          'prose prose-neutral w-full min-w-0 max-w-none break-words text-[15px] leading-6 [overflow-wrap:anywhere] dark:prose-invert',
+          'prose w-full min-w-0 max-w-none break-words [overflow-wrap:anywhere] dark:prose-invert',
           msg.tools.length > 0 ? 'mt-3' : 'mt-2',
         )}
       >

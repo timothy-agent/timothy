@@ -1,8 +1,7 @@
-import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { Link, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { addKbDocumentFromUrlAuto, uploadKbDocumentAuto } from '../../api/client'
+import { PageHeader } from '../timothy/page-header'
 import { KbUploadForm } from './KbUploadForm'
 
 // KnowledgeAutoAdd is the top-level "Add to Knowledgebase" entry point:
@@ -14,22 +13,12 @@ export function KnowledgeAutoAdd() {
   const navigate = useNavigate()
 
   return (
-    <div className="mt-6 space-y-6">
-      <Link
-        to="/knowledge"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Knowledge
-      </Link>
-
-      <div>
-        <h2 className="text-sm font-semibold">Add to Knowledgebase</h2>
-        <p className="text-sm text-muted-foreground">
-          Drop a file or paste a URL — it's classified into the best matching collection
-          automatically, or a new one is created if nothing fits.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <PageHeader
+        title="Add to Knowledgebase"
+        description="Drop a file or paste a URL — it's classified into the best matching collection automatically, or a new one is created if nothing fits."
+        breadcrumbs={[{ label: 'Knowledge', href: '/knowledge' }, { label: 'Add to Knowledgebase' }]}
+      />
 
       <KbUploadForm
         uploadFile={uploadKbDocumentAuto}

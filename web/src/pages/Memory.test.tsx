@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MemoryItem } from '../api/types'
@@ -39,7 +39,7 @@ vi.mock('echarts/components', () => ({
 }))
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }))
 
-import { entityGraph, listMemories, resolveMemory, searchMemories } from '../api/client'
+import { entityGraph, listMemories, memoryChain, resolveMemory, searchMemories } from '../api/client'
 
 const pendingMemory: MemoryItem = {
   id: 'm1',
@@ -132,8 +132,10 @@ describe('Memory tabs', () => {
   it('defaults to the queue tab, with queue listed first', async () => {
     renderPage()
     await screen.findByTestId('queue-card')
-    const tabButtons = screen.getAllByRole('button', { name: /^(Queue|Browser|Graph)$/ })
-    expect(tabButtons.map((b) => b.textContent)).toEqual(['Queue', 'Browser', 'Graph'])
+    expect(screen.getByRole('radiogroup', { name: 'Memory view' })).toBeInTheDocument()
+    const tabs = screen.getAllByRole('radio')
+    expect(tabs.map((t) => t.textContent)).toEqual(['Queue', 'Browser', 'Graph'])
+    expect(screen.getByRole('radio', { name: 'Queue' })).toHaveAttribute('data-state', 'on')
   })
 })
 
@@ -162,7 +164,7 @@ describe('Memory graph tab', () => {
       edges: [],
     })
     renderPage()
-    fireEvent.click(await screen.findByTestId('tab-graph'))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Graph' }))
     expect(await screen.findByTestId('entity-graph')).toBeInTheDocument()
     expect(screen.getByText('project')).toBeInTheDocument()
   })
@@ -174,12 +176,40 @@ describe('Memory browser', () => {
       { id: 'r1', type: 'semantic', content: 'User lives in Porto.', score: 0.02 },
     ])
     renderPage()
-    fireEvent.click(await screen.findByTestId('tab-browser'))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Browser' }))
     fireEvent.change(screen.getByTestId('memory-search'), {
       target: { value: 'where does the user live' },
     })
     fireEvent.keyDown(screen.getByTestId('memory-search'), { key: 'Enter' })
     await waitFor(() => expect(searchMemories).toHaveBeenCalledWith('where does the user live'))
     expect(await screen.findByTestId('search-results')).toHaveTextContent('User lives in Porto.')
+  })
+
+  it('opens the supersede history dialog and lists the chain oldest first', async () => {
+    vi.mocked(searchMemories).mockResolvedValue([
+      { id: 'r1', type: 'semantic', content: 'User lives in Porto.', score: 0.02 },
+    ])
+    vi.mocked(memoryChain).mockResolvedValue([
+      { ...pendingMemory, id: 'v1', content: 'User lives in Lisbon.', status: 'archived' },
+      { ...pendingMemory, id: 'v2', content: 'User lives in Porto.', status: 'active' },
+    ])
+    renderPage()
+    fireEvent.click(await screen.findByRole('radio', { name: 'Browser' }))
+    fireEvent.change(screen.getByTestId('memory-search'), {
+      target: { value: 'where does the user live' },
+    })
+    fireEvent.keyDown(screen.getByTestId('memory-search'), { key: 'Enter' })
+    const searchResults = await screen.findByTestId('search-results')
+    fireEvent.click(within(searchResults).getByRole('button', { name: 'history' }))
+
+    await waitFor(() => expect(memoryChain).toHaveBeenCalledWith('r1'))
+    const chainList = await screen.findByTestId('chain-list')
+    expect(chainList).toHaveTextContent('User lives in Lisbon.')
+    expect(chainList).toHaveTextContent('User lives in Porto.')
+    const items = within(chainList).getAllByRole('listitem')
+    expect(items[0]).toHaveTextContent('v1')
+    expect(items[0]).toHaveTextContent('User lives in Lisbon.')
+    expect(items[1]).toHaveTextContent('v2')
+    expect(items[1]).toHaveTextContent('User lives in Porto.')
   })
 })

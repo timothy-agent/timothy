@@ -538,7 +538,7 @@ describe('MissionForm: destinations multi-select', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Weekly digest' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
 
     await screen.findByText('Destinations')
     fireEvent.click(screen.getByLabelText(/^ops-hook/))
@@ -1134,7 +1134,7 @@ describe('MissionForm: repository source', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
-    expect(screen.getByRole('button', { name: 'None' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
 
     await waitFor(() =>
@@ -1157,7 +1157,7 @@ describe('MissionForm: repository source', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
-    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub' }))
 
     expect(await screen.findByText(/No GitHub connectors configured yet/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Add one in Settings/ })).toHaveAttribute(
@@ -1173,7 +1173,7 @@ describe('MissionForm: repository source', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
-    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub' }))
     fireEvent.click(await screen.findByLabelText('Connector'))
     fireEvent.click(await screen.findByText('personal-gh'))
 
@@ -1205,7 +1205,7 @@ describe('MissionForm: repository source', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
-    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub' }))
     fireEvent.click(await screen.findByLabelText('Connector'))
     fireEvent.click(await screen.findByText('personal-gh'))
 
@@ -1219,7 +1219,7 @@ describe('MissionForm: repository source', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
-    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub' }))
 
     const submit = screen.getByRole('button', { name: 'Create mission' }) as HTMLButtonElement
     expect(submit.disabled).toBe(true)
@@ -1240,7 +1240,7 @@ describe('MissionForm: repository source', () => {
 // below build on.
 async function toCodingMissionWithRepo() {
   await toCodingMission()
-  fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
+  fireEvent.click(screen.getByRole('radio', { name: 'GitHub' }))
   fireEvent.click(await screen.findByLabelText('Connector'))
   fireEvent.click(await screen.findByText('personal-gh'))
   fireEvent.click(await screen.findByRole('button', { name: 'Choose a repository' }))
@@ -1338,7 +1338,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     fireEvent.change(screen.getByLabelText('Goal'), {
       target: { value: 'Check the news every morning' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
     fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
 
     await waitFor(() =>
@@ -1364,7 +1364,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Digest the attached spec' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
 
     const file = new File(['%PDF-1.4'], 'spec.pdf', { type: 'application/pdf' })
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
@@ -1395,7 +1395,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
     expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
 
     vi.useRealTimers()
@@ -1415,7 +1415,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
     await vi.advanceTimersByTimeAsync(600)
     await vi.advanceTimersByTimeAsync(0)
 
@@ -1430,7 +1430,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
     fireEvent.click(screen.getAllByRole('combobox')[0])
     fireEvent.click(await screen.findByText('Custom'))
     fireEvent.change(screen.getByLabelText('Cron expression'), { target: { value: 'bad cron' } })
@@ -1460,7 +1460,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
 
     // Combobox order while repeating: Runs (cron preset), then Agent.
     fireEvent.click(screen.getAllByRole('combobox')[1])
@@ -1629,7 +1629,7 @@ describe('MissionForm: edit mode', () => {
     const onDone = vi.fn()
     renderForm(<MissionForm mode="edit" schedule={schedule} onDone={onDone} onCancel={vi.fn()} />)
 
-    expect(screen.queryByRole('button', { name: 'Run once' })).toBeNull()
+    expect(screen.queryByRole('radio', { name: 'Run once' })).toBeNull()
 
     await screen.findByDisplayValue('weekly-digest')
     fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
@@ -1950,7 +1950,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
     await toCodingMissionForProposal('Clone octocat/hello-world and audit its dependencies')
 
     expect(await screen.findByText('Proposed from the goal')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'GitHub' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: 'GitHub' })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByRole('button', { name: 'octocat/hello-world' })).toBeInTheDocument()
   })
 
@@ -1975,7 +1975,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear' }))
     expect(screen.queryByText('Proposed from the goal')).toBeNull()
-    expect(screen.getByRole('button', { name: 'None' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
 
     // Re-typing the exact same goal text does not re-propose.
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: `${goalText} ` } })
@@ -1990,7 +1990,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
-    fireEvent.click(screen.getByRole('button', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'GitHub' }))
     fireEvent.click(await screen.findByLabelText('Connector'))
     fireEvent.click(await screen.findByText('personal-gh'))
     fireEvent.click(await screen.findByRole('button', { name: 'Choose a repository' }))
@@ -2019,10 +2019,10 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
     expect(await screen.findByText(/Repositories matching the goal:/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'octocat/widget-one' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'octocat/widget-two' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'None' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
 
     fireEvent.click(screen.getByRole('button', { name: 'octocat/widget-two' }))
-    expect(screen.getByRole('button', { name: 'GitHub' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: 'GitHub' })).toHaveAttribute('aria-checked', 'true')
     expect(await screen.findByText('octocat/widget-two')).toBeInTheDocument()
   })
 
@@ -2049,7 +2049,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
     await new Promise((r) => setTimeout(r, 500))
 
     expect(screen.queryByText('Proposed from the goal')).toBeNull()
-    expect(screen.getByRole('button', { name: 'None' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
   })
 })
 
