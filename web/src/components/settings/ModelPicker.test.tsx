@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CatalogModel } from '../../api/types'
-import { catalogMatchForID, ModelPicker } from './ModelPicker'
+import { catalogMatchForID, matchSuggestion, ModelPicker } from './ModelPicker'
 
 afterEach(cleanup)
 
@@ -23,6 +23,18 @@ describe('catalogMatchForID', () => {
 
   it('returns undefined when nothing matches', () => {
     expect(catalogMatchForID('unknown-model', pool)).toBeUndefined()
+  })
+})
+
+describe('matchSuggestion', () => {
+  const suggestions = [{ id: 'GPT-4o' }, { id: 'claude-haiku-4-5' }]
+
+  it('matches a suggestion case-insensitively', () => {
+    expect(matchSuggestion('gpt-4o', suggestions)?.id).toBe('GPT-4o')
+  })
+
+  it('returns undefined when no suggestion matches', () => {
+    expect(matchSuggestion('unknown', suggestions)).toBeUndefined()
   })
 })
 
@@ -161,6 +173,40 @@ describe('ModelPicker', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onChange).toHaveBeenCalledWith('model-b')
+  })
+
+  it('ArrowUp from the top wraps around to the last suggestion', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelPicker
+        value=""
+        onChange={onChange}
+        suggestions={[{ id: 'model-a' }, { id: 'model-b' }]}
+      />,
+    )
+    const input = screen.getByRole('textbox')
+    fireEvent.focus(input)
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledWith('model-b')
+  })
+
+  it('ArrowDown then ArrowUp moves highlight back to the previous suggestion', () => {
+    const onChange = vi.fn()
+    render(
+      <ModelPicker
+        value=""
+        onChange={onChange}
+        suggestions={[{ id: 'model-a' }, { id: 'model-b' }]}
+      />,
+    )
+    const input = screen.getByRole('textbox')
+    fireEvent.focus(input)
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledWith('model-a')
   })
 
   it('Escape closes the popover and keeps the typed text', () => {
