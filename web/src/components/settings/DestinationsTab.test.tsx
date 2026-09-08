@@ -176,6 +176,48 @@ describe('Destinations tab', () => {
     )
   })
 
+  it('toasts when loading destinations fails', async () => {
+    vi.mocked(listDestinations).mockRejectedValue(new Error('network down'))
+    renderTab()
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load destinations', { description: 'network down' }),
+    )
+  })
+
+  it('toasts when the list-card enabled toggle fails', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
+    vi.mocked(patchDestination).mockRejectedValue(new Error('locked'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'ops-hook enabled' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not update destination', { description: 'locked' }),
+    )
+  })
+
+  it('shows the failure reason for a thrown (non-API-shaped) test error from the list card', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
+    vi.mocked(testDestination).mockRejectedValue(new Error('timeout'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test send' }))
+    expect(await screen.findByText(/Failed: timeout/)).toBeTruthy()
+  })
+
+  it('deletes a destination and refreshes the list', async () => {
+    vi.mocked(listDestinations).mockResolvedValueOnce([webhookDestination]).mockResolvedValueOnce([])
+    vi.mocked(deleteDestination).mockResolvedValue()
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(deleteDestination).toHaveBeenCalledWith('d1'))
+    expect(await screen.findByText('No destinations yet')).toBeTruthy()
+  })
+
   it('adds a webhook destination: create disabled, test, enable', async () => {
     vi.mocked(createDestination).mockResolvedValue('d2')
     vi.mocked(testDestination).mockResolvedValue({ ok: true })
@@ -351,6 +393,88 @@ describe('Destinations tab', () => {
     expect(patchDestination).toHaveBeenCalledTimes(1)
   })
 
+  it('toggles Enabled from the edit page and refreshes on success', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
+    vi.mocked(patchDestination).mockResolvedValue()
+
+    renderTab(`/settings/destinations/${webhookDestination.id}`)
+    const toggle = await screen.findByRole('switch', { name: 'ops-hook enabled' })
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(patchDestination).toHaveBeenCalledWith('d1', { enabled: false }))
+  })
+
+  it('toggles Enabled from the edit page and toasts on failure', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
+    vi.mocked(patchDestination).mockRejectedValue(new Error('locked'))
+
+    renderTab(`/settings/destinations/${webhookDestination.id}`)
+    fireEvent.click(await screen.findByRole('switch', { name: 'ops-hook enabled' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not update destination', { description: 'locked' }),
+    )
+  })
+
+  it('toasts and keeps the confirm state cleared when delete fails from the edit page', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
+    vi.mocked(deleteDestination).mockRejectedValue(new Error('still referenced'))
+
+    renderTab(`/settings/destinations/${webhookDestination.id}`)
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not remove destination', {
+        description: 'still referenced',
+      }),
+    )
+  })
+
+  it('shows the failure reason for a thrown (non-API-shaped) test error on the edit page', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
+    vi.mocked(testDestination).mockRejectedValue(new Error('timeout'))
+
+    renderTab(`/settings/destinations/${webhookDestination.id}`)
+    fireEvent.click(await screen.findByRole('button', { name: 'Test send' }))
+
+    expect(await screen.findByText(/Failed: timeout/)).toBeTruthy()
+  })
+
+  it('switches the bot token to a different credential and rotates it', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([telegramDestination])
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { name: 'SHARED_BOT_TOKEN', backend: 'db', referenced_by: [] },
+    ])
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(patchDestination).mockResolvedValue()
+
+    renderTab(`/settings/destinations/${telegramDestination.id}`)
+    await screen.findByDisplayValue('123456')
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Different credential' }))
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /SHARED_BOT_TOKEN/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save token' }))
+
+    await waitFor(() => expect(patchDestination).toHaveBeenCalledWith('d4', { credential_ref: 'SHARED_BOT_TOKEN' }))
+    expect(setSecret).not.toHaveBeenCalled()
+  })
+
+  it('toasts when rotating the bot token fails', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([telegramDestination])
+    vi.mocked(setSecret).mockRejectedValue(new Error('store unavailable'))
+
+    renderTab(`/settings/destinations/${telegramDestination.id}`)
+    fireEvent.change(await screen.findByPlaceholderText('123456:ABC-DEF...'), { target: { value: 'new-token' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save token' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not update bot token', { description: 'store unavailable' }),
+    )
+  })
+
   it('shows a persistent Alert with Retry when saving destination config fails', async () => {
     vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
     vi.mocked(patchDestination).mockRejectedValueOnce(new Error('server unavailable'))
@@ -385,9 +509,145 @@ describe('Destinations tab', () => {
     expect(screen.getByLabelText('Commit style')).toBeTruthy()
   })
 
+  it('toasts when loading connectors for the email/github add form fails', async () => {
+    vi.mocked(listConnectors).mockRejectedValue(new Error('network down'))
+    renderTab()
+    fireEvent.click(await screen.findByRole('link', { name: /^Email/ }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load connectors', { description: 'network down' }),
+    )
+  })
+
+  it('redirects to the destinations list for an unknown kind', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings/destinations/new/carrier-pigeon']}>
+        <Routes>
+          <Route path="/settings/destinations/*" element={<DestinationsTab />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('No destinations yet')).toBeTruthy()
+  })
+
+  it('shows the test failure reason and allows retesting a webhook add', async () => {
+    vi.mocked(createDestination).mockResolvedValue('d2')
+    vi.mocked(testDestination).mockResolvedValueOnce({ ok: false, error: 'refused' })
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('link', { name: /^Webhook/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-hook' } })
+    fireEvent.change(screen.getByPlaceholderText('https://…/hook'), {
+      target: { value: 'https://example.com/hook' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
+    expect(await screen.findByText(/Test failed: refused/)).toBeTruthy()
+
+    vi.mocked(testDestination).mockResolvedValueOnce({ ok: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
+    await waitFor(() => expect(testDestination).toHaveBeenCalledTimes(2))
+  })
+
+  it('toasts when runTest throws while creating the destination row', async () => {
+    vi.mocked(createDestination).mockRejectedValue(new Error('quota exceeded'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('link', { name: /^Webhook/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-hook' } })
+    fireEvent.change(screen.getByPlaceholderText('https://…/hook'), {
+      target: { value: 'https://example.com/hook' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
+
+    expect(await screen.findByText(/Test failed: quota exceeded/)).toBeTruthy()
+  })
+
+  it('toasts when creating a github destination fails', async () => {
+    vi.mocked(createDestination).mockRejectedValue(new Error('name taken'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('link', { name: /^GitHub/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-repo' } })
+    fireEvent.click(await screen.findByLabelText('GitHub connector'))
+    fireEvent.click(await screen.findByRole('option', { name: 'my-github' }))
+    fireEvent.click(await screen.findByLabelText('Mode'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Push and open a PR when done' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add destination' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not add destination', { description: 'name taken' }),
+    )
+  })
+
+  it('toasts when enabling a tested destination fails', async () => {
+    vi.mocked(createDestination).mockResolvedValue('d2')
+    vi.mocked(testDestination).mockResolvedValue({ ok: true })
+    vi.mocked(patchDestination).mockRejectedValue(new Error('gone'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('link', { name: /^Webhook/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-hook' } })
+    fireEvent.change(screen.getByPlaceholderText('https://…/hook'), {
+      target: { value: 'https://example.com/hook' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
+    const addButton = await screen.findByRole('button', { name: 'Add destination' })
+    await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(addButton)
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not enable destination', { description: 'gone' }),
+    )
+  })
+
+  it('Cancel navigates back to the destinations list from the add form', async () => {
+    renderTab()
+    fireEvent.click(await screen.findByRole('link', { name: /^Webhook/ }))
+    await screen.findByPlaceholderText('ops-inbox')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(await screen.findByText('No destinations yet')).toBeTruthy()
+    expect(createDestination).not.toHaveBeenCalled()
+  })
+
   it('offers the GitHub tile in the add flow', async () => {
     renderTab()
     expect(await screen.findByRole('link', { name: /^GitHub/ })).toBeTruthy()
+  })
+
+  it('sets branch pattern, commit style, and create-if-missing on a github add', async () => {
+    vi.mocked(createDestination).mockResolvedValue('d5')
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('link', { name: /^GitHub/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-repo' } })
+    fireEvent.click(await screen.findByLabelText('GitHub connector'))
+    fireEvent.click(await screen.findByRole('option', { name: 'my-github' }))
+    fireEvent.click(await screen.findByLabelText('Mode'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Push and open a PR when done' }))
+    fireEvent.change(screen.getByLabelText('Branch pattern'), { target: { value: '{type}/{slug}' } })
+    fireEvent.click(screen.getByLabelText('Commit style'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Plain' }))
+    fireEvent.click(screen.getByLabelText('Create repository if missing'))
+
+    const addButton = await screen.findByRole('button', { name: 'Add destination' })
+    await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(addButton)
+
+    await waitFor(() =>
+      expect(createDestination).toHaveBeenCalledWith({
+        name: 'ops-repo',
+        kind: 'github',
+        config: {
+          connector_id: 'c2',
+          mode: 'push_pr',
+          branch_pattern: '{type}/{slug}',
+          commit_style: 'plain',
+          create_if_missing: true,
+        },
+        enabled: true,
+      }),
+    )
   })
 
   it('adds a github destination: no test-send, creates enabled directly', async () => {
@@ -429,6 +689,70 @@ describe('Destinations tab', () => {
     expect(await screen.findByText('ops-repo')).toBeTruthy()
     expect(await screen.findByText('push + PR via my-github')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Test send' })).toBeNull()
+  })
+
+  it('redirects to the destinations list when the id is not found', async () => {
+    renderTab('/settings/destinations/missing')
+    expect(await screen.findByText('No destinations yet')).toBeTruthy()
+  })
+
+  it('shows a toast when loading the destination list fails', async () => {
+    vi.mocked(listDestinations).mockRejectedValue(new Error('network down'))
+    renderTab(`/settings/destinations/${webhookDestination.id}`)
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load destination', { description: 'network down' }),
+    )
+  })
+
+  it('deletes a github destination behind confirm and navigates back', async () => {
+    vi.mocked(listDestinations).mockResolvedValueOnce([githubDestination]).mockResolvedValueOnce([])
+    vi.mocked(deleteDestination).mockResolvedValue()
+    renderTab(`/settings/destinations/${githubDestination.id}`)
+
+    await screen.findByRole('heading', { name: 'ops-repo' })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(deleteDestination).toHaveBeenCalledWith('d5'))
+    expect(await screen.findByText('No destinations yet')).toBeTruthy()
+  })
+
+  it('edits a github destination config and saves the github-shaped patch', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([githubDestination])
+    vi.mocked(patchDestination).mockResolvedValue()
+
+    renderTab(`/settings/destinations/${githubDestination.id}`)
+
+    fireEvent.click(await screen.findByLabelText('Mode'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Push branch when done' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchDestination).toHaveBeenCalledWith('d5', {
+        config: {
+          connector_id: 'c2',
+          mode: 'push',
+          branch_pattern: undefined,
+          commit_style: undefined,
+          create_if_missing: undefined,
+        },
+      }),
+    )
+  })
+
+  it('test-sends from the edit page and shows the failure reason', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
+    vi.mocked(testDestination).mockResolvedValue({ ok: false, error: 'timeout' })
+    renderTab(`/settings/destinations/${webhookDestination.id}`)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test send' }))
+    expect(await screen.findByText(/Failed: timeout/)).toBeTruthy()
+
+    vi.mocked(testDestination).mockResolvedValue({ ok: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
+    await waitFor(() => expect(testDestination).toHaveBeenCalledTimes(2))
   })
 
   it('loads a github destination config into the edit form', async () => {

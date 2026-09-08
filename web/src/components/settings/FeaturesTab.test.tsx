@@ -19,12 +19,16 @@ vi.mock('../../api/client', () => ({
   patchSettings: vi.fn(),
   patchSettingValues: vi.fn(),
 }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { getSettings, listRoutes, patchSettingValues } from '../../api/client'
+import { getSettings, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
+import { toast } from 'sonner'
 
 afterEach(cleanup)
 beforeEach(() => {
+  Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
+  localStorage.clear()
   vi.mocked(listRoutes).mockResolvedValue([])
   vi.mocked(patchSettingValues).mockResolvedValue(undefined)
 })
@@ -79,5 +83,188 @@ describe('FeaturesTab review token ceiling', () => {
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(patchSettingValues).toHaveBeenCalledWith({ mission_review_token_ceiling: '0' }))
     expect(within(region).queryByRole('alert')).toBeNull()
+  })
+})
+
+describe('FeaturesTab flag flip', () => {
+  it('flips a flag optimistically and commits the PATCH', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: { tools_enabled: true }, values: {} })
+    vi.mocked(patchSettings).mockResolvedValue(undefined)
+    render(
+      <MemoryRouter>
+        <FeaturesTab />
+      </MemoryRouter>,
+    )
+
+    const toggle = await screen.findByRole('switch', { name: 'Tool execution' })
+    expect(toggle).toHaveAttribute('data-state', 'checked')
+    fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('data-state', 'unchecked')
+    await waitFor(() => expect(patchSettings).toHaveBeenCalledWith({ tools_enabled: false }))
+  })
+
+  it('reverts and toasts when the flag PATCH fails', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: { tools_enabled: true }, values: {} })
+    vi.mocked(patchSettings).mockRejectedValueOnce(new Error('server unavailable'))
+    render(
+      <MemoryRouter>
+        <FeaturesTab />
+      </MemoryRouter>,
+    )
+
+    const toggle = await screen.findByRole('switch', { name: 'Tool execution' })
+    fireEvent.click(toggle)
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not save', { description: 'server unavailable' }),
+    )
+    // flip's catch refetches settings on failure; a successful refetch
+    // clears the error state right after setting it, so the switch
+    // reverting to its server value is the only lasting effect here.
+    await waitFor(() => expect(toggle).toHaveAttribute('data-state', 'checked'))
+  })
+})
+
+describe('FeaturesTab notification sound', () => {
+  it('toggles the localStorage-backed sound preference with no PATCH', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    renderTab()
+
+    const toggle = await screen.findByRole('switch', { name: 'Notification sound' })
+    expect(toggle).toHaveAttribute('data-state', 'checked')
+    fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('data-state', 'unchecked')
+    expect(localStorage.getItem('timothy.notificationSound')).toBe('off')
+    expect(patchSettingValues).not.toHaveBeenCalled()
+  })
+})
+
+describe('FeaturesTab plain value cards', () => {
+  it('saves an edited harness run budget, trimmed', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    renderTab()
+
+    const input = await screen.findByRole('spinbutton', { name: 'Harness run budget minutes' })
+    fireEvent.change(input, { target: { value: '90' } })
+    const region = screen.getByRole('region', { name: 'Harness run budget' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchSettingValues).toHaveBeenCalledWith({ executor_run_budget_minutes: '90' }),
+    )
+  })
+
+  it('saves an edited default branch pattern, trimmed', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    renderTab()
+
+    const input = await screen.findByRole('textbox', { name: 'Default branch pattern' })
+    fireEvent.change(input, { target: { value: ' {type}/{slug} ' } })
+    const region = screen.getByRole('region', { name: 'Default branch pattern' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchSettingValues).toHaveBeenCalledWith({ git_branch_pattern: '{type}/{slug}' }),
+    )
+  })
+})
+
+describe('FeaturesTab sensitive tool route', () => {
+  it('picks a route from the loaded list and saves it', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    vi.mocked(listRoutes).mockResolvedValue([
+      { name: 'local-only', chain: [], strategy: 'ordered', enabled: true },
+    ])
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Sensitive tool route' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'local-only' }))
+    const region = screen.getByRole('region', { name: 'Sensitive tool route' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchSettingValues).toHaveBeenCalledWith({ sensitive_tool_route: 'local-only' }),
+    )
+  })
+
+  it('falls back to a plain text input when the route list fails to load', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: { sensitive_tool_route: 'local-only' } })
+    vi.mocked(listRoutes).mockRejectedValue(new Error('down'))
+    renderTab()
+
+    const input = await screen.findByRole('textbox', { name: 'Sensitive tool route' })
+    expect((input as HTMLInputElement).value).toBe('local-only')
+  })
+
+  it('shows a retryable alert when saving the sensitive route fails', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    vi.mocked(listRoutes).mockResolvedValue([
+      { name: 'local-only', chain: [], strategy: 'ordered', enabled: true },
+    ])
+    vi.mocked(patchSettingValues).mockRejectedValueOnce(new Error('network down'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Sensitive tool route' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'local-only' }))
+    const region = screen.getByRole('region', { name: 'Sensitive tool route' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    const alert = await within(region).findByRole('alert')
+    expect(alert).toHaveTextContent('network down')
+  })
+})
+
+describe('FeaturesTab load error', () => {
+  it('shows an inline alert when loading settings fails', async () => {
+    vi.mocked(getSettings).mockRejectedValue(new Error('network down'))
+    renderTab()
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('network down')
+  })
+})
+
+describe('FeaturesTab timezone fallback list', () => {
+  it('falls back to the built-in timezone list when Intl.supportedValuesOf throws', async () => {
+    const original = Intl.supportedValuesOf
+    // @ts-expect-error - simulate an older runtime without this API
+    Intl.supportedValuesOf = () => {
+      throw new Error('unsupported')
+    }
+    try {
+      vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+      renderTab()
+
+      fireEvent.click(await screen.findByRole('combobox', { name: 'Timezone' }))
+      expect(await screen.findByText('Europe/Amsterdam')).toBeTruthy()
+    } finally {
+      Intl.supportedValuesOf = original
+    }
+  })
+})
+
+describe('FeaturesTab timezone', () => {
+  it('shows the Off option and picking it saves an empty timezone', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: { timezone: 'Europe/Amsterdam' } })
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Timezone' }))
+    fireEvent.click(await screen.findByText('UTC (default)'))
+
+    await waitFor(() => expect(patchSettingValues).toHaveBeenCalledWith({ timezone: '' }))
+  })
+
+  it('toasts when saving the timezone fails', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    vi.mocked(patchSettingValues).mockRejectedValueOnce(new Error('server unavailable'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Timezone' }))
+    fireEvent.click(await screen.findByText('Europe/Amsterdam'))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not save timezone', { description: 'server unavailable' }),
+    )
   })
 })

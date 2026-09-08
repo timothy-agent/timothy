@@ -12,8 +12,10 @@ vi.mock('../../api/client', () => ({
   listProviders: vi.fn(),
   patchRoute: vi.fn(),
 }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { catalogModelsForProvider, listProviders, listRoutes, patchRoute } from '../../api/client'
+import { toast } from 'sonner'
 
 const providers: AdminProvider[] = [
   {
@@ -253,6 +255,41 @@ describe('RouteEdit scored pipeline', () => {
       'grok',
     )
   })
+
+  it('removes a duplicate resolved entry with no matching chain reference, falling back to a provider/model filter', async () => {
+    // Two resolved rows both point at p1/sonnet: the first consumes the
+    // one matching chain entry from the pool by splice, so the second
+    // display entry is a synthesized object with no chain reference.
+    // Removing that second card exercises removeEntry's fallback (its
+    // indexOf(target) misses, so it filters by provider_id/model
+    // instead of array index) and actually changes the staged chain.
+    const dupResolvedRoute: AdminRoute = {
+      ...scoredRoute,
+      name: 'dup',
+      chain: [{ provider_id: 'p1', model: 'sonnet' }],
+      resolved: [
+        { provider_id: 'p1', provider_name: 'anthropic', model: 'sonnet', usable: true, score: 0.5 },
+        { provider_id: 'p1', provider_name: 'anthropic', model: 'sonnet', usable: true, score: 0.4 },
+      ],
+      serving: { provider_id: 'p1', model: 'sonnet' },
+    }
+    vi.mocked(listRoutes).mockResolvedValue([orderedRoute, dupResolvedRoute])
+    renderRoute('dup')
+    const cards = await screen.findAllByTestId('pipeline-card')
+    expect(cards).toHaveLength(2)
+
+    const removeButtons = screen.getAllByRole('button', { name: 'Remove sonnet' })
+    fireEvent.click(removeButtons[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchRoute).toHaveBeenCalledWith('dup', {
+        strategy: 'price',
+        enabled: true,
+        chain: [],
+      }),
+    )
+  })
 })
 
 describe('RouteEdit add-chain-entry provider and model pickers', () => {
@@ -343,6 +380,17 @@ describe('RouteEdit add-chain-entry provider and model pickers', () => {
       }),
     )
     expect(patchRoute).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('RouteEdit load error', () => {
+  it('shows a toast when loading the route fails', async () => {
+    vi.mocked(listRoutes).mockRejectedValue(new Error('network down'))
+    renderRoute('default')
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load route', { description: 'network down' }),
+    )
   })
 })
 
