@@ -45,8 +45,18 @@ services:
     image: searxng/searxng@sha256:aaf56bb5ad737d48a8a375778d42eb4ab1757231e6b1eb7980e71d8dd5bdf0de
     environment:
       SEARXNG_BASE_URL: http://searxng:8080/
-    volumes:
-      - ../deploy/searxng:/etc/searxng:ro
+      SEARXNG_SETTINGS_PATH: /usr/local/searxng/settings.yml
+    # Inline config, not a bind: Coolify rewrites relative bind sources
+    # into its own data dir, docker then creates an empty directory and
+    # searxng crash-loops. The target sits outside /etc/searxng, which is
+    # an image volume: on recreate compose inherits the old container's
+    # mount there, and an inherited read-only bind cannot take the file.
+    # The tmpfs blocks that inheritance. Content is the `configs:` block;
+    # CI fails if it drifts from deploy/release/docker-compose.yml.
+    tmpfs: [/etc/searxng]
+    configs:
+      - source: searxng_settings
+        target: /usr/local/searxng/settings.yml
     # internal-only: no published ports; brain is the sole caller
 
   markitdown:
@@ -336,6 +346,30 @@ services:
 secrets:
   hugeicons_token:
     environment: HUGEICONS_TOKEN
+
+# searxng's settings.yml, inlined so no host path is involved (see the
+# searxng service). Same block in deploy/release/docker-compose.yml; CI's
+# compose job diffs the two.
+configs:
+  searxng_settings:
+    content: |
+      use_default_settings: true
+
+      general:
+        # No telemetry to the SearXNG project; this instance serves one tool.
+        enable_metrics: false
+
+      search:
+        formats:
+          - html
+          - json
+
+      server:
+        # No published port and a single internal caller (brain): this key
+        # only signs session cookies nothing outside the compose network can
+        # reach, so a static value is fine here.
+        secret_key: "3db45963595b11ba5641234fb40bfb84c612b7aaf25ceff7cc496355337e1add"
+        limiter: false
 
 volumes:
   pgdata:

@@ -268,7 +268,6 @@ jobs:
           cp deploy/release/docker-compose.yml /tmp/release-assets/docker-compose.yml
           cp deploy/release/env.example /tmp/release-assets/env.example
           cp deploy/release/install.sh /tmp/release-assets/install.sh
-          cp deploy/searxng/settings.yml /tmp/release-assets/searxng-settings.yml
           sed -i "s/__TIMOTHY_TAG__/${{ steps.version.outputs.value }}/g" \
             /tmp/release-assets/env.example /tmp/release-assets/install.sh
       - name: Create GitHub release
@@ -285,5 +284,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "${args[@]}" \
             /tmp/release-assets/docker-compose.yml \
             /tmp/release-assets/env.example \
-            /tmp/release-assets/install.sh \
-            /tmp/release-assets/searxng-settings.yml
+            /tmp/release-assets/install.sh

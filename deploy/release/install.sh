@@ -44,6 +44,13 @@ echo "Timothy installer (${RELEASE_TAG})"
 # --- Preflight ---
 command -v docker >/dev/null 2>&1 || fail "docker not found on PATH. Install Docker first: https://docs.docker.com/get-docker/"
 docker compose version >/dev/null 2>&1 || fail "'docker compose' plugin not available. Install/update Docker to a version with Compose v2."
+# The release compose inlines searxng's config (configs.content, Compose
+# 2.23.1+); an older compose rejects the file at `compose pull`, after
+# .env was already written with fresh secrets. Refuse before that.
+compose_min="2.23.1"
+compose_version=$(docker compose version --short 2>/dev/null | sed 's/^v//')
+[ "$(printf '%s\n%s\n' "$compose_min" "$compose_version" | sort -V | head -n1)" = "$compose_min" ] \
+  || fail "docker compose ${compose_version:-unknown} is too old; Timothy needs Compose ${compose_min} or newer. Update Docker."
 command -v openssl >/dev/null 2>&1 || fail "openssl not found on PATH. Install it to generate secrets."
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   fail "neither curl nor wget found on PATH."
@@ -66,8 +73,11 @@ fi
 echo "Downloading release assets..."
 fetch "${BASE_URL}/docker-compose.yml" docker-compose.yml
 fetch "${BASE_URL}/env.example" env.example
-mkdir -p searxng
-fetch "${BASE_URL}/searxng-settings.yml" searxng/settings.yml
+# searxng's settings are inlined in the compose file we just fetched, so
+# the ./searxng bind from older installs is dead: nothing reads it, but an
+# operator editing it would expect otherwise. Drop it on upgrade.
+rm -f searxng/settings.yml
+rmdir searxng 2>/dev/null || true
 
 # --- .env ---
 if [ -f .env ]; then
