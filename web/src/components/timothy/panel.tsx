@@ -10,6 +10,9 @@ interface PanelProps {
   headingLevel?: 'h2' | 'h3'
   children: ReactNode
   className?: string
+  // Extra classes on the body wrapper, e.g. `flex flex-1 flex-col` so a
+  // chart child can stretch to the panel's height.
+  bodyClassName?: string
 }
 
 // Bounded region of related content on a page: settings group, mission
@@ -32,6 +35,7 @@ export function Panel({
   headingLevel = 'h2',
   children,
   className,
+  bodyClassName,
 }: PanelProps) {
   const hasHeader = title || description || actions
   const Heading = headingLevel
@@ -53,7 +57,9 @@ export function Panel({
           </div>
         </div>
       )}
-      <div className={density === 'comfortable' ? cn('p-5', hasHeader && 'pt-0') : 'p-0'}>{children}</div>
+      <div className={cn(density === 'comfortable' ? cn('p-5', hasHeader && 'pt-0') : 'p-0', bodyClassName)}>
+        {children}
+      </div>
     </div>
   )
 }
