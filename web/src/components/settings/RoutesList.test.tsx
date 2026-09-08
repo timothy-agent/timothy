@@ -98,7 +98,7 @@ describe('RoutesList serving states', () => {
 describe('RoutesList actions', () => {
   it('creates a route with the picked name and capability', async () => {
     vi.mocked(listRoutes).mockResolvedValue([base])
-    vi.mocked(createRoute).mockResolvedValue(undefined)
+    vi.mocked(createRoute).mockResolvedValue('r-new')
     renderList()
 
     await screen.findByText('default')

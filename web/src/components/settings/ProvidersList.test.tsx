@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminProvider, ProviderHealth } from '../../api/types'
+import type { AdminProvider, ProviderHealth, TestResult } from '../../api/types'
 import { ProvidersList } from './ProvidersList'
 
 vi.mock('../../api/client', () => ({
@@ -109,8 +109,8 @@ describe('ProvidersList cli row rendering', () => {
     vi.mocked(providersHealth).mockResolvedValue([
       { name: 'OpenAI', enabled: true, healthy: true } as ProviderHealth,
     ])
-    let resolve!: (v: unknown) => void
-    vi.mocked(testProvider).mockReturnValue(new Promise((r) => (resolve = r)))
+    let resolve!: (v: TestResult) => void
+    vi.mocked(testProvider).mockReturnValue(new Promise<TestResult>((r) => (resolve = r)))
     renderPage()
 
     const testButton = await screen.findByRole('button', { name: 'Test' })

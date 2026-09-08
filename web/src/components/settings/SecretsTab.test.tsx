@@ -69,7 +69,7 @@ describe('SecretsTab default backend ordering and control', () => {
 
   it('claiming default on Vault calls setDefaultSecretBackend and refreshes', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
     )
     vi.mocked(listSecretBackends)
       .mockResolvedValueOnce([dbDefault, { ...vaultNotConfigured, configured: true }, asmNotConfigured])
@@ -87,7 +87,7 @@ describe('SecretsTab default backend ordering and control', () => {
 
   it('shows an error and skips the refresh when setDefaultSecretBackend rejects', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
     )
     vi.mocked(setDefaultSecretBackend).mockRejectedValue(new Error('cannot flip default'))
     renderTab()
@@ -116,7 +116,7 @@ describe('SecretsTab default backend ordering and control', () => {
 
   it('claiming default on ASM calls setDefaultSecretBackend with asm', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'asm' ? { region: 'us-east-1' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'asm' ? { region: 'us-east-1' } : {}),
     )
     vi.mocked(listSecretBackends).mockResolvedValue([
       dbDefault,
@@ -263,7 +263,7 @@ describe('SecretsTab vault card', () => {
 
   it('test button calls testSecretBackend and renders the ok/failed result', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
     )
     vi.mocked(listSecretBackends).mockResolvedValue([
       dbDefault,
@@ -282,7 +282,7 @@ describe('SecretsTab vault card', () => {
 
   it('test failure renders the server error message', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
     )
     vi.mocked(listSecretBackends).mockResolvedValue([
       dbDefault,
@@ -298,7 +298,7 @@ describe('SecretsTab vault card', () => {
 
   it('test failure with no server error falls back to "Connection failed."', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
     )
     vi.mocked(listSecretBackends).mockResolvedValue([
       dbDefault,
@@ -314,7 +314,7 @@ describe('SecretsTab vault card', () => {
 
   it('test throwing an exception renders errText of that exception', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
     )
     vi.mocked(listSecretBackends).mockResolvedValue([
       dbDefault,
@@ -330,7 +330,7 @@ describe('SecretsTab vault card', () => {
 
   it('remove calls deleteSecretBackendConfig, shows removed, and hides the Remove button once unconfigured', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
     )
     vi.mocked(listSecretBackends)
       .mockResolvedValueOnce([dbDefault, { backend: 'vault', configured: true, default: false }, asmNotConfigured])
@@ -348,7 +348,7 @@ describe('SecretsTab vault card', () => {
 
   it('a remove failure renders the failed status and keeps the Remove button', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'vault' ? { address: 'https://vault.internal:8200' } : {}),
     )
     vi.mocked(listSecretBackends).mockResolvedValue([
       dbDefault,
@@ -461,7 +461,7 @@ describe('SecretsTab ASM card', () => {
 
   it('test button on the ASM card calls testSecretBackend', async () => {
     vi.mocked(getSecretBackendConfig).mockImplementation((backend: 'vault' | 'asm') =>
-      Promise.resolve(backend === 'asm' ? { region: 'us-east-1' } : {}),
+      Promise.resolve<Record<string, string>>(backend === 'asm' ? { region: 'us-east-1' } : {}),
     )
     vi.mocked(listSecretBackends).mockResolvedValue([
       dbDefault,

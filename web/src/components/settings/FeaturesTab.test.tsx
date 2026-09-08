@@ -228,7 +228,6 @@ describe('FeaturesTab load error', () => {
 describe('FeaturesTab timezone fallback list', () => {
   it('falls back to the built-in timezone list when Intl.supportedValuesOf throws', async () => {
     const original = Intl.supportedValuesOf
-    // @ts-expect-error - simulate an older runtime without this API
     Intl.supportedValuesOf = () => {
       throw new Error('unsupported')
     }

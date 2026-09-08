@@ -627,7 +627,7 @@ describe('ConnectorEdit test connection identity success', () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(testConnector).mockResolvedValue({
       ok: true,
-      identity: { login: 'octocat', scopes: 'repo, workflow' },
+      identity: { login: 'octocat', name: 'Octo Cat', email: 'octo@example.com', scopes: 'repo, workflow' },
     })
     renderTab(`/settings/connectors/${githubConnector.id}`)
 

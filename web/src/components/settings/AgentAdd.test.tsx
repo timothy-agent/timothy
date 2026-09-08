@@ -49,7 +49,7 @@ describe('AgentAdd', () => {
   })
 
   it('creates the agent with slugified name and navigates to the list', async () => {
-    vi.mocked(createAgent).mockResolvedValue(undefined)
+    vi.mocked(createAgent).mockResolvedValue('a-new')
     renderAdd()
 
     fireEvent.change(await screen.findByPlaceholderText('infra, homelab, writer…'), {
@@ -100,7 +100,7 @@ describe('AgentAdd', () => {
   it('picking a route, editing the overlay, toggling memory, and setting skills all land in the create payload', async () => {
     const codingRoute: AdminRoute = { name: 'coding', chain: [], strategy: 'ordered', enabled: true }
     vi.mocked(listRoutes).mockResolvedValue([codingRoute])
-    vi.mocked(createAgent).mockResolvedValue(undefined)
+    vi.mocked(createAgent).mockResolvedValue('a-new')
     renderAdd()
 
     fireEvent.change(await screen.findByPlaceholderText('infra, homelab, writer…'), { target: { value: 'infra' } })
@@ -128,7 +128,7 @@ describe('AgentAdd', () => {
   })
 
   it('picking a harness lands it in the create payload', async () => {
-    vi.mocked(createAgent).mockResolvedValue(undefined)
+    vi.mocked(createAgent).mockResolvedValue('a-new')
     renderAdd()
 
     fireEvent.change(await screen.findByPlaceholderText('infra, homelab, writer…'), { target: { value: 'infra' } })

@@ -1371,7 +1371,7 @@ describe('MissionDetail status label for a failed mission', () => {
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
       phase: 'failed',
-      status: 'failed',
+      status: 'error',
       failure_reason: 'cancelled',
     })
     renderPage()
@@ -1383,7 +1383,7 @@ describe('MissionDetail status label for a failed mission', () => {
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
       phase: 'failed',
-      status: 'failed',
+      status: 'error',
       failure_reason: 'budget_exhausted',
     })
     renderPage()
@@ -1460,7 +1460,7 @@ describe('MissionDetail plan approval gate', () => {
       pause_reason: 'approval',
       plan: {
         units: [{ title: 'Add validation', verify_cmd: 'go test', passes: true }],
-        assumptions: [{ text: 'staging only', confidence: 'high' }],
+        assumptions: [{ assumption: 'staging only', default: 'high' }],
       },
     })
     renderPage()
