@@ -9,6 +9,11 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useAgents } from '../components/AgentPicker'
 import { Composer, type PendingAttachment } from '../components/Composer'
+import { Eyebrow } from '../components/timothy/page-header'
+import { PageShell } from '../components/timothy/page-shell'
+import { EmptyState } from '../components/timothy/empty-state'
+import { Badge } from '../components/ui/badge'
+import { Card } from '../components/ui/card'
 import { usePendingMemories } from '../lib/memory'
 
 const agentKey = 'timothy.agent'
@@ -78,9 +83,9 @@ export function Home() {
   }
 
   return (
-    <div className="flex h-full flex-col items-center overflow-y-auto px-4">
+    <PageShell className="flex h-full flex-col items-center overflow-y-auto">
       <div className="mt-[max(3rem,12vh)] w-full max-w-4xl text-center">
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Timothy</h1>
+        <h1 className="text-display font-semibold text-foreground">Timothy</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Ask anything. Chats remember what matters.
         </p>
@@ -105,33 +110,35 @@ export function Home() {
       </div>
 
       <div className="mt-14 w-full max-w-4xl">
-        <h2 className="text-center text-xs font-semibold tracking-wider text-muted-foreground uppercase">
-          Agents
+        <h2 className="text-center">
+          <Eyebrow>Agents</Eyebrow>
         </h2>
-        <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {agents.map((a) => (
-            <button
+            <Card
               key={a.id}
-              type="button"
-              onClick={() => openAgent(a.name)}
-              className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4 text-left shadow-sm transition hover:border-brand hover:shadow-md"
+              interactive
+              asChild
+              className="flex flex-col gap-2 text-left"
             >
-              <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-semibold capitalize">{a.name}</span>
-                {a.is_default && (
-                  <span className="rounded bg-brand-soft px-1.5 py-0.5 text-xs font-semibold text-brand-soft-foreground">
-                    Default
-                  </span>
+              <button type="button" onClick={() => openAgent(a.name)} aria-label={a.name}>
+                <div className="flex items-center gap-2">
+                  <span className="truncate text-sm font-semibold capitalize">{a.name}</span>
+                  {a.is_default && (
+                    <Badge variant="brand" size="sm">
+                      Default
+                    </Badge>
+                  )}
+                </div>
+                {a.description && (
+                  <p className="line-clamp-2 text-sm text-muted-foreground">{a.description}</p>
                 )}
-              </div>
-              {a.description && (
-                <p className="line-clamp-2 text-sm text-muted-foreground">{a.description}</p>
-              )}
-            </button>
+              </button>
+            </Card>
           ))}
           {agents.length === 0 && (
-            <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-              No agents configured yet, the default agent will serve new chats.
+            <div className="col-span-full rounded-md border border-dashed border-border">
+              <EmptyState title="No agents configured yet, the default agent will serve new chats." />
             </div>
           )}
         </div>
@@ -143,10 +150,10 @@ export function Home() {
           onClick={() => navigate('/memory')}
           className="group flex flex-col items-center gap-2"
         >
-          <span className="relative flex size-11 items-center justify-center rounded-xl border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+          <span className="relative flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
             <HugeiconsIcon icon={InboxIcon} className="size-5.5" />
             {pending > 0 && (
-              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[10px] font-medium text-brand-foreground">
+              <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-xs font-medium text-brand-foreground">
                 {pending}
               </span>
             )}
@@ -158,7 +165,7 @@ export function Home() {
           onClick={() => navigate('/missions')}
           className="group flex flex-col items-center gap-2"
         >
-          <span className="flex size-11 items-center justify-center rounded-xl border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+          <span className="flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
             <HugeiconsIcon icon={RocketIcon} className="size-5.5" />
           </span>
           <span className="text-xs text-muted-foreground">Missions</span>
@@ -168,7 +175,7 @@ export function Home() {
           onClick={() => navigate('/analytics')}
           className="group flex flex-col items-center gap-2"
         >
-          <span className="flex size-11 items-center justify-center rounded-xl border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+          <span className="flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
             <HugeiconsIcon icon={Analytics01Icon} className="size-5.5" />
           </span>
           <span className="text-xs text-muted-foreground">Analytics</span>
@@ -178,12 +185,12 @@ export function Home() {
           onClick={() => navigate('/settings')}
           className="group flex flex-col items-center gap-2"
         >
-          <span className="flex size-11 items-center justify-center rounded-xl border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
+          <span className="flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">
             <HugeiconsIcon icon={Settings02Icon} className="size-5.5" />
           </span>
           <span className="text-xs text-muted-foreground">Settings</span>
         </button>
       </div>
-    </div>
+    </PageShell>
   )
 }

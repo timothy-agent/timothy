@@ -1,12 +1,8 @@
 import {
-  ArrowLeft01Icon,
-  CancelCircleIcon,
   Delete02Icon,
   Edit01Icon,
   File02Icon,
-  Loading03Icon,
   ReloadIcon,
-  Tick02Icon,
 } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
@@ -34,7 +30,12 @@ import {
 } from '../ui/dialog'
 import { errText } from '../../lib/errors'
 import { Input } from '../ui/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { PageHeader } from '../timothy/page-header'
+import { Panel } from '../timothy/panel'
+import { StatusBadge } from '../timothy/status-badge'
+import type { Status } from '../timothy/status'
 import { KbUploadForm } from './KbUploadForm'
 
 const linkedSourceTypes = new Set<KbDocument['source_type']>(['url', 'clip'])
@@ -46,7 +47,7 @@ const missionSourceRefRe = /^mission:([^:]+)/
 
 export function SourceBadge({ doc }: { doc: KbDocument }) {
   const badge = (
-    <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium uppercase text-muted-foreground">
+    <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium uppercase text-muted-foreground">
       {doc.source_type}
     </span>
   )
@@ -90,47 +91,37 @@ const provenanceLabel: Record<KbDocument['provenance'], string> = {
 // SourceBadge's ingestion mechanism.
 export function ProvenanceBadge({ doc }: { doc: KbDocument }) {
   return (
-    <span className="rounded border border-border px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+    <span className="rounded-md border border-border px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
       {provenanceLabel[doc.provenance]}
     </span>
   )
 }
 
-const statusStyle: Record<KbDocument['status'], string> = {
-  pending: 'bg-muted text-muted-foreground',
-  ingesting: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
-  ready: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
-  failed: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300',
+// documentStatus maps an ingest status to the one status model
+// (contract 13.2): pending neutral, ingesting working, ready success,
+// failed error.
+const documentStatus: Record<KbDocument['status'], Status> = {
+  pending: 'neutral',
+  ingesting: 'working',
+  ready: 'success',
+  failed: 'error',
 }
 
-function StatusBadge({ doc }: { doc: KbDocument }) {
-  const icon =
-    doc.status === 'ingesting' ? (
-      <HugeiconsIcon icon={Loading03Icon} className="size-3 animate-spin" />
-    ) : doc.status === 'ready' ? (
-      <HugeiconsIcon icon={Tick02Icon} className="size-3" />
-    ) : doc.status === 'failed' ? (
-      <HugeiconsIcon icon={CancelCircleIcon} className="size-3" />
-    ) : null
-
+export function DocumentStatusBadge({ doc }: { doc: KbDocument }) {
   return (
-    <span
-      title={doc.status === 'failed' ? doc.error : undefined}
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${statusStyle[doc.status]}`}
-    >
-      {icon}
-      {doc.status}
+    <span title={doc.status === 'failed' ? doc.error : undefined}>
+      <StatusBadge status={documentStatus[doc.status]} label={doc.status} size="sm" />
     </span>
   )
 }
 
 // DocumentErrorLine surfaces the ingest failure reason (issue #408): a
 // one-line, title-tooltipped clamp under the title cell, matching the
-// mission failure text-red-400 + title pattern (eventRenderers.tsx).
+// mission failure text pattern (eventRenderers.tsx).
 export function DocumentErrorLine({ doc }: { doc: KbDocument }) {
   if (doc.status !== 'failed' || !doc.error) return null
   return (
-    <p className="mt-0.5 truncate text-xs text-red-400" title={doc.error}>
+    <p className="mt-0.5 truncate text-xs text-destructive" title={doc.error}>
       {doc.error}
     </p>
   )
@@ -230,41 +221,32 @@ export function KnowledgeCollectionDetail() {
   }
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/knowledge"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Knowledge
-      </Link>
-
-      <div className="flex items-center justify-between border-b border-border pb-6">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">{collection.name}</h1>
-          {collection.description && (
-            <p className="text-sm text-muted-foreground">{collection.description}</p>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={() => {
-              setEditName(collection.name)
-              setEditDesc(collection.description ?? '')
-              setEditWeight(String(collection.retrieval_weight ?? 1.0))
-              setEditing(true)
-            }}
-          >
-            <HugeiconsIcon icon={Edit01Icon} />
-            Rename
-          </Button>
-          <Button variant="destructive" onClick={() => setConfirmDeleteCollection(true)}>
-            <HugeiconsIcon icon={Delete02Icon} />
-            Delete collection
-          </Button>
-        </div>
-      </div>
+    <div className="w-full space-y-6">
+      <PageHeader
+        title={collection.name}
+        description={collection.description}
+        breadcrumbs={[{ label: 'Knowledge', href: '/knowledge' }, { label: collection.name }]}
+        actions={
+          <>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditName(collection.name)
+                setEditDesc(collection.description ?? '')
+                setEditWeight(String(collection.retrieval_weight ?? 1.0))
+                setEditing(true)
+              }}
+            >
+              <HugeiconsIcon icon={Edit01Icon} />
+              Rename
+            </Button>
+            <Button variant="destructive" onClick={() => setConfirmDeleteCollection(true)}>
+              <HugeiconsIcon icon={Delete02Icon} />
+              Delete collection
+            </Button>
+          </>
+        }
+      />
 
       <KbUploadForm
         uploadFile={(file) => uploadKbDocument(id, file)}
@@ -272,46 +254,48 @@ export function KnowledgeCollectionDetail() {
         onUploaded={(doc) => setDocuments((prev) => [doc, ...prev])}
       />
 
-      {documents.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No documents yet.</p>
-      ) : (
-        <TooltipProvider>
-          <div className="overflow-x-auto rounded-xl border border-border">
-            <table className="w-full text-sm">
-              <thead className="border-b border-border bg-muted/50 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2">Title</th>
-                  <th className="px-3 py-2">Source</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Chunks</th>
-                  <th className="px-3 py-2">Size</th>
-                  <th className="px-3 py-2">Ingested</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
+      <Panel title="Documents" density="operational">
+        {documents.length === 0 ? (
+          <p className="p-4 text-sm text-muted-foreground">No documents yet.</p>
+        ) : (
+          <TooltipProvider>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Title</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Chunks</TableHead>
+                  <TableHead>Size</TableHead>
+                  <TableHead>Ingested</TableHead>
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {documents.map((doc) => (
-                  <tr key={doc.id} className="border-b border-border last:border-0">
-                    <td className="px-3 py-2">
+                  <TableRow key={doc.id}>
+                    <TableCell>
                       <div className="flex items-center gap-2">
                         <HugeiconsIcon icon={File02Icon} className="size-4 shrink-0 text-muted-foreground" />
                         <span className="truncate">{doc.title}</span>
                       </div>
                       <DocumentErrorLine doc={doc} />
-                    </td>
-                    <td className="px-3 py-2">
+                    </TableCell>
+                    <TableCell>
                       <div className="flex items-center gap-1.5">
                         <SourceBadge doc={doc} />
                         <ProvenanceBadge doc={doc} />
                       </div>
-                    </td>
-                    <td className="px-3 py-2">
-                      <StatusBadge doc={doc} />
-                    </td>
-                    <td className="px-3 py-2">{doc.chunk_count}</td>
-                    <td className="px-3 py-2">{humanBytes(doc.bytes)}</td>
-                    <td className="px-3 py-2">{doc.ingested_at ? relativeTime(doc.ingested_at) : '—'}</td>
-                    <td className="px-3 py-2">
+                    </TableCell>
+                    <TableCell>
+                      <DocumentStatusBadge doc={doc} />
+                    </TableCell>
+                    <TableCell>{doc.chunk_count}</TableCell>
+                    <TableCell>{humanBytes(doc.bytes)}</TableCell>
+                    <TableCell>{doc.ingested_at ? relativeTime(doc.ingested_at) : '—'}</TableCell>
+                    <TableCell>
                       <div className="flex items-center justify-end gap-2">
                         <button
                           type="button"
@@ -330,14 +314,14 @@ export function KnowledgeCollectionDetail() {
                           <HugeiconsIcon icon={Delete02Icon} className="size-4" />
                         </button>
                       </div>
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        </TooltipProvider>
-      )}
+              </TableBody>
+            </Table>
+          </TooltipProvider>
+        )}
+      </Panel>
 
       <Dialog open={editing} onOpenChange={setEditing}>
         <DialogContent>

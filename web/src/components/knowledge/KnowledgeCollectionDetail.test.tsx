@@ -3,7 +3,12 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { KbDocument } from '../../api/types'
 import { TooltipProvider } from '../ui/tooltip'
-import { DocumentErrorLine, ProvenanceBadge, SourceBadge } from './KnowledgeCollectionDetail'
+import {
+  DocumentErrorLine,
+  DocumentStatusBadge,
+  ProvenanceBadge,
+  SourceBadge,
+} from './KnowledgeCollectionDetail'
 
 afterEach(cleanup)
 
@@ -79,6 +84,28 @@ describe('ProvenanceBadge', () => {
   })
 })
 
+describe('DocumentStatusBadge', () => {
+  afterEach(cleanup)
+
+  it.each([
+    ['pending', 'neutral'],
+    ['ingesting', 'working'],
+    ['ready', 'success'],
+    ['failed', 'error'],
+  ] as const)('renders the canonical badge for a %s document', (status, expectedDataStatus) => {
+    const doc: KbDocument = { ...baseDoc, status }
+    render(<DocumentStatusBadge doc={doc} />)
+    const label = screen.getByText(status)
+    expect(label.closest('span[data-status]')).toHaveAttribute('data-status', expectedDataStatus)
+  })
+
+  it('keeps the error as a title on a failed document', () => {
+    const doc: KbDocument = { ...baseDoc, status: 'failed', error: 'chain_exhausted' }
+    render(<DocumentStatusBadge doc={doc} />)
+    expect(screen.getByTitle('chain_exhausted')).toBeInTheDocument()
+  })
+})
+
 describe('DocumentErrorLine', () => {
   afterEach(cleanup)
 
@@ -88,7 +115,7 @@ describe('DocumentErrorLine', () => {
     const line = screen.getByText('chain_exhausted: too many input tokens')
     expect(line).toBeInTheDocument()
     expect(line).toHaveAttribute('title', doc.error)
-    expect(line).toHaveClass('text-red-400')
+    expect(line).toHaveClass('text-destructive')
   })
 
   it('renders nothing for a ready document', () => {
