@@ -591,6 +591,25 @@ describe('Analytics latency panel', () => {
     const option = lastOption() as { xAxis: { axisLabel: { formatter: (v: number) => string } } }
     expect(option.xAxis.axisLabel.formatter(1500)).toBe(formatDuration(1500))
   })
+
+  // The chart container fills its wrapper (h-full), so every ancestor up
+  // to the panel must be a flex column item or the height collapses to 0.
+  it('keeps the fill chart inside a flex column body so it has a height', async () => {
+    vi.mocked(usageLatency).mockResolvedValue([
+      { provider: 'openai', p50_ms: 250, p95_ms: 900, p99_ms: 1500, requests: 10 },
+    ])
+    renderPage()
+    for (const title of ['Latency per provider', 'Spend share by provider']) {
+      const panel = (await screen.findByText(title)).closest('[data-density]') as HTMLElement | null
+      if (!panel) throw new Error('panel not found')
+      expect(panel).toHaveClass('flex', 'flex-col')
+      const chart = panel.querySelector('.h-full') as HTMLElement | null
+      if (!chart) throw new Error('fill chart not found')
+      const wrapper = chart.parentElement as HTMLElement
+      expect(wrapper).toHaveClass('flex-1', 'min-h-[240px]')
+      expect(wrapper.parentElement).toHaveClass('flex', 'flex-1', 'flex-col')
+    }
+  })
 })
 
 describe('Analytics provider cost table sorting', () => {

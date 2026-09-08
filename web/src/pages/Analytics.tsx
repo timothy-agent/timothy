@@ -622,7 +622,7 @@ export function Analytics() {
       </Panel>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <Panel title="Latency per provider" className="flex flex-col">
+        <Panel title="Latency per provider" className="flex flex-col" bodyClassName="flex flex-1 flex-col">
           {data && data.latency.length > 0 ? (
             <div className="min-h-[240px] flex-1">
               <EChart
@@ -639,7 +639,7 @@ export function Analytics() {
           )}
         </Panel>
 
-        <Panel title="Spend share by provider" className="flex flex-col">
+        <Panel title="Spend share by provider" className="flex flex-col" bodyClassName="flex flex-1 flex-col">
           <div className="min-h-[240px] flex-1">
             <EChart
               fill
