@@ -1,5 +1,4 @@
-import { Add01Icon, AiBrain01Icon, Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { BrainCircuit, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -51,7 +50,7 @@ export function AgentsList() {
         breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
         actions={
           <Button onClick={() => navigate('/settings/agents/new')}>
-            <HugeiconsIcon icon={Add01Icon} />
+            <Plus />
             New agent
           </Button>
         }
@@ -121,7 +120,7 @@ function AgentCard({
       title={agent.name}
       tile={
         <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand-soft-foreground">
-          <HugeiconsIcon icon={AiBrain01Icon} className="size-4.5" />
+          <BrainCircuit className="size-4.5" />
         </span>
       }
       badges={agent.is_default && <Badge variant="brand">default</Badge>}
@@ -155,7 +154,7 @@ function AgentCard({
               onClick={onDelete}
               className="text-muted-foreground hover:text-destructive"
             >
-              <HugeiconsIcon icon={Delete02Icon} className="size-4" />
+              <Trash2 className="size-4" />
             </Button>
           )}
         </>

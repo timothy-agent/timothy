@@ -32,6 +32,9 @@ function renderHome() {
         <Route path="/memory" element={<div>memory page</div>} />
         <Route path="/research" element={<div>research page</div>} />
         <Route path="/analytics" element={<div>analytics page</div>} />
+        <Route path="/missions" element={<div>missions page</div>} />
+        <Route path="/automations" element={<div>automations page</div>} />
+        <Route path="/knowledge" element={<div>knowledge page</div>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -133,6 +136,24 @@ describe('Home', () => {
     renderHome()
     fireEvent.click(screen.getByRole('button', { name: 'Memory' }))
     expect(screen.getByText('memory page')).toBeTruthy()
+  })
+
+  it('the Missions shortcut navigates to the missions page', () => {
+    renderHome()
+    fireEvent.click(screen.getByRole('button', { name: 'Missions' }))
+    expect(screen.getByText('missions page')).toBeTruthy()
+  })
+
+  it('the Automations shortcut navigates to the automations page', () => {
+    renderHome()
+    fireEvent.click(screen.getByRole('button', { name: 'Automations' }))
+    expect(screen.getByText('automations page')).toBeTruthy()
+  })
+
+  it('the Knowledge shortcut navigates to the knowledge page', () => {
+    renderHome()
+    fireEvent.click(screen.getByRole('button', { name: 'Knowledge' }))
+    expect(screen.getByText('knowledge page')).toBeTruthy()
   })
 
   it('the Analytics shortcut navigates to the analytics page', () => {

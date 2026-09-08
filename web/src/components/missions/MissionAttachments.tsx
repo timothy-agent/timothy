@@ -1,13 +1,4 @@
-import {
-  Attachment02Icon,
-  Cancel01Icon,
-  File01Icon,
-  FileMusicIcon,
-  Image01Icon,
-  Loading03Icon,
-  Pdf02Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { File, FileAudio, FileText, Image, LoaderCircle, Paperclip, X } from 'lucide-react'
 import { useRef } from 'react'
 import { toast } from 'sonner'
 import { uploadAttachment } from '../../api/client'
@@ -22,10 +13,10 @@ import { Button } from '../ui/button'
 // attachmentChipIcon picks a chip's icon by mime, same per-type mapping
 // as ArtifactRefsSection.tsx's artifactChipIcon.
 function attachmentChipIcon(mime: string) {
-  if (mime.startsWith('image/')) return Image01Icon
-  if (mime.startsWith('audio/')) return FileMusicIcon
-  if (mime === 'text/plain' || mime === 'text/markdown') return File01Icon
-  return Pdf02Icon
+  if (mime.startsWith('image/')) return Image
+  if (mime.startsWith('audio/')) return FileAudio
+  if (mime === 'text/plain' || mime === 'text/markdown') return FileText
+  return File
 }
 
 // MissionAttachments is the mission-create form's attachment picker
@@ -100,20 +91,22 @@ export function MissionAttachments({
         }}
       />
       <Button type="button" variant="outline" size="sm" onClick={() => inputRef.current?.click()}>
-        <HugeiconsIcon icon={Attachment02Icon} className="size-4" />
+        <Paperclip className="size-4" />
         Attach file
       </Button>
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {attachments.map((a) => (
+          {attachments.map((a) => {
+            const Icon = attachmentChipIcon(a.mime)
+            return (
             <div
               key={a.id}
               className="group relative flex items-center gap-1.5 rounded-md border border-border bg-muted/30 py-1 pr-1.5 pl-2 text-xs"
             >
-              <HugeiconsIcon icon={attachmentChipIcon(a.mime)} className="size-3.5 text-muted-foreground" />
+              <Icon className="size-3.5 text-muted-foreground" />
               <span className="max-w-40 truncate">{a.name ?? 'Document'}</span>
               {a.uploading ? (
-                <HugeiconsIcon icon={Loading03Icon} className="size-3 animate-spin text-muted-foreground" />
+                <LoaderCircle className="size-3 animate-spin text-muted-foreground" />
               ) : (
                 <button
                   type="button"
@@ -121,11 +114,12 @@ export function MissionAttachments({
                   aria-label={`Remove ${a.name ?? 'attachment'}`}
                   className="flex size-3.5 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
                 >
-                  <HugeiconsIcon icon={Cancel01Icon} className="size-3" />
+                  <X className="size-3" />
                 </button>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

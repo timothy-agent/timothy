@@ -1,20 +1,4 @@
-import {
-  Analytics01Icon,
-  ArrowRight01Icon,
-  Brain02Icon,
-  BubbleChatIcon,
-  GithubIcon,
-  Home01Icon,
-  Key01Icon,
-  LibraryIcon,
-  Moon02Icon,
-  RepeatIcon,
-  RocketIcon,
-  Search01Icon,
-  Settings02Icon,
-  Sun03Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Brain, ChartColumn, ChevronRight, House, KeyRound, Library, MessageCircle, Moon, Repeat, Rocket, Search, Settings as SettingsIcon, Sun } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { toast, Toaster } from 'sonner'
@@ -79,17 +63,17 @@ import { DesignSystem } from './pages/DesignSystem'
 const Analytics = lazy(() => import('./pages/Analytics').then((m) => ({ default: m.Analytics })))
 
 const nav = [
-  { label: 'Home', href: '/', icon: Home01Icon },
-  { label: 'Chat', href: '/chat', icon: BubbleChatIcon },
-  { label: 'Missions', href: '/missions', icon: RocketIcon },
-  { label: 'Automations', href: '/automations', icon: RepeatIcon },
-  { label: 'Knowledge', href: '/knowledge', icon: LibraryIcon },
-  { label: 'Memory', href: '/memory', icon: Brain02Icon },
-  { label: 'Analytics', href: '/analytics', icon: Analytics01Icon },
-  { label: 'Settings', href: '/settings', icon: Settings02Icon },
+  { label: 'Home', href: '/', icon: House },
+  { label: 'Chat', href: '/chat', icon: MessageCircle },
+  { label: 'Missions', href: '/missions', icon: Rocket },
+  { label: 'Automations', href: '/automations', icon: Repeat },
+  { label: 'Knowledge', href: '/knowledge', icon: Library },
+  { label: 'Memory', href: '/memory', icon: Brain },
+  { label: 'Analytics', href: '/analytics', icon: ChartColumn },
+  { label: 'Settings', href: '/settings', icon: SettingsIcon },
 ]
 
-const themeIcon = { system: Sun03Icon, light: Sun03Icon, dark: Moon02Icon }
+const themeIcon = { system: Sun, light: Sun, dark: Moon }
 const themeLabel = { system: 'System theme', light: 'Light theme', dark: 'Dark theme' }
 
 function isActive(pathname: string, href: string): boolean {
@@ -132,6 +116,7 @@ function AppSidebar({
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const { state: sidebarState, isMobile } = useSidebar()
+  const ThemeIcon = themeIcon[theme]
   // Settings starts expanded when the app loads into a settings route
   // (deep link or a fresh load), then stays however the user toggles
   // it from there, same "sticky until touched" feel as the rest of
@@ -172,11 +157,9 @@ function AppSidebar({
                           : setSettingsOpen((open) => !open)
                       }
                     >
-                      <HugeiconsIcon icon={item.icon} />
+                      <item.icon />
                       <span>{item.label}</span>
-                      <HugeiconsIcon
-                        icon={ArrowRight01Icon}
-                        className={cn(
+                      <ChevronRight className={cn(
                           'ml-auto size-3.5! transition-transform group-data-[collapsible=icon]:hidden',
                           settingsOpen && 'rotate-90',
                         )}
@@ -203,7 +186,7 @@ function AppSidebar({
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton asChild isActive={isActive(pathname, item.href)} tooltip={item.label}>
                       <Link to={item.href}>
-                        <HugeiconsIcon icon={item.icon} />
+                        <item.icon />
                         <span>{item.label}</span>
                       </Link>
                     </SidebarMenuButton>
@@ -229,20 +212,22 @@ function AppSidebar({
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton onClick={onCycleTheme} tooltip={themeLabel[theme]}>
-              <HugeiconsIcon icon={themeIcon[theme]} />
+              <ThemeIcon />
               <span>{themeLabel[theme]}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton onClick={onToken} tooltip="API token">
-              <HugeiconsIcon icon={Key01Icon} />
+              <KeyRound />
               <span>API token</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton asChild tooltip="View on GitHub">
               <a href="https://github.com/timothy-agent/timothy" target="_blank" rel="noreferrer">
-                <HugeiconsIcon icon={GithubIcon} />
+                <svg className="size-4 fill-current" aria-hidden="true">
+                  <use href="#clogo-github" />
+                </svg>
                 <span>GitHub</span>
               </a>
             </SidebarMenuButton>
@@ -280,7 +265,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
         aria-label="Search or jump to…"
         className="ml-auto flex min-w-52 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-muted-foreground transition hover:border-zinc-400 dark:hover:border-zinc-600"
       >
-        <HugeiconsIcon icon={Search01Icon} className="size-3.5" />
+        <Search className="size-3.5" />
         <span>Search or jump to…</span>
         <kbd className="ml-auto rounded border border-border bg-background px-1 py-px font-mono text-[10px]">
           {isMac ? '⌘K' : 'Ctrl K'}
@@ -311,7 +296,7 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
         <CommandGroup heading="Pages">
           {nav.map((item) => (
             <CommandItem key={item.href} value={item.label} onSelect={() => go(item.href)}>
-              <HugeiconsIcon icon={item.icon} />
+              <item.icon />
               <span>{item.label}</span>
             </CommandItem>
           ))}
@@ -324,7 +309,7 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
                 value={s.title || 'New session'}
                 onSelect={() => go(`/chat/${s.id}`)}
               >
-                <HugeiconsIcon icon={BubbleChatIcon} />
+                <MessageCircle />
                 <span className="truncate">{s.title || 'New session'}</span>
               </CommandItem>
             ))}

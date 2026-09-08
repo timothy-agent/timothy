@@ -1,12 +1,4 @@
-import {
-  Cancel01Icon,
-  Copy01Icon,
-  Download04Icon,
-  ImageNotFound01Icon,
-  Loading03Icon,
-  Tick02Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Check, Copy, Download, ImageOff, LoaderCircle, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { fetchAttachmentBlob } from '../api/client'
 import { attachmentURLCache } from '../lib/attachmentCache'
@@ -117,7 +109,7 @@ export function AttachmentViewer({
                   </Button>
                 )}
                 <Button variant="ghost" size="sm" onClick={() => void copyText()}>
-                  <HugeiconsIcon icon={copied ? Tick02Icon : Copy01Icon} />
+                  {copied ? <Check /> : <Copy />}
                   {copied ? 'Copied' : 'Copy'}
                 </Button>
               </>
@@ -125,7 +117,7 @@ export function AttachmentViewer({
             {url && (
               <Button variant="ghost" size="sm" asChild>
                 <a href={url} download={attachment.name || attachment.id}>
-                  <HugeiconsIcon icon={Download04Icon} />
+                  <Download />
                   Download
                 </a>
               </Button>
@@ -137,7 +129,7 @@ export function AttachmentViewer({
                 FullscreenDialog uses for its own header controls. */}
             <DialogClose asChild>
               <Button variant="ghost" size="icon-sm" aria-label="Close">
-                <HugeiconsIcon icon={Cancel01Icon} />
+                <X />
               </Button>
             </DialogClose>
           </div>
@@ -145,12 +137,12 @@ export function AttachmentViewer({
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-muted/40">
           {failed && (
             <div className="flex flex-col items-center gap-2 text-muted-foreground">
-              <HugeiconsIcon icon={ImageNotFound01Icon} className="size-8" />
+              <ImageOff className="size-8" />
               <p className="text-sm">Could not load this attachment.</p>
             </div>
           )}
           {!failed && !url && (
-            <HugeiconsIcon icon={Loading03Icon} className="size-6 animate-spin text-muted-foreground" />
+            <LoaderCircle className="size-6 animate-spin text-muted-foreground" />
           )}
           {!failed && url && mime.startsWith('image/') && (
             <img src={url} alt={displayName} className="max-h-full max-w-full object-contain" />

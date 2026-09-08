@@ -1,7 +1,5 @@
 # syntax=docker/dockerfile:1
 # Production web image: Vite build served by unprivileged nginx.
-# The HugeIcons Pro registry token is consumed as a BuildKit secret so
-# it never lands in an image layer or the build history.
 # --platform=$BUILDPLATFORM: the Vite dist output is arch-independent,
 # so the build stage always runs natively. Running node under qemu for
 # the arm64 leg crashed with illegal-instruction core dumps and hung
@@ -12,9 +10,8 @@ ARG APP_VERSION
 ENV GIT_SHA=${GIT_SHA}
 ENV APP_VERSION=${APP_VERSION}
 WORKDIR /app
-COPY package.json package-lock.json .npmrc ./
-RUN --mount=type=secret,id=hugeicons_token \
-    HUGEICONS_TOKEN="$(cat /run/secrets/hugeicons_token)" npm ci
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
 RUN npm run build
 

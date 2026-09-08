@@ -1,6 +1,4 @@
-import { Add01Icon, CloudUploadIcon, LibraryIcon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { Library } from 'lucide-react'
+import { CloudUpload, Library, Plus } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -32,11 +30,11 @@ export function KnowledgeCollectionsList() {
         actions={
           <>
             <Button variant="outline" onClick={() => navigate('/knowledge/add')}>
-              <HugeiconsIcon icon={CloudUploadIcon} />
+              <CloudUpload />
               Add to Knowledgebase
             </Button>
             <Button onClick={() => navigate('/knowledge/new')}>
-              <HugeiconsIcon icon={Add01Icon} />
+              <Plus />
               New collection
             </Button>
           </>
@@ -55,7 +53,7 @@ export function KnowledgeCollectionsList() {
             description="Create one and upload documents so agents can search them for grounded answers."
             action={
               <Button onClick={() => navigate('/knowledge/new')}>
-                <HugeiconsIcon icon={Add01Icon} />
+                <Plus />
                 New collection
               </Button>
             }
@@ -68,7 +66,7 @@ export function KnowledgeCollectionsList() {
               <button type="button" onClick={() => navigate(`/knowledge/${c.id}`)} aria-label={c.name}>
                 <div className="flex items-center gap-3">
                   <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand-soft-foreground">
-                    <HugeiconsIcon icon={LibraryIcon} className="size-4.5" />
+                    <Library className="size-4.5" />
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm font-semibold">{c.name}</span>
                 </div>

@@ -108,7 +108,6 @@ The rest of this README covers building and running from source instead.
 Prerequisites:
 
 - Docker (Desktop, or engine + compose plugin).
-- A [hugeicons.com](https://hugeicons.com) account with an active token. The web UI's icons are HugeIcons Pro (a paid icon set) and the token is required to build the `web` image; without it, `make up` fails on the web build step. Not needed for the prebuilt-image quick start above.
 
 1. Copy the env file and fill in the required values:
 
@@ -121,7 +120,6 @@ Prerequisites:
    - `POSTGRES_PASSWORD`: compose refuses to start without it.
    - `TIMOTHY_MASTER_KEY`: generate with `openssl rand -base64 32`. This is the root of trust for the encrypted secret store (provider API keys, OAuth tokens all live behind it). Compose hard-fails if it's blank. **Back this up**: losing it makes every stored secret unrecoverable.
    - `TIMOTHY_API_TOKEN`: generate with `openssl rand -hex 32`. Bearer token for the API; if it's blank, every request 401s.
-   - `HUGEICONS_TOKEN`: your HugeIcons Pro token, needed to build the `web` image.
 
 2. (Optional) Missions sandbox. `deploy/env.example` prefills `MISSION_SANDBOX_IMAGE=timothy-sandbox:latest`, but that image doesn't exist until you build it:
 

@@ -101,7 +101,6 @@ jobs:
           - name: web
             context: web
             dockerfile: web/Dockerfile
-            secret: "true"
           - name: markitdown
             context: markitdown-svc
             dockerfile: markitdown-svc/Dockerfile
@@ -146,10 +145,6 @@ jobs:
             ${{ matrix.build-args }}
             GIT_SHA=${{ steps.sha.outputs.short }}
             APP_VERSION=${{ steps.version.outputs.value }}
-          # web only: HugeIcons Pro registry auth, passed as a BuildKit
-          # secret so it never lands in an image layer (not as a
-          # build-arg or env, both of which persist into layer history).
-          secrets: ${{ matrix.secret == 'true' && format('hugeicons_token={0}', secrets.HUGEICONS_TOKEN) || '' }}
           platforms: linux/amd64,linux/arm64
           push: true
           # repository_owner, not a literal: survives org renames and

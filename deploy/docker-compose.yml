@@ -298,10 +298,6 @@ services:
       args:
         GIT_SHA: ${GIT_SHA:-}
         APP_VERSION: ${APP_VERSION:-}
-      # HugeIcons Pro registry auth for npm ci, passed as a BuildKit
-      # secret (name-only ref; the value lives in deploy/.env, never in
-      # the repo or an image layer).
-      secrets: [hugeicons_token]
     environment:
       # nginx proxy target for /v1 (browser stays same-origin)
       BRAIN_URL: http://brain:8080
@@ -324,9 +320,6 @@ services:
     environment:
       # Vite dev proxy target for /v1 (browser stays same-origin)
       BRAIN_URL: http://brain:8080
-      # HugeIcons Pro registry auth for npm install (name-only ref;
-      # the value lives in deploy/.env, never in the repo)
-      HUGEICONS_TOKEN: ${HUGEICONS_TOKEN}
     # npm install, not ci: ci wipes node_modules first, defeating the
     # cache volume. install syncs against the lockfile and is fast when
     # the volume is already populated.
@@ -342,10 +335,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
-
-secrets:
-  hugeicons_token:
-    environment: HUGEICONS_TOKEN
 
 # searxng's settings.yml, inlined so no host path is involved (see the
 # searxng service). Same block in deploy/release/docker-compose.yml; CI's

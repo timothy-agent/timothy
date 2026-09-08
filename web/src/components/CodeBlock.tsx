@@ -62,8 +62,8 @@ const LANGUAGE_COLORS: Record<string, string> = {
 
 // Official per-language logos, vendored from devicon
 // (https://github.com/devicons/devicon, MIT licensed) as static SVGs
-// under ../assets/langs/ — hugeicons' stroke-rounded set has no real
-// per-language marks (its "PhpIcon" etc. are generic glyphs, not the
+// under ../assets/langs/ — general-purpose icon sets have no real
+// per-language marks (their "php" glyph is a generic file, not the
 // actual PHP logo), so this replaces that with the real thing.
 // jsx/tsx share their base language's logo (same language, JSX
 // syntax); sql uses the mysql mark as the generic "database" stand-in

@@ -1,5 +1,4 @@
-import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -223,7 +222,7 @@ function ConnectorEditForm({
         ]}
         actions={
           <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
-            <HugeiconsIcon icon={Delete02Icon} />
+            <Trash2 />
             Delete
           </Button>
         }
