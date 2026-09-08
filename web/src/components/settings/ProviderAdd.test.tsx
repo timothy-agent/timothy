@@ -549,6 +549,138 @@ describe('ProviderAdd cursor preset', () => {
   })
 })
 
+describe('ProviderAdd invalidates a passing test on further edits', () => {
+  beforeEach(() => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'glm-5.2' })
+    vi.mocked(setSecret).mockResolvedValue()
+  })
+
+  it('re-locks Add and brings back the Test button after editing the bedrock region', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'amazon.nova-lite-v1:0' })
+    renderPage('bedrock')
+
+    fireEvent.change(await screen.findByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'secretvalue123' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(false)
+
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: /us-west-2/ }))
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Test connection' })).toBeInTheDocument()
+  })
+
+  it('re-locks Add after editing the custom preset\'s Base URL field', async () => {
+    renderPage('custom')
+    fireEvent.change(await screen.findByPlaceholderText('my-gateway'), { target: { value: 'my-custom' } })
+    fireEvent.change(screen.getByPlaceholderText('paste key'), { target: { value: 'custom-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    // Custom also renders the Advanced base URL field with the same
+    // placeholder; the first match is the main field above it.
+    fireEvent.change(screen.getAllByPlaceholderText('https://…/v1')[0], { target: { value: 'https://edited.example/v1' } })
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('re-locks Add after editing the Advanced base URL field', async () => {
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.click(screen.getByText('Advanced: base URL'))
+    fireEvent.change(screen.getByPlaceholderText('https://…/v1'), { target: { value: 'https://other.example/v1' } })
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('re-locks Add after editing the bedrock credential reference field', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'amazon.nova-lite-v1:0' })
+    renderPage('bedrock')
+
+    fireEvent.change(await screen.findByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'secretvalue123' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.change(screen.getByPlaceholderText('name (e.g. BEDROCK_KEYS)'), { target: { value: 'MY_BEDROCK_REF' } })
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('re-locks Add after editing the new-credential reference field', async () => {
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.change(screen.getByPlaceholderText('name (e.g. OPENAI_API_KEY)'), { target: { value: 'MY_ZAI_REF' } })
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('re-locks Add after switching credential mode and picking an existing ref', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { name: 'ZAI_API_KEY', backend: 'db', referenced_by: [] },
+      { name: 'ZAI_API_KEY_2', backend: 'db', referenced_by: [] },
+    ])
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+
+    // Retest with an existing ref selected, then pick a different
+    // ref: onExistingRefChange must invalidate too.
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /^ZAI_API_KEY$/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.click(screen.getByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /^ZAI_API_KEY_2$/ }))
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('retries the probe from the passing-test action button', async () => {
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    expect(validateProvider).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(validateProvider).toHaveBeenCalledTimes(2))
+  })
+
+  it('retries the probe from the failed-test action button', async () => {
+    vi.mocked(validateProvider).mockResolvedValueOnce({ ok: false, latency_ms: 5, model: 'glm-5.2', detail: 'bad key' })
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(validateProvider).toHaveBeenCalledTimes(1))
+
+    const retryButton = await screen.findByRole('button', { name: 'Test connection' })
+    fireEvent.click(retryButton)
+    await waitFor(() => expect(validateProvider).toHaveBeenCalledTimes(2))
+    await screen.findByText(/^OK,/)
+  })
+})
+
 describe('ProviderAdd Timothy auth failures', () => {
   it('does not paint a 401 as a failed provider probe', async () => {
     vi.mocked(setSecret).mockRejectedValue(
