@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type * as echarts from 'echarts/core'
 import type { EntityGraphData } from '../../api/types'
 import { EChart } from '../charts/EChart'
-import { colorOfKind, graphOption } from './graphOption'
+import { colorOfKind, graphOption, visibleEntities } from './graphOption'
 
 // EntityGraph renders the entity co-occurrence graph on ECharts' force
 // layout: zoom/pan/drag, categories per entity kind, edges weighted by
@@ -18,25 +18,35 @@ export function EntityGraph({
   onSelect: (id: string | null) => void
 }) {
   const [hiddenKinds, setHiddenKinds] = useState<Set<string>>(new Set())
-  // Selection-only re-renders keep notMerge off so the force layout
-  // doesn't restart; a data or filter change rebuilds it fully.
-  const [selectMerge, setSelectMerge] = useState(false)
   // Click handlers are attached once (on chart init); read current
   // selection through a ref rather than closing over stale state.
   const selectedRef = useRef(selectedId)
   useEffect(() => {
     selectedRef.current = selectedId
   }, [selectedId])
+  const chartRef = useRef<echarts.ECharts | null>(null)
+  // Pointer-down position, to tell a pan release from a background
+  // click: only a near-stationary pointer counts as a click-to-deselect.
+  const downPosRef = useRef<{ x: number; y: number } | null>(null)
 
-  const option = useMemo(
-    () => graphOption(data, hiddenKinds, selectedId),
-    [data, hiddenKinds, selectedId],
-  )
+  // The option no longer depends on selectedId, so it never rebuilds
+  // (and never restarts the force simulation) on selection alone.
+  const option = useMemo(() => graphOption(data, hiddenKinds), [data, hiddenKinds])
 
   const kinds = [...new Set(data.entities.map((n) => n.type))]
 
+  useEffect(() => {
+    const chart = chartRef.current
+    if (!chart) return
+    // Series data is the kind-filtered list, so index into that, not data.entities.
+    const dataIndex = visibleEntities(data, hiddenKinds).findIndex((n) => n.id === selectedId)
+    chart.dispatchAction({ type: 'unselect', seriesId: 'entities' })
+    if (dataIndex >= 0) {
+      chart.dispatchAction({ type: 'select', seriesId: 'entities', dataIndex })
+    }
+  }, [selectedId, data, hiddenKinds])
+
   function toggleKind(kind: string) {
-    setSelectMerge(false)
     setHiddenKinds((prev) => {
       const next = new Set(prev)
       if (next.has(kind)) next.delete(kind)
@@ -45,19 +55,25 @@ export function EntityGraph({
     })
   }
 
-  function select(id: string | null) {
-    setSelectMerge(true)
-    onSelect(id)
-  }
-
   function attachHandlers(chart: echarts.ECharts) {
+    chartRef.current = chart
     chart.on('click', { seriesType: 'graph' }, (params) => {
       const p = params as { dataType?: string; data?: { id?: string } }
       if (p.dataType !== 'node' || !p.data?.id) return
-      select(p.data.id === selectedRef.current ? null : p.data.id)
+      onSelect(p.data.id === selectedRef.current ? null : p.data.id)
+    })
+    chart.getZr().on('mousedown', (event) => {
+      const e = event as { offsetX?: number; offsetY?: number }
+      downPosRef.current = { x: e.offsetX ?? 0, y: e.offsetY ?? 0 }
     })
     chart.getZr().on('click', (event) => {
-      if (!event.target) select(null)
+      const e = event as { target?: unknown; offsetX?: number; offsetY?: number }
+      if (e.target) return
+      const down = downPosRef.current
+      const moved = down
+        ? Math.hypot((e.offsetX ?? 0) - down.x, (e.offsetY ?? 0) - down.y)
+        : 0
+      if (moved < 5) onSelect(null)
     })
   }
 
@@ -77,7 +93,7 @@ export function EntityGraph({
         role="img"
         aria-label="Entity knowledge graph"
       >
-        <EChart option={option} height={520} notMerge={!selectMerge} onChartReady={attachHandlers} />
+        <EChart option={option} height={520} notMerge={false} onChartReady={attachHandlers} />
       </div>
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         {kinds.map((k) => {

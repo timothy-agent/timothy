@@ -40,12 +40,10 @@ function visibleEdges(edges: EntityEdge[], known: Set<string>): EntityEdge[] {
 
 // graphOption builds the ECharts `graph` series option: force layout,
 // category per entity kind, node size from memory_count (sqrt scale),
-// edge width from co-occurrence weight, selected node ringed in brand.
-export function graphOption(
-  data: EntityGraphData,
-  hiddenKinds: Set<string>,
-  selectedId: string | null,
-): EChartsOption {
+// edge width from co-occurrence weight. Selection styling is applied
+// separately by EntityGraph via dispatchAction, not baked in here, so
+// this option never changes on selection alone.
+export function graphOption(data: EntityGraphData, hiddenKinds: Set<string>): EChartsOption {
   const theme = buildBaseTheme()
   const foreground = getComputedStyle(document.documentElement).getPropertyValue('--muted-foreground').trim()
   const border = getComputedStyle(document.documentElement).getPropertyValue('--border').trim()
@@ -75,10 +73,6 @@ export function graphOption(
     symbolSize: sizeOf(n.memory_count),
     category: categoryIndex.get(n.type),
     label: { formatter: () => truncate(n.name) },
-    itemStyle:
-      n.id === selectedId
-        ? { borderColor: brand, borderWidth: 3 }
-        : undefined,
   }))
 
   const seriesEdges = edges.map((e) => ({
@@ -95,6 +89,10 @@ export function graphOption(
   const gravity = n > 200 ? 0.05 : n > 50 ? 0.1 : 0.2
   const edgeLength = edges.length > 0 ? edges.map((e) => edgeLengthOf(e.weight)) : 100
 
+  // Above 150 visible nodes, hideOverlap's per-frame recompute makes
+  // the force layout lag; labels then only show on hover/emphasis.
+  const labelDense = n > 150
+
   return {
     textStyle: theme.textStyle,
     tooltip: {
@@ -110,20 +108,23 @@ export function graphOption(
     },
     series: [
       {
+        id: 'entities',
         type: 'graph',
         layout: 'force',
         roam: true,
         draggable: true,
         scaleLimit: { min: 0.4, max: 6 },
+        selectedMode: 'single',
+        select: { itemStyle: { borderColor: brand, borderWidth: 3 } },
         label: {
-          show: true,
+          show: !labelDense,
           position: 'bottom',
           color: foreground,
           fontSize: 10,
         },
-        labelLayout: { hideOverlap: true },
-        emphasis: { focus: 'adjacency' },
-        force: { repulsion, gravity, edgeLength },
+        ...(labelDense ? {} : { labelLayout: { hideOverlap: true } }),
+        emphasis: { focus: 'adjacency', label: { show: true } },
+        force: { repulsion, gravity, edgeLength, layoutAnimation: n <= 300 },
         categories,
         data: seriesNodes,
         edges: seriesEdges,

@@ -23,6 +23,7 @@ vi.mock('echarts/core', () => ({
     setOption: vi.fn(),
     resize: vi.fn(),
     dispose: vi.fn(),
+    dispatchAction: vi.fn(),
     on: vi.fn(),
     getZr: vi.fn(() => ({ on: vi.fn() })),
   })),

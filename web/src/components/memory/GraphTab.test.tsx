@@ -16,7 +16,9 @@ vi.mock('../../api/client', () => ({
 // drive node/blank clicks directly — graphOption.test.ts carries the
 // option-logic coverage, not the canvas render itself.
 let clickHandler: ((params: unknown) => void) | null = null
+let zrMousedownHandler: ((event: unknown) => void) | null = null
 let zrClickHandler: ((event: unknown) => void) | null = null
+const dispatchAction = vi.fn()
 
 vi.mock('echarts/core', () => ({
   use: vi.fn(),
@@ -24,12 +26,14 @@ vi.mock('echarts/core', () => ({
     setOption: vi.fn(),
     resize: vi.fn(),
     dispose: vi.fn(),
+    dispatchAction,
     on: vi.fn((_event: string, _opts: unknown, handler: (params: unknown) => void) => {
       clickHandler = handler
     }),
     getZr: vi.fn(() => ({
-      on: vi.fn((_event: string, handler: (event: unknown) => void) => {
-        zrClickHandler = handler
+      on: vi.fn((event: string, handler: (event: unknown) => void) => {
+        if (event === 'mousedown') zrMousedownHandler = handler
+        if (event === 'click') zrClickHandler = handler
       }),
     })),
   })),
@@ -77,6 +81,7 @@ afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
   clickHandler = null
+  zrMousedownHandler = null
   zrClickHandler = null
   vi.mocked(entityGraph).mockResolvedValue(graph)
   vi.mocked(entityMemories).mockResolvedValue([memory])
@@ -90,7 +95,13 @@ describe('GraphTab', () => {
     expect(screen.getByText('person')).toBeInTheDocument()
   })
 
-  it('clicking a node opens the detail panel with its memories', async () => {
+  it('shows the hint text before anything is selected, graph wrapper stays mounted', async () => {
+    renderTab()
+    expect(await screen.findByTestId('entity-graph')).toBeInTheDocument()
+    expect(screen.getByText('Select an entity to see the memories behind it.')).toBeInTheDocument()
+  })
+
+  it('clicking a node opens the detail panel with its memories, graph wrapper stays mounted', async () => {
     renderTab()
     await screen.findByTestId('entity-graph')
     clickHandler!({ dataType: 'node', data: { id: 'e1' } })
@@ -100,6 +111,8 @@ describe('GraphTab', () => {
       'Timothy is a self-hosted assistant.',
     )
     expect(entityMemories).toHaveBeenCalledWith('e1')
+    expect(screen.getByTestId('entity-graph')).toBeInTheDocument()
+    expect(screen.queryByText('Select an entity to see the memories behind it.')).toBeNull()
   })
 
   it('clicking the empty canvas clears the selection', async () => {
@@ -107,8 +120,31 @@ describe('GraphTab', () => {
     await screen.findByTestId('entity-graph')
     clickHandler!({ dataType: 'node', data: { id: 'e1' } })
     await screen.findByTestId('entity-detail')
-    zrClickHandler!({ target: null })
+    zrMousedownHandler!({ offsetX: 100, offsetY: 100 })
+    zrClickHandler!({ target: null, offsetX: 100, offsetY: 100 })
     await waitFor(() => expect(screen.queryByTestId('entity-detail')).toBeNull())
+  })
+
+  it('rings the selected node by its index in the kind-filtered series', async () => {
+    renderTab()
+    await screen.findByTestId('entity-graph')
+    clickHandler!({ dataType: 'node', data: { id: 'e2' } })
+    await screen.findByTestId('entity-detail')
+    expect(dispatchAction).toHaveBeenLastCalledWith({ type: 'select', seriesId: 'entities', dataIndex: 1 })
+    fireEvent.click(screen.getByRole('button', { name: 'project' }))
+    await waitFor(() =>
+      expect(dispatchAction).toHaveBeenLastCalledWith({ type: 'select', seriesId: 'entities', dataIndex: 0 }),
+    )
+  })
+
+  it('releasing a pan on empty canvas keeps the selection', async () => {
+    renderTab()
+    await screen.findByTestId('entity-graph')
+    clickHandler!({ dataType: 'node', data: { id: 'e1' } })
+    await screen.findByTestId('entity-detail')
+    zrMousedownHandler!({ offsetX: 100, offsetY: 100 })
+    zrClickHandler!({ target: null, offsetX: 120, offsetY: 100 })
+    expect(await screen.findByTestId('entity-detail')).toBeInTheDocument()
   })
 
   it('shows the empty state when no entities exist', async () => {

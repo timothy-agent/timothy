@@ -38,16 +38,16 @@ export function GraphTab() {
       <div className="min-w-0 flex-1">
         <EntityGraph data={data} selectedId={selectedId} onSelect={setSelectedId} />
       </div>
-      {selected ? (
+      {data.entities.length > 0 && (
         <div className="lg:w-80 lg:shrink-0">
-          <EntityDetailPanel entity={selected} />
+          {selected ? (
+            <EntityDetailPanel entity={selected} />
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Select an entity to see the memories behind it.
+            </p>
+          )}
         </div>
-      ) : (
-        data.entities.length > 0 && (
-          <p className="text-sm text-muted-foreground lg:w-80 lg:shrink-0">
-            Select an entity to see the memories behind it.
-          </p>
-        )
       )}
     </div>
   )
