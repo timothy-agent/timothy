@@ -142,7 +142,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
-	m.Flow = Flow(flow)
+	m.Flow = parseFlow(flow)
 	scanReviewFindings(&m, reviewFindingsRaw)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	_ = json.Unmarshal(destinationsRaw, &m.Destinations)
@@ -228,7 +228,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds, &m.HasPlan); err != nil {
 		return Mission{}, err
 	}
-	m.Flow = Flow(flow)
+	m.Flow = parseFlow(flow)
 	scanReviewFindings(&m, reviewFindingsRaw)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	_ = json.Unmarshal(destinationsRaw, &m.Destinations)

@@ -10,7 +10,7 @@ import { PlanSection } from './PlanSection'
 // actually acted on the decision, so the card must not look
 // unanswered for that span.
 const answeredCopy: Record<'approve' | 'replan' | 'rediscover', string> = {
-  approve: 'Approved, moving to generate…',
+  approve: 'Approved, moving to build…',
   replan: 'Replan requested…',
   rediscover: 'Sending back to discover…',
 }

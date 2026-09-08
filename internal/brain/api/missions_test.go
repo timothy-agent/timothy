@@ -345,13 +345,13 @@ func TestMissionsCreateFlowNormalization(t *testing.T) {
 	if code, body := post(`{"goal":"g","kind":"general","flow":"light"}`); code != 400 || strings.Contains(body, "flow") {
 		t.Fatalf("flow=light, light omitted: code=%d body=%q, want a generic 400 (passed validation)", code, body)
 	}
-	// Explicit flow=no_prove / discover_generate on kind=general both
+	// Explicit flow=no_prove / discover_build on kind=general both
 	// pass validation.
 	if code, body := post(`{"goal":"g","kind":"general","flow":"no_prove"}`); code != 400 || strings.Contains(body, "flow") {
 		t.Fatalf("flow=no_prove on general: code=%d body=%q, want a generic 400 (passed validation)", code, body)
 	}
-	if code, body := post(`{"goal":"g","kind":"general","flow":"discover_generate"}`); code != 400 || strings.Contains(body, "flow") {
-		t.Fatalf("flow=discover_generate on general: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+	if code, body := post(`{"goal":"g","kind":"general","flow":"discover_build"}`); code != 400 || strings.Contains(body, "flow") {
+		t.Fatalf("flow=discover_build on general: code=%d body=%q, want a generic 400 (passed validation)", code, body)
 	}
 	// Unknown flow value is rejected by ValidateCreate before Driver.Create
 	// ever touches the degraded store.
@@ -1353,7 +1353,7 @@ func getExecutionPlan(t *testing.T, h *missionAPI, query string) map[string]exec
 	for _, p := range body.Phases {
 		byPhase[p.Phase] = p
 	}
-	wantOrder := []string{"discover", "plan", "generate", "prove", "escalate"}
+	wantOrder := []string{"discover", "plan", "build", "prove", "escalate"}
 	for i, p := range body.Phases {
 		if p.Phase != wantOrder[i] {
 			t.Fatalf("phase[%d] = %q, want %q (phases must always appear in this order)", i, p.Phase, wantOrder[i])
@@ -1376,7 +1376,7 @@ func TestExecutionPlanNotFoundWhenResolveRouteNil(t *testing.T) {
 // TestExecutionPlanRouteSourceExplicit confirms an explicit ?route=
 // wins the base route and propagates unchanged to discover/plan (no
 // plan_route override) and generate; prove carries the same route
-// value but its own provenance label is "inherited-from-generate"
+// value but its own provenance label is "inherited-from-build"
 // (prove never itself set), not "explicit".
 func TestExecutionPlanRouteSourceExplicit(t *testing.T) {
 	t.Parallel()
@@ -1388,14 +1388,14 @@ func TestExecutionPlanRouteSourceExplicit(t *testing.T) {
 	}
 	byPhase := getExecutionPlan(t, h, "kind=general&route=mine")
 
-	for _, phase := range []string{"discover", "plan", "generate"} {
+	for _, phase := range []string{"discover", "plan", "build"} {
 		p := byPhase[phase]
 		if p.Route != "mine" || p.RouteSource != "explicit" {
 			t.Fatalf("%s = route %q source %q, want mine/explicit", phase, p.Route, p.RouteSource)
 		}
 	}
-	if p := byPhase["prove"]; p.Route != "mine" || p.RouteSource != "inherited-from-generate" {
-		t.Fatalf("review = route %q source %q, want mine/inherited-from-generate", p.Route, p.RouteSource)
+	if p := byPhase["prove"]; p.Route != "mine" || p.RouteSource != "inherited-from-build" {
+		t.Fatalf("review = route %q source %q, want mine/inherited-from-build", p.Route, p.RouteSource)
 	}
 }
 
@@ -1416,7 +1416,7 @@ func TestExecutionPlanRouteSourceAgent(t *testing.T) {
 		}),
 	}
 	byPhase := getExecutionPlan(t, h, "kind=general&agent=coder")
-	if p := byPhase["generate"]; p.Route != "agent-route" || p.RouteSource != "agent" {
+	if p := byPhase["build"]; p.Route != "agent-route" || p.RouteSource != "agent" {
 		t.Fatalf("execute = route %q source %q, want agent-route/agent", p.Route, p.RouteSource)
 	}
 }
@@ -1435,7 +1435,7 @@ func TestExecutionPlanRouteSourceNamedCoding(t *testing.T) {
 		}),
 	}
 	byPhase := getExecutionPlan(t, h, "kind=coding")
-	if p := byPhase["generate"]; p.Route != "coding" || p.RouteSource != "named-coding" {
+	if p := byPhase["build"]; p.Route != "coding" || p.RouteSource != "named-coding" {
 		t.Fatalf("execute = route %q source %q, want coding/named-coding", p.Route, p.RouteSource)
 	}
 }
@@ -1453,14 +1453,14 @@ func TestExecutionPlanRouteSourceDefaultRole(t *testing.T) {
 		}),
 	}
 	byPhase := getExecutionPlan(t, h, "kind=general")
-	if p := byPhase["generate"]; p.Route != "default" || p.RouteSource != "default-role" {
+	if p := byPhase["build"]; p.Route != "default" || p.RouteSource != "default-role" {
 		t.Fatalf("execute = route %q source %q, want default/default-role", p.Route, p.RouteSource)
 	}
 
 	// kind=coding but no "coding" route exists (absent from the stub
 	// map, so resolveRoute errors on it) must also fall back here.
 	byPhaseCoding := getExecutionPlan(t, h, "kind=coding")
-	if p := byPhaseCoding["generate"]; p.Route != "default" || p.RouteSource != "default-role" {
+	if p := byPhaseCoding["build"]; p.Route != "default" || p.RouteSource != "default-role" {
 		t.Fatalf("execute (coding, no coding route) = route %q source %q, want default/default-role", p.Route, p.RouteSource)
 	}
 }
@@ -1474,7 +1474,7 @@ func TestExecutionPlanRouteSourceNone(t *testing.T) {
 		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{}),
 	}
 	byPhase := getExecutionPlan(t, h, "kind=general")
-	p := byPhase["generate"]
+	p := byPhase["build"]
 	if p.Route != "" || p.RouteSource != "none" {
 		t.Fatalf("execute = route %q source %q, want \"\"/none", p.Route, p.RouteSource)
 	}
@@ -1512,7 +1512,7 @@ func TestExecutionPlanOversightRoutes(t *testing.T) {
 	if p := byPhase["prove"]; p.Route != "strong" || p.RouteSource != "inherited-from-plan" {
 		t.Fatalf("review = route %q source %q, want strong/inherited-from-plan", p.Route, p.RouteSource)
 	}
-	if p := byPhase["generate"]; p.Route != "base" {
+	if p := byPhase["build"]; p.Route != "base" {
 		t.Fatalf("execute = route %q, want base (unaffected by plan_route)", p.Route)
 	}
 
@@ -1526,11 +1526,11 @@ func TestExecutionPlanOversightRoutes(t *testing.T) {
 	}
 
 	// review_route provenance without an explicit plan_route reports
-	// inherited-from-generate, matching runner.go's reviewRoute falling
+	// inherited-from-build, matching runner.go's reviewRoute falling
 	// through oversightRoute straight to Route.
 	byPhase3 := getExecutionPlan(t, h, "kind=general&route=base")
-	if p := byPhase3["prove"]; p.Route != "base" || p.RouteSource != "inherited-from-generate" {
-		t.Fatalf("review = route %q source %q, want base/inherited-from-generate", p.Route, p.RouteSource)
+	if p := byPhase3["prove"]; p.Route != "base" || p.RouteSource != "inherited-from-build" {
+		t.Fatalf("review = route %q source %q, want base/inherited-from-build", p.Route, p.RouteSource)
 	}
 }
 
@@ -1548,19 +1548,19 @@ func TestExecutionPlanHarnessAxis(t *testing.T) {
 	}
 
 	coding := getExecutionPlan(t, h, "kind=coding&route=base&harness=claude-cli")
-	if p := coding["generate"]; p.Axis != "harness" || p.Harness != "claude-cli" || p.HarnessSource != "explicit" {
+	if p := coding["build"]; p.Axis != "harness" || p.Harness != "claude-cli" || p.HarnessSource != "explicit" {
 		t.Fatalf("coding execute = axis %q harness %q source %q, want harness/claude-cli/explicit", p.Axis, p.Harness, p.HarnessSource)
 	}
 
 	general := getExecutionPlan(t, h, "kind=general&route=base&harness=claude-cli")
-	if p := general["generate"]; p.Axis != "native" || p.Harness != "" {
+	if p := general["build"]; p.Axis != "native" || p.Harness != "" {
 		t.Fatalf("general execute = axis %q harness %q, want native/\"\" (harness ignored for non-coding)", p.Axis, p.Harness)
 	}
 
 	// "native" is the settings sentinel for off: normalizes to axis
 	// native with no harness, same as create()'s own req.Harness == "native".
 	nativeSentinel := getExecutionPlan(t, h, "kind=coding&route=base&harness=native")
-	if p := nativeSentinel["generate"]; p.Axis != "native" || p.Harness != "" {
+	if p := nativeSentinel["build"]; p.Axis != "native" || p.Harness != "" {
 		t.Fatalf("coding execute with harness=native = axis %q harness %q, want native/\"\"", p.Axis, p.Harness)
 	}
 }
@@ -1578,7 +1578,7 @@ func TestExecutionPlanHarnessSourceSettings(t *testing.T) {
 		}),
 	}
 	byPhase := getExecutionPlan(t, h, "kind=coding&route=base")
-	if p := byPhase["generate"]; p.Harness != "opencode" || p.HarnessSource != "settings" {
+	if p := byPhase["build"]; p.Harness != "opencode" || p.HarnessSource != "settings" {
 		t.Fatalf("execute = harness %q source %q, want opencode/settings", p.Harness, p.HarnessSource)
 	}
 }
@@ -1604,13 +1604,13 @@ func TestExecutionPlanHarnessSourceAgent(t *testing.T) {
 		}),
 	}
 	byPhase := getExecutionPlan(t, h, "kind=coding&route=base&agent=coder")
-	if p := byPhase["generate"]; p.Harness != "pi" || p.HarnessSource != "agent" {
+	if p := byPhase["build"]; p.Harness != "pi" || p.HarnessSource != "agent" {
 		t.Fatalf("execute = harness %q source %q, want pi/agent", p.Harness, p.HarnessSource)
 	}
 
 	// An explicit ?harness= still wins over the agent's own harness.
 	explicit := getExecutionPlan(t, h, "kind=coding&route=base&agent=coder&harness=claude-cli")
-	if p := explicit["generate"]; p.Harness != "claude-cli" || p.HarnessSource != "explicit" {
+	if p := explicit["build"]; p.Harness != "claude-cli" || p.HarnessSource != "explicit" {
 		t.Fatalf("execute with explicit harness = harness %q source %q, want claude-cli/explicit", p.Harness, p.HarnessSource)
 	}
 }
@@ -1633,7 +1633,7 @@ func TestExecutionPlanLightSkipsOversightOnly(t *testing.T) {
 			t.Fatalf("%s = skipped %v reason %q, want true/%q", phase, p.Skipped, p.SkipReason, lightSkipReason)
 		}
 	}
-	if p := byPhase["generate"]; p.Skipped {
+	if p := byPhase["build"]; p.Skipped {
 		t.Fatalf("execute = skipped %v, want false (execute never skips)", p.Skipped)
 	}
 }
@@ -1687,7 +1687,7 @@ func TestExecutionPlanSelectedFirstUsable(t *testing.T) {
 	}
 
 	mixed := getExecutionPlan(t, h, "kind=general&route=mixed")
-	entries := mixed["generate"].Entries
+	entries := mixed["build"].Entries
 	if len(entries) != 3 {
 		t.Fatalf("entries = %d, want 3", len(entries))
 	}
@@ -1702,7 +1702,7 @@ func TestExecutionPlanSelectedFirstUsable(t *testing.T) {
 	}
 
 	noneUsable := getExecutionPlan(t, h, "kind=general&route=none-usable")
-	for i, e := range noneUsable["generate"].Entries {
+	for i, e := range noneUsable["build"].Entries {
 		if e.Selected {
 			t.Fatalf("entries[%d] selected = true, want false (no entry is usable)", i)
 		}
@@ -1724,7 +1724,7 @@ func TestExecutionPlanRouteModelPinSelectsPinnedEntry(t *testing.T) {
 		}),
 	}
 	byPhase := getExecutionPlan(t, h, "kind=general&route=mixed&route_model="+url.QueryEscape("C/c"))
-	entries := byPhase["generate"].Entries
+	entries := byPhase["build"].Entries
 	if entries[0].Selected {
 		t.Fatalf("entries[0] (B/b, unpinned) selected = true, want false")
 	}
@@ -1750,7 +1750,7 @@ func TestExecutionPlanRouteModelPinUnusableDegradesToFirstUsable(t *testing.T) {
 		}),
 	}
 	byPhase := getExecutionPlan(t, h, "kind=general&route=mixed&route_model="+url.QueryEscape("A/a"))
-	entries := byPhase["generate"].Entries
+	entries := byPhase["build"].Entries
 	if entries[0].Selected {
 		t.Fatalf("entries[0] (A/a, pinned but unusable) selected = true, want false")
 	}
@@ -1839,7 +1839,7 @@ func TestExecutionPlanPricesOmittedWhenNil(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	for _, p := range decoded.Phases {
-		if p.Phase != "generate" {
+		if p.Phase != "build" {
 			continue
 		}
 		for _, e := range p.Entries {
@@ -1880,7 +1880,7 @@ func TestExecutionPlanResolveErrorIsolatedToOnePhase(t *testing.T) {
 		t.Fatalf("escalate skipped = true, want false (it wasn't skipped, it failed to resolve)")
 	}
 
-	execute := byPhase["generate"]
+	execute := byPhase["build"]
 	if len(execute.Entries) != 1 || execute.Entries[0].ProviderName != "A" {
 		t.Fatalf("execute = %+v, want the base route's entry unaffected by escalate's failure", execute)
 	}

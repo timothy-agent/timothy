@@ -30,7 +30,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { missionGoal, toolCallArgs } from './fixtures'
 
 const missionCards = [
-  { status: 'working' as const, harness: 'Native', title: 'Weekly GitHub digest', phase: 'Generate · 3 of 5', model: 'claude-sonnet-5', time: '2 min ago', cost: '$0.0421' },
+  { status: 'working' as const, harness: 'Native', title: 'Weekly GitHub digest', phase: 'Build · 3 of 5', model: 'claude-sonnet-5', time: '2 min ago', cost: '$0.0421' },
   { status: 'waiting' as const, harness: 'Claude Code', title: 'Migrate provider settings to credential_ref', phase: 'Plan · 1 of 4', model: 'gpt-5.2-mini', time: '18 min ago', cost: '$0.0087' },
   { status: 'success' as const, harness: 'Codex', title: 'Summarize unread email from the last 24 hours', phase: 'Result · 5 of 5', model: 'qwen3:4b', time: '1 hour ago', cost: '$0.0000' },
 ]

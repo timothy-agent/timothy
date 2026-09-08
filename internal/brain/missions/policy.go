@@ -13,36 +13,49 @@ const (
 type Flow string
 
 const (
-	// FlowFull is discover->plan->generate->prove->result, today's
+	// FlowFull is discover->plan->build->prove->result, today's
 	// default and the only flow that existed before #459.
 	FlowFull Flow = "full"
-	// FlowDiscoverGenerate is a true planless flow: discover->generate
+	// FlowDiscoverBuild is a true planless flow: discover->build
 	// ->result, no plan, no review. Discover runs as normal (its
-	// findings land in Mission.DiscoverNotes); generate's own turn then
+	// findings land in Mission.DiscoverNotes); build's own turn then
 	// runs the exact D-069 light worker path (Mission.RunsPlanless):
 	// WorkPacket.Light rendering, no plan units, the worker's final
 	// message (mission_status's final_output) is the deliverable. The
 	// only difference from a plain light mission is that this one runs
 	// discover first, and its discover notes reach the planless prompt
 	// via WorkPacket.DiscoverNotes.
-	FlowDiscoverGenerate Flow = "discover_generate"
-	// FlowNoProve is discover->plan->generate->result: skips only the
+	FlowDiscoverBuild Flow = "discover_build"
+	// FlowNoProve is discover->plan->build->result: skips only the
 	// LLM reviewer round. CheckArtifacts (harness evidence) still runs
-	// on generate's exit for any unit declaring artifacts, same as
+	// on build's exit for any unit declaring artifacts, same as
 	// today's review_skipped path for non-coding missions.
 	FlowNoProve Flow = "no_prove"
-	// FlowLight is generate->result (D-069): existing light behavior.
+	// FlowLight is build->result (D-069): existing light behavior.
 	FlowLight Flow = "light"
 )
 
 // ValidFlow reports whether raw names one of the four defined flows.
 func ValidFlow(raw string) bool {
 	switch Flow(raw) {
-	case FlowFull, FlowDiscoverGenerate, FlowNoProve, FlowLight:
+	case FlowFull, FlowDiscoverBuild, FlowNoProve, FlowLight:
 		return true
 	default:
 		return false
 	}
+}
+
+// parseFlow maps a stored flow string onto a Flow, translating the
+// pre-#611 discover_generate spelling onto FlowDiscoverBuild. Rows a
+// data migration hasn't touched yet still carry the old value; drop
+// this alias once scripts/pending-alters.md has run everywhere and the
+// first stable release ships. An unknown value passes through
+// unchanged, leaving validate.go's ValidFlow check to reject it.
+func parseFlow(raw string) Flow {
+	if raw == "discover_generate" {
+		return FlowDiscoverBuild
+	}
+	return Flow(raw)
 }
 
 // missionPolicy derives every kind/light-dependent behavior once
@@ -53,7 +66,7 @@ type missionPolicy struct {
 	alwaysReview    bool // LLM review round can never be skipped
 	checksCitations bool // CheckCitations on verify
 	canDelegate     bool // harness (delegated CLI executor) allowed
-	skipsPlanning   bool // born in generate; no discover/plan/prove
+	skipsPlanning   bool // born in build; no discover/plan/prove
 	canPush         bool // on_complete push/push_pr allowed
 }
 
@@ -63,7 +76,7 @@ type missionPolicy struct {
 // general-shaped policy, since skipping the LLM reviewer is the whole
 // point of choosing it (CheckArtifacts in verifier.go still runs via
 // routeVerified either way). flow=discover_generate does NOT need this
-// override: it never reaches routeVerified at all, its generate turn
+// override: it never reaches routeVerified at all, its build turn
 // takes the same planless short-circuit as flow=light
 // (Mission.RunsPlanless), which never consults alwaysReview. Coding
 // stays alwaysReview true regardless of flow (ValidateCreate rejects
@@ -118,28 +131,28 @@ func missionPolicyFor(m Mission) missionPolicy {
 	return policyFor(m.Kind, m.Flow)
 }
 
-// RunsPlanless reports whether m's generate phase runs the D-069
+// RunsPlanless reports whether m's build phase runs the D-069
 // light worker path: no plan, no artifact check, the worker's final
 // message (mission_status's final_output) is the deliverable.
-// FlowDiscoverGenerate (D-090, issue #459) shares this exact worker
+// FlowDiscoverBuild (D-090, issue #459) shares this exact worker
 // behavior with FlowLight, the only difference being it runs discover
 // first; unlike FlowLight (missionPolicy.skipsPlanning), it is NOT
 // used by initialPhase: a discover_generate mission is still born in
-// PhaseDiscover, only generate itself runs planless. Exported: read
+// PhaseDiscover, only build itself runs planless. Exported: read
 // outside this package by destinations.renderPayload, which needs the
 // same "final_output IS the result" gate memory.go's digest uses.
 func (m Mission) RunsPlanless() bool {
-	return m.Flow == FlowLight || m.Flow == FlowDiscoverGenerate
+	return m.Flow == FlowLight || m.Flow == FlowDiscoverBuild
 }
 
 // initialPhase is the phase a newly created mission row starts in:
-// PhaseGenerate for a flow=light mission (D-069, skips discover/plan),
+// PhaseBuild for a flow=light mission (D-069, skips discover/plan),
 // PhaseDiscover otherwise. Shared by store.go's Create and
 // scheduler.go's createFromTemplate, which both used to duplicate
 // this check inline.
 func initialPhase(kind string, flow Flow) Phase {
 	if policyFor(kind, flow).skipsPlanning {
-		return PhaseGenerate
+		return PhaseBuild
 	}
 	return PhaseDiscover
 }

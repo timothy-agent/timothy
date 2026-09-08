@@ -714,7 +714,7 @@ func TestDelegatedRunWorker_AuthFailure_ReturnsErrExecutorAuth(t *testing.T) {
 // runner must pause the mission as infra on the FIRST turn.
 func TestDriverErrExecutorAuthPausesImmediately(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: stderr said please run /login", ErrExecutorAuth)}
 	d := testDriver(store, runner)
 
@@ -737,7 +737,7 @@ func TestDriverErrExecutorAuthPausesImmediately(t *testing.T) {
 // run may still be alive in the sandbox.
 func TestDriverErrGatewayUnavailablePausesImmediately(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: gwclient: gateway unavailable: gateway http 503: config_unavailable", ErrGatewayUnavailable)}
 	d := testDriver(store, runner)
 
@@ -2599,7 +2599,7 @@ func TestRecordLedgerPrefersReportedModel(t *testing.T) {
 			r := &delegatedRunner{ledger: led, log: slog.Default()}
 			entry := gwclient.ResolvedRouteEntry{ProviderName: "Cursor", Model: tc.entryModel}
 
-			run := cliRun{phase: string(PhaseGenerate), entry: entry, authMode: executor.AuthSubscription, route: "default", agent: "mission-worker"}
+			run := cliRun{phase: string(PhaseBuild), entry: entry, authMode: executor.AuthSubscription, route: "default", agent: "mission-worker"}
 			r.recordLedger(context.Background(), Mission{ID: "m1"}, run, nil, time.Now(), true, "", tc.reportedModel)
 
 			if len(led.entries) != 1 {

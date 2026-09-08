@@ -125,7 +125,7 @@ func TestMissionsResumeWithAnswerReachesWorker(t *testing.T) {
 	// transition leaves behind, so Signal(InputResume) has something
 	// legal to resume from.
 	if err := store.ApplyTransition(ctx, id, missions.Transition{
-		Next: missions.StepState{Phase: missions.PhaseGenerate, Status: missions.StatusWaitingForInput},
+		Next: missions.StepState{Phase: missions.PhaseBuild, Status: missions.StatusWaitingForInput},
 	}); err != nil {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := store.ApplyTransition(ctx, id, missions.Transition{
-		Next: missions.StepState{Phase: missions.PhaseGenerate, Status: missions.StatusPaused, PauseReason: missions.PauseInfra},
+		Next: missions.StepState{Phase: missions.PhaseBuild, Status: missions.StatusPaused, PauseReason: missions.PauseInfra},
 	}); err != nil {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := store.ApplyTransition(ctx, id, missions.Transition{
-		Next: missions.StepState{Phase: missions.PhaseGenerate, Status: missions.StatusIdle},
+		Next: missions.StepState{Phase: missions.PhaseBuild, Status: missions.StatusIdle},
 	}); err != nil {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Phase != missions.PhaseGenerate || got.Status != missions.StatusIdle {
+	if got.Phase != missions.PhaseBuild || got.Status != missions.StatusIdle {
 		t.Fatalf("phase/status after note = %s/%s, want unchanged execute/idle", got.Phase, got.Status)
 	}
 	if len(got.Progress) != 1 || !strings.Contains(got.Progress[0].Note, "Operator note: focus on the staging config next") {
@@ -302,7 +302,7 @@ func TestMissionsNoteAcceptedOnEveryNonTerminalPhase(t *testing.T) {
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
-	for _, phase := range []missions.Phase{missions.PhaseDiscover, missions.PhasePlan, missions.PhaseGenerate, missions.PhaseProve} {
+	for _, phase := range []missions.Phase{missions.PhaseDiscover, missions.PhasePlan, missions.PhaseBuild, missions.PhaseProve} {
 		phase := phase
 		t.Run(string(phase), func(t *testing.T) {
 			id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission note phase test", Kind: "general"})
@@ -558,7 +558,7 @@ func TestMissionsApprovePlanAdvancesToGenerate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Phase != missions.PhaseGenerate || got.Status != missions.StatusIdle && got.Status != missions.StatusWorking {
+	if got.Phase != missions.PhaseBuild || got.Status != missions.StatusIdle && got.Status != missions.StatusWorking {
 		t.Fatalf("mission after approve-plan = %s/%s, want generate/idle-or-working (Drive may have already claimed it)", got.Phase, got.Status)
 	}
 }
@@ -598,7 +598,7 @@ func TestMissionsAnswerValidatesMCQOption(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := store.SetPendingInput(ctx, id, missions.PendingInput{
-		Question: "which runtime?", Kind: "mcq", Options: []string{"node", "python"}, ProposedDefault: "node", Phase: missions.PhaseGenerate,
+		Question: "which runtime?", Kind: "mcq", Options: []string{"node", "python"}, ProposedDefault: "node", Phase: missions.PhaseBuild,
 	}); err != nil {
 		t.Fatalf("SetPendingInput: %v", err)
 	}
@@ -628,12 +628,12 @@ func TestMissionsAnswerResumesMission(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := store.ApplyTransition(ctx, id, missions.Transition{
-		Next: missions.StepState{Phase: missions.PhaseGenerate, Status: missions.StatusWaitingForInput},
+		Next: missions.StepState{Phase: missions.PhaseBuild, Status: missions.StatusWaitingForInput},
 	}); err != nil {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
 	if err := store.SetPendingInput(ctx, id, missions.PendingInput{
-		Question: "continue?", Kind: "yes_no", ProposedDefault: "yes", Phase: missions.PhaseGenerate,
+		Question: "continue?", Kind: "yes_no", ProposedDefault: "yes", Phase: missions.PhaseBuild,
 	}); err != nil {
 		t.Fatalf("SetPendingInput: %v", err)
 	}

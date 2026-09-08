@@ -8,7 +8,7 @@ import { phaseLabel } from '@/lib/phaseColors'
 // Mission phase pipeline (D-086, issue #455), current names only:
 // normalizePhase maps the pre-rename ones (explore/execute/review)
 // onto these via phaseLabel before indexing.
-const missionPhases = ['discover', 'plan', 'generate', 'prove', 'result'] as const
+const missionPhases = ['discover', 'plan', 'build', 'prove', 'result'] as const
 export type MissionPhase = (typeof missionPhases)[number]
 
 // normalizePhase maps a raw mission phase string (current or legacy)
@@ -43,7 +43,7 @@ export function failedPhaseFromEvents(events: MissionEvent[], light?: boolean): 
       if (n !== 'done' && n !== 'failed') return n
     }
   }
-  return light ? 'generate' : 'discover'
+  return light ? 'build' : 'discover'
 }
 
 // phaseStepText renders the compact "Phase · n of 5" line used on
@@ -51,7 +51,7 @@ export function failedPhaseFromEvents(events: MissionEvent[], light?: boolean): 
 export function phaseStepText(mission: { phase: string; light?: boolean; flow?: string }): string {
   if (mission.phase === 'done') return 'Done'
   if (mission.phase === 'failed') return 'Failed'
-  if (mission.light) return 'Generate · light'
+  if (mission.light) return 'Build · light'
   const label = phaseLabel(mission.phase)
   const i = missionPhases.indexOf(label as MissionPhase)
   if (i < 0) return label
@@ -65,7 +65,7 @@ export function phaseStepText(mission: { phase: string; light?: boolean; flow?: 
 // the step it died in with an X (failedAt) so the reader sees how far
 // it got. The mission status itself lives in the page header badge. No hue per phase;
 // understandable without colour via icon, weight and aria-current.
-// Light missions collapse to a single "Generate" step.
+// Light missions collapse to a single "Build" step.
 export function PhaseStepper({
   phase,
   light,
@@ -87,7 +87,7 @@ export function PhaseStepper({
           <span className={cn('flex items-center gap-1.5 font-medium', lightFailed ? 'text-destructive' : 'text-foreground')}>
             {lightDone && <Check aria-hidden className="size-3.5 text-good" />}
             {lightFailed && <CircleX aria-hidden className="size-3.5" />}
-            Generate
+            Build
           </span>
           <Badge variant="secondary" size="sm">
             light

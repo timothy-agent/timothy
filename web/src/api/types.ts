@@ -738,7 +738,7 @@ export interface Mission {
   // generate -> prove -> result -> done|failed. explore/execute/review
   // are the pre-rename names, still possible on a mission whose row
   // predates the data migration in scripts/pending-alters.md.
-  phase: 'discover' | 'plan' | 'generate' | 'prove' | 'result' | 'done' | 'failed' | 'explore' | 'execute' | 'review'
+  phase: 'discover' | 'plan' | 'build' | 'prove' | 'result' | 'done' | 'failed' | 'explore' | 'execute' | 'review' | 'generate'
   status: 'idle' | 'working' | 'waiting_for_input' | 'paused' | 'done' | 'error'
   // failure_reason is derived server-side (Store.List/Get) from this
   // mission's latest mission.failed event's payload.reason:
@@ -862,7 +862,7 @@ export interface Mission {
   // final_output is that worker's verbatim final message: the
   // deliverable itself, absent/empty until the mission reaches done.
   // Invariant: final_output is only ever populated when light is true
-  // OR flow is "discover_generate" (D-090, issue #459: also planless);
+  // OR flow is "discover_build" (D-090, issue #459: also planless);
   // any other mission's Result comes from last_evidence instead (see
   // MissionDetail.tsx's runsPlanless helper picking the Result field).
   light?: boolean
@@ -870,11 +870,11 @@ export interface Mission {
   // once at create time and never model-mutable: "full" is discover ->
   // plan -> generate -> prove -> result (the pre-#459 default);
   // "no_prove" keeps discover/plan but skips only the LLM reviewer;
-  // "discover_generate" is a true planless flow, discover -> generate
+  // "discover_build" is a true planless flow, discover -> build
   // -> result (no plan, no review, the worker's final message is the
   // deliverable, same worker behavior as light); "light" is the
   // existing D-069 behavior, always paired with light: true.
-  flow?: 'full' | 'discover_generate' | 'no_prove' | 'light'
+  flow?: 'full' | 'discover_build' | 'no_prove' | 'light'
   // has_plan (D-102, issue #496) marks a mission whose goal already
   // carried the operator's own plan: the plan turn ran in transcribe
   // mode instead of designing units from scratch.
@@ -981,7 +981,7 @@ export interface ExecutorSpawnedPayload {
   model: string
   auth_mode: string
   run_id: string
-  // phase (issue #582) is 'generate' for a worker run and 'prove' for
+  // phase (issue #582) is 'build' for a worker run and 'prove' for
   // a delegated review run; absent on events recorded before it existed
   // (always worker runs).
   phase?: string

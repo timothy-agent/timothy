@@ -1275,11 +1275,11 @@ export interface CreateMissionInput {
   // flow selects the phase set this mission runs (D-090): omit (or "")
   // maps to "light" when light is true, else "full", the pre-#459
   // default. "no_prove" keeps discover/plan but skips only the LLM
-  // reviewer. "discover_generate" is a true planless flow: discover
+  // reviewer. "discover_build" is a true planless flow: discover
   // runs, then a single planless generate pass (no plan, no review),
   // same worker behavior as light. Only "full" is valid when
   // kind === 'coding'.
-  flow?: 'full' | 'discover_generate' | 'no_prove' | 'light'
+  flow?: 'full' | 'discover_build' | 'no_prove' | 'light'
   // has_plan (D-102, issue #496) marks a goal that already carries the
   // operator's own plan: the plan turn transcribes it into units
   // instead of designing one from scratch. Omit (or false) for the

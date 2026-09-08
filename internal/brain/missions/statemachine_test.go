@@ -19,21 +19,21 @@ func TestStep(t *testing.T) {
 	}{
 		{
 			name:  "cancel from working fails the mission",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking},
 			input: StepInput{Input: InputCancel},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhaseFailed, Status: StatusError},
 		},
 		{
 			name:  "cancel from waiting_for_input fails the mission",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWaitingForInput},
+			state: StepState{Phase: PhaseBuild, Status: StatusWaitingForInput},
 			input: StepInput{Input: InputCancel},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhaseFailed, Status: StatusError},
 		},
 		{
 			name:  "cancel from paused fails the mission and clears the stale pause reason",
-			state: StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseBackoff},
+			state: StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseBackoff},
 			input: StepInput{Input: InputCancel},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhaseFailed, Status: StatusError},
@@ -68,10 +68,10 @@ func TestStep(t *testing.T) {
 		},
 		{
 			name:  "nil budget never pauses on spend",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Spent: 1_000_000},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Spent: 1_000_000},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: ""},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Spent: 1_000_000, Iteration: 1},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Spent: 1_000_000, Iteration: 1},
 		},
 		{
 			name:  "budget check does not apply to a terminal mission",
@@ -82,10 +82,10 @@ func TestStep(t *testing.T) {
 		},
 		{
 			name:  "mixed-currency spend pauses even when same-currency spend is well under budget",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, Spent: 0, Budget: budget(100), MixedCurrencySpend: true},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, Spent: 0, Budget: budget(100), MixedCurrencySpend: true},
 			input: StepInput{Input: InputWorkerRetry},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseMixedCurrency, Spent: 0, Budget: budget(100), MixedCurrencySpend: true},
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseMixedCurrency, Spent: 0, Budget: budget(100), MixedCurrencySpend: true},
 		},
 		{
 			name:  "phase_complete advances discover to plan",
@@ -95,20 +95,20 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhasePlan, Status: StatusIdle},
 		},
 		{
-			// D-090, issue #459: flow=discover_generate routes discover's
+			// D-090, issue #459: flow=discover_build routes discover's
 			// completion straight to generate, never plan.
-			name:  "flow=discover_generate: phase_complete advances discover straight to generate, skipping plan",
-			state: StepState{Phase: PhaseDiscover, Status: StatusWorking, Flow: FlowDiscoverGenerate, Iteration: 2, ConsecutiveFailures: 1},
+			name:  "flow=discover_build: phase_complete advances discover straight to generate, skipping plan",
+			state: StepState{Phase: PhaseDiscover, Status: StatusWorking, Flow: FlowDiscoverBuild, Iteration: 2, ConsecutiveFailures: 1},
 			input: StepInput{Input: InputPhaseComplete},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, Flow: FlowDiscoverGenerate},
+			want:  StepState{Phase: PhaseBuild, Status: StatusIdle, Flow: FlowDiscoverBuild},
 		},
 		{
 			name:  "phase_complete advances plan to generate when auto_approve_plan is true",
 			state: StepState{Phase: PhasePlan, Status: StatusWorking, AutoApprovePlan: true},
 			input: StepInput{Input: InputPhaseComplete},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, AutoApprovePlan: true},
+			want:  StepState{Phase: PhaseBuild, Status: StatusIdle, AutoApprovePlan: true},
 		},
 		{
 			name:  "phase_complete parks on approval when auto_approve_plan is false",
@@ -119,7 +119,7 @@ func TestStep(t *testing.T) {
 		},
 		{
 			name:  "phase_complete advances generate to prove",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking},
 			input: StepInput{Input: InputPhaseComplete},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhaseProve, Status: StatusIdle},
@@ -133,28 +133,28 @@ func TestStep(t *testing.T) {
 		},
 		{
 			name:  "worker_blocked parks the mission waiting for input",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking},
 			input: StepInput{Input: InputWorkerBlocked, Message: "which endpoint?"},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusWaitingForInput},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWaitingForInput},
 		},
 		{
 			name:  "worker_failed below backoff threshold just retries",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 1},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 1},
 			input: StepInput{Input: InputWorkerFailed},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, Iteration: 1},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, Iteration: 1},
 		},
 		{
 			name:  "worker_failed 3rd consecutive time pauses with backoff",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2},
 			input: StepInput{Input: InputWorkerFailed},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseBackoff, MaxIterations: 8, ConsecutiveFailures: 3, Iteration: 1},
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseBackoff, MaxIterations: 8, ConsecutiveFailures: 3, Iteration: 1},
 		},
 		{
 			name:  "worker_failed hitting max_iterations hard-fails instead of pausing",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, ConsecutiveFailures: 0},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1, ConsecutiveFailures: 0},
 			input: StepInput{Input: InputWorkerFailed},
 			cfg:   Config{BackoffFailures: 10, StallRounds: 10},
 			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 1, ConsecutiveFailures: 1, Iteration: 1},
@@ -164,59 +164,59 @@ func TestStep(t *testing.T) {
 			// MaxIterations and BackoffFailures on the same failure must
 			// fail terminally, never pause for backoff.
 			name:  "worker_failed hitting both ceiling and backoff threshold hard-fails, not pauses",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 3, Iteration: 2, ConsecutiveFailures: 2},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 3, Iteration: 2, ConsecutiveFailures: 2},
 			input: StepInput{Input: InputWorkerFailed},
 			cfg:   Config{BackoffFailures: 3, StallRounds: 10},
 			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 3, Iteration: 3, ConsecutiveFailures: 3},
 		},
 		{
 			name:  "worker_retry costs an iteration and resets consecutive failures",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, Iteration: 1},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, Iteration: 1},
 			input: StepInput{Input: InputWorkerRetry},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 0, Iteration: 2},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 0, Iteration: 2},
 		},
 		{
 			name:  "worker_retry hitting max_iterations hard-fails",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, Iteration: 0},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1, Iteration: 0},
 			input: StepInput{Input: InputWorkerRetry},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 1, Iteration: 1, ConsecutiveFailures: 0},
 		},
 		{
 			name:  "worker_retry with no fingerprint never accumulates stall",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc"},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc"},
 			input: StepInput{Input: InputWorkerRetry},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc"},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc"},
 		},
 		{
 			name:  "worker_retry with a new fingerprint returns to generate, stall count resets to 1",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, StallCount: 0, LastGapFingerprint: ""},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 0, LastGapFingerprint: ""},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0"},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
 		},
 		{
 			name:  "worker_retry with the SAME fingerprint twice pauses no_progress once replan is already used",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0", ReplanUsed: true},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0", ReplanUsed: true},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0"},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, StallCount: 2, LastGapFingerprint: "verify_failed:unit_0", ReplanUsed: true},
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, StallCount: 2, LastGapFingerprint: "verify_failed:unit_0", ReplanUsed: true},
 		},
 		{
 			name:  "worker_retry with a DIFFERENT fingerprint does not accumulate stall",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_1"},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "verify_failed:unit_1"},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "verify_failed:unit_1"},
 		},
 		{
 			name:  "review_approve on a non-last unit returns to generate",
 			state: StepState{Phase: PhaseProve, Status: StatusWorking, StallCount: 1, LastGapFingerprint: "x", Units: []PlanUnit{{}}},
 			input: StepInput{Input: InputReviewApprove},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, Units: []PlanUnit{{}}},
+			want:  StepState{Phase: PhaseBuild, Status: StatusIdle, Units: []PlanUnit{{}}},
 		},
 		{
 			name:  "review_approve on the last unit advances to result, not done",
@@ -230,25 +230,25 @@ func TestStep(t *testing.T) {
 			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8},
 			input: StepInput{Input: InputReviewRework},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 8, Iteration: 1, ReworkRounds: 1},
+			want:  StepState{Phase: PhaseBuild, Status: StatusIdle, MaxIterations: 8, Iteration: 1, ReworkRounds: 1},
 		},
 		{
 			name:  "review_rework leaves the worker-retry stall fingerprint alone",
 			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "abc"},
 			input: StepInput{Input: InputReviewRework},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc", ReworkRounds: 1},
+			want:  StepState{Phase: PhaseBuild, Status: StatusIdle, MaxIterations: 8, Iteration: 1, StallCount: 1, LastGapFingerprint: "abc", ReworkRounds: 1},
 		},
 		{
 			name:  "review_rework reaching max_iterations parks review_exhausted in generate instead of failing",
 			state: StepState{Phase: PhaseProve, Status: StatusWorking, MaxIterations: 1},
 			input: StepInput{Input: InputReviewRework},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseReviewExhausted, MaxIterations: 1, ReworkRounds: 1},
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseReviewExhausted, MaxIterations: 1, ReworkRounds: 1},
 		},
 		{
 			name:  "worker_retry stall with replan unused replans instead of pausing",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0"},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Reason: "same failure again"},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
@@ -261,7 +261,7 @@ func TestStep(t *testing.T) {
 			// arrives at planning one failure from a backoff pause despite
 			// having made no failed attempt yet in the new phase.
 			name:  "worker_retry stall replan clears ConsecutiveFailures",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0", ConsecutiveFailures: 2},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "verify_failed:unit_0", ConsecutiveFailures: 2},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Reason: "same failure again"},
 			cfg:   DefaultConfig,
 			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
@@ -282,17 +282,17 @@ func TestStep(t *testing.T) {
 		},
 		{
 			name:  "resume from paused clears the pause reason and goes idle",
-			state: StepState{Phase: PhaseGenerate, Status: StatusPaused, PauseReason: PauseBackoff, Iteration: 3, ConsecutiveFailures: 2},
+			state: StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseBackoff, Iteration: 3, ConsecutiveFailures: 2},
 			input: StepInput{Input: InputResume},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle, Iteration: 3, ConsecutiveFailures: 2},
+			want:  StepState{Phase: PhaseBuild, Status: StatusIdle, Iteration: 3, ConsecutiveFailures: 2},
 		},
 		{
 			name:  "resume from waiting_for_input clears and goes idle",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWaitingForInput},
+			state: StepState{Phase: PhaseBuild, Status: StatusWaitingForInput},
 			input: StepInput{Input: InputResume},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle},
+			want:  StepState{Phase: PhaseBuild, Status: StatusIdle},
 		},
 		{
 			name:  "resume on a terminal mission is a no-op",
@@ -322,10 +322,10 @@ func TestStep(t *testing.T) {
 			// any other phase is a no-op, same convention as the default
 			// unrecognized-input case.
 			name:  "plan_infeasible outside plan phase is a no-op",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking},
 			input: StepInput{Input: InputPlanInfeasible, Reason: "goal forbids the only possible action"},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusWorking},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking},
 		},
 		{
 			name:  "result_complete advances result to done",
@@ -346,7 +346,7 @@ func TestStep(t *testing.T) {
 			state: StepState{Phase: PhasePlan, Status: StatusPaused, PauseReason: PauseApproval},
 			input: StepInput{Input: InputPlanApprove},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusIdle},
+			want:  StepState{Phase: PhaseBuild, Status: StatusIdle},
 		},
 		{
 			// Operator iterations are free: replan must NOT set ReplanUsed
@@ -366,10 +366,10 @@ func TestStep(t *testing.T) {
 		},
 		{
 			name:  "plan_approve outside an approval park is a no-op",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking},
 			input: StepInput{Input: InputPlanApprove},
 			cfg:   DefaultConfig,
-			want:  StepState{Phase: PhaseGenerate, Status: StatusWorking},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking},
 		},
 		{
 			name:  "plan_replan outside an approval park is a no-op",
@@ -445,7 +445,7 @@ func TestStepPlanInfeasibleEmitsGoalInfeasibleEvent(t *testing.T) {
 func TestStepMixedCurrencyPauseDetail(t *testing.T) {
 	budget := 100.0
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Budget: &budget, MixedCurrencySpend: true},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, Budget: &budget, MixedCurrencySpend: true},
 		StepInput{Input: InputWorkerRetry},
 		DefaultConfig,
 	)
@@ -464,7 +464,7 @@ func TestStepMixedCurrencyPauseDetail(t *testing.T) {
 // no_progress exactly as before this feature existed.
 func TestStepReplanEmitsReasonAndUsesReplanOnlyOnce(t *testing.T) {
 	first := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "fp"},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "fp"},
 		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
 		DefaultConfig,
 	)
@@ -479,7 +479,7 @@ func TestStepReplanEmitsReasonAndUsesReplanOnlyOnce(t *testing.T) {
 	}
 
 	second := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "fp", ReplanUsed: true},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "fp", ReplanUsed: true},
 		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp"},
 		DefaultConfig,
 	)
@@ -489,13 +489,13 @@ func TestStepReplanEmitsReasonAndUsesReplanOnlyOnce(t *testing.T) {
 }
 
 // TestStepLightApproveGoesResult confirms a light mission (born in
-// PhaseGenerate, empty plan so every unit counts as passed) advances to
+// PhaseBuild, empty plan so every unit counts as passed) advances to
 // the result phase on review_approve exactly like a coding/general
 // mission's last unit: not straight to done, since D-086's result
 // phase now sits between the last unit's approval and done.
 func TestStepLightApproveGoesResult(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowLight},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, Flow: FlowLight},
 		StepInput{Input: InputReviewApprove},
 		DefaultConfig,
 	)
@@ -504,18 +504,18 @@ func TestStepLightApproveGoesResult(t *testing.T) {
 	}
 }
 
-// TestStepDiscoverGenerateApproveGoesResult confirms a discover_generate
+// TestStepDiscoverGenerateApproveGoesResult confirms a discover_build
 // mission (generate turn takes the same planless short-circuit as
 // light, empty plan so every unit counts as passed) advances to the
 // result phase on review_approve exactly like light, D-090.
 func TestStepDiscoverGenerateApproveGoesResult(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowDiscoverGenerate},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, Flow: FlowDiscoverBuild},
 		StepInput{Input: InputReviewApprove},
 		DefaultConfig,
 	)
 	if got.Next.Phase != PhaseResult || got.Next.Status != StatusIdle {
-		t.Fatalf("Step(discover_generate approve) = %+v, want phase=result status=idle", got.Next)
+		t.Fatalf("Step(discover_build approve) = %+v, want phase=result status=idle", got.Next)
 	}
 }
 
@@ -548,15 +548,15 @@ func TestStepResultCompleteEmitsVerifiedFlag(t *testing.T) {
 		t.Fatalf("non-light mission.done payload = %+v, want verified=true", nonLight.Events[0].Payload)
 	}
 
-	// D-090, issue #459: flow=discover_generate reaches done with zero
+	// D-090, issue #459: flow=discover_build reaches done with zero
 	// harness verification too (no spec units, planless), same as light.
 	discoverGenerate := Step(
-		StepState{Phase: PhaseResult, Status: StatusWorking, Flow: FlowDiscoverGenerate},
+		StepState{Phase: PhaseResult, Status: StatusWorking, Flow: FlowDiscoverBuild},
 		StepInput{Input: InputResultComplete},
 		DefaultConfig,
 	)
 	if verified, ok := discoverGenerate.Events[0].Payload["verified"].(bool); !ok || verified {
-		t.Fatalf("discover_generate mission.done payload = %+v, want verified=false", discoverGenerate.Events[0].Payload)
+		t.Fatalf("discover_build mission.done payload = %+v, want verified=false", discoverGenerate.Events[0].Payload)
 	}
 }
 
@@ -600,21 +600,21 @@ func TestStepAppliesVerification(t *testing.T) {
 	}{
 		{
 			name:  "worker_retry records the failing excerpt without flipping anything",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "a"}}},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "a"}}},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Verified: []UnitVerification{{Unit: 0, Check: "verify_cmd", Excerpt: long}}},
 			wantUnits: []PlanUnit{{Title: "a", VerifyCheck: "verify_cmd", VerifyExcerpt: long[:verifyExcerptCap] + "…"}},
-			wantPhase: PhaseGenerate, wantEvents: []string{"mission.retry"},
+			wantPhase: PhaseBuild, wantEvents: []string{"mission.retry"},
 		},
 		{
 			name:  "phase_complete marks a passing unit harness-passed and stays in generate while a unit is pending (D-096)",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}},
 			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
 			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}, {Title: "b"}},
-			wantPhase: PhaseGenerate, wantEvents: []string{"mission.generate_continued"},
+			wantPhase: PhaseBuild, wantEvents: []string{"mission.generate_continued"},
 		},
 		{
 			name:  "phase_complete enters prove once every unit is harness-passed, Passes waits for approval",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}}},
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}}},
 			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 1, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
 			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}},
 			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
@@ -633,11 +633,11 @@ func TestStepAppliesVerification(t *testing.T) {
 			state:     StepState{Phase: PhaseProve, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}}},
 			input:     StepInput{Input: InputReviewApprove},
 			wantUnits: []PlanUnit{{Title: "a", Passes: true, HarnessPassed: true}, {Title: "b"}},
-			wantPhase: PhaseGenerate, wantEvents: []string{"mission.unit_verified"},
+			wantPhase: PhaseBuild, wantEvents: []string{"mission.unit_verified"},
 		},
 		{
 			name: "a passed unit failing again regresses to pending with the excerpt and an event",
-			state: StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{
 				{Title: "a", Passes: true, HarnessPassed: true}, {Title: "b"},
 			}},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "regression:unit_0", Verified: []UnitVerification{
@@ -647,21 +647,21 @@ func TestStepAppliesVerification(t *testing.T) {
 				{Title: "a", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "a.md: not found"},
 				{Title: "b", HarnessPassed: true, VerifyCheck: "verify_cmd"},
 			},
-			wantPhase: PhaseGenerate, wantEvents: []string{"mission.unit_regressed", "mission.retry"},
+			wantPhase: PhaseBuild, wantEvents: []string{"mission.unit_regressed", "mission.retry"},
 		},
 		{
 			name:      "a regressed unit passing again clears the regression marker",
-			state:     StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "gone"}}},
+			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "gone"}}},
 			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
 			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}},
 			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
 		},
 		{
 			name:      "an out-of-range unit index is ignored",
-			state:     StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}}},
+			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}}},
 			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 4, Passed: true}}},
 			wantUnits: []PlanUnit{{Title: "a"}},
-			wantPhase: PhaseGenerate, wantEvents: []string{"mission.generate_continued"},
+			wantPhase: PhaseBuild, wantEvents: []string{"mission.generate_continued"},
 		},
 	}
 	for _, tc := range cases {
@@ -689,7 +689,7 @@ func TestStepAppliesVerification(t *testing.T) {
 // excerpt, so the timeline names what broke without the full output.
 func TestStepRegressionEventPayload(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "write a.md", Passes: true, HarnessPassed: true}}},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "write a.md", Passes: true, HarnessPassed: true}}},
 		StepInput{Input: InputWorkerRetry, Verified: []UnitVerification{{Unit: 0, Check: "verify_cmd", Excerpt: strings.Repeat("y", 600)}}},
 		DefaultConfig,
 	)
@@ -710,7 +710,7 @@ func TestStepRegressionEventPayload(t *testing.T) {
 // separate as documentation of that fast path's contract.
 func TestStepReviewSkippedGoesResult(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking},
+		StepState{Phase: PhaseBuild, Status: StatusWorking},
 		StepInput{Input: InputReviewApprove},
 		DefaultConfig,
 	)
@@ -729,7 +729,7 @@ func TestStepLightStallNeverReplans(t *testing.T) {
 	// mission (StallCount already at the threshold, ReplanUsed false)
 	// must instead fall through to the plain retry path for a light one.
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowLight, MaxIterations: 8, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, Flow: FlowLight, MaxIterations: 8, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
 		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
 		DefaultConfig,
 	)
@@ -746,7 +746,7 @@ func TestStepLightStallNeverReplans(t *testing.T) {
 	// Repeated identical-fingerprint stalls still respect the hard
 	// max_iterations ceiling, exactly like worker_failed.
 	final := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowLight, MaxIterations: 1, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, Flow: FlowLight, MaxIterations: 1, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
 		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
 		DefaultConfig,
 	)
@@ -756,25 +756,25 @@ func TestStepLightStallNeverReplans(t *testing.T) {
 }
 
 // TestStepDiscoverGenerateStallNeverReplans mirrors
-// TestStepLightStallNeverReplans for flow=discover_generate (D-090,
+// TestStepLightStallNeverReplans for flow=discover_build (D-090,
 // issue #459): its generate turn never visits PhasePlan either, so the
 // same replan-skip must apply.
 func TestStepDiscoverGenerateStallNeverReplans(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Flow: FlowDiscoverGenerate, MaxIterations: 8, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, Flow: FlowDiscoverBuild, MaxIterations: 8, Iteration: 0, StallCount: 1, LastGapFingerprint: "fp"},
 		StepInput{Input: InputWorkerRetry, GapFingerprint: "fp", Reason: "stuck"},
 		DefaultConfig,
 	)
 	if got.Next.Phase == PhasePlan {
-		t.Fatalf("Step(discover_generate stall) = %+v, must never route to PhasePlan", got.Next)
+		t.Fatalf("Step(discover_build stall) = %+v, must never route to PhasePlan", got.Next)
 	}
 	if got.Next.Status == StatusPaused {
-		t.Fatalf("Step(discover_generate stall) = %+v, must not pause no_progress either", got.Next)
+		t.Fatalf("Step(discover_build stall) = %+v, must not pause no_progress either", got.Next)
 	}
 }
 
 func TestParsePhase(t *testing.T) {
-	valid := []Phase{PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve, PhaseResult, PhaseDone, PhaseFailed}
+	valid := []Phase{PhaseDiscover, PhasePlan, PhaseBuild, PhaseProve, PhaseResult, PhaseDone, PhaseFailed}
 	for _, p := range valid {
 		if got, ok := parsePhase(string(p)); !ok || got != p {
 			t.Fatalf("parsePhase(%q) = %q, %v; want %q, true", p, got, ok, p)
@@ -788,19 +788,21 @@ func TestParsePhase(t *testing.T) {
 	}
 }
 
-// TestParsePhaseLegacyMapping is the table test for slice 1's legacy
-// phase name tolerance: a row (or historical mission_events payload)
-// still carrying the pre-rename explore/execute/review value must
-// parse to its new-name equivalent, so a new binary reads old rows
-// correctly before the data migration in scripts/pending-alters.md
-// runs, and old event history keeps displaying after a rollback.
+// TestParsePhaseLegacyMapping is the table test for legacy phase name
+// tolerance: a row (or historical mission_events payload) still
+// carrying a pre-rename value (slice 1's explore/execute/review, or
+// #611's generate) must parse to its current equivalent, so a new
+// binary reads old rows correctly before the data migration in
+// scripts/pending-alters.md runs, and old event history keeps
+// displaying after a rollback.
 func TestParsePhaseLegacyMapping(t *testing.T) {
 	cases := []struct {
 		legacy string
 		want   Phase
 	}{
 		{"explore", PhaseDiscover},
-		{"execute", PhaseGenerate},
+		{"execute", PhaseBuild},
+		{"generate", PhaseBuild},
 		{"review", PhaseProve},
 	}
 	for _, tc := range cases {
@@ -833,7 +835,7 @@ func TestPhaseTerminal(t *testing.T) {
 			t.Fatalf("%q.Terminal() = false, want true", p)
 		}
 	}
-	nonTerminal := []Phase{PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve, PhaseResult}
+	nonTerminal := []Phase{PhaseDiscover, PhasePlan, PhaseBuild, PhaseProve, PhaseResult}
 	for _, p := range nonTerminal {
 		if p.Terminal() {
 			t.Fatalf("%q.Terminal() = true, want false", p)
@@ -920,14 +922,14 @@ func TestStepPlanRediscoverEmitsEvent(t *testing.T) {
 // division of labor as pending_permission's own park.
 func TestStepAskUserParksWithoutEvent(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking},
+		StepState{Phase: PhaseBuild, Status: StatusWorking},
 		StepInput{Input: InputAskUser},
 		DefaultConfig,
 	)
 	if got.Next.Status != StatusWaitingForInput {
 		t.Fatalf("Status = %s, want waiting_for_input", got.Next.Status)
 	}
-	if got.Next.Phase != PhaseGenerate {
+	if got.Next.Phase != PhaseBuild {
 		t.Fatalf("Phase = %s, want generate (unchanged)", got.Next.Phase)
 	}
 	if len(got.Events) != 0 {
@@ -938,7 +940,7 @@ func TestStepAskUserParksWithoutEvent(t *testing.T) {
 // TestStepAskUserParksInEveryLLMPhase confirms the park applies
 // uniformly regardless of which of the four LLM phases asked.
 func TestStepAskUserParksInEveryLLMPhase(t *testing.T) {
-	for _, phase := range []Phase{PhaseDiscover, PhasePlan, PhaseGenerate, PhaseProve} {
+	for _, phase := range []Phase{PhaseDiscover, PhasePlan, PhaseBuild, PhaseProve} {
 		got := Step(StepState{Phase: phase, Status: StatusWorking}, StepInput{Input: InputAskUser}, DefaultConfig)
 		if got.Next.Status != StatusWaitingForInput || got.Next.Phase != phase {
 			t.Fatalf("phase %s: Next = %+v, want same phase with status waiting_for_input", phase, got.Next)
@@ -976,7 +978,7 @@ func TestStepReworkAssignsFindingIDsInOrder(t *testing.T) {
 	if !reflect.DeepEqual(got.Next.ReviewFindings, want) {
 		t.Fatalf("ReviewFindings = %+v, want %+v", got.Next.ReviewFindings, want)
 	}
-	if got.Next.ReworkRounds != 1 || got.Next.Phase != PhaseGenerate || got.Next.Status != StatusIdle {
+	if got.Next.ReworkRounds != 1 || got.Next.Phase != PhaseBuild || got.Next.Status != StatusIdle {
 		t.Fatalf("Next = %+v, want rework round 1 back in generate/idle", got.Next)
 	}
 	ev := eventOfKind(got.Events, "mission.review_verdict")
@@ -1071,7 +1073,7 @@ func TestStepApproveResolvesAllAndResetsRounds(t *testing.T) {
 // never reached the ceiling. ReworkRounds must survive it.
 func TestStepPhaseCompleteKeepsReworkRounds(t *testing.T) {
 	got := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 3, Iteration: 2, ReworkRounds: 2},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 3, Iteration: 2, ReworkRounds: 2},
 		StepInput{Input: InputPhaseComplete},
 		DefaultConfig,
 	)
@@ -1092,12 +1094,12 @@ func TestStepPhaseCompleteKeepsReworkRounds(t *testing.T) {
 // Legacy Passes-only rows count as verified.
 func TestStepPhaseCompleteRoutesOnPendingUnits(t *testing.T) {
 	pending := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, Iteration: 2, ConsecutiveFailures: 1, Units: []PlanUnit{
+		StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 2, ConsecutiveFailures: 1, Units: []PlanUnit{
 			{Title: "a", HarnessPassed: true}, {Title: "b"}, {Title: "c"},
 		}},
 		StepInput{Input: InputPhaseComplete}, DefaultConfig,
 	)
-	if pending.Next.Phase != PhaseGenerate || pending.Next.Status != StatusIdle || pending.Next.Iteration != 0 || pending.Next.ConsecutiveFailures != 0 {
+	if pending.Next.Phase != PhaseBuild || pending.Next.Status != StatusIdle || pending.Next.Iteration != 0 || pending.Next.ConsecutiveFailures != 0 {
 		t.Fatalf("Next = %+v, want generate/idle with counters reset", pending.Next)
 	}
 	ev := eventOfKind(pending.Events, "mission.generate_continued")
@@ -1109,7 +1111,7 @@ func TestStepPhaseCompleteRoutesOnPendingUnits(t *testing.T) {
 	}
 
 	allPassed := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", Passes: true}}},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", Passes: true}}},
 		StepInput{Input: InputPhaseComplete}, DefaultConfig,
 	)
 	if allPassed.Next.Phase != PhaseProve || eventOfKind(allPassed.Events, "mission.phase_started") == nil {
@@ -1117,7 +1119,7 @@ func TestStepPhaseCompleteRoutesOnPendingUnits(t *testing.T) {
 	}
 
 	openFinding := Step(
-		StepState{Phase: PhaseGenerate, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}},
+		StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}},
 			ReviewFindings: []Finding{{ID: "F1", Title: "gap", Status: FindingOpen}}},
 		StepInput{Input: InputPhaseComplete}, DefaultConfig,
 	)
@@ -1164,7 +1166,7 @@ func TestStepPhaseCompleteScoresUntouchedFindings(t *testing.T) {
 		{ID: "F3", Title: "c", Severity: SeverityBlocking, Status: FindingOpen},
 		{ID: "F4", Title: "d", File: "src/x.go", Severity: SeverityBlocking, Status: FindingResolved},
 	}
-	state := StepState{Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 8, ReviewFindings: ledger}
+	state := StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ReviewFindings: ledger}
 
 	untouched := Step(state, StepInput{Input: InputPhaseComplete, TouchedFiles: []string{"README.md"}}, DefaultConfig)
 	fs := untouched.Next.ReviewFindings
@@ -1207,7 +1209,7 @@ func TestStepReworkParksExhaustedWithIDsInDetail(t *testing.T) {
 		StepInput{Input: InputReviewRework, Findings: []Finding{{Title: "no header toggle", File: "t.tsx"}}},
 		DefaultConfig,
 	)
-	if got.Next.Phase != PhaseGenerate || got.Next.Status != StatusPaused || got.Next.PauseReason != PauseReviewExhausted {
+	if got.Next.Phase != PhaseBuild || got.Next.Status != StatusPaused || got.Next.PauseReason != PauseReviewExhausted {
 		t.Fatalf("Next = %+v, want paused review_exhausted in generate", got.Next)
 	}
 	if got.Next.ReworkRounds != 3 {
@@ -1238,7 +1240,7 @@ func TestStepReworkStallsOnUntouchedFile(t *testing.T) {
 		StepInput{Input: InputReviewRework},
 		DefaultConfig,
 	)
-	if stalled.Next.Phase != PhaseGenerate || stalled.Next.PauseReason != PauseNoProgress {
+	if stalled.Next.Phase != PhaseBuild || stalled.Next.PauseReason != PauseNoProgress {
 		t.Fatalf("Next = %+v, want paused no_progress in generate", stalled.Next)
 	}
 	ev := eventOfKind(stalled.Events, "mission.paused")

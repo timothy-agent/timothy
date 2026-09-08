@@ -868,7 +868,7 @@ func (h *missionAPI) routeUnusable(ctx context.Context, route, harness string) (
 }
 
 // unusableCreateRoute walks the phase axes a create request's flow
-// actually runs (D-100): generate on the harness axis, discover/plan on
+// actually runs (D-100): build on the harness axis, discover/plan on
 // the oversight route and prove on the review route (chat axis) unless
 // the flow skips them, escalate when set. Returns the first route with
 // zero usable entries and its reason.
@@ -1295,7 +1295,7 @@ func (h *missionAPI) baseRoute(ctx context.Context, kind, explicitRoute, agentID
 	return "", "none"
 }
 
-// resolveHarness resolves the generate phase's harness via
+// resolveHarness resolves the build phase's harness via
 // missions.ResolveHarness, the same precedence chain create() and the
 // scheduler's fire path use: explicit -> agent -> settings -> native.
 // Only kind=coding can ever delegate (mirrors policy.go's
@@ -1366,12 +1366,12 @@ func (h *missionAPI) resolveEntries(ctx context.Context, route, harness, modelPi
 }
 
 const (
-	lightSkipReason   = "light missions run generate only"
-	escalateOffReason = "no escalation route set; failures retry on the generate route"
+	lightSkipReason   = "light missions run build only"
+	escalateOffReason = "no escalation route set; failures retry on the build route"
 )
 
 // executionPlan serves GET /v1/missions/execution-plan, resolving
-// every phase (discover, plan, generate, prove, escalate) server-side
+// every phase (discover, plan, build, prove, escalate) server-side
 // so the web UI never recomputes route/harness precedence itself
 // (docs/2026-08-26-mission-execution-plan.md, slice 1). Query params
 // mirror createMissionRequest's own route fields; all are optional.
@@ -1393,7 +1393,7 @@ func (h *missionAPI) executionPlan(w http.ResponseWriter, r *http.Request) {
 	escalationRoute := q.Get("escalation_route")
 	light := q.Get("light") == "true"
 	// Model pins (D-078) mirror runner.go's own precedence: routeModel
-	// backs generate, planRouteModel backs discover/plan, reviewModel
+	// backs build, planRouteModel backs discover/plan, reviewModel
 	// falls back reviewRouteModel > planRouteModel > routeModel, see
 	// oversightModel/reviewModel.
 	routeModel := q.Get("route_model")
@@ -1448,7 +1448,7 @@ func (h *missionAPI) missionExecutionPlan(w http.ResponseWriter, r *http.Request
 	})})
 }
 
-// buildExecutionPlan resolves every phase (discover, plan, generate,
+// buildExecutionPlan resolves every phase (discover, plan, build,
 // prove, escalate) for one route/harness set.
 func (h *missionAPI) buildExecutionPlan(ctx context.Context, in executionPlanInput) []executionPlanPhase {
 	base, baseSource := in.route, in.routeSource
@@ -1478,12 +1478,12 @@ func (h *missionAPI) buildExecutionPlan(ctx context.Context, in executionPlanInp
 
 	// reviewRoute mirrors runner.go's own helper: review_route, else
 	// plan_route (as "inherited-from-plan"), else the base route (as
-	// "inherited-from-generate"). oversight already equals planRoute
+	// "inherited-from-build"). oversight already equals planRoute
 	// when planRoute is set (see above), so that's the discriminator,
 	// oversightSource itself may also read "explicit" when it fell
 	// through to an explicit base route, which must not be confused
 	// with plan_route actually being set.
-	review, reviewSource := oversight, "inherited-from-generate"
+	review, reviewSource := oversight, "inherited-from-build"
 	if planRoute != "" {
 		reviewSource = "inherited-from-plan"
 	}
@@ -1509,7 +1509,7 @@ func (h *missionAPI) buildExecutionPlan(ctx context.Context, in executionPlanInp
 
 	generateEntries, generateErr := h.resolveEntries(ctx, base, harness, routeModel)
 	phases = append(phases, executionPlanPhase{
-		Phase: "generate", Route: base, RouteSource: baseSource, Axis: executeAxis,
+		Phase: "build", Route: base, RouteSource: baseSource, Axis: executeAxis,
 		Harness: harness, HarnessSource: harnessSource,
 		SkipReason: generateErr,
 		Entries:    emptyEntries(generateEntries),
@@ -1743,7 +1743,7 @@ func (h *missionAPI) permission(w http.ResponseWriter, r *http.Request) {
 }
 
 // approvePlan handles POST /v1/missions/{id}/approve-plan: the operator
-// accepts the plan as landed, advancing straight to generate (D-087,
+// accepts the plan as landed, advancing straight to build (D-087,
 // issue #456). Plain HTTP handler only, never a tool: the model
 // cannot call this.
 func (h *missionAPI) approvePlan(w http.ResponseWriter, r *http.Request) {

@@ -361,9 +361,9 @@ describe('executor lifecycle event rendering', () => {
 describe('mission.turn rendering', () => {
   it('renders phase, ok, and duration for a successful turn', () => {
     render(
-      <div>{renderEvent(event({ phase: 'generate', duration_ms: 1500, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
+      <div>{renderEvent(event({ phase: 'build', duration_ms: 1500, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
     )
-    expect(screen.getByText('Turn (generate): ok · 1.5s')).toBeInTheDocument()
+    expect(screen.getByText('Turn (build): ok · 1.5s')).toBeInTheDocument()
   })
 
   it('renders a failed turn in red with the reason', () => {
@@ -386,34 +386,41 @@ describe('mission.turn rendering', () => {
     expect(screen.getByText('Turn (execute): ok · 800ms')).toBeInTheDocument()
   })
 
+  it('renders a pre-#611 generate turn unchanged, same as any other legacy name', () => {
+    render(
+      <div>{renderEvent(event({ phase: 'generate', duration_ms: 800, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
+    )
+    expect(screen.getByText('Turn (generate): ok · 800ms')).toBeInTheDocument()
+  })
+
   it('renders route and agent as muted context when the payload carries them', () => {
     render(
       <div>
         {renderEvent(
           event(
-            { phase: 'generate', duration_ms: 1500, ok: true, input: 'worker_retry', route: 'coding', agent: 'Coder' },
+            { phase: 'build', duration_ms: 1500, ok: true, input: 'worker_retry', route: 'coding', agent: 'Coder' },
             'mission.turn',
           ),
         )}
       </div>,
     )
-    const row = screen.getByText(/Turn \(generate\): ok/)
+    const row = screen.getByText(/Turn \(build\): ok/)
     expect(row).toHaveTextContent('Coder · coding')
   })
 
   it('renders a failed turn in red even without a reason (no colon suffix)', () => {
     render(
-      <div>{renderEvent(event({ phase: 'generate', duration_ms: 300, ok: false, input: 'worker_retry' }, 'mission.turn'))}</div>,
+      <div>{renderEvent(event({ phase: 'build', duration_ms: 300, ok: false, input: 'worker_retry' }, 'mission.turn'))}</div>,
     )
-    const row = screen.getByText('Turn (generate): failed · 300ms')
+    const row = screen.getByText('Turn (build): failed · 300ms')
     expect(row).toHaveClass('text-destructive')
   })
 
   it('renders exactly as before when route/agent are absent (legacy event)', () => {
     render(
-      <div>{renderEvent(event({ phase: 'generate', duration_ms: 1500, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
+      <div>{renderEvent(event({ phase: 'build', duration_ms: 1500, ok: true, input: 'worker_retry' }, 'mission.turn'))}</div>,
     )
-    const row = screen.getByText('Turn (generate): ok · 1.5s')
+    const row = screen.getByText('Turn (build): ok · 1.5s')
     expect(row).toBeInTheDocument()
     expect(row).not.toHaveTextContent('undefined')
   })
@@ -444,7 +451,7 @@ describe('mission.turn rendering', () => {
       <div>
         {renderEvent(
           event(
-            { phase: 'generate', duration_ms: 1500, ok: true, input: 'worker_retry', route: 'coding', agent: 'Coder' },
+            { phase: 'build', duration_ms: 1500, ok: true, input: 'worker_retry', route: 'coding', agent: 'Coder' },
             'mission.turn',
           ),
         )}
@@ -587,7 +594,7 @@ describe('mission.route_changed rendering', () => {
 describe('toolRunFromEvent', () => {
   it('maps a mission.tool_call event to a ToolRun', () => {
     const e = event(
-      { phase: 'generate', tool: 'search_kb', args_digest: '{"query":"first"}', status: 'ok', duration_ms: 12 },
+      { phase: 'build', tool: 'search_kb', args_digest: '{"query":"first"}', status: 'ok', duration_ms: 12 },
       'mission.tool_call',
       3,
     )
@@ -601,7 +608,7 @@ describe('toolRunFromEvent', () => {
   })
 
   it('maps an unrecognized status to error', () => {
-    const e = event({ phase: 'generate', tool: 'shell', status: 'blocked', duration_ms: 3 }, 'mission.tool_call')
+    const e = event({ phase: 'build', tool: 'shell', status: 'blocked', duration_ms: 3 }, 'mission.tool_call')
     expect(toolRunFromEvent(e).status).toBe('error')
   })
 })

@@ -27,7 +27,7 @@ func TestOutcomeDigest(t *testing.T) {
 				Plan:          Plan{Units: []PlanUnit{{Title: "write widget.go", Passes: true}}},
 			},
 			events: []Event{
-				{Kind: "mission.turn", Payload: json.RawMessage(`{"phase":"generate","duration_ms":500}`)},
+				{Kind: "mission.turn", Payload: json.RawMessage(`{"phase":"build","duration_ms":500}`)},
 				{Kind: "mission.review_verdict", Payload: json.RawMessage(`{"decision":"approved","findings":"looks good"}`)},
 			},
 			terminal: PhaseDone,
@@ -189,7 +189,7 @@ func TestDriverExtractsMemoryOnDone(t *testing.T) {
 
 func TestDriverExtractsMemoryOnFailed(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseGenerate, Status: StatusWorking, MaxIterations: 1, SessionID: "sess-1"})
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1, SessionID: "sess-1"})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Analysis: "nope"}},
 	}

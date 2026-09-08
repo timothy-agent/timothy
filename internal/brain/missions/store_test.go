@@ -13,8 +13,8 @@ func TestScanPendingInput(t *testing.T) {
 		{name: "nil leaves PendingInput nil", raw: nil, want: nil},
 		{
 			name: "populated unmarshals",
-			raw:  []byte(`{"question":"which runtime?","kind":"mcq","options":["node","python"],"proposed_default":"node","phase":"generate"}`),
-			want: &PendingInput{Question: "which runtime?", Kind: "mcq", Options: []string{"node", "python"}, ProposedDefault: "node", Phase: PhaseGenerate},
+			raw:  []byte(`{"question":"which runtime?","kind":"mcq","options":["node","python"],"proposed_default":"node","phase":"build"}`),
+			want: &PendingInput{Question: "which runtime?", Kind: "mcq", Options: []string{"node", "python"}, ProposedDefault: "node", Phase: PhaseBuild},
 		},
 		{name: "invalid json leaves PendingInput nil", raw: []byte(`not json`), want: nil},
 	}

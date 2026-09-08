@@ -309,7 +309,7 @@ func TestWorkPacketRenderNeutralizesParentContext(t *testing.T) {
 }
 
 // TestWorkPacketRenderIncludesDiscoverNotes confirms discover's
-// findings reach a planless flow=discover_generate worker turn's
+// findings reach a planless flow=discover_build worker turn's
 // prompt (D-090, issue #459), the whole point of running discover
 // before that pass.
 func TestWorkPacketRenderIncludesDiscoverNotes(t *testing.T) {

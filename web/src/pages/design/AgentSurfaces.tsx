@@ -214,7 +214,7 @@ function EventLogComponentSample() {
   )
 }
 
-const phaseSteps = ['Discover', 'Plan', 'Generate', 'Prove', 'Result']
+const phaseSteps = ['Discover', 'Plan', 'Build', 'Prove', 'Result']
 
 function PhaseStepper({ current }: { current: string }) {
   const currentIndex = phaseSteps.indexOf(current)
@@ -263,7 +263,7 @@ function MissionHeaderSample() {
         <h2 className="text-title font-semibold text-foreground">Weekly GitHub digest</h2>
         <StatusBadge status="working" />
       </div>
-      <PhaseStepper current="Generate" />
+      <PhaseStepper current="Build" />
       <div className="max-w-xs space-y-3">
         <CostSample value="$0.0421 of $1.00" spent={4} tone="brand" />
         <CostSample value="$0.86 of $1.00" spent={86} tone="warning" />
