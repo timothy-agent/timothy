@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminProvider } from '../api/types'
+import { TooltipProvider } from '../components/ui/tooltip'
 import { Settings } from './Settings'
 
 vi.mock('../api/client', async (importOriginal) => {
@@ -21,6 +22,8 @@ vi.mock('../api/client', async (importOriginal) => {
     listAgents: vi.fn(),
     listProviders: vi.fn(),
     listRoutes: vi.fn(),
+    listSecretRefs: vi.fn(),
+    migrateAllSecrets: vi.fn(),
     patchAgent: vi.fn(),
     setDefaultAgent: vi.fn(),
     listSecretBackends: vi.fn(),
@@ -50,12 +53,15 @@ import {
   listProviders,
   listRoutes,
   listSecretBackends,
+  listSecretRefs,
   patchSettingValues,
   providersHealth,
+  putSecretBackendConfig,
   searchCatalog,
   secretStatus,
   setDefaultSecretBackend,
   setSecret,
+  testSecretBackend,
   usageBudget,
   validateProvider,
 } from '../api/client'
@@ -74,11 +80,13 @@ const openaiProvider: AdminProvider = {
 
 function renderPage(initialEntry = '/settings/providers') {
   return render(
-    <MemoryRouter initialEntries={[initialEntry]}>
-      <Routes>
-        <Route path="/settings/*" element={<Settings />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/settings/*" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 
@@ -94,6 +102,7 @@ beforeEach(() => {
   ])
   vi.mocked(secretStatus).mockResolvedValue({ configured: true, backend: 'db' })
   vi.mocked(getSecretBackendConfig).mockResolvedValue({})
+  vi.mocked(listSecretRefs).mockResolvedValue([])
   vi.mocked(searchCatalog).mockResolvedValue([])
   vi.mocked(listAgents).mockResolvedValue([
     { id: 'a1', name: 'general', description: 'Everyday', prompt_overlay: '', route: '', skills: [], tools: [], memory: true, is_default: true, enabled: true },
@@ -107,17 +116,21 @@ beforeEach(() => {
 })
 
 describe('Settings pages', () => {
-  it('renders the area as its own page with a heading', async () => {
+  it('renders the area as its own page with a single heading', async () => {
     renderPage('/settings/secrets')
     expect(await screen.findByText('HashiCorp Vault')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Secrets' })).toBeTruthy()
+    const h1s = screen.getAllByRole('heading', { level: 1 })
+    expect(h1s).toHaveLength(1)
+    expect(h1s[0]).toHaveTextContent('Secrets')
     expect(screen.queryByText('Your providers')).toBeNull()
   })
 
-  it('redirects /settings to providers', async () => {
+  it('redirects /settings to providers, with a single heading', async () => {
     renderPage('/settings')
     expect(await screen.findByText('healthy')).toBeTruthy()
-    expect(screen.getByRole('heading', { name: 'Providers' })).toBeTruthy()
+    const h1s = screen.getAllByRole('heading', { level: 1 })
+    expect(h1s).toHaveLength(1)
+    expect(h1s[0]).toHaveTextContent('Providers')
   })
 })
 
@@ -145,8 +158,8 @@ describe('Features tab sensitive tool route', () => {
     fireEvent.click(trigger)
     fireEvent.click(await screen.findByText('local'))
 
-    const card = trigger.closest('div.rounded-xl') as HTMLElement
-    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+    const region = screen.getByRole('region', { name: 'Sensitive tool route' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
       expect(patchSettingValues).toHaveBeenCalledWith({ sensitive_tool_route: 'local' }),
@@ -157,12 +170,12 @@ describe('Features tab sensitive tool route', () => {
     vi.mocked(listRoutes).mockRejectedValue(new Error('admin proxy unavailable'))
 
     renderPage('/settings/features')
-    const input = await screen.findByLabelText('Sensitive tool route')
+    const input = await screen.findByRole('textbox', { name: 'Sensitive tool route' })
     expect((input as HTMLInputElement).tagName).toBe('INPUT')
 
     fireEvent.change(input, { target: { value: 'local' } })
-    const card = input.closest('div.rounded-xl') as HTMLElement
-    fireEvent.click(within(card).getByRole('button', { name: 'Save' }))
+    const region = screen.getByRole('region', { name: 'Sensitive tool route' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
       expect(patchSettingValues).toHaveBeenCalledWith({ sensitive_tool_route: 'local' }),
@@ -254,6 +267,37 @@ describe('Secrets tab default backend', () => {
     fireEvent.click(enabled!)
     await waitFor(() => expect(setDefaultSecretBackend).toHaveBeenCalledWith('vault'))
   })
+
+  it('renders a failed Vault test as a typed alert with the cause', async () => {
+    vi.mocked(getSecretBackendConfig).mockResolvedValue({ address: 'http://vault:8200' })
+    vi.mocked(listSecretBackends).mockResolvedValue([
+      { backend: 'db', configured: true, default: true },
+      { backend: 'vault', configured: true, default: false },
+      { backend: 'asm', configured: false, default: false },
+    ])
+    vi.mocked(testSecretBackend).mockResolvedValue({ ok: false, error: 'connection refused' })
+
+    renderPage('/settings/secrets')
+    const testButtons = await screen.findAllByRole('button', { name: 'Test' })
+    fireEvent.click(testButtons[0])
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('connection refused')
+  })
+
+  it('keeps the entered Vault fields and shows a Retry alert when Save fails', async () => {
+    vi.mocked(putSecretBackendConfig).mockRejectedValue(new Error('write forbidden'))
+
+    renderPage('/settings/secrets')
+    const address = await screen.findByPlaceholderText('https://vault.internal:8200')
+    fireEvent.change(address, { target: { value: 'https://vault.internal:8200' } })
+    const saveButtons = await screen.findAllByRole('button', { name: 'Save' })
+    fireEvent.click(saveButtons[0])
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('write forbidden')
+    expect(address).toHaveValue('https://vault.internal:8200')
+  })
 })
 
 describe('Providers tab', () => {
@@ -261,16 +305,16 @@ describe('Providers tab', () => {
     renderPage('/settings/providers')
     expect(await screen.findByText('Your providers · 1')).toBeTruthy()
     expect(screen.getByText('healthy')).toBeTruthy()
-    // Every preset is offered as a tile.
+    // Every preset is offered as a tile (a Link to its add page).
     for (const name of ['AWS Bedrock', 'GLM (Z.ai)', 'Grok (xAI)', 'Ollama', 'Custom endpoint']) {
-      expect(screen.getByRole('button', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })).toBeTruthy()
+      expect(screen.getByRole('link', { name: new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')) })).toBeTruthy()
     }
   })
 
   it('navigates to its own add page: bedrock asks for a region dropdown and a key', async () => {
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /AWS Bedrock/ }))
-    expect(await screen.findByText('Add AWS Bedrock')).toBeTruthy()
+    fireEvent.click(await screen.findByRole('link', { name: /AWS Bedrock/ }))
+    expect(await screen.findByRole('heading', { name: 'Add AWS Bedrock' })).toBeTruthy()
     expect(screen.getByText('Region')).toBeTruthy()
     expect(screen.getByRole('combobox')).toBeTruthy()
     // Static keys are the only bedrock auth now: access key id + secret
@@ -296,7 +340,7 @@ describe('Providers tab', () => {
     ])
 
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     const addButton = await screen.findByRole('button', { name: 'Add provider' })
     expect((addButton as HTMLButtonElement).disabled).toBe(true)
 
@@ -323,7 +367,7 @@ describe('Providers tab', () => {
 
   it('shows an inline error when testing without a key', async () => {
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
     expect(await screen.findByText(/An API key is required to test this provider/)).toBeTruthy()
     expect(validateProvider).not.toHaveBeenCalled()
@@ -334,7 +378,7 @@ describe('Providers tab', () => {
     vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 187, model: 'glm-4.7-flash' })
 
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gsk_abc' } })
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
@@ -357,7 +401,7 @@ describe('Providers tab', () => {
     ])
 
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     const input = await screen.findByPlaceholderText('paste key')
     // Every backend takes the raw key now, still masked.
     expect((input as HTMLInputElement).type).toBe('password')
@@ -374,7 +418,7 @@ describe('Providers tab', () => {
     })
 
     renderPage('/settings/providers')
-    fireEvent.click(await screen.findByRole('button', { name: /GLM/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /GLM/ }))
     fireEvent.change(screen.getByLabelText(/API key/), { target: { value: 'gsk_abc' } })
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
 
@@ -391,3 +435,4 @@ describe('Provider manage page', () => {
     expect(await screen.findByDisplayValue('OpenAI')).toBeTruthy()
   })
 })
+

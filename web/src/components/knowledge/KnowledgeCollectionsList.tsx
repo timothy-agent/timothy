@@ -7,7 +7,7 @@ import { listKbCollections } from '../../api/client'
 import type { KbCollection } from '../../api/types'
 import { relativeTime } from '../../lib/format'
 import { Button } from '../ui/button'
-import { errText } from '../settings/util'
+import { errText } from '../../lib/errors'
 
 export function KnowledgeCollectionsList() {
   const [collections, setCollections] = useState<KbCollection[]>([])

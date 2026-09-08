@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { ArrowDown } from 'lucide-react'
 import {
   answerPermission,
   ChatError,
@@ -15,16 +16,22 @@ import {
 import type { ChatEvent, Reference } from '../api/types'
 import { ActivityPanel } from '../components/Activity'
 import { useAgents } from '../components/AgentPicker'
+import { AgentStatusLine } from '../components/chat/AgentStatusLine'
+import { ApprovalDialog } from '../components/chat/ApprovalCard'
 import { Composer, isDocumentAttachment, type PendingAttachment } from '../components/Composer'
 import { AssistantMessage, CompactionDivider, ErrorMessage, InterruptedMessage, UserMessage } from '../components/Message'
-import { PermissionModal } from '../components/PermissionModal'
+import { Alert, AlertTitle } from '../components/ui/alert'
+import { Button } from '../components/ui/button'
+import { Kbd } from '../components/timothy/kbd'
 import { Sheet } from '../components/ui/sheet'
+import { TooltipProvider } from '../components/ui/tooltip'
 import {
   answerPermission as clearPermission,
   applyEvent,
   emptyAssistant,
   type AssistantState,
 } from '../lib/chat'
+import { agentPhaseFromState } from '../lib/chatUi'
 import { subscribeEvents } from '../lib/events'
 import { useSessions } from '../lib/sessions'
 import { fromTranscript, type ChatItem } from '../lib/transcript'
@@ -109,6 +116,15 @@ export function Chat({
   // panel content is derived from `items` below rather than captured
   // once, so it keeps updating live while that turn is still streaming.
   const [activityId, setActivityId] = useState<string | null>(null)
+  // Mirrors pendingPermission arriving while the transcript is
+  // scrolled away from it (pinnedRef false): shows the modal
+  // ApprovalDialog on top of the inline card. Closing it (without
+  // deciding) drops back to just the inline card + status line.
+  const [showApprovalDialog, setShowApprovalDialog] = useState(false)
+  // The status line's "done" summary lingers 5s after a turn finishes
+  // (contract 14.3), then the line reverts to idle.
+  const [justDone, setJustDone] = useState<{ durationMs?: number; toolCount: number } | null>(null)
+  const doneTimerRef = useRef<number | undefined>(undefined)
   const sessionRef = useRef<string | undefined>(routeSession)
   // Session ids this page itself adopted mid-stream (via navigate):
   // the resume effect must not clobber the live stream with a replay.
@@ -118,8 +134,11 @@ export function Chat({
   const listRef = useRef<HTMLDivElement>(null)
   // Whether the view is pinned to the bottom. Scrolling up releases
   // the pin so a streaming answer stops yanking the view back down;
-  // scrolling back near the bottom re-engages it.
+  // scrolling back near the bottom re-engages it. Mirrored into state
+  // so the Jump to latest button and the approval dialog gate can
+  // react to it.
   const pinnedRef = useRef(true)
+  const [pinned, setPinned] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
 
   // Cancel any in-flight stream when the page unmounts (route change).
@@ -209,10 +228,17 @@ export function Chat({
     if (pinnedRef.current) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [items])
 
+  // setPin updates the ref (read synchronously by effects/callbacks
+  // elsewhere) and the mirrored state (read by render) together.
+  const setPin = (v: boolean) => {
+    pinnedRef.current = v
+    setPinned(v)
+  }
+
   const trackPin = () => {
     const el = listRef.current
     if (!el) return
-    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    setPin(el.scrollHeight - el.scrollTop - el.clientHeight < 80)
   }
 
   // updateKnowledge handles both the mention popup's add (local only,
@@ -268,7 +294,7 @@ export function Chat({
 
   const attachLive = (sessionId: string, reconnectAttempt = 0) => {
     setStreaming(true)
-    pinnedRef.current = true
+    setPin(true)
     if (reconnectAttempt === 0) {
       setItems((prev) => {
         const next = [...prev]
@@ -361,7 +387,7 @@ export function Chat({
     setAttachments([])
     setReferences([])
     setStreaming(true)
-    pinnedRef.current = true // sending always re-follows the answer
+    setPin(true) // sending always re-follows the answer
     const userItemId = crypto.randomUUID()
     if (ready.length > 0) {
       localUrlsRef.current.set(userItemId, new Map(ready.map((a) => [a.id, a.previewUrl])))
@@ -491,7 +517,7 @@ export function Chat({
     const sessionId = sessionRef.current
     if (!sessionId || streaming) return
     setStreaming(true)
-    pinnedRef.current = true
+    setPin(true)
     setItems((prev) => {
       const next = [...prev]
       const last = next[next.length - 1]
@@ -591,12 +617,15 @@ export function Chat({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // The permission modal shows the oldest unanswered prompt of the
-  // live turn; answering posts the decision and drops it locally.
+  // The status line and the inline/modal approval cards all show the
+  // oldest unanswered prompt of the live turn; answering posts the
+  // decision and drops it locally.
   const last = items[items.length - 1]
+  const liveAssistant = last?.role === 'assistant' && last.streaming ? last : null
   const pendingPermission = last?.role === 'assistant' ? last.permissions[0] : undefined
   const decide = (id: string, decision: 'once' | 'session' | 'deny') => {
     updateLast((m) => clearPermission(m, id))
+    setShowApprovalDialog(false)
     answerPermission(id, decision).catch((err: unknown) => {
       // A replayed ask whose turn died (brain restart) answers 404
       // "unknown or already-answered": the prompt is already gone
@@ -609,113 +638,198 @@ export function Chat({
     })
   }
 
+  // Present the modal ApprovalDialog only when a request arrives while
+  // the transcript is scrolled away from it (contract 14.7): a pinned
+  // view already shows the inline card in place, no modal needed.
+  const pendingPermissionId = pendingPermission?.id
+  useEffect(() => {
+    if (pendingPermissionId && !pinnedRef.current) setShowApprovalDialog(true)
+    if (!pendingPermissionId) setShowApprovalDialog(false)
+  }, [pendingPermissionId])
+
+  // The status line's "done" summary shows for 5s after a turn
+  // finishes, then reverts to idle (contract 14.3). A new turn
+  // starting before the 5s elapses clears it immediately so the line
+  // doesn't lag showing "done" while the next one is already working.
+  useEffect(() => {
+    if (streaming) {
+      setJustDone(null)
+      return
+    }
+    const finished = last?.role === 'assistant' && !last.streaming
+    if (!finished) return
+    setJustDone({ durationMs: last.meta?.durationMs, toolCount: last.tools.length })
+    window.clearTimeout(doneTimerRef.current)
+    doneTimerRef.current = window.setTimeout(() => setJustDone(null), 5000)
+    return () => window.clearTimeout(doneTimerRef.current)
+    // Only re-evaluate when streaming stops or the trailing item's id
+    // changes (a new turn finished): re-running on every items update
+    // would restart the 5s timer while a later message merely renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streaming, last?.id])
+
+  const statusPhase = (() => {
+    if (justDone) return { kind: 'done' as const, ...justDone }
+    return agentPhaseFromState(liveAssistant, { pendingPermission: Boolean(pendingPermission) })
+  })()
+
+  const focusApprovalCard = () => {
+    const id = pendingPermission?.id
+    if (!id) return
+    const el = document.getElementById(`approval-${id}`)
+    el?.scrollIntoView({ block: 'center' })
+    el?.focus()
+  }
+
   // Re-derived from `items` every render (not captured on open) so the
   // panel keeps showing live tool/reasoning state while its turn streams.
+  const isEmpty = items.length === 0 && !loadError
   const activityItem = items.find((i) => i.id === activityId)
   const activityMsg = activityItem?.role === 'assistant' ? activityItem : undefined
 
   return (
-    <div className="flex h-full flex-col">
-      {pendingPermission && <PermissionModal request={pendingPermission} onDecision={decide} />}
-      <Sheet open={activityMsg !== undefined} onOpenChange={(open) => !open && setActivityId(null)}>
-        {activityMsg && <ActivityPanel msg={activityMsg} />}
-      </Sheet>
-      <div ref={listRef} onScroll={trackPin} className="flex-1 space-y-6 overflow-y-auto py-6">
-        {items.length === 0 && !loadError && (
-          <div className="mt-24 text-center">
-            <h2 className="text-xl font-semibold text-zinc-700 dark:text-zinc-200">
-              {emptyHeading}
-            </h2>
-            <p className="mt-2 text-sm text-zinc-400">{emptySubtext}</p>
-          </div>
-        )}
-        {loadError && (
-          <div className="mt-24 text-center text-sm text-red-500">
-            Could not load this session: {loadError}
-          </div>
-        )}
-        {items.map((item, i) => {
-          switch (item.role) {
-            case 'user':
-              return (
-                <UserMessage
-                  key={item.id}
-                  text={item.text}
-                  images={item.images}
-                  documents={item.documents}
-                  localUrls={localUrlsRef.current.get(item.id)}
-                  // A trailing user message means the turn died before any
-                  // assistant event reached the transcript: retry re-runs
-                  // it server-side, same trailing-only condition as above.
-                  onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
-                />
-              )
-            case 'compaction':
-              return <CompactionDivider key={item.id} text={item.text} />
-            case 'interrupted':
-              return <InterruptedMessage key={item.id} text={item.text} />
-            case 'error':
-              return (
-                <ErrorMessage
-                  key={item.id}
-                  text={item.text}
-                  // Same trailing-only condition as user/assistant items:
-                  // a failed turn had no way back into the UI at all
-                  // without this: the user had to type the message again.
-                  onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
-                />
-              )
-            default:
-              return (
-                <AssistantMessage
-                  key={item.id}
-                  msg={item}
-                  // Retry only ever targets the trailing dangling turn
-                  // (the session's last event server-side): never a
-                  // mid-transcript message.
-                  onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
-                  onShowActivity={() => setActivityId(item.id)}
-                />
-              )
-          }
-        })}
-        <div ref={bottomRef} />
-      </div>
-
-      <form
-        className="pb-3"
-        onSubmit={(e) => {
-          e.preventDefault()
-          send()
-        }}
+    <TooltipProvider>
+      <div
+        className={`flex h-full min-h-0 flex-col ${isEmpty ? 'justify-center' : ''}`}
       >
-        <Composer
-          draft={draft}
-          onDraft={setDraft}
-          onSend={send}
-          agent={agent}
-          onAgent={pickAgent}
-          route={route}
-          onRoute={pickRoute}
-          hidePicker={Boolean(lockedSkillHint)}
-          skillHint={skillHint}
-          onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}
-          disabled={streaming}
-          streaming={streaming}
-          onStop={stop}
-          placeholder={placeholder}
-          attachments={attachments}
-          onAttachments={setAttachments}
-          knowledge={knowledge}
-          onKnowledge={updateKnowledge}
-          agentKnowledge={agentKnowledge}
-          references={references}
-          onReferences={setReferences}
-        />
-        <p className="mt-2 text-center text-xs text-zinc-400 dark:text-zinc-500">
-          Enter to send · Shift+Enter for a new line
-        </p>
-      </form>
-    </div>
+        {pendingPermission && (
+          <ApprovalDialog
+            request={pendingPermission}
+            onDecision={decide}
+            open={showApprovalDialog}
+            onOpenChange={setShowApprovalDialog}
+          />
+        )}
+        <Sheet open={activityMsg !== undefined} onOpenChange={(open) => !open && setActivityId(null)}>
+          {activityMsg && <ActivityPanel msg={activityMsg} />}
+        </Sheet>
+
+        {isEmpty ? (
+          <div className="flex flex-col items-center justify-center">
+            <p className="text-base text-muted-foreground">{emptyHeading}</p>
+            {emptySubtext && emptySubtext !== emptyHeading && (
+              <p className="mt-1 text-sm text-muted-foreground">{emptySubtext}</p>
+            )}
+          </div>
+        ) : (
+          <div ref={listRef} onScroll={trackPin} className="flex-1 overflow-y-auto overflow-x-hidden">
+            <div className="relative mx-auto w-full min-w-0 max-w-[45rem] space-y-8 pt-8 pb-6">
+              {loadError && (
+                <Alert tone="destructive">
+                  <AlertTitle>Could not load this conversation</AlertTitle>
+                  <p className="font-mono text-xs">{loadError}</p>
+                </Alert>
+              )}
+              {items.map((item, i) => {
+                switch (item.role) {
+                  case 'user':
+                    return (
+                      <UserMessage
+                        key={item.id}
+                        text={item.text}
+                        images={item.images}
+                        documents={item.documents}
+                        localUrls={localUrlsRef.current.get(item.id)}
+                        // A trailing user message means the turn died before any
+                        // assistant event reached the transcript: retry re-runs
+                        // it server-side, same trailing-only condition as above.
+                        onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
+                      />
+                    )
+                  case 'compaction':
+                    return <CompactionDivider key={item.id} text={item.text} />
+                  case 'interrupted':
+                    return <InterruptedMessage key={item.id} text={item.text} />
+                  case 'error':
+                    return (
+                      <ErrorMessage
+                        key={item.id}
+                        text={item.text}
+                        // Same trailing-only condition as user/assistant items:
+                        // a failed turn had no way back into the UI at all
+                        // without this: the user had to type the message again.
+                        onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
+                      />
+                    )
+                  default:
+                    return (
+                      <AssistantMessage
+                        key={item.id}
+                        msg={item}
+                        // Retry only ever targets the trailing dangling turn
+                        // (the session's last event server-side): never a
+                        // mid-transcript message.
+                        onRetry={i === items.length - 1 && !streaming ? retryLast : undefined}
+                        onShowActivity={() => setActivityId(item.id)}
+                        onDecision={decide}
+                      />
+                    )
+                }
+              })}
+              <div ref={bottomRef} />
+            </div>
+            {!pinned && streaming && (
+              <div className="sticky bottom-2 mx-auto flex w-fit justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setPin(true)
+                    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+                  }}
+                >
+                  <ArrowDown aria-hidden />
+                  Jump to latest
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="mx-auto w-full max-w-[45rem] pb-6">
+          <AgentStatusLine
+            phase={
+              statusPhase.kind === 'waiting'
+                ? { ...statusPhase, onFocusRequest: focusApprovalCard }
+                : statusPhase
+            }
+            className="mb-2"
+          />
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              send()
+            }}
+          >
+            <Composer
+              draft={draft}
+              onDraft={setDraft}
+              onSend={send}
+              agent={agent}
+              onAgent={pickAgent}
+              route={route}
+              onRoute={pickRoute}
+              hidePicker={Boolean(lockedSkillHint)}
+              skillHint={skillHint}
+              onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}
+              disabled={streaming}
+              streaming={streaming}
+              onStop={stop}
+              placeholder={placeholder}
+              attachments={attachments}
+              onAttachments={setAttachments}
+              knowledge={knowledge}
+              onKnowledge={updateKnowledge}
+              agentKnowledge={agentKnowledge}
+              references={references}
+              onReferences={setReferences}
+            />
+            <p className="mt-2 text-center text-xs text-muted-foreground">
+              <Kbd>Enter</Kbd> to send · Shift+Enter for a new line
+            </p>
+          </form>
+        </div>
+      </div>
+    </TooltipProvider>
   )
 }

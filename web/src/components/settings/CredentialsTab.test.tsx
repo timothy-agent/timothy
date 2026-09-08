@@ -1,7 +1,22 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SecretRefEntry } from '../../api/client'
+import { TooltipProvider } from '../ui/tooltip'
 import { CredentialsTab } from './CredentialsTab'
+
+// CredentialsTab now renders PageHeader's breadcrumb links, which need
+// a Router context, and its delete IconButton renders a tooltip, which
+// needs a TooltipProvider, so every render is wrapped in both.
+function renderTab() {
+  return render(
+    <MemoryRouter>
+      <TooltipProvider>
+        <CredentialsTab />
+      </TooltipProvider>
+    </MemoryRouter>,
+  )
+}
 
 vi.mock('../../api/client', () => ({
   deleteSecret: vi.fn(),
@@ -11,9 +26,11 @@ vi.mock('../../api/client', () => ({
 vi.mock('./useDefaultSecretBackend', () => ({
   useDefaultSecretBackend: vi.fn(() => 'db'),
 }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { deleteSecret, listSecretRefs, migrateAllSecrets } from '../../api/client'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
+import { toast } from 'sonner'
 
 const referenced: SecretRefEntry = {
   name: 'GITHUB_PAT',
@@ -50,7 +67,7 @@ beforeEach(() => {
 describe('CredentialsTab', () => {
   it('renders every stored ref with its used-by chips and no delete button when referenced', async () => {
     vi.mocked(listSecretRefs).mockResolvedValue([referenced])
-    render(<CredentialsTab />)
+    renderTab()
 
     expect(await screen.findByText('GITHUB_PAT')).toBeInTheDocument()
     expect(screen.getByText(/connector: github-mcp/)).toBeInTheDocument()
@@ -60,14 +77,14 @@ describe('CredentialsTab', () => {
 
   it('shows an empty state when nothing is stored', async () => {
     vi.mocked(listSecretRefs).mockResolvedValue([])
-    render(<CredentialsTab />)
+    renderTab()
 
     expect(await screen.findByText('No credentials stored yet.')).toBeInTheDocument()
   })
 
   it('marks an unreferenced ref as orphaned and offers a delete button', async () => {
     vi.mocked(listSecretRefs).mockResolvedValue([orphaned])
-    render(<CredentialsTab />)
+    renderTab()
 
     expect(await screen.findByText('OLD_KEY')).toBeInTheDocument()
     expect(screen.getByText('orphaned')).toBeInTheDocument()
@@ -77,7 +94,7 @@ describe('CredentialsTab', () => {
   it('requires confirmation before deleting, and refreshes the list after', async () => {
     vi.mocked(listSecretRefs).mockResolvedValueOnce([orphaned]).mockResolvedValueOnce([])
     vi.mocked(deleteSecret).mockResolvedValue()
-    render(<CredentialsTab />)
+    renderTab()
 
     fireEvent.click(await screen.findByRole('button', { name: 'Delete OLD_KEY' }))
     expect(await screen.findByText('Delete OLD_KEY?')).toBeInTheDocument()
@@ -91,7 +108,7 @@ describe('CredentialsTab', () => {
 
   it('cancelling the confirm dialog never calls deleteSecret', async () => {
     vi.mocked(listSecretRefs).mockResolvedValue([orphaned])
-    render(<CredentialsTab />)
+    renderTab()
 
     fireEvent.click(await screen.findByRole('button', { name: 'Delete OLD_KEY' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
@@ -101,7 +118,7 @@ describe('CredentialsTab', () => {
 
   it('shows a System badge and disables delete for a bootstrap-credential ref', async () => {
     vi.mocked(listSecretRefs).mockResolvedValue([systemRef])
-    render(<CredentialsTab />)
+    renderTab()
 
     expect(await screen.findByText('VAULT_TOKEN')).toBeInTheDocument()
     expect(screen.getByText('System')).toBeInTheDocument()
@@ -112,7 +129,7 @@ describe('CredentialsTab', () => {
   it('hides the migrate-all button when the default backend is db', async () => {
     vi.mocked(useDefaultSecretBackend).mockReturnValue('db')
     vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'vault' }])
-    render(<CredentialsTab />)
+    renderTab()
 
     await screen.findByText('OLD_KEY')
     expect(screen.queryByRole('button', { name: /Migrate all to/ })).not.toBeInTheDocument()
@@ -121,7 +138,7 @@ describe('CredentialsTab', () => {
   it('hides the migrate-all button when every ref is already on the default backend', async () => {
     vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
     vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'vault' }])
-    render(<CredentialsTab />)
+    renderTab()
 
     await screen.findByText('OLD_KEY')
     expect(screen.queryByRole('button', { name: /Migrate all to/ })).not.toBeInTheDocument()
@@ -130,21 +147,101 @@ describe('CredentialsTab', () => {
   it('hides the migrate-all banner when only a system ref lives off the default backend', async () => {
     vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
     vi.mocked(listSecretRefs).mockResolvedValue([systemRef, { ...orphaned, backend: 'vault' }])
-    render(<CredentialsTab />)
+    renderTab()
 
     await screen.findByText('VAULT_TOKEN')
     expect(screen.queryByRole('button', { name: /Migrate all to/ })).not.toBeInTheDocument()
+  })
+
+  it('toasts when loading credentials fails', async () => {
+    vi.mocked(listSecretRefs).mockRejectedValue(new Error('network down'))
+    renderTab()
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load credentials', { description: 'network down' }),
+    )
+  })
+
+  it('toasts and keeps the ref when deleting fails', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([orphaned])
+    vi.mocked(deleteSecret).mockRejectedValue(new Error('still referenced'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete OLD_KEY' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not remove credential', {
+        description: 'still referenced',
+      }),
+    )
+    expect(await screen.findByText('OLD_KEY')).toBeInTheDocument()
+  })
+
+  it('toasts when the whole migrate-all call throws', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
+    vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'db' }])
+    vi.mocked(migrateAllSecrets).mockRejectedValue(new Error('gateway unreachable'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Migrate all to Vault' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not migrate credentials', {
+        description: 'gateway unreachable',
+      }),
+    )
   })
 
   it('shows migrate-all when the default backend is external and a ref lives elsewhere', async () => {
     vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
     vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'db' }])
     vi.mocked(migrateAllSecrets).mockResolvedValue([{ name: 'OLD_KEY', migrated: true, skipped: false }])
-    render(<CredentialsTab />)
+    renderTab()
 
     const button = await screen.findByRole('button', { name: 'Migrate all to Vault' })
     fireEvent.click(button)
 
     await waitFor(() => expect(migrateAllSecrets).toHaveBeenCalledWith('vault'))
+  })
+
+  it('pluralizes the migrate-all banner count for more than one credential', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { ...orphaned, name: 'KEY_A', backend: 'db' },
+      { ...orphaned, name: 'KEY_B', backend: 'db' },
+    ])
+    renderTab()
+
+    expect(await screen.findByText(/2 credentials not yet in Vault\./)).toBeInTheDocument()
+  })
+
+  it('falls back to the raw backend id when it has no friendly label', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('custom-backend')
+    vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'db' }])
+    renderTab()
+
+    expect(await screen.findByRole('button', { name: 'Migrate all to custom-backend' })).toBeInTheDocument()
+  })
+
+  it('reports partial migration failures without dropping the successes', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { ...orphaned, name: 'KEY_A', backend: 'db' },
+      { ...orphaned, name: 'KEY_B', backend: 'db' },
+    ])
+    vi.mocked(migrateAllSecrets).mockResolvedValue([
+      { name: 'KEY_A', migrated: true, skipped: false },
+      { name: 'KEY_B', migrated: false, skipped: false, error: 'locked' },
+    ])
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Migrate all to Vault' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Migrated 1, 1 failed', {
+        description: 'KEY_B: locked',
+      }),
+    )
   })
 })

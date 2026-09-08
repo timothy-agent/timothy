@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatError } from '../../api/client'
 import type { AdminProvider } from '../../api/types'
+import { TooltipProvider } from '../ui/tooltip'
 import { ProviderAdd } from './ProviderAdd'
 
 vi.mock('../../api/client', async (importOriginal) => {
@@ -43,11 +44,13 @@ const glm: AdminProvider = {
 
 function renderPage(presetId: string) {
   return render(
-    <MemoryRouter initialEntries={[`/settings/providers/new/${presetId}`]}>
-      <Routes>
-        <Route path="/settings/providers/new/:presetId" element={<ProviderAdd />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[`/settings/providers/new/${presetId}`]}>
+        <Routes>
+          <Route path="/settings/providers/new/:presetId" element={<ProviderAdd />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 
@@ -193,7 +196,7 @@ describe('ProviderAdd credential reference placement', () => {
     renderPage('glm')
 
     await screen.findByPlaceholderText('paste key')
-    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
 
     expect(screen.queryByPlaceholderText('name (e.g. OPENAI_API_KEY)')).not.toBeInTheDocument()
   })
@@ -245,7 +248,7 @@ describe('ProviderAdd existing-credential picker', () => {
     renderPage('glm')
     await screen.findByLabelText('API key')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
 
     expect(screen.queryByLabelText('API key')).not.toBeInTheDocument()
     const select = await screen.findByLabelText('existing credential')
@@ -257,7 +260,7 @@ describe('ProviderAdd existing-credential picker', () => {
   it('choosing an existing ref sets credential_ref and skips the secret write on submit', async () => {
     renderPage('glm')
     await screen.findByLabelText('API key')
-    fireEvent.click(screen.getByRole('button', { name: 'Use existing' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
 
     fireEvent.click(await screen.findByLabelText('existing credential'))
     fireEvent.click(await screen.findByRole('option', { name: /ZAI_API_KEY/ }))
@@ -271,6 +274,35 @@ describe('ProviderAdd existing-credential picker', () => {
     await waitFor(() => expect(createProvider).toHaveBeenCalled())
     expect(setSecret).not.toHaveBeenCalled()
     expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({ credential_ref: 'ZAI_API_KEY' })
+  })
+
+  it('disables a signing-key managed ref in the existing-credential list', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      {
+        name: 'ZAI_API_KEY',
+        backend: 'db',
+        referenced_by: [{ kind: 'connector', name: 'github-mcp', role: 'signing_key' }],
+      },
+    ])
+    renderPage('glm')
+    await screen.findByLabelText('API key')
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
+
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    const option = await screen.findByRole('option', { name: /signing key \(managed\)/ })
+    expect(option).toHaveAttribute('aria-disabled', 'true')
+  })
+
+  it('toggles the reveal state of the new-credential paste field', async () => {
+    renderPage('glm')
+    const input = await screen.findByLabelText('API key')
+    expect(input).toHaveAttribute('type', 'password')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show token' }))
+    expect(input).toHaveAttribute('type', 'text')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide token' }))
+    expect(input).toHaveAttribute('type', 'password')
   })
 })
 
@@ -384,7 +416,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     await screen.findByText('CLI providers have no connection test.')
     expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument()
@@ -395,7 +427,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     fireEvent.change(await screen.findByPlaceholderText('sk-ant-oat…'), {
       target: { value: 'sk-ant-api03-notatoken' },
@@ -422,7 +454,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     expect(await screen.findByPlaceholderText('claude-sonnet-4-6')).toHaveValue('claude-sonnet-4-6')
 
@@ -440,7 +472,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     fireEvent.change(await screen.findByPlaceholderText('claude-sonnet-4-6'), {
       target: { value: 'opus' },
@@ -459,7 +491,7 @@ describe('ProviderAdd anthropic auth folding', () => {
     renderPage('anthropic')
 
     fireEvent.click(screen.getByRole('combobox'))
-    fireEvent.click(await screen.findByText('Subscription token'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Subscription token' }))
 
     expect(await screen.findByText(/claude setup-token/)).toBeInTheDocument()
     expect(screen.getByText(/long-lived/)).toBeInTheDocument()
@@ -502,6 +534,150 @@ describe('ProviderAdd cursor preset', () => {
       credential_ref: 'CURSOR_API_KEY',
       default_model: 'composer-2.5',
     })
+  })
+
+  it('editing the credential reference field for a CLI preset stages the custom ref name', async () => {
+    renderPage('cursor')
+
+    fireEvent.change(screen.getByPlaceholderText('paste key'), { target: { value: 'any-cursor-key' } })
+    fireEvent.change(screen.getByPlaceholderText('name (e.g. CURSOR_API_KEY)'), { target: { value: 'MY_CURSOR_REF' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('MY_CURSOR_REF', 'any-cursor-key')
+    expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({ credential_ref: 'MY_CURSOR_REF' })
+  })
+})
+
+describe('ProviderAdd invalidates a passing test on further edits', () => {
+  beforeEach(() => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'glm-5.2' })
+    vi.mocked(setSecret).mockResolvedValue()
+  })
+
+  it('re-locks Add and brings back the Test button after editing the bedrock region', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'amazon.nova-lite-v1:0' })
+    renderPage('bedrock')
+
+    fireEvent.change(await screen.findByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'secretvalue123' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(false)
+
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(await screen.findByRole('option', { name: /us-west-2/ }))
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Test connection' })).toBeInTheDocument()
+  })
+
+  it('re-locks Add after editing the custom preset\'s Base URL field', async () => {
+    renderPage('custom')
+    fireEvent.change(await screen.findByPlaceholderText('my-gateway'), { target: { value: 'my-custom' } })
+    fireEvent.change(screen.getByPlaceholderText('paste key'), { target: { value: 'custom-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    // Custom also renders the Advanced base URL field with the same
+    // placeholder; the first match is the main field above it.
+    fireEvent.change(screen.getAllByPlaceholderText('https://…/v1')[0], { target: { value: 'https://edited.example/v1' } })
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('re-locks Add after editing the Advanced base URL field', async () => {
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.click(screen.getByText('Advanced: base URL'))
+    fireEvent.change(screen.getByPlaceholderText('https://…/v1'), { target: { value: 'https://other.example/v1' } })
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('re-locks Add after editing the bedrock credential reference field', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'amazon.nova-lite-v1:0' })
+    renderPage('bedrock')
+
+    fireEvent.change(await screen.findByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'secretvalue123' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.change(screen.getByPlaceholderText('name (e.g. BEDROCK_KEYS)'), { target: { value: 'MY_BEDROCK_REF' } })
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('re-locks Add after editing the new-credential reference field', async () => {
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.change(screen.getByPlaceholderText('name (e.g. OPENAI_API_KEY)'), { target: { value: 'MY_ZAI_REF' } })
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('re-locks Add after switching credential mode and picking an existing ref', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { name: 'ZAI_API_KEY', backend: 'db', referenced_by: [] },
+      { name: 'ZAI_API_KEY_2', backend: 'db', referenced_by: [] },
+    ])
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+
+    // Retest with an existing ref selected, then pick a different
+    // ref: onExistingRefChange must invalidate too.
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /^ZAI_API_KEY$/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    fireEvent.click(screen.getByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /^ZAI_API_KEY_2$/ }))
+
+    expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
+    expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('retries the probe from the passing-test action button', async () => {
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    expect(validateProvider).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(validateProvider).toHaveBeenCalledTimes(2))
+  })
+
+  it('retries the probe from the failed-test action button', async () => {
+    vi.mocked(validateProvider).mockResolvedValueOnce({ ok: false, latency_ms: 5, model: 'glm-5.2', detail: 'bad key' })
+    renderPage('glm')
+    fireEvent.change(await screen.findByPlaceholderText('paste key'), { target: { value: 'zai-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(validateProvider).toHaveBeenCalledTimes(1))
+
+    const retryButton = await screen.findByRole('button', { name: 'Test connection' })
+    fireEvent.click(retryButton)
+    await waitFor(() => expect(validateProvider).toHaveBeenCalledTimes(2))
+    await screen.findByText(/^OK,/)
   })
 })
 

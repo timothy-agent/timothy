@@ -1,12 +1,4 @@
-import {
-  Download04Icon,
-  EyeIcon,
-  LinkSquare01Icon,
-  Loading03Icon,
-  Pdf02Icon,
-  SourceCodeIcon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Code, Download, ExternalLink, Eye, FileDown } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -20,11 +12,12 @@ import {
   missionPdfPreviewCap,
 } from '../../api/client'
 import type { MissionFile } from '../../api/types'
+import { IconButton } from '../timothy/icon-button'
+import { Spinner } from '../timothy/spinner'
 import { FileCodeBlock, FileMarkdownBlock } from '../FilePreviewBlocks'
 import { CopyButton } from '../Message'
-import { errText } from '../settings/util'
-import { Button } from '../ui/button'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { errText } from '../../lib/errors'
+import { TooltipProvider } from '../ui/tooltip'
 import { previewKindOf } from './filePreviewKind'
 
 function humanSize(n: number): string {
@@ -130,99 +123,54 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
   return (
     <TooltipProvider>
       <div className="flex h-full min-w-0 flex-col">
-        <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/50 px-3 py-1.5">
+        <div className="flex h-9 items-center justify-between gap-3 border-b border-border px-3">
           <div className="min-w-0 flex-1">
             <p className="truncate font-mono text-xs">{file.path}</p>
-            <p className="text-xs text-muted-foreground">
-              {lineCount != null && <span>{lineCount} lines · </span>}
-              <span>{humanSize(file.size)}</span>
-            </p>
           </div>
-          <div className="flex items-center gap-1.5">
+          <p className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {lineCount != null && <span>{lineCount} lines · </span>}
+            <span>{humanSize(file.size)}</span>
+          </p>
+          <div className="flex shrink-0 items-center gap-1">
             {kind === 'markdown' && state.status === 'text' && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={showRawMarkdown ? 'Show rendered markdown' : 'Show raw markdown source'}
-                    onClick={() => setShowRawMarkdown((v) => !v)}
-                  >
-                    <HugeiconsIcon icon={showRawMarkdown ? EyeIcon : SourceCodeIcon} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {showRawMarkdown ? 'Show rendered markdown' : 'Show raw markdown source'}
-                </TooltipContent>
-              </Tooltip>
+              <IconButton
+                size="sm"
+                label={showRawMarkdown ? 'Show rendered markdown' : 'Show raw markdown source'}
+                icon={showRawMarkdown ? Eye : Code}
+                onClick={() => setShowRawMarkdown((v) => !v)}
+              />
             )}
             {state.status === 'text' && (
               <>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex">
-                      <CopyButton text={state.text} label={`Copy ${file.path}`} alwaysVisible />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>Copy</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon-sm" aria-label="Open raw content in a new tab" onClick={openRaw}>
-                      <HugeiconsIcon icon={LinkSquare01Icon} />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Open raw content in a new tab</TooltipContent>
-                </Tooltip>
+                <CopyButton text={state.text} label={`Copy ${file.path}`} alwaysVisible />
+                <IconButton size="sm" label="Open raw content in a new tab" icon={ExternalLink} onClick={openRaw} />
               </>
             )}
             {(state.status === 'image' || state.status === 'pdf') && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Open raw file in a new tab"
-                    onClick={() => window.open(state.url, '_blank')}
-                  >
-                    <HugeiconsIcon icon={LinkSquare01Icon} />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Open raw file in a new tab</TooltipContent>
-              </Tooltip>
+              <IconButton
+                size="sm"
+                label="Open raw file in a new tab"
+                icon={ExternalLink}
+                onClick={() => window.open(state.url, '_blank')}
+              />
             )}
             {kind === 'markdown' && pdfExportEnabled && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Export this file as a typeset PDF"
-                    onClick={exportPdf}
-                    disabled={exportingPdf}
-                  >
-                    <HugeiconsIcon
-                      icon={exportingPdf ? Loading03Icon : Pdf02Icon}
-                      className={exportingPdf ? 'animate-spin' : undefined}
-                    />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Export this file as a typeset PDF</TooltipContent>
-              </Tooltip>
+              <IconButton
+                size="sm"
+                label="Export this file as a typeset PDF"
+                icon={FileDown}
+                onClick={exportPdf}
+                loading={exportingPdf}
+              />
             )}
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label="Download this file" onClick={download}>
-                  <HugeiconsIcon icon={Download04Icon} />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Download this file</TooltipContent>
-            </Tooltip>
+            <IconButton size="sm" label="Download this file" icon={Download} onClick={download} />
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
           {state.status === 'loading' && (
-            <p className="p-3 text-sm text-muted-foreground">Loading…</p>
+            <div className="flex justify-center p-3">
+              <Spinner />
+            </div>
           )}
           {state.status === 'too-large' && (
             <p className="p-3 text-sm text-muted-foreground">

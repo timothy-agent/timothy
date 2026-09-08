@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react'
 import { CopyButton } from './Message'
+import { Spinner } from './timothy/spinner'
 
 // Lazy-loaded mermaid singleton, same pattern as CodeBlock.tsx's shiki
 // highlighter: the main bundle carries zero mermaid bytes until a
@@ -68,15 +69,15 @@ export function MermaidBlock({ code }: { code: string }) {
 
   if (failed || showSource) {
     return (
-      <div className="not-prose my-4 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
-        <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-100 px-3 py-1.5 dark:border-zinc-800 dark:bg-zinc-800/60">
-          <span className="text-xs text-zinc-500 dark:text-zinc-400">mermaid</span>
+      <div className="not-prose my-4 min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-muted">
+        <div className="flex h-8 items-center justify-between border-b border-border px-3 text-xs text-muted-foreground">
+          <span className={failed ? 'text-destructive' : undefined}>mermaid</span>
           <div className="flex items-center gap-1">
             {!failed && (
               <button
                 type="button"
                 onClick={() => setShowSource(false)}
-                className="text-xs text-zinc-500 underline underline-offset-2 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+                className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
               >
                 View diagram
               </button>
@@ -84,22 +85,20 @@ export function MermaidBlock({ code }: { code: string }) {
             <CopyButton text={code} label="Copy source" alwaysVisible />
           </div>
         </div>
-        <pre className="overflow-x-auto p-3 font-mono text-sm leading-relaxed text-zinc-900 dark:text-zinc-100">
-          {code}
-        </pre>
+        <pre className="overflow-x-auto p-3 font-mono text-code leading-5 text-foreground">{code}</pre>
       </div>
     )
   }
 
   return (
-    <div className="not-prose my-4 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-100 px-3 py-1.5 dark:border-zinc-800 dark:bg-zinc-800/60">
-        <span className="text-xs text-zinc-500 dark:text-zinc-400">mermaid</span>
+    <div className="not-prose my-4 min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-muted">
+      <div className="flex h-8 items-center justify-between border-b border-border px-3 text-xs text-muted-foreground">
+        <span>mermaid</span>
         <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={() => setShowSource(true)}
-            className="text-xs text-zinc-500 underline underline-offset-2 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
           >
             View source
           </button>
@@ -107,11 +106,9 @@ export function MermaidBlock({ code }: { code: string }) {
         </div>
       </div>
       {svg ? (
-        <div className="overflow-x-auto p-3" dangerouslySetInnerHTML={{ __html: svg }} />
+        <div className="max-w-full overflow-x-auto p-3" dangerouslySetInnerHTML={{ __html: svg }} />
       ) : (
-        <pre className="overflow-x-auto p-3 font-mono text-sm leading-relaxed text-zinc-900 dark:text-zinc-100">
-          {code}
-        </pre>
+        <Spinner size="sm" className="m-3" />
       )}
     </div>
   )

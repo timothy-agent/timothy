@@ -643,7 +643,7 @@ describe('Composer knowledge mentions', () => {
     await screen.findByText('#observability')
 
     const highlighted = () =>
-      screen.getByText('#observability').className.includes('bg-zinc-100')
+      screen.getByText('#observability').className.includes('bg-muted')
         ? '#observability'
         : '#billing'
 
@@ -888,7 +888,7 @@ describe('Composer reference mentions', () => {
     await screen.findByText('Old chat')
 
     const highlighted = () =>
-      screen.getByText('Fix the bug').className.includes('bg-zinc-100') ? 'mission' : 'chat'
+      screen.getByText('Fix the bug').className.includes('bg-muted') ? 'mission' : 'chat'
     expect(highlighted()).toBe('mission')
 
     fireEvent.keyDown(input, { key: 'ArrowDown' })

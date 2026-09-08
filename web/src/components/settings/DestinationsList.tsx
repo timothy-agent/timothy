@@ -1,8 +1,4 @@
-import { Mail01Icon, GlobalIcon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
-import { TelegramIcon } from '@/components/icons/TelegramIcon'
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import {
   deleteDestination,
@@ -13,20 +9,24 @@ import {
 } from '../../api/client'
 import type { AdminConnector, Destination } from '../../api/types'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
-import { DestinationKindIcon, Toggle } from './shared'
-import { errText } from './util'
+import { Switch } from '../ui/switch'
+import { ConfirmDialog } from '../timothy/confirm-dialog'
+import { EmptyState } from '../timothy/empty-state'
+import { PageHeader, SectionHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
+import { DestinationKindIcon } from '../destinations/DestinationKindIcon'
+import { AddPresetTile } from './AddPresetTile'
+import { EntityCard } from './EntityCard'
+import { destinationPresets } from './destinationPresets'
+import { settingsArea } from './settingsAreas'
+import { TestStatus } from './TestStatus'
+import { errText } from '../../lib/errors'
+
+const area = settingsArea('destinations')
 
 export function DestinationsList() {
   const [destinations, setDestinations] = useState<Destination[]>([])
   const [connectors, setConnectors] = useState<AdminConnector[]>([])
-  const navigate = useNavigate()
 
   const refresh = useCallback(() => {
     listDestinations()
@@ -46,94 +46,46 @@ export function DestinationsList() {
   }, [])
 
   return (
-    <div className="mt-6 space-y-8">
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {destinations.length > 0 ? `Your destinations · ${destinations.length}` : 'Your destinations'}
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Where mission results go. Attach one or more to a mission and its outcome digest
-          delivers there once it finishes.
-        </p>
-        {destinations.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-            No destinations yet, add one below.
-          </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {destinations.map((d) => (
-              <DestinationCard
-                key={d.id}
-                destination={d}
-                connectors={connectors}
-                onChanged={refresh}
-                onManage={() => navigate(`/settings/destinations/${d.id}`)}
+    <PageShell>
+      <PageHeader
+        title={area.label}
+        description={area.description}
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
+      />
+      <div className="space-y-10">
+        <section className="space-y-4">
+          <SectionHeader title={destinations.length > 0 ? `Your destinations · ${destinations.length}` : 'Your destinations'} />
+          <p className="-mt-2 max-w-2xl text-sm text-muted-foreground">
+            Where mission results go. Attach one or more to a mission and its outcome digest
+            delivers there once it finishes.
+          </p>
+          {destinations.length === 0 ? (
+            <EmptyState title="No destinations yet" description="Add one below." />
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {destinations.map((d) => (
+                <DestinationCard key={d.id} destination={d} connectors={connectors} onChanged={refresh} />
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-4">
+          <SectionHeader title="Add a destination" />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {destinationPresets.map((preset) => (
+              <AddPresetTile
+                key={preset.id}
+                to={`/settings/destinations/new/${preset.id}`}
+                title={preset.name}
+                description={preset.description}
+                tile={<DestinationKindIcon kind={preset.id} className="size-9" />}
               />
             ))}
           </div>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Add a destination
-        </h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <button
-            type="button"
-            onClick={() => navigate('/settings/destinations/new/email')}
-            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-          >
-            <HugeiconsIcon icon={Mail01Icon} className="size-9" />
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold">Email</span>
-              <span className="block truncate text-sm text-muted-foreground">
-                Sends via a connected Gmail account
-              </span>
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/settings/destinations/new/webhook')}
-            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-          >
-            <HugeiconsIcon icon={GlobalIcon} className="size-9" />
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold">Webhook</span>
-              <span className="block truncate text-sm text-muted-foreground">
-                POSTs the digest as JSON or plain text
-              </span>
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/settings/destinations/new/telegram')}
-            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-          >
-            <TelegramIcon className="size-9" />
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold">Telegram</span>
-              <span className="block truncate text-sm text-muted-foreground">
-                Sends via a bot to a chat
-              </span>
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/settings/destinations/new/github')}
-            className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-          >
-            <DestinationKindIcon kind="github" className="size-9" />
-            <span className="min-w-0">
-              <span className="block text-sm font-semibold">GitHub</span>
-              <span className="block truncate text-sm text-muted-foreground">
-                Pushes a branch or opens a PR via a connector
-              </span>
-            </span>
-          </button>
-        </div>
-      </section>
-    </div>
+        </section>
+      </div>
+    </PageShell>
   )
 }
 
@@ -150,12 +102,10 @@ function DestinationCard({
   destination,
   connectors,
   onChanged,
-  onManage,
 }: {
   destination: Destination
   connectors: AdminConnector[]
   onChanged: () => void
-  onManage: () => void
 }) {
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null)
@@ -191,67 +141,53 @@ function DestinationCard({
     }
   }
 
+  const summary =
+    destination.kind === 'email'
+      ? String(destination.config.to ?? '')
+      : destination.kind === 'telegram'
+        ? `chat ${String(destination.config.chat_id ?? '')}`
+        : destination.kind === 'github'
+          ? githubSummary(destination, connectors)
+          : String(destination.config.url ?? '')
+
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm transition hover:shadow-md">
-      <div className="flex items-center gap-3">
-        <DestinationKindIcon kind={destination.kind} className="size-9" />
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{destination.name}</div>
-          <div className="text-xs text-muted-foreground uppercase">{destination.kind}</div>
-        </div>
-        <Toggle on={destination.enabled} onChange={toggle} label={`${destination.name} enabled`} />
-      </div>
-
-      <div className="truncate text-xs text-muted-foreground">
-        {destination.kind === 'email'
-          ? String(destination.config.to ?? '')
-          : destination.kind === 'telegram'
-            ? `chat ${String(destination.config.chat_id ?? '')}`
-            : destination.kind === 'github'
-              ? githubSummary(destination, connectors)
-              : String(destination.config.url ?? '')}
-      </div>
-
-      {test && (
-        <div
-          className={`rounded-lg border p-2 text-xs ${test.ok ? 'border-good/30 bg-good-soft text-good' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}
-        >
-          {test.ok ? 'Test delivery sent' : `Failed: ${test.error}`}
-        </div>
-      )}
-
-      <div className="mt-auto flex items-center gap-2 pt-1">
-        {destination.kind !== 'github' && (
-          <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
-            {testing ? 'Sending…' : 'Test send'}
-          </Button>
-        )}
-        <Button size="sm" variant="outline" onClick={onManage} className="flex-1">
-          Manage
-        </Button>
-        <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(true)}>
-          Delete
-        </Button>
-      </div>
-
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {destination.name}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Removes the destination. Refused while any in-progress mission still delivers to it.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
+    <>
+      <EntityCard
+        to={`/settings/destinations/${destination.id}`}
+        title={destination.name}
+        tile={<DestinationKindIcon kind={destination.kind} className="size-9" />}
+        summary={<div className="truncate text-xs text-muted-foreground">{summary}</div>}
+        status={
+          test && (
+            <TestStatus
+              state={test.ok ? 'ok' : 'failed'}
+              message={test.ok ? 'Test delivery sent' : `Failed: ${test.error}`}
+            />
+          )
+        }
+        footer={
+          <>
+            <Switch checked={destination.enabled} onCheckedChange={toggle} aria-label={`${destination.name} enabled`} />
+            {destination.kind !== 'github' && (
+              <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
+                {testing ? 'Sending…' : 'Test send'}
+              </Button>
+            )}
+            <Button size="sm" variant="destructive" onClick={() => setConfirmDelete(true)}>
               Delete
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+          </>
+        }
+      />
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${destination.name}?`}
+        description="Removes the destination. Refused while any in-progress mission still delivers to it."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void remove()}
+      />
+    </>
   )
 }

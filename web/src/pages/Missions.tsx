@@ -1,10 +1,14 @@
-import { BellIcon, CancelCircleIcon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Bell, Inbox, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { listMissions, listNotifications, markNotificationRead } from '../api/client'
 import type { Mission, Notification } from '../api/types'
 import { MissionCard } from '../components/missions/MissionCard'
+import { EmptyState } from '../components/timothy/empty-state'
+import { IconButton } from '../components/timothy/icon-button'
+import { PageHeader } from '../components/timothy/page-header'
+import { PageShell } from '../components/timothy/page-shell'
+import { Alert } from '../components/ui/alert'
 import { Button } from '../components/ui/button'
 import {
   Select,
@@ -25,36 +29,13 @@ function harnessLabel(harness?: string): string {
   return harness || 'Native'
 }
 
-// notificationSeverityClasses colors the banner by notification kind —
-// same green/amber/red convention MissionCard's statusColor uses for
-// mission status chips. Any kind not listed here (unanticipated future
-// kind) falls back to the existing amber styling.
-const notificationSeverityClasses: Record<string, string> = {
-  done: 'border-green-200 bg-green-50 text-green-900 dark:border-green-900 dark:bg-green-950 dark:text-green-200',
-  ask_timed_out:
-    'border-green-200 bg-green-50 text-green-900 dark:border-green-900 dark:bg-green-950 dark:text-green-200',
-  error:
-    'border-red-200 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950 dark:text-red-200',
-  paused:
-    'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200',
-  waiting_for_input:
-    'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200',
+// notificationTone maps a notification kind to the Alert tone that
+// reads the same as the mission status it reports (section 13).
+function notificationTone(kind: string): 'good' | 'destructive' | 'warning' {
+  if (kind === 'done' || kind === 'ask_timed_out') return 'good'
+  if (kind === 'error') return 'destructive'
+  return 'warning'
 }
-
-const notificationDismissClasses: Record<string, string> = {
-  done: 'text-green-700 hover:text-green-900 dark:text-green-400 dark:hover:text-green-200',
-  ask_timed_out:
-    'text-green-700 hover:text-green-900 dark:text-green-400 dark:hover:text-green-200',
-  error: 'text-red-700 hover:text-red-900 dark:text-red-400 dark:hover:text-red-200',
-  paused: 'text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-200',
-  waiting_for_input:
-    'text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-200',
-}
-
-const defaultSeverityClasses =
-  'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200'
-const defaultDismissClasses =
-  'text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-200'
 
 export function Missions() {
   const navigate = useNavigate()
@@ -117,46 +98,38 @@ export function Missions() {
   )
 
   return (
-    <div className="mx-auto w-full max-w-full px-8 py-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Missions</h1>
-          <p className="text-sm text-muted-foreground">
-            Long-running tasks that plan, execute, and review their own work.
-          </p>
-        </div>
-        <Button onClick={() => navigate('/missions/new')}>New mission</Button>
-      </div>
+    <PageShell>
+      <PageHeader
+        title="Missions"
+        description="Long-running tasks that plan, execute, and review their own work."
+        actions={<Button onClick={() => navigate('/missions/new')}>New mission</Button>}
+      />
 
       {unread.length > 0 && (
-        <div className="mt-4 space-y-2">
+        <div className="mb-6 space-y-2">
           {unread.map((n) => (
-            <div
-              key={n.id}
-              className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${notificationSeverityClasses[n.kind] ?? defaultSeverityClasses}`}
-            >
+            <Alert key={n.id} tone={notificationTone(n.kind)} className="flex items-center justify-between gap-3">
               <button
                 type="button"
                 onClick={() => navigate(`/missions/${n.mission_id}`)}
                 className="flex items-center gap-2 text-left hover:underline"
               >
-                <HugeiconsIcon icon={BellIcon} className="size-4 shrink-0" />
+                <Bell aria-hidden className="size-4 shrink-0" />
                 {n.message}
               </button>
-              <button
-                type="button"
+              <IconButton
+                label="Dismiss"
+                icon={X}
+                variant="ghost"
+                size="xs"
                 onClick={() => dismiss(n.id)}
-                className={`shrink-0 ${notificationDismissClasses[n.kind] ?? defaultDismissClasses}`}
-                aria-label="Dismiss"
-              >
-                <HugeiconsIcon icon={CancelCircleIcon} className="size-4" />
-              </button>
-            </div>
+              />
+            </Alert>
           ))}
         </div>
       )}
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
         <Select value={kindFilter} onValueChange={(v) => setKindFilter(v as KindFilter)}>
           <SelectTrigger size="sm" aria-label="Filter by kind">
             <SelectValue />
@@ -214,18 +187,28 @@ export function Missions() {
         )}
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {filteredMissions.map((m) => (
           <MissionCard key={m.id} mission={m} />
         ))}
         {filteredMissions.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            {missions.length === 0
-              ? 'No missions yet, create one to get started.'
-              : 'No missions match the current filters.'}
+          <div className="col-span-full rounded-md border border-dashed border-border">
+            <EmptyState
+              icon={Inbox}
+              title={
+                missions.length === 0
+                  ? 'No missions yet, create one to get started.'
+                  : 'No missions match the current filters.'
+              }
+              action={
+                missions.length === 0 ? (
+                  <Button onClick={() => navigate('/missions/new')}>New mission</Button>
+                ) : undefined
+              }
+            />
           </div>
         )}
       </div>
-    </div>
+    </PageShell>
   )
 }

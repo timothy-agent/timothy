@@ -1,16 +1,4 @@
-import {
-  Copy01Icon,
-  File01Icon,
-  FileMusicIcon,
-  FileVideoIcon,
-  ImageNotFound01Icon,
-  Link04Icon,
-  Loading03Icon,
-  Pdf02Icon,
-  ReloadIcon,
-  Tick02Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Check, Copy, File, FileAudio, FileText, FileVideo, ImageOff, Link, ListTree, RotateCw } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { toast } from 'sonner'
@@ -21,17 +9,22 @@ import {
   getSettings,
 } from '../api/client'
 import type { ImageRef, MediaRef } from '../api/types'
-import { ActivityLine } from './Activity'
+import { ApprovalCard, type Decision } from './chat/ApprovalCard'
+import { ToolCallGroup } from './chat/ToolCallCard'
 import { AttachmentViewer, mimeLabel } from './AttachmentViewer'
-import { CodeBlock } from './CodeBlock'
 import { ModelBadge } from './ModelBadge'
-import { errText } from './settings/util'
+import { errText } from '../lib/errors'
 import { Badge } from './ui/badge'
+import { Button } from './ui/button'
+import { Alert, AlertTitle } from './ui/alert'
+import { IconButton } from './timothy/icon-button'
+import { Spinner } from './timothy/spinner'
+import { TooltipProvider } from './ui/tooltip'
 import { collapseRepeatedTail, splitSources } from '../lib/citations'
 import { attachmentURLCache } from '../lib/attachmentCache'
 import type { AssistantState } from '../lib/chat'
 import { compact, formatDuration, money } from '../lib/format'
-import { rehypePlugins, remarkPlugins } from '../lib/markdown'
+import { markdownComponents, rehypePlugins, remarkPlugins } from '../lib/markdown'
 import { cn } from '../lib/utils'
 
 // AuthedImage renders one attachment thumbnail. GET
@@ -80,10 +73,10 @@ function AuthedImage({
     return (
       <div
         data-testid="attachment-error"
-        className="flex size-full min-h-24 items-center justify-center rounded-lg bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
+        className="flex size-full min-h-24 items-center justify-center rounded-md bg-muted text-muted-foreground"
         title={id}
       >
-        <HugeiconsIcon icon={ImageNotFound01Icon} className="size-6" />
+        <ImageOff className="size-6" aria-hidden />
       </div>
     )
   }
@@ -92,9 +85,9 @@ function AuthedImage({
     return (
       <div
         data-testid="attachment-loading"
-        className="flex size-full min-h-24 items-center justify-center rounded-lg bg-zinc-100 dark:bg-zinc-800"
+        className="flex size-full min-h-24 items-center justify-center rounded-md bg-muted"
       >
-        <HugeiconsIcon icon={Loading03Icon} className="size-5 animate-spin text-zinc-400" />
+        <Spinner size="sm" />
       </div>
     )
   }
@@ -104,7 +97,7 @@ function AuthedImage({
       src={url}
       alt={mime}
       onClick={onOpen}
-      className="max-h-50 max-w-full cursor-pointer rounded-lg object-cover"
+      className="max-h-50 max-w-full cursor-pointer rounded-md object-cover"
     />
   )
 }
@@ -143,10 +136,10 @@ function ImageGrid({
 // documentChipIcon picks a chip's icon by mime — PDF, video, audio, or
 // plain text/markdown all get a distinct glyph.
 function documentChipIcon(mime: string) {
-  if (mime.startsWith('video/')) return FileVideoIcon
-  if (mime.startsWith('audio/')) return FileMusicIcon
-  if (mime === 'text/plain' || mime === 'text/markdown') return File01Icon
-  return Pdf02Icon
+  if (mime.startsWith('video/')) return FileVideo
+  if (mime.startsWith('audio/')) return FileAudio
+  if (mime === 'text/plain' || mime === 'text/markdown') return File
+  return FileText
 }
 
 // DocumentChips renders a set of non-image attachments (a user
@@ -164,18 +157,23 @@ function DocumentChips({
 }) {
   return (
     <div className={cn('flex max-w-2xl flex-wrap gap-1.5', align === 'end' ? 'justify-end' : 'justify-start')}>
-      {documents.map((doc) => (
-        <button
-          key={doc.id}
-          type="button"
-          title={doc.name ?? doc.id.slice(0, 8)}
-          onClick={() => onOpen(doc)}
-          className="flex items-center gap-1 rounded-lg border border-zinc-950/10 bg-zinc-100 px-2 py-1 text-xs text-zinc-500 transition hover:bg-zinc-200 dark:border-white/10 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
-        >
-          <HugeiconsIcon icon={documentChipIcon(doc.mime)} className="size-3.5" />
-          {doc.name ?? mimeLabel(doc.mime)}
-        </button>
-      ))}
+      {documents.map((doc) => {
+        const Icon = documentChipIcon(doc.mime)
+        return (
+          <button
+            key={doc.id}
+            type="button"
+            title={doc.name ?? doc.id.slice(0, 8)}
+            onClick={() => onOpen(doc)}
+            className="min-w-0 max-w-full"
+          >
+            <Badge variant="secondary" className="min-w-0 cursor-pointer gap-1 break-words hover:bg-secondary/80">
+              <Icon className="size-3.5 shrink-0" aria-hidden />
+              {doc.name ?? mimeLabel(doc.mime)}
+            </Badge>
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -212,20 +210,20 @@ function GeneratedMedia({ media }: { media: MediaRef[] }) {
 // reads at a glance instead of blending into the markdown body.
 function SourcesPanel({ citations }: { citations: { title: string; url: string }[] }) {
   return (
-    <div className="w-full max-w-3xl rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-700 dark:bg-zinc-900/40">
-      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400">
-        <HugeiconsIcon icon={Link04Icon} className="size-3.5" />
+    <div className="mt-3 w-full min-w-0 max-w-3xl rounded-md border border-border bg-card p-3">
+      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-muted-foreground">
+        <Link className="size-3.5" aria-hidden />
         Sources
       </div>
       <ol className="space-y-1.5 text-sm">
         {citations.map((c, i) => (
-          <li key={i} className="flex gap-2">
-            <span className="text-zinc-400 dark:text-zinc-500">{i + 1}.</span>
+          <li key={i} className="flex min-w-0 gap-2">
+            <span className="text-muted-foreground">{i + 1}.</span>
             <a
               href={c.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="truncate text-blue-600 hover:underline dark:text-blue-400"
+              className="min-w-0 break-all text-foreground underline-offset-2 hover:underline"
             >
               {c.title}
             </a>
@@ -237,10 +235,14 @@ function SourcesPanel({ citations }: { citations: { title: string; url: string }
 }
 
 // CopyButton copies a message's raw text; the check confirms briefly.
-// By default it only shows on hover of an ancestor "message" group
-// (AssistantMessage's wrapper); alwaysVisible drops that dependency
-// for contexts with no such group (e.g. inside a collapsible details
-// block, already hidden until expanded).
+// A thin wrapper around the timothy CopyButton's copy/revert logic and
+// icons, adapted to the old text/label/alwaysVisible prop names other
+// files still call it with, and keeping the data-testid/data-copied
+// hooks callers' tests rely on (the shared timothy component exposes
+// neither). By default it only shows on hover of an ancestor "message"
+// group (AssistantMessage's wrapper); alwaysVisible drops that
+// dependency for contexts with no such group (e.g. inside a
+// collapsible details block, already hidden until expanded).
 export function CopyButton({
   text,
   label,
@@ -272,11 +274,11 @@ export function CopyButton({
       data-copied={copied}
       onClick={() => void copy()}
       className={cn(
-        'rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:opacity-100',
-        alwaysVisible ? 'bg-zinc-100 dark:bg-zinc-800' : 'opacity-0 group-hover/message:opacity-100',
+        'rounded-md p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:opacity-100',
+        alwaysVisible ? 'bg-muted' : 'opacity-0 group-hover/message:opacity-100',
       )}
     >
-      <HugeiconsIcon icon={copied ? Tick02Icon : Copy01Icon} className="size-3.5" />
+      {copied ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
     </button>
   )
 }
@@ -295,16 +297,18 @@ function ExportPDFButton({ text }: { text: string }) {
       .finally(() => setExporting(false))
   }
   return (
-    <button
-      type="button"
-      aria-label="Export PDF"
-      data-testid="export-pdf-button"
-      disabled={exporting}
-      onClick={exportPdf}
-      className="rounded p-1 text-muted-foreground opacity-0 transition hover:bg-accent hover:text-foreground focus-visible:opacity-100 group-hover/message:opacity-100 disabled:opacity-50"
-    >
-      <HugeiconsIcon icon={exporting ? Loading03Icon : Pdf02Icon} className={cn('size-3.5', exporting && 'animate-spin')} />
-    </button>
+    <TooltipProvider>
+      <IconButton
+        label="Export PDF"
+        data-testid="export-pdf-button"
+        icon={FileText}
+        loading={exporting}
+        variant="ghost"
+        size="sm"
+        className="opacity-0 group-hover/message:opacity-100 focus-visible:opacity-100"
+        onClick={exportPdf}
+      />
+    </TooltipProvider>
   )
 }
 
@@ -334,7 +338,7 @@ export function UserMessage({
   const [viewerAttachment, setViewerAttachment] = useState<ImageRef | null>(null)
   const openAttachment = (ref: ImageRef) => setViewerAttachment(ref)
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex w-full min-w-0 flex-col items-end gap-1">
       {images && images.length > 0 && (
         <ImageGrid images={images} localUrls={localUrls} onOpen={openAttachment} />
       )}
@@ -349,10 +353,10 @@ export function UserMessage({
         attachment={viewerAttachment}
         localUrl={viewerAttachment ? localUrls?.get(viewerAttachment.id) : undefined}
       />
-      <div className="group/message flex items-end justify-end gap-1">
+      <div className="group/message flex w-full min-w-0 items-end justify-end gap-1">
         <CopyButton text={text} label="Copy message" />
         {text !== '' && (
-          <div className="prose prose-sm prose-invert max-w-2xl rounded-2xl bg-blue-600 px-4 py-2.5 text-sm/6 text-white prose-pre:bg-blue-700">
+          <div className="prose prose-sm ml-auto min-w-0 max-w-[85%] break-words rounded-md bg-muted px-4 py-3 text-prose text-foreground [overflow-wrap:anywhere]">
             <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
               {text}
             </ReactMarkdown>
@@ -367,9 +371,9 @@ export function UserMessage({
             aria-label="Retry"
             data-testid="retry-button"
             onClick={onRetry}
-            className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
+            className="rounded-md p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
           >
-            <HugeiconsIcon icon={ReloadIcon} className="size-3.5" />
+            <RotateCw className="size-3.5" aria-hidden />
           </button>
         </div>
       )}
@@ -382,36 +386,35 @@ export function UserMessage({
 // it — only the model forgets, and the divider says so.
 export function CompactionDivider({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-3" data-testid="compaction-divider">
-      <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
-      <span className="text-xs text-zinc-400 dark:text-zinc-500">{text}</span>
-      <div className="h-px flex-1 bg-zinc-200 dark:bg-zinc-700" />
+    <div className="flex items-center gap-3 text-xs text-muted-foreground" data-testid="compaction-divider">
+      <div className="h-px flex-1 bg-border" />
+      <span>{text}</span>
+      <div className="h-px flex-1 bg-border" />
     </div>
   )
 }
 
 // InterruptedMessage renders a turn that never completed: the partial
-// answer plus an honest marker.
+// answer plus an honest marker. Neutral row (contract 14.4:
+// interruptions/reconnects are neutral, never amber warnings).
 export function InterruptedMessage({ text }: { text: string }) {
   return (
-    <div className="group/message flex w-full flex-col items-start gap-2" data-testid="interrupted">
-      <div className="prose prose-sm w-full max-w-none dark:prose-invert">
+    <div
+      className="group/message flex w-full flex-col gap-2 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
+      data-testid="interrupted"
+    >
+      <div className="prose prose-sm min-w-0 max-w-none break-words text-foreground [overflow-wrap:anywhere]">
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
-          components={{ pre: CodeBlock }}
+          components={markdownComponents}
         >
           {text}
         </ReactMarkdown>
       </div>
-      <div className="flex items-center gap-1.5">
-        <Badge
-          variant="outline"
-          className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-        >
-          interrupted
-        </Badge>
-        <CopyButton text={text} label="Copy partial message" />
+      <div className="flex min-w-0 items-center gap-1.5">
+        <Badge variant="neutral">interrupted</Badge>
+        <CopyButton text={text} label="Copy partial message" alwaysVisible />
       </div>
     </div>
   )
@@ -432,20 +435,18 @@ export function ErrorMessage({
   onRetry?: () => void
 }) {
   return (
-    <div className="flex items-center gap-2" data-testid="turn-failed">
-      <Badge variant="destructive">{text || 'this turn failed'}</Badge>
-      {onRetry && (
-        <button
-          type="button"
-          aria-label="Retry"
-          data-testid="retry-button"
-          onClick={onRetry}
-          className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
-        >
-          <HugeiconsIcon icon={ReloadIcon} className="size-3.5" />
-        </button>
-      )}
-    </div>
+    <Alert tone="destructive" data-testid="turn-failed">
+      <AlertTitle>This turn failed</AlertTitle>
+      <div className="flex min-w-0 items-center gap-2">
+        <p className="min-w-0 break-words font-mono text-xs [overflow-wrap:anywhere]">{text || 'this turn failed'}</p>
+        {onRetry && (
+          <Button variant="outline" size="sm" data-testid="retry-button" onClick={onRetry}>
+            <RotateCw aria-hidden />
+            Retry
+          </Button>
+        )}
+      </div>
+    </Alert>
   )
 }
 
@@ -453,6 +454,7 @@ export function AssistantMessage({
   msg,
   onRetry,
   onShowActivity,
+  onDecision,
 }: {
   msg: AssistantState
   // Present only for the trailing item when it's safe to retry (an
@@ -460,9 +462,13 @@ export function AssistantMessage({
   // just renders whatever it's handed.
   onRetry?: () => void
   // Opens the Activity detail panel for this turn — Chat.tsx owns the
-  // Sheet and passes this through. Omitted, the activity line simply
+  // Sheet and passes this through. Omitted, the Activity button simply
   // doesn't render (there's nowhere for it to open).
   onShowActivity?: () => void
+  // Answers a pending permission request inline. Omitted, pending
+  // permissions render nothing (Chat.tsx's ApprovalDialog is the only
+  // way to decide them in that case).
+  onDecision?: (id: string, d: Decision) => void
 }) {
   const [pdfExportEnabled, setPdfExportEnabled] = useState(false)
   useEffect(() => {
@@ -499,66 +505,77 @@ export function AssistantMessage({
     ? { body: msg.text, citations: [] }
     : splitSources(collapseRepeatedTail(msg.text))
   return (
-    <div className="group/message flex w-full flex-col items-start gap-2">
-      {onShowActivity && <ActivityLine msg={msg} onOpen={onShowActivity} />}
-
-      {msg.permissions.length > 0 && (
-        <Badge
-          variant="outline"
-          className="border-blue-500/40 bg-blue-500/10 text-blue-600 dark:text-blue-400"
-          data-testid="awaiting-approval"
+    <div className="group/message flex w-full min-w-0 flex-col items-start">
+      <div className="flex min-w-0 max-w-full items-center gap-2.5">
+        <span
+          aria-hidden
+          className="inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-brand text-[11px] font-semibold text-brand-foreground"
         >
-          waiting for your approval
-        </Badge>
+          T
+        </span>
+      </div>
+
+      {msg.tools.length > 0 && (
+        <div className="mt-3 w-full min-w-0">
+          <ToolCallGroup runs={msg.tools} defaultOpen={msg.tools.some((t) => t.status === 'running')} />
+        </div>
       )}
 
-      <div className="prose prose-sm w-full max-w-none dark:prose-invert">
+      {onDecision &&
+        msg.permissions.map((p) => (
+          <ApprovalCard key={p.id} id={`approval-${p.id}`} request={p} onDecision={onDecision} className="mt-4" />
+        ))}
+
+      <div
+        className={cn(
+          'prose prose-neutral w-full min-w-0 max-w-none break-words text-[15px] leading-6 [overflow-wrap:anywhere] dark:prose-invert',
+          msg.tools.length > 0 ? 'mt-3' : 'mt-2',
+        )}
+      >
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
-          components={{ pre: CodeBlock }}
+          components={markdownComponents}
         >
           {body}
         </ReactMarkdown>
         {msg.streaming && msg.permissions.length === 0 && <span className="animate-pulse">▍</span>}
       </div>
 
-      {msg.media.length > 0 && <GeneratedMedia media={msg.media} />}
+      {msg.media.length > 0 && (
+        <div className="mt-3">
+          <GeneratedMedia media={msg.media} />
+        </div>
+      )}
 
-      {citations.length > 0 && <SourcesPanel citations={citations} />}
+      {citations.length > 0 && (
+        <div className="mt-3">
+          <SourcesPanel citations={citations} />
+        </div>
+      )}
 
       {msg.notices.map((n, i) => (
-        <Badge
-          key={i}
-          variant="outline"
-          className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-          data-testid="notice"
-        >
+        <Badge key={i} variant="warning" data-testid="notice" className={i === 0 ? 'mt-3' : undefined}>
           {n}
         </Badge>
       ))}
       {msg.error && (
-        <div className="flex items-center gap-2">
+        <div className="mt-3 flex items-center gap-2">
           <Badge variant="destructive" data-testid="error">
             {msg.error}
           </Badge>
           {onRetry && (
-            <button
-              type="button"
-              aria-label="Retry"
-              data-testid="retry-button"
-              onClick={onRetry}
-              className="rounded p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground"
-            >
-              <HugeiconsIcon icon={ReloadIcon} className="size-3.5" />
-            </button>
+            <Button variant="outline" size="sm" data-testid="retry-button" onClick={onRetry}>
+              <RotateCw aria-hidden />
+              Retry
+            </Button>
           )}
         </div>
       )}
-      {!msg.streaming && (Boolean(msg.meta?.provider) || msg.text !== '') && (
-        <div className="flex items-center gap-1.5">
+      {!msg.streaming && (Boolean(msg.meta?.provider) || msg.text !== '' || Boolean(onShowActivity)) && (
+        <div className="mt-2 flex min-w-0 max-w-full flex-wrap items-center gap-1 text-xs text-muted-foreground">
           {msg.meta?.provider && (
-            <div className="flex gap-1.5" data-testid="meta-badge">
+            <div className="flex flex-wrap gap-1.5" data-testid="meta-badge">
               <ModelBadge provider={msg.meta.provider} model={msg.meta.model ?? ''} />
               {tokens && <Badge variant="secondary">{tokens}</Badge>}
               {duration && (
@@ -575,6 +592,12 @@ export function AssistantMessage({
           )}
           {msg.text !== '' && <CopyButton text={msg.text} label="Copy reply" />}
           {msg.text !== '' && pdfExportEnabled && <ExportPDFButton text={msg.text} />}
+          {onShowActivity && (
+            <Button variant="ghost" size="xs" data-testid="show-activity" onClick={onShowActivity}>
+              <ListTree aria-hidden />
+              Activity
+            </Button>
+          )}
         </div>
       )}
     </div>

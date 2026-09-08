@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Destination, Mission, Schedule } from '../api/types'
+import { TooltipProvider } from '../components/ui/tooltip'
 import { AutomationDetail } from './AutomationDetail'
 
 vi.mock('../api/client', () => ({
@@ -65,7 +66,11 @@ function renderAt(id: string) {
     [{ path: '/automations/:id', element: <AutomationDetail /> }],
     { initialEntries: [`/automations/${id}`] },
   )
-  return render(<RouterProvider router={router} />)
+  return render(
+    <TooltipProvider>
+      <RouterProvider router={router} />
+    </TooltipProvider>,
+  )
 }
 
 afterEach(cleanup)
@@ -87,7 +92,7 @@ describe('AutomationDetail', () => {
     vi.mocked(listMissions).mockResolvedValue([firedMission])
     renderAt('s1')
 
-    expect(await screen.findByText('weekly-digest')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'weekly-digest' })).toBeTruthy()
     expect(screen.getByText('Weekdays, 8:00 AM')).toBeTruthy()
     expect((await screen.findAllByText('Summarize the week')).length).toBe(2)
     expect(listMissions).toHaveBeenCalledWith({ scheduleId: 's1' })
@@ -112,15 +117,54 @@ describe('AutomationDetail', () => {
     vi.mocked(listDestinations).mockResolvedValue([destination])
     vi.mocked(listSchedules).mockResolvedValue([schedule])
     renderAt('s1')
-    await screen.findByText('weekly-digest')
+    await screen.findByRole('heading', { name: 'weekly-digest' })
     expect(screen.queryByText('ops-inbox')).toBeNull()
+  })
+
+  it('falls back to the raw destination id when it cannot be resolved', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([])
+    vi.mocked(listSchedules).mockResolvedValue([
+      { ...schedule, mission_template: { ...schedule.mission_template, destination_ids: ['unknown-id'] } },
+    ])
+    renderAt('s1')
+    expect(await screen.findByText('unknown-id')).toBeTruthy()
+  })
+
+  it('shows a disabled badge when the schedule is disabled', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([{ ...schedule, enabled: false }])
+    renderAt('s1')
+    expect(await screen.findByText('disabled')).toBeTruthy()
+  })
+
+  it('shows the last run time when set', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([{ ...schedule, last_run: '2026-07-20T08:00:00Z' }])
+    renderAt('s1')
+    expect(await screen.findByText(/Last run/)).toBeTruthy()
+  })
+
+  it('navigates to the edit page when Edit is clicked', async () => {
+    vi.mocked(listSchedules).mockResolvedValue([schedule])
+    const router = createMemoryRouter(
+      [
+        { path: '/automations/:id', element: <AutomationDetail /> },
+        { path: '/automations/:id/edit', element: <div>edit page</div> },
+      ],
+      { initialEntries: ['/automations/s1'] },
+    )
+    render(
+      <TooltipProvider>
+        <RouterProvider router={router} />
+      </TooltipProvider>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/automations/s1/edit'))
   })
 
   it('renames the automation: pencil click, edit, Enter saves the slugified name', async () => {
     vi.mocked(listSchedules).mockResolvedValue([schedule])
     vi.mocked(patchSchedule).mockResolvedValue({ ...schedule, name: 'new-name' })
     renderAt('s1')
-    await screen.findByText('weekly-digest')
+    await screen.findByRole('heading', { name: 'weekly-digest' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Rename automation' }))
     const input = screen.getByRole('textbox', { name: 'Automation name' })
@@ -133,7 +177,7 @@ describe('AutomationDetail', () => {
   it('cancels the rename on Escape without calling patchSchedule', async () => {
     vi.mocked(listSchedules).mockResolvedValue([schedule])
     renderAt('s1')
-    await screen.findByText('weekly-digest')
+    await screen.findByRole('heading', { name: 'weekly-digest' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Rename automation' }))
     const input = screen.getByRole('textbox', { name: 'Automation name' })
@@ -141,7 +185,7 @@ describe('AutomationDetail', () => {
     fireEvent.keyDown(input, { key: 'Escape' })
 
     expect(screen.queryByRole('textbox', { name: 'Automation name' })).toBeNull()
-    expect(screen.getByText('weekly-digest')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'weekly-digest' })).toBeTruthy()
     expect(patchSchedule).not.toHaveBeenCalled()
   })
 })

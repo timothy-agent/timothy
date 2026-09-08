@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Destination, Mission, MissionEvent } from '../api/types'
+import { TooltipProvider } from '../components/ui/tooltip'
 import type { Signal } from '../lib/events'
 import { MissionDetail } from './MissionDetail'
 
@@ -17,6 +18,10 @@ vi.mock('../api/client', () => ({
   cancelMission: vi.fn(),
   deleteMission: vi.fn(),
   answerMissionPermission: vi.fn(),
+  approveMissionPlan: vi.fn(),
+  replanMission: vi.fn(),
+  rediscoverMission: vi.fn(),
+  answerMissionQuestion: vi.fn(),
   listMissionFiles: vi.fn(),
   listSchedules: vi.fn(),
   downloadMissionFile: vi.fn(),
@@ -35,6 +40,8 @@ vi.mock('../api/client', () => ({
 
 import {
   answerMissionPermission,
+  answerMissionQuestion,
+  approveMissionPlan,
   cancelMission,
   deleteMission,
   getMission,
@@ -46,6 +53,8 @@ import {
   missionUsage,
   openMissionPR,
   pushMission,
+  rediscoverMission,
+  replanMission,
   resumeMission,
   sendMissionNote,
 } from '../api/client'
@@ -126,12 +135,14 @@ const events: MissionEvent[] = [
 
 function renderPage(id = 'm1') {
   return render(
-    <MemoryRouter initialEntries={[`/missions/${id}`]}>
-      <Routes>
-        <Route path="/missions/:id" element={<MissionDetail />} />
-        <Route path="/missions" element={<div>Missions list</div>} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[`/missions/${id}`]}>
+        <Routes>
+          <Route path="/missions/:id" element={<MissionDetail />} />
+          <Route path="/missions" element={<div>Missions list</div>} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 
@@ -171,7 +182,7 @@ describe('MissionDetail spend', () => {
       ],
     })
     renderPage()
-    expect(await screen.findByText('$0.5000')).toBeTruthy()
+    expect(await screen.findByText('$0.5000 of $2.00')).toBeTruthy()
     expect(screen.getByText('7 calls')).toBeTruthy()
     expect(screen.getByText('120.0k→8.0k tok')).toBeTruthy()
     expect(screen.getByText('25% of budget')).toBeTruthy()
@@ -305,7 +316,7 @@ describe('MissionDetail spend', () => {
 
   it('hides the cost pills while the mission has no ledger rows', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/calls$/)).toBeNull()
   })
 
@@ -396,7 +407,7 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
   it('omits Retries when iteration is zero', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, iteration: 0 })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/Retries/)).toBeNull()
   })
 
@@ -480,7 +491,7 @@ describe('MissionDetail executor worktree summary (issue #500)', () => {
       },
     ])
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(await screen.findByText(/3 new · 1 modified · changed 2m ago/)).toBeTruthy()
   })
 
@@ -548,7 +559,7 @@ describe('MissionDetail harness pill', () => {
 
   it('omits the harness pill when no executor.spawned event exists', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/Claude Code/)).toBeNull()
     expect(screen.queryByLabelText(/harness$/)).toBeNull()
   })
@@ -572,7 +583,7 @@ describe('MissionDetail environment pill', () => {
 
   it('omits the environment pill when mission.environment is empty', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/^env ·/)).toBeNull()
   })
 })
@@ -615,7 +626,7 @@ describe('MissionDetail github destination badges', () => {
 
   it('omits both badges when no destination entries exist', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText('auto-push')).toBeNull()
     expect(screen.queryByText('auto-PR')).toBeNull()
   })
@@ -624,7 +635,7 @@ describe('MissionDetail github destination badges', () => {
 describe('MissionDetail destinations', () => {
   it('omits the Destinations section when the mission has none', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText('Destinations')).toBeNull()
   })
 
@@ -703,7 +714,7 @@ describe('MissionDetail created timestamp', () => {
 describe('MissionDetail', () => {
   it('renders mission header and plan, with no standalone progress section', async () => {
     renderPage()
-    expect(await screen.findByText('Fix the login bug')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'Fix the login bug' })).toBeTruthy()
     expect(screen.getByText('Add validation')).toBeTruthy()
     // Progress notes live in the Timeline now — the markdown-card
     // section that duplicated them is gone.
@@ -712,7 +723,7 @@ describe('MissionDetail', () => {
 
   it('does not show a permission banner when none is pending', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/Allow/)).toBeNull()
   })
 
@@ -722,7 +733,7 @@ describe('MissionDetail', () => {
       repo_url: 'https://github.com/octocat/hello-world.git',
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     const link = screen.getByRole('link', { name: 'octocat/hello-world' })
     expect(link).toHaveAttribute('href', 'https://github.com/octocat/hello-world')
@@ -731,7 +742,7 @@ describe('MissionDetail', () => {
 
   it('omits the GitHub origin link when repo_url is not set', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('link', { name: /octocat/ })).toBeNull()
   })
 
@@ -740,7 +751,6 @@ describe('MissionDetail', () => {
     renderPage()
     const heading = await screen.findByRole('heading', { level: 1 })
     expect(heading.textContent).toBe('Fix Login Bug')
-    expect(screen.queryByText('Fix the login bug')).toBeNull()
   })
 
   it('falls back to the goal in the header when name is empty', async () => {
@@ -756,10 +766,10 @@ describe('MissionDetail', () => {
       goal: 'Fix the **login** bug on staging',
     })
     renderPage()
-    await screen.findByText('Fix Login Bug')
+    await screen.findByRole('heading', { name: 'Fix Login Bug' })
 
     expect(screen.getByText('Show goal')).toBeInTheDocument()
-    expect(screen.queryByText('login')).toBeNull()
+    expect(screen.getByText('login').closest('div')).toHaveClass('line-clamp-3')
 
     fireEvent.click(screen.getByText('Show goal'))
     expect(screen.getByText('login').tagName).toBe('STRONG')
@@ -767,15 +777,15 @@ describe('MissionDetail', () => {
 
   it('renders a plain-text goal in the goal section unchanged', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByText('Show goal'))
     expect(screen.getAllByText('Fix the login bug').length).toBeGreaterThan(0)
   })
 
   it('omits the Discover section when discover_notes is absent', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
-    expect(screen.queryByText('Discover')).toBeNull()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByRole('heading', { level: 2, name: 'Discover' })).toBeNull()
   })
 
   it('shows a collapsed Discover section above Plan when discover_notes is set', async () => {
@@ -784,12 +794,12 @@ describe('MissionDetail', () => {
       discover_notes: 'found **three** prior approaches',
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings.indexOf('Discover')).toBeGreaterThanOrEqual(0)
     expect(headings.indexOf('Discover')).toBeLessThan(headings.indexOf('Plan'))
-    expect(screen.queryByText('three')).toBeNull()
+    expect(screen.getByText('three').closest('div')).toHaveClass('line-clamp-3')
 
     fireEvent.click(screen.getByText('Show discovery'))
     expect(screen.getByText('three').tagName).toBe('STRONG')
@@ -797,7 +807,7 @@ describe('MissionDetail', () => {
 
   it('omits the Artifacts refs section when artifact_refs is absent', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText('att-1')).toBeNull()
   })
 
@@ -808,7 +818,7 @@ describe('MissionDetail', () => {
       artifact_refs: [{ id: 'att-1', mime: 'text/markdown', name: 'report.md' }],
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     expect(screen.getByText('report.md')).toBeInTheDocument()
   })
@@ -949,7 +959,7 @@ describe('MissionDetail', () => {
 
   it('renders known event kinds with their specific text and unknown kinds with the fallback', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(await screen.findByText('Mission created')).toBeTruthy()
     // Unknown kind falls back to rendering the raw kind string.
     expect(screen.getByText('mission.some_future_kind')).toBeTruthy()
@@ -960,7 +970,7 @@ describe('MissionDetail', () => {
 
   it('renders the timeline as a scrollable container with scroll-to-top/bottom controls', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('button', { name: 'Scroll to top' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy()
     expect(screen.getByText(`${events.length} events`)).toBeTruthy()
@@ -969,7 +979,7 @@ describe('MissionDetail', () => {
   it('shows resume for a paused mission and cancel for a non-terminal one', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'backoff' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
 
@@ -979,7 +989,7 @@ describe('MissionDetail', () => {
 
   it('sends a note for a working mission via the Intervene modal and closes on success', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
     const input = screen.getByPlaceholderText('Steer this mission (markdown supported)…')
     fireEvent.change(input, { target: { value: 'focus on staging next' } })
@@ -992,7 +1002,7 @@ describe('MissionDetail', () => {
 
   it('shows the mission phase and status in the Intervene modal', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
     await screen.findByText((_, el) => el?.textContent === 'Currently in generate · working')
   })
@@ -1000,14 +1010,14 @@ describe('MissionDetail', () => {
   it('disables the Intervene button once the mission is terminal', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'idle' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('button', { name: 'Intervene' })).toBeDisabled()
   })
 
   it('offers the review route picker in the Intervene modal only while paused', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'infra', review_route: 'default' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
     expect(await screen.findByRole('combobox', { name: 'Review route' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
@@ -1015,7 +1025,7 @@ describe('MissionDetail', () => {
 
   it('omits the review route picker from the Intervene modal while working', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Intervene' }))
     await screen.findByPlaceholderText('Steer this mission (markdown supported)…')
     expect(screen.queryByLabelText('Review route')).toBeNull()
@@ -1083,48 +1093,50 @@ describe('MissionDetail', () => {
       },
     ])
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText('every provider attempt failed: GLM 429')).toBeNull()
   })
 
   it('hides resume and cancel for a done mission', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull()
   })
 
   it('cancels a mission', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(cancelMission).toHaveBeenCalledWith('m1'))
   })
 
   it('hides delete for a non-terminal mission', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('button', { name: 'Delete mission' })).toBeNull()
   })
 
   it('hides Fork for a non-terminal mission', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('button', { name: 'Fork' })).toBeNull()
   })
 
   it('shows Fork for a done mission and navigates to a prefilled create form', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     render(
-      <MemoryRouter initialEntries={['/missions/m1']}>
-        <Routes>
-          <Route path="/missions/:id" element={<MissionDetail />} />
-          <Route path="/missions/new" element={<div>New mission page</div>} />
-        </Routes>
-      </MemoryRouter>,
+      <TooltipProvider>
+        <MemoryRouter initialEntries={['/missions/m1']}>
+          <Routes>
+            <Route path="/missions/:id" element={<MissionDetail />} />
+            <Route path="/missions/new" element={<div>New mission page</div>} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
     )
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Fork' }))
     await screen.findByText('New mission page')
   })
@@ -1132,7 +1144,7 @@ describe('MissionDetail', () => {
   it('links to the parent mission when parent_mission_id is set', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, parent_mission_id: 'parent-123' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('link', { name: /parent-1/ })).toHaveAttribute(
       'href',
       '/missions/parent-123',
@@ -1142,9 +1154,9 @@ describe('MissionDetail', () => {
   it('shows delete for a done mission and deletes on confirm', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     fireEvent.click(screen.getByRole('button', { name: 'Delete mission' }))
-    const dialog = await screen.findByRole('dialog')
+    const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
     await waitFor(() => expect(deleteMission).toHaveBeenCalledWith('m1'))
     await screen.findByText('Missions list')
@@ -1153,7 +1165,7 @@ describe('MissionDetail', () => {
   it('ignores a signal for a different mission id', async () => {
     const sub = captureSubscribe()
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     vi.mocked(getMission).mockClear()
 
     sub.fireSignal({ kind: 'mission', id: 'some-other-mission' })
@@ -1167,7 +1179,7 @@ describe('MissionDetail', () => {
   it('refetches on a signal naming this mission, and on ready', async () => {
     const sub = captureSubscribe()
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     vi.mocked(getMission).mockClear()
 
     sub.fireSignal({ kind: 'mission', id: 'm1' })
@@ -1180,7 +1192,7 @@ describe('MissionDetail', () => {
   it('unsubscribes on unmount', async () => {
     const sub = captureSubscribe()
     const { unmount } = renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     unmount()
     expect(sub.unsubscribe).toHaveBeenCalled()
   })
@@ -1193,15 +1205,15 @@ describe('MissionDetail', () => {
       last_evidence: 'some evidence text',
     })
     renderPage()
-    expect(await screen.findByText('Result')).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Result' })).toBeTruthy()
     expect(screen.getByText('some evidence text')).toBeTruthy()
   })
 
   it('omits the Result section for a terminal mission with no evidence', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'done', status: 'done' })
     renderPage()
-    await screen.findByText('Fix the login bug')
-    expect(screen.queryByText('Result')).toBeNull()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByRole('heading', { level: 2, name: 'Result' })).toBeNull()
   })
 
   it('renders a light mission Result section from final_output, not last_evidence', async () => {
@@ -1214,7 +1226,7 @@ describe('MissionDetail', () => {
       final_output: 'the complete deliverable',
     })
     renderPage()
-    expect(await screen.findByText('Result')).toBeTruthy()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Result' })).toBeTruthy()
     expect(screen.getByText('the complete deliverable')).toBeTruthy()
     expect(screen.queryByText('worker evidence text')).toBeNull()
   })
@@ -1228,8 +1240,8 @@ describe('MissionDetail', () => {
       last_evidence: 'worker evidence text',
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
-    expect(screen.queryByText('Result')).toBeNull()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByRole('heading', { level: 2, name: 'Result' })).toBeNull()
   })
 
   it('shows a recurring schedule strip when the mission fired from a schedule', async () => {
@@ -1253,7 +1265,7 @@ describe('MissionDetail', () => {
 
   it('omits the recurring strip for a one-off mission', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByText(/Recurring ·/)).toBeNull()
   })
 })
@@ -1262,14 +1274,14 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
   it('shows Push branch and Push & open PR only for a mission with connector_id', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Push & open PR' })).toBeTruthy()
   })
 
   it('omits the push/PR buttons for a mission without connector_id', async () => {
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
     expect(screen.queryByRole('button', { name: 'Push branch' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Push & open PR' })).toBeNull()
   })
@@ -1278,7 +1290,7 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
     vi.mocked(pushMission).mockResolvedValue({ branch: 'mission/fix-login', remote_host: 'github.com' })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
     await waitFor(() => expect(pushMission).toHaveBeenCalledWith('m1'))
@@ -1295,7 +1307,7 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
       number: 9,
     })
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Push & open PR' }))
     await waitFor(() => expect(openMissionPR).toHaveBeenCalledWith('m1'))
@@ -1326,7 +1338,7 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, connector_id: 'conn-1' })
     vi.mocked(pushMission).mockRejectedValue(new Error('push failed'))
     renderPage()
-    await screen.findByText('Fix the login bug')
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
 
     fireEvent.click(screen.getByRole('button', { name: 'Push branch' }))
     await waitFor(() => expect(pushMission).toHaveBeenCalled())
@@ -1351,5 +1363,250 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
 
     expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Push & open PR' })).toBeNull()
+  })
+})
+
+describe('MissionDetail status label for a failed mission', () => {
+  it('labels a cancelled failure as "cancelled"', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'failed',
+      status: 'error',
+      failure_reason: 'cancelled',
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.getByText('cancelled')).toBeTruthy()
+  })
+
+  it('labels a non-cancelled failure as "failed"', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'failed',
+      status: 'error',
+      failure_reason: 'budget_exhausted',
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.getByText('failed')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail header stats row', () => {
+  it('uses singular "turn"/"call" for exactly one executor.progress turn/tool call', async () => {
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'executor.progress',
+        payload: { run_id: 'r1', byte_offset: 100, turns: 1, tool_calls: 1 },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText(/1 turn, 1 tool call$/)).toBeTruthy()
+  })
+
+  it('shows the budget pill in the header stats row', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, budget_amount: 5, budget_currency: 'EUR' })
+    renderPage()
+    expect(await screen.findByText(/budget €5\.00/)).toBeTruthy()
+  })
+
+  it('shows the plan route when set', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, plan_route: 'careful' })
+    renderPage()
+    expect(await screen.findByText('plan route: careful')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail attachment chips', () => {
+  it('renders an attachment chip with its name', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      attachments: [{ id: 'att-1', mime: 'application/pdf', name: 'spec.pdf' }],
+    })
+    renderPage()
+    expect(await screen.findByText('spec.pdf')).toBeTruthy()
+  })
+
+  it('falls back to a truncated id when an attachment has no name', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      attachments: [{ id: 'attachment-without-a-name', mime: 'application/pdf' }],
+    })
+    renderPage()
+    expect(await screen.findByText('attachme')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail paused alert without a detail line', () => {
+  it('shows the pause title with no description when no mission.paused event carries a detail', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'budget' })
+    vi.mocked(missionEvents).mockResolvedValue([])
+    renderPage()
+    expect(await screen.findByText('Paused: budget exhausted')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail plan approval gate', () => {
+  it('approves a parked plan and shows the answered status', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'plan',
+      status: 'paused',
+      pause_reason: 'approval',
+      plan: {
+        units: [{ title: 'Add validation', verify_cmd: 'go test', passes: true }],
+        assumptions: [{ assumption: 'staging only', default: 'high' }],
+      },
+    })
+    renderPage()
+    const approveButton = await screen.findByRole('button', { name: 'Approve' })
+    fireEvent.click(approveButton)
+    await waitFor(() => expect(approveMissionPlan).toHaveBeenCalledWith('m1'))
+    expect(await screen.findByText('Approved, moving to generate…')).toBeTruthy()
+  })
+
+  it('requests a replan with feedback', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'plan',
+      status: 'paused',
+      pause_reason: 'approval',
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Request replan' }))
+    const input = screen.getByPlaceholderText('Optional feedback for the replan, markdown supported…')
+    fireEvent.change(input, { target: { value: 'tighten scope' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(replanMission).toHaveBeenCalledWith('m1', 'tighten scope'))
+    expect(await screen.findByText('Replan requested…')).toBeTruthy()
+  })
+
+  it('sends a mission back to discover', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'plan',
+      status: 'paused',
+      pause_reason: 'approval',
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Rediscover' }))
+    await waitFor(() => expect(rediscoverMission).toHaveBeenCalledWith('m1'))
+    expect(await screen.findByText('Sending back to discover…')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail pending input gate', () => {
+  it('answers an open question and shows the answered status', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      pending_input: {
+        question: 'Which environment?',
+        kind: 'open',
+        proposed_default: 'staging',
+        asked_at: '2026-01-01T00:00:00Z',
+        phase: 'generate',
+      },
+    })
+    renderPage()
+    await screen.findByText('Which environment?')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(answerMissionQuestion).toHaveBeenCalledWith('m1', 'staging'))
+    expect(await screen.findByText('Answered: staging')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail plan section', () => {
+  it('omits the Plan panel when the mission has no plan units', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, plan: { units: [] } })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByRole('heading', { level: 2, name: 'Plan' })).toBeNull()
+  })
+})
+
+describe('MissionDetail review findings', () => {
+  it('renders the Review findings panel when findings exist', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      review_findings: [
+        { id: 'F1', unit: 0, title: 'missing validation', file: 'auth.go', detail: 'no check', severity: 'blocking' },
+      ],
+    })
+    renderPage()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Review findings' })).toBeTruthy()
+    expect(screen.getByText('missing validation')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail destination row fallbacks', () => {
+  it('falls back to "destination" and the raw destination_id when the row is missing and kind is unset', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [{ destination_id: 'dest-gone' }],
+    })
+    renderPage()
+    expect(await screen.findByText('Destinations')).toBeTruthy()
+    expect(screen.getByText('destination')).toBeTruthy()
+    expect(screen.getByText('dest-gone')).toBeTruthy()
+  })
+
+  it('renders a non-github destination using the row kind and name', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([
+      {
+        id: 'dest-email',
+        name: 'ops inbox',
+        kind: 'email',
+        config: {},
+        credential_ref: 'cred-1',
+        enabled: true,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      },
+    ])
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [{ destination_id: 'dest-email' }],
+    })
+    renderPage()
+    expect(await screen.findByText('email')).toBeTruthy()
+    expect(screen.getByText('ops inbox')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail usage badges', () => {
+  it('uses singular "call" for exactly one model request', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.1 },
+      input_tokens: 10,
+      output_tokens: 5,
+      requests: 1,
+      unpriced_requests: 0,
+      models: [{ provider: 'GLM (Z.ai)', model: 'glm-5.2', harness: false, requests: 1, last_used: '2026-01-01T00:00:00Z' }],
+    })
+    renderPage()
+    const pill = await screen.findByText('glm-5.2')
+    expect(pill.closest('span')).toHaveAttribute('title', '1 call via GLM (Z.ai)')
+    expect(await screen.findByText('1 call')).toBeTruthy()
+  })
+
+  it('omits the unpriced-calls badge when every call is priced', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.1 },
+      input_tokens: 10,
+      output_tokens: 5,
+      requests: 4,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    await screen.findByText('4 calls')
+    expect(screen.queryByText(/unpriced call/)).toBeNull()
   })
 })

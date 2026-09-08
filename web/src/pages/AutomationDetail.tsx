@@ -1,14 +1,18 @@
-import { PencilEdit01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Pencil } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { listDestinations, listMissions, listSchedules, patchSchedule } from '../api/client'
 import type { Destination, Mission, Schedule } from '../api/types'
-import { slugify } from '../components/settings/AgentForm'
 import { MissionCard } from '../components/missions/MissionCard'
-import { DestinationKindIcon } from '../components/settings/shared'
-import { errText } from '../components/settings/util'
+import { DestinationKindIcon } from '../components/destinations/DestinationKindIcon'
+import { errText } from '../lib/errors'
+import { slugify } from '../lib/slugify'
+import { EmptyState } from '../components/timothy/empty-state'
+import { IconButton } from '../components/timothy/icon-button'
+import { PageHeader } from '../components/timothy/page-header'
+import { PageShell } from '../components/timothy/page-shell'
+import { Spinner } from '../components/timothy/spinner'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -74,30 +78,34 @@ export function AutomationDetail() {
 
   if (loading) {
     return (
-      <div className="mx-auto w-full max-w-full px-8 py-6">
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      </div>
+      <PageShell>
+        <Spinner label="Loading" />
+      </PageShell>
     )
   }
 
   if (!schedule) {
     return (
-      <div className="mx-auto w-full max-w-full px-8 py-6">
+      <PageShell>
         <p className="text-sm text-muted-foreground">
           Automation not found.{' '}
           <Link to="/automations" className="underline underline-offset-2 hover:text-foreground">
             Back to automations
           </Link>
         </p>
-      </div>
+      </PageShell>
     )
   }
 
+  const destinationIds = schedule.mission_template.destination_ids ?? []
+
   return (
-    <div className="mx-auto w-full max-w-full px-8 py-6">
-      <div className="flex items-center justify-between gap-4">
-        <div className="min-w-0">
-          {renaming ? (
+    <PageShell>
+      <PageHeader
+        breadcrumbs={[{ label: 'Automations', href: '/automations' }, { label: schedule.name }]}
+        title={schedule.name}
+        titleNode={
+          renaming ? (
             <Input
               aria-label="Automation name"
               value={name}
@@ -108,58 +116,65 @@ export function AutomationDetail() {
                 if (e.key === 'Escape') setRenaming(false)
               }}
               autoFocus
-              className="h-8 max-w-sm text-xl font-semibold tracking-tight"
+              className="h-8 max-w-sm text-title font-semibold"
             />
           ) : (
             <div className="flex items-center gap-1.5">
-              <h1 className="truncate text-xl font-semibold tracking-tight">{schedule.name}</h1>
-              <button
-                type="button"
-                aria-label="Rename automation"
-                onClick={startRename}
-                className="shrink-0 text-muted-foreground hover:text-foreground"
-              >
-                <HugeiconsIcon icon={PencilEdit01Icon} className="size-4" />
-              </button>
+              <h1 className="truncate text-title font-semibold text-foreground">{schedule.name}</h1>
+              <IconButton label="Rename automation" icon={Pencil} variant="ghost" size="sm" onClick={startRename} />
             </div>
+          )
+        }
+        meta={
+          <>
+            <Badge variant={schedule.enabled ? 'good' : 'neutral'} size="sm">
+              {schedule.enabled ? 'enabled' : 'disabled'}
+            </Badge>
+            {destinationIds.map((did) => {
+              const d = destinations.find((d) => d.id === did)
+              return (
+                <Badge key={did} variant="outline" size="sm">
+                  {d && <DestinationKindIcon kind={d.kind} />}
+                  {d?.name ?? did}
+                </Badge>
+              )
+            })}
+          </>
+        }
+        description={schedule.mission_template.goal}
+        actions={
+          <Button variant="outline" onClick={() => navigate(`/automations/${id}/edit`)}>
+            Edit
+          </Button>
+        }
+      >
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+          <span className="whitespace-nowrap">{describeCron(schedule.cron)}</span>
+          {schedule.next_run && (
+            <>
+              <span aria-hidden>&middot;</span>
+              <span className="whitespace-nowrap">Next run {relativeTimeUntil(schedule.next_run)}</span>
+            </>
           )}
-          <p className="line-clamp-1 text-sm text-muted-foreground">{schedule.mission_template.goal}</p>
-          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-            <span>{describeCron(schedule.cron)}</span>
-            {schedule.next_run && <span>next {relativeTimeUntil(schedule.next_run)}</span>}
-            {schedule.last_run && <span>last {relativeTime(schedule.last_run)}</span>}
-            <span>{schedule.enabled ? 'enabled' : 'disabled'}</span>
-          </div>
-          {schedule.mission_template.destination_ids &&
-            schedule.mission_template.destination_ids.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {schedule.mission_template.destination_ids.map((did) => {
-                  const d = destinations.find((d) => d.id === did)
-                  return (
-                    <Badge key={did} variant="outline" className="text-xs">
-                      {d && <DestinationKindIcon kind={d.kind} />}
-                      {d?.name ?? did}
-                    </Badge>
-                  )
-                })}
-              </div>
-            )}
+          {schedule.last_run && (
+            <>
+              <span aria-hidden>&middot;</span>
+              <span className="whitespace-nowrap">Last run {relativeTime(schedule.last_run)}</span>
+            </>
+          )}
         </div>
-        <Button variant="outline" onClick={() => navigate(`/automations/${id}/edit`)}>
-          Edit
-        </Button>
-      </div>
+      </PageHeader>
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {missions.map((m) => (
           <MissionCard key={m.id} mission={m} />
         ))}
         {missions.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            No missions fired yet.
+          <div className="col-span-full rounded-md border border-dashed border-border">
+            <EmptyState title="No missions fired yet." />
           </div>
         )}
       </div>
-    </div>
+    </PageShell>
   )
 }

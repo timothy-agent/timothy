@@ -101,7 +101,7 @@ const LANGUAGE_LOGOS: Record<string, string> = {
 
 // Logos whose devicon artwork is dark (near-black fills or a
 // black-to-white gradient) and disappears against the code block's
-// dark zinc-900 chrome: bash's mark is solid #293138, markdown's has
+// dark muted chrome: bash's mark is solid #293138, markdown's has
 // no explicit fill (defaults to black), json's gradient runs to pure
 // black at one end. Devicon ships no currentColor/plain variant for
 // these, so instead of the raw <img> they get a small light chip
@@ -418,13 +418,11 @@ export function CodeBlock({ children, node }: { children?: ReactNode } & ExtraPr
   if (isMermaid) return <MermaidBlock code={text} />
 
   return (
-    <div className="not-prose my-4 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
-      <div className="flex items-center justify-between border-b border-zinc-200 bg-zinc-100 px-3 py-1.5 dark:border-zinc-800 dark:bg-zinc-800/60">
-        <span className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+    <div className="not-prose my-4 min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-muted">
+      <div className="flex h-8 items-center justify-between border-b border-border px-3 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1.5">
           {logo ? (
-            <span
-              className={needsChip ? 'flex items-center rounded-[3px] dark:bg-white/95 dark:p-[1px]' : 'flex items-center'}
-            >
+            <span className={needsChip ? 'flex items-center rounded-md dark:bg-white/95 dark:p-[1px]' : 'flex items-center'}>
               <img src={logo} alt="" className="size-3.5" />
             </span>
           ) : (
@@ -440,7 +438,7 @@ export function CodeBlock({ children, node }: { children?: ReactNode } & ExtraPr
       </div>
       <div className="flex overflow-x-auto">
         <div
-          className="sticky left-0 shrink-0 select-none bg-zinc-50 px-3 py-3 text-right font-mono text-sm leading-relaxed text-zinc-400 dark:bg-zinc-900 dark:text-zinc-600"
+          className="sticky left-0 shrink-0 select-none bg-muted px-3 py-3 text-right font-mono text-code leading-5 text-muted-foreground"
           aria-hidden="true"
         >
           {Array.from({ length: lineCount }, (_, i) => (
@@ -449,14 +447,12 @@ export function CodeBlock({ children, node }: { children?: ReactNode } & ExtraPr
         </div>
         {html ? (
           <div
-            className="shiki-container min-w-0 flex-1 py-3 pr-4 font-mono text-sm leading-relaxed"
+            className="shiki-container min-w-0 flex-1 p-3 font-mono text-code leading-5"
             data-testid="shiki-html"
             dangerouslySetInnerHTML={{ __html: html }}
           />
         ) : (
-          <pre className="min-w-0 flex-1 py-3 pr-4 font-mono text-sm leading-relaxed text-zinc-900 dark:text-zinc-100">
-            {text}
-          </pre>
+          <pre className="min-w-0 flex-1 p-3 font-mono text-code leading-5 text-foreground">{text}</pre>
         )}
       </div>
     </div>

@@ -38,6 +38,7 @@ export function useReorderDrag({
   const [overIndex, setOverIndex] = useState<number | null>(null)
   const items = useRef<(HTMLElement | null)[]>([])
   const gesture = useRef<{ from: number; startX: number; active: boolean } | null>(null)
+  const overRef = useRef<number | null>(null)
 
   const setItemRef = useCallback(
     (i: number) => (el: HTMLElement | null) => {
@@ -48,6 +49,7 @@ export function useReorderDrag({
 
   const stop = useCallback(() => {
     gesture.current = null
+    overRef.current = null
     setDragIndex(null)
     setOverIndex(null)
   }, [])
@@ -67,21 +69,21 @@ export function useReorderDrag({
           const r = el.getBoundingClientRect()
           return r.left + r.width / 2
         })
-      setOverIndex(targetIndex(midpoints, e.clientX))
+      const over = targetIndex(midpoints, e.clientX)
+      overRef.current = over
+      setOverIndex(over)
     }
     const onUp = () => {
       const g = gesture.current
       if (!g) return
       if (g.active) {
-        // Read the latest preview position from state via the setter to
-        // avoid a stale closure over overIndex.
-        setOverIndex((over) => {
-          if (over !== null && over !== g.from) onCommit(g.from, over)
-          return null
-        })
+        const over = overRef.current
+        if (over !== null && over !== g.from) onCommit(g.from, over)
       }
       gesture.current = null
+      overRef.current = null
       setDragIndex(null)
+      setOverIndex(null)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') stop()

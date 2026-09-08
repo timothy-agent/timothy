@@ -1,7 +1,5 @@
-import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   connectorOAuthStart,
@@ -13,21 +11,20 @@ import {
 import type { GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
+import { Field, FieldGroup, Form, FormActions } from '../timothy/field'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets } from './connectorPresets'
-import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
-import { Field } from './shared'
+import { CredentialField, type CredentialMode } from './CredentialRefPicker'
+import { settingsArea } from './settingsAreas'
+import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { connectedAs, errText, isTimothyAuthError, secretDestination } from './util'
+import { connectedAs } from './util'
+import { errText, isTimothyAuthError } from '../../lib/errors'
+import { slugify } from '../../lib/slugify'
 
-// slugify turns a display name into a connector name (tool-name
-// prefix): lowercase slug, the backend rejects anything else.
-function slugify(v: string): string {
-  return v
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
+const area = settingsArea('connectors')
 
 // isValidPort reports whether an (optional) port field's text is a
 // valid TCP port: empty (field left blank) or digits only, 1-65535.
@@ -46,7 +43,7 @@ function isValidPort(v: string): boolean {
 // are created, tested, and enabled in one go with Add gated on a
 // passing test (same contract as adding a provider); Google presets
 // take the OAuth client and hand off to Google's consent screen
-// instead — there is no unsaved test to run before that redirect.
+// instead - there is no unsaved test to run before that redirect.
 export function ConnectorAdd() {
   const { presetId } = useParams()
   const navigate = useNavigate()
@@ -72,13 +69,13 @@ export function ConnectorAdd() {
     null,
   )
   // The connector row is created (disabled) as part of testing an MCP
-  // or github preset — there's no unsaved-config validate endpoint like
+  // or github preset - there's no unsaved-config validate endpoint like
   // providers have. createdID tracks that row so a passing test's
   // Add just enables it rather than creating a second one.
   const [createdID, setCreatedID] = useState<string | null>(null)
   // tokenCredMode/clientSecretCredMode: "new" pastes+stores a fresh
   // secret (current behavior); "existing" reuses a stored ref instead
-  // — e.g. the same GitHub PAT already used by another connector, or
+  // - e.g. the same GitHub PAT already used by another connector, or
   // the same Google OAuth client credentials across gmail/calendar.
   const [tokenCredMode, setTokenCredMode] = useState<CredentialMode>('new')
   const [existingTokenRef, setExistingTokenRef] = useState('')
@@ -301,91 +298,78 @@ export function ConnectorAdd() {
     clientID.trim() !== '' &&
     (usingExistingClientSecret ? existingClientSecretRef !== '' : clientSecret !== '')
 
+  const testState: 'gate' | 'testing' | 'ok' | 'failed' = busy
+    ? 'testing'
+    : tested
+      ? 'ok'
+      : test && !test.ok
+        ? 'failed'
+        : 'gate'
+
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/connectors"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Connectors
-      </Link>
+    <PageShell width="form">
+      <PageHeader
+        title={`Add ${preset.name}`}
+        description={`kind: ${preset.kind}`}
+        meta={<ConnectorLogo preset={preset} className="size-9" />}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/connectors' },
+          { label: `Add ${preset.name}` },
+        ]}
+      />
 
-      <div className="flex items-center gap-4 border-b border-border pb-6">
-        <ConnectorLogo preset={preset} className="size-12" />
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Add {preset.name}</h1>
-          <p className="text-sm text-muted-foreground">kind: {preset.kind}</p>
-        </div>
-      </div>
+      <Form onSubmit={(e) => e.preventDefault()}>
+        <FieldGroup>
+          <Field label="Name" description="lowercase slug, prefixes this connector's tool names">
+            <Input
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value)
+                invalidate()
+              }}
+              placeholder={preset.id === 'custom-mcp' ? 'my-server' : slugify(preset.name)}
+            />
+          </Field>
 
-      <div className="grid max-w-3xl gap-5">
-        <Field label="Name" hint="lowercase slug, prefixes this connector's tool names">
-          <Input
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value)
-              invalidate()
-            }}
-            placeholder={preset.id === 'custom-mcp' ? 'my-server' : slugify(preset.name)}
-            className="mt-1.5 h-10"
-          />
-        </Field>
-
-        {isOAuth ? (
-          <>
-            <Field label="OAuth client ID">
-              <Input
-                value={clientID}
-                onChange={(e) => setClientID(e.target.value)}
-                placeholder={isMicrosoft ? 'application (client) ID' : '….apps.googleusercontent.com'}
-                className="mt-1.5 h-10"
-              />
-            </Field>
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-sm font-medium text-foreground">OAuth client secret</span>
-                <CredentialModeToggle mode={clientSecretCredMode} onChange={setClientSecretCredMode} />
-              </div>
-              {clientSecretCredMode === 'existing' ? (
-                <ExistingCredentialSelect
-                  value={existingClientSecretRef}
-                  onChange={setExistingClientSecretRef}
-                />
-              ) : (
+          {isOAuth ? (
+            <>
+              <Field label="OAuth client ID">
                 <Input
-                  type="password"
-                  value={clientSecret}
-                  onChange={(e) => setClientSecret(e.target.value)}
-                  placeholder={isMicrosoft ? 'client secret value' : 'GOCSPX-…'}
-                  className="h-10"
-                  autoComplete="off"
+                  value={clientID}
+                  onChange={(e) => setClientID(e.target.value)}
+                  placeholder={isMicrosoft ? 'application (client) ID' : '….apps.googleusercontent.com'}
                 />
-              )}
-            </div>
-            <p className="text-sm text-muted-foreground">
-              {isMicrosoft
-                ? 'From an Azure AD app registration (multitenant, "Accounts in any organizational directory and personal Microsoft accounts"). Add'
-                : 'From a Google Cloud OAuth client (Web application). Add'}{' '}
-              <span className="font-mono">{window.location.origin}/v1/connectors/oauth/callback</span>{' '}
-              to its {isMicrosoft ? 'redirect URIs (Web platform)' : 'authorized redirect URIs'}. Scopes:{' '}
-              {preset.scopes?.map((s) => s.split('/').pop()).join(', ')}. Saving redirects you to{' '}
-              {oauthProviderLabel} to consent.
-            </p>
-            <div className="flex gap-3 pt-2">
-              <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/connectors')}>
-                Cancel
-              </Button>
-              <Button disabled={!canSubmitOAuth || busy} onClick={() => void submitOAuth()}>
-                {busy ? 'Redirecting…' : `Save & connect ${oauthProviderLabel}`}
-              </Button>
-            </div>
-          </>
-        ) : (
-          <>
-            {!isGitHub && !isImap && !isCalDAV && (
-              <>
-                <Field label="Endpoint">
+              </Field>
+              <CredentialField
+                label="OAuth client secret"
+                mode={clientSecretCredMode}
+                onModeChange={setClientSecretCredMode}
+                existingRef={existingClientSecretRef}
+                onExistingRefChange={setExistingClientSecretRef}
+                secretValue={clientSecret}
+                onSecretValueChange={setClientSecret}
+                secretPlaceholder={isMicrosoft ? 'client secret value' : 'GOCSPX-…'}
+                defaultBackend={defaultBackend}
+                refName={`${refBase}${oauthSecretSuffix}`}
+              />
+              <p className="text-sm text-muted-foreground">
+                {isMicrosoft
+                  ? 'From an Azure AD app registration (multitenant, "Accounts in any organizational directory and personal Microsoft accounts"). Add'
+                  : 'From a Google Cloud OAuth client (Web application). Add'}{' '}
+                <span className="font-mono">{window.location.origin}/v1/connectors/oauth/callback</span>{' '}
+                to its {isMicrosoft ? 'redirect URIs (Web platform)' : 'authorized redirect URIs'}. Scopes:{' '}
+                {preset.scopes?.map((s) => s.split('/').pop()).join(', ')}. Saving redirects you to{' '}
+                {oauthProviderLabel} to consent.
+              </p>
+            </>
+          ) : (
+            <>
+              {!isGitHub && !isImap && !isCalDAV && (
+                <Field
+                  label="Endpoint"
+                  description={preset.endpointHint}
+                >
                   <Input
                     value={endpoint}
                     onChange={(e) => {
@@ -393,223 +377,194 @@ export function ConnectorAdd() {
                       invalidate()
                     }}
                     placeholder="https://…/mcp"
-                    className="mt-1.5 h-10"
                   />
                 </Field>
-                {preset.endpointHint && (
-                  <p className="-mt-3 text-sm text-muted-foreground">{preset.endpointHint}</p>
-                )}
-              </>
-            )}
-            {isImap && (
-              <>
-                <div className="grid grid-cols-2 gap-5">
-                  <Field label="IMAP host">
+              )}
+              {isImap && (
+                <>
+                  <div className="grid grid-cols-2 gap-5">
+                    <Field label="IMAP host">
+                      <Input
+                        value={imapHost}
+                        onChange={(e) => {
+                          setImapHost(e.target.value)
+                          invalidate()
+                        }}
+                        placeholder="imap.example.com"
+                      />
+                    </Field>
+                    <Field label="Port" required={false}>
+                      <Input
+                        value={imapPort}
+                        onChange={(e) => {
+                          setImapPort(e.target.value)
+                          invalidate()
+                        }}
+                        placeholder="993"
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Username">
                     <Input
-                      value={imapHost}
+                      value={imapUsername}
                       onChange={(e) => {
-                        setImapHost(e.target.value)
+                        setImapUsername(e.target.value)
                         invalidate()
                       }}
-                      placeholder="imap.example.com"
-                      className="mt-1.5 h-10"
+                      placeholder="me@example.com"
                     />
                   </Field>
-                  <Field label="Port">
+                  <div className="grid grid-cols-2 gap-5">
+                    <Field label="SMTP host" description="leave blank to disable sending" required={false}>
+                      <Input
+                        value={imapSMTPHost}
+                        onChange={(e) => {
+                          setImapSMTPHost(e.target.value)
+                          invalidate()
+                        }}
+                        placeholder="smtp.example.com"
+                      />
+                    </Field>
+                    <Field label="SMTP port" required={false}>
+                      <Input
+                        value={imapSMTPPort}
+                        onChange={(e) => {
+                          setImapSMTPPort(e.target.value)
+                          invalidate()
+                        }}
+                        placeholder="587"
+                      />
+                    </Field>
+                  </div>
+                </>
+              )}
+              {isCalDAV && (
+                <>
+                  <Field label="Calendar URL" description="the calendar collection URL itself, no discovery">
                     <Input
-                      value={imapPort}
+                      value={caldavURL}
                       onChange={(e) => {
-                        setImapPort(e.target.value)
+                        setCaldavURL(e.target.value)
                         invalidate()
                       }}
-                      placeholder="993"
-                      className="mt-1.5 h-10"
+                      placeholder="https://cal.example.com/dav/calendars/user/personal/"
                     />
                   </Field>
-                </div>
-                <Field label="Username">
-                  <Input
-                    value={imapUsername}
-                    onChange={(e) => {
-                      setImapUsername(e.target.value)
-                      invalidate()
-                    }}
-                    placeholder="me@example.com"
-                    className="mt-1.5 h-10"
-                  />
-                </Field>
-                <div className="grid grid-cols-2 gap-5">
-                  <Field label="SMTP host (optional)" hint="leave blank to disable sending">
+                  <Field label="Username">
                     <Input
-                      value={imapSMTPHost}
+                      value={caldavUsername}
                       onChange={(e) => {
-                        setImapSMTPHost(e.target.value)
+                        setCaldavUsername(e.target.value)
                         invalidate()
                       }}
-                      placeholder="smtp.example.com"
-                      className="mt-1.5 h-10"
+                      placeholder="me@example.com"
                     />
                   </Field>
-                  <Field label="SMTP port">
-                    <Input
-                      value={imapSMTPPort}
-                      onChange={(e) => {
-                        setImapSMTPPort(e.target.value)
-                        invalidate()
-                      }}
-                      placeholder="587"
-                      className="mt-1.5 h-10"
-                    />
-                  </Field>
-                </div>
-              </>
-            )}
-            {isCalDAV && (
-              <>
-                <Field label="Calendar URL" hint="the calendar collection URL itself, no discovery">
-                  <Input
-                    value={caldavURL}
-                    onChange={(e) => {
-                      setCaldavURL(e.target.value)
-                      invalidate()
-                    }}
-                    placeholder="https://cal.example.com/dav/calendars/user/personal/"
-                    className="mt-1.5 h-10"
-                  />
-                </Field>
-                <Field label="Username">
-                  <Input
-                    value={caldavUsername}
-                    onChange={(e) => {
-                      setCaldavUsername(e.target.value)
-                      invalidate()
-                    }}
-                    placeholder="me@example.com"
-                    className="mt-1.5 h-10"
-                  />
-                </Field>
-              </>
-            )}
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-sm font-medium text-foreground">
-                  {isGitHub
+                </>
+              )}
+
+              <CredentialField
+                label={
+                  isGitHub
                     ? 'Personal access token'
                     : isImap || isCalDAV
                       ? 'Password'
                       : preset.id === 'custom-mcp'
                         ? 'Bearer token (optional)'
-                        : 'Bearer token'}
-                </span>
-                <CredentialModeToggle
-                  mode={tokenCredMode}
-                  onChange={(m) => {
-                    setTokenCredMode(m)
-                    invalidate()
-                  }}
-                />
-              </div>
-              {tokenCredMode === 'existing' ? (
-                <ExistingCredentialSelect
-                  value={existingTokenRef}
-                  onChange={(v) => {
-                    setExistingTokenRef(v)
-                    invalidate()
-                  }}
-                />
-              ) : (
-                <>
-                  <Input
-                    type="password"
-                    value={isImap ? imapPassword : isCalDAV ? caldavPassword : token}
-                    onChange={(e) => {
-                      if (isImap) setImapPassword(e.target.value)
-                      else if (isCalDAV) setCaldavPassword(e.target.value)
-                      else setToken(e.target.value)
-                      invalidate()
-                    }}
-                    placeholder={isImap || isCalDAV ? 'password' : (preset.tokenPlaceholder ?? 'token')}
-                    className="h-10"
-                    autoComplete="off"
-                  />
-                  {!isImap && !isCalDAV && (
-                    <p className="mt-1.5 text-sm text-muted-foreground">
-                      {preset.tokenHint}
-                      {preset.tokenURL && (
-                        <>
-                          {' '}
-                          <a
-                            href={preset.tokenURL}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="font-medium text-primary underline underline-offset-2 hover:no-underline"
-                          >
-                            Create one on GitHub →
-                          </a>
-                        </>
-                      )}
-                      {!preset.tokenURL && (
-                        <>
-                          {' '}
-                          {secretDestination(
-                            defaultBackend,
-                            isGitHub ? `${refBase}_GITHUB_PAT` : `${refBase}_MCP_TOKEN`,
-                          )}
-                        </>
-                      )}
-                    </p>
+                        : 'Bearer token'
+                }
+                mode={tokenCredMode}
+                onModeChange={(m) => {
+                  setTokenCredMode(m)
+                  invalidate()
+                }}
+                existingRef={existingTokenRef}
+                onExistingRefChange={(v) => {
+                  setExistingTokenRef(v)
+                  invalidate()
+                }}
+                secretValue={isImap ? imapPassword : isCalDAV ? caldavPassword : token}
+                onSecretValueChange={(v) => {
+                  if (isImap) setImapPassword(v)
+                  else if (isCalDAV) setCaldavPassword(v)
+                  else setToken(v)
+                  invalidate()
+                }}
+                secretPlaceholder={isImap || isCalDAV ? 'password' : (preset.tokenPlaceholder ?? 'token')}
+                defaultBackend={defaultBackend}
+                refName={isGitHub ? `${refBase}_GITHUB_PAT` : isImap ? `${refBase}_IMAP_PASSWORD` : isCalDAV ? `${refBase}_CALDAV_PASSWORD` : `${refBase}_MCP_TOKEN`}
+              />
+              {!isImap && !isCalDAV && tokenCredMode === 'new' && (
+                <p className="-mt-2 text-sm text-muted-foreground">
+                  {preset.tokenHint}
+                  {preset.tokenURL && (
+                    <>
+                      {' '}
+                      <a
+                        href={preset.tokenURL}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                      >
+                        Create one on GitHub →
+                      </a>
+                    </>
                   )}
-                  {isImap && (
-                    <p className="mt-1.5 text-sm text-muted-foreground">
-                      {secretDestination(defaultBackend, `${refBase}_IMAP_PASSWORD`)}
-                    </p>
-                  )}
-                  {isCalDAV && (
-                    <p className="mt-1.5 text-sm text-muted-foreground">
-                      {secretDestination(defaultBackend, `${refBase}_CALDAV_PASSWORD`)}
-                    </p>
-                  )}
-                </>
+                </p>
               )}
-            </div>
 
-            <div
-              className={
-                'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
-                (tested
-                  ? 'border-good/30 bg-good-soft text-good'
-                  : test && !test.ok
-                    ? 'border-destructive/30 bg-destructive/5 text-destructive'
-                    : 'border-border bg-muted/40 text-muted-foreground')
-              }
-            >
-              <span className="min-w-0 flex-1 font-medium">
-                {busy
-                  ? 'Testing connection…'
-                  : tested
-                    ? test?.identity
-                      ? `${connectedAs(test.identity)}, ${test.identity.scopes}.`
-                      : 'Connection OK, tools are servable.'
-                    : test && !test.ok
-                      ? `Connection failed: ${test.error}. The connector was saved disabled, fix and retry.`
-                      : 'Not tested yet, run a test before adding.'}
-              </span>
-              <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
-                {busy ? 'Testing…' : 'Test connection'}
-              </Button>
-            </div>
+              {testState === 'gate' ? (
+                <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+                  <span className="min-w-0 flex-1 font-medium">Not tested yet, run a test before adding.</span>
+                  <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
+                    Test connection
+                  </Button>
+                </div>
+              ) : (
+                <TestStatus
+                  state={testState as 'testing' | 'ok' | 'failed'}
+                  message={
+                    testState === 'testing'
+                      ? 'Testing connection…'
+                      : testState === 'ok'
+                        ? test?.identity
+                          ? `${connectedAs(test.identity)}, ${test.identity.scopes}.`
+                          : 'Connection OK, tools are servable.'
+                        : `Connection failed: ${test?.error}. The connector was saved disabled, fix and retry.`
+                  }
+                  action={
+                    testState !== 'testing' && (
+                      <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
+                        Test connection
+                      </Button>
+                    )
+                  }
+                />
+              )}
+            </>
+          )}
+        </FieldGroup>
 
-            <div className="flex gap-3 pt-2">
-              <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/connectors')}>
-                Cancel
-              </Button>
-              <Button disabled={!tested || busy} onClick={() => void submit()}>
-                Add connector
-              </Button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+        <FormActions>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => navigate('/settings/connectors')}
+          >
+            Cancel
+          </Button>
+          {isOAuth ? (
+            <Button disabled={!canSubmitOAuth || busy} onClick={() => void submitOAuth()}>
+              {busy ? 'Redirecting…' : `Save & connect ${oauthProviderLabel}`}
+            </Button>
+          ) : (
+            <Button disabled={!tested || busy} onClick={() => void submit()}>
+              Add connector
+            </Button>
+          )}
+        </FormActions>
+      </Form>
+    </PageShell>
   )
 }

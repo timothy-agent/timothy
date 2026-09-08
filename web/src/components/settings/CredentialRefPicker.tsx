@@ -1,11 +1,16 @@
+import { Eye, EyeOff } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { listSecretRefs, type SecretRefEntry } from '../../api/client'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { Field } from './shared'
+import { Input } from '../ui/input'
+import { IconButton } from '../timothy/icon-button'
+import { SegmentedControl } from '../timothy/segmented-control'
+import { Field } from '../timothy/field'
+import { secretDestination } from './util'
 
 export type CredentialMode = 'new' | 'existing'
 
-// referentLabel renders a ref's used-by hint for the option label — no
+// referentLabel renders a ref's used-by hint for the option label, no
 // type-classification of secrets, just what already references it.
 function referentLabel(ref: SecretRefEntry): string {
   const refs = ref.referenced_by ?? []
@@ -18,14 +23,14 @@ function referentLabel(ref: SecretRefEntry): string {
 // connector's derived signing key.
 function managedRoleSuffix(ref: SecretRefEntry): string | null {
   const refs = ref.referenced_by ?? []
-  if (refs.some((r) => r.role === 'oauth_tokens')) return ' — OAuth tokens (managed by connector)'
-  if (refs.some((r) => r.role === 'signing_key')) return ' — signing key (managed)'
+  if (refs.some((r) => r.role === 'oauth_tokens')) return ' - OAuth tokens (managed by connector)'
+  if (refs.some((r) => r.role === 'signing_key')) return ' - signing key (managed)'
   return null
 }
 
 // ModeToggle is the segmented "New credential" / "Use existing"
 // control shared by every form offering credential reuse.
-export function CredentialModeToggle({
+function CredentialModeToggle({
   mode,
   onChange,
   labels,
@@ -38,20 +43,16 @@ export function CredentialModeToggle({
   labels?: { new: string; existing: string }
 }) {
   return (
-    <div className="inline-flex rounded-lg border border-border p-0.5 text-sm">
-      {(['new', 'existing'] as const).map((m) => (
-        <button
-          key={m}
-          type="button"
-          onClick={() => onChange(m)}
-          className={`rounded-md px-2.5 py-1 font-medium transition ${
-            mode === m ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          {m === 'new' ? (labels?.new ?? 'New credential') : (labels?.existing ?? 'Use existing')}
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      value={mode}
+      onChange={(v) => onChange(v as CredentialMode)}
+      options={[
+        { value: 'new', label: labels?.new ?? 'New credential' },
+        { value: 'existing', label: labels?.existing ?? 'Use existing' },
+      ]}
+      size="sm"
+      aria-label="Credential source"
+    />
   )
 }
 
@@ -75,7 +76,7 @@ export function ExistingCredentialSelect({
 
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="mt-1.5 h-10 w-full" aria-label="existing credential">
+      <SelectTrigger className="w-full" aria-label="existing credential">
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
@@ -93,37 +94,72 @@ export function ExistingCredentialSelect({
   )
 }
 
-// CredentialRefField pairs the mode toggle with either the caller's own
-// "new credential" fields (children) or the existing-ref picker —
-// choosing existing sets credential_ref to that name; the caller skips
-// its own secret PUT on submit whenever mode is "existing".
-export function CredentialRefField({
+// CredentialField pairs the mode SegmentedControl with either a
+// write-only new-secret password input (reveal toggle, secretDestination
+// caption) or the existing-ref picker. Choosing existing sets
+// credential_ref to that name and the caller skips its own secret write
+// on submit.
+export function CredentialField({
   label,
   mode,
   onModeChange,
   existingRef,
   onExistingRefChange,
-  children,
+  secretValue,
+  onSecretValueChange,
+  secretPlaceholder,
+  defaultBackend,
+  refName,
+  modeLabels,
+  invalid,
 }: {
   label: string
   mode: CredentialMode
   onModeChange: (mode: CredentialMode) => void
   existingRef: string
   onExistingRefChange: (refName: string) => void
-  children: React.ReactNode
+  secretValue: string
+  onSecretValueChange: (v: string) => void
+  secretPlaceholder?: string
+  defaultBackend: string
+  refName: string
+  modeLabels?: { new: string; existing: string }
+  invalid?: boolean
 }) {
+  const [revealed, setRevealed] = useState(false)
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium text-foreground">{label}</span>
-        <CredentialModeToggle mode={mode} onChange={onModeChange} />
+        <CredentialModeToggle mode={mode} onChange={onModeChange} labels={modeLabels} />
       </div>
       {mode === 'existing' ? (
         <Field label="Existing credential">
           <ExistingCredentialSelect value={existingRef} onChange={onExistingRefChange} />
         </Field>
       ) : (
-        children
+        <div className="space-y-1.5">
+          <div className="flex gap-2">
+            <Input
+              type={revealed ? 'text' : 'password'}
+              value={secretValue}
+              onChange={(e) => onSecretValueChange(e.target.value)}
+              placeholder={secretPlaceholder}
+              aria-label={label}
+              autoComplete="off"
+              aria-invalid={invalid || undefined}
+            />
+            <IconButton
+              label={revealed ? 'Hide token' : 'Show token'}
+              icon={revealed ? EyeOff : Eye}
+              variant="outline"
+              tooltip={false}
+              onClick={() => setRevealed((v) => !v)}
+            />
+          </div>
+          <p className="text-sm text-muted-foreground">{secretDestination(defaultBackend, refName)}</p>
+        </div>
       )}
     </div>
   )

@@ -24,7 +24,7 @@ import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
 import { SettingsDialog } from './components/SettingsDialog'
 import { ConnectorLogoSprite } from './components/settings/ConnectorLogo'
-import { LogoSprite } from './components/settings/ProviderLogo'
+import { LogoSprite } from './components/timothy/provider-logo'
 import {
   CommandDialog,
   CommandEmpty,
@@ -72,6 +72,7 @@ import { Missions } from './pages/Missions'
 import { NewMission } from './pages/NewMission'
 import { Research } from './pages/Research'
 import { Settings, settingsAreas } from './pages/Settings'
+import { DesignSystem } from './pages/DesignSystem'
 
 // Analytics pulls in ECharts (a large dependency), so it stays a
 // lazily-loaded chunk rather than bundling into the initial app load.
@@ -102,15 +103,11 @@ function isActive(pathname: string, href: string): boolean {
 }
 
 // breadcrumbFor turns the current path into the header's breadcrumb
-// trail — static per top-level page, with a "Settings / <area>" split
-// for the one section that has sub-pages.
+// trail, static per top-level page. Settings sub-pages render their
+// own breadcrumb trail in their own PageHeader, so this stays a flat
+// single crumb like every other top-level page.
 function breadcrumbFor(pathname: string): string[] {
   const match = nav.find((n) => isActive(pathname, n.href))
-  if (pathname.startsWith('/settings/')) {
-    const key = pathname.split('/')[2]
-    const area = settingsAreas.find((a) => a.key === key)
-    if (area) return ['Settings', area.label]
-  }
   return [match?.label ?? 'Timothy']
 }
 
@@ -135,14 +132,11 @@ function AppSidebar({
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const { state: sidebarState, isMobile } = useSidebar()
-  // Settings starts expanded whenever we're already on a settings
-  // route (deep link or in-app nav), and stays however the user last
-  // toggled it otherwise — same "sticky until touched" feel as the
-  // rest of the sidebar's collapse state.
+  // Settings starts expanded when the app loads into a settings route
+  // (deep link or a fresh load), then stays however the user toggles
+  // it from there, same "sticky until touched" feel as the rest of
+  // the sidebar's collapse state.
   const [settingsOpen, setSettingsOpen] = useState(() => pathname.startsWith('/settings'))
-  useEffect(() => {
-    if (pathname.startsWith('/settings')) setSettingsOpen(true)
-  }, [pathname])
   // Icon-collapsed mode hides the submenu entirely (no room for it),
   // so a click there jumps straight to the first area instead of
   // toggling an invisible expand state.
@@ -171,6 +165,7 @@ function AppSidebar({
                     <SidebarMenuButton
                       isActive={isActive(pathname, item.href)}
                       tooltip={item.label}
+                      aria-expanded={iconCollapsed ? undefined : settingsOpen}
                       onClick={() =>
                         iconCollapsed
                           ? navigate(`/settings/${settingsAreas[0].key}`)
@@ -466,7 +461,7 @@ function App() {
                 <Route
                   path="/chat/:id?"
                   element={
-                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-8">
+                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
                       <Chat onNeedToken={openToken} />
                     </div>
                   }
@@ -474,7 +469,7 @@ function App() {
                 <Route
                   path="/research/:id?"
                   element={
-                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-8">
+                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
                       <Research onNeedToken={openToken} />
                     </div>
                   }
@@ -507,6 +502,7 @@ function App() {
                 <Route path="/settings/*" element={<Settings />} />
                 {/* Old bookmark: Settings lived at one page with ?tab= before sub-routes. */}
                 <Route path="/settings" element={<Navigate to="/settings/providers" replace />} />
+                <Route path="/design" element={<DesignSystem />} />
               </Routes>
             </div>
             <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />

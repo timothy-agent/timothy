@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminProvider, ProviderHealth } from '../../api/types'
+import type { AdminProvider, ProviderHealth, TestResult } from '../../api/types'
 import { ProvidersList } from './ProvidersList'
 
 vi.mock('../../api/client', () => ({
@@ -13,7 +13,7 @@ vi.mock('../../api/client', () => ({
   testProvider: vi.fn(),
 }))
 
-import { catalogStatus, listProviders, providersHealth, refreshCatalog } from '../../api/client'
+import { catalogStatus, listProviders, providersHealth, refreshCatalog, testProvider } from '../../api/client'
 
 const apiProvider: AdminProvider = {
   id: 'p1',
@@ -102,6 +102,25 @@ describe('ProvidersList cli row rendering', () => {
 
     await waitFor(() => expect(screen.getByText('healthy')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Test' })).toBeInTheDocument()
+  })
+
+  it('running Test shows Testing…, then renders the probe result and hides Test until idle again', async () => {
+    vi.mocked(listProviders).mockResolvedValue([apiProvider])
+    vi.mocked(providersHealth).mockResolvedValue([
+      { name: 'OpenAI', enabled: true, healthy: true } as ProviderHealth,
+    ])
+    let resolve!: (v: TestResult) => void
+    vi.mocked(testProvider).mockReturnValue(new Promise<TestResult>((r) => (resolve = r)))
+    renderPage()
+
+    const testButton = await screen.findByRole('button', { name: 'Test' })
+    fireEvent.click(testButton)
+
+    expect(await screen.findByRole('button', { name: 'Testing…' })).toBeDisabled()
+
+    resolve({ ok: true, latency_ms: 12, model: 'gpt-4o-mini' })
+    expect(await screen.findByText(/^OK,/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Test' })).not.toBeDisabled()
   })
 })
 

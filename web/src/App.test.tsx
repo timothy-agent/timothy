@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { acknowledgeNeedToken } from './api/client'
@@ -67,26 +67,33 @@ describe('Legacy edit schedule route', () => {
 describe('Settings sidebar submenu', () => {
   it('starts expanded and highlights the active area on a settings route', async () => {
     renderAt('/settings/secrets')
-    const providersLink = await screen.findByRole('link', { name: 'Providers' })
-    const secretsLink = screen.getByRole('link', { name: 'Secrets' })
+    const sidebar = document.querySelector('[data-sidebar="sidebar"]') as HTMLElement
+    const providersLink = await within(sidebar).findByRole('link', { name: 'Providers' })
+    const secretsLink = within(sidebar).getByRole('link', { name: 'Secrets' })
     expect(secretsLink.getAttribute('data-active')).toBe('true')
     expect(providersLink.getAttribute('data-active')).toBe('false')
   })
 
   it('collapses and expands on click without navigating away', async () => {
     renderAt('/settings/providers')
-    await screen.findByRole('link', { name: 'Providers' })
+    const sidebar = document.querySelector('[data-sidebar="sidebar"]') as HTMLElement
+    await within(sidebar).findByRole('link', { name: 'Providers' })
+    const settingsButton = within(sidebar).getByRole('button', { name: 'Settings' })
+    expect(settingsButton.getAttribute('aria-expanded')).toBe('true')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    expect(screen.queryByRole('link', { name: 'Providers' })).toBeNull()
+    fireEvent.click(settingsButton)
+    expect(within(sidebar).queryByRole('link', { name: 'Providers' })).toBeNull()
+    expect(settingsButton.getAttribute('aria-expanded')).toBe('false')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    expect(await screen.findByRole('link', { name: 'Providers' })).toBeTruthy()
+    fireEvent.click(settingsButton)
+    expect(await within(sidebar).findByRole('link', { name: 'Providers' })).toBeTruthy()
+    expect(settingsButton.getAttribute('aria-expanded')).toBe('true')
   })
 
   it('is collapsed by default off a settings route', () => {
     renderAt('/memory')
-    expect(screen.queryByRole('link', { name: 'Providers' })).toBeNull()
+    const sidebar = document.querySelector('[data-sidebar="sidebar"]') as HTMLElement
+    expect(within(sidebar).queryByRole('link', { name: 'Providers' })).toBeNull()
   })
 })
 

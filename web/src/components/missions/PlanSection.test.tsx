@@ -28,7 +28,10 @@ describe('PlanSection', () => {
     expect(screen.getByText('harness-verified')).toBeInTheDocument()
     const pending = screen.getAllByText('pending')
     expect(pending).toHaveLength(2)
-    expect(pending[0]).toHaveAttribute('title', 'a.md: not found')
+    expect(screen.getByText('regressed: passed before, now fails').closest('div[title]')).toHaveAttribute(
+      'title',
+      'a.md: not found',
+    )
     expect(screen.getByText('regressed: passed before, now fails')).toBeInTheDocument()
     expect(screen.queryByText('verified')).toBeNull()
     expect(screen.queryByText('regressed')).toBeNull()

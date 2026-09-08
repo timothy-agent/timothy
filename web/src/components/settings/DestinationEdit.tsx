@@ -1,7 +1,7 @@
-import { ArrowLeft01Icon, Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
+import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   deleteDestination,
@@ -12,47 +12,124 @@ import {
   testDestination,
 } from '../../api/client'
 import type { AdminConnector, Destination } from '../../api/types'
-import {
-  COMMIT_STYLE_DEFAULT,
-  ON_COMPLETE_NONE,
-  commitStyleChoices,
-  onCompleteChoices,
-} from '../../lib/githubDestination'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
-import { Input } from '../ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
-import { Field, Toggle } from './shared'
-import { errText } from './util'
+import { Switch } from '../ui/switch'
+import { Alert, AlertDescription } from '../ui/alert'
+import { ConfirmDialog } from '../timothy/confirm-dialog'
+import { FieldGroup, Form, FormActions } from '../timothy/field'
+import { Panel } from '../timothy/panel'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
+import { CredentialField, type CredentialMode } from './CredentialRefPicker'
+import { DestinationKindFields, type DestinationKindValues } from './DestinationKindFields'
+import { settingsArea } from './settingsAreas'
+import { TestStatus } from './TestStatus'
+import { useDefaultSecretBackend } from './useDefaultSecretBackend'
+import { useStagedForm } from './useStagedForm'
+import { errText } from '../../lib/errors'
 
+const area = settingsArea('destinations')
+
+function valuesFrom(destination: Destination): DestinationKindValues {
+  return {
+    connectorID: String(destination.config.connector_id ?? ''),
+    to: String(destination.config.to ?? ''),
+    url: String(destination.config.url ?? ''),
+    format: (destination.config.format as 'json' | 'text') ?? 'json',
+    chatID: String(destination.config.chat_id ?? ''),
+    mode: (destination.config.mode as 'push' | 'push_pr') ?? 'push',
+    branchPattern: String(destination.config.branch_pattern ?? ''),
+    commitStyle: String(destination.config.commit_style ?? ''),
+    createIfMissing: Boolean(destination.config.create_if_missing),
+  }
+}
+
+// buildConfig builds the destination's config PATCH body from the
+// staged kind fields, same shape the old per-kind config builders sent.
+function buildConfig(destination: Destination, values: DestinationKindValues): Record<string, unknown> {
+  if (destination.kind === 'email') return { connector_id: values.connectorID, to: values.to.trim() }
+  if (destination.kind === 'telegram') return { chat_id: values.chatID.trim() }
+  if (destination.kind === 'github') {
+    return {
+      connector_id: values.connectorID,
+      mode: values.mode,
+      branch_pattern: values.branchPattern.trim() || undefined,
+      commit_style: values.commitStyle || undefined,
+      create_if_missing: values.createIfMissing || undefined,
+    }
+  }
+  return { url: values.url.trim(), format: values.format }
+}
+
+// DestinationEdit loads the destination, then hands off to
+// DestinationEditForm keyed by its id: a fresh mount per destination so
+// useStagedForm's baseline is never initialized from a placeholder
+// before the real data arrives.
 export function DestinationEdit() {
   const { id } = useParams()
-  const navigate = useNavigate()
-
   const [destination, setDestination] = useState<Destination | null | undefined>(undefined)
   const [connectors, setConnectors] = useState<AdminConnector[]>([])
+
+  const refresh = useCallback(() => {
+    return listDestinations()
+      .then((list) => {
+        const found = list.find((d) => d.id === id) ?? null
+        setDestination(found)
+        return found
+      })
+      .catch((err: unknown) => {
+        toast.error('Could not load destination', { description: errText(err) })
+        return undefined
+      })
+  }, [id])
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  useEffect(() => {
+    listConnectors()
+      .then((rows) => setConnectors(rows.filter((c) => (c.kind === 'google' || c.kind === 'github') && c.enabled)))
+      .catch(() => {
+        // Non-fatal: the connector select just shows the currently
+        // stored id with no friendly name if this fails.
+      })
+  }, [])
+
+  if (destination === null) return <Navigate to="/settings/destinations" replace />
+  if (destination === undefined) return null
+
+  return (
+    <DestinationEditForm
+      key={destination.id}
+      initialDestination={destination}
+      connectors={connectors}
+      refresh={refresh}
+    />
+  )
+}
+
+function DestinationEditForm({
+  initialDestination,
+  connectors,
+  refresh,
+}: {
+  initialDestination: Destination
+  connectors: AdminConnector[]
+  refresh: () => Promise<Destination | null | undefined>
+}) {
+  const navigate = useNavigate()
+  const defaultBackend = useDefaultSecretBackend()
+
+  const [destination, setDestinationState] = useState(initialDestination)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null)
   const [testing, setTesting] = useState(false)
 
-  // Editable config fields, seeded from the loaded destination.
-  const [to, setTo] = useState('')
-  const [connectorID, setConnectorID] = useState('')
-  const [url, setURL] = useState('')
-  const [format, setFormat] = useState<'json' | 'text'>('json')
-  const [chatID, setChatID] = useState('')
-  const [mode, setMode] = useState<'push' | 'push_pr'>('push')
-  const [branchPattern, setBranchPattern] = useState('')
-  const [commitStyle, setCommitStyle] = useState('')
-  const [createIfMissing, setCreateIfMissing] = useState(false)
-  const [savingConfig, setSavingConfig] = useState(false)
+  const staged = useStagedForm<DestinationKindValues>(valuesFrom(initialDestination))
+  const setField = <K extends keyof DestinationKindValues>(key: K, value: DestinationKindValues[K]) =>
+    staged.setField(key, value)
 
   // Rotating the bot token is a separate save from the rest of the
   // config: it writes credential_ref's value, not config.
@@ -61,44 +138,29 @@ export function DestinationEdit() {
   const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
   const [savingToken, setSavingToken] = useState(false)
 
-  const refresh = useCallback(() => {
-    listDestinations()
-      .then((list) => {
-        const found = list.find((d) => d.id === id) ?? null
-        setDestination(found)
-        if (found?.kind === 'email') {
-          setConnectorID(String(found.config.connector_id ?? ''))
-          setTo(String(found.config.to ?? ''))
-        } else if (found?.kind === 'webhook') {
-          setURL(String(found.config.url ?? ''))
-          setFormat((found.config.format as 'json' | 'text') ?? 'json')
-        } else if (found?.kind === 'telegram') {
-          setChatID(String(found.config.chat_id ?? ''))
-        } else if (found?.kind === 'github') {
-          setConnectorID(String(found.config.connector_id ?? ''))
-          setMode((found.config.mode as 'push' | 'push_pr') ?? 'push')
-          setBranchPattern(String(found.config.branch_pattern ?? ''))
-          setCommitStyle(String(found.config.commit_style ?? ''))
-          setCreateIfMissing(Boolean(found.config.create_if_missing))
-        }
-      })
-      .catch((err: unknown) => toast.error('Could not load destination', { description: errText(err) }))
-  }, [id])
-  useEffect(refresh, [refresh])
+  const doRefresh = useCallback(async () => {
+    const refetched = await refresh()
+    if (refetched) setDestinationState(refetched)
+    return refetched
+  }, [refresh])
 
-  useEffect(() => {
-    listConnectors()
-      .then((rows) =>
-        setConnectors(rows.filter((c) => (c.kind === 'google' || c.kind === 'github') && c.enabled)),
-      )
-      .catch(() => {
-        // Non-fatal: the connector select just shows the currently
-        // stored id with no friendly name if this fails.
-      })
-  }, [])
+  const save = useCallback(async () => {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const config = buildConfig(destination, staged.values)
+      await patchDestination(destination.id, { config })
+      toast.success('Destination updated')
+      const refetched = await doRefresh()
+      if (refetched) staged.rebase(valuesFrom(refetched))
+    } catch (err) {
+      setSaveError(errText(err))
+    } finally {
+      setSaving(false)
+    }
+  }, [destination, doRefresh, staged])
 
   const remove = async () => {
-    if (!destination) return
     try {
       await deleteDestination(destination.id)
       toast.success('Destination removed')
@@ -110,7 +172,6 @@ export function DestinationEdit() {
   }
 
   const runTest = async () => {
-    if (!destination) return
     setTesting(true)
     setTest(null)
     try {
@@ -123,44 +184,14 @@ export function DestinationEdit() {
   }
 
   const toggleEnabled = (enabled: boolean) => {
-    if (!destination) return
     patchDestination(destination.id, { enabled })
-      .then(refresh)
+      .then(() => void doRefresh())
       .catch((err: unknown) => toast.error('Could not update destination', { description: errText(err) }))
-  }
-
-  const saveConfig = async () => {
-    if (!destination) return
-    setSavingConfig(true)
-    try {
-      const config =
-        destination.kind === 'email'
-          ? { connector_id: connectorID, to: to.trim() }
-          : destination.kind === 'telegram'
-            ? { chat_id: chatID.trim() }
-            : destination.kind === 'github'
-              ? {
-                  connector_id: connectorID,
-                  mode,
-                  branch_pattern: branchPattern.trim() || undefined,
-                  commit_style: commitStyle || undefined,
-                  create_if_missing: createIfMissing || undefined,
-                }
-              : { url: url.trim(), format }
-      await patchDestination(destination.id, { config })
-      toast.success('Destination updated')
-      refresh()
-    } catch (err) {
-      toast.error('Could not update destination', { description: errText(err) })
-    } finally {
-      setSavingConfig(false)
-    }
   }
 
   const usingExistingBotToken = botTokenMode === 'existing'
 
   const saveBotToken = async () => {
-    if (!destination) return
     setSavingToken(true)
     try {
       const ref = usingExistingBotToken ? existingBotTokenRef : destination.credential_ref
@@ -168,7 +199,7 @@ export function DestinationEdit() {
       await patchDestination(destination.id, { credential_ref: ref })
       toast.success('Bot token updated')
       setBotToken('')
-      refresh()
+      void doRefresh()
     } catch (err) {
       toast.error('Could not update bot token', { description: errText(err) })
     } finally {
@@ -176,258 +207,131 @@ export function DestinationEdit() {
     }
   }
 
-  if (destination === null) return <Navigate to="/settings/destinations" replace />
-  if (destination === undefined) return null
-
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/destinations"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Destinations
-      </Link>
+    <PageShell width="form">
+      <PageHeader
+        title={destination.name}
+        description={destination.kind}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/destinations' },
+          { label: destination.name },
+        ]}
+        actions={
+          <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+            <HugeiconsIcon icon={Delete02Icon} />
+            Delete
+          </Button>
+        }
+      />
 
-      <div className="flex items-center gap-4 border-b border-border pb-6">
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-xl font-semibold tracking-tight">{destination.name}</h1>
-          <p className="text-sm text-muted-foreground uppercase">{destination.kind}</p>
+      <div className="mb-8 flex items-center justify-between gap-4 rounded-md border border-border p-4">
+        <div className="min-w-0">
+          <div className="text-sm font-medium">Enabled</div>
+          <p className="text-sm text-muted-foreground">
+            Disabled destinations are skipped by mission delivery without an error.
+          </p>
         </div>
-        <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
-          <HugeiconsIcon icon={Delete02Icon} />
-          Delete
-        </Button>
+        <Switch checked={destination.enabled} onCheckedChange={toggleEnabled} aria-label={`${destination.name} enabled`} />
       </div>
 
-      <div className="grid max-w-3xl gap-5">
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
-          <div className="min-w-0">
-            <div className="text-sm font-medium">Enabled</div>
-            <p className="text-sm text-muted-foreground">
-              Disabled destinations are skipped by mission delivery without an error.
-            </p>
-          </div>
-          <Toggle on={destination.enabled} onChange={toggleEnabled} label={`${destination.name} enabled`} />
-        </div>
+      <Form
+        onSubmit={(e) => {
+          e.preventDefault()
+          void save()
+        }}
+      >
+        <FieldGroup>
+          <DestinationKindFields kind={destination.kind} values={staged.values} setField={setField} connectors={connectors} />
+        </FieldGroup>
 
-        {destination.kind !== 'github' && (
-          <div
-            className={
-              'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
-              (test?.ok
-                ? 'border-good/30 bg-good-soft text-good'
-                : test && !test.ok
-                  ? 'border-destructive/30 bg-destructive/5 text-destructive'
-                  : 'border-border bg-muted/40 text-muted-foreground')
-            }
-          >
-            <span className="min-w-0 flex-1 font-medium">
-              {testing
-                ? 'Sending test delivery…'
-                : test?.ok
-                  ? 'Test delivery sent.'
-                  : test && !test.ok
-                    ? `Failed: ${test.error}`
-                    : 'Not tested yet.'}
-            </span>
-            <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()}>
-              {testing ? 'Sending…' : 'Test send'}
-            </Button>
-          </div>
+        {saveError && (
+          <Alert tone="destructive">
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span>Could not save destination changes: {saveError}</span>
+              <Button type="button" size="sm" variant="outline" onClick={() => void save()}>
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
         )}
 
-        {destination.kind === 'email' ? (
-          <>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">Google connector</span>
-              <Select value={connectorID} onValueChange={setConnectorID}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Choose a connected Gmail account" />
-                </SelectTrigger>
-                <SelectContent>
-                  {connectors
-                    .filter((c) => c.kind === 'google')
-                    .map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Field label="To">
-              <Input value={to} onChange={(e) => setTo(e.target.value)} className="mt-1.5 h-10" />
-            </Field>
-          </>
-        ) : destination.kind === 'telegram' ? (
-          <>
-            <Field label="Chat ID">
-              <Input value={chatID} onChange={(e) => setChatID(e.target.value)} className="mt-1.5 h-10" />
-            </Field>
-          </>
-        ) : destination.kind === 'github' ? (
-          <>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">GitHub connector</span>
-              <Select value={connectorID} onValueChange={setConnectorID}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Choose a connected GitHub account" />
-                </SelectTrigger>
-                <SelectContent>
-                  {connectors
-                    .filter((c) => c.kind === 'github')
-                    .map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">Mode</span>
-              <Select value={mode} onValueChange={(v) => setMode(v as 'push' | 'push_pr')}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {onCompleteChoices
-                    .filter((c) => c.value !== ON_COMPLETE_NONE)
-                    .map((c) => (
-                      <SelectItem key={c.value} value={c.value}>
-                        {c.label}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Field label="Branch pattern" hint="optional">
-              <Input
-                value={branchPattern}
-                onChange={(e) => setBranchPattern(e.target.value)}
-                placeholder="Default (from settings)"
-                className="mt-1.5 h-10"
-              />
-            </Field>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">Commit style</span>
-              <Select
-                value={commitStyle || COMMIT_STYLE_DEFAULT}
-                onValueChange={(v) => setCommitStyle(v === COMMIT_STYLE_DEFAULT ? '' : v)}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {commitStyleChoices.map((c) => (
-                    <SelectItem key={c.value} value={c.value}>
-                      {c.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Create repository if missing</div>
-                <p className="text-sm text-muted-foreground">
-                  Create the repository through this connector when the mission has no target
-                  repository.
-                </p>
-              </div>
-              <Toggle
-                on={createIfMissing}
-                onChange={setCreateIfMissing}
-                label="Create repository if missing"
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <Field label="URL">
-              <Input value={url} onChange={(e) => setURL(e.target.value)} className="mt-1.5 h-10" />
-            </Field>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">Format</span>
-              <Select value={format} onValueChange={(v) => setFormat(v as 'json' | 'text')}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="json">JSON</SelectItem>
-                  <SelectItem value="text">Plain text</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </>
-        )}
-
-        <div className="flex gap-3 pt-2">
-          <Button disabled={savingConfig} onClick={() => void saveConfig()}>
-            {savingConfig ? 'Saving…' : 'Save changes'}
+        <FormActions note={staged.dirty ? 'Unsaved changes' : undefined}>
+          <Button type="button" variant="outline" disabled={saving} onClick={staged.reset}>
+            Cancel
           </Button>
-        </div>
+          <Button type="submit" disabled={!staged.dirty || saving}>
+            Save
+          </Button>
+        </FormActions>
+      </Form>
+
+      <div className="mt-10 space-y-4">
+        {destination.kind !== 'github' && (
+          <Panel title="Test send">
+            {test || testing ? (
+              <TestStatus
+                state={testing ? 'testing' : test?.ok ? 'ok' : 'failed'}
+                message={testing ? 'Sending test delivery…' : test?.ok ? 'Test delivery sent.' : `Failed: ${test?.error}`}
+                action={
+                  !testing && (
+                    <Button size="sm" variant="test" onClick={() => void runTest()}>
+                      Test send
+                    </Button>
+                  )
+                }
+              />
+            ) : (
+              <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+                <span className="min-w-0 flex-1 font-medium">Not tested yet.</span>
+                <Button size="sm" variant="test" onClick={() => void runTest()}>
+                  Test send
+                </Button>
+              </div>
+            )}
+          </Panel>
+        )}
 
         {destination.kind === 'telegram' && (
-          <div className="space-y-3 rounded-xl border border-border p-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-foreground">Rotate bot token</span>
-              <CredentialModeToggle
+          <Panel title="Rotate bot token">
+            <div className="space-y-3">
+              <CredentialField
+                label="Bot token"
                 mode={botTokenMode}
-                onChange={(m) => {
+                onModeChange={(m) => {
                   setBotTokenMode(m)
                   if (m === 'existing' && !existingBotTokenRef) setExistingBotTokenRef(destination.credential_ref)
                 }}
-                labels={{ new: 'New token', existing: 'Different credential' }}
+                existingRef={existingBotTokenRef}
+                onExistingRefChange={setExistingBotTokenRef}
+                secretValue={botToken}
+                onSecretValueChange={setBotToken}
+                secretPlaceholder="123456:ABC-DEF..."
+                defaultBackend={defaultBackend}
+                refName={destination.credential_ref}
+                modeLabels={{ new: 'New token', existing: 'Different credential' }}
               />
+              <Button
+                size="sm"
+                disabled={savingToken || (usingExistingBotToken ? !existingBotTokenRef : !botToken.trim())}
+                onClick={() => void saveBotToken()}
+              >
+                {savingToken ? 'Saving…' : 'Save token'}
+              </Button>
             </div>
-            {botTokenMode === 'existing' ? (
-              <Field label="Existing credential">
-                <ExistingCredentialSelect value={existingBotTokenRef} onChange={setExistingBotTokenRef} />
-              </Field>
-            ) : (
-              <div className="space-y-1.5">
-                <Input
-                  value={botToken}
-                  onChange={(e) => setBotToken(e.target.value)}
-                  placeholder="123456:ABC-DEF..."
-                  className="h-10"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Replaces the stored value of {destination.credential_ref}.
-                </p>
-              </div>
-            )}
-            <Button
-              size="sm"
-              disabled={savingToken || (usingExistingBotToken ? !existingBotTokenRef : !botToken.trim())}
-              onClick={() => void saveBotToken()}
-            >
-              {savingToken ? 'Saving…' : 'Save token'}
-            </Button>
-          </div>
+          </Panel>
         )}
       </div>
 
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {destination.name}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Removes the destination. Refused while any in-progress mission still delivers to it.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${destination.name}?`}
+        description="Removes the destination. Refused while any in-progress mission still delivers to it."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void remove()}
+      />
+    </PageShell>
   )
 }

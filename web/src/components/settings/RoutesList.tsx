@@ -1,7 +1,7 @@
-import { Delete02Icon, PlusSignIcon } from '@hugeicons-pro/core-stroke-rounded'
+import { PlusSignIcon } from '@hugeicons-pro/core-stroke-rounded'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import {
   createRoute,
@@ -12,11 +12,24 @@ import {
   setRouteRole,
 } from '../../api/client'
 import type { AdminProvider, AdminRoute } from '../../api/types'
+import { BrandTile } from '../timothy/brand-tile'
+import { IconButton } from '../timothy/icon-button'
+import { Panel } from '../timothy/panel'
+import { PageHeader, SectionHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
+import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { Label } from '../ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { Toggle } from './shared'
-import { errText } from './util'
+import { Switch } from '../ui/switch'
+import { EntityCard } from './EntityCard'
+import { ServingLine } from './ServingLine'
+import { settingsArea } from './settingsAreas'
+import { UNSET } from './util'
+import { errText } from '../../lib/errors'
+
+const area = settingsArea('routes')
 
 const ROLES = [
   { key: 'default', label: 'Chat (default)' },
@@ -25,14 +38,12 @@ const ROLES = [
   { key: 'summarize', label: 'Summarize' },
 ]
 const CAPABILITIES = ['chat', 'embeddings', 'vision']
-const ROLE_UNSET = '__unset__'
 
 export function RoutesList() {
   const [routes, setRoutes] = useState<AdminRoute[]>([])
   const [providers, setProviders] = useState<AdminProvider[]>([])
   const [newName, setNewName] = useState('')
   const [newCapability, setNewCapability] = useState('chat')
-  const navigate = useNavigate()
 
   const refresh = useCallback(() => {
     Promise.all([listRoutes(), listProviders()])
@@ -76,64 +87,64 @@ export function RoutesList() {
   }
 
   return (
-    <div className="mt-6 space-y-6">
-      <div className="rounded-xl border border-border p-4">
-        <div className="text-sm font-medium">System roles</div>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Timothy needs one route bound to each of these 4 roles to work. A newly connected
-          provider fills in whichever are still unbound.
-        </p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {ROLES.map((role) => {
-            const bound = routes.find((r) => r.role === role.key)
-            return (
-              <label key={role.key} className="grid gap-1 text-xs text-muted-foreground">
-                {role.label}
-                <Select
-                  value={bound?.name ?? ROLE_UNSET}
-                  onValueChange={(v) => {
-                    if (v !== ROLE_UNSET) assignRole(role.key, v)
-                  }}
-                >
-                  <SelectTrigger className="h-10 w-full" aria-label={`${role.label} route`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {!bound && <SelectItem value={ROLE_UNSET}>Unbound</SelectItem>}
-                    {routes.map((r) => (
-                      <SelectItem key={r.name} value={r.name}>
-                        {r.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
-            )
-          })}
-        </div>
-      </div>
+    <PageShell>
+      <PageHeader
+        title={area.label}
+        description={area.description}
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
+      />
+      <div className="space-y-10">
+        <Panel title="System roles" description="Timothy needs one route bound to each of these 4 roles to work. A newly connected provider fills in whichever are still unbound.">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {ROLES.map((role) => {
+              const bound = routes.find((r) => r.role === role.key)
+              return (
+                <div key={role.key} className="space-y-2">
+                  <Label htmlFor={`role-${role.key}`}>{role.label}</Label>
+                  <Select
+                    value={bound?.name ?? UNSET}
+                    onValueChange={(v) => {
+                      if (v !== UNSET) assignRole(role.key, v)
+                    }}
+                  >
+                    <SelectTrigger id={`role-${role.key}`} className="w-full" aria-label={`${role.label} route`}>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {!bound && <SelectItem value={UNSET}>Unbound</SelectItem>}
+                      {routes.map((r) => (
+                        <SelectItem key={r.name} value={r.name}>
+                          {r.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )
+            })}
+          </div>
+        </Panel>
 
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <p className="text-sm text-muted-foreground">
-            Routes are named model chains agents route through, reorder providers within a route
-            or add fallbacks from its own page.
-          </p>
-          <div className="flex items-end gap-2">
-            <label className="grid gap-1 text-xs text-muted-foreground">
-              New route name
+        <section className="space-y-4">
+          <SectionHeader
+            title={routes.length > 0 ? `Your routes · ${routes.length}` : 'Your routes'}
+            description="Routes are named model chains agents route through, reorder providers within a route or add fallbacks from its own page."
+          />
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="space-y-2">
+              <Label htmlFor="new-route-name">New route name</Label>
               <Input
+                id="new-route-name"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="my-route"
-                className="h-10 w-40"
-                aria-label="New route name"
+                className="w-40"
               />
-            </label>
-            <label className="grid gap-1 text-xs text-muted-foreground">
-              Capability
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="new-route-capability">Capability</Label>
               <Select value={newCapability} onValueChange={setNewCapability}>
-                <SelectTrigger className="h-10 w-32" aria-label="New route capability">
+                <SelectTrigger id="new-route-capability" className="w-32" aria-label="New route capability">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -144,84 +155,81 @@ export function RoutesList() {
                   ))}
                 </SelectContent>
               </Select>
-            </label>
+            </div>
             <Button onClick={create} disabled={!newName.trim()}>
               <HugeiconsIcon icon={PlusSignIcon} className="size-4" />
               Add route
             </Button>
           </div>
-        </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {routes.map((r) => {
-            // The router's own verdict: first usable entry in try order.
-            const serving = r.serving
-            return (
-              <div
-                key={r.name}
-                className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 text-left shadow-sm transition hover:shadow-md"
-              >
-                <button
-                  type="button"
-                  onClick={() => navigate(`/settings/routes/${r.name}`)}
-                  className="flex items-center gap-3 text-left"
-                >
-                  <span className="truncate text-sm font-semibold">{r.name}</span>
-                  {r.role && (
-                    <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-xs font-medium text-blue-600 dark:text-blue-400">
-                      {r.role}
-                    </span>
-                  )}
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-xs font-medium capitalize text-muted-foreground">
-                    {r.strategy || 'ordered'}
-                  </span>
-                  <span className="ml-auto flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                    <Toggle on={r.enabled} onChange={(v) => toggle(r, v)} label={`${r.name} route enabled`} />
-                    <button
-                      type="button"
-                      onClick={() => remove(r)}
-                      disabled={!!r.role}
-                      title={r.role ? `Serves the ${r.role} role, reassign that role first` : 'Delete route'}
-                      aria-label={`Delete ${r.name} route`}
-                      className="rounded p-1 text-muted-foreground hover:text-red-600 disabled:opacity-30 disabled:hover:text-muted-foreground"
-                    >
-                      <HugeiconsIcon icon={Delete02Icon} className="size-4" />
-                    </button>
-                  </span>
-                </button>
-                {serving ? (
-                  <p className="text-xs text-muted-foreground">
-                    serving <span className="text-foreground">{nameOf(serving.provider_id)}</span> /{' '}
-                    <span className="font-mono text-foreground">{serving.model}</span>
-                  </p>
-                ) : !r.enabled ? (
-                  <p className="text-xs font-medium text-warning">disabled</p>
-                ) : r.resolved ? (
-                  <p className="text-xs font-medium text-warning">no usable provider</p>
-                ) : (
-                  <p className="text-xs text-muted-foreground">stats loading…</p>
-                )}
-                {r.chain.length > 0 ? (
-                  <ol className="space-y-0.5 text-xs text-muted-foreground">
-                    {r.chain.map((c, i) => (
-                      <li key={`${c.provider_id}-${c.model}-${i}`} className="truncate">
-                        {i + 1}. {nameOf(c.provider_id)} /{' '}
-                        {/* An empty entry model follows the provider's default;
-                            show what the router actually resolved it to. */}
-                        <span className="font-mono" title={c.model ? undefined : 'provider default'}>
-                          {c.model || r.resolved?.[i]?.model || ''}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p className="text-xs text-muted-foreground">no providers in chain</p>
-                )}
-              </div>
-            )
-          })}
-        </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {routes.map((r) => (
+              <RouteCard key={r.name} route={r} nameOf={nameOf} onToggle={(v) => toggle(r, v)} onDelete={() => remove(r)} />
+            ))}
+          </div>
+        </section>
       </div>
-    </div>
+    </PageShell>
+  )
+}
+
+function RouteCard({
+  route: r,
+  nameOf,
+  onToggle,
+  onDelete,
+}: {
+  route: AdminRoute
+  nameOf: (id: string) => string
+  onToggle: (v: boolean) => void
+  onDelete: () => void
+}) {
+  return (
+    <EntityCard
+      to={`/settings/routes/${r.name}`}
+      title={r.name}
+      tile={<BrandTile size="sm" />}
+      badges={
+        <>
+          {r.role && <Badge variant="brand">{r.role}</Badge>}
+          <Badge variant="neutral" className="capitalize">
+            {r.strategy || 'ordered'}
+          </Badge>
+        </>
+      }
+      summary={<ServingLine route={r} nameOf={nameOf} />}
+      status={
+        r.chain.length > 0 ? (
+          <ol className="space-y-0.5 text-xs text-muted-foreground">
+            {r.chain.map((c, i) => (
+              <li key={`${c.provider_id}-${c.model}-${i}`} className="truncate">
+                {i + 1}. {nameOf(c.provider_id)} /{' '}
+                {/* An empty entry model follows the provider's default;
+                    show what the router actually resolved it to. */}
+                <span className="font-mono" title={c.model ? undefined : 'provider default'}>
+                  {c.model || r.resolved?.[i]?.model || ''}
+                </span>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="text-xs text-muted-foreground">no providers in chain</p>
+        )
+      }
+      footer={
+        <>
+          <Switch checked={r.enabled} onCheckedChange={onToggle} aria-label={`${r.name} route enabled`} />
+          <IconButton
+            label={r.role ? `Serves the ${r.role} role, reassign that role first` : `Delete ${r.name} route`}
+            icon={Trash2}
+            variant="ghost"
+            size="sm"
+            disabled={!!r.role}
+            onClick={onDelete}
+            className="ml-auto"
+          />
+        </>
+      }
+    />
   )
 }

@@ -1,63 +1,59 @@
-import { ArrowLeft01Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
 import { useEffect, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { createDestination, listConnectors, patchDestination, setSecret, testDestination } from '../../api/client'
 import type { AdminConnector } from '../../api/types'
-import {
-  COMMIT_STYLE_DEFAULT,
-  ON_COMPLETE_NONE,
-  commitStyleChoices,
-  onCompleteChoices,
-} from '../../lib/githubDestination'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
-import { Field, Toggle } from './shared'
-import { errText } from './util'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
+import { Field, FieldGroup, Form, FormActions } from '../timothy/field'
+import { CredentialField, type CredentialMode } from './CredentialRefPicker'
+import { DestinationKindFields, type DestinationKindValues } from './DestinationKindFields'
+import { settingsArea } from './settingsAreas'
+import { TestStatus } from './TestStatus'
+import { useDefaultSecretBackend } from './useDefaultSecretBackend'
+import { errText } from '../../lib/errors'
+import { slugify } from '../../lib/slugify'
 
-function slugify(v: string): string {
-  return v
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
+const area = settingsArea('destinations')
 
-// DestinationAdd is kind-aware (email vs webhook vs telegram) and its
-// own page, mirroring ConnectorAdd's shape: the destination row is
-// created (disabled) as part of testing, and a passing test enables
-// it.
+// DestinationAdd is kind-aware (email vs webhook vs telegram vs github)
+// and its own page, mirroring ConnectorAdd's shape: the destination row
+// is created (disabled) as part of testing, and a passing test enables
+// it. GitHub has no test-send affordance, so it creates enabled
+// directly.
 export function DestinationAdd() {
   const { kind } = useParams<{ kind: 'email' | 'webhook' | 'telegram' | 'github' }>()
   const navigate = useNavigate()
+  const defaultBackend = useDefaultSecretBackend()
 
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; error?: string } | null>(null)
   const [createdID, setCreatedID] = useState<string | null>(null)
 
-  // email fields
   const [connectors, setConnectors] = useState<AdminConnector[] | null>(null)
-  const [connectorID, setConnectorID] = useState('')
-  const [to, setTo] = useState('')
+  const [values, setValues] = useState<DestinationKindValues>({
+    connectorID: '',
+    to: '',
+    url: '',
+    format: 'json',
+    chatID: '',
+    mode: 'push',
+    branchPattern: '',
+    commitStyle: '',
+    createIfMissing: false,
+  })
+  const setField = <K extends keyof DestinationKindValues>(key: K, value: DestinationKindValues[K]) => {
+    setValues((prev) => ({ ...prev, [key]: value }))
+    invalidate()
+  }
 
-  // webhook fields
-  const [url, setURL] = useState('')
-  const [format, setFormat] = useState<'json' | 'text'>('json')
-
-  // telegram fields
-  const [chatID, setChatID] = useState('')
+  // telegram bot token
   const [botToken, setBotToken] = useState('')
   const [botTokenMode, setBotTokenMode] = useState<CredentialMode>('new')
   const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
-
-  // github fields (reuses connectorID above for the picked connector)
-  const [mode, setMode] = useState<'push' | 'push_pr'>('push')
-  const [branchPattern, setBranchPattern] = useState('')
-  const [commitStyle, setCommitStyle] = useState('')
-  const [createIfMissing, setCreateIfMissing] = useState(false)
 
   useEffect(() => {
     if (kind !== 'email' && kind !== 'github') return
@@ -71,7 +67,7 @@ export function DestinationAdd() {
     return <Navigate to="/settings/destinations" replace />
   }
 
-  const invalidate = () => {
+  function invalidate() {
     setTest(null)
     setCreatedID(null)
   }
@@ -82,28 +78,28 @@ export function DestinationAdd() {
 
   const config =
     kind === 'email'
-      ? { connector_id: connectorID, to: to.trim() }
+      ? { connector_id: values.connectorID, to: values.to.trim() }
       : kind === 'telegram'
-        ? { chat_id: chatID.trim() }
+        ? { chat_id: values.chatID.trim() }
         : kind === 'github'
           ? {
-              connector_id: connectorID,
-              mode,
-              branch_pattern: branchPattern.trim() || undefined,
-              commit_style: commitStyle || undefined,
-              create_if_missing: createIfMissing || undefined,
+              connector_id: values.connectorID,
+              mode: values.mode,
+              branch_pattern: values.branchPattern.trim() || undefined,
+              commit_style: values.commitStyle || undefined,
+              create_if_missing: values.createIfMissing || undefined,
             }
-          : { url: url.trim(), format }
+          : { url: values.url.trim(), format: values.format }
 
   const canTest =
     slug !== '' &&
     (kind === 'email'
-      ? connectorID !== '' && to.trim() !== ''
+      ? values.connectorID !== '' && values.to.trim() !== ''
       : kind === 'telegram'
-        ? chatID.trim() !== '' && (usingExistingBotToken ? existingBotTokenRef !== '' : botToken.trim() !== '')
+        ? values.chatID.trim() !== '' && (usingExistingBotToken ? existingBotTokenRef !== '' : botToken.trim() !== '')
         : kind === 'github'
-          ? connectorID !== ''
-          : url.trim() !== '')
+          ? values.connectorID !== ''
+          : values.url.trim() !== '')
 
   const runTest = async () => {
     setBusy(true)
@@ -160,282 +156,108 @@ export function DestinationAdd() {
   }
 
   const tested = test?.ok === true
+  const testState: 'gate' | 'testing' | 'ok' | 'failed' = busy
+    ? 'testing'
+    : tested
+      ? 'ok'
+      : test && !test.ok
+        ? 'failed'
+        : 'gate'
+
+  const destinationTitle = `Add ${kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : kind === 'github' ? 'GitHub' : 'Webhook'} destination`
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/destinations"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Destinations
-      </Link>
+    <PageShell width="form">
+      <PageHeader
+        title={destinationTitle}
+        description={`kind: ${kind}`}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/destinations' },
+          { label: destinationTitle },
+        ]}
+      />
 
-      <div className="border-b border-border pb-6">
-        <h1 className="text-xl font-semibold tracking-tight">
-          Add {kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : kind === 'github' ? 'GitHub' : 'Webhook'}{' '}
-          destination
-        </h1>
-        <p className="text-sm text-muted-foreground">kind: {kind}</p>
-      </div>
+      <Form onSubmit={(e) => e.preventDefault()}>
+        <FieldGroup>
+          <Field label="Name" description="lowercase slug">
+            <Input
+              value={name}
+              onChange={(e) => {
+                setName(e.target.value)
+                invalidate()
+              }}
+              placeholder="ops-inbox"
+            />
+          </Field>
 
-      <div className="grid max-w-3xl gap-5">
-        <Field label="Name" hint="lowercase slug">
-          <Input
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value)
-              invalidate()
-            }}
-            placeholder="ops-inbox"
-            className="mt-1.5 h-10"
-          />
-        </Field>
+          <DestinationKindFields kind={kind} values={values} setField={setField} connectors={connectors ?? []} />
+          {kind === 'email' && connectors && connectors.length === 0 && (
+            <p className="-mt-2 text-sm text-muted-foreground">
+              No enabled Google connectors yet - add one under Connectors first.
+            </p>
+          )}
+          {kind === 'github' && connectors && connectors.length === 0 && (
+            <p className="-mt-2 text-sm text-muted-foreground">
+              No enabled GitHub connectors yet, add one under Connectors first.
+            </p>
+          )}
 
-        {kind === 'email' ? (
-          <>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">Google connector</span>
-              <Select
-                value={connectorID}
-                onValueChange={(v) => {
-                  setConnectorID(v)
-                  invalidate()
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Choose a connected Gmail account" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(connectors ?? []).map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {connectors && connectors.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  No enabled Google connectors yet — add one under Connectors first.
-                </p>
-              )}
-            </div>
-            <Field label="To" hint="recipient address">
-              <Input
-                value={to}
-                onChange={(e) => {
-                  setTo(e.target.value)
-                  invalidate()
-                }}
-                placeholder="ops@example.com"
-                className="mt-1.5 h-10"
-              />
-            </Field>
-          </>
-        ) : kind === 'telegram' ? (
-          <>
-            <Field label="Chat ID" hint="the numeric chat or channel id the bot posts to">
-              <Input
-                value={chatID}
-                onChange={(e) => {
-                  setChatID(e.target.value)
-                  invalidate()
-                }}
-                placeholder="123456789"
-                className="mt-1.5 h-10"
-              />
-            </Field>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-foreground">Bot token</span>
-                <CredentialModeToggle
-                  mode={botTokenMode}
-                  onChange={(m) => {
-                    setBotTokenMode(m)
-                    invalidate()
-                  }}
-                />
-              </div>
-              {botTokenMode === 'existing' ? (
-                <Field label="Existing credential">
-                  <ExistingCredentialSelect
-                    value={existingBotTokenRef}
-                    onChange={(v) => {
-                      setExistingBotTokenRef(v)
-                      invalidate()
-                    }}
-                  />
-                </Field>
-              ) : (
-                <Input
-                  value={botToken}
-                  onChange={(e) => {
-                    setBotToken(e.target.value)
-                    invalidate()
-                  }}
-                  placeholder="123456:ABC-DEF..."
-                  className="h-10"
-                />
-              )}
-            </div>
-          </>
-        ) : kind === 'github' ? (
-          <>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">GitHub connector</span>
-              <Select
-                value={connectorID}
-                onValueChange={(v) => {
-                  setConnectorID(v)
-                  invalidate()
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Choose a connected GitHub account" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(connectors ?? []).map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {connectors && connectors.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  No enabled GitHub connectors yet, add one under Connectors first.
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">Mode</span>
-              <Select
-                value={mode}
-                onValueChange={(v) => {
-                  setMode(v as 'push' | 'push_pr')
-                  invalidate()
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {onCompleteChoices
-                    .filter((c) => c.value !== ON_COMPLETE_NONE)
-                    .map((c) => (
-                      <SelectItem key={c.value} value={c.value}>
-                        {c.label}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Field label="Branch pattern" hint="optional">
-              <Input
-                value={branchPattern}
-                onChange={(e) => {
-                  setBranchPattern(e.target.value)
-                  invalidate()
-                }}
-                placeholder="Default (from settings)"
-                className="mt-1.5 h-10"
-              />
-            </Field>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">Commit style</span>
-              <Select
-                value={commitStyle || COMMIT_STYLE_DEFAULT}
-                onValueChange={(v) => {
-                  setCommitStyle(v === COMMIT_STYLE_DEFAULT ? '' : v)
-                  invalidate()
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {commitStyleChoices.map((c) => (
-                    <SelectItem key={c.value} value={c.value}>
-                      {c.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
-              <div className="min-w-0">
-                <div className="text-sm font-medium">Create repository if missing</div>
-                <p className="text-sm text-muted-foreground">
-                  Create the repository through this connector when the mission has no target
-                  repository.
-                </p>
-              </div>
-              <Toggle
-                on={createIfMissing}
-                onChange={(v) => {
-                  setCreateIfMissing(v)
-                  invalidate()
-                }}
-                label="Create repository if missing"
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <Field label="URL">
-              <Input
-                value={url}
-                onChange={(e) => {
-                  setURL(e.target.value)
-                  invalidate()
-                }}
-                placeholder="https://…/hook"
-                className="mt-1.5 h-10"
-              />
-            </Field>
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium text-foreground">Format</span>
-              <Select value={format} onValueChange={(v) => setFormat(v as 'json' | 'text')}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="json">JSON</SelectItem>
-                  <SelectItem value="text">Plain text</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </>
-        )}
+          {kind === 'telegram' && (
+            <CredentialField
+              label="Bot token"
+              mode={botTokenMode}
+              onModeChange={(m) => {
+                setBotTokenMode(m)
+                invalidate()
+              }}
+              existingRef={existingBotTokenRef}
+              onExistingRefChange={(v) => {
+                setExistingBotTokenRef(v)
+                invalidate()
+              }}
+              secretValue={botToken}
+              onSecretValueChange={(v) => {
+                setBotToken(v)
+                invalidate()
+              }}
+              secretPlaceholder="123456:ABC-DEF..."
+              defaultBackend={defaultBackend}
+              refName={botTokenRef}
+            />
+          )}
+        </FieldGroup>
 
-        {kind !== 'github' && (
-          <div
-            className={
-              'flex flex-wrap items-center gap-3 rounded-xl border p-4 text-sm ' +
-              (tested
-                ? 'border-good/30 bg-good-soft text-good'
-                : test && !test.ok
-                  ? 'border-destructive/30 bg-destructive/5 text-destructive'
-                  : 'border-border bg-muted/40 text-muted-foreground')
-            }
-          >
-            <span className="min-w-0 flex-1 font-medium">
-              {busy
-                ? 'Testing…'
-                : tested
-                  ? 'Test delivery sent, ready to add.'
-                  : test && !test.ok
-                    ? `Test failed: ${test.error}. The destination was saved disabled, fix and retry.`
-                    : 'Not tested yet, run a test before adding.'}
-            </span>
-            <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
-              {busy ? 'Testing…' : 'Test send'}
-            </Button>
-          </div>
-        )}
+        {kind !== 'github' &&
+          (testState === 'gate' ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
+              <span className="min-w-0 flex-1 font-medium">Not tested yet, run a test before adding.</span>
+              <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
+                Test send
+              </Button>
+            </div>
+          ) : (
+            <TestStatus
+              state={testState as 'testing' | 'ok' | 'failed'}
+              message={
+                testState === 'testing'
+                  ? 'Testing…'
+                  : testState === 'ok'
+                    ? 'Test delivery sent, ready to add.'
+                    : `Test failed: ${test?.error}. The destination was saved disabled, fix and retry.`
+              }
+              action={
+                testState !== 'testing' && (
+                  <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
+                    Test send
+                  </Button>
+                )
+              }
+            />
+          ))}
 
-        <div className="flex gap-3 pt-2">
-          <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/destinations')}>
+        <FormActions>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => navigate('/settings/destinations')}>
             Cancel
           </Button>
           {kind === 'github' ? (
@@ -447,8 +269,8 @@ export function DestinationAdd() {
               Add destination
             </Button>
           )}
-        </div>
-      </div>
-    </div>
+        </FormActions>
+      </Form>
+    </PageShell>
   )
 }

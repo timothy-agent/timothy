@@ -1,23 +1,15 @@
-import { Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { CalendarClock } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { deleteSchedule, listDestinations, patchSchedule, listSchedules } from '../api/client'
 import type { Destination, Schedule } from '../api/types'
-import { describeCron } from '../lib/schedules'
-import { relativeTime, relativeTimeUntil } from '../lib/format'
-import { Badge } from '../components/ui/badge'
-import { Button } from '../components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../components/ui/dialog'
-import { DestinationKindIcon, Toggle } from '../components/settings/shared'
-import { errText } from '../components/settings/util'
+import { ScheduleCard } from '../components/missions/ScheduleCard'
+import { ConfirmDialog } from '../components/timothy/confirm-dialog'
+import { EmptyState } from '../components/timothy/empty-state'
+import { PageHeader } from '../components/timothy/page-header'
+import { PageShell } from '../components/timothy/page-shell'
+import { errText } from '../lib/errors'
 
 // Automations lists every recurring schedule as a card, folding in what
 // RecurringSchedules used to render inline on the Missions page — same
@@ -69,87 +61,40 @@ export function Automations() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-full px-8 py-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Automations</h1>
-        <p className="text-sm text-muted-foreground">Recurring missions that run on a schedule.</p>
-      </div>
+    <PageShell>
+      <PageHeader title="Automations" description="Recurring missions that run on a schedule." />
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {schedules.map((sc) => (
-          <div
+          <ScheduleCard
             key={sc.id}
-            className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4 shadow-sm transition hover:border-brand hover:shadow-md"
-          >
-            <Link to={`/automations/${sc.id}`} className="min-w-0">
-              <span className="truncate text-sm font-semibold">{sc.name}</span>
-              <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-                {sc.mission_template.goal}
-              </p>
-              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                <span>{describeCron(sc.cron)}</span>
-                {sc.next_run && <span>next {relativeTimeUntil(sc.next_run)}</span>}
-                {sc.last_run && <span>last {relativeTime(sc.last_run)}</span>}
-              </div>
-              {sc.mission_template.destination_ids && sc.mission_template.destination_ids.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {sc.mission_template.destination_ids.map((id) => {
-                    const d = destinations.find((d) => d.id === id)
-                    return (
-                      <Badge key={id} variant="outline" className="text-xs">
-                        {d && <DestinationKindIcon kind={d.kind} />}
-                        {d?.name ?? id}
-                      </Badge>
-                    )
-                  })}
-                </div>
-              )}
-            </Link>
-            <div className="flex items-center gap-2">
-              <Toggle on={sc.enabled} onChange={(v) => toggle(sc, v)} label={`${sc.name} enabled`} />
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => navigate(`/automations/${sc.id}/edit`)}
-              >
-                Edit
-              </Button>
-              <button
-                type="button"
-                aria-label={`Delete ${sc.name}`}
-                onClick={() => setConfirmDelete(sc)}
-                className="ml-auto text-muted-foreground hover:text-destructive"
-              >
-                <HugeiconsIcon icon={Delete02Icon} className="size-4" />
-              </button>
-            </div>
-          </div>
+            schedule={sc}
+            destinations={destinations}
+            onToggle={(enabled) => toggle(sc, enabled)}
+            onEdit={() => navigate(`/automations/${sc.id}/edit`)}
+            onDelete={() => setConfirmDelete(sc)}
+          />
         ))}
         {schedules.length === 0 && (
-          <div className="col-span-full rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            No automations yet. Create a mission and choose "Repeat on schedule" to add one.
+          <div className="col-span-full rounded-md border border-dashed border-border">
+            <EmptyState
+              icon={CalendarClock}
+              title="No automations yet"
+              description='Create a mission and choose "Repeat on schedule" to add one.'
+            />
           </div>
         )}
       </div>
 
-      <Dialog open={confirmDelete !== null} onOpenChange={(o) => !o && setConfirmDelete(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {confirmDelete?.name}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            This schedule stops firing. Missions it already created keep their history.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(null)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        onOpenChange={(o) => !o && setConfirmDelete(null)}
+        title={`Delete ${confirmDelete?.name}?`}
+        description="This schedule stops firing. Missions it already created keep their history."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void remove()}
+      />
+    </PageShell>
   )
 }

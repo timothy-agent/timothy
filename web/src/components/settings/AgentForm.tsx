@@ -8,20 +8,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select'
-import { Field, Toggle } from './shared'
-import { KnowledgePicker } from './KnowledgePicker'
-import { SkillsPicker } from './SkillsPicker'
-import { ToolsPicker } from './ToolsPicker'
+import { Switch } from '../ui/switch'
+import { Field, FieldGroup } from '../timothy/field'
+import { UNSET } from './util'
+import { slugify } from '../../lib/slugify'
+import { AllowlistPicker } from './AllowlistPicker'
 import { EXECUTOR_DEFAULT, executorChoices } from '../missions/MissionForm'
+import { listKbCollections, listSkills, listTools } from '../../api/client'
+import { useStagedForm } from './useStagedForm'
 import type { AdminAgent, AdminRoute } from '../../api/types'
-
-// slugify mirrors the backend's name rule: lowercase slug.
-export function slugify(v: string): string {
-  return v
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
 
 export interface AgentFormValue {
   name: string
@@ -100,6 +95,57 @@ export function useAgentForm(agent?: AdminAgent) {
   }
 }
 
+export type AgentStagedValue = Omit<AgentFormValue, 'name'>
+
+function baselineFrom(agent: AdminAgent): AgentStagedValue {
+  return {
+    description: agent.description,
+    overlay: agent.prompt_overlay,
+    route: agent.route,
+    skills: agent.skills,
+    tools: agent.tools,
+    knowledge: agent.knowledge ?? [],
+    memory: agent.memory,
+    harness: agent.harness ?? '',
+  }
+}
+
+// useAgentEditForm stages AgentEdit's fields (contract 10.7): nothing
+// commits until Save, Cancel discards back to the loaded agent, and a
+// sibling refresh (after a successful Save) rebases untouched fields
+// while keeping ones the user is still editing. Same `fields` shape as
+// useAgentForm so AgentForm renders either without knowing which.
+export function useAgentEditForm(agent: AdminAgent) {
+  const staged = useStagedForm<AgentStagedValue>(baselineFrom(agent))
+
+  return {
+    dirty: staged.dirty,
+    reset: staged.reset,
+    rebase: (next: AdminAgent) => staged.rebase(baselineFrom(next)),
+    value: staged.values,
+    fields: {
+      name: agent.name,
+      setName: () => undefined,
+      description: staged.values.description,
+      setDescription: (v: string) => staged.setField('description', v),
+      overlay: staged.values.overlay,
+      setOverlay: (v: string) => staged.setField('overlay', v),
+      route: staged.values.route,
+      setRoute: (v: string) => staged.setField('route', v),
+      skills: staged.values.skills,
+      setSkills: (v: string[]) => staged.setField('skills', v),
+      tools: staged.values.tools,
+      setTools: (v: string[]) => staged.setField('tools', v),
+      knowledge: staged.values.knowledge,
+      setKnowledge: (v: string[]) => staged.setField('knowledge', v),
+      memory: staged.values.memory,
+      setMemory: (v: boolean) => staged.setField('memory', v),
+      harness: staged.values.harness,
+      setHarness: (v: string) => staged.setField('harness', v),
+    },
+  }
+}
+
 // AgentForm renders the shared field set for both create and edit:
 // name is a one-time slug fixed at creation (it lives in ledger rows
 // and event payloads), so it's the only field Add shows that Edit
@@ -111,91 +157,122 @@ export function AgentForm({
 }: {
   isNew: boolean
   routes: AdminRoute[]
-  fields: ReturnType<typeof useAgentForm>['fields']
+  fields: ReturnType<typeof useAgentForm>['fields'] | ReturnType<typeof useAgentEditForm>['fields']
 }) {
   return (
-    <div className="grid gap-5">
+    <FieldGroup>
       {isNew && (
-        <Field label="Name" hint="unique slug, immutable after creation">
+        <Field label="Name" description="unique slug, immutable after creation">
           <Input
             value={fields.name}
             onChange={(e) => fields.setName(e.target.value)}
             placeholder="infra, homelab, writer…"
-            className="mt-1.5 h-10"
           />
         </Field>
       )}
-      <Field label="Description" hint="shown in the picker">
+      <Field label="Description" description="shown in the picker">
         <Input
           value={fields.description}
           onChange={(e) => fields.setDescription(e.target.value)}
           placeholder="What this agent is for"
-          className="mt-1.5 h-10"
         />
       </Field>
-      <Field label="Prompt overlay" hint="appended to the system prompt">
+      <Field label="Prompt overlay" description="appended to the system prompt">
         <Textarea
           value={fields.overlay}
           onChange={(e) => fields.setOverlay(e.target.value)}
           aria-label="Prompt overlay"
           rows={5}
           placeholder="Instructions, persona, house rules… Markdown supported."
-          className="mt-1.5 min-h-32 resize-y text-sm"
+          className="min-h-32 resize-y text-sm"
         />
       </Field>
       <div className="grid gap-5 sm:grid-cols-2">
-        <Field label="Route" hint="model chain">
+        <Field label="Route" description="model chain">
+          {(props) => (
+            <Select
+              value={fields.route || UNSET}
+              onValueChange={(v) => fields.setRoute(v === UNSET ? '' : v)}
+            >
+              <SelectTrigger id={props.id} className="w-full" aria-label="agent route">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={UNSET}>default</SelectItem>
+                {routes
+                  .filter((r) => r.name !== 'default' && r.name !== 'embedding')
+                  .map((r) => (
+                    <SelectItem key={r.name} value={r.name}>
+                      {r.name}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+        <Field label="Memory">
+          {(props) => (
+            <div className="flex h-9 items-center">
+              <Switch id={props.id} checked={fields.memory} onCheckedChange={fields.setMemory} aria-label="agent memory" />
+            </div>
+          )}
+        </Field>
+      </div>
+      <Field label="Harness" description="coding executor this agent's missions delegate to; inherit falls through to settings">
+        {(props) => (
           <Select
-            value={fields.route || 'default'}
-            onValueChange={(v) => fields.setRoute(v === 'default' ? '' : v)}
+            value={fields.harness || EXECUTOR_DEFAULT}
+            onValueChange={(v) => fields.setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
           >
-            <SelectTrigger className="mt-1.5 h-10 w-full" aria-label="agent route">
+            <SelectTrigger id={props.id} className="w-full" aria-label="agent harness">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="default">default</SelectItem>
-              {routes
-                .filter((r) => r.name !== 'default' && r.name !== 'embedding')
-                .map((r) => (
-                  <SelectItem key={r.name} value={r.name}>
-                    {r.name}
-                  </SelectItem>
-                ))}
+              {executorChoices.map((c) => (
+                <SelectItem key={c.value} value={c.value}>
+                  {c.value === EXECUTOR_DEFAULT ? 'Inherit from settings' : c.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
-        </Field>
-        <Field label="Memory">
-          <div className="mt-2.5">
-            <Toggle on={fields.memory} onChange={fields.setMemory} label="agent memory" />
-          </div>
-        </Field>
-      </div>
-      <Field label="Harness" hint="coding executor this agent's missions delegate to; inherit falls through to settings">
-        <Select
-          value={fields.harness || EXECUTOR_DEFAULT}
-          onValueChange={(v) => fields.setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
-        >
-          <SelectTrigger className="mt-1.5 h-10 w-full" aria-label="agent harness">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {executorChoices.map((c) => (
-              <SelectItem key={c.value} value={c.value}>
-                {c.value === EXECUTOR_DEFAULT ? 'Inherit from settings' : c.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        )}
       </Field>
-      <Field label="Skills allowlist" hint="pick from the loaded skill packs; empty = none">
-        <SkillsPicker value={fields.skills} onChange={fields.setSkills} />
-      </Field>
-      <Field label="Tools allowlist" hint="pick from the live tool surface; empty = none">
-        <ToolsPicker value={fields.tools} onChange={fields.setTools} />
-      </Field>
-      <Field label="Knowledge allowlist" hint="search_kb always searches the whole knowledge base; these collections rank higher in results">
-        <KnowledgePicker value={fields.knowledge} onChange={fields.setKnowledge} />
-      </Field>
-    </div>
+      <AllowlistPicker
+        label="Skills allowlist"
+        description="pick from the loaded skill packs; empty = none"
+        value={fields.skills}
+        onChange={fields.setSkills}
+        load={async () =>
+          (await listSkills()).map((s) => ({ id: s.name, label: s.name, description: s.description }))
+        }
+        cacheKey="skills"
+        emptyText="No skill matches."
+        freeTextPlaceholder="research-brief, coding"
+      />
+      <AllowlistPicker
+        label="Tools allowlist"
+        description="pick from the live tool surface; empty = none"
+        value={fields.tools}
+        onChange={fields.setTools}
+        load={async () =>
+          (await listTools()).map((t) => ({ id: t.name, label: t.name, description: t.description }))
+        }
+        cacheKey="tools"
+        emptyText="No tool matches."
+        freeTextPlaceholder="search_web, fetch_url, shell"
+      />
+      <AllowlistPicker
+        label="Knowledge allowlist"
+        description="search_kb always searches the whole knowledge base; these collections rank higher in results"
+        value={fields.knowledge}
+        onChange={fields.setKnowledge}
+        load={async () =>
+          (await listKbCollections()).map((c) => ({ id: c.name, label: c.name, description: c.description }))
+        }
+        cacheKey="knowledge"
+        emptyText="No collection matches."
+        freeTextPlaceholder="product-docs, runbooks"
+      />
+    </FieldGroup>
   )
 }

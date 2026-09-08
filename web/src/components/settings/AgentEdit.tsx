@@ -1,68 +1,92 @@
-import { ArrowLeft01Icon, Delete02Icon } from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { deleteAgent, listAgents, listRoutes, patchAgent } from '../../api/client'
 import type { AdminAgent, AdminRoute } from '../../api/types'
 import { Button } from '../ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../ui/dialog'
-import { AgentForm, useAgentForm } from './AgentForm'
-import { errText } from './util'
+import { Alert, AlertDescription } from '../ui/alert'
+import { ConfirmDialog } from '../timothy/confirm-dialog'
+import { Form, FormActions } from '../timothy/field'
+import { PageHeader } from '../timothy/page-header'
+import { PageShell } from '../timothy/page-shell'
+import { AgentForm, useAgentEditForm } from './AgentForm'
+import { settingsArea } from './settingsAreas'
+import { errText } from '../../lib/errors'
+
+const area = settingsArea('agents')
 
 export function AgentEdit() {
   const { id } = useParams()
-  const navigate = useNavigate()
   const [agent, setAgent] = useState<AdminAgent | null | undefined>(undefined)
   const [routes, setRoutes] = useState<AdminRoute[]>([])
-  const [busy, setBusy] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const refresh = useCallback(() => {
-    Promise.all([listAgents(), listRoutes()])
+    return Promise.all([listAgents(), listRoutes()])
       .then(([agents, r]) => {
-        setAgent(agents.find((a) => a.id === id) ?? null)
+        const found = agents.find((a) => a.id === id) ?? null
+        setAgent(found)
         setRoutes(r)
+        return found
       })
-      .catch((err: unknown) => toast.error('Could not load agent', { description: errText(err) }))
+      .catch((err: unknown) => {
+        toast.error('Could not load agent', { description: errText(err) })
+        return undefined
+      })
   }, [id])
-  useEffect(refresh, [refresh])
-
-  // useAgentForm must run unconditionally regardless of load state;
-  // it seeds blank until `agent` resolves, which is fine since the
-  // form itself doesn't render until then.
-  const { value, fields } = useAgentForm(agent ?? undefined)
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
 
   if (agent === null) return <Navigate to="/settings/agents" replace />
   if (agent === undefined) return null
 
-  const submit = async () => {
-    setBusy(true)
+  return <AgentEditForm key={agent.id} initialAgent={agent} routes={routes} refresh={refresh} />
+}
+
+function AgentEditForm({
+  initialAgent,
+  routes,
+  refresh,
+}: {
+  initialAgent: AdminAgent
+  routes: AdminRoute[]
+  refresh: () => Promise<AdminAgent | null | undefined>
+}) {
+  const navigate = useNavigate()
+  const [agent, setAgentState] = useState(initialAgent)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  const staged = useAgentEditForm(initialAgent)
+
+  const save = useCallback(async () => {
+    setSaving(true)
+    setSaveError(null)
     try {
       await patchAgent(agent.id, {
-        description: value.description,
-        prompt_overlay: value.overlay,
-        route: value.route,
-        skills: value.skills,
-        tools: value.tools,
-        knowledge: value.knowledge,
-        memory: value.memory,
-        harness: value.harness,
+        description: staged.value.description,
+        prompt_overlay: staged.value.overlay,
+        route: staged.value.route,
+        skills: staged.value.skills,
+        tools: staged.value.tools,
+        knowledge: staged.value.knowledge,
+        memory: staged.value.memory,
+        harness: staged.value.harness,
       })
       toast.success('Agent saved')
-      navigate('/settings/agents')
+      const refetched = await refresh()
+      if (refetched) {
+        setAgentState(refetched)
+        staged.rebase(refetched)
+      }
     } catch (err) {
-      toast.error('Could not save agent', { description: errText(err) })
+      setSaveError(errText(err))
     } finally {
-      setBusy(false)
+      setSaving(false)
     }
-  }
+  }, [agent.id, refresh, staged])
 
   const remove = async () => {
     try {
@@ -76,62 +100,63 @@ export function AgentEdit() {
   }
 
   return (
-    <div className="mt-6 w-full space-y-6">
-      <Link
-        to="/settings/agents"
-        className="inline-flex w-fit items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-      >
-        <HugeiconsIcon icon={ArrowLeft01Icon} className="size-4" />
-        Agents
-      </Link>
-
-      <div className="flex items-center justify-between border-b border-border pb-6">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight capitalize">{agent.name}</h1>
-          <p className="text-sm text-muted-foreground">
-            {agent.is_default ? 'Default agent' : 'Agent'}
-          </p>
-        </div>
-        {!agent.is_default && (
-          <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
-            <HugeiconsIcon icon={Delete02Icon} />
-            Delete
-          </Button>
-        )}
-      </div>
-
-      <div className="max-w-3xl">
-        <AgentForm isNew={false} routes={routes} fields={fields} />
-
-        <div className="flex gap-3 pt-6">
-          <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/agents')}>
-            Cancel
-          </Button>
-          <Button disabled={busy} onClick={() => void submit()}>
-            Save
-          </Button>
-        </div>
-      </div>
-
-      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {agent.name}?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">
-            Sessions that used this agent keep their history; new turns fall back to the default
-            agent.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmDelete(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={() => void remove()}>
+    <PageShell width="form">
+      <PageHeader
+        title={agent.name}
+        description={agent.is_default ? 'Default agent' : 'Agent'}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/agents' },
+          { label: agent.name },
+        ]}
+        actions={
+          !agent.is_default && (
+            <Button variant="destructive" onClick={() => setConfirmDelete(true)}>
+              <Trash2 aria-hidden />
               Delete
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+          )
+        }
+      />
+
+      <Form
+        onSubmit={(e) => {
+          e.preventDefault()
+          void save()
+        }}
+      >
+        <AgentForm isNew={false} routes={routes} fields={staged.fields} />
+
+        {saveError && (
+          <Alert tone="destructive">
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span>Could not save agent changes: {saveError}</span>
+              <Button type="button" size="sm" variant="outline" onClick={() => void save()}>
+                Retry
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        <FormActions note={staged.dirty ? 'Unsaved changes' : undefined}>
+          <Button type="button" variant="outline" disabled={saving} onClick={staged.reset}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={!staged.dirty || saving}>
+            Save
+          </Button>
+        </FormActions>
+      </Form>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete ${agent.name}?`}
+        description="Sessions that used this agent keep their history; new turns fall back to the default agent."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void remove()}
+      />
+    </PageShell>
   )
 }

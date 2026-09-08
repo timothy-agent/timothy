@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mission, Notification } from '../api/types'
+import { TooltipProvider } from '../components/ui/tooltip'
 import type { Signal } from '../lib/events'
 import { Missions } from './Missions'
 
@@ -58,7 +59,11 @@ function renderPage() {
     ],
     { initialEntries: ['/missions'] },
   )
-  render(<RouterProvider router={router} />)
+  render(
+    <TooltipProvider>
+      <RouterProvider router={router} />
+    </TooltipProvider>,
+  )
   return router
 }
 
@@ -92,7 +97,7 @@ describe('Missions board', () => {
     const banner = await screen.findByText(
       'Mission - Fix the login bug is paused, needs your intervention.',
     )
-    expect(banner.closest('div')).toHaveClass('border-amber-200')
+    expect(banner.closest('[data-tone]')).toHaveAttribute('data-tone', 'warning')
   })
 
   it('does not show read notifications', async () => {
@@ -122,7 +127,7 @@ describe('Missions board', () => {
     vi.mocked(listNotifications).mockResolvedValue([note])
     renderPage()
     const banner = await screen.findByText('Mission - Fix the login bug is done')
-    expect(banner.closest('div')).toHaveClass('border-green-200')
+    expect(banner.closest('[data-tone]')).toHaveAttribute('data-tone', 'good')
   })
 
   it('colors an error notification red', async () => {
@@ -137,7 +142,7 @@ describe('Missions board', () => {
     vi.mocked(listNotifications).mockResolvedValue([note])
     renderPage()
     const banner = await screen.findByText('Mission - Fix the login bug is failed')
-    expect(banner.closest('div')).toHaveClass('border-red-200')
+    expect(banner.closest('[data-tone]')).toHaveAttribute('data-tone', 'destructive')
   })
 
   it('colors a cancelled (error kind) notification red', async () => {
@@ -152,7 +157,7 @@ describe('Missions board', () => {
     vi.mocked(listNotifications).mockResolvedValue([note])
     renderPage()
     const banner = await screen.findByText('Mission - Fix the login bug is cancelled')
-    expect(banner.closest('div')).toHaveClass('border-red-200')
+    expect(banner.closest('[data-tone]')).toHaveAttribute('data-tone', 'destructive')
   })
 
   it('colors a waiting_for_input notification amber', async () => {
@@ -169,7 +174,7 @@ describe('Missions board', () => {
     const banner = await screen.findByText(
       'Mission - Fix the login bug is waiting for your input.',
     )
-    expect(banner.closest('div')).toHaveClass('border-amber-200')
+    expect(banner.closest('[data-tone]')).toHaveAttribute('data-tone', 'warning')
   })
 
   it('navigates to the new mission page', async () => {
@@ -289,5 +294,28 @@ describe('Missions board', () => {
       expect(screen.queryByText('1 of 2')).toBeNull()
       expect(screen.queryByText('2 of 2')).toBeNull()
     })
+
+    it('shows a filters-no-match empty state with no create button in it', async () => {
+      vi.mocked(listMissions).mockResolvedValue([mission])
+      renderPage()
+      await screen.findByText('Fix the login bug')
+
+      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by kind' }))
+      fireEvent.click(await screen.findByRole('option', { name: 'Coding' }))
+
+      const empty = screen.getByText('No missions match the current filters.').closest('div')
+      expect(empty?.querySelector('button')).toBeNull()
+    })
+  })
+
+  it('shows a no-missions empty state with a working create button', async () => {
+    vi.mocked(listMissions).mockResolvedValue([])
+    const router = renderPage()
+    const heading = await screen.findByText('No missions yet, create one to get started.')
+
+    const createButton = heading.closest('div')?.querySelector('button')
+    expect(createButton).toBeTruthy()
+    fireEvent.click(createButton!)
+    await waitFor(() => expect(router.state.location.pathname).toBe('/missions/new'))
   })
 })

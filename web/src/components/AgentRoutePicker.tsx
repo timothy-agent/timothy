@@ -1,10 +1,7 @@
-import {
-  AiBrain01Icon,
-  ArrowDown01Icon,
-  SparklesIcon,
-  Tick02Icon,
-} from '@hugeicons-pro/core-stroke-rounded'
-import { HugeiconsIcon } from '@hugeicons/react'
+import { Bot, Check, ChevronDown, Sparkles } from 'lucide-react'
+import { buttonVariants } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 import { AUTO_AGENT, useAgents, useRoutes } from './AgentPicker'
 import {
   DropdownMenu,
@@ -51,14 +48,15 @@ export function AgentRoutePicker({
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label="Agent and route"
-        className="flex h-8 items-center gap-1.5 rounded-full border border-zinc-950/10 px-3 text-sm text-zinc-700 transition hover:bg-zinc-100 dark:border-white/10 dark:text-zinc-200 dark:hover:bg-zinc-700/50"
+        className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
       >
-        <HugeiconsIcon
-          icon={isAuto && !currentRoute ? SparklesIcon : AiBrain01Icon}
-          className="size-4"
-        />
-        <span className="capitalize">{label}</span>
-        <HugeiconsIcon icon={ArrowDown01Icon} className="size-3.5 opacity-60" />
+        {isAuto && !currentRoute ? (
+          <Sparkles className="size-4 text-muted-foreground" />
+        ) : (
+          <Bot className="size-4 text-muted-foreground" />
+        )}
+        <span className="text-sm capitalize">{label}</span>
+        <ChevronDown className="size-3.5 text-muted-foreground" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-[min(92vw,22rem)] p-1.5">
         <DropdownMenuLabel className="px-2.5 pt-1.5">
@@ -70,7 +68,7 @@ export function AgentRoutePicker({
         <DropdownMenuItem
           onSelect={() => onAgent(AUTO_AGENT)}
           data-selected={isAuto || undefined}
-          className="items-start gap-3 rounded-lg px-2.5 py-2 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+          className="items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
         >
           <div className="min-w-0 flex-1">
             <span className="text-sm font-medium">Auto</span>
@@ -78,7 +76,7 @@ export function AgentRoutePicker({
               Picks the best-fit agent for each message.
             </p>
           </div>
-          {isAuto && <HugeiconsIcon icon={Tick02Icon} className="mt-1 size-4 shrink-0" />}
+          {isAuto && <Check className="mt-1 size-4 shrink-0" />}
         </DropdownMenuItem>
         {agents.map((a) => {
           const selected = a.name === (current?.name ?? '')
@@ -87,22 +85,18 @@ export function AgentRoutePicker({
               key={a.id}
               onSelect={() => onAgent(a.name)}
               data-selected={selected || undefined}
-              className="items-start gap-3 rounded-lg px-2.5 py-2 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+              className="items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium capitalize">{a.name}</span>
-                  {a.is_default && (
-                    <span className="rounded bg-blue-500/10 px-1.5 py-px text-[10px] font-medium text-blue-600 dark:text-blue-400">
-                      Default
-                    </span>
-                  )}
+                  {a.is_default && <Badge variant="outline">Default</Badge>}
                 </div>
                 {a.description && (
                   <p className="mt-0.5 text-xs text-muted-foreground">{a.description}</p>
                 )}
               </div>
-              {selected && <HugeiconsIcon icon={Tick02Icon} className="mt-1 size-4 shrink-0" />}
+              {selected && <Check className="mt-1 size-4 shrink-0" />}
             </DropdownMenuItem>
           )
         })}
@@ -118,7 +112,7 @@ export function AgentRoutePicker({
             <DropdownMenuItem
               onSelect={() => onRoute?.('')}
               data-selected={isRouteAuto || undefined}
-              className="items-start gap-3 rounded-lg px-2.5 py-2 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+              className="items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
             >
               <div className="min-w-0 flex-1">
                 <span className="text-sm font-medium">Auto</span>
@@ -126,7 +120,7 @@ export function AgentRoutePicker({
                   Uses the agent's own route, or the server default.
                 </p>
               </div>
-              {isRouteAuto && <HugeiconsIcon icon={Tick02Icon} className="mt-1 size-4 shrink-0" />}
+              {isRouteAuto && <Check className="mt-1 size-4 shrink-0" />}
             </DropdownMenuItem>
             {routes?.filter((r) => r.enabled).map((r) => {
               const selected = r.name === route
@@ -137,13 +131,13 @@ export function AgentRoutePicker({
                   key={r.name}
                   onSelect={() => onRoute?.(r.name)}
                   data-selected={selected || undefined}
-                  className="items-start gap-3 rounded-lg px-2.5 py-2 data-selected:bg-zinc-100 dark:data-selected:bg-zinc-800"
+                  className="items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
                 >
                   <div className="min-w-0 flex-1">
                     <span className="text-sm font-medium capitalize">{r.name}</span>
-                    <p className="mt-0.5 text-xs text-muted-foreground">{chainLabel}</p>
+                    <p className="mt-0.5 font-mono text-xs text-muted-foreground">{chainLabel}</p>
                   </div>
-                  {selected && <HugeiconsIcon icon={Tick02Icon} className="mt-1 size-4 shrink-0" />}
+                  {selected && <Check className="mt-1 size-4 shrink-0" />}
                 </DropdownMenuItem>
               )
             })}

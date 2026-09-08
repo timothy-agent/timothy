@@ -1,4 +1,16 @@
 import type { ReactNode } from 'react'
+import {
+  CircleCheck,
+  CircleX,
+  Flag,
+  GitBranch,
+  GitPullRequest,
+  Hand,
+  Pause,
+  RotateCcw,
+  Sparkles,
+  type LucideIcon,
+} from 'lucide-react'
 import type {
   ExecutorAuthFailedPayload,
   ExecutorDiedPayload,
@@ -18,6 +30,9 @@ import type {
   MissionTurnPayload,
 } from '../../api/types'
 import { formatDuration } from '../../lib/format'
+import { traceIcons } from '../timothy/trace-group'
+import { statusText, toolCallStatus, type Status } from '../timothy/status'
+import type { ToolRun } from '../../lib/chat'
 
 // eventRenderers maps a mission_events kind to a short, human-readable
 // summary of its payload. Unrecognized kinds fall back to the generic
@@ -50,7 +65,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     const { unit, passed } = asRecord(p)
     const label = typeof unit === 'number' ? `Unit ${unit + 1} verification` : 'Unit verification'
     return (
-      <span className={passed ? 'text-green-400' : 'text-red-400'}>
+      <span className={passed ? 'text-good' : 'text-destructive'}>
         {label}: {passed ? 'passed' : 'failed'}
       </span>
     )
@@ -60,7 +75,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     const label = typeof unit === 'number' ? `Unit ${unit + 1}` : 'Unit'
     const name = title ? ` (${String(title)})` : ''
     return (
-      <span className="text-red-400">
+      <span className="text-destructive">
         {label}
         {name} regressed: {String(check ?? 'harness')} check failed
       </span>
@@ -76,7 +91,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'mission.finding_demoted': (p) => {
     const { title, reason } = asRecord(p)
     return (
-      <span className="text-amber-400">
+      <span className="text-warning">
         Finding demoted to minor: {String(title ?? '?')} ({String(reason ?? 'no evidence')})
       </span>
     )
@@ -88,7 +103,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     const openIDs = Array.isArray(open) ? open : undefined
     const openSuffix = !approved && openIDs && openIDs.length > 0 ? `: open ${openIDs.join(', ')}` : ''
     return (
-      <span className={approved ? 'text-green-400' : 'text-amber-400'}>
+      <span className={approved ? 'text-good' : 'text-warning'}>
         Review verdict: {String(decision ?? '?')}
         {findingsOnly}
         {openSuffix}
@@ -104,20 +119,20 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     const context = model ? [agent, model].filter(Boolean).join(' · ') : [agent, route].filter(Boolean).join(' · ')
     const contextTitle = model ? [provider, route].filter(Boolean).join(' / ') : undefined
     const contextEl = context && (
-      <span className="ml-1 text-zinc-500" title={contextTitle || undefined}>
+      <span className="ml-1 text-muted-foreground" title={contextTitle || undefined}>
         {context}
       </span>
     )
     if (ok || !reason) {
       return (
-        <span className={ok ? undefined : 'text-red-400'}>
+        <span className={ok ? undefined : 'text-destructive'}>
           {base}
           {contextEl}
         </span>
       )
     }
     return (
-      <span className="text-red-400" title={reason}>
+      <span className="text-destructive" title={reason}>
         {base}: {truncateForDisplay(reason, 160)}
         {contextEl}
       </span>
@@ -134,9 +149,9 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'mission.retry': (p) => {
     const { cause, reason } = p as MissionRetryPayload
     const label = cause ? `Retrying (${cause})` : 'Retrying'
-    if (!reason) return <span className="text-amber-400">{label}</span>
+    if (!reason) return <span className="text-warning">{label}</span>
     return (
-      <span className="text-amber-400" title={reason}>
+      <span className="text-warning" title={reason}>
         {label}: {truncateForDisplay(reason, 160)}
       </span>
     )
@@ -170,7 +185,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
       <span>
         Question asked ({String(kind ?? '?')}): {String(question ?? '?')}
         {proposed_default ? (
-          <span className="text-zinc-500"> (proposed: {String(proposed_default)})</span>
+          <span className="text-muted-foreground"> (proposed: {String(proposed_default)})</span>
         ) : null}
       </span>
     )
@@ -182,7 +197,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'mission.input_timed_out': (p) => {
     const { applied_default } = asRecord(p)
     return (
-      <span className="text-amber-400">
+      <span className="text-warning">
         Question timed out, applied default: {String(applied_default ?? '?')}
       </span>
     )
@@ -190,7 +205,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'mission.permission_denied': (p) => {
     const { tool, detail } = p as MissionPermissionDeniedPayload
     return (
-      <span className="text-red-400" title={detail}>
+      <span className="text-destructive" title={detail}>
         Permission denied: {tool}
         {detail ? `: ${truncateForDisplay(detail, 160)}` : ''}
       </span>
@@ -199,13 +214,13 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'mission.paused': (p) => {
     const { reason, detail } = asRecord(p)
     const base = `Paused (${String(reason ?? 'unknown reason')})`
-    return <span className="text-amber-400">{detail ? `${base}: ${String(detail)}` : base}</span>
+    return <span className="text-warning">{detail ? `${base}: ${String(detail)}` : base}</span>
   },
   'mission.resumed': () => 'Resumed',
   'mission.steered': (p) => {
     const { note, phase } = p as MissionSteeredPayload
     return (
-      <span className="text-amber-400">
+      <span className="text-warning">
         Operator note{phase ? ` (${phase})` : ''}: {note}
       </span>
     )
@@ -214,18 +229,18 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     const { from_route, to_route, from_model, to_model } = p as MissionRouteChangedPayload
     const pin = (from_model ?? '') !== (to_model ?? '') ? ` · model ${from_model || 'auto'} → ${to_model || 'auto'}` : ''
     return (
-      <span className="text-amber-400">
+      <span className="text-warning">
         Review route changed: {from_route || 'none'} → {to_route}
         {pin}
       </span>
     )
   },
   'mission.recovery': () => 'Recovered after a restart',
-  'mission.violation': () => <span className="text-red-400">Policy violation detected</span>,
-  'mission.done': () => <span className="text-green-400">Mission completed</span>,
+  'mission.violation': () => <span className="text-destructive">Policy violation detected</span>,
+  'mission.done': () => <span className="text-good">Mission completed</span>,
   'mission.failed': (p) => {
     const { reason } = asRecord(p)
-    return <span className="text-red-400">Mission failed{reason ? `: ${String(reason)}` : ''}</span>
+    return <span className="text-destructive">Mission failed{reason ? `: ${String(reason)}` : ''}</span>
   },
   'mission.reconciled': (p) => {
     const { canonical_phase } = asRecord(p)
@@ -237,7 +252,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   },
   'mission.push_failed': (p) => {
     const { reason } = asRecord(p)
-    return <span className="text-red-400">Push failed: {String(reason ?? 'unknown reason')}</span>
+    return <span className="text-destructive">Push failed: {String(reason ?? 'unknown reason')}</span>
   },
   'mission.pr_opened': (p) => {
     const { url, number } = p as MissionPROpenedPayload
@@ -273,10 +288,10 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     if (promoted_kb_collection_id) parts.push('promoted to kb')
     const errors = [delivery_error, promote_kb_error].filter(Boolean)
     if (errors.length === 0) {
-      return <span className="text-green-400">Result complete{parts.length > 0 ? `: ${parts.join(', ')}` : ''}</span>
+      return <span className="text-good">Result complete{parts.length > 0 ? `: ${parts.join(', ')}` : ''}</span>
     }
     return (
-      <span className="text-red-400" title={errors.map(String).join('; ')}>
+      <span className="text-destructive" title={errors.map(String).join('; ')}>
         Result step failed{parts.length > 0 ? ` (${parts.join(', ')} succeeded)` : ''}
       </span>
     )
@@ -290,7 +305,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
           {provider}/{model}
         </span>{' '}
         · {auth_mode}
-        <span className="ml-1.5 rounded bg-brand-soft px-1.5 py-0.5 text-[10px] font-semibold text-brand-soft-foreground">
+        <span className="ml-1.5 rounded-md bg-brand-soft px-1.5 py-0.5 text-xs font-medium text-brand-soft-foreground">
           harness
         </span>
       </span>
@@ -299,7 +314,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'executor.died': (p) => {
     const { reason, exit_code } = p as ExecutorDiedPayload
     return (
-      <span className="text-red-400">
+      <span className="text-destructive">
         Harness died: {reason}
         {exit_code !== undefined ? ` (exit ${exit_code})` : ''}
       </span>
@@ -307,16 +322,16 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   },
   'executor.idle_killed': (p) => {
     const { idle_s } = p as ExecutorIdleKilledPayload
-    return <span className="text-red-400">Harness killed: idle for {idle_s}s</span>
+    return <span className="text-destructive">Harness killed: idle for {idle_s}s</span>
   },
   'executor.auth_failed': (p) => {
     const { harness } = p as ExecutorAuthFailedPayload
-    return <span className="text-red-400">{harness} auth failed — re-run the harness login</span>
+    return <span className="text-destructive">{harness} auth failed — re-run the harness login</span>
   },
   'executor.skipped': (p) => {
     const { reason, error, until, provider, model, skip_reasons } = p as ExecutorSkippedPayload
     return (
-      <span className="text-amber-400">
+      <span className="text-warning">
         Harness skipped: {reason}
         {reason === 'resolve_failed' && error ? ` — ${truncateForDisplay(error)}` : ''}
         {reason === 'cooldown' && until ? ` — ${provider}/${model} until ${until}` : ''}
@@ -331,7 +346,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'review.delegated_fallback': (p) => {
     const { harness, reason, error } = p as ReviewDelegatedFallbackPayload
     return (
-      <span className="text-amber-400">
+      <span className="text-warning">
         Review harness {harness} unavailable ({reason}), native review ran instead
         {error ? `: ${truncateForDisplay(error)}` : ''}
       </span>
@@ -343,7 +358,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   'executor.steered': (p) => {
     const { note, harness } = p as ExecutorSteeredPayload
     return (
-      <span className="text-amber-400">
+      <span className="text-warning">
         Steering note delivered to the running {harness} agent: {note}
       </span>
     )
@@ -370,18 +385,91 @@ function formatExecutorCost(costUsd: number | null | undefined, billed: boolean,
   return subscriptionAuth ? 'subscription — cost untracked' : 'cost unreported'
 }
 
-// toolCallStatusClass colors a tool call trace entry by outcome:
-// shared between the plain Timeline row above and TimelineSection's
-// per-turn trace, so a tool call reads the same color wherever it's
-// shown.
+// toolCallStatusClass colors a tool call trace entry by outcome, from
+// the one shared status model (toolCallStatus/statusText): shared
+// between the plain Timeline row above and TimelineSection's per-turn
+// trace, so a tool call reads the same color wherever it's shown.
 export function toolCallStatusClass(status: string): string {
-  if (status === 'ok') return 'text-green-400'
-  if (status === 'denied') return 'text-amber-400'
-  return 'text-red-400'
+  return statusText[toolCallStatus(status as Parameters<typeof toolCallStatus>[0])]
 }
 
 function asRecord(v: unknown): Record<string, unknown> {
   return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {}
+}
+
+// eventIcon maps a Timeline row's event kind to an icon (section 16):
+// a fixed table of dedicated glyphs for terminal/control-flow kinds,
+// input-request kinds share the permission Hand icon, anything
+// unrecognized falls back to traceIcons.other.
+const kindIcons: Record<string, LucideIcon> = {
+  'mission.created': Sparkles,
+  'mission.phase_started': Flag,
+  'mission.permission_requested': Hand,
+  'mission.permission_answered': Hand,
+  'mission.permission_denied': Hand,
+  'mission.done': CircleCheck,
+  'mission.failed': CircleX,
+  'mission.violation': CircleX,
+  'mission.paused': Pause,
+  'mission.blocked': Pause,
+  'mission.retry': RotateCcw,
+  'mission.recovery': RotateCcw,
+  'mission.pushed': GitBranch,
+  'mission.push_failed': GitBranch,
+  'mission.pr_opened': GitPullRequest,
+  'executor.died': CircleX,
+  'executor.auth_failed': CircleX,
+  'mission.result_complete': CircleCheck,
+}
+
+export function eventIcon(kind: string): LucideIcon {
+  if (kindIcons[kind]) return kindIcons[kind]
+  if (kind.startsWith('mission.input')) return Hand
+  return traceIcons.other
+}
+
+// eventStatus maps an event kind (and, where the outcome is in the
+// payload rather than the kind, its payload) to the one Status model
+// (section 13), so a Timeline row's dot/icon colour comes from the
+// same table as everywhere else, never a bespoke class.
+export function eventStatus(kind: string, payload: unknown): Status | undefined {
+  if (kind === 'mission.done' || kind === 'mission.result_complete') return 'success'
+  if (
+    kind === 'mission.failed' ||
+    kind === 'mission.violation' ||
+    kind === 'executor.died' ||
+    kind === 'executor.auth_failed' ||
+    kind === 'mission.push_failed' ||
+    kind === 'mission.permission_denied'
+  )
+    return 'error'
+  if (kind === 'mission.paused' || kind === 'mission.blocked' || kind === 'mission.permission_requested' || kind === 'mission.input_requested')
+    return 'waiting'
+  if (kind === 'mission.retry' || kind === 'mission.recovery') return 'warning'
+  if (kind === 'mission.unit_verified') {
+    const { passed } = asRecord(payload)
+    return passed ? 'success' : 'error'
+  }
+  if (kind === 'mission.unit_regressed') return 'error'
+  if (kind === 'mission.review_verdict') {
+    const { decision } = asRecord(payload)
+    return decision === 'approved' ? 'success' : 'warning'
+  }
+  return undefined
+}
+
+// toolRunFromEvent maps a mission.tool_call event to the ToolRun shape
+// ToolCallCard/TraceRow render (issue #587): args_digest already IS
+// the display text (server-truncated), never re-parsed as JSON args.
+export function toolRunFromEvent(e: MissionEvent): ToolRun {
+  const { tool, status, duration_ms, args_digest } = e.payload as MissionToolCallPayload
+  return {
+    id: String(e.seq),
+    name: tool,
+    status: status === 'ok' || status === 'error' || status === 'denied' ? status : 'error',
+    digest: args_digest,
+    durationMs: duration_ms,
+  }
 }
 
 // truncateForDisplay caps an inline Timeline snippet well below the
@@ -419,7 +507,7 @@ function renderExecutorResult(event: MissionEvent, allEvents: MissionEvent[]): R
       {usage
         ? `${usage.input_tokens}→${usage.output_tokens} tok · ${formatExecutorCost(usage.cost_usd, !!usage.cost_usd_billed, subscriptionAuth)}`
         : 'no usage reported'}
-      {denials.length > 0 && <span className="text-amber-400"> · denials: {denials.join(', ')}</span>}
+      {denials.length > 0 && <span className="text-warning"> · denials: {denials.join(', ')}</span>}
     </span>
   )
 }

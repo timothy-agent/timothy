@@ -4,7 +4,7 @@ import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type { KbDocument } from '../../api/types'
 import { Button } from '../ui/button'
-import { errText } from '../settings/util'
+import { errText } from '../../lib/errors'
 
 const acceptExt = '.pdf,.md,.txt,.docx,.html'
 

@@ -1,7 +1,8 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import { Hand, Sparkles, Wrench } from 'lucide-react'
 import type { MissionEvent } from '../../api/types'
-import { renderEvent } from './eventRenderers'
+import { eventIcon, eventStatus, renderEvent, toolCallStatusClass, toolRunFromEvent } from './eventRenderers'
 
 function event(payload: unknown, kind = 'mission.unit_verified', seq = 1): MissionEvent {
   return {
@@ -17,9 +18,9 @@ function event(payload: unknown, kind = 'mission.unit_verified', seq = 1): Missi
 describe('mission.unit_verified rendering', () => {
   it('names the unit 1-indexed when the payload carries a 0-indexed index', () => {
     render(<div>{renderEvent(event({ unit: 0, passed: true }))}</div>)
-    expect(screen.getByText('Unit 1 verification: passed')).toHaveClass('text-green-400')
+    expect(screen.getByText('Unit 1 verification: passed')).toHaveClass('text-good')
     render(<div>{renderEvent(event({ unit: 2, passed: false }))}</div>)
-    expect(screen.getByText('Unit 3 verification: failed')).toHaveClass('text-red-400')
+    expect(screen.getByText('Unit 3 verification: failed')).toHaveClass('text-destructive')
   })
 
   it('omits the unit index when the payload has none, rather than showing "Unit ?"', () => {
@@ -31,26 +32,26 @@ describe('mission.unit_verified rendering', () => {
 describe('mission.unit_regressed rendering', () => {
   it('names the unit 1-indexed with its title and failing check', () => {
     render(<div>{renderEvent(event({ unit: 0, title: 'write report', check: 'artifacts' }, 'mission.unit_regressed'))}</div>)
-    expect(screen.getByText('Unit 1 (write report) regressed: artifacts check failed')).toHaveClass('text-red-400')
+    expect(screen.getByText('Unit 1 (write report) regressed: artifacts check failed')).toHaveClass('text-destructive')
   })
 })
 
 describe('mission.finding_demoted rendering', () => {
   it('names the finding and the gate reason', () => {
     render(<div>{renderEvent(event({ title: 'wrong status', file: 'nope.md', reason: 'quotes no evidence' }, 'mission.finding_demoted'))}</div>)
-    expect(screen.getByText('Finding demoted to minor: wrong status (quotes no evidence)')).toHaveClass('text-amber-400')
+    expect(screen.getByText('Finding demoted to minor: wrong status (quotes no evidence)')).toHaveClass('text-warning')
   })
 })
 
 describe('mission.review_verdict rendering', () => {
   it('renders an approved decision green', () => {
     render(<div>{renderEvent(event({ decision: 'approved', findings: [], resolved: [] }, 'mission.review_verdict'))}</div>)
-    expect(screen.getByText('Review verdict: approved')).toHaveClass('text-green-400')
+    expect(screen.getByText('Review verdict: approved')).toHaveClass('text-good')
   })
 
   it('renders a rework decision amber with the open finding ids', () => {
     render(<div>{renderEvent(event({ decision: 'rework', reason: 'missing test', round: 1, open: ['F1', 'F2'] }, 'mission.review_verdict'))}</div>)
-    expect(screen.getByText('Review verdict: rework: open F1, F2')).toHaveClass('text-amber-400')
+    expect(screen.getByText('Review verdict: rework: open F1, F2')).toHaveClass('text-warning')
   })
 
   it('marks a findings_only round as such', () => {
@@ -59,7 +60,7 @@ describe('mission.review_verdict rendering', () => {
         {renderEvent(event({ decision: 'rework', findings: [], resolved: [], findings_only: true }, 'mission.review_verdict'))}
       </div>,
     )
-    expect(screen.getByText('Review verdict: rework (findings-only round)')).toHaveClass('text-amber-400')
+    expect(screen.getByText('Review verdict: rework (findings-only round)')).toHaveClass('text-warning')
   })
 })
 
@@ -111,7 +112,7 @@ describe('mission.pushed rendering', () => {
 describe('mission.push_failed rendering', () => {
   it('names the failure reason', () => {
     render(<div>{renderEvent(event({ reason: 'push rejected' }, 'mission.push_failed'))}</div>)
-    expect(screen.getByText('Push failed: push rejected')).toHaveClass('text-red-400')
+    expect(screen.getByText('Push failed: push rejected')).toHaveClass('text-destructive')
   })
 
   it('falls back to "unknown reason" when the payload has none', () => {
@@ -234,7 +235,7 @@ describe('mission.steered rendering', () => {
     render(<div>{renderEvent(event({ note: 'focus on staging next' }, 'mission.steered'))}</div>)
     const row = screen.getByText(/Operator note: focus on staging next/)
     expect(row).toBeInTheDocument()
-    expect(row).toHaveClass('text-amber-400')
+    expect(row).toHaveClass('text-warning')
   })
 
   it('includes the phase when the payload carries one', () => {
@@ -353,7 +354,7 @@ describe('executor lifecycle event rendering', () => {
     render(<div>{renderEvent(event({ note: 'focus on staging next', harness: 'pi' }, 'executor.steered'))}</div>)
     const row = screen.getByText(/Steering note delivered to the running pi agent: focus on staging next/)
     expect(row).toBeInTheDocument()
-    expect(row).toHaveClass('text-amber-400')
+    expect(row).toHaveClass('text-warning')
   })
 })
 
@@ -374,7 +375,7 @@ describe('mission.turn rendering', () => {
       </div>,
     )
     const row = screen.getByText(/Turn \(plan\): failed · 500ms/)
-    expect(row).toHaveClass('text-red-400')
+    expect(row).toHaveClass('text-destructive')
     expect(row).toHaveTextContent('model returned empty')
   })
 
@@ -398,6 +399,14 @@ describe('mission.turn rendering', () => {
     )
     const row = screen.getByText(/Turn \(generate\): ok/)
     expect(row).toHaveTextContent('Coder · coding')
+  })
+
+  it('renders a failed turn in red even without a reason (no colon suffix)', () => {
+    render(
+      <div>{renderEvent(event({ phase: 'generate', duration_ms: 300, ok: false, input: 'worker_retry' }, 'mission.turn'))}</div>,
+    )
+    const row = screen.getByText('Turn (generate): failed · 300ms')
+    expect(row).toHaveClass('text-destructive')
   })
 
   it('renders exactly as before when route/agent are absent (legacy event)', () => {
@@ -462,14 +471,19 @@ describe('mission.result_complete rendering', () => {
       <div>{renderEvent(event({ delivered: 2, artifacts_copied: 1 }, 'mission.result_complete'))}</div>,
     )
     const row = screen.getByText(/Result complete/)
-    expect(row).toHaveClass('text-green-400')
+    expect(row).toHaveClass('text-good')
     expect(row).toHaveTextContent('delivered to 2')
     expect(row).toHaveTextContent('1 artifact(s) copied')
   })
 
   it('renders a failed result step in red', () => {
     render(<div>{renderEvent(event({ delivery_error: 'destination unreachable' }, 'mission.result_complete'))}</div>)
-    expect(screen.getByText(/Result step failed/)).toHaveClass('text-red-400')
+    expect(screen.getByText(/Result step failed/)).toHaveClass('text-destructive')
+  })
+
+  it('renders a bare success message when there is nothing to report', () => {
+    render(<div>{renderEvent(event({}, 'mission.result_complete'))}</div>)
+    expect(screen.getByText('Result complete')).toHaveClass('text-good')
   })
 })
 
@@ -477,13 +491,62 @@ describe('mission.retry rendering', () => {
   it('shows the cause and reason', () => {
     render(<div>{renderEvent(event({ cause: 'worker_failed', reason: 'transport_death' }, 'mission.retry'))}</div>)
     const row = screen.getByText(/Retrying \(worker_failed\)/)
-    expect(row).toHaveClass('text-amber-400')
+    expect(row).toHaveClass('text-warning')
     expect(row).toHaveTextContent('transport_death')
   })
 
   it('falls back to a bare "Retrying" when the payload has no cause', () => {
     render(<div>{renderEvent(event({}, 'mission.retry'))}</div>)
-    expect(screen.getByText('Retrying')).toHaveClass('text-amber-400')
+    expect(screen.getByText('Retrying')).toHaveClass('text-warning')
+  })
+})
+
+describe('mission.paused rendering', () => {
+  it('shows the reason alone when the payload has no detail', () => {
+    render(<div>{renderEvent(event({ reason: 'budget_exceeded' }, 'mission.paused'))}</div>)
+    expect(screen.getByText('Paused (budget_exceeded)')).toHaveClass('text-warning')
+  })
+
+  it('appends the detail when the payload carries one', () => {
+    render(<div>{renderEvent(event({ reason: 'budget_exceeded', detail: 'over $5 spent' }, 'mission.paused'))}</div>)
+    expect(screen.getByText('Paused (budget_exceeded): over $5 spent')).toHaveClass('text-warning')
+  })
+
+  it('falls back to "unknown reason" when the payload has none', () => {
+    render(<div>{renderEvent(event({}, 'mission.paused'))}</div>)
+    expect(screen.getByText('Paused (unknown reason)')).toBeInTheDocument()
+  })
+})
+
+describe('mission.violation rendering', () => {
+  it('renders a fixed destructive message', () => {
+    render(<div>{renderEvent(event({}, 'mission.violation'))}</div>)
+    expect(screen.getByText('Policy violation detected')).toHaveClass('text-destructive')
+  })
+})
+
+describe('mission.done rendering', () => {
+  it('renders a fixed success message', () => {
+    render(<div>{renderEvent(event({}, 'mission.done'))}</div>)
+    expect(screen.getByText('Mission completed')).toHaveClass('text-good')
+  })
+})
+
+describe('mission.recovery rendering', () => {
+  it('renders a fixed message', () => {
+    expect(renderEvent(event({}, 'mission.recovery'))).toBe('Recovered after a restart')
+  })
+})
+
+describe('mission.failed rendering', () => {
+  it('shows the reason when the payload carries one', () => {
+    render(<div>{renderEvent(event({ reason: 'goal_infeasible' }, 'mission.failed'))}</div>)
+    expect(screen.getByText('Mission failed: goal_infeasible')).toHaveClass('text-destructive')
+  })
+
+  it('omits the suffix when the payload has no reason', () => {
+    render(<div>{renderEvent(event({}, 'mission.failed'))}</div>)
+    expect(screen.getByText('Mission failed')).toBeInTheDocument()
   })
 })
 
@@ -491,7 +554,7 @@ describe('mission.permission_denied rendering', () => {
   it('shows the tool and a trimmed detail', () => {
     render(<div>{renderEvent(event({ tool: 'shell', detail: 'rm -rf /workspace' }, 'mission.permission_denied'))}</div>)
     const row = screen.getByText(/Permission denied: shell/)
-    expect(row).toHaveClass('text-red-400')
+    expect(row).toHaveClass('text-destructive')
     expect(row).toHaveTextContent('rm -rf /workspace')
   })
 })
@@ -505,7 +568,7 @@ describe('unknown event kind fallback', () => {
 describe('mission.route_changed rendering', () => {
   it('names the old and new review route', () => {
     render(<div>{renderEvent(event({ from_route: 'default', to_route: 'careful' }, 'mission.route_changed'))}</div>)
-    expect(screen.getByText('Review route changed: default → careful')).toHaveClass('text-amber-400')
+    expect(screen.getByText('Review route changed: default → careful')).toHaveClass('text-warning')
   })
 
   it('appends the model pin change when it differs', () => {
@@ -517,5 +580,94 @@ describe('mission.route_changed rendering', () => {
       </div>,
     )
     expect(screen.getByText('Review route changed: default → careful · model auto → openai/gpt-5')).toBeInTheDocument()
+  })
+})
+
+describe('eventStatus', () => {
+  it('maps terminal kinds to success/error', () => {
+    expect(eventStatus('mission.done', {})).toBe('success')
+    expect(eventStatus('mission.result_complete', {})).toBe('success')
+    expect(eventStatus('mission.failed', {})).toBe('error')
+    expect(eventStatus('mission.violation', {})).toBe('error')
+    expect(eventStatus('executor.died', {})).toBe('error')
+  })
+
+  it('maps waiting/warning kinds', () => {
+    expect(eventStatus('mission.paused', {})).toBe('waiting')
+    expect(eventStatus('mission.permission_requested', {})).toBe('waiting')
+    expect(eventStatus('mission.retry', {})).toBe('warning')
+    expect(eventStatus('mission.recovery', {})).toBe('warning')
+  })
+
+  it('reads the outcome from the payload for unit_verified and review_verdict', () => {
+    expect(eventStatus('mission.unit_verified', { passed: true })).toBe('success')
+    expect(eventStatus('mission.unit_verified', { passed: false })).toBe('error')
+    expect(eventStatus('mission.unit_regressed', {})).toBe('error')
+    expect(eventStatus('mission.review_verdict', { decision: 'approved' })).toBe('success')
+    expect(eventStatus('mission.review_verdict', { decision: 'rework' })).toBe('warning')
+  })
+
+  it('returns undefined for a kind with no status mapping', () => {
+    expect(eventStatus('mission.created', {})).toBeUndefined()
+  })
+})
+
+describe('toolRunFromEvent', () => {
+  it('maps a mission.tool_call event to a ToolRun', () => {
+    const e = event(
+      { phase: 'generate', tool: 'search_kb', args_digest: '{"query":"first"}', status: 'ok', duration_ms: 12 },
+      'mission.tool_call',
+      3,
+    )
+    expect(toolRunFromEvent(e)).toEqual({
+      id: '3',
+      name: 'search_kb',
+      status: 'ok',
+      digest: '{"query":"first"}',
+      durationMs: 12,
+    })
+  })
+
+  it('maps an unrecognized status to error', () => {
+    const e = event({ phase: 'generate', tool: 'shell', status: 'blocked', duration_ms: 3 }, 'mission.tool_call')
+    expect(toolRunFromEvent(e).status).toBe('error')
+  })
+})
+
+describe('mission.tool_call rendering', () => {
+  it('renders the tool name, status, and duration colored by outcome', () => {
+    render(
+      <div>{renderEvent(event({ tool: 'search_kb', status: 'ok', duration_ms: 250 }, 'mission.tool_call'))}</div>,
+    )
+    const row = screen.getByText('search_kb · ok · 250ms')
+    expect(row).toHaveClass('text-good')
+  })
+})
+
+describe('toolCallStatusClass', () => {
+  it('colors a successful call good', () => {
+    expect(toolCallStatusClass('ok')).toBe('text-good')
+  })
+
+  it('colors a denied call neutral', () => {
+    expect(toolCallStatusClass('denied')).toBe('text-muted-foreground')
+  })
+
+  it('colors an unrecognized status as error', () => {
+    expect(toolCallStatusClass('blocked')).toBe('text-destructive')
+  })
+})
+
+describe('eventIcon', () => {
+  it('returns the dedicated icon for a kind in the fixed table', () => {
+    expect(eventIcon('mission.created')).toBe(Sparkles)
+  })
+
+  it('returns the Hand icon for any mission.input* kind not in the table', () => {
+    expect(eventIcon('mission.input_requested')).toBe(Hand)
+  })
+
+  it('falls back to traceIcons.other for an unrecognized kind', () => {
+    expect(eventIcon('some.future.kind')).toBe(Wrench)
   })
 })

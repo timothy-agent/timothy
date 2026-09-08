@@ -1,7 +1,9 @@
+import axe from 'axe-core'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminProvider, AdminRoute } from '../../api/types'
+import { TooltipProvider } from '../ui/tooltip'
 import { RouteEdit } from './RouteEdit'
 
 vi.mock('../../api/client', () => ({
@@ -10,8 +12,10 @@ vi.mock('../../api/client', () => ({
   listProviders: vi.fn(),
   patchRoute: vi.fn(),
 }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { catalogModelsForProvider, listProviders, listRoutes, patchRoute } from '../../api/client'
+import { toast } from 'sonner'
 
 const providers: AdminProvider[] = [
   {
@@ -68,11 +72,13 @@ const scoredRoute: AdminRoute = {
 function renderRoute(name: string, override?: AdminRoute) {
   if (override) vi.mocked(listRoutes).mockResolvedValue([override, scoredRoute])
   return render(
-    <MemoryRouter initialEntries={[`/settings/routes/${name}`]}>
-      <Routes>
-        <Route path="/settings/routes/:name" element={<RouteEdit />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[`/settings/routes/${name}`]}>
+        <Routes>
+          <Route path="/settings/routes/:name" element={<RouteEdit />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 
@@ -111,12 +117,18 @@ describe('RouteEdit ordered pipeline', () => {
     expect(cards[1]).toHaveTextContent('unpriced')
   })
 
-  it('arrow button reorders via a single PATCH', async () => {
+  it('arrow reorder stages, Save sends one PATCH with the order', async () => {
     renderRoute('default')
     await screen.findByTestId('pipeline')
     fireEvent.click(screen.getByRole('button', { name: 'Move sonnet right' }))
+    expect(patchRoute).not.toHaveBeenCalled()
+    expect(await screen.findByText('Unsaved changes')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
       expect(patchRoute).toHaveBeenCalledWith('default', {
+        strategy: 'ordered',
+        enabled: true,
         chain: [
           { provider_id: 'p2', model: 'grok-4' },
           { provider_id: 'p1', model: 'sonnet' },
@@ -126,7 +138,7 @@ describe('RouteEdit ordered pipeline', () => {
     expect(patchRoute).toHaveBeenCalledTimes(1)
   })
 
-  it('pointer drag commits one PATCH with the new order', async () => {
+  it('drag stages, Save sends one PATCH with the new order', async () => {
     renderRoute('default')
     const cards = await screen.findAllByTestId('pipeline-card')
     cards.forEach((card, i) => {
@@ -137,8 +149,14 @@ describe('RouteEdit ordered pipeline', () => {
     fireEvent.pointerDown(cards[0], { clientX: 10, button: 0 })
     fireEvent.pointerMove(window, { clientX: 180 })
     fireEvent.pointerUp(window)
+    expect(patchRoute).not.toHaveBeenCalled()
+    expect(await screen.findByText('Unsaved changes')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
       expect(patchRoute).toHaveBeenCalledWith('default', {
+        strategy: 'ordered',
+        enabled: true,
         chain: [
           { provider_id: 'p2', model: 'grok-4' },
           { provider_id: 'p1', model: 'sonnet' },
@@ -148,7 +166,7 @@ describe('RouteEdit ordered pipeline', () => {
     expect(patchRoute).toHaveBeenCalledTimes(1)
   })
 
-  it('Escape cancels a drag without a PATCH', async () => {
+  it('Escape cancels a drag without a PATCH, order and dirty state unchanged', async () => {
     renderRoute('default')
     const cards = await screen.findAllByTestId('pipeline-card')
     cards.forEach((card, i) => {
@@ -161,17 +179,60 @@ describe('RouteEdit ordered pipeline', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     fireEvent.pointerUp(window)
     expect(patchRoute).not.toHaveBeenCalled()
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
+    const settled = await screen.findAllByTestId('pipeline-card')
+    expect(settled[0]).toHaveTextContent('anthropic')
+    expect(settled[1]).toHaveTextContent('grok')
   })
 
-  it('removes an entry', async () => {
+  it('removes an entry: stages, Save sends the PATCH', async () => {
     renderRoute('default')
     await screen.findByTestId('pipeline')
     fireEvent.click(screen.getByRole('button', { name: 'Remove grok-4' }))
+    expect(patchRoute).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
       expect(patchRoute).toHaveBeenCalledWith('default', {
+        strategy: 'ordered',
+        enabled: true,
         chain: [{ provider_id: 'p1', model: 'sonnet' }],
       }),
     )
+    expect(patchRoute).toHaveBeenCalledTimes(1)
+  })
+
+  it('strategy and Enabled stage; Save sends one PATCH; Cancel restores the server chain', async () => {
+    renderRoute('default')
+    await screen.findByTestId('pipeline')
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'default strategy' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Cheapest' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'default route enabled' }))
+    expect(patchRoute).not.toHaveBeenCalled()
+    expect(await screen.findByText('Unsaved changes')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(patchRoute).not.toHaveBeenCalled()
+    expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'default route enabled' })).toBeChecked()
+  })
+
+  it('zero PATCH before Save; a failed Save keeps state and renders an Alert with Retry', async () => {
+    vi.mocked(patchRoute).mockRejectedValueOnce(new Error('network down'))
+    renderRoute('default')
+    await screen.findByTestId('pipeline')
+    fireEvent.click(screen.getByRole('button', { name: 'Move sonnet right' }))
+    expect(patchRoute).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('network down')
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument()
+
+    vi.mocked(patchRoute).mockResolvedValueOnce(undefined)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(patchRoute).toHaveBeenCalledTimes(2))
   })
 })
 
@@ -192,6 +253,41 @@ describe('RouteEdit scored pipeline', () => {
     await screen.findByTestId('pipeline')
     expect(screen.getByText('serving').closest('[data-testid="pipeline-card"]')).toHaveTextContent(
       'grok',
+    )
+  })
+
+  it('removes a duplicate resolved entry with no matching chain reference, falling back to a provider/model filter', async () => {
+    // Two resolved rows both point at p1/sonnet: the first consumes the
+    // one matching chain entry from the pool by splice, so the second
+    // display entry is a synthesized object with no chain reference.
+    // Removing that second card exercises removeEntry's fallback (its
+    // indexOf(target) misses, so it filters by provider_id/model
+    // instead of array index) and actually changes the staged chain.
+    const dupResolvedRoute: AdminRoute = {
+      ...scoredRoute,
+      name: 'dup',
+      chain: [{ provider_id: 'p1', model: 'sonnet' }],
+      resolved: [
+        { provider_id: 'p1', provider_name: 'anthropic', model: 'sonnet', usable: true, score: 0.5 },
+        { provider_id: 'p1', provider_name: 'anthropic', model: 'sonnet', usable: true, score: 0.4 },
+      ],
+      serving: { provider_id: 'p1', model: 'sonnet' },
+    }
+    vi.mocked(listRoutes).mockResolvedValue([orderedRoute, dupResolvedRoute])
+    renderRoute('dup')
+    const cards = await screen.findAllByTestId('pipeline-card')
+    expect(cards).toHaveLength(2)
+
+    const removeButtons = screen.getAllByRole('button', { name: 'Remove sonnet' })
+    fireEvent.click(removeButtons[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchRoute).toHaveBeenCalledWith('dup', {
+        strategy: 'price',
+        enabled: true,
+        chain: [],
+      }),
     )
   })
 })
@@ -247,7 +343,7 @@ describe('RouteEdit add-chain-entry provider and model pickers', () => {
     expect(catalogModelsForProvider).not.toHaveBeenCalledWith('p1', 'claude-op')
   })
 
-  it('picking a suggested model and adding it sets the chain entry', async () => {
+  it('picking a suggested model and adding it stages the chain entry; Save sends it', async () => {
     vi.mocked(catalogModelsForProvider).mockResolvedValue([
       {
         id: 'claude-opus-4-6',
@@ -268,8 +364,14 @@ describe('RouteEdit add-chain-entry provider and model pickers', () => {
     fireEvent.click(await screen.findByRole('option', { name: /^claude-opus-4-6/ }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(patchRoute).not.toHaveBeenCalled()
+    expect(await screen.findByText('Unsaved changes')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
       expect(patchRoute).toHaveBeenCalledWith('default', {
+        strategy: 'ordered',
+        enabled: true,
         chain: [
           { provider_id: 'p1', model: 'sonnet' },
           { provider_id: 'p2', model: 'grok-4' },
@@ -277,5 +379,26 @@ describe('RouteEdit add-chain-entry provider and model pickers', () => {
         ],
       }),
     )
+    expect(patchRoute).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('RouteEdit load error', () => {
+  it('shows a toast when loading the route fails', async () => {
+    vi.mocked(listRoutes).mockRejectedValue(new Error('network down'))
+    renderRoute('default')
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load route', { description: 'network down' }),
+    )
+  })
+})
+
+describe('RouteEdit accessibility', () => {
+  it('has no axe violations', async () => {
+    const { container } = renderRoute('default')
+    await screen.findByTestId('pipeline')
+    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
+    expect(results.violations).toEqual([])
   })
 })
