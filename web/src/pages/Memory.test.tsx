@@ -132,8 +132,10 @@ describe('Memory tabs', () => {
   it('defaults to the queue tab, with queue listed first', async () => {
     renderPage()
     await screen.findByTestId('queue-card')
-    const tabButtons = screen.getAllByRole('button', { name: /^(Queue|Browser|Graph)$/ })
-    expect(tabButtons.map((b) => b.textContent)).toEqual(['Queue', 'Browser', 'Graph'])
+    expect(screen.getByRole('radiogroup', { name: 'Memory view' })).toBeInTheDocument()
+    const tabs = screen.getAllByRole('radio')
+    expect(tabs.map((t) => t.textContent)).toEqual(['Queue', 'Browser', 'Graph'])
+    expect(screen.getByRole('radio', { name: 'Queue' })).toHaveAttribute('data-state', 'on')
   })
 })
 
@@ -162,7 +164,7 @@ describe('Memory graph tab', () => {
       edges: [],
     })
     renderPage()
-    fireEvent.click(await screen.findByTestId('tab-graph'))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Graph' }))
     expect(await screen.findByTestId('entity-graph')).toBeInTheDocument()
     expect(screen.getByText('project')).toBeInTheDocument()
   })
@@ -174,7 +176,7 @@ describe('Memory browser', () => {
       { id: 'r1', type: 'semantic', content: 'User lives in Porto.', score: 0.02 },
     ])
     renderPage()
-    fireEvent.click(await screen.findByTestId('tab-browser'))
+    fireEvent.click(await screen.findByRole('radio', { name: 'Browser' }))
     fireEvent.change(screen.getByTestId('memory-search'), {
       target: { value: 'where does the user live' },
     })
