@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BudgetStatus, GroupTotal, UsagePoint, UsageSummary } from '../api/types'
 import { Analytics, sortGroupsByTotal } from './Analytics'
 import * as echartsCore from 'echarts/core'
+import { formatDuration } from '../lib/format'
 
 vi.mock('../api/client', () => ({
   catalogPrices: vi.fn(),
@@ -508,5 +509,149 @@ describe('Analytics zero-cost exclusion', () => {
     if (!modelCostChart) throw new Error('model cost chart section not found')
     expect(await within(modelCostChart).findByText('gpt-5.6-sol')).toBeInTheDocument()
     expect(within(modelCostChart).queryByText('local-llama')).toBeNull()
+  })
+})
+
+describe('Analytics multi-currency summaries', () => {
+  it('lists non-primary currencies separately below the tiles, never summed with the total', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([
+      summary,
+      { ...summary, currency: 'EUR', cost: 5, requests: 2 },
+    ])
+    renderPage()
+    const note = await screen.findByText(/Also in range:/)
+    expect(note).toHaveTextContent('€5.00')
+    expect(note).toHaveTextContent('shown separately')
+    // The primary tile stays at its own currency's total, unaffected by the EUR row.
+    expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0)
+  })
+
+  it('omits the note when only one currency is present', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getAllByText('$2.50').length).toBeGreaterThan(0))
+    expect(screen.queryByText(/Also in range:/)).toBeNull()
+  })
+})
+
+describe('Analytics unpriced note without a catalog estimate', () => {
+  it('omits the "roughly ≈" clause when the estimate resolves to zero', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([{ ...summary, unpriced_requests: 3 }])
+    renderPage()
+    const note = await screen.findByText(/had no configured price/)
+    expect(note).toHaveTextContent('3 calls in range')
+    expect(note).not.toHaveTextContent('roughly')
+  })
+
+  it('uses singular "call" for exactly one unpriced request', async () => {
+    vi.mocked(usageSummary).mockResolvedValue([{ ...summary, unpriced_requests: 1 }])
+    renderPage()
+    const note = await screen.findByText(/had no configured price/)
+    expect(note).toHaveTextContent('1 call in range')
+  })
+})
+
+describe('Analytics spend-by-model view toggle', () => {
+  it('defaults to lines and switches to bars on click', async () => {
+    vi.mocked(usageSeries).mockImplementation(async (_from, _to, _bucket, group) =>
+      group === 'model' ? [{ ...providerPoint, group: 'gpt-5.6-sol' }] : [],
+    )
+    vi.mocked(usageTotals).mockImplementation(async (_from, _to, group) =>
+      group === 'model' ? [{ ...providerTotal, group: 'gpt-5.6-sol' }] : [],
+    )
+    renderPage()
+    const chart = (await screen.findByText('Spend by model')).closest('[data-density]') as HTMLElement | null
+    if (!chart) throw new Error('chart section not found')
+    const lastOption = await findChartOptionGetter(chart)
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('line'))
+
+    fireEvent.click(within(chart).getByText('Bars'))
+    await waitFor(() => expect((lastOption().series as Array<{ type: string }>)[0]?.type).toBe('bar'))
+  })
+})
+
+describe('Analytics latency panel', () => {
+  it('shows a placeholder when there are no requests in range', async () => {
+    vi.mocked(usageLatency).mockResolvedValue([])
+    renderPage()
+    const chart = (await screen.findByText('Latency per provider')).closest('[data-density]') as HTMLElement | null
+    if (!chart) throw new Error('chart section not found')
+    expect(await within(chart).findByText('No requests in range.')).toBeInTheDocument()
+  })
+
+  it('renders the latency chart when requests exist, formatting the axis in duration units', async () => {
+    vi.mocked(usageLatency).mockResolvedValue([
+      { provider: 'openai', p50_ms: 250, p95_ms: 900, p99_ms: 1500, requests: 10 },
+    ])
+    renderPage()
+    const chart = (await screen.findByText('Latency per provider')).closest('[data-density]') as HTMLElement | null
+    if (!chart) throw new Error('chart section not found')
+    expect(within(chart).queryByText('No requests in range.')).toBeNull()
+    const lastOption = await findChartOptionGetter(chart)
+    await waitFor(() => expect(lastOption()).toBeTruthy())
+    const option = lastOption() as { xAxis: { axisLabel: { formatter: (v: number) => string } } }
+    expect(option.xAxis.axisLabel.formatter(1500)).toBe(formatDuration(1500))
+  })
+})
+
+describe('Analytics provider cost table sorting', () => {
+  // cost puts openai first by default (cost desc); alphabetical sort puts anthropic
+  // first, so the two orders are distinguishable in the assertions below.
+  const rowA: GroupTotal = { ...providerTotal, group: 'anthropic', cost: 1, requests: 1 }
+  const rowB: GroupTotal = { ...providerTotal, group: 'openai', cost: 3, requests: 5 }
+
+  function providerTable() {
+    return screen.getByText('Cost breakdown by provider').closest('[data-density]') as HTMLElement
+  }
+
+  function providerRows() {
+    return within(providerTable())
+      .getAllByRole('row')
+      .slice(1) // drop the header row
+      .map((row) => within(row).getAllByRole('cell')[0].textContent)
+  }
+
+  beforeEach(() => {
+    vi.mocked(usageTotals).mockImplementation(async (_from, _to, group) =>
+      group === 'provider' ? [rowA, rowB] : [],
+    )
+  })
+
+  it('defaults to sorting by cost descending', async () => {
+    renderPage()
+    await screen.findByText('Cost breakdown by provider')
+    expect(providerRows()).toEqual(['openai', 'anthropic'])
+  })
+
+  it('sorts by provider name descending on header click, and toggles ascending on a second click', async () => {
+    renderPage()
+    await screen.findByText('Cost breakdown by provider')
+    // Switching to a new sort key defaults to descending: openai before anthropic alphabetically.
+    fireEvent.click(within(providerTable()).getByText('Provider', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['openai', 'anthropic']))
+
+    fireEvent.click(within(providerTable()).getByText('Provider', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['anthropic', 'openai']))
+  })
+
+  it('sorts by requests on header click', async () => {
+    renderPage()
+    await screen.findByText('Cost breakdown by provider')
+    fireEvent.click(within(providerTable()).getByText('Requests', { exact: false, selector: 'th' }))
+    // Switching to a new sort key defaults to descending: openai (5) before anthropic (1).
+    await waitFor(() => expect(providerRows()).toEqual(['openai', 'anthropic']))
+  })
+
+  it('sorts by cost on header click, toggling ascending on a second click', async () => {
+    renderPage()
+    await screen.findByText('Cost breakdown by provider')
+    // Sort by requests first so a "Cost" click is a genuine key change.
+    fireEvent.click(within(providerTable()).getByText('Requests', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['openai', 'anthropic']))
+
+    fireEvent.click(within(providerTable()).getByText('Cost', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['openai', 'anthropic']))
+
+    fireEvent.click(within(providerTable()).getByText('Cost', { exact: false, selector: 'th' }))
+    await waitFor(() => expect(providerRows()).toEqual(['anthropic', 'openai']))
   })
 })
