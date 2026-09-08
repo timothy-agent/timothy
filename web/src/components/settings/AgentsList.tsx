@@ -5,11 +5,14 @@ import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { deleteAgent, listAgents, patchAgent, setDefaultAgent } from '../../api/client'
 import type { AdminAgent } from '../../api/types'
+import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { ConfirmDialog } from '../timothy/confirm-dialog'
-import { PageHeader } from '../timothy/page-header'
+import { EmptyState } from '../timothy/empty-state'
+import { PageHeader, SectionHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
+import { EntityCard } from './EntityCard'
 import { settingsArea } from './settingsAreas'
 import { errText } from './util'
 
@@ -46,35 +49,35 @@ export function AgentsList() {
         title={area.label}
         description={area.description}
         breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
-      />
-      <div className="space-y-6">
-        <p className="text-sm text-muted-foreground">
-          Agents are who serves a session: a prompt overlay, a model chain (route), skill and tool
-          allowlists, and whether long-term memory participates. The default agent serves new
-          sessions unless the composer picks another.
-        </p>
-
-        <div className="flex items-center justify-between">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Agents · {agents.length}
-          </h2>
+        actions={
           <Button onClick={() => navigate('/settings/agents/new')}>
             <HugeiconsIcon icon={Add01Icon} />
             New agent
           </Button>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {agents.map((a) => (
-            <AgentCard
-              key={a.id}
-              agent={a}
-              onChanged={refresh}
-              onManage={() => navigate(`/settings/agents/${a.id}`)}
-              onDelete={() => setConfirmDelete(a)}
-            />
-          ))}
-        </div>
+        }
+      />
+      <div className="space-y-10">
+        <section className="space-y-4">
+          <SectionHeader
+            title={agents.length > 0 ? `Agents · ${agents.length}` : 'Agents'}
+            description="Who serves a session: a prompt overlay, a model chain (route), skill and tool allowlists, and whether long-term memory participates. The default agent serves new sessions unless the composer picks another."
+          />
+          {agents.length === 0 ? (
+            <EmptyState title="No agents configured yet" description="Add one to serve sessions." />
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {agents.map((a) => (
+                <AgentCard
+                  key={a.id}
+                  agent={a}
+                  onChanged={refresh}
+                  onManage={() => navigate(`/settings/agents/${a.id}`)}
+                  onDelete={() => setConfirmDelete(a)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
 
         <ConfirmDialog
           open={confirmDelete !== null}
@@ -113,53 +116,50 @@ function AgentCard({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm transition hover:shadow-md">
-      <div className="flex items-center gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-brand-soft-foreground">
+    <EntityCard
+      to={`/settings/agents/${agent.id}`}
+      title={agent.name}
+      tile={
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand-soft-foreground">
           <HugeiconsIcon icon={AiBrain01Icon} className="size-4.5" />
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-semibold capitalize">{agent.name}</span>
-            {agent.is_default && (
-              <span className="rounded bg-brand-soft px-1.5 py-0.5 text-xs font-semibold text-brand-soft-foreground">
-                default
-              </span>
-            )}
-          </div>
-        </div>
-        <Switch checked={agent.enabled} onCheckedChange={toggle} aria-label={`${agent.name} enabled`} />
-      </div>
-
-      {agent.description && (
-        <p className="line-clamp-2 text-sm text-muted-foreground">{agent.description}</p>
-      )}
-
-      <p className="text-xs text-muted-foreground">
-        route <span className="font-mono text-foreground">{agent.route || 'default'}</span>
-        {' · '}memory {agent.memory ? 'on' : 'off'}
-      </p>
-
-      <div className="mt-auto flex items-center gap-2 pt-1">
-        {!agent.is_default && (
-          <Button size="sm" variant="outline" disabled={!agent.enabled} onClick={makeDefault} className="flex-1">
-            Make default
+      }
+      badges={agent.is_default && <Badge variant="brand">default</Badge>}
+      summary={
+        agent.description ? (
+          <p className="line-clamp-2 text-sm text-muted-foreground">{agent.description}</p>
+        ) : undefined
+      }
+      status={
+        <p className="text-xs text-muted-foreground">
+          route <span className="font-mono text-foreground">{agent.route || 'default'}</span>
+          {' · '}memory {agent.memory ? 'on' : 'off'}
+        </p>
+      }
+      footer={
+        <>
+          <Switch checked={agent.enabled} onCheckedChange={toggle} aria-label={`${agent.name} enabled`} />
+          {!agent.is_default && (
+            <Button size="sm" variant="outline" disabled={!agent.enabled} onClick={makeDefault} className="flex-1">
+              Make default
+            </Button>
+          )}
+          <Button size="sm" variant="outline" onClick={onManage} className="flex-1">
+            Manage
           </Button>
-        )}
-        <Button size="sm" variant="outline" onClick={onManage} className="flex-1">
-          Manage
-        </Button>
-        {!agent.is_default && (
-          <button
-            type="button"
-            aria-label={`Delete ${agent.name}`}
-            onClick={onDelete}
-            className="text-muted-foreground hover:text-destructive"
-          >
-            <HugeiconsIcon icon={Delete02Icon} className="size-4" />
-          </button>
-        )}
-      </div>
-    </div>
+          {!agent.is_default && (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              aria-label={`Delete ${agent.name}`}
+              onClick={onDelete}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <HugeiconsIcon icon={Delete02Icon} className="size-4" />
+            </Button>
+          )}
+        </>
+      }
+    />
   )
 }

@@ -9,11 +9,12 @@ import {
   SelectValue,
 } from '../ui/select'
 import { Switch } from '../ui/switch'
-import { Field } from '../timothy/field'
+import { Field, FieldGroup } from '../timothy/field'
 import { slugify, UNSET } from './util'
 import { AllowlistPicker } from './AllowlistPicker'
 import { EXECUTOR_DEFAULT, executorChoices } from '../missions/MissionForm'
 import { listKbCollections, listSkills, listTools } from '../../api/client'
+import { useStagedForm } from './useStagedForm'
 import type { AdminAgent, AdminRoute } from '../../api/types'
 
 export interface AgentFormValue {
@@ -93,6 +94,57 @@ export function useAgentForm(agent?: AdminAgent) {
   }
 }
 
+export type AgentStagedValue = Omit<AgentFormValue, 'name'>
+
+function baselineFrom(agent: AdminAgent): AgentStagedValue {
+  return {
+    description: agent.description,
+    overlay: agent.prompt_overlay,
+    route: agent.route,
+    skills: agent.skills,
+    tools: agent.tools,
+    knowledge: agent.knowledge ?? [],
+    memory: agent.memory,
+    harness: agent.harness ?? '',
+  }
+}
+
+// useAgentEditForm stages AgentEdit's fields (contract 10.7): nothing
+// commits until Save, Cancel discards back to the loaded agent, and a
+// sibling refresh (after a successful Save) rebases untouched fields
+// while keeping ones the user is still editing. Same `fields` shape as
+// useAgentForm so AgentForm renders either without knowing which.
+export function useAgentEditForm(agent: AdminAgent) {
+  const staged = useStagedForm<AgentStagedValue>(baselineFrom(agent))
+
+  return {
+    dirty: staged.dirty,
+    reset: staged.reset,
+    rebase: (next: AdminAgent) => staged.rebase(baselineFrom(next)),
+    value: staged.values,
+    fields: {
+      name: agent.name,
+      setName: () => undefined,
+      description: staged.values.description,
+      setDescription: (v: string) => staged.setField('description', v),
+      overlay: staged.values.overlay,
+      setOverlay: (v: string) => staged.setField('overlay', v),
+      route: staged.values.route,
+      setRoute: (v: string) => staged.setField('route', v),
+      skills: staged.values.skills,
+      setSkills: (v: string[]) => staged.setField('skills', v),
+      tools: staged.values.tools,
+      setTools: (v: string[]) => staged.setField('tools', v),
+      knowledge: staged.values.knowledge,
+      setKnowledge: (v: string[]) => staged.setField('knowledge', v),
+      memory: staged.values.memory,
+      setMemory: (v: boolean) => staged.setField('memory', v),
+      harness: staged.values.harness,
+      setHarness: (v: string) => staged.setField('harness', v),
+    },
+  }
+}
+
 // AgentForm renders the shared field set for both create and edit:
 // name is a one-time slug fixed at creation (it lives in ledger rows
 // and event payloads), so it's the only field Add shows that Edit
@@ -104,17 +156,16 @@ export function AgentForm({
 }: {
   isNew: boolean
   routes: AdminRoute[]
-  fields: ReturnType<typeof useAgentForm>['fields']
+  fields: ReturnType<typeof useAgentForm>['fields'] | ReturnType<typeof useAgentEditForm>['fields']
 }) {
   return (
-    <div className="grid gap-5">
+    <FieldGroup>
       {isNew && (
         <Field label="Name" description="unique slug, immutable after creation">
           <Input
             value={fields.name}
             onChange={(e) => fields.setName(e.target.value)}
             placeholder="infra, homelab, writer…"
-            className="mt-1.5 h-10"
           />
         </Field>
       )}
@@ -123,7 +174,6 @@ export function AgentForm({
           value={fields.description}
           onChange={(e) => fields.setDescription(e.target.value)}
           placeholder="What this agent is for"
-          className="mt-1.5 h-10"
         />
       </Field>
       <Field label="Prompt overlay" description="appended to the system prompt">
@@ -133,7 +183,7 @@ export function AgentForm({
           aria-label="Prompt overlay"
           rows={5}
           placeholder="Instructions, persona, house rules… Markdown supported."
-          className="mt-1.5 min-h-32 resize-y text-sm"
+          className="min-h-32 resize-y text-sm"
         />
       </Field>
       <div className="grid gap-5 sm:grid-cols-2">
@@ -143,7 +193,7 @@ export function AgentForm({
               value={fields.route || UNSET}
               onValueChange={(v) => fields.setRoute(v === UNSET ? '' : v)}
             >
-              <SelectTrigger id={props.id} className="mt-1.5 h-10 w-full" aria-label="agent route">
+              <SelectTrigger id={props.id} className="w-full" aria-label="agent route">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -161,7 +211,7 @@ export function AgentForm({
         </Field>
         <Field label="Memory">
           {(props) => (
-            <div className="mt-2.5">
+            <div className="flex h-9 items-center">
               <Switch id={props.id} checked={fields.memory} onCheckedChange={fields.setMemory} aria-label="agent memory" />
             </div>
           )}
@@ -173,7 +223,7 @@ export function AgentForm({
             value={fields.harness || EXECUTOR_DEFAULT}
             onValueChange={(v) => fields.setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
           >
-            <SelectTrigger id={props.id} className="mt-1.5 h-10 w-full" aria-label="agent harness">
+            <SelectTrigger id={props.id} className="w-full" aria-label="agent harness">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -222,6 +272,6 @@ export function AgentForm({
         emptyText="No collection matches."
         freeTextPlaceholder="product-docs, runbooks"
       />
-    </div>
+    </FieldGroup>
   )
 }

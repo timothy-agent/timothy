@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { createAgent, listRoutes } from '../../api/client'
 import type { AdminRoute } from '../../api/types'
 import { Button } from '../ui/button'
+import { Form, FormActions } from '../timothy/field'
 import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { AgentForm, useAgentForm } from './AgentForm'
@@ -58,18 +59,23 @@ export function AgentAdd() {
         ]}
       />
 
-      <div>
+      <Form
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submit()
+        }}
+      >
         <AgentForm isNew routes={routes} fields={fields} />
 
-        <div className="flex gap-3 pt-6">
-          <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/agents')}>
+        <FormActions>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => navigate('/settings/agents')}>
             Cancel
           </Button>
-          <Button disabled={!canSubmit || busy} onClick={() => void submit()}>
+          <Button type="submit" disabled={!canSubmit || busy}>
             Create agent
           </Button>
-        </div>
-      </div>
+        </FormActions>
+      </Form>
     </PageShell>
   )
 }

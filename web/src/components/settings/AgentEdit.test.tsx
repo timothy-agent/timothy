@@ -1,3 +1,4 @@
+import axe from 'axe-core'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -59,7 +60,7 @@ describe('AgentEdit', () => {
     renderEdit()
 
     // The agent arrives via a promise resolved after AgentEdit's first
-    // render (before that, the fields hold blank defaults) — this
+    // render (before that, the fields hold blank defaults); this
     // guards the useState-seeded-once bug: without the re-seed effect
     // in useAgentForm, these stay blank/default forever.
     expect(await screen.findByDisplayValue(coder.description)).toBeTruthy()
@@ -81,19 +82,67 @@ describe('AgentEdit', () => {
     expect(screen.getByText('Knowledge allowlist')).toBeInTheDocument()
   })
 
-  it('includes knowledge in the save payload, defaulting to empty when the agent omits it', async () => {
+  it('disables Save until the form is dirty, sends zero PATCH before Save', async () => {
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    const save = screen.getByRole('button', { name: 'Save' })
+    expect((save as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByText('Unsaved changes')).toBeNull()
+    expect(patchAgent).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByDisplayValue(coder.description), { target: { value: 'Updated description' } })
+    expect((save as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByText('Unsaved changes')).toBeTruthy()
+    expect(patchAgent).not.toHaveBeenCalled()
+  })
+
+  it('sends exactly one PATCH on Save with the staged fields', async () => {
     vi.mocked(patchAgent).mockResolvedValue()
     renderEdit()
 
     await screen.findByDisplayValue(coder.description)
+    fireEvent.change(screen.getByDisplayValue(coder.description), { target: { value: 'Updated description' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
-    await waitFor(() =>
-      expect(patchAgent).toHaveBeenCalledWith(
-        'a1',
-        expect.objectContaining({ knowledge: [] }),
-      ),
+    await waitFor(() => expect(patchAgent).toHaveBeenCalledTimes(1))
+    expect(patchAgent).toHaveBeenCalledWith(
+      'a1',
+      expect.objectContaining({ description: 'Updated description', knowledge: [] }),
     )
+  })
+
+  it('Cancel restores the loaded values and clears the unsaved note', async () => {
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    const descriptionInput = screen.getByDisplayValue(coder.description)
+    fireEvent.change(descriptionInput, { target: { value: 'Something else' } })
+    expect(screen.getByText('Unsaved changes')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.getByDisplayValue(coder.description)).toBeTruthy()
+    expect(screen.queryByText('Unsaved changes')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(patchAgent).not.toHaveBeenCalled()
+  })
+
+  it('keeps staged values and shows a retryable alert when Save fails', async () => {
+    vi.mocked(patchAgent).mockRejectedValueOnce(new Error('network down'))
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    fireEvent.change(screen.getByDisplayValue(coder.description), { target: { value: 'Updated description' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('network down')
+    expect(screen.getByDisplayValue('Updated description')).toBeTruthy()
+
+    vi.mocked(patchAgent).mockResolvedValueOnce()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(patchAgent).toHaveBeenCalledTimes(2))
   })
 
   it('shows the harness select defaulted to inherit from settings when the agent omits it', async () => {
@@ -105,11 +154,12 @@ describe('AgentEdit', () => {
     )
   })
 
-  it('submits an empty harness (inherit) by default', async () => {
+  it('submits an empty harness (inherit) by default after an edit', async () => {
     vi.mocked(patchAgent).mockResolvedValue()
     renderEdit()
 
     await screen.findByDisplayValue(coder.description)
+    fireEvent.change(screen.getByDisplayValue(coder.description), { target: { value: 'Updated description' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
@@ -123,7 +173,7 @@ describe('AgentEdit', () => {
 
     await screen.findByDisplayValue(coder.description)
     fireEvent.click(screen.getByRole('combobox', { name: 'agent harness' }))
-    fireEvent.click(await screen.findByText('Claude Code'))
+    fireEvent.click(await screen.findByRole('option', { name: 'Claude Code' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
@@ -132,5 +182,12 @@ describe('AgentEdit', () => {
         expect.objectContaining({ harness: 'claude-cli' }),
       ),
     )
+  })
+
+  it('has no axe violations', async () => {
+    const { container } = renderEdit()
+    await screen.findByDisplayValue(coder.description)
+    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
+    expect(results.violations).toEqual([])
   })
 })
