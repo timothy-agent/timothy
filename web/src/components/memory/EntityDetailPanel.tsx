@@ -32,7 +32,7 @@ export function EntityDetailPanel({ entity }: { entity: EntityNode }) {
     <div className="space-y-3" data-testid="entity-detail">
       <div className="flex items-center gap-2">
         <h3 className="min-w-0 flex-1 truncate text-sm font-semibold">{entity.name}</h3>
-        <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+        <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
           {entity.type}
         </span>
       </div>
@@ -46,7 +46,7 @@ export function EntityDetailPanel({ entity }: { entity: EntityNode }) {
       ) : (
         <div className="space-y-2">
           {memories.map((m) => (
-            <div key={m.id} className="space-y-2 rounded-lg border p-3 text-sm" data-testid="entity-memory">
+            <div key={m.id} className="space-y-2 rounded-md border p-3 text-sm" data-testid="entity-memory">
               <div className="flex items-center gap-2">
                 <TypeBadge type={m.type} />
                 <span className="text-xs text-muted-foreground">
