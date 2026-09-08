@@ -66,6 +66,7 @@ function AgentEditForm({
     setSaveError(null)
     try {
       await patchAgent(agent.id, {
+        name: staged.value.name.trim(),
         description: staged.value.description,
         prompt_overlay: staged.value.overlay,
         route: staged.value.route,
@@ -125,7 +126,7 @@ function AgentEditForm({
           void save()
         }}
       >
-        <AgentForm isNew={false} routes={routes} fields={staged.fields} />
+        <AgentForm routes={routes} fields={staged.fields} />
 
         {saveError && (
           <Alert tone="destructive">

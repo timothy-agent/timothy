@@ -503,7 +503,8 @@ func main() {
 
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
-		flags.Location, agentReg.Resolve, app.Log)
+		flags.Location, agentReg.ResolveByID, app.Log)
+	svc.SetAgentResolverByName(agentReg.Resolve)
 	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
 	svc.SetSensitiveTools(sensitiveTools)
 	// TURN_TIMEOUT raises the detached-turn ceiling above the compiled

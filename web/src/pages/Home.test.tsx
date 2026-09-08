@@ -129,7 +129,7 @@ describe('Home', () => {
     renderHome()
     fireEvent.click(await screen.findByRole('button', { name: /research/ }))
     expect(landed?.pathname).toBe('/chat')
-    expect(landed?.state?.agent).toBe('research')
+    expect(landed?.state?.agent).toBe('a2')
   })
 
   it('the Memory shortcut navigates to the memory page', () => {

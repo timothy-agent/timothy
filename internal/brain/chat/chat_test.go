@@ -1733,20 +1733,20 @@ func TestChatAutoDispatchesAgent(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
-	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
-		switch name {
-		case "", "general":
-			return agents.Agent{Name: "general", Route: "default"}, true
-		case "researcher":
-			return agents.Agent{Name: "researcher", Route: "research"}, true
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
+		switch id {
+		case "", "general-id":
+			return agents.Agent{ID: "general-id", Name: "general", Route: "default"}, true
+		case "researcher-id":
+			return agents.Agent{ID: "researcher-id", Name: "researcher", Route: "research"}, true
 		default:
 			return agents.Agent{}, false
 		}
 	}
 	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	candidates := []agents.Agent{
-		{Name: "general", Description: "everyday tasks"},
-		{Name: "researcher", Description: "consults sources"},
+		{ID: "general-id", Name: "general", Description: "everyday tasks"},
+		{ID: "researcher-id", Name: "researcher", Description: "consults sources"},
 	}
 	svc.SetAutoDispatch(
 		func(context.Context) []agents.Agent { return candidates },
@@ -1760,8 +1760,8 @@ func TestChatAutoDispatchesAgent(t *testing.T) {
 	drain(t, ch)
 
 	sent := chatRequest(t, gw)
-	if sent.Agent != "researcher" || sent.Route != "research" {
-		t.Fatalf("agent/route = %s/%s, want researcher/research (auto-dispatched)", sent.Agent, sent.Route)
+	if sent.Agent != "researcher-id" || sent.Route != "research" {
+		t.Fatalf("agent/route = %s/%s, want researcher-id/research (auto-dispatched)", sent.Agent, sent.Route)
 	}
 
 	events, err := log.Events(t.Context(), "s1")
@@ -1774,8 +1774,8 @@ func TestChatAutoDispatchesAgent(t *testing.T) {
 			_ = json.Unmarshal(ev.Payload, &msg)
 		}
 	}
-	if msg.Agent != "researcher" {
-		t.Fatalf("persisted user message agent = %q, want researcher (never the raw auto sentinel)", msg.Agent)
+	if msg.Agent != "researcher-id" {
+		t.Fatalf("persisted user message agent = %q, want researcher-id (never the raw auto sentinel)", msg.Agent)
 	}
 }
 
@@ -1787,9 +1787,9 @@ func TestChatAutoWithoutDispatchWiredFallsBackToDefault(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
-	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
-		if name == "" {
-			return agents.Agent{Name: "general", Route: "default"}, true
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
+		if id == "" {
+			return agents.Agent{ID: "general-id", Name: "general", Route: "default"}, true
 		}
 		return agents.Agent{}, false
 	}
@@ -1802,8 +1802,8 @@ func TestChatAutoWithoutDispatchWiredFallsBackToDefault(t *testing.T) {
 	drain(t, ch)
 
 	sent := chatRequest(t, gw)
-	if sent.Agent != "general" {
-		t.Fatalf("agent = %q, want general (fallback default)", sent.Agent)
+	if sent.Agent != "general-id" {
+		t.Fatalf("agent = %q, want general-id (fallback default)", sent.Agent)
 	}
 }
 
@@ -1815,11 +1815,11 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
-	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
-		switch name {
-		case "", "researcher":
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
+		switch id {
+		case "", "researcher-id":
 			return agents.Agent{
-				Name: "researcher", Route: "research",
+				ID: "researcher-id", Name: "researcher", Route: "research",
 				PromptOverlay: "Consult sources before answering.",
 				Tools:         []string{"search_web"},
 				Memory:        false,
@@ -1839,15 +1839,15 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 		t.Fatal("unknown agent accepted")
 	}
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: "researcher"})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: "researcher-id"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
 	drain(t, ch)
 
 	sent := chatRequest(t, gw)
-	if sent.Route != "research" || sent.Agent != "researcher" {
-		t.Fatalf("route/agent = %s/%s, want research/researcher", sent.Route, sent.Agent)
+	if sent.Route != "research" || sent.Agent != "researcher-id" {
+		t.Fatalf("route/agent = %s/%s, want research/researcher-id", sent.Route, sent.Agent)
 	}
 	if !slices.Equal(sent.ToolAllow, []string{"search_web", "retrieve_output"}) {
 		t.Fatalf("tool allowlist = %v, want authored list plus retrieve_output", sent.ToolAllow)
@@ -1857,6 +1857,50 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 	}
 	if recalled || strings.Contains(sent.System, "MEMORY BLOCK") {
 		t.Fatal("memory recall ran for a memory-off agent")
+	}
+}
+
+// TestRetryFallsBackToNameForOldSessionEvents covers the read-time
+// compatibility path (issue #615): a session's last user_message
+// persisted before agents were addressed by id still carries a name in
+// its agent field. Retry's id lookup misses that value, so it must
+// fall back to the name resolver wired via SetAgentResolverByName.
+func TestRetryFallsBackToNameForOldSessionEvents(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	if _, err := log.Append(t.Context(), "s1", session.KindUserMessage, session.UserMessage{
+		Text: "the question", Route: "mini", Agent: "researcher",
+	}); err != nil {
+		t.Fatalf("seed user_message: %v", err)
+	}
+	gw := &fakeGW{events: okEvents("the answer")}
+	byID := func(_ context.Context, id string) (agents.Agent, bool) {
+		if id == "" {
+			return agents.Agent{ID: "general-id", Name: "general", Route: "default"}, true
+		}
+		return agents.Agent{}, false // "researcher" is a name, not an id: unknown here
+	}
+	byName := func(_ context.Context, name string) (agents.Agent, bool) {
+		if name == "researcher" {
+			return agents.Agent{ID: "researcher-id", Name: "researcher", Route: "research"}, true
+		}
+		return agents.Agent{}, false
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, byID, discard())
+	svc.SetAgentResolverByName(byName)
+
+	_, ch, err := svc.Retry(t.Context(), "s1")
+	if err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	drain(t, ch)
+
+	// Route is Retry's persisted verbatim (last.Route), not the
+	// resolved profile's: only the agent id resolution is under test
+	// here.
+	sent := chatRequest(t, gw)
+	if sent.Route != "mini" || sent.Agent != "researcher-id" {
+		t.Fatalf("route/agent = %s/%s, want mini/researcher-id (resolved via name fallback)", sent.Route, sent.Agent)
 	}
 }
 
@@ -2596,7 +2640,7 @@ func TestChatSeedsApprovalAllowlistAsStandingGrant(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
-	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
 		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
 			ApprovalAllowlist: []string{"list_calendar_events"}}, true
 	}
@@ -2604,7 +2648,7 @@ func TestChatSeedsApprovalAllowlistAsStandingGrant(t *testing.T) {
 	granter := &fakeGranter{}
 	svc.SetApprovalGrants(granter)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what's on my calendar", Agent: "scheduler"})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what's on my calendar", Agent: "agent-1"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -2624,14 +2668,14 @@ func TestChatWithoutAllowlistGrantsNothing(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
-	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
 		return agents.Agent{ID: "agent-2", Name: "plain", Memory: true}, true
 	}
 	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	granter := &fakeGranter{}
 	svc.SetApprovalGrants(granter)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: "plain"})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: "agent-2"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -2650,7 +2694,7 @@ func TestChatSeedsApprovalAllowlistOnceIdempotent(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
-	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
 		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
 			ApprovalAllowlist: []string{"list_calendar_events"}}, true
 	}
@@ -2658,7 +2702,7 @@ func TestChatSeedsApprovalAllowlistOnceIdempotent(t *testing.T) {
 	granter := &fakeGranter{}
 	svc.SetApprovalGrants(granter)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first", Agent: "scheduler"})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first", Agent: "agent-1"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -2667,7 +2711,7 @@ func TestChatSeedsApprovalAllowlistOnceIdempotent(t *testing.T) {
 	// drain returns, not synchronously with it (D-042).
 	waitFor(t, func() bool { return !svc.TurnActive("s1") })
 
-	_, ch, err = svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second", Agent: "scheduler"})
+	_, ch, err = svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second", Agent: "agent-1"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -2686,12 +2730,12 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
-	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
-		switch name {
-		case "scheduler":
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
+		switch id {
+		case "agent-1":
 			return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
 				ApprovalAllowlist: []string{"list_calendar_events"}}, true
-		case "mailer":
+		case "agent-2":
 			return agents.Agent{ID: "agent-2", Name: "mailer", Memory: true,
 				ApprovalAllowlist: []string{"gmail_search"}}, true
 		default:
@@ -2702,7 +2746,7 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 	granter := &fakeGranter{}
 	svc.SetApprovalGrants(granter)
 
-	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first", Agent: "scheduler"})
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "first", Agent: "agent-1"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -2711,7 +2755,7 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 	// drain returns, not synchronously with it (D-042).
 	waitFor(t, func() bool { return !svc.TurnActive("s1") })
 
-	_, ch, err = svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second", Agent: "mailer"})
+	_, ch, err = svc.Chat(t.Context(), Request{SessionID: "s1", Message: "second", Agent: "agent-2"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
 	}
@@ -3310,20 +3354,20 @@ func TestChatAutoDispatchFallsBackWhenClassifyErrors(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
-	resolver := func(_ context.Context, name string) (agents.Agent, bool) {
-		switch name {
-		case "", "general":
-			return agents.Agent{Name: "general", Route: "default"}, true
-		case "researcher":
-			return agents.Agent{Name: "researcher", Route: "research"}, true
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
+		switch id {
+		case "", "general-id":
+			return agents.Agent{ID: "general-id", Name: "general", Route: "default"}, true
+		case "researcher-id":
+			return agents.Agent{ID: "researcher-id", Name: "researcher", Route: "research"}, true
 		default:
 			return agents.Agent{}, false
 		}
 	}
 	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	candidates := []agents.Agent{
-		{Name: "general", Description: "everyday tasks"},
-		{Name: "researcher", Description: "consults sources"},
+		{ID: "general-id", Name: "general", Description: "everyday tasks"},
+		{ID: "researcher-id", Name: "researcher", Description: "consults sources"},
 	}
 	svc.SetAutoDispatch(
 		func(context.Context) []agents.Agent { return candidates },
@@ -3337,7 +3381,7 @@ func TestChatAutoDispatchFallsBackWhenClassifyErrors(t *testing.T) {
 	drain(t, ch)
 
 	sent := chatRequest(t, gw)
-	if sent.Agent != "general" || sent.Route != "default" {
-		t.Fatalf("agent/route = %s/%s, want general/default (dispatch fallback on classify error)", sent.Agent, sent.Route)
+	if sent.Agent != "general-id" || sent.Route != "default" {
+		t.Fatalf("agent/route = %s/%s, want general-id/default (dispatch fallback on classify error)", sent.Agent, sent.Route)
 	}
 }

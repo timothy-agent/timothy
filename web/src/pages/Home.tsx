@@ -41,9 +41,9 @@ export function Home() {
   const [route, setRoute] = useState(() => localStorage.getItem(routeKey) ?? '')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [knowledge, setKnowledge] = useState<string[]>([])
-  // Same fallback as AgentRoutePicker: an empty/unmatched agent name
+  // Same fallback as AgentRoutePicker: an empty/unmatched agent id
   // resolves to the default agent, the one that actually serves it.
-  const servingAgent = agents.find((a) => a.name === agent) ?? agents.find((a) => a.is_default)
+  const servingAgent = agents.find((a) => a.id === agent) ?? agents.find((a) => a.is_default)
   const agentKnowledge = servingAgent?.knowledge ?? []
 
   const pickAgent = (a: string) => {
@@ -71,9 +71,9 @@ export function Home() {
     })
   }
 
-  const openAgent = (name: string) => {
-    pickAgent(name)
-    navigate('/chat', { state: { agent: name } satisfies ChatIntent })
+  const openAgent = (id: string) => {
+    pickAgent(id)
+    navigate('/chat', { state: { agent: id } satisfies ChatIntent })
   }
 
   return (
@@ -115,9 +115,9 @@ export function Home() {
               asChild
               className="flex flex-col gap-2 text-left"
             >
-              <button type="button" onClick={() => openAgent(a.name)} aria-label={a.name}>
+              <button type="button" onClick={() => openAgent(a.id)} aria-label={a.name}>
                 <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-semibold capitalize">{a.name}</span>
+                  <span className="truncate text-sm font-semibold">{a.name}</span>
                   {a.is_default && (
                     <Badge variant="brand" size="sm">
                       Default

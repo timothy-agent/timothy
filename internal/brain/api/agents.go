@@ -33,6 +33,8 @@ func failAgent(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, agents.ErrInUse):
 		jsonError(w, http.StatusConflict, "in_use", err.Error())
+	case errors.Is(err, agents.ErrNameConflict):
+		jsonError(w, http.StatusConflict, "name_conflict", err.Error())
 	default:
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	}

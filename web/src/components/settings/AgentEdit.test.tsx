@@ -114,6 +114,18 @@ describe('AgentEdit', () => {
     )
   })
 
+  it('renders name as an editable field and includes it in the PATCH payload', async () => {
+    vi.mocked(patchAgent).mockResolvedValue()
+    renderEdit()
+
+    fireEvent.change(await screen.findByDisplayValue(coder.name), { target: { value: 'Coder Two' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchAgent).toHaveBeenCalledWith('a1', expect.objectContaining({ name: 'Coder Two' })),
+    )
+  })
+
   it('stages edits to overlay, route, memory, skills, and tools, all landing in the one PATCH', async () => {
     vi.mocked(patchAgent).mockResolvedValue()
     vi.mocked(listRoutes).mockResolvedValue([
