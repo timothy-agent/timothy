@@ -1,8 +1,8 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
-@import "@fontsource/geist-mono";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/fira-code";
 @plugin "@tailwindcss/typography";
 
 /* Theme is user-controlled: dark mode keys on the .dark class that
@@ -10,13 +10,14 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-    --font-sans: 'Geist Variable', sans-serif;
-    --font-mono: 'Geist Mono', ui-monospace, monospace;
+    --font-sans: 'Inter Variable', sans-serif;
+    --font-mono: 'Fira Code Variable', ui-monospace, monospace;
     --color-brand: var(--brand);
     --color-brand-foreground: var(--brand-foreground);
     --color-brand-text: var(--brand-text);
     --color-brand-soft: var(--brand-soft);
     --color-brand-soft-foreground: var(--brand-soft-foreground);
+    --color-glow: var(--glow);
     --color-good: var(--good);
     --color-good-soft: var(--good-soft);
     --color-good-foreground: var(--good-foreground);
@@ -108,9 +109,9 @@
     --destructive-foreground: oklch(0.99 0 0);
     --border: oklch(0.922 0 0);
     --input: oklch(0.75 0 0);
-    --ring: oklch(0.66 0.19 46);
+    --ring: oklch(0.806 0.241 147);
     --chart-1: oklch(0.6 0.12 250);
-    --chart-2: oklch(0.62 0.13 155);
+    --chart-2: oklch(0.62 0.12 160);
     --chart-3: oklch(0.72 0.14 75);
     --chart-4: oklch(0.6 0.13 300);
     --chart-5: oklch(0.55 0 0);
@@ -123,21 +124,28 @@
     --sidebar-accent: oklch(0.97 0 0);
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.66 0.19 46);
+    --sidebar-ring: oklch(0.806 0.241 147);
 
-    /* Brand accent — single orange hue, both themes. Separate from
-       shadcn's --accent (a neutral hover surface, used all over ui/*)
-       so re-theming this doesn't repaint every hover state. */
-    --brand: oklch(0.66 0.19 46);
-    --brand-foreground: oklch(0.99 0 0);
-    --brand-text: oklch(0.5 0.16 46);
-    --brand-soft: oklch(0.95 0.04 55);
-    --brand-soft-foreground: oklch(0.5 0.16 46);
+    /* Brand accent: the sumonselim.com primary, hsl(142 100% 45%) =
+       #00e654, as the fill in both themes with near-black text on it
+       (white on this green fails contrast). --brand-text is the darker
+       green-700 for text on light surfaces. --glow feeds the hover and
+       focus glows (site's --glow). Separate from shadcn's --accent (a
+       neutral hover surface, used all over ui/*) so re-theming this
+       doesn't repaint every hover state. */
+    --brand: oklch(0.806 0.241 147);
+    --brand-foreground: oklch(0.13 0.02 150);
+    --brand-text: oklch(0.48 0.13 150);
+    --brand-soft: oklch(0.95 0.05 150);
+    --brand-soft-foreground: oklch(0.42 0.12 150);
+    --glow: oklch(0.806 0.241 147 / 0.35);
 
-    /* Semantic status colors — independent of --brand; never used for
-       plain UI accents. --info is the "test/verify" action color. */
-    --good: oklch(0.5 0.13 155);
-    --good-soft: oklch(0.94 0.04 155);
+    /* Semantic status colors: independent of --brand and never used
+       for plain UI accents. Success is a calmer, deeper green (hue 160,
+       low chroma) so a passing badge never reads as the bright brand
+       green. --info is the "test/verify" color. */
+    --good: oklch(0.52 0.12 160);
+    --good-soft: oklch(0.94 0.04 160);
     --good-foreground: oklch(0.99 0 0);
     --warning: oklch(0.52 0.13 75);
     --warning-soft: oklch(0.95 0.05 75);
@@ -153,9 +161,9 @@
 
 .dark {
     color-scheme: dark;
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
+    --background: oklch(0.13 0.004 150);
+    --foreground: oklch(0.93 0 0);
+    --card: oklch(0.17 0.005 150);
     --card-foreground: oklch(0.985 0 0);
     --popover: oklch(0.205 0 0);
     --popover-foreground: oklch(0.985 0 0);
@@ -170,32 +178,33 @@
     --destructive: oklch(0.704 0.191 22.216);
     --destructive-soft: oklch(0.3 0.08 25);
     --destructive-foreground: oklch(0.16 0.02 25);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(0.45 0 0);
-    --ring: oklch(0.72 0.17 46);
+    --border: oklch(0.3 0.04 150);
+    --input: oklch(0.42 0.05 150);
+    --ring: oklch(0.806 0.241 147);
     --chart-1: oklch(0.7 0.12 250);
-    --chart-2: oklch(0.72 0.13 155);
+    --chart-2: oklch(0.72 0.12 160);
     --chart-3: oklch(0.82 0.14 75);
     --chart-4: oklch(0.7 0.13 300);
     --chart-5: oklch(0.65 0 0);
-    --sidebar: oklch(0.205 0 0);
+    --sidebar: oklch(0.15 0.005 150);
     --sidebar-foreground: oklch(0.985 0 0);
     --sidebar-primary: oklch(0.922 0 0);
     --sidebar-primary-foreground: oklch(0.985 0 0);
     --sidebar-accent: oklch(0.269 0 0);
     --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.72 0.17 46);
+    --sidebar-border: oklch(0.3 0.04 150);
+    --sidebar-ring: oklch(0.806 0.241 147);
 
-    --brand: oklch(0.72 0.17 46);
-    --brand-foreground: oklch(0.16 0.02 46);
-    --brand-text: oklch(0.78 0.15 46);
-    --brand-soft: oklch(0.3 0.09 46);
-    --brand-soft-foreground: oklch(0.85 0.09 46);
+    --brand: oklch(0.806 0.241 147);
+    --brand-foreground: oklch(0.13 0.02 150);
+    --brand-text: oklch(0.806 0.241 147);
+    --brand-soft: oklch(0.26 0.07 150);
+    --brand-soft-foreground: oklch(0.86 0.18 147);
+    --glow: oklch(0.806 0.241 147 / 0.45);
 
-    --good: oklch(0.72 0.14 155);
-    --good-soft: oklch(0.28 0.06 155);
-    --good-foreground: oklch(0.16 0.02 155);
+    --good: oklch(0.72 0.14 160);
+    --good-soft: oklch(0.27 0.06 160);
+    --good-foreground: oklch(0.16 0.02 160);
     --warning: oklch(0.78 0.14 75);
     --warning-soft: oklch(0.3 0.06 75);
     --warning-foreground: oklch(0.16 0.02 75);
@@ -237,6 +246,16 @@
 .prose :where(pre):not(:where([class~="not-prose"] *)) {
   font-size: 0.8125rem;
   line-height: 1.25rem;
+}
+
+/* Terminal glow (brand hover/focus emphasis, from sumonselim.com):
+   a soft brand-coloured halo on hovered primary controls, interactive
+   cards and the brand tile; glow-text for the wordmark. */
+@utility glow {
+  box-shadow: 0 0 20px var(--glow), 0 0 2px var(--glow);
+}
+@utility glow-text {
+  text-shadow: 0 0 10px var(--glow), 0 0 20px var(--glow);
 }
 
 /* Reduced motion (section 9): one global rule. `.motion-keep` opts a

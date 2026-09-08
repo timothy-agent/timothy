@@ -1,16 +1,12 @@
-// phaseColors is the one shared color-per-phase map (issue #473): a
-// mission's discover/plan/generate/prove/result phase reads with the
-// same color wherever it's chipped, following MissionCard's own
-// bg-X-100/dark:bg-X-950 status-pill convention. done/failed/legacy
-// (explore/execute/review, pre-D-086 rename) fall back to phaseColors'
-// caller-side default rather than being listed here: this map only
-// covers the five phases the timeline chips.
-export const phaseColors: Record<string, string> = {
-  discover: 'bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300',
-  plan: 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300',
-  generate: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300',
-  prove: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300',
-  result: 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300',
+// phaseTextColors is the same per-phase hue as a bare text color, for
+// places that prefix a line with the phase name instead of chipping it
+// (the mission timeline rows).
+export const phaseTextColors: Record<string, string> = {
+  discover: 'text-sky-700 dark:text-sky-400',
+  plan: 'text-violet-700 dark:text-violet-400',
+  generate: 'text-blue-700 dark:text-blue-400',
+  prove: 'text-amber-700 dark:text-amber-400',
+  result: 'text-green-700 dark:text-green-400',
 }
 
 // phaseLabel normalizes a phase string for display: the pre-D-086

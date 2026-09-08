@@ -72,8 +72,8 @@ const allowedMimes = [
 // Exported: MissionAttachments.tsx reuses the same caps for its own
 // document upload flow.
 export const maxAttachmentBytes = 10 * 1024 * 1024
-export const maxVideoBytes = 100 * 1024 * 1024
-export const maxAudioBytes = 25 * 1024 * 1024
+const maxVideoBytes = 100 * 1024 * 1024
+const maxAudioBytes = 25 * 1024 * 1024
 export const maxAttachments = 8
 
 // maxBytesFor mirrors the server's per-type size caps (internal/brain/
@@ -96,20 +96,9 @@ function documentChipIcon(mime: string) {
 // allowedMimes, or (for .md/.txt) by extension: browsers report
 // markdown files inconsistently: empty type, text/markdown, or
 // text/plain depending on OS/browser.
-export function isAllowedFile(file: File): boolean {
+function isAllowedFile(file: File): boolean {
   if (allowedMimes.includes(file.type)) return true
   return /\.(md|txt)$/i.test(file.name)
-}
-
-// isDocumentFile is isAllowedFile narrowed to document types (PDF,
-// Markdown, text): used where only documents are accepted.
-export function isDocumentFile(file: File): boolean {
-  return (
-    isAllowedFile(file) &&
-    !file.type.startsWith('image/') &&
-    !file.type.startsWith('video/') &&
-    !file.type.startsWith('audio/')
-  )
 }
 
 // isMissionAttachmentFile is isAllowedFile narrowed to what missions
@@ -592,7 +581,7 @@ export function Composer({
     <div
       onDragOver={(e) => e.preventDefault()}
       onDrop={handleDrop}
-      className="relative rounded-md border border-input bg-card p-3 transition-[border-color,box-shadow] duration-100 ease-out focus-within:border-ring focus-within:ring-1 focus-within:ring-ring"
+      className="relative rounded-md border border-input bg-card p-3 transition-[border-color,box-shadow] duration-100 ease-out focus-within:border-brand focus-within:glow"
     >
       {popupOpen && (
         <div className="absolute bottom-full left-2 z-50 mb-1 max-h-72 w-64 overflow-y-auto rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-overlay">

@@ -68,7 +68,7 @@ export function AgentRoutePicker({
         <DropdownMenuItem
           onSelect={() => onAgent(AUTO_AGENT)}
           data-selected={isAuto || undefined}
-          className="items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
+          className="h-auto items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
         >
           <div className="min-w-0 flex-1">
             <span className="text-sm font-medium">Auto</span>
@@ -85,7 +85,7 @@ export function AgentRoutePicker({
               key={a.id}
               onSelect={() => onAgent(a.name)}
               data-selected={selected || undefined}
-              className="items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
+              className="h-auto items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
@@ -112,7 +112,7 @@ export function AgentRoutePicker({
             <DropdownMenuItem
               onSelect={() => onRoute?.('')}
               data-selected={isRouteAuto || undefined}
-              className="items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
+              className="h-auto items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
             >
               <div className="min-w-0 flex-1">
                 <span className="text-sm font-medium">Auto</span>
@@ -131,7 +131,7 @@ export function AgentRoutePicker({
                   key={r.name}
                   onSelect={() => onRoute?.(r.name)}
                   data-selected={selected || undefined}
-                  className="items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
+                  className="h-auto items-start gap-3 rounded-md px-2.5 py-2 data-selected:bg-muted"
                 >
                   <div className="min-w-0 flex-1">
                     <span className="text-sm font-medium capitalize">{r.name}</span>

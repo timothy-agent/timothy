@@ -22,7 +22,7 @@ describe('Card', () => {
     )
     const link = screen.getByRole('link', { name: 'Mission' })
     expect(link).toHaveAttribute('href', '/missions/1')
-    expect(link.className).toContain('focus-visible:ring-2')
+    expect(link.className).toContain('focus-visible:border-brand')
   })
 
   it('applies operational density padding', () => {

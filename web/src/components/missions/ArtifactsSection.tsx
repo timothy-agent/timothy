@@ -1,4 +1,4 @@
-import { BookOpen, FileDown, FolderArchive, FolderOpen } from 'lucide-react'
+import { BookOpen, FileDown, FolderArchive, FolderOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -12,6 +12,7 @@ import {
 } from '../../api/client'
 import type { KbCollection, MediaRef, MissionFile } from '../../api/types'
 import { errText } from '../../lib/errors'
+import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
@@ -135,6 +136,7 @@ export function ArtifactsSection({
   const [selected, setSelected] = useState<MissionFile | undefined>(undefined)
   const [pdfExportEnabled, setPdfExportEnabled] = useState(false)
   const [exportingPdf, setExportingPdf] = useState(false)
+  const [treeOpen, setTreeOpen] = useState(true)
   const [promoteOpen, setPromoteOpen] = useState(false)
   const { fullscreen, toggle, close } = useFullscreenPanel()
   const canPromote = phase === 'done' && refs.some((r) => markdownFileRe.test(r.name ?? ''))
@@ -204,6 +206,16 @@ export function ArtifactsSection({
     )
   }
 
+  const treeToggle = files.length > 0 && (
+    <IconButton
+      size="sm"
+      label={treeOpen ? 'Hide file list' : 'Show file list'}
+      icon={treeOpen ? PanelLeftClose : PanelLeftOpen}
+      aria-pressed={treeOpen}
+      onClick={() => setTreeOpen((v) => !v)}
+    />
+  )
+
   const actions = (
     <>
       <span className="mr-auto text-xs text-muted-foreground">
@@ -243,7 +255,13 @@ export function ArtifactsSection({
         <EmptyState density="operational" icon={FolderOpen} title="No files yet." />
       ) : (
         <div className={fullscreen ? 'flex min-h-0 flex-1' : 'flex h-80'}>
-          <div className="w-60 shrink-0 overflow-y-auto border-r border-border">
+          <div
+            aria-hidden={!treeOpen}
+            className={cn(
+              'shrink-0 overflow-y-auto border-r border-border transition-[width,opacity] duration-200 ease-out',
+              treeOpen ? 'w-60 opacity-100' : 'w-0 border-r-0 opacity-0 invisible',
+            )}
+          >
             <FileTreeView nodes={tree} selectedPath={selected?.path} onSelect={selectNode} />
           </div>
           <div className="min-w-0 flex-1">
@@ -265,7 +283,14 @@ export function ArtifactsSection({
   )
 
   const panel = (
-    <Panel title="Files" density="operational" actions={actions} className={fullscreen ? 'flex h-full flex-col' : undefined}>
+    <Panel
+      title="Files"
+      density="operational"
+      leading={treeToggle}
+      actions={actions}
+      className={fullscreen ? 'flex h-full min-h-0 flex-col' : undefined}
+      bodyClassName={fullscreen ? 'flex min-h-0 flex-1 flex-col' : undefined}
+    >
       {body}
     </Panel>
   )

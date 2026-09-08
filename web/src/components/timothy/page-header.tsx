@@ -69,7 +69,7 @@ export function PageHeader({ title, titleNode, description, breadcrumbs, actions
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
       {children && <div className="mt-3">{children}</div>}
-      {description && <p className="mt-1 max-w-2xl text-sm text-muted-foreground">{description}</p>}
+      {description && <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>}
     </div>
   )
 }
@@ -89,7 +89,7 @@ export function SectionHeader({ title, description, actions, as: As = 'h2' }: Se
         <As className="text-section font-semibold text-foreground">{title}</As>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
-      {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
+      {description && <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</p>}
     </div>
   )
 }

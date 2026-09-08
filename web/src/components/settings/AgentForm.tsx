@@ -18,7 +18,7 @@ import { listKbCollections, listSkills, listTools } from '../../api/client'
 import { useStagedForm } from './useStagedForm'
 import type { AdminAgent, AdminRoute } from '../../api/types'
 
-export interface AgentFormValue {
+interface AgentFormValue {
   name: string
   description: string
   overlay: string

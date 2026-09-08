@@ -46,6 +46,19 @@ export function humanBytes(bytes: number): string {
   return `${v.toFixed(1)} ${units[i]}`
 }
 
+// euDateTime renders an ISO timestamp in day-first European form
+// (DD/MM/YYYY, 24-hour clock) in the viewer's own timezone.
+export function euDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+}
+
 // relativeTime renders an ISO timestamp as "just now" / "5m ago" /
 // "3h ago" / "2d ago", falling back to a locale date past a week —
 // document/collection rows update often enough that an absolute

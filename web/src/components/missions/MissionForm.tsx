@@ -181,7 +181,7 @@ export const executorChoices: { value: string; label: string }[] = [
 // Native (the default, wire value '') plus the registered adapters.
 // cursor-cli and opencode have no read-only mode, so picking them would
 // only ever fall back to native; they are left out.
-export const reviewHarnessChoices: { value: string; label: string }[] = [
+const reviewHarnessChoices: { value: string; label: string }[] = [
   { value: EXECUTOR_DEFAULT, label: 'Native' },
   ...executorChoices.filter((c) => ['claude-cli', 'pi', 'codex-cli'].includes(c.value)),
 ]

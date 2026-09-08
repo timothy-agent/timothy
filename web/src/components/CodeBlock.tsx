@@ -321,14 +321,14 @@ export function extractText(node: ReactNode): string {
 
 // hast Element shape as passed via react-markdown's `node` prop,
 // declared locally to avoid a direct hast-types dependency.
-export type HastElement = {
+type HastElement = {
   type: 'element'
   tagName: string
   properties?: { className?: unknown }
   children?: HastElement[]
 }
 
-export function findLanguageClass(node: HastElement | undefined): string | undefined {
+function findLanguageClass(node: HastElement | undefined): string | undefined {
   for (const child of node?.children ?? []) {
     if (child.type !== 'element') continue
     const classes = child.properties?.className
@@ -343,7 +343,7 @@ export function findLanguageClass(node: HastElement | undefined): string | undef
 
 // Fallback when the hast node isn't available: reads the `language-xxx`
 // class straight off the rendered `<code>` child element.
-export function languageFromChildren(children: ReactNode): string | undefined {
+function languageFromChildren(children: ReactNode): string | undefined {
   let found: string | undefined
   Children.forEach(children, (child) => {
     if (found) return
@@ -362,7 +362,7 @@ export function languageFromChildren(children: ReactNode): string | undefined {
 // that is pending, when the language isn't one shiki bundles, or if
 // loading/highlighting fails for any reason (a bad chunk load degrades
 // to plain text rather than wedging the block).
-function useHighlightedHtml(text: string, language: string | undefined): string | undefined {
+export function useHighlightedHtml(text: string, language: string | undefined): string | undefined {
   const [html, setHtml] = useState<string | undefined>(undefined)
 
   useEffect(() => {

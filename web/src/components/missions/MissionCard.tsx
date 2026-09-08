@@ -54,8 +54,14 @@ export function MissionCard({
         </div>
         <p className="mt-3 line-clamp-2 text-sm font-medium">{missionDisplayName(mission)}</p>
         <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-          <span className="whitespace-nowrap">{phaseStepText(mission)}</span>
-          <span aria-hidden>&middot;</span>
+          {/* The status badge above already says done/failed; the phase
+              line only adds information while the mission is running. */}
+          {mission.phase !== 'done' && mission.phase !== 'failed' && (
+            <>
+              <span className="whitespace-nowrap">{phaseStepText(mission)}</span>
+              <span aria-hidden>&middot;</span>
+            </>
+          )}
           <span className="whitespace-nowrap capitalize">{mission.kind}</span>
           {mission.top_model && (
             <>

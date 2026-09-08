@@ -122,7 +122,7 @@ export function Foundations() {
 
       <section>
         <SectionHeader title="Colour roles" />
-        <p className="mb-4 text-sm text-muted-foreground">Evaluate: orange scarcity, status hues distinct from brand.</p>
+        <p className="mb-4 text-sm text-muted-foreground">Evaluate: brand scarcity, status hues distinct from brand.</p>
         <div className="space-y-6">
           {colorGroups.map((group) => (
             <div key={group.eyebrow}>

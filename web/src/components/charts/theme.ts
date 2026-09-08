@@ -18,7 +18,7 @@ export function buildBaseTheme() {
   const muted = cssVar('--muted-foreground')
   const border = cssVar('--border')
   const popover = cssVar('--popover')
-  const fontFamily = 'Geist Variable, sans-serif'
+  const fontFamily = 'Inter Variable, sans-serif'
 
   return {
     textStyle: { color: foreground, fontFamily },

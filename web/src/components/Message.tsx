@@ -13,6 +13,7 @@ import { ApprovalCard, type Decision } from './chat/ApprovalCard'
 import { ToolCallGroup } from './chat/ToolCallCard'
 import { AttachmentViewer, mimeLabel } from './AttachmentViewer'
 import { presetForProviderName, ProviderMark } from './timothy/provider-logo'
+import { BrandMark } from './BrandMark'
 import { errText } from '../lib/errors'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -518,12 +519,7 @@ export function AssistantMessage({
   return (
     <div className="group/message flex w-full min-w-0 flex-col items-start">
       <div className="flex min-w-0 max-w-full items-center gap-2.5">
-        <span
-          aria-hidden
-          className="inline-flex size-5 shrink-0 items-center justify-center rounded-md bg-brand text-xs font-semibold text-brand-foreground"
-        >
-          T
-        </span>
+        <BrandMark className="size-5 shrink-0" />
       </div>
 
       {msg.tools.length > 0 && (

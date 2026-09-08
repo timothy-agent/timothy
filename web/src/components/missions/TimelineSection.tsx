@@ -6,8 +6,8 @@ import { CopyButton } from '../timothy/copy-button'
 import { IconButton } from '../timothy/icon-button'
 import { EventLog, type EventLogRow } from '../timothy/event-log'
 import { ToolCallCard } from '../chat/ToolCallCard'
-import { phaseLabel } from '../../lib/phaseColors'
-import { eventIcon, eventStatus, renderEvent, toolRunFromEvent } from './eventRenderers'
+import { phaseLabel, phaseTextColors } from '../../lib/phaseColors'
+import { eventIcon, renderEvent, toolRunFromEvent } from './eventRenderers'
 import { FullscreenDialog, FullscreenToggle, useFullscreenPanel } from './FullscreenPanel'
 import { TooltipProvider } from '../ui/tooltip'
 
@@ -126,7 +126,6 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
     const phase = phasesBySeq.get(e.seq)
     const title = (
       <>
-        {phase && <span className="text-muted-foreground">{phaseLabel(phase)} · </span>}
         {renderEvent(e, rows)}
         {calls.length > 0 && (
           <span className="text-muted-foreground"> · {calls.length} tool call{calls.length === 1 ? '' : 's'}</span>
@@ -139,7 +138,9 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
       time: new Date(e.created_at),
       kind: e.kind,
       icon: eventIcon(e.kind),
-      status: eventStatus(e.kind, e.payload),
+      label: phase ? (
+        <span className={phaseTextColors[phaseLabel(phase)] ?? 'text-muted-foreground'}>{phaseLabel(phase)}</span>
+      ) : undefined,
       title,
       payload,
       children:
@@ -173,7 +174,8 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
       <EventLog
         rows={logRows}
         scrollRef={scrollRef}
-        className={fullscreen ? 'h-full flex-1' : undefined}
+        className={fullscreen ? 'min-h-0 flex-1' : undefined}
+        fill={fullscreen}
         ariaLabel="Mission timeline"
         toolbar={toolbar}
       />
@@ -188,7 +190,13 @@ export function TimelineSection({ events }: { events: MissionEvent[] }) {
   )
 
   const panel = (
-    <Panel title="Timeline" density="operational" actions={actions} className={fullscreen ? 'flex h-full flex-col' : undefined}>
+    <Panel
+      title="Timeline"
+      density="operational"
+      actions={actions}
+      className={fullscreen ? 'flex h-full min-h-0 flex-col' : undefined}
+      bodyClassName={fullscreen ? 'flex min-h-0 flex-1 flex-col' : undefined}
+    >
       {log}
     </Panel>
   )

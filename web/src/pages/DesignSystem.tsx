@@ -7,7 +7,7 @@ import { AgentSurfaces } from './design/AgentSurfaces'
 
 // Internal showcase of the Timothy design system contract. Not linked
 // from the sidebar; every element here must follow the contract it
-// demonstrates (tokens only, orange scarcity, comfortable vs
+// demonstrates (tokens only, brand scarcity, comfortable vs
 // operational density).
 export function DesignSystem() {
   return (

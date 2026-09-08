@@ -1,18 +1,28 @@
 export type PreviewKind = 'image' | 'markdown' | 'pdf' | 'code' | 'unsupported'
 
 const imageExts = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'bmp', 'ico'])
+// Known binary formats that no text preview can show. Anything not
+// listed here or above previews as text; FileViewer still bails out on
+// content that turns out to be binary.
+const binaryExts = new Set([
+  'zip', 'tar', 'gz', 'tgz', 'bz2', 'xz', 'zst', '7z', 'rar', 'jar', 'war',
+  'exe', 'dll', 'so', 'dylib', 'bin', 'o', 'a', 'wasm', 'class', 'pyc',
+  'woff', 'woff2', 'ttf', 'otf', 'eot',
+  'mp3', 'wav', 'ogg', 'flac', 'm4a', 'mp4', 'mov', 'avi', 'mkv', 'webm',
+  'sqlite', 'db', 'parquet', 'avro', 'pb', 'psd', 'ai', 'heic', 'tiff', 'tif',
+])
 const markdownExts = new Set(['md', 'markdown'])
 
-// codeLanguage maps an extension to a highlight.js language name for
-// files that aren't markdown/images — undefined lets highlight.js
-// auto-detect, exts here are just the common cases worth naming
+// codeLanguage maps an extension to a shiki language id for files
+// that aren't markdown/images. undefined falls back to CodeBlock's
+// content heuristic; exts here are just the common cases worth naming
 // explicitly (e.g. .go isn't unambiguous from content alone).
 const codeLanguages: Record<string, string> = {
   go: 'go',
   ts: 'typescript',
-  tsx: 'typescript',
+  tsx: 'tsx',
   js: 'javascript',
-  jsx: 'javascript',
+  jsx: 'jsx',
   py: 'python',
   rb: 'ruby',
   rs: 'rust',
@@ -26,9 +36,9 @@ const codeLanguages: Record<string, string> = {
   yml: 'yaml',
   yaml: 'yaml',
   json: 'json',
-  toml: 'ini',
+  toml: 'toml',
   sql: 'sql',
-  html: 'xml',
+  html: 'html',
   xml: 'xml',
   php: 'php',
   kt: 'kotlin',
@@ -49,7 +59,7 @@ const codeLanguages: Record<string, string> = {
 }
 
 // basenameLanguages maps extensionless/dotfile basenames (exact match,
-// case-sensitive per convention) to a highlight.js language.
+// case-sensitive per convention) to a shiki language id.
 const basenameLanguages: Record<string, string> = {
   '.gitignore': 'plaintext',
   '.gitattributes': 'plaintext',
@@ -77,9 +87,8 @@ export function previewKindOf(path: string): PreviewKind {
   if (imageExts.has(ext)) return 'image'
   if (markdownExts.has(ext)) return 'markdown'
   if (ext === 'pdf') return 'pdf'
-  if (baseOf(path) in basenameLanguages) return 'code'
-  if (ext in codeLanguages) return 'code'
-  return 'unsupported'
+  if (binaryExts.has(ext)) return 'unsupported'
+  return 'code'
 }
 
 export function codeLanguageOf(path: string): string | undefined {

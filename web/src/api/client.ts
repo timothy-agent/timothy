@@ -759,14 +759,6 @@ export async function deleteSecret(refName: string): Promise<void> {
   await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, { method: 'DELETE' })
 }
 
-// migrateSecret moves one stored ref's value onto backend, wiping its
-// old storage: used to re-home a credential after Vault/ASM is set up.
-export async function migrateSecret(refName: string, backend: string): Promise<void> {
-  await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}/migrate`, {
-    method: 'POST',
-    body: JSON.stringify({ backend }),
-  })
-}
 
 export interface SecretMigrationResult {
   name: string
@@ -788,7 +780,7 @@ export async function migrateAllSecrets(backend: string): Promise<SecretMigratio
 
 // SecretReference is one provider or connector naming a credential ref
 // as its credential_ref: the credentials panel's used-by chips.
-export interface SecretReference {
+interface SecretReference {
   kind: 'provider' | 'connector'
   name: string
   role: 'credential' | 'oauth_tokens' | 'signing_key' | 'client_secret'

@@ -53,11 +53,21 @@ describe('EventLog', () => {
     expect(screen.getByText(/search_web/)).toBeInTheDocument()
   })
 
-  it('renders a status dot when status is set', () => {
-    const { container } = renderLog(
-      <EventLog rows={[row({ id: '1', time: new Date(), title: 'Done', status: 'success' })]} />,
+  it('reserves the chevron slot on rows without a disclosure so timestamps align', () => {
+    renderLog(
+      <EventLog
+        rows={[
+          row({ id: '1', time: new Date(), title: 'Plain' }),
+          row({ id: '2', time: new Date(), title: 'With payload', payload: { a: 1 } }),
+        ]}
+      />,
     )
-    expect(container.querySelector('[data-status="success"]')).toBeInTheDocument()
+    const plain = screen.getByText('Plain').closest('li') as HTMLElement
+    const spacer = plain.querySelector('span[aria-hidden]') as HTMLElement
+    expect(spacer).toHaveClass('size-3.5', 'shrink-0')
+    expect(spacer.nextElementSibling?.tagName).toBe('TIME')
+    const withPayload = screen.getByText('With payload').closest('li') as HTMLElement
+    expect(withPayload.querySelector('svg[data-chevron]')?.nextElementSibling?.tagName).toBe('TIME')
   })
 
   it('shows empty text when there are no rows', () => {
@@ -114,6 +124,20 @@ describe('EventLog', () => {
     expect(screen.queryByText('1 new')).not.toBeInTheDocument()
   })
 
+  it('fills the remaining height instead of capping at 32rem when fill is set', () => {
+    renderLog(<EventLog rows={[row({ id: '1', time: new Date(), title: 'A' })]} fill />)
+    const log = screen.getByRole('log')
+    expect(log).toHaveClass('min-h-0', 'flex-1')
+    expect(log).not.toHaveClass('max-h-[32rem]')
+  })
+
+  it('grows with its rows up to 32rem by default', () => {
+    renderLog(<EventLog rows={[row({ id: '1', time: new Date(), title: 'A' })]} />)
+    const log = screen.getByRole('log')
+    expect(log).toHaveClass('max-h-[32rem]')
+    expect(log).not.toHaveClass('flex-1')
+  })
+
   it('pauses following when the user scrolls away from the bottom', () => {
     renderLog(<EventLog rows={[row({ id: '1', time: new Date(), title: 'One' })]} />)
     const log = screen.getByRole('log')
@@ -135,5 +159,27 @@ describe('EventLog', () => {
     )
     fireEvent.click(screen.getByRole('button', { name: /Pause/ }))
     expect(onFollowChange).toHaveBeenCalledWith(false)
+  })
+
+  it('gives labelled rows their own column, reserved even on rows without one', () => {
+    renderLog(
+      <EventLog
+        rows={[
+          row({ id: '1', time: new Date(), title: 'First', label: 'plan' }),
+          row({ id: '2', time: new Date(), title: 'Second' }),
+        ]}
+      />,
+    )
+    const labelled = screen.getByText('First').closest('li') as HTMLElement
+    expect(labelled.querySelector('.w-20')?.textContent).toBe('plan')
+    const bare = screen.getByText('Second').closest('li') as HTMLElement
+    expect(bare.querySelector('.w-20')).not.toBeNull()
+    expect(bare.querySelector('.w-20')?.textContent).toBe('')
+  })
+
+  it('drops the label column when no row carries a label', () => {
+    renderLog(<EventLog rows={[row({ id: '1', time: new Date(), title: 'Only' })]} />)
+    const item = screen.getByText('Only').closest('li') as HTMLElement
+    expect(item.querySelector('.w-20')).toBeNull()
   })
 })

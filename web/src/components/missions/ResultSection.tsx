@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { markdownComponents, rehypePlugins, remarkPlugins } from '../../lib/markdown'
-import { Button } from '../ui/button'
+import { ChevronDown, ChevronUp } from 'lucide-react'
+import { IconButton } from '../timothy/icon-button'
 
 // ResultSection renders a mission's terminal evidence as markdown,
-// clamped to a scrollable height with a "Show all" toggle to remove
+// clamped to a scrollable height with a chevron toggle to remove
 // it — same rendering GoalSection/DiscoverSection use. Uses CodeBlock
 // (via markdownComponents) so fenced code gets the same highlighted,
 // GitHub-style treatment as chat/file markdown. The panel around it
@@ -19,9 +20,13 @@ export function ResultSection({ evidence }: { evidence: string }) {
           {evidence}
         </ReactMarkdown>
       </div>
-      <Button variant="ghost" size="xs" onClick={() => setExpanded((v) => !v)}>
-        {expanded ? 'Show less' : 'Show all'}
-      </Button>
+      <IconButton
+        size="xs"
+        label={expanded ? 'Show less' : 'Show all'}
+        icon={expanded ? ChevronUp : ChevronDown}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((v) => !v)}
+      />
     </div>
   )
 }

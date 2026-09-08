@@ -28,6 +28,19 @@ describe('Panel', () => {
     expect(body).toHaveClass('flex', 'flex-1', 'flex-col', 'p-5', 'pt-0')
   })
 
+  it('renders no body and no bottom padding when children are false', () => {
+    render(
+      <Panel title="Goal" actions={<button type="button">Show goal</button>}>
+        {false}
+      </Panel>,
+    )
+    const header = screen.getByRole('heading', { name: 'Goal' }).closest('[data-density]')?.firstElementChild
+    expect(header).toHaveClass('p-5')
+    expect(header).not.toHaveClass('pb-0')
+    expect(header?.firstElementChild).not.toHaveClass('mb-4')
+    expect(header?.nextElementSibling).toBeNull()
+  })
+
   it('defaults the title to an h2', () => {
     render(<Panel title="Goal">Body</Panel>)
     const heading = screen.getByRole('heading', { name: 'Goal', level: 2 })
@@ -54,5 +67,16 @@ describe('Panel', () => {
     )
     expect(screen.getByText('What Timothy is trying to do')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
+  })
+
+  it('renders a leading control before the title', () => {
+    render(
+      <Panel title="Files" leading={<button type="button">Toggle</button>}>
+        body
+      </Panel>,
+    )
+    const toggle = screen.getByRole('button', { name: 'Toggle' })
+    const title = screen.getByText('Files')
+    expect(toggle.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

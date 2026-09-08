@@ -4,7 +4,7 @@ import { buildBaseTheme } from '../charts/theme'
 
 // Node fill per entity kind — mid hues that read on both themes,
 // consistent with the page's raw-palette convention (TypeBadge).
-export const kindColor: Record<string, string> = {
+const kindColor: Record<string, string> = {
   person: '#3b82f6',
   project: '#8b5cf6',
   service: '#06b6d4',

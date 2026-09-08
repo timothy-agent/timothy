@@ -29,16 +29,6 @@ export const statusText: Record<Status, string> = {
   error: 'text-destructive',
 }
 
-// Soft background pair, matching the badge tones (section 2.2).
-export const statusSoftBg: Record<Status, string> = {
-  neutral: 'bg-muted',
-  working: 'bg-info-soft',
-  waiting: 'bg-warning-soft',
-  success: 'bg-good-soft',
-  warning: 'bg-warning-soft',
-  error: 'bg-destructive-soft',
-}
-
 // Solid background for dots and other filled indicators.
 export const statusSolidBg: Record<Status, string> = {
   neutral: 'bg-muted-foreground',
@@ -49,15 +39,6 @@ export const statusSolidBg: Record<Status, string> = {
   error: 'bg-destructive',
 }
 
-// Left-rule border colour for banners and alerts (section 13.3).
-export const statusBorder: Record<Status, string> = {
-  neutral: 'border-l-muted-foreground',
-  working: 'border-l-info',
-  waiting: 'border-l-warning',
-  success: 'border-l-good',
-  warning: 'border-l-warning',
-  error: 'border-l-destructive',
-}
 
 // missionStatus implements the domain mapping table (contract 13.2)
 // for a mission's phase/status pair. Mirrors MissionCard's own

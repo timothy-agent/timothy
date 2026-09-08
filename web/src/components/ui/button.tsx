@@ -9,15 +9,15 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // Primary action: orange brand accent.
-        default: "bg-brand text-brand-foreground hover:bg-brand/90 active:bg-brand/80",
+        // Primary action: green brand accent.
+        default: "bg-brand text-brand-foreground hover:bg-brand/90 hover:glow active:bg-brand/80 focus-visible:glow",
         outline:
           "border-input bg-card hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground",
         secondary:
           "bg-secondary text-secondary-foreground hover:bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)] aria-expanded:bg-secondary aria-expanded:text-secondary-foreground",
         ghost:
           "hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent aria-expanded:text-accent-foreground dark:hover:bg-muted/50",
-        // Verify/test actions: blue, distinct from the orange primary
+        // Verify/test actions: blue, distinct from the green primary
         // and from destructive red.
         test: "bg-info/10 text-info hover:bg-info/20 dark:bg-info/20 dark:hover:bg-info/30",
         // Destructive is soft by default (rare filled use is a design call, not this variant).

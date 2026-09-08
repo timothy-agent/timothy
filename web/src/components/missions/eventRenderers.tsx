@@ -31,7 +31,7 @@ import type {
 } from '../../api/types'
 import { formatDuration } from '../../lib/format'
 import { traceIcons } from '../timothy/trace-group'
-import { statusText, toolCallStatus, type Status } from '../timothy/status'
+import { statusText, toolCallStatus } from '../timothy/status'
 import type { ToolRun } from '../../lib/chat'
 
 // eventRenderers maps a mission_events kind to a short, human-readable
@@ -426,36 +426,6 @@ export function eventIcon(kind: string): LucideIcon {
   if (kindIcons[kind]) return kindIcons[kind]
   if (kind.startsWith('mission.input')) return Hand
   return traceIcons.other
-}
-
-// eventStatus maps an event kind (and, where the outcome is in the
-// payload rather than the kind, its payload) to the one Status model
-// (section 13), so a Timeline row's dot/icon colour comes from the
-// same table as everywhere else, never a bespoke class.
-export function eventStatus(kind: string, payload: unknown): Status | undefined {
-  if (kind === 'mission.done' || kind === 'mission.result_complete') return 'success'
-  if (
-    kind === 'mission.failed' ||
-    kind === 'mission.violation' ||
-    kind === 'executor.died' ||
-    kind === 'executor.auth_failed' ||
-    kind === 'mission.push_failed' ||
-    kind === 'mission.permission_denied'
-  )
-    return 'error'
-  if (kind === 'mission.paused' || kind === 'mission.blocked' || kind === 'mission.permission_requested' || kind === 'mission.input_requested')
-    return 'waiting'
-  if (kind === 'mission.retry' || kind === 'mission.recovery') return 'warning'
-  if (kind === 'mission.unit_verified') {
-    const { passed } = asRecord(payload)
-    return passed ? 'success' : 'error'
-  }
-  if (kind === 'mission.unit_regressed') return 'error'
-  if (kind === 'mission.review_verdict') {
-    const { decision } = asRecord(payload)
-    return decision === 'approved' ? 'success' : 'warning'
-  }
-  return undefined
 }
 
 // toolRunFromEvent maps a mission.tool_call event to the ToolRun shape

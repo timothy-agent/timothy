@@ -6,7 +6,7 @@ import type { Status } from '../timothy/status'
 // D-099): reviewed (a review approved it), harness-verified (harness
 // evidence, awaiting review), pending. A regressed unit is pending and
 // gets a separate regressed note.
-export function unitBadge(u: PlanUnit): { label: string; status: Status } {
+function unitBadge(u: PlanUnit): { label: string; status: Status } {
   if (u.passes) return { label: 'reviewed', status: 'success' }
   if (u.harness_passed) return { label: 'harness-verified', status: 'success' }
   return { label: 'pending', status: 'neutral' }
