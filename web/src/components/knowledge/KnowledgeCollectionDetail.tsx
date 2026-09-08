@@ -32,7 +32,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog'
-import { errText } from '../settings/util'
+import { errText } from '../../lib/errors'
 import { Input } from '../ui/input'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { KbUploadForm } from './KbUploadForm'

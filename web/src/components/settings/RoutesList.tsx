@@ -26,7 +26,8 @@ import { Switch } from '../ui/switch'
 import { EntityCard } from './EntityCard'
 import { ServingLine } from './ServingLine'
 import { settingsArea } from './settingsAreas'
-import { errText, UNSET } from './util'
+import { UNSET } from './util'
+import { errText } from '../../lib/errors'
 
 const area = settingsArea('routes')
 

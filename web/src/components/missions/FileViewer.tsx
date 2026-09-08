@@ -16,7 +16,7 @@ import { IconButton } from '../timothy/icon-button'
 import { Spinner } from '../timothy/spinner'
 import { FileCodeBlock, FileMarkdownBlock } from '../FilePreviewBlocks'
 import { CopyButton } from '../Message'
-import { errText } from '../settings/util'
+import { errText } from '../../lib/errors'
 import { TooltipProvider } from '../ui/tooltip'
 import { previewKindOf } from './filePreviewKind'
 

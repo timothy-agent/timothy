@@ -1,4 +1,4 @@
-import { presetForProviderName, ProviderMark } from './settings/ProviderLogo'
+import { presetForProviderName, ProviderMark } from './timothy/provider-logo'
 import { Badge } from './ui/badge'
 
 // ModelBadge renders a model name with its provider's brand mark, in

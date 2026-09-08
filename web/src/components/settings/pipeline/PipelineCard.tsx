@@ -3,8 +3,8 @@ import type { AdminProvider, RouteEntryStatus } from '../../../api/types'
 import { Badge } from '../../ui/badge'
 import { Card } from '../../ui/card'
 import { IconButton } from '../../timothy/icon-button'
-import { matchPreset } from '../presets'
-import { ProviderLogo } from '../ProviderLogo'
+import { matchPreset } from '../../../lib/providerPresets'
+import { ProviderLogo } from '../../timothy/provider-logo'
 import { ScoreBar } from './ScoreBar'
 
 const fmtLatency = (v?: number) => (v === undefined ? 'N/A' : `${Math.round(v)} ms`)

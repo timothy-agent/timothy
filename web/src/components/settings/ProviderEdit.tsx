@@ -29,13 +29,14 @@ import { bedrockKeyJSON, BedrockKeyFields } from './BedrockKeyFields'
 import { ExistingCredentialSelect } from './CredentialRefPicker'
 import { catalogRowID, ModelPicker, priceLabel, type ModelSuggestion, useCatalogSearch } from './ModelPicker'
 import { OptionStringField } from './OptionStringField'
-import { bedrockRegions, matchPreset } from './presets'
-import { ProviderLogo } from './ProviderLogo'
+import { bedrockRegions, matchPreset } from '../../lib/providerPresets'
+import { ProviderLogo } from '../timothy/provider-logo'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { useStagedForm } from './useStagedForm'
-import { backendLabel, errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
+import { backendLabel, probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
+import { errText, isTimothyAuthDetail, isTimothyAuthError } from '../../lib/errors'
 
 const area = settingsArea('providers')
 

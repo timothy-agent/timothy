@@ -7,7 +7,8 @@ import { createKbCollection } from '../../api/client'
 import { Field } from '../timothy/field'
 import { Input } from '../ui/input'
 import { Button } from '../ui/button'
-import { errText, slugify } from '../settings/util'
+import { errText } from '../../lib/errors'
+import { slugify } from '../../lib/slugify'
 
 export function KnowledgeCollectionAdd() {
   const navigate = useNavigate()

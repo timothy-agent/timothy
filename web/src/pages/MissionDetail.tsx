@@ -57,7 +57,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
-import { errText } from '../components/settings/util'
+import { errText } from '../lib/errors'
 import { ConfirmDialog } from '../components/timothy/confirm-dialog'
 import { CopyButton } from '../components/timothy/copy-button'
 import { Eyebrow, PageHeader } from '../components/timothy/page-header'

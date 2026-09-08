@@ -16,7 +16,8 @@ import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, presetFor } from './connectorPresets'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
-import { connectedAs, errText, isTimothyAuthError } from './util'
+import { connectedAs } from './util'
+import { errText, isTimothyAuthError } from '../../lib/errors'
 
 const area = settingsArea('connectors')
 

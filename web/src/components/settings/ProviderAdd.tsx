@@ -13,12 +13,13 @@ import { Field, FieldGroup, Form, FormActions } from '../timothy/field'
 import { bedrockKeyJSON, BedrockKeyFields } from './BedrockKeyFields'
 import { CredentialField, type CredentialMode } from './CredentialRefPicker'
 import { catalogMatchForID, catalogRowID, ModelPicker, type ModelSuggestion, useCatalogSearch } from './ModelPicker'
-import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
-import { ProviderLogo } from './ProviderLogo'
+import { bedrockRegions, providerPresets, type ProviderPreset } from '../../lib/providerPresets'
+import { ProviderLogo } from '../timothy/provider-logo'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { errText, isTimothyAuthDetail, isTimothyAuthError, probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
+import { probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
+import { errText, isTimothyAuthDetail, isTimothyAuthError } from '../../lib/errors'
 
 const area = settingsArea('providers')
 

@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select'
-import { awsRegions } from './presets'
+import { awsRegions } from '../../lib/providerPresets'
 import { Alert, AlertDescription } from '../ui/alert'
 import { BrandTile } from '../timothy/brand-tile'
 import { Field } from '../timothy/field'
@@ -31,7 +31,7 @@ import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { TestStatus } from './TestStatus'
 import { settingsArea } from './settingsAreas'
-import { errText } from './util'
+import { errText } from '../../lib/errors'
 
 const area = settingsArea('secrets')
 

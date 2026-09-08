@@ -12,7 +12,7 @@ import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { AgentForm, useAgentEditForm } from './AgentForm'
 import { settingsArea } from './settingsAreas'
-import { errText } from './util'
+import { errText } from '../../lib/errors'
 
 const area = settingsArea('agents')
 

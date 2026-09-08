@@ -9,7 +9,8 @@ import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { AgentForm, useAgentForm } from './AgentForm'
 import { settingsArea } from './settingsAreas'
-import { errText, slugify } from './util'
+import { errText } from '../../lib/errors'
+import { slugify } from '../../lib/slugify'
 
 const area = settingsArea('agents')
 

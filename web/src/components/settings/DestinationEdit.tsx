@@ -26,7 +26,7 @@ import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { useStagedForm } from './useStagedForm'
-import { errText } from './util'
+import { errText } from '../../lib/errors'
 
 const area = settingsArea('destinations')
 

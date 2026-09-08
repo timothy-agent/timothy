@@ -13,7 +13,8 @@ import { DestinationKindFields, type DestinationKindValues } from './Destination
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { errText, slugify } from './util'
+import { errText } from '../../lib/errors'
+import { slugify } from '../../lib/slugify'
 
 const area = settingsArea('destinations')
 

@@ -1,6 +1,6 @@
 import { CursorIcon } from '../icons/CursorIcon'
-import { BrandTile } from '../timothy/brand-tile'
-import { providerPresets, type ProviderPreset } from './presets'
+import { BrandTile } from './brand-tile'
+import { providerPresets, type ProviderPreset } from '../../lib/providerPresets'
 
 // Official provider marks (lobehub icon set, monochrome variants),
 // rendered white on the preset's brand color. LogoSprite mounts once

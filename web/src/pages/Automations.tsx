@@ -9,7 +9,7 @@ import { ConfirmDialog } from '../components/timothy/confirm-dialog'
 import { EmptyState } from '../components/timothy/empty-state'
 import { PageHeader } from '../components/timothy/page-header'
 import { PageShell } from '../components/timothy/page-shell'
-import { errText } from '../components/settings/util'
+import { errText } from '../lib/errors'
 
 // Automations lists every recurring schedule as a card, folding in what
 // RecurringSchedules used to render inline on the Missions page — same

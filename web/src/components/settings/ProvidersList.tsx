@@ -11,12 +11,12 @@ import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { AddPresetTile } from './AddPresetTile'
 import { EntityCard } from './EntityCard'
-import { matchPreset, providerPresets } from './presets'
-import { ProviderLogo } from './ProviderLogo'
+import { matchPreset, providerPresets } from '../../lib/providerPresets'
+import { ProviderLogo } from '../timothy/provider-logo'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useProviderTest } from './useProviderTest'
-import { errText } from './util'
+import { errText } from '../../lib/errors'
 
 const area = settingsArea('providers')
 

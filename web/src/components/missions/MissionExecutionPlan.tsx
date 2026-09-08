@@ -2,8 +2,8 @@ import type { ExecutionPlanEntry, ExecutionPlanPhase } from '../../api/types'
 import { unusablePhases, unusableReason } from './executionPlan'
 import { executorChoices } from './MissionForm'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { matchPreset } from '../settings/presets'
-import { ProviderLogo } from '../settings/ProviderLogo'
+import { matchPreset } from '../../lib/providerPresets'
+import { ProviderLogo } from '../timothy/provider-logo'
 
 // MODEL_AUTO is the select's sentinel for "no pin" — Radix Select
 // rejects an empty-string item value, same convention MissionForm's

@@ -19,12 +19,12 @@ import { Switch } from '../ui/switch'
 import { catalogRowID, ModelPicker, type ModelSuggestion, useCatalogSearch } from './ModelPicker'
 import { Pipeline, type PipelineEntry } from './pipeline/Pipeline'
 import { reorder } from './pipeline/useReorderDrag'
-import { matchPreset } from './presets'
-import { ProviderMark } from './ProviderLogo'
+import { matchPreset } from '../../lib/providerPresets'
+import { ProviderMark } from '../timothy/provider-logo'
 import { ServingLine } from './ServingLine'
 import { settingsArea } from './settingsAreas'
 import { useStagedForm } from './useStagedForm'
-import { errText } from './util'
+import { errText } from '../../lib/errors'
 
 const area = settingsArea('routes')
 const scoredStrategies = ['auto', 'price', 'latency']

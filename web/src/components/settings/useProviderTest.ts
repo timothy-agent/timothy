@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { testProvider } from '../../api/client'
-import { isTimothyAuthDetail, isTimothyAuthError, probeFailureText, responsesSuffix } from './util'
+import { probeFailureText, responsesSuffix } from './util'
+import { isTimothyAuthDetail, isTimothyAuthError } from '../../lib/errors'
 
 interface ProviderTestState {
   state: 'idle' | 'testing' | 'ok' | 'failed'

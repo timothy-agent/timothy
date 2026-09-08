@@ -26,7 +26,9 @@ import { presetFor } from './connectorPresets'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useStagedForm } from './useStagedForm'
-import { connectedAs, errText, isTimothyAuthError, slugify } from './util'
+import { connectedAs } from './util'
+import { errText, isTimothyAuthError } from '../../lib/errors'
+import { slugify } from '../../lib/slugify'
 
 const area = settingsArea('connectors')
 

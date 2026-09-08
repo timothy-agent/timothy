@@ -1,4 +1,4 @@
-import type { AdminProvider } from '../../api/types'
+import type { AdminProvider } from '../api/types'
 
 // ProviderPreset is one entry of the declarative provider registry:
 // the add dialog, tile grid, and card branding all render from these —

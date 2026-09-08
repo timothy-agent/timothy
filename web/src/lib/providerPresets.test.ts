@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { AdminProvider } from '../../api/types'
-import { matchPreset } from './presets'
+import type { AdminProvider } from '../api/types'
+import { matchPreset } from './providerPresets'
 
 function provider(overrides: Partial<AdminProvider>): AdminProvider {
   return {

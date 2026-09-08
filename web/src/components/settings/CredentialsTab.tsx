@@ -13,7 +13,7 @@ import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { settingsArea } from './settingsAreas'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { errText } from './util'
+import { errText } from '../../lib/errors'
 
 const area = settingsArea('credentials')
 

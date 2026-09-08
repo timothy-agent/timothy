@@ -20,7 +20,7 @@ import { EntityCard } from './EntityCard'
 import { destinationPresets } from './destinationPresets'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
-import { errText } from './util'
+import { errText } from '../../lib/errors'
 
 const area = settingsArea('destinations')
 

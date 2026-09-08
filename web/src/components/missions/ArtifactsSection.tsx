@@ -11,7 +11,7 @@ import {
   promoteMissionToKB,
 } from '../../api/client'
 import type { KbCollection, MediaRef, MissionFile } from '../../api/types'
-import { errText } from '../settings/util'
+import { errText } from '../../lib/errors'
 import { Button } from '../ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'

@@ -24,7 +24,7 @@ import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
 import { SettingsDialog } from './components/SettingsDialog'
 import { ConnectorLogoSprite } from './components/settings/ConnectorLogo'
-import { LogoSprite } from './components/settings/ProviderLogo'
+import { LogoSprite } from './components/timothy/provider-logo'
 import {
   CommandDialog,
   CommandEmpty,
