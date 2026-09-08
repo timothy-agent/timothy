@@ -778,7 +778,30 @@ describe('UserMessage attachments', () => {
   })
 })
 
+describe('turn footer', () => {
+  it('keeps copy and activity controls visible without hover, next to plain metadata text', () => {
+    const msg = play([
+      { type: 'chunk', text: 'hello' },
+      { type: 'meta', session_id: 's', provider: 'openai', model: 'gpt-5', usage: { input_tokens: 10, output_tokens: 5 } },
+      { type: 'done' },
+    ])
+    render(<AssistantMessage msg={msg} onShowActivity={() => {}} />)
+    expect(screen.getByTestId('copy-button').className).not.toContain('opacity-0')
+    expect(screen.getByTestId('show-activity')).toBeInTheDocument()
+    const meta = screen.getByTestId('meta-badge')
+    expect(meta.querySelector('[data-slot="badge"]')).toBeNull()
+    expect(meta).toHaveTextContent('gpt-5')
+    expect(meta).toHaveTextContent('10→5 tok')
+  })
+})
+
 describe('long unbroken content containment', () => {
+  it('inverts prose colors in the user bubble so links stay readable in dark mode', () => {
+    render(<UserMessage text="see https://example.com" />)
+    const bubble = screen.getByText(/see/).closest('div')
+    expect(bubble?.className).toContain('dark:prose-invert')
+  })
+
   it('wraps a 400-character unbroken token in the user bubble', () => {
     const token = 'a'.repeat(400)
     render(<UserMessage text={token} />)

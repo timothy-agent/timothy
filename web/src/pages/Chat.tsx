@@ -713,7 +713,7 @@ export function Chat({
           </div>
         ) : (
           <div ref={listRef} onScroll={trackPin} className="flex-1 overflow-y-auto overflow-x-hidden">
-            <div className="relative mx-auto w-full min-w-0 max-w-[45rem] space-y-8 pt-8 pb-6">
+            <div className="relative mx-auto w-full min-w-0 max-w-4xl space-y-8 pt-8 pb-6">
               {loadError && (
                 <Alert tone="destructive">
                   <AlertTitle>Could not load this conversation</AlertTitle>
@@ -786,7 +786,7 @@ export function Chat({
           </div>
         )}
 
-        <div className="mx-auto w-full max-w-[45rem] pb-6">
+        <div className="mx-auto w-full max-w-4xl pb-6">
           <AgentStatusLine
             phase={
               statusPhase.kind === 'waiting'

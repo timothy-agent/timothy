@@ -1,5 +1,5 @@
 import { Check, Copy, File, FileAudio, FileText, FileVideo, ImageOff, Link, ListTree, RotateCw } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type HTMLAttributes } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { toast } from 'sonner'
 import {
@@ -12,7 +12,7 @@ import type { ImageRef, MediaRef } from '../api/types'
 import { ApprovalCard, type Decision } from './chat/ApprovalCard'
 import { ToolCallGroup } from './chat/ToolCallCard'
 import { AttachmentViewer, mimeLabel } from './AttachmentViewer'
-import { ModelBadge } from './ModelBadge'
+import { presetForProviderName, ProviderMark } from './timothy/provider-logo'
 import { errText } from '../lib/errors'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
@@ -274,12 +274,24 @@ export function CopyButton({
       data-copied={copied}
       onClick={() => void copy()}
       className={cn(
-        'rounded-md p-1 text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:opacity-100',
-        alwaysVisible ? 'bg-muted' : 'opacity-0 group-hover/message:opacity-100',
+        'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition hover:bg-accent hover:text-foreground focus-visible:opacity-100',
+        !alwaysVisible && 'opacity-0 group-hover/message:opacity-100',
       )}
     >
       {copied ? <Check className="size-3.5" aria-hidden /> : <Copy className="size-3.5" aria-hidden />}
     </button>
+  )
+}
+
+// MetaItem is one dot-separated entry in the turn footer's metadata line.
+function MetaItem({ children, ...props }: HTMLAttributes<HTMLSpanElement>) {
+  return (
+    <>
+      <span aria-hidden className="select-none">
+        ·
+      </span>
+      <span {...props}>{children}</span>
+    </>
   )
 }
 
@@ -304,8 +316,7 @@ function ExportPDFButton({ text }: { text: string }) {
         icon={FileText}
         loading={exporting}
         variant="ghost"
-        size="sm"
-        className="opacity-0 group-hover/message:opacity-100 focus-visible:opacity-100"
+        size="xs"
         onClick={exportPdf}
       />
     </TooltipProvider>
@@ -356,7 +367,7 @@ export function UserMessage({
       <div className="group/message flex w-full min-w-0 items-end justify-end gap-1">
         <CopyButton text={text} label="Copy message" />
         {text !== '' && (
-          <div className="prose ml-auto min-w-0 max-w-[85%] break-words rounded-md bg-muted px-4 py-3 text-prose text-foreground [overflow-wrap:anywhere]">
+          <div className="prose ml-auto min-w-0 max-w-[85%] break-words rounded-md bg-muted px-4 py-3 text-prose text-foreground [overflow-wrap:anywhere] dark:prose-invert">
             <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
               {text}
             </ReactMarkdown>
@@ -403,7 +414,7 @@ export function InterruptedMessage({ text }: { text: string }) {
       className="group/message flex w-full flex-col gap-2 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
       data-testid="interrupted"
     >
-      <div className="prose min-w-0 max-w-none break-words text-foreground [overflow-wrap:anywhere]">
+      <div className="prose min-w-0 max-w-none break-words text-foreground [overflow-wrap:anywhere] dark:prose-invert">
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
@@ -573,31 +584,32 @@ export function AssistantMessage({
         </div>
       )}
       {!msg.streaming && (Boolean(msg.meta?.provider) || msg.text !== '' || Boolean(onShowActivity)) && (
-        <div className="mt-2 flex min-w-0 max-w-full flex-wrap items-center gap-1 text-xs text-muted-foreground">
+        <div className="mt-2 flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
           {msg.meta?.provider && (
-            <div className="flex flex-wrap gap-1.5" data-testid="meta-badge">
-              <ModelBadge provider={msg.meta.provider} model={msg.meta.model ?? ''} />
-              {tokens && <Badge variant="secondary">{tokens}</Badge>}
-              {duration && (
-                <Badge variant="secondary" data-testid="duration-badge">
-                  {duration}
-                </Badge>
-              )}
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2 tabular-nums" data-testid="meta-badge">
+              <span className="inline-flex items-center gap-1.5">
+                <ProviderMark preset={presetForProviderName(msg.meta.provider)} className="size-3" />
+                {msg.meta.model ?? ''}
+              </span>
+              {tokens && <MetaItem>{tokens}</MetaItem>}
+              {duration && <MetaItem data-testid="duration-badge">{duration}</MetaItem>}
               {cost && (
-                <Badge variant="secondary" data-testid="cost-badge" title={costTitle}>
+                <MetaItem data-testid="cost-badge" title={costTitle}>
                   {cost}
-                </Badge>
+                </MetaItem>
               )}
             </div>
           )}
-          {msg.text !== '' && <CopyButton text={msg.text} label="Copy reply" />}
-          {msg.text !== '' && pdfExportEnabled && <ExportPDFButton text={msg.text} />}
-          {onShowActivity && (
-            <Button variant="ghost" size="xs" data-testid="show-activity" onClick={onShowActivity}>
-              <ListTree aria-hidden />
-              Activity
-            </Button>
-          )}
+          <div className="ml-auto flex items-center gap-0.5">
+            {msg.text !== '' && <CopyButton text={msg.text} label="Copy reply" alwaysVisible />}
+            {msg.text !== '' && pdfExportEnabled && <ExportPDFButton text={msg.text} />}
+            {onShowActivity && (
+              <Button variant="ghost" size="xs" data-testid="show-activity" onClick={onShowActivity}>
+                <ListTree aria-hidden />
+                Activity
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </div>

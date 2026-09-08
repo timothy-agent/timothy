@@ -149,7 +149,7 @@ function AppSidebar({
           <Link to="/" aria-label="Timothy home" className="flex size-7 shrink-0 items-center justify-center">
             <BrandMark className="size-5" />
           </Link>
-          <span className="truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
+          <span className="truncate text-sm font-semibold tracking-tight transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
             Timothy
           </span>
         </div>
@@ -220,7 +220,7 @@ function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto group-data-[collapsible=icon]:hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
           <SessionList />
         </div>
       </SidebarContent>
@@ -248,7 +248,7 @@ function AppSidebar({
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
-        <div className="px-2 py-1 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+        <div className="whitespace-nowrap px-2 py-1 text-xs text-muted-foreground transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
           v{__APP_VERSION__} ({__GIT_SHA__})
         </div>
       </SidebarFooter>

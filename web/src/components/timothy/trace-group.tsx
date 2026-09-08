@@ -92,8 +92,8 @@ export function TraceRow({
     <>
       <StatusIcon aria-hidden className={cn('size-3.5 shrink-0', statusText[status], meta.spin && 'animate-spin motion-keep')} />
       {CategoryIcon && <CategoryIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />}
-      <span className="text-sm text-muted-foreground">{action}</span>
-      {target && <span className="truncate font-mono text-xs text-foreground">{target}</span>}
+      <span className="shrink-0 whitespace-nowrap text-sm text-muted-foreground">{action}</span>
+      {target && <span className="min-w-0 truncate font-mono text-xs text-foreground">{target}</span>}
       {duration && <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">{duration}</span>}
     </>
   )

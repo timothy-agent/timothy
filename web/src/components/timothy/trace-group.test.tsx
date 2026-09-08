@@ -5,6 +5,12 @@ import { TraceGroup, TraceRow } from './trace-group'
 afterEach(cleanup)
 
 describe('TraceGroup', () => {
+  it('keeps the action on one line and lets the target truncate', () => {
+    render(<TraceRow status="success" action="Fetch url" target="https://example.com/a/very/long/path" />)
+    expect(screen.getByText('Fetch url')).toHaveClass('shrink-0', 'whitespace-nowrap')
+    expect(screen.getByText('https://example.com/a/very/long/path')).toHaveClass('min-w-0', 'truncate')
+  })
+
   it('toggles aria-expanded and content visibility', () => {
     render(
       <TraceGroup summary="3 tool calls" duration="2.1s">

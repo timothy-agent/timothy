@@ -424,7 +424,7 @@ export function CodeBlock({ children, node }: { children?: ReactNode } & ExtraPr
       <div className="flex h-8 items-center justify-between border-b border-border px-3 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
           {logo ? (
-            <span className={needsChip ? 'flex items-center rounded-md dark:bg-white/95 dark:p-[1px]' : 'flex items-center'}>
+            <span className={needsChip ? 'flex items-center rounded-[3px] dark:bg-white/95 dark:p-[1px]' : 'flex items-center'}>
               <img src={logo} alt="" className="size-3.5" />
             </span>
           ) : (
