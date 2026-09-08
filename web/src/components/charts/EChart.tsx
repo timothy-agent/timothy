@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts/core'
+import { isDarkTheme } from './theme'
 import { BarChart, GaugeChart, GraphChart, LineChart, PieChart } from 'echarts/charts'
 import {
   DataZoomComponent,
@@ -62,7 +63,14 @@ export function EChart({ option, height = 240, fill = false, notMerge = true, on
     const resizeObserver = new ResizeObserver(() => chart.resize())
     resizeObserver.observe(el)
 
+    // Class attribute changes on <html> for reasons other than the
+    // dark/light toggle (e.g. focus-visible) must not dispose the
+    // chart, so only re-init when the dark boolean actually flips.
+    let dark = isDarkTheme()
     const themeObserver = new MutationObserver(() => {
+      const nowDark = isDarkTheme()
+      if (nowDark === dark) return
+      dark = nowDark
       chart.dispose()
       chartRef.current = echarts.init(el)
       chartRef.current.setOption(option, { notMerge })

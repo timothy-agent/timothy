@@ -4,8 +4,11 @@ import { graphOption, visibleEntities } from './graphOption'
 
 type Series = {
   categories: { name: string }[]
-  data: { id: string; category: number; symbolSize: number; itemStyle?: { borderColor?: string; borderWidth?: number } }[]
+  data: { id: string; category: number; symbolSize: number }[]
   edges: { source: string; target: string }[]
+  label?: { show?: boolean }
+  labelLayout?: { hideOverlap?: boolean }
+  force?: { layoutAnimation?: boolean }
 }
 
 function seriesOf(option: ReturnType<typeof graphOption>): Series {
@@ -31,7 +34,7 @@ const data: EntityGraphData = {
 
 describe('graphOption', () => {
   it('assigns one category per entity kind present', () => {
-    const s = seriesOf(graphOption(data, new Set(), null))
+    const s = seriesOf(graphOption(data, new Set()))
     expect(s.categories.map((c) => c.name)).toEqual(['person', 'project'])
     const a = s.data.find((n) => n.id === 'a')!
     const b = s.data.find((n) => n.id === 'b')!
@@ -40,30 +43,48 @@ describe('graphOption', () => {
   })
 
   it('drops hidden-kind nodes and their edges', () => {
-    const s = seriesOf(graphOption(data, new Set(['project']), null))
+    const s = seriesOf(graphOption(data, new Set(['project'])))
     expect(s.data.map((n) => n.id)).toEqual(['a'])
     expect(s.edges).toHaveLength(0)
   })
 
   it('drops edges with a dangling endpoint', () => {
-    const s = seriesOf(graphOption(data, new Set(), null))
+    const s = seriesOf(graphOption(data, new Set()))
     expect(s.edges).toHaveLength(1)
     expect(s.edges[0]).toMatchObject({ source: 'a', target: 'b' })
   })
 
   it('sizes nodes monotonically with memory_count', () => {
-    const s = seriesOf(graphOption(data, new Set(), null))
+    const s = seriesOf(graphOption(data, new Set()))
     const size = (id: string) => s.data.find((n) => n.id === id)!.symbolSize
     expect(size('a')).toBeGreaterThan(size('b'))
     expect(size('b')).toBeGreaterThan(size('c'))
   })
 
-  it('gives the selected node border styling', () => {
-    const s = seriesOf(graphOption(data, new Set(), 'b'))
-    const a = s.data.find((n) => n.id === 'a')!
-    const b = s.data.find((n) => n.id === 'b')!
-    expect(a.itemStyle).toBeUndefined()
-    expect(b.itemStyle?.borderWidth).toBeGreaterThan(0)
+  function manyNodes(count: number): EntityGraphData {
+    return {
+      entities: Array.from({ length: count }, (_, i) => node(`n${i}`, 'topic', 1)),
+      edges: [],
+    }
+  }
+
+  it('hides overlap labels below the dense threshold', () => {
+    const s = seriesOf(graphOption(manyNodes(20), new Set()))
+    expect(s.labelLayout?.hideOverlap).toBe(true)
+    expect(s.label?.show).toBe(true)
+  })
+
+  it('shows labels on emphasis only above the dense threshold', () => {
+    const s = seriesOf(graphOption(manyNodes(200), new Set()))
+    expect(s.labelLayout).toBeUndefined()
+    expect(s.label?.show).toBe(false)
+  })
+
+  it('disables force layout animation for very large graphs', () => {
+    const small = seriesOf(graphOption(manyNodes(200), new Set()))
+    const large = seriesOf(graphOption(manyNodes(400), new Set()))
+    expect(small.force?.layoutAnimation).toBe(true)
+    expect(large.force?.layoutAnimation).toBe(false)
   })
 })
 
