@@ -93,6 +93,21 @@ describe('useGateShortcuts', () => {
     expect(onA).not.toHaveBeenCalled()
   })
 
+  it('ignores keydown when an input is focused', () => {
+    const onA = vi.fn()
+    function InputHarness() {
+      const onKeyDown = useGateShortcuts({ a: onA })
+      return (
+        <div onKeyDown={onKeyDown}>
+          <input data-testid="note" />
+        </div>
+      )
+    }
+    render(<InputHarness />)
+    fireEvent.keyDown(screen.getByTestId('note'), { key: 'a' })
+    expect(onA).not.toHaveBeenCalled()
+  })
+
   it('ignores keydown with a modifier held', () => {
     const onA = vi.fn()
     render(<Harness onA={onA} onD={() => {}} />)

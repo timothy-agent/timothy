@@ -101,6 +101,28 @@ describe('ToolCallCard', () => {
     fireEvent.click(screen.getByRole('button'))
     expect(screen.getByText('Denied by you')).toBeInTheDocument()
   })
+
+  it('shows unparsable args as the raw string', () => {
+    const run: ToolRun = { id: '1', name: 'shell', status: 'ok', args: 'not json' }
+    renderWithProvider(<ToolCallCard run={run} />)
+    fireEvent.click(screen.getByRole('button'))
+    expect(screen.getByLabelText('Arguments')).toHaveTextContent('not json')
+  })
+
+  it('truncates a long digest with a "Show all" toggle that expands and collapses', () => {
+    const lines = Array.from({ length: 25 }, (_, i) => `line ${i}`)
+    const run: ToolRun = { id: '1', name: 'shell', status: 'ok', digest: lines.join('\n') }
+    render(<ToolCallCard run={run} defaultOpen />)
+    fireEvent.click(screen.getByRole('button', { name: /Shell/ }))
+    expect(screen.getByText('line 0', { exact: false })).toBeInTheDocument()
+    expect(screen.queryByText('line 24', { exact: false })).not.toBeInTheDocument()
+    const toggle = screen.getByRole('button', { name: 'Show all (+5 lines)' })
+    fireEvent.click(toggle)
+    expect(screen.getByText('Show less')).toBeInTheDocument()
+    expect(screen.getByText('line 24', { exact: false })).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Show less'))
+    expect(screen.getByText('Show all (+5 lines)')).toBeInTheDocument()
+  })
 })
 
 describe('ToolCallGroup', () => {

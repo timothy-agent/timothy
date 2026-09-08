@@ -17,6 +17,10 @@ describe('normalizePhase', () => {
     expect(normalizePhase('done')).toBe('done')
     expect(normalizePhase('failed')).toBe('failed')
   })
+
+  it('falls back to discover for an unrecognized phase', () => {
+    expect(normalizePhase('bogus')).toBe('discover')
+  })
 })
 
 describe('phaseIndex', () => {
@@ -51,6 +55,10 @@ describe('phaseStepText', () => {
   it('renders terminal phases as Done/Failed', () => {
     expect(phaseStepText({ phase: 'done' })).toBe('Done')
     expect(phaseStepText({ phase: 'failed' })).toBe('Failed')
+  })
+
+  it('renders just the label for an unrecognized phase', () => {
+    expect(phaseStepText({ phase: 'bogus' })).toBe('bogus')
   })
 })
 

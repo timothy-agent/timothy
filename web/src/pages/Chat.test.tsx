@@ -45,6 +45,7 @@ import {
   listAgents,
   listMissions,
   listRoutes,
+  retryStream,
   setSessionKnowledge,
   stopTurn,
   streamLive,
@@ -737,5 +738,281 @@ describe('agent status line', () => {
 
     await screen.findByRole('region') // inline card renders
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('opens the ApprovalDialog and focuses the inline card via "Show request" when scrolled away', async () => {
+    let feed!: (ev: ChatEvent) => void
+    vi.mocked(chatStream).mockImplementation(
+      async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
+        opts.onSession?.('s1')
+        feed = onEvent
+        await new Promise<void>(() => {}) // never resolves: turn stays live
+      },
+    )
+
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(chatStream).toHaveBeenCalled())
+
+    // Scroll away from the bottom before the permission arrives: the
+    // dialog gate (pinnedRef false) should surface the modal.
+    const list = document.querySelector('.overflow-y-auto') as HTMLElement
+    Object.defineProperty(list, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(list, 'clientHeight', { value: 200, configurable: true })
+    Object.defineProperty(list, 'scrollTop', { value: 0, configurable: true })
+    fireEvent.scroll(list)
+
+    feed({
+      type: 'permission_request',
+      permission: {
+        id: 'perm-1',
+        call_id: 'call-1',
+        tool: 'shell',
+        args: '{}',
+        danger_level: 'safe',
+        rationale: 'runs a shell command',
+      },
+    })
+
+    await screen.findByRole('dialog')
+    const focusSpy = vi.fn()
+    const card = document.getElementById('approval-perm-1')
+    expect(card).not.toBeNull()
+    card!.focus = focusSpy
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show request' }))
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+    expect(focusSpy).toHaveBeenCalled()
+  })
+
+  it('closes the dialog without hiding the inline card when a pinned scroll re-engages the pin', async () => {
+    let feed!: (ev: ChatEvent) => void
+    vi.mocked(chatStream).mockImplementation(
+      async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
+        opts.onSession?.('s1')
+        feed = onEvent
+        await new Promise<void>(() => {}) // never resolves: turn stays live
+      },
+    )
+
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(chatStream).toHaveBeenCalled())
+
+    const list = document.querySelector('.overflow-y-auto') as HTMLElement
+    Object.defineProperty(list, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(list, 'clientHeight', { value: 200, configurable: true })
+    Object.defineProperty(list, 'scrollTop', { value: 0, configurable: true })
+    fireEvent.scroll(list)
+
+    feed({
+      type: 'permission_request',
+      permission: {
+        id: 'perm-1',
+        call_id: 'call-1',
+        tool: 'shell',
+        args: '{}',
+        danger_level: 'safe',
+        rationale: 'runs a shell command',
+      },
+    })
+    await screen.findByRole('dialog')
+
+    // Scroll back near the bottom: trackPin re-engages the pin, but the
+    // dialog only reacts to pendingPermissionId changing, so it stays
+    // open until the request itself resolves or clears.
+    Object.defineProperty(list, 'scrollTop', { value: 850, configurable: true })
+    fireEvent.scroll(list)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+})
+
+describe('replayed transcript rendering', () => {
+  it('renders a compaction divider from the replayed transcript', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
+      items: [{ seq: 1, kind: 'compaction', text: 'older messages summarized', created_at: '' }],
+      turn_active: false,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByTestId('compaction-divider')).toHaveTextContent('older messages summarized')
+  })
+
+  it('renders an interrupted item from the replayed transcript', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
+      items: [{ seq: 1, kind: 'interrupted', text: 'partial answer', created_at: '' }],
+      turn_active: false,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByTestId('interrupted')).toBeInTheDocument()
+  })
+
+  it('renders a failed turn with a working retry button on the trailing error item', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
+      items: [
+        { seq: 1, kind: 'user', text: 'do the thing', created_at: '' },
+        { seq: 2, kind: 'error', text: 'boom', created_at: '' },
+      ],
+      turn_active: false,
+    })
+    vi.mocked(retryStream).mockImplementation(
+      async () => new Promise(() => {}), // never resolves: assert the call happened
+    )
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByTestId('turn-failed')).toHaveTextContent('boom')
+    fireEvent.click(screen.getByTestId('retry-button'))
+    await waitFor(() => expect(retryStream).toHaveBeenCalledWith('s1', expect.any(Function), expect.anything()))
+  })
+
+  it('shows the load error banner when the transcript fails to load', async () => {
+    vi.mocked(getTranscript).mockRejectedValue(new Error('network down'))
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Could not load this conversation')).toBeInTheDocument()
+    expect(screen.getByText('network down')).toBeInTheDocument()
+  })
+})
+
+describe('activity panel', () => {
+  it('opens the Activity sheet for a turn and closes it again', async () => {
+    vi.mocked(getTranscript).mockResolvedValue({
+      session: { id: 's1', title: '', archived: false, created_at: '', updated_at: '' },
+      items: [
+        { seq: 1, kind: 'user', text: 'do the thing', created_at: '' },
+        {
+          seq: 2,
+          kind: 'assistant',
+          blocks: [{ type: 'text', text: 'the answer' }],
+          created_at: '',
+        },
+      ],
+      turn_active: false,
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('the answer')
+    fireEvent.click(screen.getByTestId('show-activity'))
+
+    expect(await screen.findByRole('heading', { name: 'Activity' })).toBeInTheDocument()
+
+    // Closing via onOpenChange(false) clears activityId, unmounting the panel content.
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Activity' })).not.toBeInTheDocument())
+  })
+})
+
+describe('jump to latest', () => {
+  it('shows the button once scrolled away mid-stream, and jumping re-pins and scrolls down', async () => {
+    let feed!: (ev: ChatEvent) => void
+    vi.mocked(chatStream).mockImplementation(
+      async (_req: ChatRequest, onEvent: (ev: ChatEvent) => void, opts: ChatStreamOptions = {}) => {
+        opts.onSession?.('s1')
+        feed = onEvent
+        await new Promise<void>(() => {}) // never resolves: turn stays live
+      },
+    )
+
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => expect(chatStream).toHaveBeenCalled())
+    feed({ type: 'chunk', text: 'partial' })
+
+    expect(screen.queryByRole('button', { name: /Jump to latest/ })).not.toBeInTheDocument()
+
+    const list = document.querySelector('.overflow-y-auto') as HTMLElement
+    Object.defineProperty(list, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(list, 'clientHeight', { value: 200, configurable: true })
+    Object.defineProperty(list, 'scrollTop', { value: 0, configurable: true })
+    fireEvent.scroll(list)
+
+    const jumpButton = await screen.findByRole('button', { name: /Jump to latest/ })
+    vi.mocked(Element.prototype.scrollIntoView).mockClear()
+    fireEvent.click(jumpButton)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /Jump to latest/ })).not.toBeInTheDocument(),
+    )
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
+  })
+})
+
+describe('skill hint chip', () => {
+  it('removes a home-screen skill hint from the composer', async () => {
+    render(
+      <MemoryRouter
+        initialEntries={[{ pathname: '/chat', state: { skillHint: 'research' } }]}
+      >
+        <Routes>
+          <Route path="/chat" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    const removeButton = await screen.findByRole('button', { name: /Remove .* skill/ })
+    fireEvent.click(removeButton)
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Remove .* skill/ })).not.toBeInTheDocument())
+  })
+
+  it('renders a locked skill hint with no remove button', async () => {
+    render(
+      <MemoryRouter initialEntries={['/research']}>
+        <Routes>
+          <Route
+            path="/research"
+            element={<Chat onNeedToken={vi.fn()} basePath="/research" lockedSkillHint="research" />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await screen.findByLabelText('Message')
+    expect(screen.queryByRole('button', { name: /Remove .* skill/ })).not.toBeInTheDocument()
   })
 })

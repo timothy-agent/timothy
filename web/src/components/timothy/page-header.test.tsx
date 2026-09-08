@@ -34,12 +34,27 @@ describe('Breadcrumbs', () => {
     expect(last).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings')
   })
+
+  it('renders a non-last crumb with no href as plain text, not a link', () => {
+    render(
+      <MemoryRouter>
+        <Breadcrumbs items={[{ label: 'Settings' }, { label: 'Current' }]} />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument()
+    expect(screen.getByText('Settings')).not.toHaveAttribute('aria-current')
+  })
 })
 
 describe('SectionHeader', () => {
   it('renders an h2 by default', () => {
     render(<SectionHeader title="Goal" />)
     expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Goal')
+  })
+
+  it('renders actions when given', () => {
+    render(<SectionHeader title="Goal" actions={<button>Edit</button>} />)
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument()
   })
 })
 

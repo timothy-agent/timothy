@@ -18,6 +18,10 @@ vi.mock('../api/client', () => ({
   cancelMission: vi.fn(),
   deleteMission: vi.fn(),
   answerMissionPermission: vi.fn(),
+  approveMissionPlan: vi.fn(),
+  replanMission: vi.fn(),
+  rediscoverMission: vi.fn(),
+  answerMissionQuestion: vi.fn(),
   listMissionFiles: vi.fn(),
   listSchedules: vi.fn(),
   downloadMissionFile: vi.fn(),
@@ -36,6 +40,8 @@ vi.mock('../api/client', () => ({
 
 import {
   answerMissionPermission,
+  answerMissionQuestion,
+  approveMissionPlan,
   cancelMission,
   deleteMission,
   getMission,
@@ -47,6 +53,8 @@ import {
   missionUsage,
   openMissionPR,
   pushMission,
+  rediscoverMission,
+  replanMission,
   resumeMission,
   sendMissionNote,
 } from '../api/client'
@@ -1355,5 +1363,250 @@ describe('MissionDetail push/PR (github-connection missions)', () => {
 
     expect(screen.getByRole('button', { name: 'Push branch' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Push & open PR' })).toBeNull()
+  })
+})
+
+describe('MissionDetail status label for a failed mission', () => {
+  it('labels a cancelled failure as "cancelled"', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'failed',
+      status: 'failed',
+      failure_reason: 'cancelled',
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.getByText('cancelled')).toBeTruthy()
+  })
+
+  it('labels a non-cancelled failure as "failed"', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'failed',
+      status: 'failed',
+      failure_reason: 'budget_exhausted',
+    })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.getByText('failed')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail header stats row', () => {
+  it('uses singular "turn"/"call" for exactly one executor.progress turn/tool call', async () => {
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'executor.progress',
+        payload: { run_id: 'r1', byte_offset: 100, turns: 1, tool_calls: 1 },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText(/1 turn, 1 tool call$/)).toBeTruthy()
+  })
+
+  it('shows the budget pill in the header stats row', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, budget_amount: 5, budget_currency: 'EUR' })
+    renderPage()
+    expect(await screen.findByText(/budget €5\.00/)).toBeTruthy()
+  })
+
+  it('shows the plan route when set', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, plan_route: 'careful' })
+    renderPage()
+    expect(await screen.findByText('plan route: careful')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail attachment chips', () => {
+  it('renders an attachment chip with its name', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      attachments: [{ id: 'att-1', mime: 'application/pdf', name: 'spec.pdf' }],
+    })
+    renderPage()
+    expect(await screen.findByText('spec.pdf')).toBeTruthy()
+  })
+
+  it('falls back to a truncated id when an attachment has no name', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      attachments: [{ id: 'attachment-without-a-name', mime: 'application/pdf' }],
+    })
+    renderPage()
+    expect(await screen.findByText('attachme')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail paused alert without a detail line', () => {
+  it('shows the pause title with no description when no mission.paused event carries a detail', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'budget' })
+    vi.mocked(missionEvents).mockResolvedValue([])
+    renderPage()
+    expect(await screen.findByText('Paused: budget exhausted')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail plan approval gate', () => {
+  it('approves a parked plan and shows the answered status', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'plan',
+      status: 'paused',
+      pause_reason: 'approval',
+      plan: {
+        units: [{ title: 'Add validation', verify_cmd: 'go test', passes: true }],
+        assumptions: [{ text: 'staging only', confidence: 'high' }],
+      },
+    })
+    renderPage()
+    const approveButton = await screen.findByRole('button', { name: 'Approve' })
+    fireEvent.click(approveButton)
+    await waitFor(() => expect(approveMissionPlan).toHaveBeenCalledWith('m1'))
+    expect(await screen.findByText('Approved, moving to generate…')).toBeTruthy()
+  })
+
+  it('requests a replan with feedback', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'plan',
+      status: 'paused',
+      pause_reason: 'approval',
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Request replan' }))
+    const input = screen.getByPlaceholderText('Optional feedback for the replan, markdown supported…')
+    fireEvent.change(input, { target: { value: 'tighten scope' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(replanMission).toHaveBeenCalledWith('m1', 'tighten scope'))
+    expect(await screen.findByText('Replan requested…')).toBeTruthy()
+  })
+
+  it('sends a mission back to discover', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'plan',
+      status: 'paused',
+      pause_reason: 'approval',
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Rediscover' }))
+    await waitFor(() => expect(rediscoverMission).toHaveBeenCalledWith('m1'))
+    expect(await screen.findByText('Sending back to discover…')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail pending input gate', () => {
+  it('answers an open question and shows the answered status', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      pending_input: {
+        question: 'Which environment?',
+        kind: 'open',
+        proposed_default: 'staging',
+        asked_at: '2026-01-01T00:00:00Z',
+        phase: 'generate',
+      },
+    })
+    renderPage()
+    await screen.findByText('Which environment?')
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(answerMissionQuestion).toHaveBeenCalledWith('m1', 'staging'))
+    expect(await screen.findByText('Answered: staging')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail plan section', () => {
+  it('omits the Plan panel when the mission has no plan units', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, plan: { units: [] } })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByRole('heading', { level: 2, name: 'Plan' })).toBeNull()
+  })
+})
+
+describe('MissionDetail review findings', () => {
+  it('renders the Review findings panel when findings exist', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      review_findings: [
+        { id: 'F1', unit: 0, title: 'missing validation', file: 'auth.go', detail: 'no check', severity: 'blocking' },
+      ],
+    })
+    renderPage()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Review findings' })).toBeTruthy()
+    expect(screen.getByText('missing validation')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail destination row fallbacks', () => {
+  it('falls back to "destination" and the raw destination_id when the row is missing and kind is unset', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [{ destination_id: 'dest-gone' }],
+    })
+    renderPage()
+    expect(await screen.findByText('Destinations')).toBeTruthy()
+    expect(screen.getByText('destination')).toBeTruthy()
+    expect(screen.getByText('dest-gone')).toBeTruthy()
+  })
+
+  it('renders a non-github destination using the row kind and name', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([
+      {
+        id: 'dest-email',
+        name: 'ops inbox',
+        kind: 'email',
+        config: {},
+        credential_ref: 'cred-1',
+        enabled: true,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+      },
+    ])
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      destinations: [{ destination_id: 'dest-email' }],
+    })
+    renderPage()
+    expect(await screen.findByText('email')).toBeTruthy()
+    expect(screen.getByText('ops inbox')).toBeTruthy()
+  })
+})
+
+describe('MissionDetail usage badges', () => {
+  it('uses singular "call" for exactly one model request', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.1 },
+      input_tokens: 10,
+      output_tokens: 5,
+      requests: 1,
+      unpriced_requests: 0,
+      models: [{ provider: 'GLM (Z.ai)', model: 'glm-5.2', harness: false, requests: 1, last_used: '2026-01-01T00:00:00Z' }],
+    })
+    renderPage()
+    const pill = await screen.findByText('glm-5.2')
+    expect(pill.closest('span')).toHaveAttribute('title', '1 call via GLM (Z.ai)')
+    expect(await screen.findByText('1 call')).toBeTruthy()
+  })
+
+  it('omits the unpriced-calls badge when every call is priced', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.1 },
+      input_tokens: 10,
+      output_tokens: 5,
+      requests: 4,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    await screen.findByText('4 calls')
+    expect(screen.queryByText(/unpriced call/)).toBeNull()
   })
 })

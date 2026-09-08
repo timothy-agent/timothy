@@ -44,6 +44,11 @@ describe('CostDisplay', () => {
     expect(screen.getByText('3 unpriced calls')).toBeInTheDocument()
   })
 
+  it('uses singular "call" for exactly one unpriced request', () => {
+    render(<CostDisplay cost={0.1} currency="USD" unpricedRequests={1} />)
+    expect(screen.getByText('1 unpriced call')).toBeInTheDocument()
+  })
+
   it('omits the unpriced line when zero', () => {
     render(<CostDisplay cost={0.1} currency="USD" unpricedRequests={0} />)
     expect(screen.queryByText(/unpriced/)).not.toBeInTheDocument()

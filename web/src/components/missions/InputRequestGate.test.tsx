@@ -50,6 +50,19 @@ describe('InputRequestGate', () => {
     expect(onAnswer).toHaveBeenCalledWith('no')
   })
 
+  it('renders no mcq buttons when options is undefined', () => {
+    render(<InputRequestGate question="pick one" kind="mcq" proposedDefault="a" onAnswer={vi.fn()} />)
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('marks the No button default when the proposed default is no, and answers yes on click', () => {
+    const onAnswer = vi.fn()
+    render(<InputRequestGate question="continue?" kind="yes_no" proposedDefault="no" onAnswer={onAnswer} />)
+    expect(screen.getByRole('button', { name: /No.*default/ })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Yes$/ }))
+    expect(onAnswer).toHaveBeenCalledWith('yes')
+  })
+
   it('renders an open MarkdownField and submits the drafted text unchanged', () => {
     const onAnswer = vi.fn()
     render(
@@ -59,6 +72,11 @@ describe('InputRequestGate', () => {
     fireEvent.change(textarea, { target: { value: 'My **Report**' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
     expect(onAnswer).toHaveBeenCalledWith('My **Report**')
+  })
+
+  it('uses a generic placeholder when the open kind has no proposed default', () => {
+    render(<InputRequestGate question="what should the title be?" kind="open" proposedDefault="" onAnswer={vi.fn()} />)
+    expect(screen.getByPlaceholderText('Your answer, markdown supported…')).toBeInTheDocument()
   })
 
   it('falls back to the proposed default when open text is left empty', () => {
@@ -96,5 +114,19 @@ describe('InputRequestGate', () => {
       />,
     )
     expect(screen.getByText(/if unanswered for 300s/)).toBeInTheDocument()
+  })
+
+  it('omits the timeout line when timeoutSeconds is set but askedAt is missing', () => {
+    render(
+      <InputRequestGate
+        question="continue?"
+        kind="yes_no"
+        proposedDefault="yes"
+        onAnswer={vi.fn()}
+        timeoutSeconds={300}
+      />,
+    )
+    expect(screen.queryByText(/if unanswered for/)).not.toBeInTheDocument()
+    expect(screen.getByText(/if unanswered$/)).toBeInTheDocument()
   })
 })

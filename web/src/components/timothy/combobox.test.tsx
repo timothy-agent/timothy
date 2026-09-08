@@ -70,6 +70,28 @@ describe('Combobox', () => {
     )
     expect(screen.getByRole('combobox')).toHaveAttribute('id', 'model-field')
   })
+
+  it('clears the value when allowClear and the selected option is reselected', () => {
+    const onChange = vi.fn()
+    render(
+      <Combobox options={options} value="gpt-5" onChange={onChange} allowClear />,
+    )
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(within(screen.getByRole('listbox')).getByText('gpt-5'))
+    expect(onChange).toHaveBeenCalledWith(undefined)
+  })
+
+  it('uses renderValue to display the selected option', () => {
+    render(
+      <Combobox
+        options={options}
+        value="gpt-5"
+        onChange={() => {}}
+        renderValue={(option) => <span>Custom: {option.label}</span>}
+      />,
+    )
+    expect(screen.getByText('Custom: gpt-5')).toBeInTheDocument()
+  })
 })
 
 function MultiHarness({ ariaLabelledby }: { ariaLabelledby?: boolean } = {}) {

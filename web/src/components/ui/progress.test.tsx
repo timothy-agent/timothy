@@ -10,4 +10,10 @@ describe('Progress', () => {
     const el = screen.getByRole('progressbar')
     expect(el).toHaveAttribute('aria-valuenow', '42')
   })
+
+  it('treats an undefined value as 0 for the indicator transform', () => {
+    render(<Progress aria-label="Budget used" />)
+    const indicator = document.querySelector('[data-slot="progress-indicator"]')
+    expect(indicator).toHaveStyle({ transform: 'translateX(-100%)' })
+  })
 })

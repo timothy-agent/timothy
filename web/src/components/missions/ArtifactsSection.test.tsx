@@ -136,6 +136,53 @@ describe('ArtifactsSection', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('closes the fullscreen dialog on Escape', async () => {
+    vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
+    render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)
+    await screen.findByText('big.bin')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fullscreen' }))
+    const dialog = screen.getByRole('dialog')
+    // The click also focused the button, opening its Radix tooltip as
+    // its own dismissable layer above the dialog: the first Escape
+    // dismisses that layer, the second reaches the dialog itself.
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('shows a singular "1 file" count for exactly one file', async () => {
+    vi.mocked(listMissionFiles).mockResolvedValue({ files: [files[0]], truncated: false })
+    render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)
+    expect(await screen.findByText('1 file')).toBeTruthy()
+  })
+
+  it('shows the destructive error line when the file listing fails', async () => {
+    vi.mocked(listMissionFiles).mockRejectedValue(new Error('workspace gone'))
+    render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" refs={refs} />)
+    expect(await screen.findByText('workspace gone')).toBeTruthy()
+  })
+
+  it('opens the Promote to KB dialog from the workspace panel action', async () => {
+    vi.mocked(listMissionFiles).mockResolvedValue({
+      files: [{ path: 'README.md', size: 10, mtime: '2026-01-01T00:00:00Z', declared: false }],
+      truncated: false,
+    })
+    render(
+      <ArtifactsSection
+        missionId="m1"
+        phase="done"
+        workspace="ws-1"
+        refs={[{ id: 'a1', mime: 'text/markdown', name: 'README.md' }]}
+      />,
+    )
+    const btn = await screen.findByRole('button', {
+      name: 'Promote workspace markdown artifacts to the knowledge base',
+    })
+    fireEvent.click(btn)
+    expect(await screen.findByText('Promote to knowledge base')).toBeInTheDocument()
+  })
+
   it('renders refs chips alone when the workspace is gone', () => {
     render(<ArtifactsSection missionId="m1" phase="terminal" workspace={undefined} refs={refs} />)
     expect(screen.getByText('Files')).toBeInTheDocument()

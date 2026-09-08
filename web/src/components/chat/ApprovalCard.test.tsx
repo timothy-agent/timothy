@@ -75,6 +75,73 @@ describe('ApprovalCard', () => {
     fireEvent.keyDown(screen.getByTestId('outside'), { key: 'd' })
     expect(onDecision).not.toHaveBeenCalled()
   })
+
+  it('calls onDecision(id, session) when s is pressed', () => {
+    const onDecision = vi.fn()
+    renderWithProvider(<ApprovalCard request={baseRequest} onDecision={onDecision} />)
+    fireEvent.keyDown(screen.getByRole('region'), { key: 's' })
+    expect(onDecision).toHaveBeenCalledWith('perm-1', 'session')
+  })
+
+  it('calls onDecision(id, deny) when the Deny button is clicked', () => {
+    const onDecision = vi.fn()
+    renderWithProvider(<ApprovalCard request={baseRequest} onDecision={onDecision} />)
+    fireEvent.click(screen.getByRole('button', { name: /Deny/ }))
+    expect(onDecision).toHaveBeenCalledWith('perm-1', 'deny')
+  })
+
+  it('calls onDecision(id, session) when the Allow for session button is clicked', () => {
+    const onDecision = vi.fn()
+    renderWithProvider(<ApprovalCard request={baseRequest} onDecision={onDecision} />)
+    fireEvent.click(screen.getByRole('button', { name: /Allow for session/ }))
+    expect(onDecision).toHaveBeenCalledWith('perm-1', 'session')
+  })
+
+  it('renders raw args text when it is not valid JSON', () => {
+    renderWithProvider(
+      <ApprovalCard request={{ ...baseRequest, args: 'not json' }} onDecision={() => {}} />,
+    )
+    expect(screen.getByText('not json', { exact: false })).toBeInTheDocument()
+  })
+
+  it('titles a non-shell tool as "wants to use"', () => {
+    renderWithProvider(
+      <ApprovalCard request={{ ...baseRequest, tool: 'read_file' }} onDecision={() => {}} />,
+    )
+    expect(screen.getByText(/Timothy wants to use/)).toBeInTheDocument()
+  })
+
+  it('calls onDecision(id, deny) when d is pressed', () => {
+    const onDecision = vi.fn()
+    renderWithProvider(<ApprovalCard request={baseRequest} onDecision={onDecision} />)
+    fireEvent.keyDown(screen.getByRole('region'), { key: 'd' })
+    expect(onDecision).toHaveBeenCalledWith('perm-1', 'deny')
+  })
+
+  it('calls onDecision(id, once) when the Allow once button is clicked', () => {
+    const onDecision = vi.fn()
+    renderWithProvider(<ApprovalCard request={baseRequest} onDecision={onDecision} />)
+    fireEvent.click(screen.getByRole('button', { name: /Allow once/ }))
+    expect(onDecision).toHaveBeenCalledWith('perm-1', 'once')
+  })
+
+  it('shows the formatted requested time in meta when provided', () => {
+    renderWithProvider(
+      <ApprovalCard
+        request={baseRequest}
+        onDecision={() => {}}
+        requestedAt={new Date('2026-09-07T14:30:00Z')}
+      />,
+    )
+    expect(screen.getByText(/\d{2}:\d{2}/)).toBeInTheDocument()
+  })
+
+  it('omits the rationale blockquote when rationale is empty', () => {
+    const { container } = renderWithProvider(
+      <ApprovalCard request={{ ...baseRequest, rationale: '' }} onDecision={() => {}} />,
+    )
+    expect(container.querySelector('blockquote')).not.toBeInTheDocument()
+  })
 })
 
 function DialogHarness({ onDecision }: { onDecision: (id: string, d: 'once' | 'session' | 'deny') => void }) {

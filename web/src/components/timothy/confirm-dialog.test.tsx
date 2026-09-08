@@ -79,4 +79,11 @@ describe('useConfirm', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
     expect(await screen.findByText('confirmed')).toBeInTheDocument()
   })
+
+  it('resolves false when the user cancels', async () => {
+    render(<ConfirmHarness />)
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    expect(await screen.findByText('cancelled')).toBeInTheDocument()
+  })
 })
