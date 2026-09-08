@@ -5,6 +5,8 @@ import { cn } from '@/lib/utils'
 interface PanelProps {
   title?: string
   description?: string
+  // Control rendered left of the title, e.g. a sidebar toggle.
+  leading?: ReactNode
   actions?: ReactNode
   density?: 'comfortable' | 'operational'
   headingLevel?: 'h2' | 'h3'
@@ -30,6 +32,7 @@ interface PanelProps {
 export function Panel({
   title,
   description,
+  leading,
   actions,
   density = 'comfortable',
   headingLevel = 'h2',
@@ -37,7 +40,9 @@ export function Panel({
   className,
   bodyClassName,
 }: PanelProps) {
-  const hasHeader = title || description || actions
+  const hasHeader = title || description || actions || leading
+  // A collapsed section passes false/null children: no body, no body padding.
+  const hasBody = children !== null && children !== undefined && children !== false
   const Heading = headingLevel
 
   return (
@@ -45,21 +50,32 @@ export function Panel({
       {hasHeader && (
         <div
           className={cn(
-            density === 'comfortable' ? 'p-5 pb-0' : 'border-b border-border px-4 py-3',
+            density === 'comfortable' ? (hasBody ? 'p-5 pb-0' : 'p-5') : 'border-b border-border px-4 py-3',
           )}
         >
-          <div className={cn('flex items-start justify-between gap-4', density === 'comfortable' && 'mb-4')}>
-            <div>
-              {title && <Heading className="text-sm leading-5 font-semibold">{title}</Heading>}
-              {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
+          <div
+            className={cn(
+              'flex justify-between gap-4',
+              description ? 'items-start' : 'items-center',
+              density === 'comfortable' && hasBody && 'mb-4',
+            )}
+          >
+            <div className="flex min-w-0 items-center gap-2">
+              {leading}
+              <div className="min-w-0">
+                {title && <Heading className="text-sm leading-5 font-semibold">{title}</Heading>}
+                {description && <p className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</p>}
+              </div>
             </div>
             {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
           </div>
         </div>
       )}
-      <div className={cn(density === 'comfortable' ? cn('p-5', hasHeader && 'pt-0') : 'p-0', bodyClassName)}>
-        {children}
-      </div>
+      {hasBody && (
+        <div className={cn(density === 'comfortable' ? cn('p-5', hasHeader && 'pt-0') : 'p-0', bodyClassName)}>
+          {children}
+        </div>
+      )}
     </div>
   )
 }

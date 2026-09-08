@@ -149,7 +149,7 @@ function AppSidebar({
           <Link to="/" aria-label="Timothy home" className="flex size-7 shrink-0 items-center justify-center">
             <BrandMark className="size-5" />
           </Link>
-          <span className="truncate text-sm font-semibold tracking-tight transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
+          <span className="glow-text truncate font-mono text-sm font-semibold tracking-[0.2em] text-brand-text uppercase transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
             Timothy
           </span>
         </div>
@@ -264,7 +264,7 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
   const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
 
   return (
-    <header className="flex h-12 w-full shrink-0 items-center gap-3 border-b border-border px-3">
+    <header className="sticky top-0 z-20 flex h-12 w-full shrink-0 items-center gap-3 border-b border-border bg-background px-3">
       <SidebarTrigger />
       <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
         {crumbs.map((c, i) => (
@@ -449,9 +449,9 @@ function App() {
             onCycleTheme={cycleTheme}
             onToken={openToken}
           />
-          <SidebarInset className="bg-dot-grid">
+          <SidebarInset className="min-w-0 bg-dot-grid">
             <TopBar onOpenPalette={() => setPaletteOpen(true)} />
-            <div className="min-h-0 flex-1 overflow-hidden px-4">
+            <div className="min-h-0 min-w-0 flex-1 overflow-hidden px-4">
               <Routes>
                 <Route path="/" element={<Home />} />
                 {/* One route pattern serves new chats and resumes:

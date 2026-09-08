@@ -8,7 +8,7 @@ export interface Usage {
   cache_write_tokens?: number
 }
 
-export interface ToolCallEvent {
+interface ToolCallEvent {
   id: string
   name: string
   input?: unknown
@@ -22,7 +22,7 @@ export interface MediaRef {
   name?: string
 }
 
-export interface ToolResultEvent {
+interface ToolResultEvent {
   id: string
   name: string
   status: 'ok' | 'error' | 'denied'
@@ -40,12 +40,12 @@ export interface PermissionRequestEvent {
   rationale: string
 }
 
-export interface PermissionResolvedEvent {
+interface PermissionResolvedEvent {
   id: string
   decision: string
 }
 
-export interface StreamEvent {
+interface StreamEvent {
   type:
     | 'chunk'
     | 'reasoning_chunk'
@@ -78,7 +78,7 @@ export interface StreamEvent {
   meta?: { provider: string; model: string; ledger_id?: string }
 }
 
-export interface MetaEvent {
+interface MetaEvent {
   type: 'meta'
   session_id: string
   provider?: string
@@ -147,7 +147,7 @@ export interface SessionMeta {
   updated_at: string
 }
 
-export interface UIBlock {
+interface UIBlock {
   type: 'text' | 'reasoning' | 'media'
   text?: string
   media?: MediaRef[]
@@ -164,7 +164,7 @@ export interface ImageRef {
 }
 
 // One executed tool call in the replay projection (digest only).
-export interface ToolExecution {
+interface ToolExecution {
   call_id: string
   name: string
   args?: string
@@ -274,7 +274,7 @@ export interface EntityGraphData {
 // (never a guess) and it differs from the target. The original
 // cost/currency fields are always left exactly as the ledger recorded
 // them (D-013): these are purely additive display fields.
-export interface ConvertedMoney {
+interface ConvertedMoney {
   converted_amount?: number
   converted_currency?: string
   rate_as_of?: string
@@ -351,7 +351,7 @@ export interface UnpricedGroup {
 // One mission's total ledger footprint. unpriced_requests counts turns
 // whose cost is unknown (NULL in the ledger): cost_by_currency is
 // then a floor per currency, not the whole bill.
-export interface ModelUsed {
+interface ModelUsed {
   provider: string
   model: string
   // harness is true when this row is the delegated CLI executor's own
@@ -424,7 +424,7 @@ export interface BudgetLimit extends ConvertedMoney {
   currency: string
 }
 
-export interface BudgetWindow extends ConvertedMoney {
+interface BudgetWindow extends ConvertedMoney {
   currency: string
   limit: BudgetLimit | null
   spend: number
@@ -698,7 +698,7 @@ export interface PlanAssumption {
   default: string
 }
 
-export interface ProgressNote {
+interface ProgressNote {
   at: string
   note: string
 }
@@ -905,7 +905,7 @@ export interface Mission {
 // delivery outcome, filled in at push/PR time. delivered_at/error are
 // the result step's own outcome record, mutually exclusive, both
 // absent before the first attempt.
-export interface DestinationEntry {
+interface DestinationEntry {
   destination?: 'kb' | ''
   destination_id?: string
   collection_id?: string
@@ -963,7 +963,7 @@ export interface MissionEvent {
 // or a non-anthropic provider (priced against Anthropic's table, which
 // is fiction for that provider: the ledger prices it separately from
 // that provider's own rows, or leaves it unpriced).
-export interface ExecutorUsage {
+interface ExecutorUsage {
   input_tokens: number
   output_tokens: number
   cache_read?: number
@@ -1262,7 +1262,7 @@ export interface Schedule {
 // ExecutionPlanPrices mirrors CatalogPrice's price shape for one
 // execution plan entry's model. Absent entirely when unpriced -
 // never a guessed number.
-export interface ExecutionPlanPrices {
+interface ExecutionPlanPrices {
   input_per_mtok?: number
   output_per_mtok?: number
   cache_read_per_mtok?: number

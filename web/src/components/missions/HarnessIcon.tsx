@@ -7,7 +7,7 @@ import { PiIcon } from '../icons/PiIcon'
 
 // harnessDisplayNames maps a registered harness id to the label shown
 // wherever a mission's harness is named (D-051).
-export const harnessDisplayNames: Record<string, string> = {
+const harnessDisplayNames: Record<string, string> = {
   'claude-cli': 'Claude Code',
   pi: 'pi',
   'codex-cli': 'Codex CLI',

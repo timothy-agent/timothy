@@ -187,7 +187,6 @@ const eventLogSampleRows: EventLogRow[] = eventLogComponentRows.map((r) => ({
   id: r.id,
   time: new Date(r.time),
   kind: r.kind,
-  status: r.status,
   icon: eventLogComponentRowIcon(r.kind),
   title:
     r.target != null ? (

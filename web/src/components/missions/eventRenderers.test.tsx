@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { Hand, Sparkles, Wrench } from 'lucide-react'
 import type { MissionEvent } from '../../api/types'
-import { eventIcon, eventStatus, renderEvent, toolCallStatusClass, toolRunFromEvent } from './eventRenderers'
+import { eventIcon, renderEvent, toolCallStatusClass, toolRunFromEvent } from './eventRenderers'
 
 function event(payload: unknown, kind = 'mission.unit_verified', seq = 1): MissionEvent {
   return {
@@ -583,34 +583,6 @@ describe('mission.route_changed rendering', () => {
   })
 })
 
-describe('eventStatus', () => {
-  it('maps terminal kinds to success/error', () => {
-    expect(eventStatus('mission.done', {})).toBe('success')
-    expect(eventStatus('mission.result_complete', {})).toBe('success')
-    expect(eventStatus('mission.failed', {})).toBe('error')
-    expect(eventStatus('mission.violation', {})).toBe('error')
-    expect(eventStatus('executor.died', {})).toBe('error')
-  })
-
-  it('maps waiting/warning kinds', () => {
-    expect(eventStatus('mission.paused', {})).toBe('waiting')
-    expect(eventStatus('mission.permission_requested', {})).toBe('waiting')
-    expect(eventStatus('mission.retry', {})).toBe('warning')
-    expect(eventStatus('mission.recovery', {})).toBe('warning')
-  })
-
-  it('reads the outcome from the payload for unit_verified and review_verdict', () => {
-    expect(eventStatus('mission.unit_verified', { passed: true })).toBe('success')
-    expect(eventStatus('mission.unit_verified', { passed: false })).toBe('error')
-    expect(eventStatus('mission.unit_regressed', {})).toBe('error')
-    expect(eventStatus('mission.review_verdict', { decision: 'approved' })).toBe('success')
-    expect(eventStatus('mission.review_verdict', { decision: 'rework' })).toBe('warning')
-  })
-
-  it('returns undefined for a kind with no status mapping', () => {
-    expect(eventStatus('mission.created', {})).toBeUndefined()
-  })
-})
 
 describe('toolRunFromEvent', () => {
   it('maps a mission.tool_call event to a ToolRun', () => {

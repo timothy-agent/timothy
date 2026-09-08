@@ -1,5 +1,5 @@
 import { FileText, GitFork, GitPullRequest, MessageSquare, Trash2, Upload } from 'lucide-react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Children, Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
@@ -39,7 +39,7 @@ import { HarnessIcon, harnessLabel } from '../components/missions/HarnessIcon'
 import { InputRequestGate } from '../components/missions/InputRequestGate'
 import { MarkdownField } from '../components/missions/MarkdownField'
 import { MissionPermissionGate } from '../components/missions/MissionPermissionGate'
-import { PhaseStepper } from '../components/missions/PhaseStepper'
+import { failedPhaseFromEvents, PhaseStepper } from '../components/missions/PhaseStepper'
 import { PlanApprovalGate } from '../components/missions/PlanApprovalGate'
 import { PlanSection } from '../components/missions/PlanSection'
 import { ResultSection } from '../components/missions/ResultSection'
@@ -60,7 +60,7 @@ import {
 import { errText } from '../lib/errors'
 import { ConfirmDialog } from '../components/timothy/confirm-dialog'
 import { CopyButton } from '../components/timothy/copy-button'
-import { Eyebrow, PageHeader } from '../components/timothy/page-header'
+import { PageHeader } from '../components/timothy/page-header'
 import { PageShell } from '../components/timothy/page-shell'
 import { Panel } from '../components/timothy/panel'
 import { StatusBadge } from '../components/timothy/status-badge'
@@ -68,7 +68,28 @@ import { missionStatus } from '../components/timothy/status'
 import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
-import { compact, formatDuration, missionDisplayName, money, relativeTime } from '../lib/format'
+import { compact, euDateTime, formatDuration, missionDisplayName, money, relativeTime } from '../lib/format'
+
+// MetaLine renders the mission metadata as one dot-separated row; falsy
+// children are dropped so separators never double up. It heads the
+// usage panel, so the badge grid below it gets a rule.
+function MetaLine({ children }: { children: ReactNode }) {
+  const items = Children.toArray(children).filter(Boolean)
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border pb-3 text-xs text-muted-foreground">
+      {items.map((item, i) => (
+        <Fragment key={i}>
+          {i > 0 && (
+            <span aria-hidden className="select-none">
+              ·
+            </span>
+          )}
+          {item}
+        </Fragment>
+      ))}
+    </div>
+  )
+}
 
 // unbilledTooltipLine formats the billed cost pill's tooltip line, in
 // that pill's OWN currency only — prefers the currency-converted
@@ -395,6 +416,12 @@ export function MissionDetail() {
   // mid-turn.
   const elapsedEnd = isTerminal ? mission.updated_at : new Date().toISOString()
   const elapsedMs = new Date(elapsedEnd).getTime() - new Date(mission.created_at).getTime()
+  const costEntries: [string, number][] =
+    usage && usage.requests > 0
+      ? usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0
+        ? Object.entries(usage.converted_cost_by_currency)
+        : Object.entries(usage.cost_by_currency)
+      : []
 
   // pause_message never carries real content (the state machine clears
   // it on every transition — see store.go's ApplyTransition comment);
@@ -638,64 +665,13 @@ export function MissionDetail() {
           </>
         }
       >
-        <PhaseStepper phase={mission.phase} status={missionStatus(mission)} light={mission.light} />
+        <PhaseStepper
+          phase={mission.phase}
+          light={mission.light}
+          failedAt={mission.phase === 'failed' ? failedPhaseFromEvents(events, mission.light) : undefined}
+        />
       </PageHeader>
 
-      <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <span title={new Date(mission.created_at).toLocaleString()}>created {relativeTime(mission.created_at)}</span>
-        {executorActivity && (
-          <span>
-            harness: {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
-            {executorActivity.tool_calls} tool call{executorActivity.tool_calls === 1 ? '' : 's'}
-            {executorActivity.worktree && (
-              <>
-                {' · '}
-                {executorActivity.worktree.untracked} new · {executorActivity.worktree.modified} modified
-                {executorActivity.worktree.newest_mtime > 0 &&
-                  ` · changed ${relativeTime(new Date(executorActivity.worktree.newest_mtime * 1000).toISOString())}`}
-              </>
-            )}
-          </span>
-        )}
-        {!isTerminal && mission.iteration > 0 && <span>Retries {mission.iteration}</span>}
-        {mission.budget_amount != null && (
-          <span>budget {money(mission.budget_amount, mission.budget_currency ?? 'USD')}</span>
-        )}
-        {mission.route && <span>route: {mission.route}</span>}
-        {mission.plan_route && <span>plan route: {mission.plan_route}</span>}
-        <span className="capitalize">{mission.kind}</span>
-      </div>
-      {mission.branch && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {mission.branch} @ {mission.base_commit?.slice(0, 8)}
-          {mission.repo_url && (
-            <>
-              {' · '}
-              <a
-                href={githubHTMLURL(mission.repo_url)}
-                target="_blank"
-                rel="noreferrer"
-                className="underline underline-offset-2 hover:text-foreground"
-              >
-                {githubFullName(mission.repo_url)}
-              </a>
-            </>
-          )}
-          {prChip && (
-            <>
-              {' · '}
-              <a
-                href={prChip.url}
-                target="_blank"
-                rel="noreferrer"
-                className="underline underline-offset-2 hover:text-foreground"
-              >
-                PR #{prChip.number}
-              </a>
-            </>
-          )}
-        </p>
-      )}
       {schedule && (
         <p className="mt-1 text-xs text-muted-foreground">
           Recurring · {describeCron(schedule.cron)} · next run {formatDate(schedule.next_run)}
@@ -816,120 +792,58 @@ export function MissionDetail() {
       </Dialog>
 
       <div className="mt-10 space-y-10">
-        <GoalSection goal={mission.goal} />
-
-        {mission.discover_notes && <DiscoverSection notes={mission.discover_notes} />}
-
-        {(mission.plan?.units?.length ?? 0) > 0 && (
-          <Panel title="Plan">
-            <PlanSection units={mission.plan?.units ?? []} assumptions={mission.plan?.assumptions} />
-          </Panel>
-        )}
-
-        {(mission.review_findings?.length ?? 0) > 0 && (
-          <Panel title="Review findings">
-            <FindingsSection findings={mission.review_findings ?? []} />
-          </Panel>
-        )}
-
-        {isTerminal && (runsPlanless(mission) ? mission.final_output : mission.last_evidence) && (
-          <Panel
-            title="Result"
-            actions={<CopyButton value={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''} label="Copy result" />}
-          >
-            <ResultSection evidence={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''} />
-          </Panel>
-        )}
-
-        {mission.destinations && mission.destinations.length > 0 && (
-          <Panel title="Destinations">
-            <div className="divide-y divide-border">
-              {mission.destinations.map((d, i) => {
-                const row = d.destination_id ? destinationsByID.get(d.destination_id) : undefined
-                const isGitHub = row?.kind === 'github'
-                const mode = isGitHub ? (row.config as unknown as GitHubDestinationConfig).mode : undefined
-                return (
-                  <div key={d.destination_id || `${d.destination}-${i}`} className="flex items-center gap-2 py-2 text-sm">
-                    <span className="text-xs text-muted-foreground uppercase">
-                      {row?.kind ?? d.destination ?? 'destination'}
-                    </span>
-                    {isGitHub ? (
-                      <span className="truncate">
-                        <span className="font-medium text-foreground">{row.name}</span>
-                        {d.repo_url && (
-                          <>
-                            {' · '}
-                            <a
-                              href={githubHTMLURL(d.repo_url)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="underline underline-offset-2 hover:text-foreground"
-                            >
-                              {githubFullName(d.repo_url)}
-                            </a>
-                          </>
-                        )}
-                        {mode && ` · ${mode === 'push_pr' ? 'push + PR' : 'push'}`}
-                        {d.branch && ` · ${d.branch}`}
-                        {d.pr_url && (
-                          <>
-                            {' · '}
-                            <a
-                              href={d.pr_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="underline underline-offset-2 hover:text-foreground"
-                            >
-                              PR #{d.pr_number}
-                            </a>
-                          </>
-                        )}
-                      </span>
-                    ) : d.destination === 'kb' ? (
-                      <span className="text-muted-foreground">promoted to knowledge base</span>
-                    ) : (
-                      <span className="text-muted-foreground">{row?.name ?? d.destination_id}</span>
-                    )}
-                    {d.delivered_at && (
-                      <StatusBadge status="success" label="delivered" size="sm" />
-                    )}
-                    {d.error && <StatusBadge status="error" label="failed" size="sm" />}
-                  </div>
-                )
-              })}
-            </div>
-          </Panel>
-        )}
-
-        <ArtifactsSection
-          missionId={id}
-          missionName={mission.name}
-          phase={mission.phase}
-          workspace={mission.workspace}
-          refs={mission.artifact_refs ?? []}
-        />
-
-        <TimelineSection events={events} />
-
-        <Panel title="Cost">
-          <div className="space-y-4">
-            {usage &&
-              usage.requests > 0 &&
-              (usage.converted_cost_by_currency && Object.keys(usage.converted_cost_by_currency).length > 0
-                ? Object.entries(usage.converted_cost_by_currency)
-                : Object.entries(usage.cost_by_currency)
-              ).map(([currency, cost]) => (
-                <CostDisplay
-                  key={currency}
-                  cost={cost}
-                  currency={currency}
-                  budget={mission.budget_amount != null && mission.budget_currency === currency ? mission.budget_amount : undefined}
-                  detail={unbilledTooltipLine(usage, currency)}
-                />
+        <Panel>
+          <div className="space-y-3">
+            <MetaLine>
+              <span className="capitalize">{mission.kind}</span>
+              {mission.route && <span>route {mission.route}</span>}
+              {mission.plan_route && <span>plan route {mission.plan_route}</span>}
+              {executorActivity && (
+                <span>
+                  harness {executorActivity.turns} turn{executorActivity.turns === 1 ? '' : 's'},{' '}
+                  {executorActivity.tool_calls} tool call{executorActivity.tool_calls === 1 ? '' : 's'}
+                  {executorActivity.worktree && (
+                    <>
+                      {' · '}
+                      {executorActivity.worktree.untracked} new · {executorActivity.worktree.modified} modified
+                      {executorActivity.worktree.newest_mtime > 0 &&
+                        ` · changed ${relativeTime(new Date(executorActivity.worktree.newest_mtime * 1000).toISOString())}`}
+                    </>
+                  )}
+                </span>
+              )}
+              {!isTerminal && mission.iteration > 0 && <span>retries {mission.iteration}</span>}
+              {mission.budget_amount != null && (
+                <span>budget {money(mission.budget_amount, mission.budget_currency ?? 'USD')}</span>
+              )}
+              {mission.branch && (
+                <span className="font-mono">
+                  {mission.branch} @ {mission.base_commit?.slice(0, 8)}
+                </span>
+              )}
+              {mission.repo_url && (
+                <a
+                  href={githubHTMLURL(mission.repo_url)}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  {githubFullName(mission.repo_url)}
+                </a>
+              )}
+              {prChip && (
+                <a href={prChip.url} target="_blank" rel="noreferrer" className="underline underline-offset-2 hover:text-foreground">
+                  PR #{prChip.number}
+                </a>
+              )}
+              <span title={relativeTime(mission.created_at)}>created {euDateTime(mission.created_at)}</span>
+            </MetaLine>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {costEntries.map(([currency, cost]) => (
+                <Badge key={currency} variant="secondary" className="tabular-nums">
+                  {money(cost, currency)}
+                </Badge>
               ))}
-            <div>
-              <Eyebrow>Usage</Eyebrow>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
                 {usage &&
                   usage.requests > 0 &&
                   usage.models
@@ -1025,10 +939,118 @@ export function MissionDetail() {
                       })()}
                   </>
                 )}
-              </div>
             </div>
+            {costEntries.map(([currency]) => {
+              const line = usage && unbilledTooltipLine(usage, currency)
+              return line ? (
+                <p key={currency} className="text-xs text-muted-foreground">
+                  {line}
+                </p>
+              ) : null
+            })}
+            {costEntries
+              .filter(([currency]) => mission.budget_amount != null && mission.budget_currency === currency)
+              .map(([currency, cost]) => (
+                <CostDisplay key={currency} cost={cost} currency={currency} budget={mission.budget_amount ?? undefined} />
+              ))}
           </div>
         </Panel>
+
+        <GoalSection goal={mission.goal} />
+
+        {mission.discover_notes && <DiscoverSection notes={mission.discover_notes} />}
+
+        {(mission.plan?.units?.length ?? 0) > 0 && (
+          <Panel title="Plan">
+            <PlanSection units={mission.plan?.units ?? []} assumptions={mission.plan?.assumptions} />
+          </Panel>
+        )}
+
+        {(mission.review_findings?.length ?? 0) > 0 && (
+          <Panel title="Review findings">
+            <FindingsSection findings={mission.review_findings ?? []} />
+          </Panel>
+        )}
+
+        {isTerminal && (runsPlanless(mission) ? mission.final_output : mission.last_evidence) && (
+          <Panel
+            title="Result"
+            actions={<CopyButton value={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''} label="Copy result" />}
+          >
+            <ResultSection evidence={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''} />
+          </Panel>
+        )}
+
+        {mission.destinations && mission.destinations.length > 0 && (
+          <Panel title="Destinations">
+            <div className="divide-y divide-border">
+              {mission.destinations.map((d, i) => {
+                const row = d.destination_id ? destinationsByID.get(d.destination_id) : undefined
+                const isGitHub = row?.kind === 'github'
+                const mode = isGitHub ? (row.config as unknown as GitHubDestinationConfig).mode : undefined
+                return (
+                  <div key={d.destination_id || `${d.destination}-${i}`} className="flex items-center gap-2 py-2 text-sm">
+                    <span className="text-xs text-muted-foreground uppercase">
+                      {row?.kind ?? d.destination ?? 'destination'}
+                    </span>
+                    {isGitHub ? (
+                      <span className="truncate">
+                        <span className="font-medium text-foreground">{row.name}</span>
+                        {d.repo_url && (
+                          <>
+                            {' · '}
+                            <a
+                              href={githubHTMLURL(d.repo_url)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline underline-offset-2 hover:text-foreground"
+                            >
+                              {githubFullName(d.repo_url)}
+                            </a>
+                          </>
+                        )}
+                        {mode && ` · ${mode === 'push_pr' ? 'push + PR' : 'push'}`}
+                        {d.branch && ` · ${d.branch}`}
+                        {d.pr_url && (
+                          <>
+                            {' · '}
+                            <a
+                              href={d.pr_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline underline-offset-2 hover:text-foreground"
+                            >
+                              PR #{d.pr_number}
+                            </a>
+                          </>
+                        )}
+                      </span>
+                    ) : d.destination === 'kb' ? (
+                      <span className="text-muted-foreground">promoted to knowledge base</span>
+                    ) : (
+                      <span className="text-muted-foreground">{row?.name ?? d.destination_id}</span>
+                    )}
+                    {d.delivered_at && (
+                      <StatusBadge status="success" label="delivered" size="sm" />
+                    )}
+                    {d.error && <StatusBadge status="error" label="failed" size="sm" />}
+                  </div>
+                )
+              })}
+            </div>
+          </Panel>
+        )}
+
+        <ArtifactsSection
+          missionId={id}
+          missionName={mission.name}
+          phase={mission.phase}
+          workspace={mission.workspace}
+          refs={mission.artifact_refs ?? []}
+        />
+
+        <TimelineSection events={events} />
+
       </div>
     </PageShell>
   )

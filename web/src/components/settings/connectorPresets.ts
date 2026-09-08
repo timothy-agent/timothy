@@ -20,11 +20,11 @@ export interface ConnectorPreset {
   scopes?: string[]
 }
 
-export const gmailScope = 'https://www.googleapis.com/auth/gmail.modify'
-export const calendarScope = 'https://www.googleapis.com/auth/calendar'
-export const driveScope = 'https://www.googleapis.com/auth/drive.readonly'
-export const docsScopes = ['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive.file']
-export const outlookScopes = ['Mail.Read', 'Mail.Send', 'Calendars.Read', 'offline_access', 'User.Read']
+const gmailScope = 'https://www.googleapis.com/auth/gmail.modify'
+const calendarScope = 'https://www.googleapis.com/auth/calendar'
+const driveScope = 'https://www.googleapis.com/auth/drive.readonly'
+const docsScopes = ['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive.file']
+const outlookScopes = ['Mail.Read', 'Mail.Send', 'Calendars.Read', 'offline_access', 'User.Read']
 
 export const connectorPresets: ConnectorPreset[] = [
   {
@@ -114,7 +114,7 @@ export const connectorPresets: ConnectorPreset[] = [
 // Fallback for connectors that predate a preset removal / don't match
 // any current preset — keeps ConnectorLogo/name rendering safe without
 // needing a dummy entry in the list above.
-export const unknownPreset: ConnectorPreset = {
+const unknownPreset: ConnectorPreset = {
   id: 'unknown',
   name: 'Custom',
   kind: 'mcp',

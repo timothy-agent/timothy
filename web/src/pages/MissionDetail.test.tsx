@@ -60,6 +60,7 @@ import {
 } from '../api/client'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
+import { euDateTime } from '../lib/format'
 
 // captureSubscribe grabs the onSignal/onReady callbacks subscribeEvents
 // was last called with, so a test can fire them directly instead of
@@ -414,7 +415,7 @@ describe('MissionDetail retries/turns/processing/elapsed', () => {
   it('shows Retries N when iteration is greater than zero', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, iteration: 3 })
     renderPage()
-    expect(await screen.findByText('Retries 3')).toBeTruthy()
+    expect(await screen.findByText('retries 3')).toBeTruthy()
   })
 
   it('counts turns and sums processing time from mission.turn events', async () => {
@@ -702,12 +703,12 @@ describe('MissionDetail destinations', () => {
 })
 
 describe('MissionDetail created timestamp', () => {
-  it('shows the relative created time with an absolute tooltip', async () => {
+  it('shows the created time day-first with a relative tooltip', async () => {
     const createdAt = new Date(Date.now() - 3 * 3_600_000).toISOString()
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, created_at: createdAt })
     renderPage()
-    const el = await screen.findByText('created 3h ago')
-    expect(el).toHaveAttribute('title', new Date(createdAt).toLocaleString())
+    const el = await screen.findByText(`created ${euDateTime(createdAt)}`)
+    expect(el).toHaveAttribute('title', '3h ago')
   })
 })
 
@@ -759,7 +760,7 @@ describe('MissionDetail', () => {
     expect(heading.textContent).toBe('Fix the login bug')
   })
 
-  it('shows a collapsed goal section under the header, rendering markdown once expanded', async () => {
+  it('shows the goal section collapsed under the header, rendering markdown once opened', async () => {
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
       name: 'Fix Login Bug',
@@ -768,18 +769,19 @@ describe('MissionDetail', () => {
     renderPage()
     await screen.findByRole('heading', { name: 'Fix Login Bug' })
 
-    expect(screen.getByText('Show goal')).toBeInTheDocument()
-    expect(screen.getByText('login').closest('div')).toHaveClass('line-clamp-3')
+    expect(screen.getByRole('button', { name: 'Show goal' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show goal' }))
 
-    fireEvent.click(screen.getByText('Show goal'))
     expect(screen.getByText('login').tagName).toBe('STRONG')
   })
 
   it('renders a plain-text goal in the goal section unchanged', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, name: 'Login', goal: 'Fix the login bug' })
     renderPage()
-    await screen.findByRole('heading', { name: 'Fix the login bug' })
-    fireEvent.click(screen.getByText('Show goal'))
-    expect(screen.getAllByText('Fix the login bug').length).toBeGreaterThan(0)
+    await screen.findByRole('heading', { name: 'Login' })
+    expect(screen.queryByText('Fix the login bug')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show goal' }))
+    expect(screen.getByText('Fix the login bug')).toBeInTheDocument()
   })
 
   it('omits the Discover section when discover_notes is absent', async () => {
@@ -788,7 +790,7 @@ describe('MissionDetail', () => {
     expect(screen.queryByRole('heading', { level: 2, name: 'Discover' })).toBeNull()
   })
 
-  it('shows a collapsed Discover section above Plan when discover_notes is set', async () => {
+  it('shows the Discover section above Plan when discover_notes is set', async () => {
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
       discover_notes: 'found **three** prior approaches',
@@ -799,9 +801,8 @@ describe('MissionDetail', () => {
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings.indexOf('Discover')).toBeGreaterThanOrEqual(0)
     expect(headings.indexOf('Discover')).toBeLessThan(headings.indexOf('Plan'))
-    expect(screen.getByText('three').closest('div')).toHaveClass('line-clamp-3')
 
-    fireEvent.click(screen.getByText('Show discovery'))
+    fireEvent.click(screen.getByRole('button', { name: 'Show discovery' }))
     expect(screen.getByText('three').tagName).toBe('STRONG')
   })
 
@@ -1418,7 +1419,7 @@ describe('MissionDetail header stats row', () => {
   it('shows the plan route when set', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, plan_route: 'careful' })
     renderPage()
-    expect(await screen.findByText('plan route: careful')).toBeTruthy()
+    expect(await screen.findByText('plan route careful')).toBeTruthy()
   })
 })
 

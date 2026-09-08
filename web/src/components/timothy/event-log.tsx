@@ -1,13 +1,11 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { ChevronRight, Pause, Play, type LucideIcon } from 'lucide-react'
 
-import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
+import { IconButton } from './icon-button'
 import { JsonBlock } from './json-block'
-import { StatusDot } from './status-dot'
-import { statusMeta, type Status } from './status'
 import { traceIcons } from './trace-group'
 
 // How close to the bottom (px) counts as "already following the
@@ -20,7 +18,10 @@ export interface EventLogRow {
   time: Date
   kind: string
   icon?: LucideIcon
-  status?: Status
+  // Short category shown in its own column between the icon and the
+  // message, e.g. a mission phase. Rows without one keep the column's
+  // width so every message still starts at the same x.
+  label?: ReactNode
   title: ReactNode
   payload?: unknown
   payloadNode?: ReactNode
@@ -47,17 +48,22 @@ function DayDivider({ date }: { date: Date }) {
   )
 }
 
-function EventLogRowItem({ row }: { row: EventLogRow }) {
+function EventLogRowItem({ row, labelled }: { row: EventLogRow; labelled: boolean }) {
   const Icon = row.icon ?? traceIcons.other
   const hasDisclosure = row.payload !== undefined || row.payloadNode !== undefined || row.children !== undefined
 
   const head = (
     <>
+      {hasDisclosure ? (
+        <ChevronRight data-chevron aria-hidden className="mt-[3px] size-3.5 shrink-0 text-muted-foreground transition-transform duration-100" />
+      ) : (
+        <span aria-hidden className="size-3.5 shrink-0" />
+      )}
       <time dateTime={row.time.toISOString()} className="w-16 shrink-0 font-mono text-trace text-muted-foreground tabular-nums">
         {formatTime(row.time)}
       </time>
-      {row.status && <StatusDot status={row.status} label={statusMeta[row.status].label} size="sm" />}
       <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      {labelled && <span className="w-20 shrink-0 truncate leading-5">{row.label}</span>}
       <span className="min-w-0 flex-1 break-words leading-5 [overflow-wrap:anywhere]">{row.title}</span>
     </>
   )
@@ -74,10 +80,9 @@ function EventLogRowItem({ row }: { row: EventLogRow }) {
     <li className="min-h-8 px-3 py-1.5 text-sm">
       <Collapsible>
         <CollapsibleTrigger className="flex w-full items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background [&[data-state=open]_svg[data-chevron]]:rotate-90">
-          <ChevronRight data-chevron aria-hidden className="mt-[3px] size-3.5 shrink-0 text-muted-foreground transition-transform duration-100" />
           {head}
         </CollapsibleTrigger>
-        <CollapsibleContent className="pt-1.5 pl-6">
+        <CollapsibleContent className={cn('pt-1.5', labelled ? 'pl-[11.375rem]' : 'pl-[5.875rem]')}>
           {row.payloadNode ?? (row.payload !== undefined && <JsonBlock value={row.payload} density="trace" maxLines={20} />)}
           {row.children}
         </CollapsibleContent>
@@ -97,6 +102,7 @@ export function EventLog({
   ariaLabel = 'Event log',
   toolbar,
   scrollRef,
+  fill = false,
 }: {
   rows: EventLogRow[]
   follow?: boolean
@@ -108,6 +114,9 @@ export function EventLog({
   // Optional external ref to the scroll container, for a caller that
   // needs to drive scrolling itself (e.g. scroll-to-top/bottom controls).
   scrollRef?: RefObject<HTMLDivElement | null>
+  // fill lets the log take the remaining height of a flex column
+  // (fullscreen panels) instead of growing with its rows up to 32rem.
+  fill?: boolean
 }) {
   const [internalFollow, setInternalFollow] = useState(true)
   const following = follow ?? internalFollow
@@ -143,6 +152,10 @@ export function EventLog({
     setFollowing(true)
   }
 
+  // Any row carrying a label turns on the label column for every row,
+  // so messages line up in one gutter instead of stepping in and out.
+  const labelled = rows.some((r) => r.label !== undefined)
+
   // showDivider[i] is true when row i starts a new calendar day: the
   // first row shows one only if the whole list spans more than one
   // day, every later row compares against the previous row's day.
@@ -154,19 +167,17 @@ export function EventLog({
   return (
     <div className={cn('flex flex-col', className)}>
       <div className="flex h-9 items-center gap-2 border-b border-border px-3">
-        <span className="text-xs text-muted-foreground">
-          {rows.length} event{rows.length === 1 ? '' : 's'}
-        </span>
         <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="ghost"
+          <span className="text-xs text-muted-foreground">
+            {rows.length} event{rows.length === 1 ? '' : 's'}
+          </span>
+          <IconButton
             size="xs"
+            label={following ? 'Pause' : 'Follow'}
+            icon={following ? Pause : Play}
             aria-pressed={following}
             onClick={() => setFollowing(!following)}
-          >
-            {following ? <Pause aria-hidden className="size-3.5" /> : <Play aria-hidden className="size-3.5" />}
-            {following ? 'Pause' : 'Follow'}
-          </Button>
+          />
           {!following && newSinceCount > 0 && (
             <Badge variant="info" size="sm" asChild>
               <button type="button" onClick={jumpToBottom}>
@@ -184,7 +195,10 @@ export function EventLog({
         aria-live={following ? 'polite' : 'off'}
         aria-label={ariaLabel}
         tabIndex={0}
-        className="h-80 min-h-80 resize-y overflow-y-auto focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className={cn(
+          'overflow-y-auto focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+          fill ? 'min-h-0 flex-1' : 'max-h-[32rem]',
+        )}
       >
         {rows.length === 0 ? (
           <p className="px-3 py-2 text-sm text-muted-foreground">{emptyText}</p>
@@ -193,7 +207,7 @@ export function EventLog({
             {rows.map((row, i) => (
               <Fragment key={row.id}>
                 {showDivider[i] && <DayDivider date={row.time} />}
-                <EventLogRowItem row={row} />
+                <EventLogRowItem row={row} labelled={labelled} />
               </Fragment>
             ))}
           </ol>

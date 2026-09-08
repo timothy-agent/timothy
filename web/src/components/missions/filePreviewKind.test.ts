@@ -34,21 +34,33 @@ describe('previewKindOf', () => {
     expect(previewKindOf('go.mod')).toBe('code')
   })
 
-  it('falls back to unsupported for unknown extensions', () => {
+  it('treats only known binary formats as unsupported', () => {
     expect(previewKindOf('archive.zip')).toBe('unsupported')
-    expect(previewKindOf('noext')).toBe('unsupported')
+    expect(previewKindOf('fonts/a.woff2')).toBe('unsupported')
+    expect(previewKindOf('clip.mp4')).toBe('unsupported')
+  })
+
+  it('previews unknown extensions and extensionless files as text', () => {
+    expect(previewKindOf('noext')).toBe('code')
+    expect(previewKindOf('.gitkeep')).toBe('code')
+    expect(previewKindOf('data.csv')).toBe('code')
+    expect(previewKindOf('notes.org')).toBe('code')
+    expect(codeLanguageOf('notes.org')).toBeUndefined()
   })
 })
 
 describe('codeLanguageOf', () => {
-  it('maps known extensions to a highlight.js language', () => {
+  it('maps known extensions to a shiki language id', () => {
     expect(codeLanguageOf('main.go')).toBe('go')
-    expect(codeLanguageOf('index.tsx')).toBe('typescript')
+    expect(codeLanguageOf('index.tsx')).toBe('tsx')
+    expect(codeLanguageOf('app.jsx')).toBe('jsx')
+    expect(codeLanguageOf('page.html')).toBe('html')
+    expect(codeLanguageOf('Cargo.toml')).toBe('toml')
     expect(codeLanguageOf('config.xml')).toBe('xml')
     expect(codeLanguageOf('index.php')).toBe('php')
   })
 
-  it('maps known basenames to a highlight.js language', () => {
+  it('maps known basenames to a shiki language id', () => {
     expect(codeLanguageOf('.gitignore')).toBe('plaintext')
     expect(codeLanguageOf('Makefile')).toBe('makefile')
     expect(codeLanguageOf('Dockerfile')).toBe('dockerfile')

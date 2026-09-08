@@ -333,13 +333,14 @@ describe('TimelineSection phase labels', () => {
       },
     ]
     render(<TimelineSection events={phaseEvents} />)
-    expect(screen.getAllByText('discover ·')).toHaveLength(2) // phase_started row + discover_complete row
-    expect(screen.getAllByText('plan ·')).toHaveLength(2) // phase_started row + plan_created row
+    expect(screen.getAllByText('discover')).toHaveLength(2) // phase_started row + discover_complete row
+    expect(screen.getAllByText('plan')).toHaveLength(2) // phase_started row + plan_created row
   })
 
   it('labels rows from their own payload phase without any phase_started', () => {
     render(<TimelineSection events={toolCallTraceEvents} />)
-    expect(screen.getAllByText('generate ·').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('generate').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('generate')[0]).toHaveClass('text-blue-700')
   })
 
   it('labels initial-phase rows before the first transition with their own phase', () => {
@@ -374,8 +375,8 @@ describe('TimelineSection phase labels', () => {
     ]
     render(<TimelineSection events={phaseEvents} />)
     // provisioned (backfilled) + the discover turn
-    expect(screen.getAllByText('discover ·')).toHaveLength(2)
-    expect(screen.getAllByText('plan ·')).toHaveLength(1)
+    expect(screen.getAllByText('discover')).toHaveLength(2)
+    expect(screen.getAllByText('plan')).toHaveLength(1)
   })
 
   it('survives events with a null payload (mission.resumed)', () => {
@@ -398,7 +399,7 @@ describe('TimelineSection phase labels', () => {
       },
     ]
     render(<TimelineSection events={withNull} />)
-    expect(screen.getAllByText('generate ·').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('generate').length).toBeGreaterThan(0)
   })
 
   it('renders no phase label when no event carries a phase at all', () => {
@@ -413,6 +414,6 @@ describe('TimelineSection phase labels', () => {
       },
     ]
     render(<TimelineSection events={bare} />)
-    expect(screen.queryByText('discover ·')).toBeNull()
+    expect(screen.queryByText('discover')).toBeNull()
   })
 })

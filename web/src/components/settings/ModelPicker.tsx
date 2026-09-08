@@ -72,23 +72,6 @@ export function priceLabel(s: ModelSuggestion): string {
   return `in ${label(in_)} · out ${label(out)} /MTok`
 }
 
-// configuredPrice picks a declared model's own prices, unless both
-// input and output are zero. Unlike the catalog (Entry's *float64
-// fields preserve nil-vs-0), a provider row's ModelPrices are plain
-// (non-optional) floats: an unset field and a genuinely-free model
-// both serialize as 0, so there's no way to tell them apart here. Cost
-// honesty means treating that ambiguous all-zero case as "never
-// priced" rather than guessing "free". Shared by every declared-model
-// suggestion builder (ProviderAdd, RouteEdit's chain entry picker) so
-// the fallback rule lives once.
-export function configuredPrice(
-  prices: { input_per_mtok?: number; output_per_mtok?: number } | undefined,
-): Pick<ModelSuggestion, 'input_per_mtok' | 'output_per_mtok'> | undefined {
-  const { input_per_mtok, output_per_mtok } = prices ?? {}
-  if (!input_per_mtok && !output_per_mtok) return undefined
-  return { input_per_mtok, output_per_mtok }
-}
-
 // catalogMatchForID mirrors the gateway's catalog.Match rule (internal
 // /gateway/catalog/match.go): exact model_key first, else the first
 // catalog row whose key's last "/"-segment equals id. Catalog keys are

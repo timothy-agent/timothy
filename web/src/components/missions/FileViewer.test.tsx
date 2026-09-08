@@ -35,26 +35,25 @@ function file(path: string, size = 5): MissionFile {
 }
 
 describe('FileViewer', () => {
-  it('renders code files with syntax highlighting', async () => {
-    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['package main']))
+  it('renders code files with a line-number gutter', async () => {
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['package main\nimport "fmt"']))
     const { container } = render(<FileViewer missionId="m1" file={file('main.go')} />)
 
     await screen.findByText('package', { exact: false })
-    const code = container.querySelector('code.hljs')
-    expect(code?.textContent).toBe('package main')
-    expect(code?.querySelector('.hljs-keyword')).toBeTruthy()
+    const gutter = container.querySelector('[aria-hidden="true"].select-none') as HTMLElement
+    expect(gutter.textContent).toBe('12')
+    expect(screen.getByText('2 lines ·', { exact: false })).toBeTruthy()
   })
 
   it('renders markdown rendered by default, with a toggle to source', async () => {
     vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['# Hello world']))
-    const { container } = render(<FileViewer missionId="m1" file={file('README.md')} />)
+    render(<FileViewer missionId="m1" file={file('README.md')} />)
 
     expect(await screen.findByRole('heading', { name: 'Hello world' })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Show raw markdown source' }))
-    await screen.findByText('Hello', { exact: false })
-    const code = container.querySelector('code.hljs')
-    expect(code?.textContent).toBe('# Hello world')
+    const source = await screen.findByText('# Hello world')
+    expect(source.tagName).toBe('PRE')
   })
 
   it('renders images via an object URL', async () => {

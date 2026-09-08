@@ -2,7 +2,7 @@
 // answer so the UI can render it as a distinct panel instead of just
 // another heading in the prose. Only the LAST such heading counts —
 // an answer that discusses "sources" mid-body must not be truncated.
-export interface Citation {
+interface Citation {
   title: string
   url: string
 }

@@ -24,7 +24,7 @@ function Card({
         "rounded-md border border-border bg-card text-card-foreground",
         density === "operational" ? "p-3" : "p-5",
         interactive &&
-          "outline-none transition-colors duration-100 hover:border-foreground/20 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          "group/card outline-none transition-[color,border-color,box-shadow] duration-100 hover:border-brand hover:glow focus-visible:border-brand focus-visible:glow",
         className
       )}
       {...props}

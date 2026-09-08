@@ -70,8 +70,15 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
           objectUrl = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }))
           setState({ status: 'pdf', url: objectUrl })
         } else {
-          blob.text().then((text) => {
-            if (!cancelled) setState({ status: 'text', text })
+          blob.slice(0, 8192).arrayBuffer().then((head) => {
+            if (cancelled) return
+            if (new Uint8Array(head).includes(0)) {
+              setState({ status: 'error', message: 'binary' })
+              return
+            }
+            blob.text().then((text) => {
+              if (!cancelled) setState({ status: 'text', text })
+            })
           })
         }
       },
@@ -182,7 +189,9 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
             <p className="p-3 text-sm text-muted-foreground">
               {state.message === 'unsupported'
                 ? "Can't preview this file type. Download it instead."
-                : state.message}
+                : state.message === 'binary'
+                  ? 'This file is binary. Download it instead.'
+                  : state.message}
             </p>
           )}
           {state.status === 'image' && (

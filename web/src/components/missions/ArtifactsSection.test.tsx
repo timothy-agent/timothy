@@ -81,6 +81,23 @@ describe('ArtifactsSection', () => {
     expect(screen.getByText('512 B')).toBeTruthy()
   })
 
+  it('hides and shows the file tree from the header toggle', async () => {
+    vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
+    render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)
+
+    const tree = (await screen.findByText('a.txt')).closest('[aria-hidden]') as HTMLElement
+    expect(tree).toHaveAttribute('aria-hidden', 'false')
+    expect(tree).toHaveClass('w-60')
+    const toggle = screen.getByRole('button', { name: 'Hide file list' })
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(toggle)
+    expect(tree).toHaveAttribute('aria-hidden', 'true')
+    expect(tree).toHaveClass('w-0', 'invisible')
+    fireEvent.click(screen.getByRole('button', { name: 'Show file list' }))
+    expect(tree).toHaveAttribute('aria-hidden', 'false')
+    expect(tree).toHaveClass('w-60')
+  })
+
   it('marks the selected tree row with aria-current', async () => {
     vi.mocked(listMissionFiles).mockResolvedValue({ files, truncated: false })
     render(<ArtifactsSection missionId="m1" phase="execute" workspace="ws-1" />)

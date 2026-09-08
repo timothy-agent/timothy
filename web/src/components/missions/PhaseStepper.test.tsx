@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { PhaseStepper, normalizePhase, phaseIndex, phaseStepText } from './PhaseStepper'
+import { failedPhaseFromEvents, PhaseStepper, normalizePhase, phaseIndex, phaseStepText } from './PhaseStepper'
 
 describe('normalizePhase', () => {
   it('passes current phase names through', () => {
@@ -64,7 +64,7 @@ describe('phaseStepText', () => {
 
 describe('PhaseStepper', () => {
   it('renders all five steps with the current one marked', () => {
-    render(<PhaseStepper phase="generate" status="working" />)
+    render(<PhaseStepper phase="generate" />)
     const current = screen.getByText('Generate').closest('span[aria-current="step"]')
     expect(current).not.toBeNull()
     expect(screen.getByText('Discover')).toBeInTheDocument()
@@ -72,33 +72,80 @@ describe('PhaseStepper', () => {
   })
 
   it('marks completed steps with a check icon', () => {
-    const { container } = render(<PhaseStepper phase="prove" status="working" />)
+    const { container } = render(<PhaseStepper phase="prove" />)
     // discover, plan, generate are completed (3 checks); prove is current (no check)
-    expect(container.querySelectorAll('svg.lucide-check')).toHaveLength(3)
+    const checks = container.querySelectorAll('svg.lucide-check')
+    expect(checks).toHaveLength(3)
+    checks.forEach((c) => expect(c).toHaveClass('text-good'))
   })
 
-  it('renders terminal phases with all steps completed and a status badge', () => {
-    render(<PhaseStepper phase="done" status="success" />)
-    expect(screen.getByText('Done')).toBeInTheDocument()
+  it('renders terminal phases with all steps completed and no status badge of its own', () => {
+    const { container } = render(<PhaseStepper phase="done" />)
+    expect(screen.queryByText('Done')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('svg.lucide-check')).toHaveLength(5)
     expect(screen.getAllByText(/Discover|Plan|Generate|Prove|Result/)).toHaveLength(5)
   })
 
-  it('renders failed phase with no completed steps, only the status badge', () => {
-    const { container } = render(<PhaseStepper phase="failed" status="error" />)
-    expect(screen.getByText('Failed')).toBeInTheDocument()
+  it('marks the failed step with an X and checks the ones before it', () => {
+    const { container } = render(<PhaseStepper phase="failed" failedAt="generate" />)
+    expect(container.querySelectorAll('svg.lucide-check')).toHaveLength(2)
+    const failedStep = screen.getByText('Generate').closest('span')
+    expect(failedStep).toHaveClass('text-destructive')
+    expect(failedStep?.querySelector('svg.lucide-circle-x')).not.toBeNull()
+    expect(screen.getByText('Prove').closest('span')).toHaveClass('text-muted-foreground')
+  })
+
+  it('derives the failed phase from the latest phase_started event', () => {
+    const ev = (seq: number, kind: string, payload: unknown) => ({
+      mission_id: 'm',
+      seq,
+      kind,
+      payload,
+      provenance: 'harness',
+      created_at: '2026-01-01T00:00:00Z',
+    })
+    expect(failedPhaseFromEvents([])).toBe('discover')
+    expect(failedPhaseFromEvents([], true)).toBe('generate')
+    expect(
+      failedPhaseFromEvents([
+        ev(1, 'mission.phase_started', { phase: 'plan' }),
+        ev(2, 'mission.phase_started', { phase: 'execute' }),
+        ev(3, 'mission.failed', { reason: 'cancelled' }),
+      ]),
+    ).toBe('generate')
+  })
+
+  it('renders failed phase with no completed steps', () => {
+    const { container } = render(<PhaseStepper phase="failed" />)
+    expect(screen.queryByText('Failed')).not.toBeInTheDocument()
     expect(container.querySelectorAll('svg.lucide-check')).toHaveLength(0)
     expect(screen.getAllByText(/Discover|Plan|Generate|Prove|Result/)).toHaveLength(5)
   })
 
   it('renders a single Generate step with a light badge for light missions', () => {
-    render(<PhaseStepper phase="generate" status="working" light />)
+    render(<PhaseStepper phase="generate" light />)
     expect(screen.getByText('Generate')).toBeInTheDocument()
     expect(screen.getByText('light')).toBeInTheDocument()
     expect(screen.queryByText('Discover')).not.toBeInTheDocument()
   })
 
   it('is an ordered list labelled Mission phases', () => {
-    render(<PhaseStepper phase="plan" status="waiting" />)
+    render(<PhaseStepper phase="plan" />)
     expect(screen.getByRole('list', { name: 'Mission phases' })).toBeInTheDocument()
+  })
+
+  it('marks a light mission done with a green check and failed with an X', () => {
+    const done = render(<PhaseStepper phase="done" light />)
+    expect(done.container.querySelector('svg.lucide-check')).toHaveClass('text-good')
+    done.unmount()
+
+    const failed = render(<PhaseStepper phase="failed" light />)
+    expect(failed.container.querySelector('svg.lucide-circle-x')).not.toBeNull()
+    expect(screen.getByText('Generate').closest('span')).toHaveClass('text-destructive')
+    failed.unmount()
+
+    const running = render(<PhaseStepper phase="generate" light />)
+    expect(running.container.querySelector('svg.lucide-check')).toBeNull()
+    expect(running.container.querySelector('svg.lucide-circle-x')).toBeNull()
   })
 })

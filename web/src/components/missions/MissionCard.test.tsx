@@ -157,9 +157,11 @@ describe('MissionCard phase step text', () => {
     expect(screen.getByText('Generate · 3 of 5')).toBeInTheDocument()
   })
 
-  it('shows Done for a completed mission', () => {
+  it('drops the phase text once the mission is terminal, leaving the badge to say so', () => {
     renderCard({ ...baseMission, phase: 'done', status: 'done' })
-    expect(screen.getByText('Done')).toBeInTheDocument()
+    expect(screen.queryByText('Done')).not.toBeInTheDocument()
+    expect(screen.queryByText(/of 5/)).not.toBeInTheDocument()
+    expect(screen.getByText('done')).toBeInTheDocument()
   })
 })
 
