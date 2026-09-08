@@ -1,5 +1,5 @@
 import axe from 'axe-core'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminAgent, AdminRoute } from '../../api/types'
@@ -14,8 +14,10 @@ vi.mock('../../api/client', () => ({
   listSkills: vi.fn(),
   listKbCollections: vi.fn(),
 }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { listAgents, listRoutes, listTools, listSkills, listKbCollections, patchAgent } from '../../api/client'
+import { listAgents, listRoutes, listTools, listSkills, listKbCollections, patchAgent, deleteAgent } from '../../api/client'
+import { toast } from 'sonner'
 
 afterEach(cleanup)
 
@@ -112,6 +114,40 @@ describe('AgentEdit', () => {
     )
   })
 
+  it('stages edits to overlay, route, memory, skills, and tools, all landing in the one PATCH', async () => {
+    vi.mocked(patchAgent).mockResolvedValue()
+    vi.mocked(listRoutes).mockResolvedValue([
+      codingRoute,
+      { name: 'writing', chain: [], strategy: 'ordered', enabled: true },
+    ])
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    fireEvent.change(screen.getByDisplayValue(coder.prompt_overlay), { target: { value: 'Be extra careful.' } })
+    fireEvent.click(screen.getByRole('combobox', { name: 'agent route' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'writing' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'agent memory' }))
+    fireEvent.change(screen.getByPlaceholderText('research-brief, coding'), { target: { value: 'writing' } })
+    fireEvent.change(screen.getByPlaceholderText('search_web, fetch_url, shell'), { target: { value: 'shell' } })
+    fireEvent.change(screen.getByPlaceholderText('product-docs, runbooks'), { target: { value: 'kb-a' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchAgent).toHaveBeenCalledWith(
+        'a1',
+        expect.objectContaining({
+          prompt_overlay: 'Be extra careful.',
+          route: 'writing',
+          memory: false,
+          skills: ['writing'],
+          tools: ['shell'],
+          knowledge: ['kb-a'],
+        }),
+      ),
+    )
+  })
+
   it('Cancel restores the loaded values and clears the unsaved note', async () => {
     renderEdit()
 
@@ -189,5 +225,78 @@ describe('AgentEdit', () => {
     await screen.findByDisplayValue(coder.description)
     const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
     expect(results.violations).toEqual([])
+  })
+
+  it('redirects away and renders nothing when the agent id is not found', async () => {
+    render(
+      <MemoryRouter initialEntries={['/settings/agents/missing']}>
+        <Routes>
+          <Route path="/settings/agents/:id" element={<AgentEdit />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(listAgents).toHaveBeenCalled())
+    expect(screen.queryByRole('heading')).toBeNull()
+  })
+
+  it('shows a toast when loading the agent fails', async () => {
+    vi.mocked(listAgents).mockRejectedValue(new Error('network down'))
+    renderEdit()
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load agent', { description: 'network down' }),
+    )
+  })
+
+  it('deletes the agent behind confirm', async () => {
+    vi.mocked(deleteAgent).mockResolvedValue()
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(deleteAgent).toHaveBeenCalledWith('a1'))
+  })
+
+  it('keeps the dialog open and toasts on delete failure', async () => {
+    vi.mocked(deleteAgent).mockRejectedValue(new Error('agent in use'))
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not remove agent', { description: 'agent in use' }),
+    )
+  })
+
+  it('describes the default agent and hides Delete', async () => {
+    vi.mocked(listAgents).mockResolvedValue([{ ...coder, is_default: true }])
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    expect(screen.getByText('Default agent')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull()
+  })
+
+  it('navigates away if the agent vanishes from the post-save refetch', async () => {
+    vi.mocked(patchAgent).mockResolvedValue()
+    vi.mocked(listAgents).mockResolvedValueOnce([coder]).mockResolvedValueOnce([])
+    renderEdit()
+
+    await screen.findByDisplayValue(coder.description)
+    fireEvent.change(screen.getByDisplayValue(coder.description), { target: { value: 'Updated description' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(patchAgent).toHaveBeenCalledTimes(1))
+    // found = null on the refetch: AgentEdit's own state flips to null
+    // and it navigates away rather than rebasing a form for an agent
+    // that no longer exists.
+    await waitFor(() => expect(screen.queryByDisplayValue('Updated description')).toBeNull())
   })
 })

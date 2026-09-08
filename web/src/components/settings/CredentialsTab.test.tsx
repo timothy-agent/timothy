@@ -26,9 +26,11 @@ vi.mock('../../api/client', () => ({
 vi.mock('./useDefaultSecretBackend', () => ({
   useDefaultSecretBackend: vi.fn(() => 'db'),
 }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { deleteSecret, listSecretRefs, migrateAllSecrets } from '../../api/client'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
+import { toast } from 'sonner'
 
 const referenced: SecretRefEntry = {
   name: 'GITHUB_PAT',
@@ -151,6 +153,46 @@ describe('CredentialsTab', () => {
     expect(screen.queryByRole('button', { name: /Migrate all to/ })).not.toBeInTheDocument()
   })
 
+  it('toasts when loading credentials fails', async () => {
+    vi.mocked(listSecretRefs).mockRejectedValue(new Error('network down'))
+    renderTab()
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load credentials', { description: 'network down' }),
+    )
+  })
+
+  it('toasts and keeps the ref when deleting fails', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([orphaned])
+    vi.mocked(deleteSecret).mockRejectedValue(new Error('still referenced'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete OLD_KEY' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not remove credential', {
+        description: 'still referenced',
+      }),
+    )
+    expect(await screen.findByText('OLD_KEY')).toBeInTheDocument()
+  })
+
+  it('toasts when the whole migrate-all call throws', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
+    vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'db' }])
+    vi.mocked(migrateAllSecrets).mockRejectedValue(new Error('gateway unreachable'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Migrate all to Vault' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not migrate credentials', {
+        description: 'gateway unreachable',
+      }),
+    )
+  })
+
   it('shows migrate-all when the default backend is external and a ref lives elsewhere', async () => {
     vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
     vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'db' }])
@@ -161,5 +203,45 @@ describe('CredentialsTab', () => {
     fireEvent.click(button)
 
     await waitFor(() => expect(migrateAllSecrets).toHaveBeenCalledWith('vault'))
+  })
+
+  it('pluralizes the migrate-all banner count for more than one credential', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { ...orphaned, name: 'KEY_A', backend: 'db' },
+      { ...orphaned, name: 'KEY_B', backend: 'db' },
+    ])
+    renderTab()
+
+    expect(await screen.findByText(/2 credentials not yet in Vault\./)).toBeInTheDocument()
+  })
+
+  it('falls back to the raw backend id when it has no friendly label', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('custom-backend')
+    vi.mocked(listSecretRefs).mockResolvedValue([{ ...orphaned, backend: 'db' }])
+    renderTab()
+
+    expect(await screen.findByRole('button', { name: 'Migrate all to custom-backend' })).toBeInTheDocument()
+  })
+
+  it('reports partial migration failures without dropping the successes', async () => {
+    vi.mocked(useDefaultSecretBackend).mockReturnValue('vault')
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      { ...orphaned, name: 'KEY_A', backend: 'db' },
+      { ...orphaned, name: 'KEY_B', backend: 'db' },
+    ])
+    vi.mocked(migrateAllSecrets).mockResolvedValue([
+      { name: 'KEY_A', migrated: true, skipped: false },
+      { name: 'KEY_B', migrated: false, skipped: false, error: 'locked' },
+    ])
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Migrate all to Vault' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Migrated 1, 1 failed', {
+        description: 'KEY_B: locked',
+      }),
+    )
   })
 })

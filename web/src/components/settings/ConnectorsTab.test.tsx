@@ -15,16 +15,19 @@ vi.mock('../../api/client', () => ({
   setSecret: vi.fn(),
   testConnector: vi.fn(),
 }))
+vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import {
   connectorOAuthStart,
   createConnector,
+  deleteConnector,
   listConnectors,
   listSecretBackends,
   patchConnector,
   setSecret,
   testConnector,
 } from '../../api/client'
+import { toast } from 'sonner'
 
 const calendarConnector: AdminConnector = {
   id: 'c1',
@@ -444,5 +447,284 @@ describe('Connectors tab', () => {
       }),
     )
     expect(connectorOAuthStart).toHaveBeenCalledWith('c5')
+  })
+})
+
+describe('ConnectorEdit load and not-found', () => {
+  it('redirects to the connectors list when the id is not found', async () => {
+    renderTab(`/settings/connectors/missing`)
+    expect(await screen.findByText('Your connectors · 1')).toBeTruthy()
+  })
+
+  it('shows a toast when loading the connector list fails', async () => {
+    vi.mocked(listConnectors).mockRejectedValue(new Error('network down'))
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load connector', {
+        description: 'network down',
+      }),
+    )
+  })
+})
+
+describe('ConnectorEdit delete', () => {
+  it('deletes behind confirm and navigates back to the list', async () => {
+    vi.mocked(deleteConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+
+    await screen.findByRole('heading', { name: 'google-calendar' })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(deleteConnector).toHaveBeenCalledWith('c1'))
+    expect(await screen.findByText('Your connectors · 1')).toBeTruthy()
+  })
+
+  it('keeps the dialog open and toasts on delete failure', async () => {
+    vi.mocked(deleteConnector).mockRejectedValue(new Error('still referenced'))
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+
+    await screen.findByRole('heading', { name: 'google-calendar' })
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not remove connector', {
+        description: 'still referenced',
+      }),
+    )
+  })
+})
+
+describe('ConnectorEdit rotate token and copy key', () => {
+  const githubConnector: AdminConnector = {
+    id: 'gh1',
+    name: 'personal-gh',
+    kind: 'github',
+    config: { sign_commits: true, signing_public_key: 'ssh-ed25519 AAAAC3Nz… timothy' },
+    credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+    enabled: true,
+    sensitive: false,
+  }
+
+  it('rotates the github PAT via the existing credential_ref', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(setSecret).mockResolvedValue()
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    const tokenInput = await screen.findByPlaceholderText('paste new token')
+    expect(tokenInput).toHaveAttribute('type', 'password')
+    fireEvent.change(tokenInput, { target: { value: 'ghp_new' } })
+    const saveButtons = screen.getAllByRole('button', { name: 'Save' })
+    fireEvent.click(saveButtons.find((b) => b.getAttribute('type') !== 'submit')!)
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('PERSONAL_GH_GITHUB_PAT', 'ghp_new'))
+    expect(patchConnector).not.toHaveBeenCalled()
+  })
+
+  it('rotates an imap password and mints a credential_ref when none exists yet', async () => {
+    const imapConnector: AdminConnector = {
+      id: 'imap1',
+      name: 'my-mail',
+      kind: 'imap',
+      config: { username: 'me@example.com', host: 'imap.example.com' },
+      credential_ref: '',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([imapConnector])
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${imapConnector.id}`)
+
+    expect(await screen.findByText('me@example.com @ imap.example.com')).toBeTruthy()
+    fireEvent.change(screen.getByPlaceholderText('paste new token'), { target: { value: 'app-pass' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') !== 'submit')!)
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('MY_MAIL_IMAP_PASSWORD', 'app-pass'))
+    expect(patchConnector).toHaveBeenCalledWith('imap1', { credential_ref: 'MY_MAIL_IMAP_PASSWORD' })
+  })
+
+  it('rotates a caldav password and shows the username @ url summary', async () => {
+    const caldavConnector: AdminConnector = {
+      id: 'cal1',
+      name: 'my-cal',
+      kind: 'caldav',
+      config: { username: 'me@example.com', url: 'https://cal.example.com/dav/' },
+      credential_ref: 'MY_CAL_CALDAV_PASSWORD',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([caldavConnector])
+    vi.mocked(setSecret).mockResolvedValue()
+    renderTab(`/settings/connectors/${caldavConnector.id}`)
+
+    expect(await screen.findByText('me@example.com @ https://cal.example.com/dav/')).toBeTruthy()
+    fireEvent.change(screen.getByPlaceholderText('paste new token'), { target: { value: 'new-pass' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') !== 'submit')!)
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('MY_CAL_CALDAV_PASSWORD', 'new-pass'))
+  })
+
+  it('shows a toast when rotating the token fails', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(setSecret).mockRejectedValue(new Error('store unavailable'))
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    fireEvent.change(await screen.findByPlaceholderText('paste new token'), { target: { value: 'ghp_x' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') !== 'submit')!)
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not save token', { description: 'store unavailable' }),
+    )
+  })
+
+  it('copies the signing public key to the clipboard', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy' }))
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('ssh-ed25519 AAAAC3Nz… timothy'))
+    expect(toast.success).toHaveBeenCalledWith('Public key copied')
+  })
+
+  it('shows the endpoint summary and MCP token rotate label for a plain mcp connector', async () => {
+    const mcpConnector: AdminConnector = {
+      id: 'mcp1',
+      name: 'custom-mcp',
+      kind: 'mcp',
+      config: { endpoint: 'https://mcp.example.com' },
+      credential_ref: 'CUSTOM_MCP_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([mcpConnector])
+    renderTab(`/settings/connectors/${mcpConnector.id}`)
+
+    expect(await screen.findByText('Endpoint:')).toBeTruthy()
+    expect(screen.getByText('https://mcp.example.com')).toBeTruthy()
+    expect(screen.getByText('Rotate bearer token')).toBeTruthy()
+  })
+})
+
+describe('ConnectorEdit test connection identity success', () => {
+  it('shows the connected identity and scopes on a passing github test', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: {},
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(testConnector).mockResolvedValue({
+      ok: true,
+      identity: { login: 'octocat', scopes: 'repo, workflow' },
+    })
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText(/octocat.*repo, workflow/)).toBeTruthy()
+  })
+
+  it('re-tests from the Test connection button shown after a passing test', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: {},
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await screen.findByText('Connection OK, tools are servable.')
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(testConnector).toHaveBeenCalledTimes(2))
+  })
+
+  it('does not surface a manage-page test result on a Timothy auth error', async () => {
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+    const authError = Object.assign(new Error('auth required'), { status: 401 })
+    vi.mocked(testConnector).mockRejectedValue(authError)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(testConnector).toHaveBeenCalled())
+    expect(screen.queryByText(/Failed:/)).toBeNull()
+  })
+
+  it('shows the failure reason for a plain manage-page test error', async () => {
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+    vi.mocked(testConnector).mockRejectedValue(new Error('timeout'))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText(/Failed: timeout/)).toBeTruthy()
+  })
+
+  it('toasts when reconnecting oauth fails from the manage page', async () => {
+    vi.mocked(connectorOAuthStart).mockRejectedValue(new Error('provider unreachable'))
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect Google account' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not start Google re-connect', {
+        description: 'provider unreachable',
+      }),
+    )
+  })
+})
+
+describe('ConnectorsList runTest auth-error handling', () => {
+  it('does not surface a test result when testConnector throws a Timothy auth error', async () => {
+    renderTab()
+    await screen.findByText('calendar')
+    const authError = Object.assign(new Error('auth required'), { status: 401 })
+    vi.mocked(testConnector).mockRejectedValue(authError)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }))
+    await waitFor(() => expect(testConnector).toHaveBeenCalled())
+    expect(screen.queryByText(/Failed:/)).toBeNull()
+  })
+
+  it('shows the failure reason for a plain test error from the list card', async () => {
+    renderTab()
+    await screen.findByText('calendar')
+    vi.mocked(testConnector).mockRejectedValue(new Error('timeout'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test' }))
+    expect(await screen.findByText(/Failed: timeout/)).toBeTruthy()
+  })
+
+  it('toasts when the list-card enabled toggle fails', async () => {
+    vi.mocked(patchConnector).mockRejectedValue(new Error('locked'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('switch', { name: 'google-calendar enabled' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not update connector', { description: 'locked' }),
+    )
+  })
+
+  it('toasts when loading the connectors list fails', async () => {
+    vi.mocked(listConnectors).mockRejectedValue(new Error('network down'))
+    renderTab()
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not load connectors', { description: 'network down' }),
+    )
   })
 })

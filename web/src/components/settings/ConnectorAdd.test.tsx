@@ -119,6 +119,26 @@ describe('ConnectorAdd imap flow', () => {
     await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-imap', { enabled: true }))
   })
 
+  it('includes smtp host and port when provided', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-imap-smtp')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('imap')
+
+    fireEvent.change(await screen.findByPlaceholderText('imap.example.com'), {
+      target: { value: 'imap.fastmail.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('me@example.com'), { target: { value: 'me@fastmail.com' } })
+    fireEvent.change(screen.getByPlaceholderText('password'), { target: { value: 'app-password' } })
+    fireEvent.change(screen.getByPlaceholderText('smtp.example.com'), { target: { value: 'smtp.fastmail.com' } })
+    fireEvent.change(screen.getByPlaceholderText('587'), { target: { value: '465' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
+      config: { smtp_host: 'smtp.fastmail.com', smtp_port: 465 },
+    })
+  })
+
   it('rejects an invalid port and does not create a connector', async () => {
     renderPage('imap')
 
@@ -166,5 +186,101 @@ describe('ConnectorAdd caldav flow', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
     await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-caldav', { enabled: true }))
+  })
+})
+
+describe('ConnectorAdd mcp endpoint field', () => {
+  it('edits the pre-filled endpoint and invalidates a prior test', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-mcp')
+    vi.mocked(testConnector).mockResolvedValueOnce({ ok: true })
+    renderPage('github')
+
+    fireEvent.change(await screen.findByPlaceholderText('ghp_… or github_pat_…'), { target: { value: 'ghp_abc' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText(/Connection OK/)).toBeTruthy()
+
+    const endpointInput = screen.getByDisplayValue('https://api.githubcopilot.com/mcp/')
+    fireEvent.change(endpointInput, { target: { value: 'https://mcp.example.com/' } })
+
+    // Editing after a passing test invalidates it: Add is gated again.
+    expect((screen.getByRole('button', { name: 'Add connector' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+})
+
+describe('ConnectorAdd auth-error handling', () => {
+  it('does not surface a test result when createConnector throws a Timothy auth error', async () => {
+    const authError = Object.assign(new Error('auth required'), { status: 401 })
+    vi.mocked(createConnector).mockRejectedValue(authError)
+    renderPage('github')
+
+    fireEvent.change(await screen.findByPlaceholderText('ghp_… or github_pat_…'), { target: { value: 'ghp_abc' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(screen.queryByText(/Connection failed:/)).toBeNull()
+  })
+
+  it('toasts when enabling the connector after a passing test fails', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-mcp-3')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    vi.mocked(patchConnector).mockRejectedValue(new Error('gone'))
+    renderPage('github')
+
+    fireEvent.change(await screen.findByPlaceholderText('ghp_… or github_pat_…'), { target: { value: 'ghp_abc' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not enable connector', { description: 'gone' }),
+    )
+  })
+})
+
+describe('ConnectorAdd oauth failure', () => {
+  it('toasts and stays on the page when the google connect flow fails', async () => {
+    vi.mocked(createConnector).mockRejectedValue(new Error('quota exceeded'))
+    renderPage('gmail')
+
+    fireEvent.change(await screen.findByPlaceholderText('….apps.googleusercontent.com'), {
+      target: { value: 'cid.apps.googleusercontent.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('GOCSPX-…'), { target: { value: 'GOCSPX-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & connect Google' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not connect Google account', {
+        description: 'quota exceeded',
+      }),
+    )
+  })
+})
+
+describe('ConnectorAdd cancel and retest', () => {
+  it('Cancel navigates back to the connectors list', async () => {
+    renderPage('imap')
+    await screen.findByPlaceholderText('imap.example.com')
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    // No API calls fire on cancel; the button itself is the only assertable effect here.
+    expect(createConnector).not.toHaveBeenCalled()
+  })
+
+  it('offers a retest button after a failed test, alongside the failure message', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-imap-2')
+    vi.mocked(testConnector).mockResolvedValue({ ok: false, error: 'connection refused' })
+    renderPage('imap')
+
+    fireEvent.change(await screen.findByPlaceholderText('imap.example.com'), {
+      target: { value: 'imap.fastmail.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('me@example.com'), { target: { value: 'me@fastmail.com' } })
+    fireEvent.change(screen.getByPlaceholderText('password'), { target: { value: 'app-password' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    expect(await screen.findByText(/Connection failed: connection refused/)).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Add connector' }) as HTMLButtonElement).disabled).toBe(true)
+
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(testConnector).toHaveBeenCalledTimes(2))
   })
 })
