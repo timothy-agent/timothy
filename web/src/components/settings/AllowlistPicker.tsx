@@ -52,7 +52,6 @@ export function AllowlistPicker({
               )
             }
             placeholder={freeTextPlaceholder}
-            className="mt-1.5 h-10"
           />
         )}
       </Field>
@@ -67,17 +66,16 @@ export function AllowlistPicker({
 
   return (
     <Field label={label} description={description}>
-      {() => (
-        <div className="mt-1.5">
-          <Combobox
-            multiple
-            options={options}
-            value={value}
-            onChange={onChange}
-            emptyText={emptyText}
-            aria-label={label}
-          />
-        </div>
+      {(props) => (
+        <Combobox
+          id={props.id}
+          multiple
+          options={options}
+          value={value}
+          onChange={onChange}
+          emptyText={emptyText}
+          aria-label={label}
+        />
       )}
     </Field>
   )

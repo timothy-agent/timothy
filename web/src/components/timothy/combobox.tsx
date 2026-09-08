@@ -23,6 +23,7 @@ interface ComboboxSharedProps {
   disabled?: boolean
   size?: 'default' | 'sm'
   className?: string
+  id?: string
   'aria-label'?: string
   'aria-labelledby'?: string
 }
@@ -126,6 +127,7 @@ export function Combobox(props: ComboboxProps) {
     disabled,
     size = 'default',
     className,
+    id,
     'aria-label': ariaLabel,
     'aria-labelledby': ariaLabelledBy,
   } = props
@@ -166,7 +168,7 @@ export function Combobox(props: ComboboxProps) {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
-          id={triggerId}
+          id={id ?? triggerId}
           variant="outline"
           size={size}
           role="combobox"

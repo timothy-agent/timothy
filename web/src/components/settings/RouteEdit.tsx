@@ -269,7 +269,7 @@ function AddChainEntry({
   const catalogModels = useCatalogSearch(model, catalogSearch)
 
   // Live catalog rows for the selected provider, same shape
-  // ProviderAdd/ProviderEdit feed ModelInput, so price labels render
+  // ProviderAdd/ProviderEdit feed ModelPicker, so price labels render
   // the same way everywhere.
   const suggestions: ModelSuggestion[] = useMemo(() => {
     if (!selected) return []
@@ -283,7 +283,7 @@ function AddChainEntry({
   return (
     <Field label="Add a provider to this chain">
       {() => (
-        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Select
             value={providerID}
             onValueChange={(id) => {
@@ -292,7 +292,7 @@ function AddChainEntry({
               setModel(p?.default_model ?? '')
             }}
           >
-            <SelectTrigger className="h-10 w-44" aria-label="Provider">
+            <SelectTrigger className="w-44" aria-label="Provider">
               <SelectValue placeholder="provider…" />
             </SelectTrigger>
             <SelectContent>
@@ -309,7 +309,7 @@ function AddChainEntry({
             onChange={setModel}
             suggestions={suggestions}
             placeholder="model id"
-            className="h-10 w-56"
+            className="w-56"
             ariaLabel="Model"
           />
           <Button

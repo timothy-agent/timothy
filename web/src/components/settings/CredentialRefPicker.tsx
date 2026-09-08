@@ -30,7 +30,7 @@ function managedRoleSuffix(ref: SecretRefEntry): string | null {
 
 // ModeToggle is the segmented "New credential" / "Use existing"
 // control shared by every form offering credential reuse.
-export function CredentialModeToggle({
+function CredentialModeToggle({
   mode,
   onChange,
   labels,
@@ -76,7 +76,7 @@ export function ExistingCredentialSelect({
 
   return (
     <Select value={value} onValueChange={onChange}>
-      <SelectTrigger className="mt-1.5 h-10 w-full" aria-label="existing credential">
+      <SelectTrigger className="w-full" aria-label="existing credential">
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>

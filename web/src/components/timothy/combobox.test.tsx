@@ -63,6 +63,13 @@ describe('Combobox', () => {
     expect(onChange).toHaveBeenCalledWith('claude')
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
   })
+
+  it('forwards id to the combobox trigger', () => {
+    render(
+      <Combobox options={options} value={undefined} onChange={() => {}} id="model-field" />,
+    )
+    expect(screen.getByRole('combobox')).toHaveAttribute('id', 'model-field')
+  })
 })
 
 function MultiHarness({ ariaLabelledby }: { ariaLabelledby?: boolean } = {}) {

@@ -223,6 +223,26 @@ describe('AllowlistPicker: knowledge', () => {
     expect(await screen.findByText('Select...')).toBeTruthy()
   })
 
+  it('associates the Field label with the combobox trigger via id', async () => {
+    const { AllowlistPicker, listKbCollections } = await freshPicker()
+    vi.mocked(listKbCollections).mockResolvedValue(collections)
+    render(
+      <AllowlistPicker
+        label="Knowledge allowlist"
+        value={[]}
+        onChange={vi.fn()}
+        load={async () => (await listKbCollections()).map((c) => ({ id: c.name, label: c.name }))}
+        cacheKey="knowledge-label"
+        emptyText="No collection matches."
+        freeTextPlaceholder="product-docs, runbooks"
+      />,
+    )
+
+    const trigger = await screen.findByRole('combobox')
+    expect(trigger).toHaveAccessibleName('Knowledge allowlist')
+    expect(screen.getByLabelText('Knowledge allowlist')).toBe(trigger)
+  })
+
   it('selects a collection from the popover', async () => {
     const { AllowlistPicker, listKbCollections } = await freshPicker()
     vi.mocked(listKbCollections).mockResolvedValue(collections)

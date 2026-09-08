@@ -11,6 +11,12 @@ interface ControlProps {
   'aria-required'?: boolean
 }
 
+// Drops undefined keys so cloneElement doesn't overwrite an explicit
+// child prop (e.g. aria-invalid) with an absent Field value.
+function definedControlProps(props: ControlProps): Partial<ControlProps> {
+  return Object.fromEntries(Object.entries(props).filter(([, value]) => value !== undefined)) as Partial<ControlProps>
+}
+
 interface FieldProps {
   label: string
   description?: string
@@ -51,7 +57,11 @@ export function Field({ label, description, error, required = true, optional, ht
             {description}
           </p>
         )}
-        {typeof children === 'function' ? children(controlProps) : isValidElement(children) ? cloneElement(children, controlProps) : children}
+        {typeof children === 'function'
+          ? children(controlProps)
+          : isValidElement(children)
+            ? cloneElement(children, definedControlProps(controlProps))
+            : children}
         {error && (
           <p id={errId} role="alert" className="flex items-center gap-1.5 text-xs text-destructive">
             <CircleAlert className="size-3" aria-hidden />

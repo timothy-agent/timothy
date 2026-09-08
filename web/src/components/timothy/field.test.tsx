@@ -49,6 +49,24 @@ describe('Field', () => {
     expect(input).toHaveAttribute('id', 'email-field')
     expect(screen.getByText('Email')).toHaveAttribute('for', 'email-field')
   })
+
+  it('keeps an explicit child aria-invalid when Field has no error', () => {
+    render(
+      <Field label="Email">
+        <Input aria-invalid="true" />
+      </Field>,
+    )
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('still sets aria-invalid via cloned props when Field has an error', () => {
+    render(
+      <Field label="Email" error="Invalid email">
+        <Input />
+      </Field>,
+    )
+    expect(screen.getByRole('textbox')).toHaveAttribute('aria-invalid', 'true')
+  })
 })
 
 describe('FieldGroup', () => {

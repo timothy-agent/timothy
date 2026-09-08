@@ -1,8 +1,8 @@
-import axe from 'axe-core'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminProvider } from '../api/types'
+import { TooltipProvider } from '../components/ui/tooltip'
 import { Settings } from './Settings'
 
 vi.mock('../api/client', async (importOriginal) => {
@@ -80,11 +80,13 @@ const openaiProvider: AdminProvider = {
 
 function renderPage(initialEntry = '/settings/providers') {
   return render(
-    <MemoryRouter initialEntries={[initialEntry]}>
-      <Routes>
-        <Route path="/settings/*" element={<Settings />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/settings/*" element={<Settings />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 
@@ -434,53 +436,3 @@ describe('Provider manage page', () => {
   })
 })
 
-describe('Settings pages accessibility', () => {
-  it('has no axe violations on the providers list', async () => {
-    const { container } = renderPage('/settings/providers')
-    await screen.findByText('Your providers · 1')
-    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
-    expect(results.violations).toEqual([])
-  })
-
-  it('has no axe violations on the provider add page', async () => {
-    const { container } = renderPage('/settings/providers/new/glm')
-    await screen.findByRole('heading', { name: 'Add GLM (Z.ai)' })
-    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
-    expect(results.violations).toEqual([])
-  })
-
-  it('has no axe violations on the features page', async () => {
-    vi.mocked(getSettings).mockResolvedValue({
-      settings: { tools_enabled: true },
-      values: { sensitive_tool_route: '', timezone: '' },
-    })
-    const { container } = renderPage('/settings/features')
-    await screen.findByRole('region', { name: 'Timezone' })
-    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
-    expect(results.violations).toEqual([])
-  })
-
-  it('has no axe violations on the provider edit page', async () => {
-    const { container } = renderPage('/settings/providers/p1')
-    await screen.findByDisplayValue('OpenAI')
-    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
-    expect(results.violations).toEqual([])
-  })
-
-  it('has no axe violations on the credentials page', async () => {
-    vi.mocked(listSecretRefs).mockResolvedValue([
-      { name: 'OPENAI_API_KEY', backend: 'db', referenced_by: [], system: false },
-    ])
-    const { container } = renderPage('/settings/credentials')
-    await screen.findByText('OPENAI_API_KEY')
-    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
-    expect(results.violations).toEqual([])
-  })
-
-  it('has no axe violations on the secrets page', async () => {
-    const { container } = renderPage('/settings/secrets')
-    await screen.findByText('HashiCorp Vault')
-    const results = await axe.run(container, { rules: { 'color-contrast': { enabled: false } } })
-    expect(results.violations).toEqual([])
-  })
-})

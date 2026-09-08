@@ -50,8 +50,9 @@ interface PageHeaderProps {
 // Page-level heading: breadcrumb, title row (title + meta on the left,
 // actions on the right), optional children slot (e.g. a phase
 // stepper) between the title row and the description (section 11.3).
-// titleNode replaces the rendered h1 in place (e.g. an inline rename
-// input) while title stays required for callers that don't need it.
+// titleNode replaces the rendered h1 when the title needs a sibling
+// element inside the heading (a status badge, a mono identifier); it
+// is not for an editable title (11.3).
 export function PageHeader({ title, titleNode, description, breadcrumbs, actions, meta, children }: PageHeaderProps) {
   return (
     <div className="mb-8">

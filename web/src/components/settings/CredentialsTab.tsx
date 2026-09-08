@@ -11,7 +11,6 @@ import { IconButton } from '../timothy/icon-button'
 import { Panel } from '../timothy/panel'
 import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
-import { TooltipProvider } from '../ui/tooltip'
 import { settingsArea } from './settingsAreas'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { errText } from './util'
@@ -98,116 +97,111 @@ export function CredentialsTab() {
   }
 
   return (
-    // CredentialsTab renders its own TooltipProvider: pages/Settings.test.tsx
-    // exercises this tab without mounting App's provider, and the delete
-    // IconButton needs one.
-    <TooltipProvider delayDuration={300}>
-      <PageShell>
-        <PageHeader
-          title={area.label}
-          description={area.description}
-          breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
-        />
-        <div className="space-y-6">
-          <p className="text-sm text-muted-foreground">
-            Every credential Timothy has stored, by reference name. Values are never shown here.
-            This is a directory, not a vault viewer. A credential in use by a provider or connector
-            can&apos;t be deleted until nothing references it.
-          </p>
-          {showMigrateAll && (
-            <Alert tone="info">
-              <AlertDescription className="flex items-center gap-3">
-                <div className="min-w-0 flex-1">
-                  {elsewhereCount} credential{elsewhereCount === 1 ? '' : 's'} not yet in{' '}
-                  {BACKEND_LABEL[defaultBackend] ?? defaultBackend}.
-                </div>
-                <Button size="sm" disabled={migrating} onClick={() => void migrateAll()}>
-                  Migrate all to {BACKEND_LABEL[defaultBackend] ?? defaultBackend}
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-          <Panel title="Credentials" density="operational">
-            {loaded && refs.length === 0 ? (
-              <p className="p-4 text-sm text-muted-foreground">No credentials stored yet.</p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Reference</TableHead>
-                    <TableHead>Used by</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead>Updated</TableHead>
-                    <TableHead>
-                      <span className="sr-only">Actions</span>
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {refs.map((r) => (
-                    <TableRow key={r.name}>
-                      <TableCell className="font-mono text-xs">{r.name}</TableCell>
-                      <TableCell>
-                        {r.system ? (
-                          <Badge variant="warning" size="sm" className="uppercase tracking-wide">
-                            System
-                          </Badge>
-                        ) : r.referenced_by.length === 0 ? (
-                          <span className="text-xs text-muted-foreground">orphaned</span>
-                        ) : (
-                          <div className="flex flex-wrap gap-1">
-                            {r.referenced_by.map((ref) => (
-                              <Badge key={`${ref.kind}-${ref.name}`} variant="neutral" size="sm" className="uppercase">
-                                {ref.kind}: {ref.name}
-                              </Badge>
-                            ))}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {r.created_at ? new Date(r.created_at).toLocaleDateString() : '-'}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        {r.updated_at ? new Date(r.updated_at).toLocaleDateString() : '-'}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {r.system ? (
+    <PageShell>
+      <PageHeader
+        title={area.label}
+        description={area.description}
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
+      />
+      <div className="space-y-6">
+        <p className="text-sm text-muted-foreground">
+          Every credential Timothy has stored, by reference name. Values are never shown here.
+          This is a directory, not a vault viewer. A credential in use by a provider or connector
+          can&apos;t be deleted until nothing references it.
+        </p>
+        {showMigrateAll && (
+          <Alert tone="info">
+            <AlertDescription className="flex items-center gap-3">
+              <div className="min-w-0 flex-1">
+                {elsewhereCount} credential{elsewhereCount === 1 ? '' : 's'} not yet in{' '}
+                {BACKEND_LABEL[defaultBackend] ?? defaultBackend}.
+              </div>
+              <Button size="sm" disabled={migrating} onClick={() => void migrateAll()}>
+                Migrate all to {BACKEND_LABEL[defaultBackend] ?? defaultBackend}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+        <Panel title="Credentials" density="operational">
+          {loaded && refs.length === 0 ? (
+            <p className="p-4 text-sm text-muted-foreground">No credentials stored yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Reference</TableHead>
+                  <TableHead>Used by</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Updated</TableHead>
+                  <TableHead>
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {refs.map((r) => (
+                  <TableRow key={r.name}>
+                    <TableCell className="font-mono text-xs">{r.name}</TableCell>
+                    <TableCell>
+                      {r.system ? (
+                        <Badge variant="warning" size="sm" className="uppercase tracking-wide">
+                          System
+                        </Badge>
+                      ) : r.referenced_by.length === 0 ? (
+                        <span className="text-xs text-muted-foreground">orphaned</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {r.referenced_by.map((ref) => (
+                            <Badge key={`${ref.kind}-${ref.name}`} variant="neutral" size="sm" className="uppercase">
+                              {ref.kind}: {ref.name}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {r.created_at ? new Date(r.created_at).toLocaleDateString() : '-'}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {r.updated_at ? new Date(r.updated_at).toLocaleDateString() : '-'}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {r.system ? (
+                        <IconButton
+                          label={`${r.name} is the bootstrap credential for the ${BACKEND_LABEL[r.backend] ?? r.backend} secret backend and can't be deleted while it's configured.`}
+                          icon={Trash2}
+                          size="xs"
+                          disabled
+                        />
+                      ) : (
+                        r.referenced_by.length === 0 && (
                           <IconButton
-                            label={`${r.name} is the bootstrap credential for the ${BACKEND_LABEL[r.backend] ?? r.backend} secret backend and can't be deleted while it's configured.`}
+                            label={`Delete ${r.name}`}
                             icon={Trash2}
                             size="xs"
-                            disabled
+                            onClick={() => setPendingDelete(r.name)}
                           />
-                        ) : (
-                          r.referenced_by.length === 0 && (
-                            <IconButton
-                              label={`Delete ${r.name}`}
-                              icon={Trash2}
-                              size="xs"
-                              onClick={() => setPendingDelete(r.name)}
-                            />
-                          )
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </Panel>
+                        )
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </Panel>
 
-          <ConfirmDialog
-            open={pendingDelete != null}
-            onOpenChange={(open) => !open && setPendingDelete(null)}
-            title={`Delete ${pendingDelete}?`}
-            description="This cannot be undone. The stored value is removed permanently."
-            confirmLabel="Delete"
-            destructive
-            loading={busy}
-            onConfirm={() => pendingDelete && void remove(pendingDelete)}
-          />
-        </div>
-      </PageShell>
-    </TooltipProvider>
+        <ConfirmDialog
+          open={pendingDelete != null}
+          onOpenChange={(open) => !open && setPendingDelete(null)}
+          title={`Delete ${pendingDelete}?`}
+          description="This cannot be undone. The stored value is removed permanently."
+          confirmLabel="Delete"
+          destructive
+          loading={busy}
+          onConfirm={() => pendingDelete && void remove(pendingDelete)}
+        />
+      </div>
+    </PageShell>
   )
 }
