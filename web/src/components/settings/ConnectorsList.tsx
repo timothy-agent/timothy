@@ -1,23 +1,27 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { listConnectors, patchConnector, testConnector } from '../../api/client'
 import type { AdminConnector, GitHubIdentity } from '../../api/types'
+import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { Alert, AlertDescription } from '../ui/alert'
-import { PageHeader } from '../timothy/page-header'
+import { EmptyState } from '../timothy/empty-state'
+import { PageHeader, SectionHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
+import { AddPresetTile } from './AddPresetTile'
+import { EntityCard } from './EntityCard'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets, presetFor } from './connectorPresets'
 import { settingsArea } from './settingsAreas'
+import { TestStatus } from './TestStatus'
 import { connectedAs, errText, isTimothyAuthError } from './util'
 
 const area = settingsArea('connectors')
 
 export function ConnectorsList() {
   const [connectors, setConnectors] = useState<AdminConnector[]>([])
-  const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
 
   // The OAuth callback bounces back here with the outcome in the query.
@@ -39,7 +43,7 @@ export function ConnectorsList() {
         description={area.description}
         breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
       />
-      <div className="space-y-8">
+      <div className="space-y-10">
         {oauthConnected && (
           <Alert tone="good">
             <AlertDescription className="flex items-center gap-3">
@@ -61,11 +65,9 @@ export function ConnectorsList() {
           </Alert>
         )}
 
-        <section className="space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {connectors.length > 0 ? `Your connectors · ${connectors.length}` : 'Your connectors'}
-          </h2>
-          <p className="text-sm text-muted-foreground">
+        <section className="space-y-4">
+          <SectionHeader title={connectors.length > 0 ? `Your connectors · ${connectors.length}` : 'Your connectors'} />
+          <p className="-mt-2 max-w-2xl text-sm text-muted-foreground">
             Integrations the agent can use as tools. A tool appears to the model once per capability
             (e.g. <span className="font-mono text-xs">search_mail</span>) with an{' '}
             <span className="font-mono text-xs">account</span> argument routing to the right
@@ -75,43 +77,27 @@ export function ConnectorsList() {
             calls go through the same permission prompts as everything else.
           </p>
           {connectors.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border p-10 text-center text-sm text-muted-foreground">
-              No connectors yet, add one below.
-            </div>
+            <EmptyState title="No connectors yet" description="Add one below." />
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {connectors.map((c) => (
-                <ConnectorCard
-                  key={c.id}
-                  connector={c}
-                  onChanged={refresh}
-                  onManage={() => navigate(`/settings/connectors/${c.id}`)}
-                />
+                <ConnectorCard key={c.id} connector={c} onChanged={refresh} />
               ))}
             </div>
           )}
         </section>
 
-        <section className="space-y-3">
-          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Add a connector
-          </h2>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <section className="space-y-4">
+          <SectionHeader title="Add a connector" />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {connectorPresets.map((preset) => (
-              <button
+              <AddPresetTile
                 key={preset.id}
-                type="button"
-                onClick={() => navigate(`/settings/connectors/new/${preset.id}`)}
-                className="flex items-center gap-3 rounded-xl border border-dashed border-border p-4 text-left transition hover:border-brand hover:bg-muted/50"
-              >
-                <ConnectorLogo preset={preset} className="size-9" />
-                <span className="min-w-0">
-                  <span className="block text-sm font-semibold">{preset.name}</span>
-                  <span className="block truncate text-sm text-muted-foreground">
-                    {preset.description}
-                  </span>
-                </span>
-              </button>
+                to={`/settings/connectors/new/${preset.id}`}
+                title={preset.name}
+                description={preset.description}
+                tile={<ConnectorLogo preset={preset} className="size-9" />}
+              />
             ))}
           </div>
         </section>
@@ -123,11 +109,9 @@ export function ConnectorsList() {
 function ConnectorCard({
   connector,
   onChanged,
-  onManage,
 }: {
   connector: AdminConnector
   onChanged: () => void
-  onManage: () => void
 }) {
   const preset = presetFor(connector)
   const [testing, setTesting] = useState(false)
@@ -157,55 +141,38 @@ function ConnectorCard({
     }
   }
 
+  const summary =
+    connector.kind === 'mcp'
+      ? String(connector.config.endpoint ?? '')
+      : connector.kind === 'google' || connector.kind === 'microsoft'
+        ? (connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')
+        : connector.kind === 'imap' || connector.kind === 'caldav'
+          ? String(connector.config.username ?? '')
+          : 'Identity for mission use, no chat tools'
+
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4 shadow-sm transition hover:shadow-md">
-      <div className="flex items-center gap-3">
-        <ConnectorLogo preset={preset} className="size-9" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <div className="truncate text-sm font-semibold">{connector.name}</div>
-            {connector.sensitive && (
-              <span className="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-600 dark:text-amber-400">
-                Sensitive
-              </span>
-            )}
-          </div>
-          <div className="text-xs text-muted-foreground uppercase">{preset.name}</div>
-        </div>
-        <Switch checked={connector.enabled} onCheckedChange={toggle} aria-label={`${connector.name} enabled`} />
-      </div>
-
-      <div className="truncate text-xs text-muted-foreground">
-        {connector.kind === 'mcp'
-          ? String(connector.config.endpoint ?? '')
-          : connector.kind === 'google' || connector.kind === 'microsoft'
-            ? (connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')
-            : connector.kind === 'imap' || connector.kind === 'caldav'
-              ? String(connector.config.username ?? '')
-              : 'Identity for mission use, no chat tools'}
-      </div>
-
-      {test && (
-        <div
-          className={`rounded-lg border p-2 text-xs ${test.ok ? 'border-good/30 bg-good-soft text-good' : 'border-destructive/30 bg-destructive/5 text-destructive'}`}
-        >
-          {test.ok
-            ? test.identity
-              ? connectedAs(test.identity)
-              : 'Connection OK'
-            : `Failed: ${test.error}`}
-        </div>
-      )}
-
-      <div className="mt-auto flex items-center gap-2 pt-1">
-        <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
-          {testing ? 'Testing…' : 'Test'}
-        </Button>
-        <Button size="sm" variant="outline" onClick={onManage} className="flex-1">
-          Manage
-        </Button>
-      </div>
-    </div>
+    <EntityCard
+      to={`/settings/connectors/${connector.id}`}
+      title={connector.name}
+      tile={<ConnectorLogo preset={preset} className="size-9" />}
+      badges={connector.sensitive && <Badge variant="warning">Sensitive</Badge>}
+      summary={<div className="truncate text-xs text-muted-foreground">{summary}</div>}
+      status={
+        test && (
+          <TestStatus
+            state={test.ok ? 'ok' : 'failed'}
+            message={test.ok ? (test.identity ? connectedAs(test.identity) : 'Connection OK') : `Failed: ${test.error}`}
+          />
+        )
+      }
+      footer={
+        <>
+          <Switch checked={connector.enabled} onCheckedChange={toggle} aria-label={`${connector.name} enabled`} />
+          <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
+            {testing ? 'Testing…' : 'Test'}
+          </Button>
+        </>
+      }
+    />
   )
 }
-

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { TooltipProvider } from '../ui/tooltip'
 import { ConnectorAdd } from './ConnectorAdd'
 
 vi.mock('../../api/client', () => ({
@@ -26,11 +27,13 @@ import { toast } from 'sonner'
 
 function renderPage(presetId: string) {
   return render(
-    <MemoryRouter initialEntries={[`/settings/connectors/new/${presetId}`]}>
-      <Routes>
-        <Route path="/settings/connectors/new/:presetId" element={<ConnectorAdd />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[`/settings/connectors/new/${presetId}`]}>
+        <Routes>
+          <Route path="/settings/connectors/new/:presetId" element={<ConnectorAdd />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 

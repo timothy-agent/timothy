@@ -11,7 +11,7 @@ import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { Field, FieldGroup, Form, FormActions } from '../timothy/field'
 import { bedrockKeyJSON, BedrockKeyFields } from './BedrockKeyFields'
-import { CredentialModeToggle, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
+import { CredentialField, type CredentialMode } from './CredentialRefPicker'
 import { catalogMatchForID, catalogRowID, ModelPicker, type ModelSuggestion, useCatalogSearch } from './ModelPicker'
 import { bedrockRegions, providerPresets, type ProviderPreset } from './presets'
 import { ProviderLogo } from './ProviderLogo'
@@ -529,41 +529,31 @@ export function ProviderAdd() {
           )}
           {!isCli && wantsKey && !bedrockSplit && (
             <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-sm font-medium text-foreground">
-                  {preset.id === 'custom' ? 'API key (optional)' : 'API key'}
-                </span>
-                <CredentialModeToggle
-                  mode={credMode}
-                  onChange={(m) => {
-                    setCredMode(m)
-                    invalidate()
-                  }}
-                />
-              </div>
-              {credMode === 'existing' ? (
-                <ExistingCredentialSelect
-                  value={ref}
-                  onChange={(v) => {
-                    setRef(v)
-                    setRefEdited(true)
-                    invalidate()
-                  }}
-                />
-              ) : (
+              <CredentialField
+                label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}
+                mode={credMode}
+                onModeChange={(m) => {
+                  setCredMode(m)
+                  invalidate()
+                }}
+                existingRef={ref}
+                onExistingRefChange={(v) => {
+                  setRef(v)
+                  setRefEdited(true)
+                  invalidate()
+                }}
+                secretValue={key}
+                onSecretValueChange={(v) => {
+                  setKey(v)
+                  invalidate()
+                }}
+                secretPlaceholder={preset.keyPlaceholder ?? 'paste key'}
+                defaultBackend={defaultBackend}
+                refName={ref}
+                invalid={keyError != null}
+              />
+              {credMode === 'new' && (
                 <>
-                  <Input
-                    type="password"
-                    value={key}
-                    onChange={(e) => {
-                      setKey(e.target.value)
-                      invalidate()
-                    }}
-                    placeholder={preset.keyPlaceholder ?? 'paste key'}
-                    aria-label={preset.id === 'custom' ? 'API key (optional)' : 'API key'}
-                    autoComplete="off"
-                    aria-invalid={keyError != null}
-                  />
                   {keyError && (
                     <p className="mt-1.5 flex items-center gap-1.5 text-sm font-medium text-destructive">
                       <CircleAlert className="size-4 shrink-0" aria-hidden />
@@ -583,28 +573,23 @@ export function ProviderAdd() {
                       />
                     </Field>
                   </div>
-                  {!keyError && (
-                    <div className="mt-1.5 space-y-1 text-sm text-muted-foreground">
-                      {preset.keyHint && (
-                        <p>
-                          {preset.keyHint}
-                          {preset.keyURL && (
-                            <>
-                              {' '}
-                              <a
-                                href={preset.keyURL}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="font-medium text-primary underline underline-offset-2 hover:no-underline"
-                              >
-                                Open {preset.name} →
-                              </a>
-                            </>
-                          )}
-                        </p>
+                  {!keyError && preset.keyHint && (
+                    <p className="mt-1.5 text-sm text-muted-foreground">
+                      {preset.keyHint}
+                      {preset.keyURL && (
+                        <>
+                          {' '}
+                          <a
+                            href={preset.keyURL}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                          >
+                            Open {preset.name} →
+                          </a>
+                        </>
                       )}
-                      <p>{secretDestination(defaultBackend, ref)}</p>
-                    </div>
+                    </p>
                   )}
                 </>
               )}

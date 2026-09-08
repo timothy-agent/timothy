@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminConnector } from '../../api/types'
+import { TooltipProvider } from '../ui/tooltip'
 import { ConnectorsTab } from './ConnectorsTab'
 
 vi.mock('../../api/client', () => ({
@@ -39,11 +40,13 @@ const assign = vi.fn()
 
 function renderTab(entry = '/settings/connectors') {
   return render(
-    <MemoryRouter initialEntries={[entry]}>
-      <Routes>
-        <Route path="/settings/connectors/*" element={<ConnectorsTab />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[entry]}>
+        <Routes>
+          <Route path="/settings/connectors/*" element={<ConnectorsTab />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 
@@ -64,18 +67,10 @@ describe('Connectors tab', () => {
     renderTab()
     expect(await screen.findByText('Your connectors · 1')).toBeTruthy()
     expect(screen.getByText('calendar')).toBeTruthy()
-    // Accessible names concatenate the tile's title and description
-    // (e.g. "GmailRead, search, and send email"), so match the title as
-    // a strict prefix up to where its description begins.
-    for (const [name, description] of [
-      ['Gmail', 'Read'],
-      ['Google Calendar', 'List'],
-      ['Google Drive', 'Search'],
-      ['Google Docs', 'Read, create'],
-      ['GitHub MCP', 'Issues'],
-      ['GitHub', 'Identity'],
-    ]) {
-      expect(screen.getByRole('button', { name: new RegExp(`^${name}${description}`) })).toBeTruthy()
+    // AddPresetTile's accessible name is the title alone (description
+    // reachable via aria-describedby), per contract.
+    for (const name of ['Gmail', 'Google Calendar', 'Google Drive', 'Google Docs', 'GitHub MCP', 'GitHub']) {
+      expect(screen.getByRole('link', { name })).toBeTruthy()
     }
   })
 
@@ -92,44 +87,59 @@ describe('Connectors tab', () => {
     expect(screen.queryByText('Sensitive')).toBeNull()
   })
 
-  it('toggles a connector sensitive from the manage page', async () => {
+  it('stages the sensitive switch: flips immediately with no PATCH, Save sends it', async () => {
     vi.mocked(patchConnector).mockResolvedValue()
     renderTab(`/settings/connectors/${calendarConnector.id}`)
 
     const toggle = await screen.findByRole('switch', { name: 'google-calendar sensitive' })
     fireEvent.click(toggle)
 
+    expect(toggle).toHaveAttribute('data-state', 'checked')
+    expect(patchConnector).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
-      expect(patchConnector).toHaveBeenCalledWith(calendarConnector.id, { sensitive: true }),
+      expect(patchConnector).toHaveBeenCalledWith(calendarConnector.id, {
+        name: 'google-calendar',
+        sensitive: true,
+        config: { scopes: ['https://www.googleapis.com/auth/calendar'], sign_commits: false },
+      }),
     )
   })
 
-  it('renames a connector: pencil click, edit, Enter saves the slugified name', async () => {
+  it('edits the name field and Save sends a PATCH with the slugified name; header shows the old name until success', async () => {
     vi.mocked(patchConnector).mockResolvedValue()
     renderTab(`/settings/connectors/${calendarConnector.id}`)
     await screen.findByRole('heading', { name: 'google-calendar' })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rename connector' }))
     const input = screen.getByRole('textbox', { name: 'Connector name' })
     fireEvent.change(input, { target: { value: 'New Calendar' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(patchConnector).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', { name: 'google-calendar' })).toBeTruthy()
 
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
-      expect(patchConnector).toHaveBeenCalledWith(calendarConnector.id, { name: 'new-calendar' }),
+      expect(patchConnector).toHaveBeenCalledWith(calendarConnector.id, {
+        name: 'new-calendar',
+        sensitive: false,
+        config: { scopes: ['https://www.googleapis.com/auth/calendar'], sign_commits: false },
+      }),
     )
   })
 
-  it('cancels a connector rename on Escape without calling patchConnector', async () => {
+  it('Cancel restores the name with no PATCH; Rename connector button no longer exists', async () => {
     renderTab(`/settings/connectors/${calendarConnector.id}`)
     await screen.findByRole('heading', { name: 'google-calendar' })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rename connector' }))
+    expect(screen.queryByRole('button', { name: 'Rename connector' })).toBeNull()
+
     const input = screen.getByRole('textbox', { name: 'Connector name' })
     fireEvent.change(input, { target: { value: 'New Calendar' } })
-    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
-    expect(screen.queryByRole('textbox', { name: 'Connector name' })).toBeNull()
-    expect(screen.getByRole('heading', { name: 'google-calendar' })).toBeTruthy()
+    expect((screen.getByRole('textbox', { name: 'Connector name' }) as HTMLInputElement).value).toBe(
+      'google-calendar',
+    )
     expect(patchConnector).not.toHaveBeenCalled()
   })
 
@@ -175,7 +185,7 @@ describe('Connectors tab', () => {
     expect(screen.getByText(/Paste a new personal access token below/)).toBeTruthy()
   })
 
-  it('toggles sign commits on a github connector and patches its config', async () => {
+  it('stages sign commits: switch flips immediately with no PATCH, Save patches the config; key block absent until the refetch returns it', async () => {
     const githubConnector: AdminConnector = {
       id: 'gh1',
       name: 'personal-gh',
@@ -193,29 +203,26 @@ describe('Connectors tab', () => {
     const toggle = await screen.findByRole('switch', { name: 'personal-gh sign commits' })
     fireEvent.click(toggle)
 
+    expect(toggle).toHaveAttribute('data-state', 'checked')
+    expect(patchConnector).not.toHaveBeenCalled()
+    expect(screen.getByText('A signing key is generated when you save.')).toBeTruthy()
+
+    vi.mocked(listConnectors).mockResolvedValue([
+      { ...githubConnector, config: { sign_commits: true, signing_public_key: 'ssh-ed25519 AAAAC3Nz… timothy' } },
+    ])
+    const saveButtons = screen.getAllByRole('button', { name: 'Save' })
+    fireEvent.click(saveButtons.find((b) => b.getAttribute('type') === 'submit')!)
+
     await waitFor(() =>
-      expect(patchConnector).toHaveBeenCalledWith('gh1', { config: { sign_commits: true } }),
+      expect(patchConnector).toHaveBeenCalledWith('gh1', {
+        name: 'personal-gh',
+        sensitive: false,
+        config: { sign_commits: true },
+      }),
     )
-  })
-
-  it('shows the signing public key with a GitHub link once sign_commits is on', async () => {
-    const githubConnector: AdminConnector = {
-      id: 'gh1',
-      name: 'personal-gh',
-      kind: 'github',
-      config: { sign_commits: true, signing_public_key: 'ssh-ed25519 AAAAC3Nz… timothy' },
-      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
-      enabled: true,
-      sensitive: false,
-    }
-    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
-
-    renderTab(`/settings/connectors/${githubConnector.id}`)
-
     expect(await screen.findByDisplayValue('ssh-ed25519 AAAAC3Nz… timothy')).toBeTruthy()
     const link = screen.getByRole('link', { name: /new SSH key/ })
     expect(link.getAttribute('href')).toBe('https://github.com/settings/ssh/new')
-    expect(screen.getByText(/Signing Key/)).toBeTruthy()
   })
 
   it('does not show the public key block when sign_commits is off', async () => {
@@ -236,6 +243,58 @@ describe('Connectors tab', () => {
     expect(screen.queryByRole('link', { name: /new SSH key/ })).toBeNull()
   })
 
+  it('shows the signing public key with a GitHub link when already on (loaded with the key present)', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: { sign_commits: true, signing_public_key: 'ssh-ed25519 AAAAC3Nz… timothy' },
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    expect(await screen.findByDisplayValue('ssh-ed25519 AAAAC3Nz… timothy')).toBeTruthy()
+    const link = screen.getByRole('link', { name: /new SSH key/ })
+    expect(link.getAttribute('href')).toBe('https://github.com/settings/ssh/new')
+    expect(screen.getByText(/Signing Key/)).toBeTruthy()
+  })
+
+  it('zero PATCH before Save, exactly one on Save; Cancel discards staged edits', async () => {
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+
+    const toggle = await screen.findByRole('switch', { name: 'google-calendar sensitive' })
+    fireEvent.click(toggle)
+    expect(patchConnector).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(patchConnector).not.toHaveBeenCalled()
+    expect(await screen.findByRole('switch', { name: 'google-calendar sensitive' })).toHaveAttribute(
+      'data-state',
+      'unchecked',
+    )
+  })
+
+  it('shows a persistent Alert with Retry when Save fails, and Retry re-sends', async () => {
+    vi.mocked(patchConnector).mockRejectedValueOnce(new Error('server unavailable'))
+    renderTab(`/settings/connectors/${calendarConnector.id}`)
+
+    const toggle = await screen.findByRole('switch', { name: 'google-calendar sensitive' })
+    fireEvent.click(toggle)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText(/server unavailable/)).toBeTruthy()
+
+    vi.mocked(patchConnector).mockResolvedValue()
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(patchConnector).toHaveBeenCalledTimes(2))
+  })
+
   it('shows the OAuth outcome banners from the callback redirect', async () => {
     renderTab('/settings/connectors?oauth_connected=personal')
     expect(await screen.findByText(/Account connected to “personal”/)).toBeTruthy()
@@ -252,7 +311,7 @@ describe('Connectors tab', () => {
     vi.mocked(patchConnector).mockResolvedValue()
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /^GitHub MCPIssues/ }))
+    fireEvent.click(await screen.findByRole('link', { name: 'GitHub MCP' }))
     fireEvent.change(await screen.findByPlaceholderText('ghp_… or github_pat_…'), {
       target: { value: 'ghp_abc' },
     })
@@ -279,7 +338,7 @@ describe('Connectors tab', () => {
     vi.mocked(testConnector).mockResolvedValue({ ok: false, error: 'status 401' })
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /^GitHub MCPIssues/ }))
+    fireEvent.click(await screen.findByRole('link', { name: 'GitHub MCP' }))
     fireEvent.change(await screen.findByPlaceholderText('ghp_… or github_pat_…'), {
       target: { value: 'bad-token' },
     })
@@ -299,7 +358,7 @@ describe('Connectors tab', () => {
     vi.mocked(connectorOAuthStart).mockResolvedValue('https://accounts.google.com/o/oauth2/v2/auth?x=1')
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /Gmail/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /Gmail/ }))
     fireEvent.change(await screen.findByPlaceholderText('….apps.googleusercontent.com'), {
       target: { value: 'cid.apps.googleusercontent.com' },
     })
@@ -330,7 +389,7 @@ describe('Connectors tab', () => {
     vi.mocked(connectorOAuthStart).mockResolvedValue('https://accounts.google.com/o/oauth2/v2/auth?x=3')
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /^Google DriveSearch/ }))
+    fireEvent.click(await screen.findByRole('link', { name: 'Google Drive' }))
     fireEvent.change(await screen.findByPlaceholderText('….apps.googleusercontent.com'), {
       target: { value: 'cid.apps.googleusercontent.com' },
     })
@@ -361,7 +420,7 @@ describe('Connectors tab', () => {
     )
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /Outlook/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /Outlook/ }))
     fireEvent.change(await screen.findByPlaceholderText('application (client) ID'), {
       target: { value: 'msft-client-id' },
     })

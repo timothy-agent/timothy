@@ -3,6 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChatError } from '../../api/client'
 import type { AdminProvider } from '../../api/types'
+import { TooltipProvider } from '../ui/tooltip'
 import { ProviderAdd } from './ProviderAdd'
 
 vi.mock('../../api/client', async (importOriginal) => {
@@ -43,11 +44,13 @@ const glm: AdminProvider = {
 
 function renderPage(presetId: string) {
   return render(
-    <MemoryRouter initialEntries={[`/settings/providers/new/${presetId}`]}>
-      <Routes>
-        <Route path="/settings/providers/new/:presetId" element={<ProviderAdd />} />
-      </Routes>
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={[`/settings/providers/new/${presetId}`]}>
+        <Routes>
+          <Route path="/settings/providers/new/:presetId" element={<ProviderAdd />} />
+        </Routes>
+      </MemoryRouter>
+    </TooltipProvider>,
   )
 }
 

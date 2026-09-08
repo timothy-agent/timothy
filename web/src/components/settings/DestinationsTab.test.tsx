@@ -10,6 +10,7 @@ vi.mock('../../api/client', () => ({
   deleteDestination: vi.fn(),
   listConnectors: vi.fn(),
   listDestinations: vi.fn(),
+  listSecretBackends: vi.fn(),
   listSecretRefs: vi.fn(),
   patchDestination: vi.fn(),
   setSecret: vi.fn(),
@@ -23,6 +24,7 @@ import {
   deleteDestination,
   listConnectors,
   listDestinations,
+  listSecretBackends,
   listSecretRefs,
   patchDestination,
   setSecret,
@@ -101,6 +103,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listDestinations).mockResolvedValue([])
   vi.mocked(listConnectors).mockResolvedValue([googleConnector, githubConnector])
+  vi.mocked(listSecretBackends).mockResolvedValue([{ backend: 'db', configured: true, default: true }])
   vi.mocked(listSecretRefs).mockResolvedValue([])
 })
 
@@ -108,9 +111,10 @@ describe('Destinations tab', () => {
   it('shows the empty state and the add tiles when there are none', async () => {
     renderTab()
     expect(await screen.findByText('Your destinations')).toBeTruthy()
-    expect(screen.getByText('No destinations yet, add one below.')).toBeTruthy()
-    expect(screen.getByRole('button', { name: /^Email/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /^Webhook/ })).toBeTruthy()
+    expect(screen.getByText('No destinations yet')).toBeTruthy()
+    expect(screen.getByText('Add one below.')).toBeTruthy()
+    expect(screen.getByRole('link', { name: /^Email/ })).toBeTruthy()
+    expect(screen.getByRole('link', { name: /^Webhook/ })).toBeTruthy()
   })
 
   it('renders a configured destination card', async () => {
@@ -178,7 +182,7 @@ describe('Destinations tab', () => {
     vi.mocked(patchDestination).mockResolvedValue()
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /^Webhook/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /^Webhook/ }))
     fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-hook' } })
     fireEvent.change(screen.getByPlaceholderText('https://…/hook'), {
       target: { value: 'https://example.com/hook' },
@@ -203,7 +207,7 @@ describe('Destinations tab', () => {
     vi.mocked(testDestination).mockResolvedValue({ ok: false, error: 'status 500' })
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /^Webhook/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /^Webhook/ }))
     fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-hook' } })
     fireEvent.change(screen.getByPlaceholderText('https://…/hook'), {
       target: { value: 'https://example.com/hook' },
@@ -223,7 +227,7 @@ describe('Destinations tab', () => {
     vi.mocked(patchDestination).mockResolvedValue()
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /^Email/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /^Email/ }))
     fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-inbox' } })
     fireEvent.click(await screen.findByText('Choose a connected Gmail account'))
     fireEvent.click(await screen.findByRole('option', { name: 'gmail' }))
@@ -252,7 +256,7 @@ describe('Destinations tab', () => {
     vi.mocked(patchDestination).mockResolvedValue()
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /^Telegram/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /^Telegram/ }))
     fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-telegram' } })
     fireEvent.change(screen.getByPlaceholderText('123456789'), { target: { value: '123456' } })
     fireEvent.change(screen.getByPlaceholderText('123456:ABC-DEF...'), { target: { value: 'bot-token-value' } })
@@ -279,7 +283,7 @@ describe('Destinations tab', () => {
     vi.mocked(testDestination).mockResolvedValue({ ok: true })
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /^Telegram/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /^Telegram/ }))
     fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-telegram' } })
     fireEvent.change(screen.getByPlaceholderText('123456789'), { target: { value: '123456' } })
     fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
@@ -307,27 +311,90 @@ describe('Destinations tab', () => {
 
     const chatIDInput = await screen.findByDisplayValue('123456')
     fireEvent.change(chatIDInput, { target: { value: '987654' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
       expect(patchDestination).toHaveBeenCalledWith('d4', { config: { chat_id: '987654' } }),
     )
 
-    fireEvent.change(screen.getByPlaceholderText('123456:ABC-DEF...'), { target: { value: 'new-token' } })
+    const tokenInput = screen.getByPlaceholderText('123456:ABC-DEF...')
+    expect(tokenInput).toHaveAttribute('type', 'password')
+    fireEvent.change(tokenInput, { target: { value: 'new-token' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save token' }))
     await waitFor(() => expect(setSecret).toHaveBeenCalledWith('OPS_TELEGRAM_TELEGRAM_BOT_TOKEN', 'new-token'))
     expect(patchDestination).toHaveBeenCalledWith('d4', { credential_ref: 'OPS_TELEGRAM_TELEGRAM_BOT_TOKEN' })
   })
 
+  it('stages destination config edits: zero PATCH before Save, one on Save, Cancel discards', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
+    vi.mocked(patchDestination).mockResolvedValue()
+
+    renderTab(`/settings/destinations/${webhookDestination.id}`)
+
+    const urlInput = await screen.findByDisplayValue('https://example.com/hook')
+    fireEvent.change(urlInput, { target: { value: 'https://example.com/hook2' } })
+    expect(patchDestination).not.toHaveBeenCalled()
+    expect(screen.getByText('Unsaved changes')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(patchDestination).not.toHaveBeenCalled()
+    expect(screen.getByDisplayValue('https://example.com/hook')).toBeTruthy()
+
+    fireEvent.change(screen.getByDisplayValue('https://example.com/hook'), {
+      target: { value: 'https://example.com/hook2' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(patchDestination).toHaveBeenCalledWith('d1', {
+        config: { url: 'https://example.com/hook2', format: 'json' },
+      }),
+    )
+    expect(patchDestination).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a persistent Alert with Retry when saving destination config fails', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
+    vi.mocked(patchDestination).mockRejectedValueOnce(new Error('server unavailable'))
+
+    renderTab(`/settings/destinations/${webhookDestination.id}`)
+
+    const urlInput = await screen.findByDisplayValue('https://example.com/hook')
+    fireEvent.change(urlInput, { target: { value: 'https://example.com/hook2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText(/server unavailable/)).toBeTruthy()
+    expect(screen.getByDisplayValue('https://example.com/hook2')).toBeTruthy()
+
+    vi.mocked(patchDestination).mockResolvedValue()
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(patchDestination).toHaveBeenCalledTimes(2))
+  })
+
+  it('every Select and Input in DestinationAdd and DestinationEdit is found by label', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([telegramDestination])
+    renderTab('/settings/destinations/d4')
+    expect(await screen.findByLabelText('Chat ID')).toBeTruthy()
+
+    cleanup()
+    renderTab()
+    fireEvent.click(await screen.findByRole('link', { name: /^GitHub/ }))
+    expect(await screen.findByLabelText('Name')).toBeTruthy()
+    expect(screen.getByLabelText('GitHub connector')).toBeTruthy()
+    expect(screen.getByLabelText('Mode')).toBeTruthy()
+    expect(screen.getByLabelText('Branch pattern')).toBeTruthy()
+    expect(screen.getByLabelText('Commit style')).toBeTruthy()
+  })
+
   it('offers the GitHub tile in the add flow', async () => {
     renderTab()
-    expect(await screen.findByRole('button', { name: /^GitHub/ })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: /^GitHub/ })).toBeTruthy()
   })
 
   it('adds a github destination: no test-send, creates enabled directly', async () => {
     vi.mocked(createDestination).mockResolvedValue('d5')
 
     renderTab()
-    fireEvent.click(await screen.findByRole('button', { name: /^GitHub/ }))
+    fireEvent.click(await screen.findByRole('link', { name: /^GitHub/ }))
     fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-repo' } })
 
     // No test-send affordance for github.
@@ -337,9 +404,9 @@ describe('Destinations tab', () => {
     const addButton = screen.getByRole('button', { name: 'Add destination' })
     expect((addButton as HTMLButtonElement).disabled).toBe(true)
 
-    fireEvent.click(await screen.findByText('Choose a connected GitHub account'))
+    fireEvent.click(await screen.findByLabelText('GitHub connector'))
     fireEvent.click(await screen.findByRole('option', { name: 'my-github' }))
-    fireEvent.click(await screen.findByText('Push branch when done'))
+    fireEvent.click(await screen.findByLabelText('Mode'))
     fireEvent.click(await screen.findByRole('option', { name: 'Push and open a PR when done' }))
 
     await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
@@ -375,8 +442,8 @@ describe('Destinations tab', () => {
       </MemoryRouter>,
     )
 
-    expect(await screen.findByText('my-github')).toBeTruthy()
-    expect(await screen.findByText('Push and open a PR when done')).toBeTruthy()
+    expect(await screen.findByRole('combobox', { name: 'GitHub connector' })).toHaveTextContent('my-github')
+    expect(screen.getByRole('combobox', { name: 'Mode' })).toHaveTextContent('Push and open a PR when done')
     expect(screen.queryByRole('button', { name: 'Test send' })).toBeNull()
   })
 })
