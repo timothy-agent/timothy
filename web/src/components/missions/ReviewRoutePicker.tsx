@@ -73,7 +73,7 @@ export function ReviewRoutePicker({ mission, onSaved }: ReviewRoutePickerProps) 
   }
 
   return (
-    <div className="space-y-2 rounded-lg border border-border p-3">
+    <div className="space-y-2 rounded-md border border-border p-3">
       <Label htmlFor="mission-review-route">Review route</Label>
       <div className="flex flex-wrap items-center gap-2">
         {routes === null ? (

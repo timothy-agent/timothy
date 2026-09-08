@@ -47,7 +47,7 @@ export function FileCodeBlock({ code, path }: { code: string; path: string }) {
 export function FileMarkdownBlock({ text, raw }: { text: string; raw: boolean }) {
   if (raw) return <FileCodeBlock code={text} path="file.md" />
   return (
-    <div className="prose prose-sm max-w-none p-3 dark:prose-invert">
+    <div className="prose max-w-none p-3 dark:prose-invert">
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}

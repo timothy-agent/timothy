@@ -103,7 +103,7 @@ export function InputRequestGate({
         )
       }
     >
-      <div className="prose prose-sm max-w-none dark:prose-invert">
+      <div className="prose max-w-none dark:prose-invert">
         <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
           {question}
         </ReactMarkdown>
