@@ -106,7 +106,9 @@ const LANGUAGE_LOGOS: Record<string, string> = {
 // black at one end. Devicon ships no currentColor/plain variant for
 // these, so instead of the raw <img> they get a small light chip
 // behind them in dark mode only (light mode already has a light
-// background, so no chip needed there).
+// background, so no chip needed there). Fixed white, not a token:
+// the chip exists to keep third-party artwork visible against the
+// dark theme, not to express a themeable surface.
 const DARK_MODE_NEEDS_CHIP = new Set(['bash', 'sh', 'shell', 'markdown', 'json'])
 
 // shiki/langs (bundledLanguages/bundledLanguagesAlias: id/alias ->

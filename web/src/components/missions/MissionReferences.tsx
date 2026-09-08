@@ -3,6 +3,7 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import type { ComponentProps, KeyboardEvent } from 'react'
 import { useRef, useState } from 'react'
 import type { Reference } from '../../api/types'
+import { Eyebrow } from '../timothy/page-header'
 import {
   addReference,
   groupReferenceOptions,
@@ -107,11 +108,11 @@ export function GoalTextarea({
     <div className="space-y-2">
       <div className="relative">
         {open && (
-          <div className="absolute bottom-full left-0 z-50 mb-1 max-h-72 w-72 overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-lg">
+          <div className="absolute bottom-full left-0 z-50 mb-1 max-h-72 w-72 overflow-y-auto rounded-md border border-border bg-popover py-1 shadow-overlay">
             {groups.map((group) => (
               <div key={group.kind}>
-                <div className="px-3 pt-1.5 pb-0.5 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
-                  {referenceKindLabel[group.kind]}
+                <div className="px-3 pt-1.5 pb-0.5">
+                  <Eyebrow>{referenceKindLabel[group.kind]}</Eyebrow>
                 </div>
                 {group.options.map((o) => {
                   const i = flat.findIndex((f) => f.kind === o.kind && f.id === o.id)
@@ -155,7 +156,7 @@ export function GoalTextarea({
           {references.map((r) => (
             <span
               key={`${r.kind}-${r.id}`}
-              className="inline-flex max-w-56 items-center gap-1.5 rounded-lg border border-border bg-muted/30 py-1 pr-1.5 pl-2 text-xs"
+              className="inline-flex max-w-56 items-center gap-1.5 rounded-md border border-border bg-muted/30 py-1 pr-1.5 pl-2 text-xs"
             >
               <span className="truncate">
                 {referenceKindLabel[r.kind].replace(/s$/, '')}: {r.name}

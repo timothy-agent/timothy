@@ -27,8 +27,8 @@ export function DiscoverSection({ notes }: { notes: string }) {
       <div
         className={
           expanded
-            ? 'prose prose-sm max-h-96 max-w-none overflow-y-auto text-prose dark:prose-invert'
-            : 'prose prose-sm line-clamp-3 max-w-none text-prose dark:prose-invert'
+            ? 'prose max-h-96 max-w-none overflow-y-auto text-prose dark:prose-invert'
+            : 'prose line-clamp-3 max-w-none text-prose dark:prose-invert'
         }
       >
         <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>

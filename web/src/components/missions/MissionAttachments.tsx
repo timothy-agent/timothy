@@ -108,7 +108,7 @@ export function MissionAttachments({
           {attachments.map((a) => (
             <div
               key={a.id}
-              className="group relative flex items-center gap-1.5 rounded-lg border border-border bg-muted/30 py-1 pr-1.5 pl-2 text-xs"
+              className="group relative flex items-center gap-1.5 rounded-md border border-border bg-muted/30 py-1 pr-1.5 pl-2 text-xs"
             >
               <HugeiconsIcon icon={attachmentChipIcon(a.mime)} className="size-3.5 text-muted-foreground" />
               <span className="max-w-40 truncate">{a.name ?? 'Document'}</span>

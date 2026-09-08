@@ -55,7 +55,7 @@ export function MarkdownField({
           rows={rows}
         />
       ) : value.trim() ? (
-        <div className="prose prose-sm min-h-16 max-w-none rounded-md border border-input px-2.5 py-2 dark:prose-invert">
+        <div className="prose min-h-16 max-w-none rounded-md border border-input px-2.5 py-2 dark:prose-invert">
           <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={{ pre: CodeBlock }}>
             {value}
           </ReactMarkdown>

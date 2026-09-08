@@ -14,7 +14,7 @@ export function ResultSection({ evidence }: { evidence: string }) {
 
   return (
     <div className="space-y-2">
-      <div className={`prose prose-sm max-w-none dark:prose-invert ${expanded ? '' : 'max-h-96 overflow-y-auto'}`}>
+      <div className={`prose max-w-none dark:prose-invert ${expanded ? '' : 'max-h-96 overflow-y-auto'}`}>
         <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
           {evidence}
         </ReactMarkdown>
