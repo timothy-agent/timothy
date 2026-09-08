@@ -779,6 +779,12 @@ describe('UserMessage attachments', () => {
 })
 
 describe('long unbroken content containment', () => {
+  it('inverts prose colors in the user bubble so links stay readable in dark mode', () => {
+    render(<UserMessage text="see https://example.com" />)
+    const bubble = screen.getByText(/see/).closest('div')
+    expect(bubble?.className).toContain('dark:prose-invert')
+  })
+
   it('wraps a 400-character unbroken token in the user bubble', () => {
     const token = 'a'.repeat(400)
     render(<UserMessage text={token} />)

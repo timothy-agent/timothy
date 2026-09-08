@@ -356,7 +356,7 @@ export function UserMessage({
       <div className="group/message flex w-full min-w-0 items-end justify-end gap-1">
         <CopyButton text={text} label="Copy message" />
         {text !== '' && (
-          <div className="prose ml-auto min-w-0 max-w-[85%] break-words rounded-md bg-muted px-4 py-3 text-prose text-foreground [overflow-wrap:anywhere]">
+          <div className="prose ml-auto min-w-0 max-w-[85%] break-words rounded-md bg-muted px-4 py-3 text-prose text-foreground [overflow-wrap:anywhere] dark:prose-invert">
             <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
               {text}
             </ReactMarkdown>
@@ -403,7 +403,7 @@ export function InterruptedMessage({ text }: { text: string }) {
       className="group/message flex w-full flex-col gap-2 rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
       data-testid="interrupted"
     >
-      <div className="prose min-w-0 max-w-none break-words text-foreground [overflow-wrap:anywhere]">
+      <div className="prose min-w-0 max-w-none break-words text-foreground [overflow-wrap:anywhere] dark:prose-invert">
         <ReactMarkdown
           remarkPlugins={remarkPlugins}
           rehypePlugins={rehypePlugins}
