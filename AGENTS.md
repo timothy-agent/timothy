@@ -8,17 +8,17 @@ Timothy: self-hosted personal AI assistant. Go microservices + one
 PostgreSQL database + React web UI, run via Docker Compose
 (`deploy/docker-compose.yml`).
 
-| Service      | Role                                                                    |
-|--------------|-------------------------------------------------------------------------|
-| `brain`      | Public API (:8300 host, :8080 in-network): chat, agent loop, missions   |
-| `gateway`    | Internal LLM gateway: provider routing, cost ledger                     |
-| `memoryd`    | Internal memory service: pgvector recall                                |
-| `sandboxd`   | Holds the Docker socket; per-mission sandbox containers                 |
-| `web`        | React UI (:3300)                                                        |
-| `searxng`    | Metasearch backend for search_web                                       |
-| `markitdown` | Python sidecar: file → markdown                                         |
-| `whisper`    | Python sidecar: local speech-to-text                                    |
-| `pdfgen`     | Python sidecar: markdown → PDF via Typst (mission export)               |
+| Service      | Role                                                                  |
+|--------------|-----------------------------------------------------------------------|
+| `brain`      | Public API (:8300 host, :8080 in-network): chat, agent loop, missions |
+| `gateway`    | Internal LLM gateway: provider routing, cost ledger                   |
+| `memoryd`    | Internal memory service: pgvector recall                              |
+| `sandboxd`   | Holds the Docker socket; per-mission sandbox containers               |
+| `web`        | React UI (:3300)                                                      |
+| `searxng`    | Metasearch backend for search_web                                     |
+| `markitdown` | Python sidecar: file → markdown                                       |
+| `whisper`    | Python sidecar: local speech-to-text                                  |
+| `pdfgen`     | Python sidecar: markdown → PDF via Typst (mission export)             |
 
 ## Commands
 
@@ -59,7 +59,7 @@ via the existing `--env-file` Make targets.
   `markitdown`, `whisper`).
 - `migrations/`: numbered idempotent SQL, embedded via `embed.go`.
   Pre-release: schema changes edit the original migration in place
-  (e.g. missions = `0010_missions.sql`); never add iterative ALTERs.
+  (currently one file, `0001_init.sql`); never add iterative ALTERs.
 - `web/`: React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui.
 
 ## Missions harness
@@ -69,8 +69,8 @@ via the existing `--env-file` Make targets.
   writer; append-only `mission_events`), `driver.go`, `runner.go`,
   `policy.go` (per-kind/light behavior), `provision.go`, `budget.go`,
   `verifier.go`, `sentinel.go`, `packet.go`, `scheduler.go`.
-- Light missions (kind=general, `light` flag): born in phase=execute,
-  skip explore/plan/review; the worker carries the deliverable in
+- Light missions (kind=general, `light` flag): born in phase=build,
+  skip discover/plan; the worker carries the deliverable in
   mission_status's `final_output` argument.
 - Worker turns end on successful sentinel execution
   (`loop.Request.EndTurnTools`); never add a post-sentinel model call.

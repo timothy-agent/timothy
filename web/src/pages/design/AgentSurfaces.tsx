@@ -1,70 +1,61 @@
-import { Check, Hand, Loader2, Search } from 'lucide-react'
+import { Check, Hand, Loader2 } from 'lucide-react'
 
 import { SectionHeader, Eyebrow } from '@/components/timothy/page-header'
 import { Panel } from '@/components/timothy/panel'
 import { StatusBadge } from '@/components/timothy/status-badge'
-import { StatusDot } from '@/components/timothy/status-dot'
 import { JsonBlock } from '@/components/timothy/json-block'
 import { Kbd } from '@/components/timothy/kbd'
 import { TraceGroup, TraceRow, traceIcons } from '@/components/timothy/trace-group'
 import { EventLog, type EventLogRow } from '@/components/timothy/event-log'
+import { BrandTile } from '@/components/timothy/brand-tile'
+import { ApprovalCardShell } from '@/components/timothy/approval-card'
+import { ProviderLogo, presetForProviderName } from '@/components/timothy/provider-logo'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
-import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
-import { eventLogComponentRows, eventLogRows, providers, timothyAnswerParagraphs } from './fixtures'
+import { eventLogComponentRows, providers, timothyAnswerParagraphs } from './fixtures'
 
-function BrandTile() {
+// title is a parameter so repeated specimens on the page (used inside
+// ConversationSample and standalone) get distinct accessible names:
+// axe's landmark-unique rule flags two role="region" landmarks with
+// the same labelledby text.
+function ApprovalSample({ title = 'Timothy wants to run a command' }: { title?: string }) {
   return (
-    <span className="flex size-5 items-center justify-center rounded-md bg-brand text-xs font-semibold text-brand-foreground">
-      T
-    </span>
-  )
-}
-
-function ApprovalSample() {
-  return (
-    <div className="space-y-4 rounded-md border border-l-[3px] border-border border-l-warning bg-card p-5">
-      <div className="flex items-center gap-2">
-        <Hand className="size-4 text-warning" aria-hidden />
-        <span className="text-sm font-semibold">Timothy wants to run a command</span>
-        <StatusBadge status="waiting" />
-        <span className="ml-auto text-xs text-muted-foreground tabular-nums">08:04</span>
-      </div>
+    <ApprovalCardShell
+      title={title}
+      meta="08:04"
+      rationale="Running the missions package tests confirms the verifier change didn't regress batch verification."
+      consequence="Runs inside the mission sandbox. Can modify files in the worktree. Sends no external traffic."
+      actions={
+        <>
+          <Button variant="outline">
+            Deny
+            <Kbd>D</Kbd>
+          </Button>
+          <Button variant="outline">
+            Allow for session
+            <Kbd>S</Kbd>
+          </Button>
+          <Button>
+            Allow once
+            <Kbd>A</Kbd>
+          </Button>
+        </>
+      }
+    >
       <div>
         <Eyebrow className="mb-1.5 block">What</Eyebrow>
         <JsonBlock value={{ tool: 'shell', cmd: 'go test ./internal/brain/missions/...' }} density="prose" copy={false} />
       </div>
-      <div>
-        <Eyebrow className="mb-1.5 block">Why</Eyebrow>
-        <p className="text-sm text-muted-foreground">"Running the missions package tests confirms the verifier change didn't regress batch verification."</p>
-      </div>
-      <div>
-        <Eyebrow className="mb-1.5 block">Consequence</Eyebrow>
-        <p className="text-sm text-muted-foreground">
-          Runs inside the mission sandbox. Can modify files in the worktree. Sends no external traffic.
-        </p>
-      </div>
-      <div className="flex items-center justify-end gap-2">
-        <Button variant="outline">
-          Deny
-          <Kbd>D</Kbd>
-        </Button>
-        <Button variant="outline">
-          Allow for session
-          <Kbd>S</Kbd>
-        </Button>
-        <Button>
-          Allow once
-          <Kbd>A</Kbd>
-        </Button>
-      </div>
-    </div>
+    </ApprovalCardShell>
   )
 }
 
-function ConversationSample() {
+// approvalTitle lets each ConversationSample render (Conversation
+// section, Side by side section) give its embedded ApprovalSample a
+// distinct accessible name; see the note on ApprovalSample.
+function ConversationSample({ approvalTitle }: { approvalTitle: string }) {
   return (
     <div className="max-w-[45rem] space-y-8">
       <div className="flex justify-end">
@@ -74,7 +65,12 @@ function ConversationSample() {
       </div>
       <div>
         <div className="flex items-center gap-2">
-          <BrandTile />
+          <BrandTile
+            size="sm"
+            className="size-5 bg-brand text-brand-foreground"
+            icon={<span className="text-xs font-semibold">T</span>}
+            label="Timothy"
+          />
           <span className="text-xs text-muted-foreground">08:03</span>
         </div>
         <div className="mt-3 space-y-3 text-prose">
@@ -96,7 +92,7 @@ function ConversationSample() {
           <p>{timothyAnswerParagraphs[2]}</p>
         </div>
       </div>
-      <ApprovalSample />
+      <ApprovalSample title={approvalTitle} />
     </div>
   )
 }
@@ -129,50 +125,6 @@ function AgentStatusLineSample() {
   )
 }
 
-function EventLogSample() {
-  return (
-    <Panel title="Timeline" density="operational" headingLevel="h3">
-      <div role="log" aria-live="polite">
-        <div className="flex h-8 items-center px-4">
-          <Eyebrow>Today</Eyebrow>
-        </div>
-        {eventLogRows.map((row, i) => {
-          const time = new Date(row.time)
-          const hh = String(time.getUTCHours()).padStart(2, '0')
-          const mm = String(time.getUTCMinutes()).padStart(2, '0')
-          const Icon = row.kind === 'tool' ? traceIcons.shell : row.kind === 'review' ? traceIcons.other : Search
-          if (i === 3) {
-            return (
-              <div key={row.time} className="border-t border-border px-4 py-1">
-                <TraceGroup summary="Turn: gathered notifications" duration="1.1s">
-                  <TraceRow status="success" icon={traceIcons.mail} action="List calendar events" target="account=work" duration="640ms" />
-                  <TraceRow status="success" icon={traceIcons.web} action="Search web" target="unread github notifications api" duration="420ms" />
-                </TraceGroup>
-              </div>
-            )
-          }
-          return (
-            <div key={row.time} className="flex h-8 items-center gap-3 border-t border-border px-4 text-sm">
-              <span className="w-16 shrink-0 font-mono text-xs text-muted-foreground">
-                {hh}:{mm}
-              </span>
-              <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
-              <span className="min-w-0 flex-1 truncate">{row.text}</span>
-              {row.status && <StatusDot status={row.status} label={row.status} />}
-            </div>
-          )
-        })}
-      </div>
-      <div className="flex items-center justify-between border-t border-border px-4 py-2">
-        <Button variant="outline" size="sm">
-          Pause
-        </Button>
-        <Badge variant="neutral">3 new events</Badge>
-      </div>
-    </Panel>
-  )
-}
-
 function eventLogComponentRowIcon(kind: string) {
   if (kind === 'tool') return traceIcons.shell
   if (kind === 'review') return traceIcons.other
@@ -188,6 +140,7 @@ const eventLogSampleRows: EventLogRow[] = eventLogComponentRows.map((r) => ({
   time: new Date(r.time),
   kind: r.kind,
   icon: eventLogComponentRowIcon(r.kind),
+  label: r.label,
   title:
     r.target != null ? (
       <>
@@ -275,20 +228,26 @@ function MissionHeaderSample() {
 function ProviderCardSample() {
   return (
     <div className="grid gap-4 sm:grid-cols-2">
-      {providers.map((provider) => (
-        <Card key={provider.name}>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-sm font-medium">{provider.name}</span>
-            <StatusBadge status={provider.status} label={provider.statusLabel} />
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">Last checked {provider.lastChecked}</p>
-          <div className="mt-3">
-            <Button variant="test" size="sm">
-              Test connection
-            </Button>
-          </div>
-        </Card>
-      ))}
+      {providers.map((provider) => {
+        const preset = presetForProviderName(provider.name)
+        return (
+          <Card key={provider.name}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-sm font-medium">
+                {preset && <ProviderLogo preset={preset} className="size-6" />}
+                {provider.name}
+              </span>
+              <StatusBadge status={provider.status} label={provider.statusLabel} />
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">Last checked {provider.lastChecked}</p>
+            <div className="mt-3">
+              <Button variant="test" size="sm">
+                Test connection
+              </Button>
+            </div>
+          </Card>
+        )
+      })}
     </div>
   )
 }
@@ -299,7 +258,7 @@ export function AgentSurfaces() {
       <section>
         <SectionHeader title="Conversation" />
         <p className="mb-4 text-sm text-muted-foreground">Evaluate: unchromed Timothy prose against a muted user bubble, recessed trace.</p>
-        <ConversationSample />
+        <ConversationSample approvalTitle="Timothy wants to run a command" />
       </section>
 
       <section>
@@ -312,14 +271,17 @@ export function AgentSurfaces() {
         <SectionHeader title="Approval" />
         <p className="mb-4 text-sm text-muted-foreground">Evaluate: the most formal object on screen, same shape in chat and missions.</p>
         <div className="max-w-[45rem] space-y-3">
-          <ApprovalSample />
+          <ApprovalSample title="Timothy wants to run a command (standalone)" />
           <TraceRow status="success" action="Allowed once" target="shell" duration="14:02" />
         </div>
       </section>
 
       <section>
         <SectionHeader title="Event log" />
-        <p className="mb-4 text-sm text-muted-foreground">Evaluate: the canonical EventLog component, follow toggle, day divider, nested tool calls (contract 14.11).</p>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Evaluate: the canonical EventLog component, follow toggle, day divider, the label column, nested tool
+          calls (contract 14.11).
+        </p>
         <div className="max-w-2xl">
           <EventLogComponentSample />
         </div>
@@ -341,8 +303,8 @@ export function AgentSurfaces() {
         <SectionHeader title="Side by side" />
         <p className="mb-4 text-sm text-muted-foreground">Evaluate: the calm/operational contrast on one screen (contract 14.1).</p>
         <div className="grid gap-8 lg:grid-cols-[minmax(0,45rem)_minmax(0,1fr)]">
-          <ConversationSample />
-          <EventLogSample />
+          <ConversationSample approvalTitle="Timothy wants to run a command (side by side)" />
+          <EventLogComponentSample />
         </div>
       </section>
     </div>

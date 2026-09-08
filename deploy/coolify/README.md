@@ -2,7 +2,7 @@
 
 [Coolify](https://coolify.io) deploys Timothy as a **Docker Compose**
 resource from a Git source. The stack is nine containers, two networks
-and four volumes, so the single-Dockerfile resource type cannot host it.
+and three volumes, so the single-Dockerfile resource type cannot host it.
 
 The compose is `deploy/release/docker-compose.yml`, the same file the
 installer uses; it pulls the published `ghcr.io/timothy-agent/timothy-*`
@@ -26,25 +26,25 @@ in `brain`'s `depends_on` and run without missions.
 **New Resource → Docker Compose**, Git source pointing at this repository
 (or your fork).
 
-| Field | Value |
-|-------|-------|
-| Base Directory | `/deploy/release` |
-| Compose file | `docker-compose.yml` |
-| Branch | a release tag (a compose from `main` with images from a tag can drift) |
+| Field          | Value                                                                  |
+|----------------|------------------------------------------------------------------------|
+| Base Directory | `/deploy/release`                                                      |
+| Compose file   | `docker-compose.yml`                                                   |
+| Branch         | a release tag (a compose from `main` with images from a tag can drift) |
 
 ## 2. Environment variables
 
 Compose interpolation fails the deployment outright without the first
 three:
 
-| Variable | Value |
-|----------|-------|
-| `TIMOTHY_VERSION` | Newest release tag without the leading `v`, e.g. `0.1.0-alpha.69` |
-| `POSTGRES_PASSWORD` | `openssl rand -hex 24` |
-| `TIMOTHY_MASTER_KEY` | `openssl rand -base64 32` |
-| `TIMOTHY_API_TOKEN` | `openssl rand -hex 32` |
-| `TIMOTHY_PUBLIC_URL` | The public HTTPS URL, e.g. `https://timothy.example.com` |
-| `DOCKER_SOCK_GID` | `stat -c '%g' /var/run/docker.sock` on the Coolify host |
+| Variable             | Value                                                             |
+|----------------------|-------------------------------------------------------------------|
+| `TIMOTHY_VERSION`    | Newest release tag without the leading `v`, e.g. `0.1.0-alpha.69` |
+| `POSTGRES_PASSWORD`  | `openssl rand -hex 24`                                            |
+| `TIMOTHY_MASTER_KEY` | `openssl rand -base64 32`                                         |
+| `TIMOTHY_API_TOKEN`  | `openssl rand -hex 32`                                            |
+| `TIMOTHY_PUBLIC_URL` | The public HTTPS URL, e.g. `https://timothy.example.com`          |
+| `DOCKER_SOCK_GID`    | `stat -c '%g' /var/run/docker.sock` on the Coolify host           |
 
 `TIMOTHY_PUBLIC_URL` builds the connector OAuth redirect; that URL plus
 `/v1/connectors/oauth/callback` is what goes in the Google OAuth client's
