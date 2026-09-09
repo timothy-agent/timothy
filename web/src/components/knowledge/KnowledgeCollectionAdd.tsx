@@ -43,7 +43,7 @@ export function KnowledgeCollectionAdd() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="product-docs, runbooks…"
-              className="mt-1.5 h-10"
+              className="mt-1.5"
             />
           </Field>
           <Field label="Description" description="what this collection covers">
@@ -51,7 +51,7 @@ export function KnowledgeCollectionAdd() {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="What documents live here"
-              className="mt-1.5 h-10"
+              className="mt-1.5"
             />
           </Field>
         </div>
