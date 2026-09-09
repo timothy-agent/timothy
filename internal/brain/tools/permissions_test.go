@@ -193,6 +193,21 @@ func TestResolveShortCircuits(t *testing.T) {
 		}
 	})
 
+	// search_kb, read_kb and search_memory are pure reads over stores
+	// scoped in Go; a prompt on them parks a mission on nothing (#648).
+	t.Run("store read tools exempt", func(t *testing.T) {
+		t.Parallel()
+		for _, tool := range []string{"search_kb", "read_kb", "search_memory"} {
+			res, err := p.Resolve(ctx, "s1", tool, json.RawMessage(`{"query":"q"}`))
+			if err != nil {
+				t.Fatalf("Resolve(%s): %v", tool, err)
+			}
+			if res.Decision != DecisionAllow {
+				t.Fatalf("Resolve(%s) = %+v, want allow", tool, res)
+			}
+		}
+	})
+
 	t.Run("mission sentinel tools exempt", func(t *testing.T) {
 		t.Parallel()
 		for _, tool := range []string{"mission_status", "review_verdict", "submit_plan", "discover_notes", "ask_user"} {
