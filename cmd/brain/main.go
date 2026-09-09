@@ -1122,13 +1122,18 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// build so agent edits apply on the next turn. The load_skill tool
 	// is already in the mission builtin set; this makes the packs
 	// discoverable there.
-	driver.SetSkillsIndex(func(ctx context.Context, agentID string) string {
+	missionSkillsIndex := func(ctx context.Context, agentID string) string {
 		a, ok := agentReg.ResolveByID(ctx, agentID)
 		if !ok {
 			return ""
 		}
 		return skills.Index(skills.Allowed(packs, a.Skills))
-	})
+	}
+	driver.SetSkillsIndex(missionSkillsIndex)
+	// Issue #628: discover and plan get the same index, so a skill that
+	// defines the mission's output shape is loadable before the plan is
+	// committed rather than first seen in build.
+	nativeRunner.SetSkillsIndex(missionSkillsIndex)
 	if conns != nil && secrets != nil {
 		// A repo_url mission's clone token: resolve connector_id straight
 		// to its credential_ref's secret value, same as resolveSecret does
