@@ -329,6 +329,18 @@ describe('CodeBlock', () => {
     expect(chip?.className).toContain('dark:bg-white')
   })
 
+  it('gives sh and shell a neutral terminal glyph instead of the Bash logo', () => {
+    for (const lang of ['sh', 'shell']) {
+      cleanup()
+      renderMarkdown('```' + lang + '\necho hi\n```')
+      const header = screen.getByText(lang).closest('span')
+      expect(header?.querySelector('img')).not.toBeInTheDocument()
+      expect(header?.querySelector('.size-2.rounded-full')).not.toBeInTheDocument()
+      expect(header?.querySelector('svg.lucide-terminal')).toBeInTheDocument()
+      expect(header?.querySelector('[class*="dark:bg-white"]')).not.toBeInTheDocument()
+    }
+  })
+
   it('does not add the dark-mode chip to a logo that already reads fine on dark', () => {
     renderMarkdown('```java\nclass X {}\n```')
     const header = screen.getByText('java').closest('span')

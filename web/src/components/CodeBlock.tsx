@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Children, isValidElement, useEffect, useState } from 'react'
 import type { ExtraProps } from 'react-markdown'
+import { Terminal, type LucideIcon } from 'lucide-react'
 import bashLogo from '../assets/langs/bash.svg'
 import cLogo from '../assets/langs/c.svg'
 import cplusplusLogo from '../assets/langs/cplusplus.svg'
@@ -89,8 +90,6 @@ const LANGUAGE_LOGOS: Record<string, string> = {
   html: html5Logo,
   css: css3Logo,
   bash: bashLogo,
-  sh: bashLogo,
-  shell: bashLogo,
   sql: mysqlLogo,
   yaml: yamlLogo,
   yml: yamlLogo,
@@ -110,6 +109,11 @@ const LANGUAGE_LOGOS: Record<string, string> = {
 // the chip exists to keep third-party artwork visible against the
 // dark theme, not to express a themeable surface.
 const DARK_MODE_NEEDS_CHIP = new Set(['bash', 'sh', 'shell', 'markdown', 'json'])
+
+// sh and shell are POSIX shell, not Bash, so they do not wear the Bash
+// logo. They get the same neutral terminal glyph the trace rows use,
+// drawn in currentColor, so no chip is needed either.
+const LANGUAGE_ICONS: Record<string, LucideIcon> = { sh: Terminal, shell: Terminal }
 
 // shiki/langs (bundledLanguages/bundledLanguagesAlias: id/alias ->
 // lazy grammar loader, one entry per shiki-supported language) is
@@ -413,6 +417,7 @@ export function CodeBlock({ children, node }: { children?: ReactNode } & ExtraPr
   const lineCount = text === '' ? 1 : text.split('\n').length
   const langKey = language?.toLowerCase()
   const color = langKey ? LANGUAGE_COLORS[langKey] : undefined
+  const Icon = langKey ? LANGUAGE_ICONS[langKey] : undefined
   const logo = langKey ? LANGUAGE_LOGOS[langKey] : undefined
   const needsChip = langKey ? DARK_MODE_NEEDS_CHIP.has(langKey) : false
   const html = useHighlightedHtml(isMermaid ? '' : text, isMermaid ? undefined : language)
@@ -423,7 +428,9 @@ export function CodeBlock({ children, node }: { children?: ReactNode } & ExtraPr
     <div className="not-prose my-4 min-w-0 max-w-full overflow-hidden rounded-md border border-border bg-muted">
       <div className="flex h-8 items-center justify-between border-b border-border px-3 text-xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
-          {logo ? (
+          {Icon ? (
+            <Icon className="size-3.5" aria-hidden="true" />
+          ) : logo ? (
             <span className={needsChip ? 'flex items-center rounded-[3px] dark:bg-white/95 dark:p-[1px]' : 'flex items-center'}>
               <img src={logo} alt="" className="size-3.5" />
             </span>
