@@ -3488,3 +3488,39 @@ func TestSearchMemoryPlanNotForcedWhenOffered(t *testing.T) {
 		t.Fatalf("ForceTool = %q, want empty when search_memory is also offered", withMem.requests[0].ForceTool)
 	}
 }
+
+// TestPlanSessionAllowsLoadSkillWithIndex pins issue #638: the skills
+// nudge asked the planner to call load_skill while ToolAllow filtered
+// it out, so the planner guessed at artifact names the skill defines.
+// With an index the tool is allowed and submit_plan is not forced;
+// without one the turn is exactly as before.
+func TestPlanSessionAllowsLoadSkillWithIndex(t *testing.T) {
+	const planArgs = `{"units":[{"title":"t","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -q done out.md"}]}`
+	m := Mission{ID: "m1", AgentID: "a1", Route: "default", Goal: "enter the hackathon"}
+
+	withIndex := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, planArgs)}}}
+	r := newTestRunner(withIndex)
+	r.SetSkillsIndex(func(context.Context, string) string { return "Available skills:\n- hackathon" })
+	if _, err := r.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession with index: %v", err)
+	}
+	req := withIndex.requests[0]
+	if !slices.Contains(req.ToolAllow, "load_skill") || !slices.Contains(req.ToolAllow, planToolName) {
+		t.Fatalf("ToolAllow = %v, want submit_plan and load_skill", req.ToolAllow)
+	}
+	if req.ForceTool != "" {
+		t.Fatalf("ForceTool = %q, want empty so the planner can load the skill first", req.ForceTool)
+	}
+
+	without := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, planArgs)}}}
+	br := newTestRunner(without)
+	if _, err := br.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession without index: %v", err)
+	}
+	if allow := without.requests[0].ToolAllow; len(allow) != 1 || allow[0] != planToolName {
+		t.Fatalf("ToolAllow = %v, want [%s] with no skills index", allow, planToolName)
+	}
+	if without.requests[0].ForceTool != planToolName {
+		t.Fatalf("ForceTool = %q, want %s with no skills index", without.requests[0].ForceTool, planToolName)
+	}
+}
