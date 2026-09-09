@@ -124,7 +124,8 @@ export function SessionList() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search chats…"
-              className="h-8 pl-8"
+              size="sm"
+              className="data-[size=sm]:pl-8"
             />
           </div>
         </SidebarGroupContent>
