@@ -29,6 +29,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM alpine:3.22.2 AS runtime-shell
 RUN apk add --no-cache curl git openssh-keygen
 COPY --from=build /out/app /app
+# Skill packs ship inside the brain image; release.yml's change filter
+# lists skills/ so a pack edit rebuilds it instead of copying forward.
 COPY skills/ /skills/
 RUN mkdir -p /workspace /attachments && chown nobody:nobody /workspace /attachments
 USER nobody
