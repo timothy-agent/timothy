@@ -1696,7 +1696,8 @@ func planSystemPrompt(hasPlan bool) string {
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
-	system := planSystemPrompt(m.HasPlan) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m)
+	skillsHint := r.skillsNudge(ctx, m)
+	system := planSystemPrompt(m.HasPlan) + r.execEnvironmentNote(ctx) + skillsHint
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)
@@ -1735,7 +1736,12 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 		// the turn's only BASE tool is none: a planner that reaches for
 		// shell parked a live canary on the permission gate for ten
 		// minutes trying to do the worker's job in plan phase.
-		ToolAllow:    []string{planToolName},
+		// load_skill is the one base tool let through, and only when
+		// the agent has skills to load (issue #638): it is read-only,
+		// and the skills nudge above asks the planner to call it, so
+		// filtering it out left the planner an instruction it could
+		// not follow and a plan that guessed at the artifact names.
+		ToolAllow:    planToolAllow(skillsHint),
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
 		Unattended:   m.ScheduleID != "",
@@ -1744,8 +1750,9 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	}
 	// Force submit_plan only when it is the turn's sole tool (D-063):
 	// a KB-attached mission also offers search_kb/read_kb here, and a
-	// forced choice would make consulting them impossible.
-	if len(extra) == 1 {
+	// forced choice would make consulting them impossible. The same
+	// holds when load_skill is allowed (issue #638).
+	if len(extra) == 1 && skillsHint == "" {
 		req.ForceTool = planToolName
 	}
 	res, err := r.runTurn(ctx, req, planToolName, PhasePlan)
@@ -1986,4 +1993,15 @@ func defaultScope(artifacts []string) []string {
 		}
 	}
 	return out
+}
+
+// planToolAllow is the planner's base-tool allowlist: submit_plan
+// alone, plus load_skill when the turn carries a skills index to act
+// on (issue #638). Both are read-only from the workspace's point of
+// view, so the planner still cannot act.
+func planToolAllow(skillsHint string) []string {
+	if skillsHint == "" {
+		return []string{planToolName}
+	}
+	return []string{planToolName, "load_skill"}
 }
