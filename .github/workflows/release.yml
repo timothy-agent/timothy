@@ -59,7 +59,7 @@ jobs:
           fi
           files=$(git diff --name-only "${{ steps.prev.outputs.tag }}" "$GITHUB_SHA")
           changed() { echo "$files" | grep -qE "$1"; }
-          go_pattern='^(go\.mod|go\.sum|migrations/|internal/|cmd/|deploy/Dockerfile)'
+          go_pattern='^(go\.mod|go\.sum|migrations/|internal/|cmd/|skills/|deploy/Dockerfile)'
           for name in brain gateway memoryd sandboxd; do
             changed "$go_pattern" && echo "$name=true" >> "$GITHUB_OUTPUT" || echo "$name=false" >> "$GITHUB_OUTPUT"
           done
