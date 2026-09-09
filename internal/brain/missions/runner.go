@@ -244,6 +244,10 @@ type nativeRunner struct {
 	// same nil-safe contract as every resolver above.
 	skillsIndex func(ctx context.Context, agentID string) string
 
+	// skillBody resolves a skill discover loaded to its body for the
+	// plan prompt (issue #649); nil-safe like skillsIndex.
+	skillBody func(ctx context.Context, agentID, name string) string
+
 	// askParker backs ask_user's park (D-088): nil means ask_user is
 	// never offered on any mission turn, same nil-safe contract as
 	// kbSearch/kbRead: a store wiring bug degrades to "no ask_user"
@@ -321,6 +325,78 @@ func (r *nativeRunner) SetLocation(loc func(ctx context.Context) *time.Location)
 // the behavior before this existed.
 func (r *nativeRunner) SetSkillsIndex(fn func(ctx context.Context, agentID string) string) {
 	r.skillsIndex = fn
+}
+
+// SetSkillBody wires the resolver that turns a skill name discover
+// loaded into the pack's body for the plan prompt (issue #649). Nil
+// means the plan prompt carries the index alone, as before.
+func (r *nativeRunner) SetSkillBody(fn func(ctx context.Context, agentID, name string) string) {
+	r.skillBody = fn
+}
+
+// loadedSkillsPrefix opens the first line of discover notes when the
+// discover turn loaded skills: "Skills loaded in discover: a, b". The
+// notes column is the one channel that already crosses from discover
+// to plan, and the marker goes first so the notes cap cannot cut it.
+const loadedSkillsPrefix = "Skills loaded in discover: "
+
+func loadedSkillsMarker(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	return loadedSkillsPrefix + strings.Join(names, ", ") + "\n\n"
+}
+
+// parseLoadedSkills reads the marker loadedSkillsMarker wrote, if the
+// notes start with one.
+func parseLoadedSkills(notes string) []string {
+	first, _, _ := strings.Cut(notes, "\n")
+	rest, ok := strings.CutPrefix(first, loadedSkillsPrefix)
+	if !ok {
+		return nil
+	}
+	var names []string
+	for _, n := range strings.Split(rest, ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			names = append(names, n)
+		}
+	}
+	return names
+}
+
+// loadSkillArgName extracts the name from a load_skill call's args.
+func loadSkillArgName(args json.RawMessage) string {
+	var a struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(a.Name)
+}
+
+// loadedSkillsForPlan renders the bodies of the skills discover loaded
+// into the plan prompt (issue #649). Two earlier fixes put the index in
+// front of the planner and let it call load_skill; on a live run it
+// still went straight to submit_plan in under three seconds and named
+// artifacts the skill does not. What discover learned already reaches
+// the plan as notes; what discover loaded reaches it the same way.
+func (r *nativeRunner) loadedSkillsForPlan(ctx context.Context, m Mission, discoverNotes string) string {
+	if r.skillBody == nil || m.AgentID == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, name := range parseLoadedSkills(discoverNotes) {
+		body := r.skillBody(ctx, m.AgentID, name)
+		if body == "" {
+			continue
+		}
+		b.WriteString("\n\nThe skill \"")
+		b.WriteString(name)
+		b.WriteString("\" was loaded in discover and applies to this mission. Its rules set the artifacts, their names, and the evidence the plan must deliver:\n\n")
+		b.WriteString(body)
+	}
+	return b.String()
 }
 
 // operatorNotePrefix marks a progress note as operator-authored
@@ -721,6 +797,7 @@ type turnResult struct {
 	text         string
 	sentinelArgs json.RawMessage
 	seenURLs     []string
+	loadedSkills []string // names passed to successful load_skill calls, in order
 	finalSeg     string
 	askedUser    bool
 	provider     string
@@ -776,7 +853,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 	}
 	var b, finalB strings.Builder
 	var sentinelArgs json.RawMessage
-	var seenURLs []string
+	var seenURLs, loadedSkills []string
 	askedUser := false
 	// parked tracks in-flight parks by CallID, not a single flag: a
 	// turn can issue concurrent tool calls (executeAll runs up to
@@ -836,6 +913,11 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			}
 			if ev.ToolResult != nil && ev.ToolResult.Status == "ok" && ev.ToolResult.Name == "search_web" {
 				seenURLs = append(seenURLs, webSearchResultURLs(ev.ToolResult.Content)...)
+			}
+			if ev.ToolResult != nil && ev.ToolResult.Status == "ok" && ev.ToolResult.Name == "load_skill" {
+				if name := loadSkillArgName(ev.ToolResult.Args); name != "" && !slices.Contains(loadedSkills, name) {
+					loadedSkills = append(loadedSkills, name)
+				}
 			}
 			// D-088: a successful ask_user call ends the turn with no
 			// sentinel call at all: the caller must not read that as a
@@ -898,7 +980,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 	if servedModel != "" && r.belowFloor(servedModel) {
 		return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("%w: %s", ErrModelFloor, servedModel)
 	}
-	return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, nil
+	return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, loadedSkills: loadedSkills, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, nil
 }
 
 // webFetchArgURL extracts the url arg from a fetch_url call's raw
@@ -1320,7 +1402,7 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 		return "", "", "", ErrAskedUser
 	}
 	if report, ok := tryParseFindings(res.sentinelArgs); ok {
-		return r.applyDiscoverReport(ctx, m, report), res.provider, res.model, nil
+		return loadedSkillsMarker(res.loadedSkills) + r.applyDiscoverReport(ctx, m, report), res.provider, res.model, nil
 	}
 
 	// One recovery re-run, same ladder shape as RunWorker/PlanSession.
@@ -1697,7 +1779,7 @@ func planSystemPrompt(hasPlan bool) string {
 // each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	skillsHint := r.skillsNudge(ctx, m)
-	system := planSystemPrompt(m.HasPlan) + r.execEnvironmentNote(ctx) + skillsHint
+	system := planSystemPrompt(m.HasPlan) + r.execEnvironmentNote(ctx) + skillsHint + r.loadedSkillsForPlan(ctx, m, discoverNotes)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)
