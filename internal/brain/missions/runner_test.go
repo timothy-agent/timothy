@@ -3524,3 +3524,66 @@ func TestPlanSessionAllowsLoadSkillWithIndex(t *testing.T) {
 		t.Fatalf("ForceTool = %q, want %s with no skills index", without.requests[0].ForceTool, planToolName)
 	}
 }
+
+// TestLoadedSkillsCarryIntoPlan pins issue #649: a skill the discover
+// turn loaded reaches the plan prompt as its body, through the notes
+// channel that already crosses phases. Without a body resolver the
+// marker is still written and the plan prompt is untouched.
+func TestLoadedSkillsCarryIntoPlan(t *testing.T) {
+	m := Mission{ID: "m1", AgentID: "a1", Route: "default", Goal: "enter the hackathon"}
+	discoverAgent := &scriptedAgent{batches: [][]stream.StreamEvent{{
+		finishedToolResultEvent("c1", "load_skill", "ok", `{"name":"hackathon"}`, 5),
+		finishedToolResultEvent("c2", "load_skill", "ok", `{"name":"hackathon"}`, 5),
+		toolEndEvent(discoverNotesToolName, `{"findings":"rules read"}`),
+	}}}
+	dr := newTestRunner(discoverAgent)
+	notes, _, _, err := dr.DiscoverSession(context.Background(), m)
+	if err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
+	}
+	if !strings.HasPrefix(notes, "Skills loaded in discover: hackathon\n\n") || !strings.Contains(notes, "rules read") {
+		t.Fatalf("discover notes = %q, want marker line then findings", notes)
+	}
+	if got := parseLoadedSkills(notes); len(got) != 1 || got[0] != "hackathon" {
+		t.Fatalf("parseLoadedSkills = %v, want [hackathon] (deduplicated)", got)
+	}
+
+	const body = "Produce a rules checklist as the first artifact, rules-checklist.md"
+	const planArgs = `{"units":[{"title":"t","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -q done out.md"}]}`
+	planAgent := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, planArgs)}}}
+	pr := newTestRunner(planAgent)
+	var askedFor string
+	pr.SetSkillBody(func(_ context.Context, agentID, name string) string {
+		askedFor = agentID + "/" + name
+		return body
+	})
+	if _, err := pr.PlanSession(context.Background(), m, notes); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if askedFor != "a1/hackathon" {
+		t.Fatalf("resolver asked for %q, want a1/hackathon", askedFor)
+	}
+	if sys := planAgent.requests[0].System; !strings.Contains(sys, body) || !strings.Contains(sys, `"hackathon" was loaded in discover`) {
+		t.Fatalf("plan system prompt missing loaded skill body: %s", sys)
+	}
+
+	bare := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, planArgs)}}}
+	br := newTestRunner(bare)
+	if _, err := br.PlanSession(context.Background(), m, notes); err != nil {
+		t.Fatalf("PlanSession without resolver: %v", err)
+	}
+	if strings.Contains(bare.requests[0].System, "was loaded in discover") {
+		t.Fatal("plan prompt carried a skill body with no resolver wired")
+	}
+}
+
+func TestParseLoadedSkillsIgnoresPlainNotes(t *testing.T) {
+	for _, notes := range []string{"", "Stack: go.\n\nfindings", "Skills loaded elsewhere: x"} {
+		if got := parseLoadedSkills(notes); got != nil {
+			t.Fatalf("parseLoadedSkills(%q) = %v, want nil", notes, got)
+		}
+	}
+	if got := parseLoadedSkills("Skills loaded in discover: a, b ,\n\nx"); len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Fatalf("parseLoadedSkills = %v, want [a b]", got)
+	}
+}

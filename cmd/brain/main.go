@@ -1155,6 +1155,20 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// defines the mission's output shape is loadable before the plan is
 	// committed rather than first seen in build.
 	nativeRunner.SetSkillsIndex(missionSkillsIndex)
+	// Issue #649: a skill discover loaded reaches the plan prompt as
+	// its body, resolved against the agent's allowed packs.
+	nativeRunner.SetSkillBody(func(ctx context.Context, agentID, name string) string {
+		a, ok := agentReg.ResolveByID(ctx, agentID)
+		if !ok {
+			return ""
+		}
+		for _, sk := range skills.Allowed(packs, a.Skills) {
+			if sk.Name == name {
+				return sk.Body
+			}
+		}
+		return ""
+	})
 	if conns != nil && secrets != nil {
 		// A repo_url mission's clone token: resolve connector_id straight
 		// to its credential_ref's secret value, same as resolveSecret does
