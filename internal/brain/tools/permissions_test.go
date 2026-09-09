@@ -38,7 +38,7 @@ func TestGuardSubject(t *testing.T) {
 		{name: "environment word", command: "grep environment docs/config.md"},
 		{name: "html closing tag", command: `echo "</head>" >> summary.md`},
 		{name: "html tag no quotes", command: "printf '<html>\\n</html>'"},
-		{name: "redirect outside workspace", command: "cat file 2>&1 >/etc/passwd", blocked: "outside the workspace"},
+		{name: "redirect outside workspace", command: "cat file 2>&1 >/etc/passwd", blocked: "system dirs|outside the workspace"},
 
 		{name: "quoted regex leading slash", command: "awk '/^#{1,6}/ {print}' README.md"},
 		{name: "quoted regex alternation", command: "grep -E '^(foo|bar)$' /workspace/file"},
@@ -48,6 +48,22 @@ func TestGuardSubject(t *testing.T) {
 		{name: "quoted brace path exempt", command: "cat '/tmp/{a,b}'"},
 		{name: "unquoted brace path denied", command: "cat /tmp/{a,b}", blocked: "outside the workspace"},
 		{name: "quoted metachars relative redirect", command: `echo "^foo$" > out.md`},
+
+		// A guarded name inside ordinary command text names no such
+		// path: the guard matches path-like tokens, not raw substrings.
+		{name: "builder.aws in grep pattern", command: "grep -n 'builder.aws' plan.md"},
+		{name: "builder.aws in heredoc line", command: "python3 - <<'PY'\nreq=['builder.aws','README']\nPY"},
+		{name: "credentials as prose", command: "grep -rn 'rotate the credentials' docs/"},
+		{name: "secrets as prose", command: "grep -rn 'secrets management' docs/"},
+		{name: "aws sdk import path", command: "go get github.com/aws/aws-sdk-go-v2"},
+		{name: "key as a word", command: "grep -rn 'api key rotation' notes.md"},
+
+		// Real paths stay denied however they are wrapped.
+		{name: "aws dir relative", command: "ls .aws/", blocked: "credential stores"},
+		{name: "npmrc in home", command: "cat ~/.npmrc", blocked: "credential stores|home dotfiles"},
+		{name: "credentials file punctuated", command: `cat "~/.aws/credentials";`, blocked: "credential stores|home dotfiles"},
+		{name: "env file in subdir", command: "cat deploy/.env", blocked: "env files"},
+		{name: "keystore file", command: "keytool -list -keystore app.keystore", blocked: "key material"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

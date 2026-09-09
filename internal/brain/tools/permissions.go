@@ -367,18 +367,39 @@ func callSubject(tool string, args json.RawMessage) string {
 }
 
 // guardPatterns are the hard-deny policy guard (chain step 1): paths
-// and names that no grant can unlock. Matched against the call
-// subject, case-insensitively.
+// and names that no grant can unlock. Matched per token against the
+// path-like parts of the call subject, case-insensitively.
+//
+// Matching is per token, not against the whole command line, because
+// a guarded name can appear inside ordinary command text that touches
+// no such path: `builder.aws` in a grep pattern is not ~/.aws, and
+// "rotate the credentials" in a doc search is not a credential store.
+// Each pattern below therefore anchors to a whole token or to a real
+// path segment within one.
+// filename alone identifies these, so they match any token: a key is
+// key material wherever it sits, including a bare `id_rsa` in the
+// working directory.
 var guardPatterns = []struct {
 	name    string
 	pattern *regexp.Regexp
 }{
-	{name: "env files", pattern: regexp.MustCompile(`(?i)(^|[\s/'"=])\.env(\.[A-Za-z0-9._-]+)?([\s'"/]|$)`)},
-	{name: "ssh keys", pattern: regexp.MustCompile(`(?i)\.ssh(/|\b)|id_(rsa|ed25519|ecdsa|dsa)\b`)},
-	{name: "key material", pattern: regexp.MustCompile(`(?i)\.(pem|key|p12|pfx|keystore)\b`)},
-	{name: "credential stores", pattern: regexp.MustCompile(`(?i)(^|/|\s)(credentials?|secrets?)(/|\.|\s|$)|\.aws(/|\b)|\.kube(/|\b)|\.gnupg(/|\b)|\.netrc\b|\.npmrc\b`)},
-	{name: "home dotfiles", pattern: regexp.MustCompile(`~/\.[A-Za-z]`)},
-	{name: "system dirs", pattern: regexp.MustCompile(`(^|[\s'"=])/(etc|root|proc|sys|dev|boot|var/(run|lib))(/|\s|$)`)},
+	{name: "env files", pattern: regexp.MustCompile(`(?i)(^|/)\.env(\.[A-Za-z0-9._-]+)?$`)},
+	{name: "ssh keys", pattern: regexp.MustCompile(`(?i)(^|/)id_(rsa|ed25519|ecdsa|dsa)$`)},
+	{name: "key material", pattern: regexp.MustCompile(`(?i)\.(pem|key|p12|pfx|keystore)$`)},
+}
+
+// guardPathPatterns need directory context to be meaningful, so they
+// match only tokens carrying path syntax (see looksLikePath). Without
+// that gate a quoted phrase the tokenizer split on whitespace would
+// put a bare "credentials" or "secrets" up for matching.
+var guardPathPatterns = []struct {
+	name    string
+	pattern *regexp.Regexp
+}{
+	{name: "ssh keys", pattern: regexp.MustCompile(`(?i)(^|/)\.ssh(/|$)`)},
+	{name: "credential stores", pattern: regexp.MustCompile(`(?i)(^|/)(credentials?|secrets?)(/|\.[A-Za-z0-9]+)?$|(^|/)\.(aws|kube|gnupg)(/|$)|(^|/)\.(netrc|npmrc)$`)},
+	{name: "home dotfiles", pattern: regexp.MustCompile(`^~/\.[A-Za-z]`)},
+	{name: "system dirs", pattern: regexp.MustCompile(`^/(etc|root|proc|sys|dev|boot|var/(run|lib))(/|$)`)},
 }
 
 // AllowedAbsPrefixes are absolute paths a shell command may name even
@@ -397,9 +418,20 @@ func guardSubject(root, tool, subject string) string {
 	for _, p := range AllowedAbsPrefixes {
 		subject = strings.ReplaceAll(subject, p, " ")
 	}
-	for _, g := range guardPatterns {
-		if g.pattern.MatchString(subject) {
-			return "policy guard: " + g.name + " are off-limits"
+	for _, qt := range commandTokensQuoted(subject) {
+		tok := guardToken(qt.text)
+		for _, g := range guardPatterns {
+			if g.pattern.MatchString(tok) {
+				return "policy guard: " + g.name + " are off-limits"
+			}
+		}
+		if !looksLikePath(tok) {
+			continue
+		}
+		for _, g := range guardPathPatterns {
+			if g.pattern.MatchString(tok) {
+				return "policy guard: " + g.name + " are off-limits"
+			}
 		}
 	}
 	if root != "" {
@@ -432,6 +464,25 @@ func guardSubject(root, tool, subject string) string {
 		}
 	}
 	return ""
+}
+
+// looksLikePath reports whether a token carries path syntax: a slash,
+// or a leading dot or tilde. Only those tokens are matched against
+// the path rules, so an ordinary word that happens to be a guarded
+// name ("credentials" inside a quoted phrase the tokenizer split on
+// whitespace) is not mistaken for a path. `secrets/` and `.env` both
+// qualify; a bare `credentials` does not.
+func looksLikePath(tok string) bool {
+	return strings.Contains(tok, "/") || strings.HasPrefix(tok, ".") || strings.HasPrefix(tok, "~")
+}
+
+// guardToken trims the shell punctuation that can wrap a path inside
+// one token, so a guarded path still matches when it arrives as
+// `cat(.env)`, `"~/.aws/credentials";` or a heredoc line. Interior
+// characters are untouched: trimming only the edges is what keeps
+// `builder.aws` a single ordinary word rather than a path segment.
+func guardToken(tok string) string {
+	return strings.Trim(tok, "()[]{},;:&|<>*?!\"'`$")
 }
 
 // pathWithin is a purely lexical containment check (the workspace may
