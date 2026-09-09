@@ -1083,6 +1083,27 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		return out, nil
 	}
 	nativeRunner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, kbSearch, kbReadFromStore(kb.New(db)), log)
+	// search_memory: nil-safe in the same sense as kbSearch above (mc
+	// is never nil), calling the same memclient.Retrieve chat's own
+	// per-turn recall uses. Missions read memory as a tool rather than
+	// a packet block (issue #627): a mission spans four phases and many
+	// turns, so what it needs to know about the operator is not knowable
+	// when the packet is built. Retrieval is global: memoryd's
+	// handleRetrieve ignores session_id, so the empty session here
+	// recalls the same set chat does.
+	nativeRunner.SetSearchMemory(func(ctx context.Context, query string) ([]builtin.SearchMemoryHit, error) {
+		rctx, cancel := context.WithTimeout(ctx, retrieveBudget)
+		defer cancel()
+		memories, err := mc.Retrieve(rctx, "", query)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]builtin.SearchMemoryHit, len(memories))
+		for i, m := range memories {
+			out[i] = builtin.SearchMemoryHit{Type: m.Type, Content: m.Content, Score: m.Score}
+		}
+		return out, nil
+	})
 	if conns != nil {
 		nativeRunner.SetConnectorReads(missionConnectorReadsResolver(agentReg, conns))
 	}
