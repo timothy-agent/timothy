@@ -2530,6 +2530,20 @@ func TestBuildLaunchCmdRealShell_ContainerMarker(t *testing.T) {
 	if _, err := os.Stat(markerPath); err != nil {
 		t.Fatalf("marker file %s not written: %v", markerPath, err)
 	}
+	// The CLI runs detached under setsid and keeps writing into rdir
+	// after the launch shell returns; wait for exit_code so TempDir
+	// cleanup does not race it.
+	exitPath := filepath.Join(rdir, "exit_code")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(exitPath); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("exit_code never appeared")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 
 	probeCmd := fmt.Sprintf("[ -f \"$HOME/%s\" ]", containerMarkerFile)
 	if out, err := exec.Command("/bin/sh", "-c", probeCmd).CombinedOutput(); err != nil { //nolint:gosec // G204: same command shape probeContainerMarker issues.

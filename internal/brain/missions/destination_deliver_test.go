@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 // recordingDeliver is a DestinationDeliver fake that records every call
@@ -229,15 +230,22 @@ func TestDriverResultRetryOnlyRedeliversFailedDestination(t *testing.T) {
 		t.Fatalf("d2 delivery attempts after first round = %d, want 1", got)
 	}
 
-	// Resume: the second round must retry only d2.
+	// Resume: the second round must retry only d2. Signal re-kicks
+	// Drive in the background, so wait for that loop instead of
+	// racing it with another Advance.
 	if err := d.Signal(context.Background(), "m1", InputResume); err != nil {
 		t.Fatalf("Signal(resume): %v", err)
 	}
-	driveN(t, d, "m1", 1)
-
-	m, _ = store.Get(context.Background(), "m1")
-	if m.Phase != PhaseDone {
-		t.Fatalf("mission phase = %s, want done after the retry delivers d2", m.Phase)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		m, _ = store.Get(context.Background(), "m1")
+		if m.Phase == PhaseDone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("mission phase = %s, want done after the retry delivers d2", m.Phase)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	if got := fake.callsFor("d1"); got != 1 {
 		t.Fatalf("d1 delivery attempts after retry = %d, want 1 (never re-sent once delivered)", got)
