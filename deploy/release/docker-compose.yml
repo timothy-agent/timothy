@@ -119,7 +119,7 @@ services:
       # mission as infra instead of burning iterations on a model that
       # cannot do the job — the small local fallback exists for chat
       # resilience, not for missions.
-      MISSION_MODEL_FLOOR: ${MISSION_MODEL_FLOOR:-qwen2.5:7b}
+      MISSION_MODEL_FLOOR: ${MISSION_MODEL_FLOOR:-qwen2.5:7b,nova}
       # Compose-internal only: the model never sees this address.
       SEARXNG_URL: http://searxng:8080
       # Converts Gmail attachments (PDFs) and HTML-only email bodies to

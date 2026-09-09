@@ -131,7 +131,7 @@ services:
       # mission as infra instead of burning iterations on a model that
       # cannot do the job — the small local fallback exists for chat
       # resilience, not for missions.
-      MISSION_MODEL_FLOOR: ${MISSION_MODEL_FLOOR:-qwen2.5:7b}
+      MISSION_MODEL_FLOOR: ${MISSION_MODEL_FLOOR:-qwen2.5:7b,nova}
       # Detached-turn ceiling override (Go duration, e.g. "60m").
       # Empty keeps the compiled 30m default; must exceed 10m. Raise it
       # alongside a slow provider's request_timeout so the two
