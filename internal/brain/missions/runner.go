@@ -214,6 +214,13 @@ type nativeRunner struct {
 	// as kbSearch.
 	kbRead KBReadFunc
 
+	// recall backs the per-turn search_memory ExtraTool: same nil
+	// contract as kbSearch. Missions get memory as a tool rather than
+	// a packet block (issue #627): a mission runs too many turns
+	// across too many phases for a create-time snapshot to hold what
+	// a given turn needs.
+	recall SearchMemoryFunc
+
 	// connectorReads resolves a mission's agent to the read-only
 	// connector tools (gmail/calendar reads) it may use on worker/discover
 	// turns (see SetConnectorReads): nil-safe: unset means no connector
@@ -430,6 +437,11 @@ func (r *nativeRunner) SetConnectorReads(resolve ConnectorReadsResolver) {
 // live-agent-boosted calls.
 type KBSearchFunc func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error)
 
+// SearchMemoryFunc runs one search_memory recall over long-term
+// memory: main curries memclient.Client.Retrieve in, the same call
+// chat's own per-turn recall makes.
+type SearchMemoryFunc func(ctx context.Context, query string) ([]builtin.SearchMemoryHit, error)
+
 // KBReadFunc loads one kb document by id, unscoped by collection
 // (D-078: collections no longer gate read access: issue #368).
 type KBReadFunc func(ctx context.Context, documentID string) (builtin.KBDocument, error)
@@ -487,6 +499,25 @@ func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
 	}
 	return builtin.KBRead(func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
 		return r.kbRead(ctx, documentID)
+	})
+}
+
+// SetSearchMemory wires long-term memory recall for mission turns.
+// Optional: unwired means search_memory is never offered, exactly as
+// kbSearch behaves.
+func (r *nativeRunner) SetSearchMemory(fn SearchMemoryFunc) { r.recall = fn }
+
+// searchMemoryTool builds this turn's search_memory ExtraTool, gated
+// exactly like kbSearchTool. Offered in discover, plan and build, not
+// in review: the reviewer's tool set is deliberately narrow (D-093)
+// and what the operator prefers is not evidence about whether the work
+// under review is correct.
+func (r *nativeRunner) searchMemoryTool() *tools.Tool {
+	if r.recall == nil {
+		return nil
+	}
+	return builtin.SearchMemory(func(ctx context.Context, query string) ([]builtin.SearchMemoryHit, error) {
+		return r.recall(ctx, query)
 	})
 }
 
@@ -1103,6 +1134,9 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	if t := r.kbReadTool(m); t != nil {
 		extra = append(extra, t)
 	}
+	if t := r.searchMemoryTool(); t != nil {
+		extra = append(extra, t)
+	}
 	extra = append(extra, r.connectorReadTools(ctx, m)...)
 	if t := r.askUserTool(m, PhaseBuild); t != nil {
 		extra = append(extra, t)
@@ -1251,6 +1285,9 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 		extra = append(extra, t)
 	}
 	if t := r.kbReadTool(m); t != nil {
+		extra = append(extra, t)
+	}
+	if t := r.searchMemoryTool(); t != nil {
 		extra = append(extra, t)
 	}
 	extra = append(extra, r.connectorReadTools(ctx, m)...)
@@ -1676,6 +1713,9 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 		extra = append(extra, t)
 	}
 	if t := r.kbReadTool(m); t != nil {
+		extra = append(extra, t)
+	}
+	if t := r.searchMemoryTool(); t != nil {
 		extra = append(extra, t)
 	}
 	if t := r.askUserTool(m, PhasePlan); t != nil {

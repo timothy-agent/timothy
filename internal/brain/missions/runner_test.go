@@ -3361,3 +3361,130 @@ func TestSkillsIndexAbsentWithoutResolverOrAgent(t *testing.T) {
 		})
 	}
 }
+
+// toolNames lists the ExtraTools a recorded request offered.
+func toolNames(req loop.Request) []string {
+	names := make([]string, 0, len(req.ExtraTools))
+	for _, t := range req.ExtraTools {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+func hasTool(req loop.Request, name string) bool {
+	return slices.Contains(toolNames(req), name)
+}
+
+// TestSearchMemoryReachesWorkingPhases pins issue #627: missions had no
+// read path to long-term memory at all, so a preference the operator
+// stated once in chat was silently absent from every mission turn. The
+// tool is offered where the operator's preferences change the work, and
+// withheld from review, whose tool set is deliberately narrow (D-093).
+func TestSearchMemoryReachesWorkingPhases(t *testing.T) {
+	recall := func(context.Context, string) ([]builtin.SearchMemoryHit, error) {
+		return []builtin.SearchMemoryHit{{Type: "semantic", Content: "Prefers Go."}}, nil
+	}
+	m := Mission{ID: "m1", Route: "default", ReviewRoute: "default", Goal: "build a thing"}
+
+	cases := []struct {
+		name  string
+		event stream.StreamEvent
+		run   func(r *nativeRunner) error
+		want  bool
+	}{
+		{
+			name:  "discover",
+			event: toolEndEvent(discoverNotesToolName, `{"findings":"ok"}`),
+			run: func(r *nativeRunner) error {
+				_, _, _, err := r.DiscoverSession(context.Background(), m)
+				return err
+			},
+			want: true,
+		},
+		{
+			name:  "plan",
+			event: toolEndEvent(planToolName, `{"units":[{"title":"t","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -q done out.md"}]}`),
+			run: func(r *nativeRunner) error {
+				_, err := r.PlanSession(context.Background(), m, "")
+				return err
+			},
+			want: true,
+		},
+		{
+			name:  "build",
+			event: toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"tests pass"}`),
+			run: func(r *nativeRunner) error {
+				_, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"})
+				return err
+			},
+			want: true,
+		},
+		{
+			name:  "review",
+			event: toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`),
+			run: func(r *nativeRunner) error {
+				_, err := r.RunReview(context.Background(), m, ReviewPacket{Goal: "goal", Diff: "d"})
+				return err
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &scriptedAgent{batches: [][]stream.StreamEvent{{tc.event}}}
+			r := newTestRunner(agent)
+			r.SetSearchMemory(recall)
+			if err := tc.run(r); err != nil {
+				t.Fatalf("%s phase: %v", tc.name, err)
+			}
+			if got := hasTool(agent.requests[0], "search_memory"); got != tc.want {
+				t.Fatalf("%s offered search_memory = %v, want %v (tools: %v)",
+					tc.name, got, tc.want, toolNames(agent.requests[0]))
+			}
+		})
+	}
+}
+
+// TestSearchMemoryAbsentWithoutBackend pins the nil-safe contract: an
+// unwired runner never offers the tool, exactly as kbSearch behaves.
+func TestSearchMemoryAbsentWithoutBackend(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"tests pass"}`)},
+	}}
+	r := newTestRunner(agent)
+	if _, _, err := r.RunWorker(context.Background(), Mission{ID: "m1", Route: "default"}, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if hasTool(agent.requests[0], "search_memory") {
+		t.Fatal("search_memory offered with no backend wired")
+	}
+}
+
+// TestSearchMemoryPlanNotForcedWhenOffered pins the D-063 interaction:
+// submit_plan is force-called only when it is the turn's sole tool, so
+// a planner offered search_memory can consult it before planning
+// instead of being forced straight into the plan.
+func TestSearchMemoryPlanNotForcedWhenOffered(t *testing.T) {
+	const planArgs = `{"units":[{"title":"t","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -q done out.md"}]}`
+	m := Mission{ID: "m1", Route: "default", Goal: "build a thing"}
+
+	bare := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, planArgs)}}}
+	br := newTestRunner(bare)
+	if _, err := br.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession without memory: %v", err)
+	}
+	if bare.requests[0].ForceTool != planToolName {
+		t.Fatalf("ForceTool = %q, want %q when submit_plan is the only tool", bare.requests[0].ForceTool, planToolName)
+	}
+
+	withMem := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, planArgs)}}}
+	mr := newTestRunner(withMem)
+	mr.SetSearchMemory(func(context.Context, string) ([]builtin.SearchMemoryHit, error) { return nil, nil })
+	if _, err := mr.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession with memory: %v", err)
+	}
+	if withMem.requests[0].ForceTool != "" {
+		t.Fatalf("ForceTool = %q, want empty when search_memory is also offered", withMem.requests[0].ForceTool)
+	}
+}
