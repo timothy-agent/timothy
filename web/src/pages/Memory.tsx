@@ -213,7 +213,6 @@ function Browser() {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && search()}
           data-testid="memory-search"
-          className="h-10"
         />
         <Button onClick={search} disabled={busy}>
           Search
@@ -284,10 +283,9 @@ function Browser() {
             onChange={(e) => setNewFact(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && add()}
             data-testid="manual-add"
-            className="h-10"
           />
           <Select value={newType} onValueChange={setNewType}>
-            <SelectTrigger className="h-10 w-36" aria-label="Memory type">
+            <SelectTrigger className="w-36" aria-label="Memory type">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
