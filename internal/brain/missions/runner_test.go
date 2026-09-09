@@ -3294,3 +3294,70 @@ func TestRenderReviewContentCriteriaReplaceGoal(t *testing.T) {
 		t.Fatalf("legacy packet must render the goal:\n%s", legacy)
 	}
 }
+
+// TestSkillsIndexReachesDiscoverAndPlan pins issue #628: the agent's
+// skill index reached the work packet only, so a mission whose agent
+// carries a skill defining the output contract planned without it and
+// first loaded it in build, with the plan already committed.
+func TestSkillsIndexReachesDiscoverAndPlan(t *testing.T) {
+	const index = "Available skills:\n- hackathon: rules first, then ideas"
+	resolver := func(ctx context.Context, agentID string) string { return index }
+	m := Mission{ID: "m1", AgentID: "a1", Route: "default", Goal: "enter the hackathon"}
+
+	discoverAgent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(discoverNotesToolName, `{"findings":"ok"}`)},
+	}}
+	dr := newTestRunner(discoverAgent)
+	dr.SetSkillsIndex(resolver)
+	if _, _, _, err := dr.DiscoverSession(context.Background(), m); err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
+	}
+	if got := discoverAgent.requests[0].System; !strings.Contains(got, index) {
+		t.Fatalf("discover system prompt missing skills index: %s", got)
+	}
+
+	planAgent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, `{"units":[{"title":"t","artifacts":["out.md"],"criteria":["c1","c2"],"verify_cmd":"grep -q done out.md"}]}`)},
+	}}
+	pr := newTestRunner(planAgent)
+	pr.SetSkillsIndex(resolver)
+	if _, err := pr.PlanSession(context.Background(), m, ""); err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if got := planAgent.requests[0].System; !strings.Contains(got, index) {
+		t.Fatalf("plan system prompt missing skills index: %s", got)
+	}
+}
+
+// TestSkillsIndexAbsentWithoutResolverOrAgent pins the nil-safe
+// contract: no resolver, no agent, or an agent with no packs each
+// leave both prompts exactly as they were before #628.
+func TestSkillsIndexAbsentWithoutResolverOrAgent(t *testing.T) {
+	cases := []struct {
+		name     string
+		resolver func(ctx context.Context, agentID string) string
+		agentID  string
+	}{
+		{name: "no resolver", resolver: nil, agentID: "a1"},
+		{name: "no agent", resolver: func(context.Context, string) string { return "Available skills:\n- x" }, agentID: ""},
+		{name: "agent with no packs", resolver: func(context.Context, string) string { return "" }, agentID: "a1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+				{toolEndEvent(discoverNotesToolName, `{"findings":"ok"}`)},
+			}}
+			r := newTestRunner(agent)
+			if tc.resolver != nil {
+				r.SetSkillsIndex(tc.resolver)
+			}
+			m := Mission{ID: "m1", AgentID: tc.agentID, Route: "default"}
+			if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
+				t.Fatalf("DiscoverSession: %v", err)
+			}
+			if got := agent.requests[0].System; strings.Contains(got, "Available skills") || strings.Contains(got, "load_skill") {
+				t.Fatalf("discover system prompt should carry no skill index: %s", got)
+			}
+		})
+	}
+}

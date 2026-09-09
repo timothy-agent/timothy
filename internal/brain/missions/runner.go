@@ -230,6 +230,13 @@ type nativeRunner struct {
 	// discover/plan prompts' date line; nil means UTC.
 	location func(ctx context.Context) *time.Location
 
+	// skillsIndex renders the agent's skill index for the discover and
+	// plan prompts (issue #628), so a skill that defines the mission's
+	// shape is loadable before the plan is committed rather than only
+	// in build. nil, or a mission with no agent, means no index: the
+	// same nil-safe contract as every resolver above.
+	skillsIndex func(ctx context.Context, agentID string) string
+
 	// askParker backs ask_user's park (D-088): nil means ask_user is
 	// never offered on any mission turn, same nil-safe contract as
 	// kbSearch/kbRead: a store wiring bug degrades to "no ask_user"
@@ -299,6 +306,14 @@ func (r *nativeRunner) SetProgressReader(pr ProgressReader) {
 // runner is built alongside).
 func (r *nativeRunner) SetLocation(loc func(ctx context.Context) *time.Location) {
 	r.location = loc
+}
+
+// SetSkillsIndex wires the per-agent skill index into the discover and
+// plan prompts (issue #628). Same resolver the driver renders into
+// worker packets; unset means those two phases show no index, which is
+// the behavior before this existed.
+func (r *nativeRunner) SetSkillsIndex(fn func(ctx context.Context, agentID string) string) {
+	r.skillsIndex = fn
 }
 
 // operatorNotePrefix marks a progress note as operator-authored
@@ -486,6 +501,23 @@ func (r *nativeRunner) kbDiscoverNudge(m Mission) string {
 		return ""
 	}
 	return " A curated knowledge base is available via search_kb: search it for anything relevant to the goal before concluding no research is needed."
+}
+
+// skillsNudge renders the agent's skill index for a discover or plan
+// prompt (issue #628). Before this, the index reached the work packet
+// only, so an agent whose skill defines the mission's whole output
+// shape planned without it and discovered the contract in build, with
+// the plan already committed. Empty when no resolver is wired, the
+// mission has no agent, or the agent lists no skills.
+func (r *nativeRunner) skillsNudge(ctx context.Context, m Mission) string {
+	if r.skillsIndex == nil || m.AgentID == "" {
+		return ""
+	}
+	index := r.skillsIndex(ctx, m.AgentID)
+	if index == "" {
+		return ""
+	}
+	return "\n\n" + index + "\nLoad a skill with load_skill before deciding how to approach the goal: a skill that fits sets the output contract this mission is judged against."
 }
 
 // connectorReadTools resolves m's read-only connector tools (nil
@@ -1198,7 +1230,7 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 // failure. provider/model (issue #507) are who served the turn that
 // produced the returned notes; empty when the turn errored.
 func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, servedProvider, servedModel string, err error) {
-	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx)
+	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if pc := m.ParentContext(); pc != "" {
 		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(pc)
@@ -1627,7 +1659,7 @@ func planSystemPrompt(hasPlan bool) string {
 // stuck mission (5 straight "invalid plan JSON" failures, identical
 // each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
-	system := planSystemPrompt(m.HasPlan) + r.execEnvironmentNote(ctx)
+	system := planSystemPrompt(m.HasPlan) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)
