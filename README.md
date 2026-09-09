@@ -11,7 +11,9 @@
 
 ![Timothy](assets/timothy.png)
 
-**The personal AI assistant you actually own.** Timothy runs on your hardware and works for you around the clock: it chats, researches, and writes code; it reads your inbox and calendar and briefs you about what matters; it remembers who you are across every conversation; and it delivers results to your phone while you sleep. Every conversation, memory, document, and API key stays on infrastructure you control.
+**The open-source control plane for your personal AI workforce.** Run your own AI agents. Your infrastructure. Your models. Your rules.
+
+Timothy runs on your hardware and works for you around the clock. Shape agents with their own model, tools and knowledge, hand them real work, and let them chat, research, write code, read your inbox and calendar, and brief you about what matters. They remember who you are across every conversation and deliver results to your phone while you sleep. Every conversation, memory, document, and API key stays on infrastructure you control.
 
 Use any model you want: Anthropic, OpenAI, Amazon Bedrock, GLM, a local Ollama, or any compatible endpoint. Route each kind of work to whichever model does it best, switch anytime from settings, no code changes, no lock-in.
 
@@ -21,21 +23,21 @@ Alpha releases with prebuilt images are available on the [Releases page](https:/
 
 ## Features
 
-| Feature | What you get |
-|---|---|
-| **One assistant, every model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider, all behind one interface. Pick which model handles chat, coding, research, or briefings, and let Timothy fail over to a backup when a provider has a bad day. |
-| **Give it real work** | Hand Timothy a task (research a topic, write a report, fix a bug) and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done. |
-| **Results find you** | Any task or schedule can deliver its result to Telegram, email, or a webhook the moment it finishes, files attached. No checking a dashboard: the answer lands where you already are. |
-| **It writes code safely** | Coding tasks run in isolated per-language sandboxes (Go, Node, Python, Java, PHP), on their own git branch, with the work verified before you see it. It can even drive Claude Code or Codex for you while keeping review and budgets in your hands. |
-| **Your daily briefings** | Wake up to a digest of your inbox, calendar, and spending, delivered to Telegram or email in your timezone, saying only what actually needs your attention. Schedule any task to run on your clock. |
-| **Connected to your life** | Gmail, Google Calendar, Docs, Drive, GitHub, and any MCP server. Timothy reads them when a task needs it, and asks before doing anything destructive. |
-| **Shape your own assistants** | Create named agents with their own personality, favorite model, and exactly the tools and knowledge they need, nothing more. A briefing agent that reads only your mail and calendar can never touch your code or send a message on your behalf. |
-| **It remembers you** | Preferences, projects, and facts you share carry across conversations, and recurring patterns become insights over time. You approve what becomes a standing instruction; noise gets filtered before it ever reaches you. |
-| **Your documents, searchable** | Drop in files or URLs; Timothy files them into topic collections and uses them to answer your questions. Your own knowledge base, on your own disk. |
-| **Nothing gets lost** | Conversations survive restarts, crashes, and upgrades. Pick up any session exactly where it left off. |
-| **You control the spend** | Every model call is priced and logged honestly. Set budgets with alerts, see exactly where the money goes, and route routine work to cheap or free models. |
-| **Private by design** | Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager), never in logs, never in the UI. |
-| **Talk to it** | Optional voice input with fully local speech-to-text. Audio never leaves your machine. |
+| Feature                        | What you get                                                                                                                                                                                                                                                            |
+|--------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **One assistant, every model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider, all behind one interface. Pick which model handles chat, coding, research, or briefings, and let Timothy fail over to a backup when a provider has a bad day.                   |
+| **Give it real work**          | Hand Timothy a task (research a topic, write a report, fix a bug) and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done.                     |
+| **Results find you**           | Any task or schedule can deliver its result to Telegram, email, a webhook, or GitHub (a pushed branch or an opened pull request) the moment it finishes, files attached. No checking a dashboard: the answer lands where you already are.                               |
+| **It writes code safely**      | Coding tasks run in isolated per-language sandboxes (Go, Node, Python, Java, PHP), on their own git branch, with the work verified before you see it. It can also hand the coding work to a CLI agent you already use, Claude Code, Codex, Cursor, opencode, or pi, while keeping review and budgets in your hands. |
+| **Your daily briefings**       | Wake up to a digest of your inbox, calendar, and spending, delivered to Telegram or email in your timezone, saying only what actually needs your attention. Schedule any task to run on your clock.                                                                     |
+| **Connected to your life**     | Gmail, Google Calendar, Docs, Drive, GitHub, Outlook, IMAP, CalDAV, and any MCP server. Timothy reads them when a task needs it, and asks before doing anything destructive.                                                                                            |
+| **Shape your own assistants**  | Create named agents with their own personality, favorite model, and exactly the tools and knowledge they need, nothing more. A briefing agent that reads only your mail and calendar can never touch your code or send a message on your behalf.                        |
+| **It remembers you**           | Preferences, projects, and facts you share carry across conversations, and recurring patterns become insights over time. You approve what becomes a standing instruction; noise gets filtered before it ever reaches you.                                               |
+| **Your documents, searchable** | Drop in files or URLs; Timothy files them into topic collections and uses them to answer your questions. Your own knowledge base, on your own disk.                                                                                                                     |
+| **Nothing gets lost**          | Conversations survive restarts, crashes, and upgrades. Pick up any session exactly where it left off.                                                                                                                                                                   |
+| **You control the spend**      | Every model call is priced and logged honestly. Set budgets with alerts, see exactly where the money goes, and route routine work to cheap or free models.                                                                                                              |
+| **Private by design**          | Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager), never in logs, never in the UI.                         |
+| **Talk to it**                 | Optional voice input with fully local speech-to-text. Audio never leaves your machine.                                                                                                                                                                                  |
 
 ## A day with Timothy
 
@@ -121,13 +123,13 @@ Prerequisites:
    - `TIMOTHY_MASTER_KEY`: generate with `openssl rand -base64 32`. This is the root of trust for the encrypted secret store (provider API keys, OAuth tokens all live behind it). Compose hard-fails if it's blank. **Back this up**: losing it makes every stored secret unrecoverable.
    - `TIMOTHY_API_TOKEN`: generate with `openssl rand -hex 32`. Bearer token for the API; if it's blank, every request 401s.
 
-2. (Optional) Missions sandbox. `deploy/env.example` prefills `MISSION_SANDBOX_IMAGE=timothy-sandbox:latest`, but that image doesn't exist until you build it:
+2. Missions sandbox. `sandboxd` is a required service: `docker-compose.yml` fixes its `MISSION_SANDBOX_IMAGE` at `timothy-sandbox:latest`, and it refuses to start without that image built. `make up` builds it for you, but you can build it ahead of time:
 
    ```sh
    make sandbox-image
    ```
 
-   This builds the base image plus the per-language variants (`timothy-sandbox-{go,node,python,java,php}:latest`) that coding missions run in; sandboxd derives a variant's image name from `MISSION_SANDBOX_IMAGE`, so the local names must stay in this convention. Skip this and leave `MISSION_SANDBOX_IMAGE` empty in `.env` if you don't need missions isolated in their own container; mission shell commands then run in-process instead.
+   This builds the base image plus the per-language variants (`timothy-sandbox-{go,node,python,java,php}:latest`) that coding missions run in.
 
 3. (Linux only) Set `DOCKER_SOCK_GID` so `sandboxd` can use the Docker socket:
 
@@ -147,7 +149,7 @@ Prerequisites:
 
 5. First login. There's no login page: the web UI auto-opens a settings dialog asking for an API token the first time it can't find one. Paste the `TIMOTHY_API_TOKEN` value from `deploy/.env`. It's stored in your browser's `localStorage`.
 
-6. Add a provider. A fresh install has zero LLM providers and no routing configured, so Timothy can't answer anything until you do this. Go to **Settings → Providers**, pick a preset tile (OpenAI, Anthropic, Bedrock, GLM, Grok, Ollama, or a custom OpenAI-compatible endpoint), fill in the form, and run the connection test before adding it. The API key you enter is encrypted into the secret store (default backend `db`, encrypted with `TIMOTHY_MASTER_KEY`); the database only ever holds a reference to it, never the raw value, and it never appears in `.env`, logs, or API responses. Creating your first provider automatically bootstraps the 4 routes Timothy needs to work (`default`, `summarize`, `embedding`, `vision`); routes are otherwise fully user-managed (create, edit chain/strategy, delete) from **Settings → Routing**.
+6. Add a provider. A fresh install has zero LLM providers and no routing configured, so Timothy can't answer anything until you do this. Go to **Settings → Providers**, pick a preset tile (OpenAI, OpenAI Responses, Anthropic, Cursor, Bedrock, GLM, Grok, Ollama, or a custom OpenAI-compatible endpoint), fill in the form, and run the connection test before adding it. The API key you enter is encrypted into the secret store (default backend `db`, encrypted with `TIMOTHY_MASTER_KEY`); the database only ever holds a reference to it, never the raw value, and it never appears in `.env`, logs, or API responses. Creating your first provider automatically bootstraps the 4 routes Timothy needs to work (`default`, `summarize`, `embedding`, `vision`); routes are otherwise fully user-managed (create, edit chain/strategy, delete) from **Settings → Routing**.
 
 ## Operating the stack
 

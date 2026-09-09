@@ -34,32 +34,10 @@ export const toolCallArgs = {
   requested_at: '2026-09-07T08:03:12Z',
 }
 
-export interface EventLogRow {
-  time: string
-  kind: 'tool' | 'plan' | 'phase' | 'note' | 'review'
-  text: string
-  status?: 'neutral' | 'working' | 'waiting' | 'success' | 'warning' | 'error'
-}
-
-export const eventLogRows: EventLogRow[] = [
-  { time: '2026-09-07T08:00:02Z', kind: 'phase', text: 'Mission started', status: 'working' },
-  { time: '2026-09-07T08:00:14Z', kind: 'plan', text: 'Plan approved, 3 units', status: 'success' },
-  { time: '2026-09-07T08:01:03Z', kind: 'tool', text: 'search_web "unread github notifications api"', status: 'success' },
-  { time: '2026-09-07T08:01:41Z', kind: 'tool', text: 'list_calendar_events account=work', status: 'success' },
-  { time: '2026-09-07T08:02:20Z', kind: 'note', text: 'Grouped 14 notifications across 2 repositories' },
-  { time: '2026-09-07T08:02:55Z', kind: 'tool', text: 'read_file digest-template.md', status: 'success' },
-  { time: '2026-09-07T08:03:30Z', kind: 'review', text: 'Prove round: 2 of 2 units harness-passed', status: 'success' },
-  { time: '2026-09-07T08:04:02Z', kind: 'tool', text: 'send_mail account=personal', status: 'working' },
-  { time: '2026-09-07T08:04:09Z', kind: 'tool', text: 'send_mail account=personal', status: 'success' },
-  { time: '2026-09-07T08:04:11Z', kind: 'phase', text: 'Mission done', status: 'success' },
-]
-
-// eventLogComponentRows feeds the new timothy/event-log.tsx EventLog
-// component's showcase section (distinct shape from the legacy
-// eventLogRows above, which the hand-rolled EventLogSample still
-// uses). Plain data only, no JSX, since this file has no .tsx JSX
-// support: AgentSurfaces.tsx builds ReactNode titles/payloads for
-// these rows itself.
+// eventLogComponentRows feeds the timothy/event-log.tsx EventLog
+// component's showcase section. Plain data only, no JSX, since this
+// file has no .tsx JSX support: AgentSurfaces.tsx builds ReactNode
+// titles/payloads for these rows itself.
 export interface EventLogComponentRowFixture {
   id: string
   time: string
@@ -68,11 +46,14 @@ export interface EventLogComponentRowFixture {
   text: string
   target?: string
   payload?: unknown
+  // Short category shown in EventLog's own label column, e.g. a
+  // mission phase name (14.11).
+  label?: string
 }
 
 export const eventLogComponentRows: EventLogComponentRowFixture[] = [
-  { id: 'started', time: '2026-09-07T08:00:02Z', kind: 'phase', status: 'working', text: 'Mission started' },
-  { id: 'plan-approved', time: '2026-09-07T08:00:14Z', kind: 'plan', status: 'success', text: 'Plan approved, 3 units' },
+  { id: 'started', time: '2026-09-07T08:00:02Z', kind: 'phase', status: 'working', text: 'Mission started', label: 'Discover' },
+  { id: 'plan-approved', time: '2026-09-07T08:00:14Z', kind: 'plan', status: 'success', text: 'Plan approved, 3 units', label: 'Plan' },
   {
     id: 'search-web',
     time: '2026-09-07T08:01:03Z',
@@ -81,6 +62,7 @@ export const eventLogComponentRows: EventLogComponentRowFixture[] = [
     text: 'search_web',
     target: 'unread github notifications api',
     payload: { query: 'unread github notifications api', limit: 8 },
+    label: 'Build',
   },
   {
     id: 'calendar',
@@ -89,11 +71,12 @@ export const eventLogComponentRows: EventLogComponentRowFixture[] = [
     status: 'success',
     text: 'list_calendar_events',
     target: 'account=work',
+    label: 'Build',
   },
-  { id: 'note', time: '2026-09-07T08:02:20Z', kind: 'note', text: 'Grouped 14 notifications across 2 repositories' },
-  { id: 'turn', time: '2026-09-07T08:02:55Z', kind: 'turn', status: 'success', text: 'Turn: gathered notifications' },
-  { id: 'review', time: '2026-09-07T08:03:30Z', kind: 'review', status: 'success', text: 'Prove round: 2 of 2 units harness-passed' },
-  { id: 'done', time: '2026-09-07T08:04:11Z', kind: 'phase', status: 'success', text: 'Mission done' },
+  { id: 'note', time: '2026-09-07T08:02:20Z', kind: 'note', text: 'Grouped 14 notifications across 2 repositories', label: 'Build' },
+  { id: 'turn', time: '2026-09-07T08:02:55Z', kind: 'turn', status: 'success', text: 'Turn: gathered notifications', label: 'Build' },
+  { id: 'review', time: '2026-09-07T08:03:30Z', kind: 'review', status: 'success', text: 'Prove round: 2 of 2 units harness-passed', label: 'Prove' },
+  { id: 'done', time: '2026-09-07T08:04:11Z', kind: 'phase', status: 'success', text: 'Mission done', label: 'Result' },
 ]
 
 export interface ModelOption {
