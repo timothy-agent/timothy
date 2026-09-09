@@ -9,6 +9,7 @@ description: Carries a hackathon from its published rules to a submission-ready 
 
 - Rules before ideas. Given a link, fetch the main page with fetch_url and then every linked rules, FAQ, prizes, schedule, judging criteria, sponsor track, and terms page, HTML and PDF alike, before proposing anything. Follow links found on those pages as well until no new rules-bearing page appears.
 - If a search_kb tool is available, search the knowledge base for past entries, rubrics, and sponsor notes on the same event or organizer before the web.
+- If a search_memory tool is available, search long-term memory before writing ideas: the operator's languages and stack, the infrastructure and data they run, the tasks they repeat, and any standing preference. One query per topic. The operator-fit rule below cannot be met from the goal text alone.
 - Produce a rules checklist as the first artifact, `rules-checklist.md`, with one row per constraint: eligibility, team size, registration and submission deadlines, required deliverables (repository, demo video, writeup, sponsor technology), IP and license terms, disallowed content and data, and judging criteria with weights when published. Every row carries the source URL and the quoted sentence it comes from. Nothing enters the checklist without a quote.
 - Number the rows R1 upward with no gaps, and state the last ID used at the end of the file as `Rows: R1-Rn`. Every later reference to a row, in any file, uses one of those IDs. A row ID that is not in the checklist is a fabricated citation.
 - Convert every deadline to Europe/Amsterdam with convert_time and show both the original and the converted time. State the remaining time from now to the submission deadline; that number drives feasibility later.
@@ -31,7 +32,7 @@ description: Carries a hackathon from its published rules to a submission-ready 
 **Why not:** the biggest risk to finishing in the time left, or the weakness a judge will find.
 ```
 - Name what a judge would find non-obvious about each idea, and what the agent does that a single prompt or a scripted workflow could not. When the judging criteria weigh originality, the obvious framing of the event's own theme is the entry every other submission files: say so and go past it.
-- Ideas are for this operator, not a generic entrant. Use what the mission knows about them, their languages and stack, the infrastructure and data they already run, and the tasks they actually repeat. When a required sponsor technology rules out a standing preference, say which preference yields and why.
+- Ideas are for this operator, not a generic entrant. Use what search_memory and the goal say about them, their languages and stack, the infrastructure and data they already run, and the tasks they actually repeat. When a required sponsor technology rules out a standing preference, say which preference yields and why.
 - Before writing `ideas.md`, re-read `rules-checklist.md` and cite only IDs you can see in it. Cite the row for what it actually says: quote or paraphrase each row you name, so a wrong ID is visible as a mismatch. Never continue an ID sequence past the last row, and never carry a row number over from another event.
 - Stop after the ideas. The build starts only after the operator picks one. When the mission has a followup_mission tool, offer to open the build mission with the chosen idea and the checklist attached.
 - In the build mission, the plan lists the submission pack as explicit units alongside the code: a README that maps each judging criterion to where the project meets it, a writeup draft in the platform's required shape and length, and a demo script timed to the allowed video length. A plan that only builds code is incomplete.
@@ -51,6 +52,7 @@ description: Carries a hackathon from its published rules to a submission-ready 
 | "I remember how Devpost submissions work"                       | Platforms change their required fields; read this event's page or ask for the pasted text.                         |
 | "The sponsor API is hard, I'll mention it in the writeup"       | Sponsor tracks are judged on real use; the technology must run in the code.                                        |
 | "The operator can flesh out the interesting ideas themselves"   | An idea without a build sketch and a named risk cannot be chosen between. Cost the work before ranking it.          |
+| "I know enough about the operator from the goal"                | The goal names an event, not a person. Search memory for their stack and preferences, then write.                  |
 | "The first ideas that fit the theme are the ideas"              | The obvious reading of the theme is what every other entry submits; originality is scored, so go past it.           |
 | "The search found nothing like it, so it is novel"              | An empty result is unclear, not novel. Name what was searched and what it could not reach.                          |
 | "Fifteen candidates is a lot of writing for five slots"         | The pool is thinking, not writing. One line each, then cut, then research the survivors.                            |
@@ -67,6 +69,7 @@ description: Carries a hackathon from its published rules to a submission-ready 
 - An idea claims novelty, or names no existing solution to compare against.
 - The five ideas were written straight out, with no wider pool cut down first.
 - Every idea is the event theme's most obvious reading, or could have been written without knowing anything about this operator.
+- `ideas.md` is being written and search_memory was offered but never called.
 - A dropped idea is ranked instead of listed under `## Dropped`.
 - The build plan has no unit for the README criteria map, the writeup, or the demo script.
 - Code is being written before the operator picked an idea.
