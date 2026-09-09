@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Bot, FileText, Inbox } from 'lucide-react'
+import { Bot, ChevronDown, ChevronUp, FileText, Inbox } from 'lucide-react'
 
 import { SectionHeader } from '@/components/timothy/page-header'
 import { Panel } from '@/components/timothy/panel'
@@ -9,6 +9,7 @@ import { StatusBadge } from '@/components/timothy/status-badge'
 import { Combobox } from '@/components/timothy/combobox'
 import { useConfirm } from '@/components/timothy/confirm-dialog'
 import { CopyButton } from '@/components/timothy/copy-button'
+import { IconButton } from '@/components/timothy/icon-button'
 import { JsonBlock } from '@/components/timothy/json-block'
 import { Kbd, KbdGroup } from '@/components/timothy/kbd'
 import { Button } from '@/components/ui/button'
@@ -42,6 +43,35 @@ const fileRows = [
   { path: 'docs/2026-09-07-digest-notes.md', size: '640 B' },
   { path: 'internal/brain/destinations/email.go', size: '4.8 KB' },
 ]
+
+// GoalPanelSample mirrors GoalSection.tsx (components/missions): a
+// Panel with a leading control and an IconButton chevron in `actions`
+// that expands/collapses the body, replacing the old text toggle
+// ("Show goal").
+function GoalPanelSample() {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <Panel
+      title="Goal"
+      headingLevel="h3"
+      leading={<Bot className="size-4 text-muted-foreground" aria-hidden />}
+      actions={
+        <>
+          {expanded && <CopyButton value={missionGoal} label="Copy goal" />}
+          <IconButton
+            size="xs"
+            label={expanded ? 'Hide goal' : 'Show goal'}
+            icon={expanded ? ChevronUp : ChevronDown}
+            aria-expanded={expanded}
+            onClick={() => setExpanded((v) => !v)}
+          />
+        </>
+      }
+    >
+      {expanded && <p className="text-prose">{missionGoal}</p>}
+    </Panel>
+  )
+}
 
 export function Compositions() {
   const [confirm, confirmElement] = useConfirm()
@@ -157,11 +187,12 @@ export function Compositions() {
 
       <section>
         <SectionHeader title="Panel" />
-        <p className="mb-4 text-sm text-muted-foreground">Evaluate: comfortable prose panel next to an operational divided list.</p>
+        <p className="mb-4 text-sm text-muted-foreground">
+          Evaluate: comfortable prose panel next to an operational divided list; the leading slot and the
+          IconButton chevron collapse pattern (replaces text toggles like "Show goal").
+        </p>
         <div className="grid gap-4 lg:grid-cols-2">
-          <Panel title="Goal" headingLevel="h3">
-            <p className="text-prose">{missionGoal}</p>
-          </Panel>
+          <GoalPanelSample />
           <Panel title="Files" density="operational" headingLevel="h3">
             <div className="divide-y divide-border">
               {fileRows.map((file) => (

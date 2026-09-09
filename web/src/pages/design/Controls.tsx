@@ -7,6 +7,7 @@ import { IconButton } from '@/components/timothy/icon-button'
 import { Combobox } from '@/components/timothy/combobox'
 import { SegmentedControl } from '@/components/timothy/segmented-control'
 import { Kbd, KbdGroup } from '@/components/timothy/kbd'
+import { Spinner } from '@/components/timothy/spinner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -91,6 +92,11 @@ export function Controls() {
               <Plus aria-hidden />
               New mission
             </Button>
+          </div>
+          <div className="flex flex-wrap items-center gap-4">
+            <Spinner size="sm" />
+            <Spinner size="default" />
+            <Spinner size="lg" />
           </div>
         </div>
       </section>
