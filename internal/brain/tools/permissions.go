@@ -419,18 +419,19 @@ func guardSubject(root, tool, subject string) string {
 		subject = strings.ReplaceAll(subject, p, " ")
 	}
 	for _, qt := range commandTokensQuoted(subject) {
-		tok := guardToken(qt.text)
-		for _, g := range guardPatterns {
-			if g.pattern.MatchString(tok) {
-				return "policy guard: " + g.name + " are off-limits"
+		for _, tok := range guardFragments(qt.text) {
+			for _, g := range guardPatterns {
+				if g.pattern.MatchString(tok) {
+					return "policy guard: " + g.name + " are off-limits"
+				}
 			}
-		}
-		if !looksLikePath(tok) {
-			continue
-		}
-		for _, g := range guardPathPatterns {
-			if g.pattern.MatchString(tok) {
-				return "policy guard: " + g.name + " are off-limits"
+			if !looksLikePath(tok) {
+				continue
+			}
+			for _, g := range guardPathPatterns {
+				if g.pattern.MatchString(tok) {
+					return "policy guard: " + g.name + " are off-limits"
+				}
 			}
 		}
 	}
@@ -476,13 +477,23 @@ func looksLikePath(tok string) bool {
 	return strings.Contains(tok, "/") || strings.HasPrefix(tok, ".") || strings.HasPrefix(tok, "~")
 }
 
-// guardToken trims the shell punctuation that can wrap a path inside
-// one token, so a guarded path still matches when it arrives as
-// `cat(.env)`, `"~/.aws/credentials";` or a heredoc line. Interior
-// characters are untouched: trimming only the edges is what keeps
-// `builder.aws` a single ordinary word rather than a path segment.
-func guardToken(tok string) string {
-	return strings.Trim(tok, "()[]{},;:&|<>*?!\"'`$")
+// guardFragmentSplit are the characters that can wrap or abut a path
+// inside a single whitespace-delimited token: quotes and brackets in
+// a language literal (python3 -c "open('/etc/passwd')"), and the
+// shell's own separators. '.', '-', '_' and '~' are absent on
+// purpose, since they occur inside real path names.
+const guardFragmentSplit = "()[]{},;:&|<>*?!\"'`$= \t\n"
+
+// guardFragments splits one token into the path-shaped pieces the
+// guard matches against. A path can sit inside a token rather than be
+// the token: `"open('/etc/passwd').read()"` is one token, and only
+// after splitting on quotes and brackets does /etc/passwd appear.
+// Splitting also strips wrapping punctuation, so `"~/.aws/creds";`
+// still matches.
+func guardFragments(tok string) []string {
+	return strings.FieldsFunc(tok, func(r rune) bool {
+		return strings.ContainsRune(guardFragmentSplit, r)
+	})
 }
 
 // pathWithin is a purely lexical containment check (the workspace may

@@ -289,3 +289,28 @@ func TestSandboxAllowsGating(t *testing.T) {
 		}
 	})
 }
+
+func TestGuardEmbeddedPath(t *testing.T) {
+	t.Parallel()
+	const root = "/workspace"
+	cases := []struct {
+		cmd  string
+		deny bool
+	}{
+		{`python3 -c "open('/etc/passwd').read()"`, true},
+		{`python3 -c "open('~/.aws/credentials').read()"`, true},
+		{`node -e "require('fs').readFileSync('.env')"`, true},
+		{"grep -n 'builder.aws' plan.md", false},
+		{"python3 - <<'PY'\nreq=['builder.aws','README']\nPY", false},
+		{"grep -rn 'rotate the credentials' docs/", false},
+	}
+	for _, c := range cases {
+		got := guardSubject(root, "shell", c.cmd)
+		if c.deny && got == "" {
+			t.Errorf("want deny, got allow: %q", c.cmd)
+		}
+		if !c.deny && got != "" {
+			t.Errorf("want allow, got %q: %q", got, c.cmd)
+		}
+	}
+}
