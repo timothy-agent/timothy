@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -247,13 +248,15 @@ func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan str
 
 			case *types.ConverseStreamOutputMemberMetadata:
 				if v.Value.Usage != nil {
+					write5m, write1h := splitBedrockCacheWrite(v.Value.Usage)
 					if !emit(sctx, outCh, stream.StreamEvent{
 						Type: stream.EventUsage,
 						Usage: &stream.Usage{
-							InputTokens:      int(aws.ToInt32(v.Value.Usage.InputTokens)),
-							OutputTokens:     int(aws.ToInt32(v.Value.Usage.OutputTokens)),
-							CacheReadTokens:  int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
-							CacheWriteTokens: int(aws.ToInt32(v.Value.Usage.CacheWriteInputTokens)),
+							InputTokens:        int(aws.ToInt32(v.Value.Usage.InputTokens)),
+							OutputTokens:       int(aws.ToInt32(v.Value.Usage.OutputTokens)),
+							CacheReadTokens:    int(aws.ToInt32(v.Value.Usage.CacheReadInputTokens)),
+							CacheWriteTokens:   write5m,
+							CacheWrite1hTokens: write1h,
 						},
 					}) {
 						return
@@ -311,7 +314,7 @@ func buildConverseStreamInput(req CompletionRequest) *bedrockruntime.ConverseStr
 		// converseMessages flattens that history to plain text instead.
 		Messages:   converseMessages(req.Messages, toolConfig != nil),
 		ToolConfig: toolConfig,
-		System:     converseSystem(req.System, req.Model),
+		System:     converseSystem(req.System, req.Model, req.CacheTTL),
 	}
 	if req.MaxTokens > 0 {
 		input.InferenceConfig = &types.InferenceConfiguration{
@@ -510,19 +513,48 @@ func isToolResultTurn(msg types.Message) bool {
 // rejects cachePoint blocks, hence the model-family gate; prefixes
 // shorter than Nova's caching minimum are ignored server-side, not
 // errors.
-func converseSystem(system, model string) []types.SystemContentBlock {
+//
+// cacheTTL "1h" asks the cache point for the extended tier. Only the
+// cache-eligible family can carry it; for anything else the request
+// goes out unchanged and the miss is logged at debug.
+func converseSystem(system, model, cacheTTL string) []types.SystemContentBlock {
 	if system == "" {
 		return nil
 	}
 	blocks := []types.SystemContentBlock{
 		&types.SystemContentBlockMemberText{Value: system},
 	}
-	if strings.Contains(model, "amazon.nova") {
-		blocks = append(blocks, &types.SystemContentBlockMemberCachePoint{
-			Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
-		})
+	if !strings.Contains(model, "amazon.nova") {
+		if cacheTTL != "" {
+			slog.Default().Debug("cache ttl not applied", "model", model, "cache_ttl", cacheTTL)
+		}
+		return blocks
 	}
+	point := types.CachePointBlock{Type: types.CachePointTypeDefault}
+	if cacheTTL == "1h" {
+		point.Ttl = types.CacheTTLOneHour
+	}
+	blocks = append(blocks, &types.SystemContentBlockMemberCachePoint{Value: point})
 	return blocks
+}
+
+// splitBedrockCacheWrite separates the cache write into its
+// five-minute and one-hour parts, which bill at different rates.
+// CacheDetails is the per-TTL breakdown and is empty when no cache
+// creation happened or the model reports no breakdown, in which case
+// the undifferentiated total counts as five-minute.
+func splitBedrockCacheWrite(u *types.TokenUsage) (fiveMin, oneHour int) {
+	if len(u.CacheDetails) == 0 {
+		return int(aws.ToInt32(u.CacheWriteInputTokens)), 0
+	}
+	for _, d := range u.CacheDetails {
+		if d.Ttl == types.CacheTTLOneHour {
+			oneHour += int(aws.ToInt32(d.InputTokens))
+			continue
+		}
+		fiveMin += int(aws.ToInt32(d.InputTokens))
+	}
+	return fiveMin, oneHour
 }
 
 // converseTools maps tool definitions onto a Converse tool config;

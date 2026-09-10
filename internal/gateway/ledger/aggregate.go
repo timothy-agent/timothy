@@ -295,6 +295,11 @@ type MissionUsage struct {
 	// cache (D-093): shown next to input_tokens so the caching
 	// breakpoints' effect is visible per mission.
 	CacheReadTokens int64 `json:"cache_read_tokens"`
+	// CacheWriteTokens is what this mission paid to populate that cache,
+	// and HitRatio is read over read plus input: the pair says whether
+	// the caching breakpoints earned their keep on this mission.
+	CacheWriteTokens int64   `json:"cache_write_tokens"`
+	HitRatio         float64 `json:"hit_ratio"`
 	// ReviewInputTokens is the input of the mission's reviewer turns
 	// (rows tagged agent=reviewerAgent), shown against the review token
 	// ceiling (D-097).
@@ -338,14 +343,17 @@ func (a *Aggregator) Mission(ctx context.Context, missionID string) (MissionUsag
 	}
 	err = db.QueryRow(ctx, `SELECT
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cache_read_tokens), 0),
+			COALESCE(SUM(cache_write_tokens), 0),
 			COALESCE(SUM(input_tokens) FILTER (WHERE agent = $2), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE cost IS NULL)
 		FROM cost_ledger
 		WHERE mission_id = $1 AND `+notTest, missionID, reviewerAgent).
-		Scan(&m.InputTokens, &m.OutputTokens, &m.CacheReadTokens, &m.ReviewInputTokens, &m.Requests, &m.UnpricedRequests)
+		Scan(&m.InputTokens, &m.OutputTokens, &m.CacheReadTokens, &m.CacheWriteTokens,
+			&m.ReviewInputTokens, &m.Requests, &m.UnpricedRequests)
 	if err != nil {
 		return MissionUsage{}, fmt.Errorf("usage mission: %w", err)
 	}
+	m.HitRatio = cacheHitRatio(m.CacheReadTokens, m.InputTokens)
 	// brain = every billed turn the missions engine ran directly
 	// (explore/plan/worker/review); harness = the delegated CLI
 	// executor's own billed rows (purpose='executor', D-051).
@@ -473,7 +481,13 @@ type SessionUsage struct {
 	Cost         float64 `json:"cost"`
 	InputTokens  int64   `json:"input_tokens"`
 	OutputTokens int64   `json:"output_tokens"`
-	Requests     int64   `json:"requests"`
+	// CacheReadTokens and CacheWriteTokens expose the session's prompt
+	// caching (D-018/D-093); HitRatio is derived, read over read plus
+	// input, and is zero when the session moved no input at all.
+	CacheReadTokens  int64   `json:"cache_read_tokens"`
+	CacheWriteTokens int64   `json:"cache_write_tokens"`
+	HitRatio         float64 `json:"hit_ratio"`
+	Requests         int64   `json:"requests"`
 }
 
 // TopSessions ranks sessions by real spend only — Cost excludes
@@ -490,7 +504,8 @@ func (a *Aggregator) TopSessions(ctx context.Context, from, to time.Time, limit 
 	}
 	rows, err := db.Query(ctx, `SELECT session_id, currency,
 			COALESCE(SUM(cost) FILTER (WHERE NOT unbilled), 0),
-			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COUNT(*)
+			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0), COUNT(*)
 		FROM cost_ledger
 		WHERE ts >= $1 AND ts < $2 AND session_id IS NOT NULL AND `+notTest+`
 		GROUP BY session_id, currency ORDER BY 3 DESC LIMIT $3`, from, to, limit)
@@ -502,9 +517,11 @@ func (a *Aggregator) TopSessions(ctx context.Context, from, to time.Time, limit 
 	out := []SessionUsage{}
 	for rows.Next() {
 		var s SessionUsage
-		if err := rows.Scan(&s.SessionID, &s.Currency, &s.Cost, &s.InputTokens, &s.OutputTokens, &s.Requests); err != nil {
+		if err := rows.Scan(&s.SessionID, &s.Currency, &s.Cost, &s.InputTokens, &s.OutputTokens,
+			&s.CacheReadTokens, &s.CacheWriteTokens, &s.Requests); err != nil {
 			return nil, fmt.Errorf("usage sessions: %w", err)
 		}
+		s.HitRatio = cacheHitRatio(s.CacheReadTokens, s.InputTokens)
 		out = append(out, s)
 	}
 	return out, rows.Err()
@@ -558,6 +575,17 @@ type CacheRow struct {
 	HitRatio        float64 `json:"hit_ratio"`
 }
 
+// cacheHitRatio is the share of prompt input that came from cache:
+// reads over reads plus fresh input. Zero when nothing moved, so an
+// idle session or mission reads as 0 rather than dividing by zero.
+func cacheHitRatio(read, input int64) float64 {
+	total := read + input
+	if total <= 0 {
+		return 0
+	}
+	return float64(read) / float64(total)
+}
+
 func (a *Aggregator) Cache(ctx context.Context, from, to time.Time) ([]CacheRow, error) {
 	db, err := a.db.Get()
 	if err != nil {
@@ -579,9 +607,7 @@ func (a *Aggregator) Cache(ctx context.Context, from, to time.Time) ([]CacheRow,
 		if err := rows.Scan(&c.Provider, &c.CacheReadTokens, &c.InputTokens); err != nil {
 			return nil, fmt.Errorf("usage cache: %w", err)
 		}
-		if total := c.CacheReadTokens + c.InputTokens; total > 0 {
-			c.HitRatio = float64(c.CacheReadTokens) / float64(total)
-		}
+		c.HitRatio = cacheHitRatio(c.CacheReadTokens, c.InputTokens)
 		out = append(out, c)
 	}
 	return out, rows.Err()

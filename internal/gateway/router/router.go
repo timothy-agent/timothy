@@ -25,7 +25,13 @@ type ModelPrices struct {
 	OutputPerMTok     float64 `json:"output_per_mtok"`
 	CacheReadPerMTok  float64 `json:"cache_read_per_mtok"`
 	CacheWritePerMTok float64 `json:"cache_write_per_mtok"`
-	Currency          string  `json:"currency,omitempty"`
+	// CacheWrite1hPerMTok prices the one-hour cache tier, which no
+	// catalog publishes: it comes from the prices_by_model operator
+	// override only. Left at zero, a request that wrote at that tier
+	// records a null cost rather than a guessed multiple of
+	// CacheWritePerMTok (D-013).
+	CacheWrite1hPerMTok float64 `json:"cache_write_1h_per_mtok"`
+	Currency            string  `json:"currency,omitempty"`
 }
 
 // ProviderRow mirrors one providers table row.

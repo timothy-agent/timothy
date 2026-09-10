@@ -894,9 +894,14 @@ export function MissionDetail() {
                   </Badge>
                 )}
                 {usage && usage.requests > 0 && (
-                  <Badge variant="secondary" title="input→output tokens; cached = input read from the provider's prompt cache">
+                  <Badge
+                    variant="secondary"
+                    title="input→output tokens; cached = input read from the provider's prompt cache, with that share of total prompt input"
+                  >
                     {compact(usage.input_tokens)}→{compact(usage.output_tokens)} tok
-                    {usage.cache_read_tokens ? ` · ${compact(usage.cache_read_tokens)} cached` : ''}
+                    {usage.cache_read_tokens
+                      ? ` · ${compact(usage.cache_read_tokens)} cached (${Math.round((usage.hit_ratio ?? 0) * 100)}%)`
+                      : ''}
                   </Badge>
                 )}
                 {usage && usage.review_input_tokens ? (

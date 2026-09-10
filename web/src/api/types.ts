@@ -395,6 +395,11 @@ export interface MissionUsage {
   // cache_read_tokens is input served from the provider's prompt cache
   // (D-093), shown next to input_tokens on the cost card.
   cache_read_tokens?: number
+  // cache_write_tokens is what the mission paid to populate that
+  // cache, and hit_ratio is the derived share of prompt input that
+  // came from it: reads over reads plus fresh input.
+  cache_write_tokens?: number
+  hit_ratio?: number
   // review_input_tokens is the input spent on reviewer turns, shown
   // against review_token_ceiling (the mission_review_token_ceiling
   // setting, 0 = no ceiling) on the cost card (D-097).
@@ -418,6 +423,21 @@ export interface CacheRow {
   cache_read_tokens: number
   input_tokens: number
   hit_ratio: number
+}
+
+// One session's spend and prompt-cache position over a range
+// (GET /v1/admin/usage/sessions). hit_ratio is derived server-side:
+// cache reads over reads plus fresh input.
+export interface SessionUsage {
+  session_id: string
+  currency: string
+  cost: number
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_write_tokens: number
+  hit_ratio: number
+  requests: number
 }
 
 // Budget position per UTC calendar window; limit is null when no

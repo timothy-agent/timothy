@@ -51,6 +51,23 @@ func TestCost(t *testing.T) {
 			usage: &stream.Usage{},
 			want:  f(0),
 		},
+		{
+			// No operator-declared one-hour rate: the real cost is
+			// unknown, so it is null, never a derived multiple.
+			name: "unpriced one-hour cache write means unknown", prices: prices,
+			usage: &stream.Usage{InputTokens: 100_000, CacheWrite1hTokens: 200_000},
+			want:  nil,
+		},
+		{
+			name: "one-hour cache write priced when declared",
+			prices: &router.ModelPrices{
+				InputPerMTok: 3, OutputPerMTok: 15,
+				CacheReadPerMTok: 0.3, CacheWritePerMTok: 3.75,
+				CacheWrite1hPerMTok: 6,
+			},
+			usage: &stream.Usage{InputTokens: 100_000, CacheWriteTokens: 200_000, CacheWrite1hTokens: 500_000},
+			want:  f(0.3 + 0.75 + 3),
+		},
 	}
 
 	for _, tt := range tests {
