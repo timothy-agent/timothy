@@ -341,6 +341,14 @@ describe('CodeBlock', () => {
     }
   })
 
+  it('gives json a braces glyph instead of the swirl logo', () => {
+    renderMarkdown('```json\n{"a": 1}\n```')
+    const header = screen.getByText('json').closest('span')
+    expect(header?.querySelector('img')).not.toBeInTheDocument()
+    expect(header?.querySelector('svg.lucide-braces')).toBeInTheDocument()
+    expect(header?.querySelector('[class*="dark:bg-white"]')).not.toBeInTheDocument()
+  })
+
   it('does not add the dark-mode chip to a logo that already reads fine on dark', () => {
     renderMarkdown('```java\nclass X {}\n```')
     const header = screen.getByText('java').closest('span')
