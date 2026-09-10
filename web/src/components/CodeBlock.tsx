@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Children, isValidElement, useEffect, useState } from 'react'
 import type { ExtraProps } from 'react-markdown'
-import { Terminal, type LucideIcon } from 'lucide-react'
+import { Braces, Terminal, type LucideIcon } from 'lucide-react'
 import bashLogo from '../assets/langs/bash.svg'
 import cLogo from '../assets/langs/c.svg'
 import cplusplusLogo from '../assets/langs/cplusplus.svg'
@@ -12,7 +12,6 @@ import goLogo from '../assets/langs/go.svg'
 import html5Logo from '../assets/langs/html5.svg'
 import javaLogo from '../assets/langs/java.svg'
 import javascriptLogo from '../assets/langs/javascript.svg'
-import jsonLogo from '../assets/langs/json.svg'
 import kotlinLogo from '../assets/langs/kotlin.svg'
 import markdownLogo from '../assets/langs/markdown.svg'
 import mysqlLogo from '../assets/langs/mysql.svg'
@@ -93,27 +92,27 @@ const LANGUAGE_LOGOS: Record<string, string> = {
   sql: mysqlLogo,
   yaml: yamlLogo,
   yml: yamlLogo,
-  json: jsonLogo,
   markdown: markdownLogo,
   dockerfile: dockerLogo,
 }
 
-// Logos whose devicon artwork is dark (near-black fills or a
-// black-to-white gradient) and disappears against the code block's
-// dark muted chrome: bash's mark is solid #293138, markdown's has
-// no explicit fill (defaults to black), json's gradient runs to pure
-// black at one end. Devicon ships no currentColor/plain variant for
+// Logos whose devicon artwork is dark (near-black fills) and
+// disappears against the code block's dark muted chrome: bash's mark
+// is solid #293138, markdown's has no explicit fill (defaults to
+// black). Devicon ships no currentColor/plain variant for
 // these, so instead of the raw <img> they get a small light chip
 // behind them in dark mode only (light mode already has a light
 // background, so no chip needed there). Fixed white, not a token:
 // the chip exists to keep third-party artwork visible against the
 // dark theme, not to express a themeable surface.
-const DARK_MODE_NEEDS_CHIP = new Set(['bash', 'sh', 'shell', 'markdown', 'json'])
+const DARK_MODE_NEEDS_CHIP = new Set(['bash', 'sh', 'shell', 'markdown'])
 
 // sh and shell are POSIX shell, not Bash, so they do not wear the Bash
 // logo. They get the same neutral terminal glyph the trace rows use,
-// drawn in currentColor, so no chip is needed either.
-const LANGUAGE_ICONS: Record<string, LucideIcon> = { sh: Terminal, shell: Terminal }
+// drawn in currentColor, so no chip is needed either. json's official
+// mark is a black-to-white swirl that reads as an unrelated blob at
+// icon size, so it gets a braces glyph the same way.
+const LANGUAGE_ICONS: Record<string, LucideIcon> = { sh: Terminal, shell: Terminal, json: Braces }
 
 // shiki/langs (bundledLanguages/bundledLanguagesAlias: id/alias ->
 // lazy grammar loader, one entry per shiki-supported language) is
