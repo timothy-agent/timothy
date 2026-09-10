@@ -3,8 +3,10 @@ package loop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -714,11 +716,11 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			}
 			run = append(run, c)
 		}
-		executed := a.executeAll(ctx, exec, req.SessionID, run, toolNames, req.Unattended, emit)
+		executed := a.executeAll(ctx, exec, req.SessionID, run, toolNames, req.Unattended, req.ToolResultCap, emit)
 		results := make([]provider.ToolResult, 0, len(calls))
 		for i, c := range calls {
 			if refused[i] {
-				results = append(results, provider.ToolResult{ID: c.ID, Content: toolCallCapMessage, IsError: true})
+				results = append(results, provider.ToolResult{ID: c.ID, Content: wrapToolError(codeCallCap, toolCallCapMessage, req.ToolResultCap), IsError: true})
 				continue
 			}
 			results = append(results, executed[0])
@@ -811,13 +813,13 @@ func EffortFor(results []provider.ToolResult) string {
 // returns results in call order. toolNames is the turn's offered
 // surface (see run's toolNames comment); unattended is req.Unattended,
 // threaded down to resolveAndRun's DecisionAsk handling (D-039).
-func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string, calls []provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) []provider.ToolResult {
+func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string, calls []provider.ToolCall, toolNames map[string]bool, unattended bool, resultCap int, emit func(stream.StreamEvent)) []provider.ToolResult {
 	results := make([]provider.ToolResult, len(calls))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxParallelTools)
 	for i, call := range calls {
 		g.Go(func() error {
-			results[i] = a.executeOne(gctx, exec, sessionID, call, toolNames, unattended, emit)
+			results[i] = a.executeOne(gctx, exec, sessionID, call, toolNames, unattended, resultCap, emit)
 			return nil
 		})
 	}
@@ -825,7 +827,7 @@ func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string,
 	return results
 }
 
-func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) provider.ToolResult {
+func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, resultCap int, emit func(stream.StreamEvent)) provider.ToolResult {
 	start := time.Now()
 	// A fresh collector per call: media a tool emits during THIS
 	// Execute rides on ctx, drained right below, never leaking into a
@@ -836,11 +838,11 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 	// never a process crash: executeOne runs inside an errgroup worker,
 	// and an unrecovered panic there takes down the whole brain — every
 	// active turn and mission with it.
-	content, status := func() (content, status string) {
+	content, status, code := func() (content, status, code string) {
 		defer func() {
 			if p := recover(); p != nil {
 				a.logger.Error("tool panicked", "tool", call.Name, "panic", p, "stack", string(debug.Stack()))
-				content, status = fmt.Sprintf("tool %s failed with an internal error: %v", call.Name, p), "error"
+				content, status, code = fmt.Sprintf("tool %s failed with an internal error: %v", call.Name, p), "error", codeToolError
 			}
 		}()
 		return a.resolveAndRun(ctx, exec, sessionID, call, toolNames, unattended, emit)
@@ -914,13 +916,23 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 		Media: streamMedia, Content: traceContent,
 	}})
 
+	// D-104: the single boundary where a failure becomes the structured
+	// object. Everything above (digest, audit line, stream event) has
+	// already been taken from the raw prose, so the UI, the mission
+	// events and the audit trail read the same as before; only what the
+	// model sees changes.
+	if isError && !alreadyStructured(content) {
+		content = wrapToolError(code, content, resultCap)
+	}
+
 	return provider.ToolResult{ID: call.ID, Content: content, IsError: isError}
 }
 
 // resolveAndRun walks the permission chain, parks on Ask, and executes
-// on allow. It returns the content the model sees plus a status of
-// ok, denied, or error — denials and failures come back as feedback
-// text, never as a broken turn (D-009).
+// on allow. It returns the raw message, a status of ok, denied, or
+// error, and on failure the error code executeOne wraps the message
+// with (D-104): denials and failures come back as feedback, never as
+// a broken turn (D-009). The code is empty on ok.
 //
 // A call whose name is absent from toolNames (a hallucinated tool)
 // never reaches a.perms.Resolve at all — it is rejected here, before
@@ -928,26 +940,26 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 // feedback tools.Constrained.Execute would eventually give (D-039):
 // an unattended mission can't afford to wait out a 10-minute prompt
 // timeout just to learn the name never existed.
-func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) (content, status string) {
+func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) (content, status, code string) {
 	if !toolNames[call.Name] {
-		return fmt.Sprintf("unknown tool %q — use one of the tools you were given", call.Name), "error"
+		return fmt.Sprintf("unknown tool %q — use one of the tools you were given", call.Name), "error", codeUnknownTool
 	}
 
 	res, err := a.perms.Resolve(ctx, sessionID, call.Name, call.Input)
 	if err != nil {
-		return "permission check failed: " + err.Error(), "error"
+		return "permission check failed: " + err.Error(), "error", codeGatewayUnavailable
 	}
 
 	switch res.Decision {
 	case tools.DecisionDeny:
-		return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied"
+		return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied", codePolicyDenied
 	case tools.DecisionAsk:
 		if unattended {
 			// No human is watching a schedule-fired mission's turn — parking
 			// on askUser would strand it for the full permissionTimeout with
 			// nobody to answer (D-039). Fail fast with feedback that steers
 			// the model toward calls the allowlist actually grants.
-			return fmt.Sprintf("permission denied automatically (unattended mission): %s. No human is available to approve. Rewrite the call to avoid the flagged pattern — create files with write_file instead of shell redirects, avoid command substitution — or use only tools the agent's allowlist grants.", res.Rationale), "denied"
+			return fmt.Sprintf("permission denied automatically (unattended mission): %s. No human is available to approve. Rewrite the call to avoid the flagged pattern — create files with write_file instead of shell redirects, avoid command substitution — or use only tools the agent's allowlist grants.", res.Rationale), "denied", codePolicyDenied
 		}
 
 		// A step's parallel same-tool calls (executeAll) all land here
@@ -960,7 +972,7 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 		key := sessionID + "\x00" + call.Name + "\x00" + res.Subject
 		release, ok := a.askGate.lock(ctx, key)
 		if !ok {
-			return "the user denied permission for this call. Adapt your approach or ask the user what they want.", "denied"
+			return "the user denied permission for this call. Adapt your approach or ask the user what they want.", "denied", codeUserDenied
 		}
 
 		// Re-resolve under the gate: a parallel sibling's session grant
@@ -968,14 +980,14 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 		res, err = a.perms.Resolve(ctx, sessionID, call.Name, call.Input)
 		if err != nil {
 			release()
-			return "permission check failed: " + err.Error(), "error"
+			return "permission check failed: " + err.Error(), "error", codeGatewayUnavailable
 		}
 		switch res.Decision {
 		case tools.DecisionAllow:
 			// fall through to execution below.
 		case tools.DecisionDeny:
 			release()
-			return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied"
+			return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied", codePolicyDenied
 		default: // still DecisionAsk
 			decision := a.askUser(ctx, call, res, emit)
 			switch decision {
@@ -987,7 +999,9 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 				// proceed
 			default: // deny or timeout
 				release()
-				return "the user denied permission for this call. Adapt your approach or ask the user what they want.", "denied"
+				// Issue #650 will split the timeout case out with its own
+				// wording; both share user_denied until then.
+				return "the user denied permission for this call. Adapt your approach or ask the user what they want.", "denied", codeUserDenied
 			}
 		}
 		// Execution runs outside the gate: only the ask/re-resolve/grant
@@ -999,15 +1013,42 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 	out, err := exec.Execute(ctx, call.Name, call.Input)
 	if err != nil {
 		if tools.IsViolation(err) {
-			return err.Error(), "error"
+			return err.Error(), "error", codePolicyDenied
+		}
+		// A tool that emits its own structured error hands it back as
+		// the error message; relay it verbatim so executeOne's
+		// passthrough guard sees an object rather than prefixed prose.
+		if alreadyStructured(err.Error()) {
+			return err.Error(), "error", ""
 		}
 		if out != "" {
-			// e.g. shell timeout with partial output.
-			return err.Error() + "\n" + out, "error"
+			// e.g. shell timeout with partial output: the output is the
+			// useful half of the message and must survive the wrap.
+			return err.Error() + "\n" + out, "error", classifyToolError(err)
 		}
-		return "tool failed: " + err.Error(), "error"
+		return "tool failed: " + err.Error(), "error", classifyToolError(err)
 	}
-	return out, "ok"
+	return out, "ok", ""
+}
+
+// classifyToolError maps a tool's own failure to a retryable code:
+// timeout for a deadline (the tools.ErrTimeout sentinel or a net
+// timeout), network for any other net.Error or dial failure, and the
+// generic tool_error otherwise. It never inspects message text.
+func classifyToolError(err error) string {
+	if errors.Is(err, tools.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return codeTimeout
+	}
+	// net.Error covers dial, DNS and read/write failures alike
+	// (*net.OpError and *net.DNSError both satisfy it).
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return codeTimeout
+		}
+		return codeNetwork
+	}
+	return codeToolError
 }
 
 // askUser parks the call: emits a permission_request and blocks for
