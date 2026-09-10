@@ -122,6 +122,14 @@ type CompletionRequest struct {
 	// (D-063). Empty means auto, today's behavior. Drivers that cannot
 	// express a forced choice on the wire ignore it.
 	ForceTool string
+	// CacheTTL asks for a longer prompt-cache lifetime than the
+	// provider's default: "" is the default (five minutes on every
+	// current provider), "1h" is the extended tier. Like Effort, it is
+	// a hint: drivers apply it where the provider exposes the control
+	// and ignore it otherwise. Set for mission turns, whose verify
+	// waits, ask_user parks, and phase transitions routinely idle past
+	// five minutes and throw the cached prefix away.
+	CacheTTL string
 	// ProviderState is opaque driver continuation state (D-067), echoed
 	// by the caller from the previous response's Meta.ProviderState.
 	// Drivers ignore state naming a different driver or absent entirely.

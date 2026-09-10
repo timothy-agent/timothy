@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
@@ -202,12 +203,12 @@ func TestConverseMessagesKeepsToolBlocksWhenToolsOffered(t *testing.T) {
 
 func TestConverseSystem(t *testing.T) {
 	t.Parallel()
-	if converseSystem("", "us.amazon.nova-pro-v1:0") != nil {
+	if converseSystem("", "us.amazon.nova-pro-v1:0", "") != nil {
 		t.Fatal("empty system must yield nil")
 	}
 
 	// Nova: system text followed by a cache point.
-	blocks := converseSystem("persona", "us.amazon.nova-pro-v1:0")
+	blocks := converseSystem("persona", "us.amazon.nova-pro-v1:0", "")
 	if len(blocks) != 2 {
 		t.Fatalf("nova blocks = %d, want 2", len(blocks))
 	}
@@ -220,9 +221,62 @@ func TestConverseSystem(t *testing.T) {
 	}
 
 	// Non-Nova models must not get a cache point — Titan rejects it.
-	blocks = converseSystem("persona", "amazon.titan-text-premier-v1:0")
+	blocks = converseSystem("persona", "amazon.titan-text-premier-v1:0", "")
 	if len(blocks) != 1 {
 		t.Fatalf("titan blocks = %d, want 1", len(blocks))
+	}
+}
+
+func TestConverseSystemCacheTTL(t *testing.T) {
+	t.Parallel()
+
+	// No hint: the cache point keeps the provider's default lifetime.
+	blocks := converseSystem("persona", "us.amazon.nova-pro-v1:0", "")
+	cp, ok := blocks[1].(*types.SystemContentBlockMemberCachePoint)
+	if !ok {
+		t.Fatalf("block 1 = %#v", blocks[1])
+	}
+	if cp.Value.Ttl != "" {
+		t.Fatalf("default ttl = %q, want empty", cp.Value.Ttl)
+	}
+
+	// Hinted and eligible: the cache point carries the one-hour tier.
+	blocks = converseSystem("persona", "us.amazon.nova-pro-v1:0", "1h")
+	cp, ok = blocks[1].(*types.SystemContentBlockMemberCachePoint)
+	if !ok {
+		t.Fatalf("block 1 = %#v", blocks[1])
+	}
+	if cp.Value.Ttl != types.CacheTTLOneHour {
+		t.Fatalf("ttl = %q, want %q", cp.Value.Ttl, types.CacheTTLOneHour)
+	}
+
+	// Hinted but not cache-eligible: the request goes out unchanged,
+	// no cache point at all (the miss is a debug log, not an error).
+	blocks = converseSystem("persona", "amazon.titan-text-premier-v1:0", "1h")
+	if len(blocks) != 1 {
+		t.Fatalf("titan blocks = %d, want 1 (no cache point)", len(blocks))
+	}
+}
+
+func TestSplitBedrockCacheWrite(t *testing.T) {
+	t.Parallel()
+
+	// No breakdown: the whole write counts as the five-minute tier.
+	five, one := splitBedrockCacheWrite(&types.TokenUsage{CacheWriteInputTokens: aws.Int32(900)})
+	if five != 900 || one != 0 {
+		t.Fatalf("no details = (%d, %d), want (900, 0)", five, one)
+	}
+
+	// Breakdown present: each TTL lands in its own bucket.
+	five, one = splitBedrockCacheWrite(&types.TokenUsage{
+		CacheWriteInputTokens: aws.Int32(900),
+		CacheDetails: []types.CacheDetail{
+			{InputTokens: aws.Int32(700), Ttl: types.CacheTTLOneHour},
+			{InputTokens: aws.Int32(200), Ttl: types.CacheTTLFiveMinutes},
+		},
+	})
+	if five != 200 || one != 700 {
+		t.Fatalf("with details = (%d, %d), want (200, 700)", five, one)
 	}
 }
 

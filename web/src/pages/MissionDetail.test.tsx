@@ -195,7 +195,24 @@ describe('MissionDetail spend', () => {
     )
   })
 
-  it('shows cached input reads alongside the token counts when present', async () => {
+  it('shows cached input reads and the hit ratio alongside the token counts', async () => {
+    vi.mocked(missionUsage).mockResolvedValue({
+      mission_id: 'm1',
+      cost_by_currency: { USD: 0.5 },
+      input_tokens: 120_000,
+      output_tokens: 8_000,
+      cache_read_tokens: 90_000,
+      cache_write_tokens: 30_000,
+      hit_ratio: 0.4286,
+      requests: 7,
+      unpriced_requests: 0,
+      models: [],
+    })
+    renderPage()
+    expect(await screen.findByText('120.0k→8.0k tok · 90.0k cached (43%)')).toBeTruthy()
+  })
+
+  it('reads a missing hit ratio as zero rather than blanking the badge', async () => {
     vi.mocked(missionUsage).mockResolvedValue({
       mission_id: 'm1',
       cost_by_currency: { USD: 0.5 },
@@ -207,7 +224,7 @@ describe('MissionDetail spend', () => {
       models: [],
     })
     renderPage()
-    expect(await screen.findByText('120.0k→8.0k tok · 90.0k cached')).toBeTruthy()
+    expect(await screen.findByText('120.0k→8.0k tok · 90.0k cached (0%)')).toBeTruthy()
   })
 
   it('shows review input tokens against the ceiling', async () => {

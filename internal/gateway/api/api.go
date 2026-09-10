@@ -278,6 +278,15 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 		ForceTool:     req.ForceTool,
 		ProviderState: req.ProviderState,
 	}
+	// A mission turn asks for the extended prompt-cache tier: missions
+	// idle past the five-minute default on verify waits, ask_user parks,
+	// and phase transitions, so the default tier throws the cached
+	// system prefix away between turns. The driver gets the intent, not
+	// the mission id: purpose is hardcoded "chat" on this path, so
+	// MissionID is the only honest mission signal here.
+	if req.MissionID != "" {
+		completion.CacheTTL = "1h"
+	}
 
 	var codes []string
 	for i, att := range attempts {
