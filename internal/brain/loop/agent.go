@@ -50,10 +50,9 @@ type EventAppender interface {
 }
 
 const (
-	permissionTimeout = 10 * time.Minute
-	maxParallelTools  = 4
-	persistTimeout    = 10 * time.Second
-	sessionGrantTTL   = 12 * time.Hour
+	maxParallelTools = 4
+	persistTimeout   = 10 * time.Second
+	sessionGrantTTL  = 12 * time.Hour
 	// retrieveInlineCap bounds what retrieve_output returns inline;
 	// re-offloading a retrieval would chase its own tail, so it
 	// truncates with an honest note instead.
@@ -76,6 +75,11 @@ const maxStepRetries = 2
 // of plumbing a config knob through Request/NewAgent for one knob
 // only tests need.
 var stepRetryBackoff = time.Second
+
+// permissionTimeout bounds a chat turn's wait for a parked permission
+// (D-010); an attended mission turn never applies it (see askUser).
+// A package-level var, same reasoning as stepRetryBackoff.
+var permissionTimeout = 10 * time.Minute
 
 const finalizeWarning = "[system] You have one tool step left before the limit. Finish gathering and produce your final answer on the next step."
 
@@ -716,7 +720,8 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			}
 			run = append(run, c)
 		}
-		executed := a.executeAll(ctx, exec, req.SessionID, run, toolNames, req.Unattended, req.ToolResultCap, emit)
+		attendedMission := req.MissionID != "" && !req.Unattended
+		executed := a.executeAll(ctx, exec, req.SessionID, run, toolNames, req.Unattended, attendedMission, req.ToolResultCap, emit)
 		results := make([]provider.ToolResult, 0, len(calls))
 		for i, c := range calls {
 			if refused[i] {
@@ -813,13 +818,17 @@ func EffortFor(results []provider.ToolResult) string {
 // returns results in call order. toolNames is the turn's offered
 // surface (see run's toolNames comment); unattended is req.Unattended,
 // threaded down to resolveAndRun's DecisionAsk handling (D-039).
-func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string, calls []provider.ToolCall, toolNames map[string]bool, unattended bool, resultCap int, emit func(stream.StreamEvent)) []provider.ToolResult {
+// attendedMission (issue #650) is req.MissionID != "" && !req.Unattended
+// — a mission turn with an operator watching it, threaded down to
+// askUser so a parked permission there waits for the mission's own
+// pause/resume instead of racing a loop-level timer.
+func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string, calls []provider.ToolCall, toolNames map[string]bool, unattended, attendedMission bool, resultCap int, emit func(stream.StreamEvent)) []provider.ToolResult {
 	results := make([]provider.ToolResult, len(calls))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxParallelTools)
 	for i, call := range calls {
 		g.Go(func() error {
-			results[i] = a.executeOne(gctx, exec, sessionID, call, toolNames, unattended, resultCap, emit)
+			results[i] = a.executeOne(gctx, exec, sessionID, call, toolNames, unattended, attendedMission, resultCap, emit)
 			return nil
 		})
 	}
@@ -827,7 +836,7 @@ func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string,
 	return results
 }
 
-func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, resultCap int, emit func(stream.StreamEvent)) provider.ToolResult {
+func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended, attendedMission bool, resultCap int, emit func(stream.StreamEvent)) provider.ToolResult {
 	start := time.Now()
 	// A fresh collector per call: media a tool emits during THIS
 	// Execute rides on ctx, drained right below, never leaking into a
@@ -848,7 +857,7 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 				content, status, code = fmt.Sprintf("tool %s failed with an internal error: %v", call.Name, p), "error", codeToolError
 			}
 		}()
-		return a.resolveAndRun(ctx, exec, sessionID, call, toolNames, unattended, emit)
+		return a.resolveAndRun(ctx, exec, sessionID, call, toolNames, unattended, attendedMission, emit)
 	}()
 	isError := status != "ok"
 	media := collector.Drain()
@@ -943,7 +952,7 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 // feedback tools.Constrained.Execute would eventually give (D-039):
 // an unattended mission can't afford to wait out a 10-minute prompt
 // timeout just to learn the name never existed.
-func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended bool, emit func(stream.StreamEvent)) (content, status, code string) {
+func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended, attendedMission bool, emit func(stream.StreamEvent)) (content, status, code string) {
 	if !toolNames[call.Name] {
 		return fmt.Sprintf("unknown tool %q — use one of the tools you were given", call.Name), "error", codeUnknownTool
 	}
@@ -992,7 +1001,7 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 			release()
 			return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied", codePolicyDenied
 		default: // still DecisionAsk
-			decision := a.askUser(ctx, call, res, emit)
+			decision := a.askUser(ctx, call, res, attendedMission, emit)
 			switch decision {
 			case DecideSession:
 				if err := a.perms.Grant(ctx, sessionID, call.Name, res.Subject, sessionGrantTTL); err != nil {
@@ -1000,10 +1009,11 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 				}
 			case DecideOnce:
 				// proceed
-			default: // deny or timeout
+			case DecideTimeout:
 				release()
-				// Issue #650 will split the timeout case out with its own
-				// wording; both share user_denied until then.
+				return "no decision arrived within the time allowed; the call was not run. This is not a denial — nobody answered. Retry later or ask the user directly.", "denied", codeTimeout
+			default: // deny
+				release()
 				return "the user denied permission for this call. Adapt your approach or ask the user what they want.", "denied", codeUserDenied
 			}
 		}
@@ -1055,15 +1065,23 @@ func classifyToolError(err error) string {
 }
 
 // askUser parks the call: emits a permission_request and blocks for
-// the decision (timeout = deny, D-010). Turn durability while parked
-// comes from the relay's periodic pending_state flushes; the prompt
-// itself is in-memory only — a restart drops it, which resolves as a
-// deny. Whatever the outcome — an explicit answer, a timeout, or ctx
+// the decision (D-010). Turn durability while parked comes from the
+// relay's periodic pending_state flushes; the prompt itself is
+// in-memory only — a restart drops it, which resolves as a timeout.
+// Whatever the outcome — an explicit answer, a timeout, or ctx
 // cancellation — a permission_resolved event follows so anything
 // tracking the request (persistence, a replay client) learns the
 // outcome too; the live web client already clears its prompt off
 // tool_result, so this is additive, not a behavior change for it.
-func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.Resolution, emit func(stream.StreamEvent)) string {
+//
+// attendedMission (issue #650) is a mission turn with a human
+// operator and no schedule behind it: the parked permission IS that
+// turn's pause point (StorePermissionParker records it, the mission
+// UI offers approve/deny), so no loop-level timer competes with it —
+// only the turn's own context ending can end the wait. A chat turn
+// (attendedMission false) keeps the 10-minute timer, since chat has
+// no equivalent pause state to sit in.
+func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.Resolution, attendedMission bool, emit func(stream.StreamEvent)) string {
 	id, answer := a.broker.Create()
 	defer a.broker.Forget(id)
 
@@ -1075,15 +1093,23 @@ func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.R
 	}})
 
 	decision := func() string {
+		if attendedMission {
+			select {
+			case d := <-answer:
+				return d
+			case <-ctx.Done():
+				return DecideTimeout
+			}
+		}
 		timer := time.NewTimer(permissionTimeout)
 		defer timer.Stop()
 		select {
 		case d := <-answer:
 			return d
 		case <-timer.C:
-			return DecideDeny
+			return DecideTimeout
 		case <-ctx.Done():
-			return DecideDeny
+			return DecideTimeout
 		}
 	}()
 	emit(stream.StreamEvent{Type: stream.EventPermissionResolved, Resolved: &stream.PermissionResolvedEvent{
