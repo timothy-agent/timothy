@@ -50,6 +50,10 @@ type Entry struct {
 	// from ID (Timothy's row id) — lets a row be reconciled against the
 	// provider's own usage export.
 	ProviderRequestID string
+	// ToolDefTokensEstimate is the brain-side tokenizer's estimate of
+	// the prompt tokens spent on this turn's tool definitions. Recorded
+	// for tool-surface overhead visibility only, never priced.
+	ToolDefTokensEstimate int
 }
 
 // Recorder is what the API layer depends on; tests supply an in-memory
@@ -102,11 +106,13 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 	_, err = db.Exec(wctx, `INSERT INTO cost_ledger
 		(id, provider, model, route, agent, purpose, session_id, mission_id,
 		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
-		 latency_ms, status, error_code, cost, currency, unbilled, provider_request_id)
+		 latency_ms, status, error_code, cost, currency, unbilled, provider_request_id,
+		 tool_def_tokens_estimate)
 		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()),
-		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, $15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''))`,
+		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, $15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), $21)`,
 		e.ID, e.Provider, e.Model, e.Route, e.Agent, e.Purpose, e.SessionID, e.MissionID,
-		in, out, cr, cw, rt, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency, e.Unbilled, e.ProviderRequestID)
+		in, out, cr, cw, rt, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency, e.Unbilled, e.ProviderRequestID,
+		e.ToolDefTokensEstimate)
 	if err != nil {
 		l.log.Warn("ledger write failed", "error", err, "provider", e.Provider, "status", e.Status)
 	}

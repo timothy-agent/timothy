@@ -265,6 +265,7 @@ describe('Analytics unpriced usage', () => {
         errors: 0,
         unpriced_input_tokens: 1_000_000,
         unpriced_output_tokens: 100_000,
+        tool_def_tokens_estimate: 0,
       },
     ])
     renderPage()
@@ -294,6 +295,7 @@ const providerPoint: UsagePoint = {
   errors: 0,
   unpriced_input_tokens: 0,
   unpriced_output_tokens: 0,
+  tool_def_tokens_estimate: 40,
 }
 
 const providerTotal: GroupTotal = {
@@ -358,6 +360,25 @@ describe('Analytics chart legend selection', () => {
     // Ctrl-click again restores just that entry.
     fireEvent.click(inputEntry, { ctrlKey: true })
     await waitFor(() => expect(inputEntry).not.toHaveStyle({ textDecoration: 'line-through' }))
+  })
+
+  // Issue #642: the tool-definition estimate is its own series beside
+  // prompt and completion tokens, and its label says "est." so it never
+  // reads as provider-reported usage.
+  it('shows tool-definition tokens as a labelled estimate series', async () => {
+    vi.mocked(usageSeries).mockImplementation(async (_from, _to, _bucket, group) =>
+      group === 'provider' ? [providerPoint] : [],
+    )
+    renderPage()
+
+    const chart = (await screen.findByText('Tokens consumption')).closest('[data-density]') as HTMLElement | null
+    if (!chart) throw new Error('chart section not found')
+    const entry = (await within(chart).findAllByText('tool defs (est.)')).find((el) => el.className === '')
+    if (!entry) throw new Error('tool defs legend entry not found')
+    // 40 tokens on the single seeded bucket: mean, max and total all
+    // report the same figure, so one match proves the series is summed
+    // from tool_def_tokens_estimate rather than left at zero.
+    expect(within(chart).getAllByText('40').length).toBeGreaterThan(0)
   })
 })
 
@@ -461,6 +482,7 @@ describe('Analytics zero-cost exclusion', () => {
     errors: 0,
     unpriced_input_tokens: 0,
     unpriced_output_tokens: 0,
+    tool_def_tokens_estimate: 0,
   }
   const freeModelTotal: GroupTotal = {
     group: 'local-llama',

@@ -130,6 +130,11 @@ type streamRequest struct {
 	// ProviderState is opaque driver continuation state (D-067), echoed
 	// back from the previous step's done Meta.ProviderState.
 	ProviderState json.RawMessage `json:"provider_state,omitempty"`
+	// ToolDefTokensEstimate is the brain-side tokenizer's estimate of
+	// what the Tools array costs in prompt tokens. Ledger tag only:
+	// it never affects routing or the provider call, and is never
+	// priced (cost stays on provider-reported usage).
+	ToolDefTokensEstimate int `json:"tool_def_tokens_estimate,omitempty"`
 }
 
 // requiredVisionCapability derives whether this request needs a
@@ -291,6 +296,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			Provider: att.ProviderName, Model: att.Model,
 			Route: req.Route, Agent: req.Agent, Purpose: req.Purpose,
 			SessionID: req.SessionID, MissionID: req.MissionID, Local: local,
+			ToolDefTokensEstimate: req.ToolDefTokensEstimate,
 		}, prices, send)
 
 		if res.failedOver() {

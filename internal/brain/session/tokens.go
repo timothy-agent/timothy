@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 
@@ -48,4 +49,25 @@ func EstimateTokens(msgs []provider.Message) (int, error) {
 		total += len(e.Encode(m.Content, nil, nil)) + perMessageOverhead
 	}
 	return total, nil
+}
+
+// EstimateToolTokens counts tokens in the serialized tool definitions
+// a turn offers. Measurement only: the figure is logged and recorded
+// alongside prompt tokens so tool-surface overhead is visible, and is
+// never used for cost (billing stays on provider-reported usage).
+// json.Marshal reproduces the Anthropic wire bytes for the tool array
+// exactly and is close for the OpenAI shapes.
+func EstimateToolTokens(defs []provider.ToolDef) (int, error) {
+	if len(defs) == 0 {
+		return 0, nil
+	}
+	e, err := encoder()
+	if err != nil {
+		return 0, err
+	}
+	b, err := json.Marshal(defs)
+	if err != nil {
+		return 0, fmt.Errorf("session: marshal tool defs: %w", err)
+	}
+	return len(e.Encode(string(b), nil, nil)), nil
 }

@@ -74,10 +74,10 @@ func seedAgg(t *testing.T, led *Ledger) (from, to time.Time) {
 	rows := []Entry{
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", SessionID: "s1",
 			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 20},
-			LatencyMS: 100, Status: "ok", Cost: usd(0.10)},
+			LatencyMS: 100, Status: "ok", Cost: usd(0.10), ToolDefTokensEstimate: 400},
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", SessionID: "s1",
 			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100},
-			LatencyMS: 300, Status: "ok", Cost: usd(0.20)},
+			LatencyMS: 300, Status: "ok", Cost: usd(0.20), ToolDefTokensEstimate: 600},
 		{Provider: aggMarker + "b", Model: "m2", Route: "mini", SessionID: "s2",
 			Usage:     &stream.Usage{InputTokens: 10, OutputTokens: 5},
 			LatencyMS: 50, Status: "ok", Cost: usd(0.01)},
@@ -115,6 +115,7 @@ func TestAggregateSummaryExcludesTestTraffic(t *testing.T) {
 			agg.OutputTokens += p.OutputTokens
 			agg.Requests += p.Requests
 			agg.Errors += p.Errors
+			agg.ToolDefTokensEstimate += p.ToolDefTokensEstimate
 			byProvider[p.Group] = agg
 		}
 	}
@@ -122,6 +123,11 @@ func TestAggregateSummaryExcludesTestTraffic(t *testing.T) {
 	// Provider a: 2 real rows (the 99-dollar test probe must be gone).
 	if a.Requests != 2 || a.Cost != 0.30 || a.InputTokens != 300 || a.OutputTokens != 150 {
 		t.Fatalf("provider a = %+v, want 2 req / $0.30 / 300 in / 150 out", a)
+	}
+	// Tool-def estimate aggregates alongside prompt tokens; the excluded
+	// probe row carries none, so the sum is exactly the two real rows.
+	if a.ToolDefTokensEstimate != 1000 {
+		t.Fatalf("provider a tool_def_tokens_estimate = %d, want 1000", a.ToolDefTokensEstimate)
 	}
 	if b.Requests != 2 || b.Errors != 1 || b.Cost != 0.01 {
 		t.Fatalf("provider b = %+v, want 2 req / 1 error / $0.01", b)
