@@ -5,7 +5,5 @@ run before deploy; each entry stays here until confirmed applied on
 every live instance, then it's removed.
 
 ```sql
-ALTER TABLE cost_ledger ADD COLUMN IF NOT EXISTS tool_def_tokens_estimate integer;
-ALTER TABLE cost_ledger ADD COLUMN IF NOT EXISTS cache_write_1h_tokens integer;
-ALTER TABLE cost_ledger ADD COLUMN IF NOT EXISTS effort text;
+(none)
 ```
