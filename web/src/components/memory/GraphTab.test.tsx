@@ -128,6 +128,7 @@ describe('GraphTab', () => {
   it('rings the selected node by its index in the kind-filtered series', async () => {
     renderTab()
     await screen.findByTestId('entity-graph')
+    await waitFor(() => expect(clickHandler).not.toBeNull())
     clickHandler!({ dataType: 'node', data: { id: 'e2' } })
     await screen.findByTestId('entity-detail')
     expect(dispatchAction).toHaveBeenLastCalledWith({ type: 'select', seriesId: 'entities', dataIndex: 1 })

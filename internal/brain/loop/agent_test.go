@@ -347,6 +347,125 @@ func TestAgentTerminalSurvivesContextCancel(t *testing.T) {
 	}
 }
 
+// errAfterCancelGateway's Stream call blocks until the caller's ctx is
+// canceled, then returns ctx.Err() — the shape of a stop landing while
+// a step's Stream request is in flight.
+type errAfterCancelGateway struct{}
+
+func (g *errAfterCancelGateway) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	return role, true, nil
+}
+
+func (g *errAfterCancelGateway) Stream(ctx context.Context, _ gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// TestAgentStopVsOutageStreamErrorCode pins issue #622: a canceled ctx
+// must surface as a distinct, non-retryable "stopped" code, never the
+// "gateway_unavailable" code a real outage gets — a stop is not a
+// gateway failure and must not read as one to the model or the UI.
+func TestAgentStopVsOutageStreamErrorCode(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	gw := &errAfterCancelGateway{}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(ctx, Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	evs := collect(t, ch)
+
+	errs := ofType(evs, stream.EventError)
+	if len(errs) != 1 {
+		t.Fatalf("error events = %+v, want exactly 1", errs)
+	}
+	if errs[0].Err.Code != "stopped" {
+		t.Fatalf("code = %q, want stopped", errs[0].Err.Code)
+	}
+	if errs[0].Err.Retryable {
+		t.Fatal("stopped error must not be retryable")
+	}
+}
+
+// TestAgentGatewayOutageKeepsUnavailableCode confirms the #622 fix
+// left the real-outage path untouched: a Stream failure with no
+// context cancellation still reports gateway_unavailable/retryable.
+func TestAgentGatewayOutageKeepsUnavailableCode(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{} // no scripts queued: every Stream call errors
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	errs := ofType(evs, stream.EventError)
+	if len(errs) != 1 {
+		t.Fatalf("error events = %+v, want exactly 1", errs)
+	}
+	if errs[0].Err.Code != "gateway_unavailable" {
+		t.Fatalf("code = %q, want gateway_unavailable", errs[0].Err.Code)
+	}
+	if !errs[0].Err.Retryable {
+		t.Fatal("a real outage must stay retryable")
+	}
+}
+
+// TestAgentToolCallCanceledOnStop pins issue #622's second AC: a tool
+// call in flight when the turn is stopped must persist and report as
+// canceled, not error — the tool did not fail, the operator stopped it.
+func TestAgentToolCallCanceledOnStop(t *testing.T) {
+	t.Parallel()
+	started := make(chan struct{})
+	slow := &tools.Tool{
+		Name:        "slow",
+		Description: "blocks until its context is canceled",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
+		Execute: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			close(started)
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	}
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"slow", `{}`}),
+	}}
+	a, audit, _, _ := testAgent(t, gw, slow)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	ch, err := a.Start(ctx, Request{SessionID: "s1", Route: "coding", Messages: []provider.Message{{Role: "user", Content: "go"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drain concurrently: emit() blocks on the channel send until read,
+	// so the tool_start event ahead of the call must be drained before
+	// the tool itself ever runs and can close started. Once ctx is
+	// canceled, emit()'s own select races ctx.Done() against the send
+	// and may legitimately drop a live event — this only asserts on
+	// audit persistence, which runs on a detached (WithoutCancel)
+	// context and is never subject to that race.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		collect(t, ch)
+	}()
+	<-started
+	cancel()
+	<-done
+
+	audit.mu.Lock()
+	gotAudit := audit.entries
+	audit.mu.Unlock()
+	if len(gotAudit) != 1 || gotAudit[0].Status != "canceled" {
+		t.Fatalf("audit = %+v, want status canceled", gotAudit)
+	}
+}
+
 // TestAgentToolPanicBecomesErrorResult pins the recover in executeOne:
 // a panicking tool must come back to the model as an error result
 // (D-009), not crash the process — executeOne runs inside an errgroup
