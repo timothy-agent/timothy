@@ -18,7 +18,10 @@ function toToolRun(tool: NonNullable<TranscriptItem['tool']>): ToolRun {
     id: tool.call_id,
     name: tool.name,
     args: tool.args,
-    status: status === 'ok' || status === 'error' || status === 'denied' ? status : 'ok',
+    status:
+      status === 'ok' || status === 'error' || status === 'denied' || status === 'canceled'
+        ? status
+        : 'ok',
     digest: tool.result_digest,
     durationMs: tool.duration_ms,
   }

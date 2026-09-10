@@ -30,6 +30,10 @@ const (
 	codeNetwork            = "network"
 	codeGatewayUnavailable = "gateway_unavailable"
 	codeToolError          = "tool_error"
+	// codeCanceled marks a call cut short by the turn being stopped
+	// (issue #622), never by the tool itself failing: retrying it means
+	// re-running the same call the operator asked to stop.
+	codeCanceled = "canceled"
 )
 
 // retryableFor reports whether a call that failed with code could
@@ -39,7 +43,7 @@ const (
 // recovery it could have made.
 func retryableFor(code string) bool {
 	switch code {
-	case codePolicyDenied, codeUnknownTool, codeCallCap, codeUserDenied:
+	case codePolicyDenied, codeUnknownTool, codeCallCap, codeUserDenied, codeCanceled:
 		return false
 	default:
 		return true

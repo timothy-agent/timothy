@@ -68,7 +68,12 @@ export function ToolCallCard({
   const args = parseArgs(run.args)
   const isError = run.status === 'error'
 
-  const hasDetail = args !== undefined || run.digest !== undefined || run.status === 'denied' || children !== undefined
+  const hasDetail =
+    args !== undefined ||
+    run.digest !== undefined ||
+    run.status === 'denied' ||
+    run.status === 'canceled' ||
+    children !== undefined
   if (!hasDetail) {
     return (
       <div className="min-w-0 w-full" data-density={density}>
@@ -85,6 +90,7 @@ export function ToolCallCard({
           <p className="font-mono text-trace text-muted-foreground">{run.name}</p>
           {args !== undefined && <JsonBlock value={args} density="trace" label="Arguments" maxLines={20} />}
           {run.status === 'denied' && <p className="text-sm text-muted-foreground">Denied by you</p>}
+          {run.status === 'canceled' && <p className="text-sm text-muted-foreground">Stopped</p>}
           {run.digest !== undefined && <DigestBlock digest={run.digest} isError={isError} />}
           {children}
         </div>

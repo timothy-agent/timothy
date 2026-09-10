@@ -552,6 +552,17 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		for attempt := 0; ; attempt++ {
 			upstream, err := a.gw.Stream(ctx, sreq)
 			if err != nil {
+				// A canceled ctx (issue #622) means the operator stopped
+				// the turn, not that the gateway is unreachable: retrying,
+				// and the gateway_unavailable code, both misrepresent an
+				// intentional stop as a failure.
+				if ctx.Err() != nil {
+					emitFinal(stream.StreamEvent{Type: stream.EventUsage, Usage: &total})
+					emitFinal(stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
+						Code: "stopped", Message: "turn stopped", Retryable: false,
+					}})
+					return
+				}
 				if attempt < maxStepRetries && retryStep(ctx, emit, attempt+1, err.Error()) {
 					continue
 				}
@@ -1025,6 +1036,9 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 
 	out, err := exec.Execute(ctx, call.Name, call.Input)
 	if err != nil {
+		if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+			return "turn stopped before this call finished", "canceled", codeCanceled
+		}
 		if tools.IsViolation(err) {
 			return err.Error(), "error", codePolicyDenied
 		}
