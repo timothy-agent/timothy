@@ -61,9 +61,9 @@ export function missionStatus(input: { phase?: string; status: string }): Status
 }
 
 // toolCallStatus implements the tool-call row of the same mapping table.
-export function toolCallStatus(s: 'running' | 'ok' | 'denied' | 'error' | 'blocked'): Status {
+export function toolCallStatus(s: 'running' | 'ok' | 'denied' | 'error' | 'blocked' | 'canceled'): Status {
   if (s === 'running') return 'working'
   if (s === 'ok') return 'success'
-  if (s === 'denied') return 'neutral'
+  if (s === 'denied' || s === 'canceled') return 'neutral'
   return 'error'
 }

@@ -49,7 +49,8 @@ type StreamEvent struct {
 }
 
 // ToolResultEvent reports a finished tool execution to the client:
-// status ok|error|denied, a digest (never the raw result), and timing.
+// status ok|error|denied|canceled, a digest (never the raw result), and
+// timing.
 type ToolResultEvent struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
