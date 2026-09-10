@@ -931,7 +931,7 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 // resolveAndRun walks the permission chain, parks on Ask, and executes
 // on allow. It returns the raw message, a status of ok, denied, or
 // error, and on failure the error code executeOne wraps the message
-// with (D-104) — denials and failures come back as feedback, never as
+// with (D-104): denials and failures come back as feedback, never as
 // a broken turn (D-009). The code is empty on ok.
 //
 // A call whose name is absent from toolNames (a hallucinated tool)
