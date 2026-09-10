@@ -44,3 +44,22 @@ type Tool struct {
 	// convention or a connector's kind.
 	ReadOnly bool
 }
+
+// sessionIDKey carries the turn's session id to a tool's Execute. Set
+// once by the loop before it runs a step's calls; the permission
+// chain takes the id as an argument instead, so this exists only for
+// tools that must record something per session (connectors' load_tool,
+// issue #643).
+type sessionIDKey struct{}
+
+// WithSessionID attaches the turn's session id to ctx.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDKey{}, sessionID)
+}
+
+// SessionIDFromContext returns the session id WithSessionID attached,
+// or "" outside a turn.
+func SessionIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(sessionIDKey{}).(string)
+	return id
+}

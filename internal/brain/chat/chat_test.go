@@ -21,6 +21,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
@@ -3383,5 +3384,51 @@ func TestChatAutoDispatchFallsBackWhenClassifyErrors(t *testing.T) {
 	sent := chatRequest(t, gw)
 	if sent.Agent != "general-id" || sent.Route != "default" {
 		t.Fatalf("agent/route = %s/%s, want general-id/default (dispatch fallback on classify error)", sent.Agent, sent.Route)
+	}
+}
+
+// TestLoadedToolsPersistPerSession pins the session-scoped registry a
+// deferred MCP tool lands in (issue #643): the tool sticks for the
+// session, reloading it replaces rather than duplicates, and another
+// session sees nothing.
+func TestLoadedToolsPersistPerSession(t *testing.T) {
+	t.Parallel()
+	s := &Service{logger: discard()}
+	mk := func(name string) *tools.Tool {
+		return &tools.Tool{
+			Name:        name,
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+			Execute:     func(context.Context, json.RawMessage) (string, error) { return name, nil },
+		}
+	}
+
+	s.RecordLoadedTool("s1", mk("github_create_issue"))
+	s.RecordLoadedTool("s1", mk("github_list_prs"))
+	s.RecordLoadedTool("s1", mk("github_create_issue")) // reload, not a duplicate
+	s.RecordLoadedTool("", mk("github_ignored"))
+	s.RecordLoadedTool("s1", nil)
+
+	got := s.LoadedTools("s1")
+	if len(got) != 2 || got[0].Name != "github_create_issue" || got[1].Name != "github_list_prs" {
+		t.Fatalf("loaded = %+v", got)
+	}
+	if len(s.LoadedTools("s2")) != 0 {
+		t.Fatalf("session s2 must see nothing")
+	}
+	// The recorded tool is schema-validated, unlike a raw ExtraTool.
+	if _, err := got[0].Execute(t.Context(), json.RawMessage(`[]`)); !tools.IsViolation(err) {
+		t.Fatalf("recorded tool = %v, want a schema violation on bad args", err)
+	}
+}
+
+// TestRecordLoadedToolDropsBrokenSchema keeps a remote server's
+// malformed schema out of the session surface instead of panicking
+// or offering an uncheckable tool.
+func TestRecordLoadedToolDropsBrokenSchema(t *testing.T) {
+	t.Parallel()
+	s := &Service{logger: discard()}
+	s.RecordLoadedTool("s1", &tools.Tool{Name: "bad", InputSchema: json.RawMessage(`{"type":`)})
+	if len(s.LoadedTools("s1")) != 0 {
+		t.Fatalf("a broken schema must not reach the session surface")
 	}
 }

@@ -113,8 +113,38 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// memory (issue #648): the query is the only argument and
 			// nothing it returns reaches a side effect.
 			"search_memory": true,
+			// A connector's deferred-tool index entry point is exempt
+			// too, but by suffix rather than by name: see
+			// isConnectorLoadTool.
 		},
 	}
+}
+
+// loadToolName is the raw name a connector gives its deferred-tool
+// index entry point; the manager serves it namespaced as
+// "<connector>_load_tool" (connectors.NamespacedName).
+const loadToolName = "load_tool"
+
+// isConnectorLoadTool reports whether tool is a connector's
+// deferred-tool index entry point (issue #643), which is exempt for
+// the same reason load_skill is: its Execute resolves a name against
+// an in-process list and returns that tool's description and schema
+// as text, with no remote call and no side effect the operator could
+// meaningfully approve. Prompting on the lookup would park a turn on
+// the act of reading an index.
+//
+// A suffix check rather than an exempt-map entry because the map is
+// exact-name and the manager namespaces the raw "load_tool" per
+// connector, so the exempt name is not known until a connector is
+// configured. The suffix is deliberately NOT applied to the rest of
+// the exempt map: reusing ToolMatches there would exempt any remote
+// tool that happened to end in "_search_kb" or "_remember", handing a
+// third-party MCP server a way to name its way out of the permission
+// chain. Loading a tool still grants nothing: the loaded tool keeps
+// its own namespaced name, is absent from the exempt map, and walks
+// the whole chain when the model actually calls it.
+func isConnectorLoadTool(tool string) bool {
+	return tool == loadToolName || strings.HasSuffix(tool, "_"+loadToolName)
 }
 
 // Resolve runs the chain for one call.
@@ -129,7 +159,7 @@ func (p *Permissions) Resolve(ctx context.Context, sessionID, tool string, args 
 		}, nil
 	}
 
-	if p.exempt[tool] {
+	if p.exempt[tool] || isConnectorLoadTool(tool) {
 		return Resolution{Decision: DecisionAllow, Subject: subject, Rationale: "exempt tool"}, nil
 	}
 

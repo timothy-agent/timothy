@@ -269,3 +269,28 @@ func TestResolveSandboxOpaqueGuardStillDenies(t *testing.T) {
 		t.Fatalf("res = %+v, want hard deny (system dirs guard)", res)
 	}
 }
+
+// TestResolveConnectorLoadToolPath pins the deferred-tool permission
+// path end to end against the real chain: the index entry point is
+// allowed without a prompt (exempt, like load_skill), while a tool
+// loaded through it has no grant and no exemption, so it asks exactly
+// as the eager tool it stands in for would.
+func TestResolveConnectorLoadToolPath(t *testing.T) {
+	p, sid := integrationPermissions(t)
+
+	res, err := p.Resolve(t.Context(), sid, "github_load_tool", json.RawMessage(`{"name":"create_issue"}`))
+	if err != nil {
+		t.Fatalf("Resolve entry point: %v", err)
+	}
+	if res.Decision != DecisionAllow || res.Rationale != "exempt tool" {
+		t.Fatalf("github_load_tool = %+v, want an exempt allow", res)
+	}
+
+	res, err = p.Resolve(t.Context(), sid, "github_create_issue", json.RawMessage(`{"title":"x"}`))
+	if err != nil {
+		t.Fatalf("Resolve loaded tool: %v", err)
+	}
+	if res.Decision != DecisionAsk {
+		t.Fatalf("github_create_issue = %+v, want ask", res)
+	}
+}

@@ -119,7 +119,18 @@ const (
 	// from the cost ledger before every review round; "" (the default)
 	// defers to DefaultReviewTokenCeiling, "0" disables the ceiling.
 	ValueReviewTokenCeiling = "mission_review_token_ceiling"
+	// ValueMCPToolIndexThreshold is the tool count above which an MCP
+	// connector stops injecting every remote schema into every turn and
+	// offers a one-line index plus a load_tool entry point instead
+	// (issue #643); "" defers to DefaultMCPToolIndexThreshold, "0"
+	// disables deferral so every connector stays fully eager.
+	ValueMCPToolIndexThreshold = "mcp_tool_index_threshold"
 )
+
+// DefaultMCPToolIndexThreshold is the MCP tool count above which the
+// index replaces eager schemas when ValueMCPToolIndexThreshold is
+// unset.
+const DefaultMCPToolIndexThreshold = 8
 
 // DefaultReviewTokenCeiling is the per-mission review input token cap
 // when ValueReviewTokenCeiling is unset.
@@ -138,6 +149,7 @@ var knownValueKeys = map[string]bool{
 	ValueWebBaseURL: true, ValueTimezone: true,
 	ValuePermissionTimeoutSeconds: true, ValueAskTimeoutSeconds: true,
 	ValueExecutorRunBudgetMinutes: true, ValueReviewTokenCeiling: true,
+	ValueMCPToolIndexThreshold: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -240,6 +252,18 @@ func (s *Store) AskTimeoutSeconds(ctx context.Context) int {
 		}
 	}
 	return 0
+}
+
+// MCPToolIndexThreshold parses the MCP deferral threshold: unset or
+// unparsable falls back to DefaultMCPToolIndexThreshold, 0 disables
+// deferral entirely.
+func (s *Store) MCPToolIndexThreshold(ctx context.Context) int {
+	if v := s.Value(ctx, ValueMCPToolIndexThreshold); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return DefaultMCPToolIndexThreshold
 }
 
 // ExecutorRunBudget parses the delegated executor wall-clock cap,
@@ -411,7 +435,7 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 			return fmt.Errorf("%s must be a positive integer or empty", key)
 		}
 	}
-	if (key == ValuePermissionTimeoutSeconds || key == ValueAskTimeoutSeconds || key == ValueReviewTokenCeiling) && value != "" {
+	if (key == ValuePermissionTimeoutSeconds || key == ValueAskTimeoutSeconds || key == ValueReviewTokenCeiling || key == ValueMCPToolIndexThreshold) && value != "" {
 		if n, err := strconv.Atoi(value); err != nil || n < 0 {
 			return fmt.Errorf("%s must be a non-negative integer or empty", key)
 		}

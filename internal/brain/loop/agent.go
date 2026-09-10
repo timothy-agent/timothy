@@ -834,6 +834,9 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 	// concurrent sibling call's result.
 	collector := tools.NewCollector(a.mediaSaver)
 	ctx = tools.WithCollector(ctx, collector)
+	// The session id rides ctx for tools that record per-session state
+	// (connectors' load_tool, issue #643); every other tool ignores it.
+	ctx = tools.WithSessionID(ctx, sessionID)
 	// A panicking tool must become feedback the model can read (D-009),
 	// never a process crash: executeOne runs inside an errgroup worker,
 	// and an unrecovered panic there takes down the whole brain — every

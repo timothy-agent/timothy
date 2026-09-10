@@ -329,3 +329,33 @@ func TestGuardEmbeddedPath(t *testing.T) {
 		}
 	}
 }
+
+// TestConnectorLoadToolExemption pins both halves of issue #643's
+// permission story: the deferred-index entry point is exempt under
+// every connector's namespaced form, the way load_skill is, while a
+// tool loaded THROUGH it stays fully inside the chain. The suffix
+// must not leak to the rest of the exempt map either, or a remote
+// server could name its way out by ending a tool in "_search_kb".
+func TestConnectorLoadToolExemption(t *testing.T) {
+	t.Parallel()
+	exempt := []string{"load_tool", "github_load_tool", "some-other-mcp_load_tool"}
+	notExempt := []string{
+		"github_create_issue",
+		"github_load_toolbox",  // suffix must land on a "_" boundary
+		"github_search_kb",     // an exempt raw name must NOT match by suffix
+		"github_remember",      // same
+		"my_load_tool_wrapper", // suffix must be at the end
+	}
+
+	p := NewPermissions(nil, "/workspace")
+	for _, name := range exempt {
+		if !isConnectorLoadTool(name) {
+			t.Errorf("%s: want exempt as a connector index entry point", name)
+		}
+	}
+	for _, name := range notExempt {
+		if isConnectorLoadTool(name) || p.exempt[name] {
+			t.Errorf("%s: must stay inside the permission chain", name)
+		}
+	}
+}
