@@ -148,6 +148,13 @@ type Usage struct {
 	OutputTokens     int `json:"output_tokens"`
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// CacheWrite1hTokens is the part of the cache write that went to the
+	// one-hour tier, which the provider bills at a higher rate than the
+	// five-minute tier. Split out so cost never applies the wrong
+	// multiplier; CacheWriteTokens holds the five-minute remainder.
+	// Zero when the provider reports no per-TTL breakdown, in which case
+	// the whole write sits in CacheWriteTokens.
+	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
 	// ReasoningTokens is already included in OutputTokens and billed as
 	// output (D-013 unaffected); it exists purely so an operator can see
 	// how much output spend went to invisible reasoning.

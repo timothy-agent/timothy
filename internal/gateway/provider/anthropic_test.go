@@ -355,6 +355,80 @@ func TestAnthropicMissingModel(t *testing.T) {
 	}
 }
 
+// TestAnthropicCacheTTLHint pins where the extended tier lands: on the
+// system block only, and only when the request asks for it. Longer
+// TTLs must precede shorter ones, which system-first already gives.
+func TestAnthropicCacheTTLHint(t *testing.T) {
+	t.Parallel()
+	a := NewAnthropic(AnthropicConfig{Name: "a"})
+	msgs := []Message{{Role: "user", Content: "hi"}}
+
+	plain, err := json.Marshal(a.buildRequest(CompletionRequest{Model: "m", System: "sys", Messages: msgs}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), `"ttl"`) {
+		t.Fatalf("unhinted request carries a ttl:\n%s", plain)
+	}
+
+	hinted, err := json.Marshal(a.buildRequest(CompletionRequest{
+		Model: "m", System: "sys", Messages: msgs, CacheTTL: "1h",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(hinted), `"cache_control"`); got != 2 {
+		t.Fatalf("cache_control markers = %d, want 2:\n%s", got, hinted)
+	}
+	if !strings.Contains(string(hinted), `"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral","ttl":"1h"}}]`) {
+		t.Fatalf("system block missing the 1h ttl:\n%s", hinted)
+	}
+	// The conversation breakpoint stays on the default tier: only one
+	// ttl in the whole body, and it is not on the message block.
+	if got := strings.Count(string(hinted), `"ttl":"1h"`); got != 1 {
+		t.Fatalf("ttl markers = %d, want 1 (system only):\n%s", got, hinted)
+	}
+	if !strings.Contains(string(hinted), `{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}`) {
+		t.Fatalf("breakpoint left the default tier:\n%s", hinted)
+	}
+}
+
+// TestAnthropicUsageCacheWriteSplit pins the per-TTL write split: the
+// breakdown, when the API sends one, decides which price applies.
+func TestAnthropicUsageCacheWriteSplit(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name              string
+		body              string
+		wantFive, wantOne int
+	}{
+		{
+			name:     "no breakdown keeps today's behaviour",
+			body:     `{"cache_creation_input_tokens":900}`,
+			wantFive: 900, wantOne: 0,
+		},
+		{
+			name: "breakdown splits by tier",
+			body: `{"cache_creation_input_tokens":900,
+				"cache_creation":{"ephemeral_5m_input_tokens":200,"ephemeral_1h_input_tokens":700}}`,
+			wantFive: 200, wantOne: 700,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var u anthropicUsage
+			if err := json.Unmarshal([]byte(tc.body), &u); err != nil {
+				t.Fatal(err)
+			}
+			five, one := u.splitCacheWrite()
+			if five != tc.wantFive || one != tc.wantOne {
+				t.Fatalf("split = (%d, %d), want (%d, %d)", five, one, tc.wantFive, tc.wantOne)
+			}
+		})
+	}
+}
+
 // TestAnthropicEffort covers the D-020 dial: "low" sends
 // output_config.effort on a model that supports it, full effort and
 // unsupported models send nothing at all.

@@ -26,7 +26,12 @@ GOALS=(
   "Summarize what DNS TTL means and how it affects record changes, in a markdown file."
   "Explain what an idempotent HTTP method is with examples, in a markdown file."
 )
-GOAL="${GOALS[$((RANDOM % ${#GOALS[@]}))]}"
+# CANARY_GOAL pins the goal instead of drawing one. Only for a
+# deliberate before/after comparison (e.g. measuring a prompt-cache
+# change across two runs), where the goal must be identical and the
+# cache warmth is the thing being measured; a normal canary run must
+# leave it unset so the random draw applies.
+GOAL="${CANARY_GOAL:-${GOALS[$((RANDOM % ${#GOALS[@]}))]}}"
 
 # The API token stays in the shell environment only — sourced here,
 # never printed.
@@ -106,6 +111,21 @@ if failures:
     sys.exit(1)
 print("canary: PASS")
 PY
+
+# Prompt-cache position for this mission, read before the delete below
+# removes the mission the ledger rows are keyed to. Best-effort: a
+# usage endpoint that is unavailable must never flip a PASS to a FAIL.
+if usage="$(curl -sf "${auth[@]}" "${BASE_URL}/v1/admin/usage/mission?id=${id}")"; then
+  CANARY_USAGE="${usage}" python3 <<'USAGEPY'
+import json, os
+u = json.loads(os.environ["CANARY_USAGE"])
+print("canary: input_tokens={} cache_read_tokens={} cache_write_tokens={} hit_ratio={:.3f}".format(
+    u.get("input_tokens", 0), u.get("cache_read_tokens", 0),
+    u.get("cache_write_tokens", 0), u.get("hit_ratio", 0.0)))
+USAGEPY
+else
+  echo "canary: WARNING - usage for mission ${id} unavailable (non-fatal)" >&2
+fi
 
 # Cleanup only runs once every check above has passed (set -e would
 # have already aborted the script on any failure) — a failed mission is

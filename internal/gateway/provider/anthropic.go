@@ -156,9 +156,19 @@ type anthropicContentBlock struct {
 	CacheControl json.RawMessage `json:"cache_control,omitempty"`
 }
 
-// anthropicCacheEphemeral is the one cache_control value the driver
-// ever sends.
+// anthropicCacheEphemeral is the default five-minute cache_control
+// value: the conversation breakpoint always uses it, and so does the
+// system block unless the request asks for the extended tier.
 var anthropicCacheEphemeral = json.RawMessage(`{"type":"ephemeral"}`)
+
+// anthropicCacheEphemeral1h is the extended one-hour tier, GA on
+// cache_control with no beta header. Used on the SYSTEM block only,
+// for mission turns (CompletionRequest.CacheTTL == "1h"): the API
+// requires longer-TTL breakpoints to appear before shorter ones, and
+// system-first ordering already satisfies that. Writes at this tier
+// cost more than the five-minute tier, so the usage split keeps them
+// separate for pricing.
+var anthropicCacheEphemeral1h = json.RawMessage(`{"type":"ephemeral","ttl":"1h"}`)
 
 // markLastBlockCached puts the conversation breakpoint on the last
 // content block of the last message (D-093): the system block is the
@@ -289,6 +299,25 @@ type anthropicUsage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	// CacheCreation is the per-TTL breakdown of CacheCreationInputTokens.
+	// Absent on older responses, hence the pointer: nil means no
+	// breakdown and the whole creation count is treated as five-minute.
+	CacheCreation *anthropicCacheCreation `json:"cache_creation"`
+}
+
+type anthropicCacheCreation struct {
+	Ephemeral5mInputTokens int `json:"ephemeral_5m_input_tokens"`
+	Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens"`
+}
+
+// splitCacheWrite fills the five-minute and one-hour write counts from
+// the response usage, falling back to the undifferentiated total when
+// the provider sends no breakdown.
+func (u anthropicUsage) splitCacheWrite() (fiveMin, oneHour int) {
+	if u.CacheCreation == nil {
+		return u.CacheCreationInputTokens, 0
+	}
+	return u.CacheCreation.Ephemeral5mInputTokens, u.CacheCreation.Ephemeral1hInputTokens
 }
 
 // Stream implements Provider.
@@ -391,10 +420,14 @@ func (a *Anthropic) buildRequest(req CompletionRequest) anthropicRequest {
 		// cache_control on the system block enables prompt caching for
 		// the stable prefix (D-018); the conversation breakpoint above
 		// (D-093) extends that to the growing tool-loop transcript.
+		cc := anthropicCacheEphemeral
+		if req.CacheTTL == "1h" {
+			cc = anthropicCacheEphemeral1h
+		}
 		out.System = []anthropicTextBlock{{
 			Type:         "text",
 			Text:         req.System,
-			CacheControl: anthropicCacheEphemeral,
+			CacheControl: cc,
 		}}
 	}
 	for _, t := range req.Tools {
@@ -427,7 +460,7 @@ func (a *Anthropic) relay(ctx context.Context, body io.Reader, ch chan<- stream.
 		case "message_start":
 			usage.InputTokens = p.Message.Usage.InputTokens
 			usage.CacheReadTokens = p.Message.Usage.CacheReadInputTokens
-			usage.CacheWriteTokens = p.Message.Usage.CacheCreationInputTokens
+			usage.CacheWriteTokens, usage.CacheWrite1hTokens = p.Message.Usage.splitCacheWrite()
 			requestID = p.Message.ID
 		case "content_block_start":
 			if p.ContentBlock.Type == "tool_use" {

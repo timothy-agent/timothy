@@ -73,7 +73,7 @@ func seedAgg(t *testing.T, led *Ledger) (from, to time.Time) {
 
 	rows := []Entry{
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", SessionID: "s1",
-			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 20},
+			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 20, CacheWriteTokens: 60},
 			LatencyMS: 100, Status: "ok", Cost: usd(0.10), ToolDefTokensEstimate: 400},
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", SessionID: "s1",
 			Usage: &stream.Usage{InputTokens: 200, OutputTokens: 100},
@@ -429,7 +429,7 @@ func TestAggregateMissionUsage(t *testing.T) {
 			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 30},
 			LatencyMS: 100, Status: "ok", Cost: usd(0.10)},
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", MissionID: mission,
-			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100, CacheReadTokens: 10},
+			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100, CacheReadTokens: 10, CacheWriteTokens: 90},
 			LatencyMS: 100, Status: "ok", Cost: usd(0.20)},
 		// A fallback to a second model, the whole point of Models: a
 		// route is a chain, not one model, so both must show up. Tagged
@@ -467,6 +467,12 @@ func TestAggregateMissionUsage(t *testing.T) {
 	}
 	if got.CacheReadTokens != 40 {
 		t.Fatalf("CacheReadTokens = %d, want 40 (D-093: cached reads summed per mission)", got.CacheReadTokens)
+	}
+	if got.CacheWriteTokens != 90 {
+		t.Fatalf("CacheWriteTokens = %d, want 90", got.CacheWriteTokens)
+	}
+	if want := 40.0 / 390.0; got.HitRatio != want {
+		t.Fatalf("HitRatio = %v, want %v (read over read plus input)", got.HitRatio, want)
 	}
 	if got.ReviewInputTokens != 40 {
 		t.Fatalf("ReviewInputTokens = %d, want 40 (D-097: only the reviewer-tagged row)", got.ReviewInputTokens)
@@ -780,6 +786,18 @@ func TestAggregateTopSessionsAndCache(t *testing.T) {
 	}
 	if p1, p2 := pos["s1"], pos["s2"]; p2 < p1 {
 		t.Fatalf("s2 ($0.01) ranked above s1 ($0.30): %v", pos)
+	}
+	// s1: 20 cached reads and 60 cache writes against 300 fresh input.
+	s1 := sessions[pos["s1"]]
+	if s1.CacheReadTokens != 20 || s1.CacheWriteTokens != 60 {
+		t.Fatalf("s1 cache tokens = read %d write %d, want 20 and 60", s1.CacheReadTokens, s1.CacheWriteTokens)
+	}
+	if want := 20.0 / 320.0; s1.HitRatio != want {
+		t.Fatalf("s1 hit ratio = %v, want %v (read over read plus input)", s1.HitRatio, want)
+	}
+	// s2 never touched the cache: a zero ratio, not a division by zero.
+	if s2 := sessions[pos["s2"]]; s2.HitRatio != 0 {
+		t.Fatalf("s2 hit ratio = %v, want 0", s2.HitRatio)
 	}
 
 	cache, err := agg.Cache(t.Context(), from, to)

@@ -99,9 +99,10 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), writeTimeout)
 	defer cancel()
 
-	var in, out, cr, cw, rt *int
+	var in, out, cr, cw, cw1h, rt *int
 	if e.Usage != nil {
 		in, out, cr, cw, rt = &e.Usage.InputTokens, &e.Usage.OutputTokens, &e.Usage.CacheReadTokens, &e.Usage.CacheWriteTokens, &e.Usage.ReasoningTokens
+		cw1h = &e.Usage.CacheWrite1hTokens
 	}
 	currency := e.Currency
 	if currency == "" {
@@ -109,13 +110,13 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 	}
 	_, err = db.Exec(wctx, `INSERT INTO cost_ledger
 		(id, provider, model, route, agent, purpose, session_id, mission_id,
-		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens,
+		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, reasoning_tokens,
 		 latency_ms, status, error_code, cost, currency, unbilled, provider_request_id,
 		 tool_def_tokens_estimate, effort)
 		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()),
-		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, $15, NULLIF($16, ''), $17, $18, $19, NULLIF($20, ''), $21, NULLIF($22, ''))`,
+		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, ''), $18, $19, $20, NULLIF($21, ''), $22, NULLIF($23, ''))`,
 		e.ID, e.Provider, e.Model, e.Route, e.Agent, e.Purpose, e.SessionID, e.MissionID,
-		in, out, cr, cw, rt, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency, e.Unbilled, e.ProviderRequestID,
+		in, out, cr, cw, cw1h, rt, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency, e.Unbilled, e.ProviderRequestID,
 		e.ToolDefTokensEstimate, e.Effort)
 	if err != nil {
 		l.log.Warn("ledger write failed", "error", err, "provider", e.Provider, "status", e.Status)
@@ -152,7 +153,7 @@ func (l *Ledger) LastSuccess(ctx context.Context, sessionID, route string) (prov
 // billableUsage reports whether u carries any tokens that would have
 // been priced had the catalog known this model.
 func billableUsage(u *stream.Usage) bool {
-	return u != nil && u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens > 0
+	return u != nil && u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens+u.CacheWrite1hTokens > 0
 }
 
 // NewID returns a random UUIDv4 for pre-assigning ledger rows.
@@ -173,10 +174,18 @@ func Cost(prices *router.ModelPrices, u *stream.Usage) *float64 {
 	if prices == nil || u == nil {
 		return nil
 	}
+	// A one-hour cache write bills above the five-minute write, and no
+	// catalog carries that rate: without an operator-declared price the
+	// row's real cost is unknown, so it goes in as NULL rather than a
+	// derived multiple of the five-minute rate (D-013).
+	if u.CacheWrite1hTokens > 0 && prices.CacheWrite1hPerMTok == 0 {
+		return nil
+	}
 	const mtok = 1_000_000.0
 	c := float64(u.InputTokens)*prices.InputPerMTok/mtok +
 		float64(u.OutputTokens)*prices.OutputPerMTok/mtok +
 		float64(u.CacheReadTokens)*prices.CacheReadPerMTok/mtok +
-		float64(u.CacheWriteTokens)*prices.CacheWritePerMTok/mtok
+		float64(u.CacheWriteTokens)*prices.CacheWritePerMTok/mtok +
+		float64(u.CacheWrite1hTokens)*prices.CacheWrite1hPerMTok/mtok
 	return &c
 }

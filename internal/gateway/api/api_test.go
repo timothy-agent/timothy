@@ -1231,3 +1231,57 @@ func TestIsLocalBaseURL(t *testing.T) {
 		})
 	}
 }
+
+// anthropicSnapshotFor builds a one-provider snapshot on the anthropic
+// driver, so a test can read the native Messages API body the driver
+// actually sends.
+func anthropicSnapshotFor(t *testing.T, baseURL string) *router.Snapshot {
+	t.Helper()
+	rows := []router.ProviderRow{
+		{ID: "p1", Name: "one", Kind: "api", Driver: "anthropic", BaseURL: baseURL,
+			DefaultModel: "m1", Enabled: true},
+	}
+	routes := []router.RouteRow{
+		{Name: "coding", Chain: []router.ChainEntry{{ProviderID: "p1", Model: "m1"}}, Enabled: true},
+	}
+	snap, _ := router.BuildSnapshot(rows, routes, func(string) string { return "" }, nil)
+	return snap
+}
+
+// TestStreamMissionTurnAsksForExtendedCacheTTL pins the mission-turn
+// derivation: a request carrying mission_id gets CacheTTL "1h", which
+// the Anthropic driver puts on the system block; a chat turn without
+// one keeps the five-minute default. MissionID is the signal because
+// purpose is hardcoded "chat" on this path.
+func TestStreamMissionTurnAsksForExtendedCacheTTL(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		reqBody string
+		wantTTL bool
+	}{
+		{"mission turn", `{"route":"coding","mission_id":"m-1","system":"sys","messages":[{"role":"user","content":"hi"}]}`, true},
+		{"chat turn", `{"route":"coding","session_id":"s1","system":"sys","messages":[{"role":"user","content":"hi"}]}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var body []byte
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ = io.ReadAll(r.Body)
+				_, _ = fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			}))
+			t.Cleanup(srv.Close)
+			a, _ := newAPI(anthropicSnapshotFor(t, srv.URL))
+
+			w := postJSON(t, a.handleStream, tc.reqBody)
+			if w.Code != http.StatusOK {
+				t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
+			}
+			got := strings.Contains(string(body), `"ttl":"1h"`)
+			if got != tc.wantTTL {
+				t.Fatalf("body has 1h ttl = %v, want %v:\n%s", got, tc.wantTTL, body)
+			}
+		})
+	}
+}

@@ -204,6 +204,7 @@ func validateModelPrices(p ModelPrices) error {
 		{"output_per_mtok", p.OutputPerMTok},
 		{"cache_read_per_mtok", p.CacheReadPerMTok},
 		{"cache_write_per_mtok", p.CacheWritePerMTok},
+		{"cache_write_1h_per_mtok", p.CacheWrite1hPerMTok},
 	} {
 		if math.IsNaN(f.val) || math.IsInf(f.val, 0) {
 			return fmt.Errorf("%s is not a finite number", f.name)

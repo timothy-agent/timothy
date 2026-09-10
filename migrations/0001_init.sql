@@ -65,6 +65,10 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
     output_tokens      integer,
     cache_read_tokens  integer,
     cache_write_tokens integer,
+    -- Part of cache_write_tokens' total that went to the one-hour
+    -- cache tier, which providers bill above the five-minute tier;
+    -- kept apart so cost never applies the wrong multiplier.
+    cache_write_1h_tokens integer,
     -- Subset of output_tokens already included and billed there (OpenAI
     -- reasoning models); stored separately for spend visibility only.
     reasoning_tokens   integer,
