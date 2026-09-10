@@ -189,7 +189,7 @@ func runShell(ctx context.Context, dir string, timeout time.Duration, command st
 
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
-		return out, fmt.Errorf("command timed out after %s", timeout)
+		return out, fmt.Errorf("command timed out after %s: %w", timeout, tools.ErrTimeout)
 	case err != nil:
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
