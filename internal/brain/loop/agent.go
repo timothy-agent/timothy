@@ -73,13 +73,47 @@ const maxStepRetries = 2
 // stepRetryBackoff scales the wait before each step retry (attempt *
 // this duration); a package-level var so tests can shrink it instead
 // of plumbing a config knob through Request/NewAgent for one knob
-// only tests need.
+// only tests need. Guarded by timingVarsMu since tests run in
+// parallel and both write and read it concurrently.
 var stepRetryBackoff = time.Second
 
 // permissionTimeout bounds a chat turn's wait for a parked permission
 // (D-010); an attended mission turn never applies it (see askUser).
 // A package-level var, same reasoning as stepRetryBackoff.
 var permissionTimeout = 10 * time.Minute
+
+// timingVarsMu guards stepRetryBackoff and permissionTimeout: tests
+// override them per-case, but agent_test.go runs its cases with
+// t.Parallel(), so unsynchronized access races under -race.
+var timingVarsMu sync.RWMutex
+
+func getStepRetryBackoff() time.Duration {
+	timingVarsMu.RLock()
+	defer timingVarsMu.RUnlock()
+	return stepRetryBackoff
+}
+
+func setStepRetryBackoff(d time.Duration) time.Duration {
+	timingVarsMu.Lock()
+	defer timingVarsMu.Unlock()
+	old := stepRetryBackoff
+	stepRetryBackoff = d
+	return old
+}
+
+func getPermissionTimeout() time.Duration {
+	timingVarsMu.RLock()
+	defer timingVarsMu.RUnlock()
+	return permissionTimeout
+}
+
+func setPermissionTimeout(d time.Duration) time.Duration {
+	timingVarsMu.Lock()
+	defer timingVarsMu.Unlock()
+	old := permissionTimeout
+	permissionTimeout = d
+	return old
+}
 
 const finalizeWarning = "[system] You have one tool step left before the limit. Finish gathering and produce your final answer on the next step."
 
@@ -796,7 +830,7 @@ func capToolResult(content string, limit int) string {
 // whether the caller should retry; false means ctx ended mid-wait, in
 // which case the caller falls through to its normal failure path.
 func retryStep(ctx context.Context, emit func(stream.StreamEvent), attempt int, reason string) bool {
-	backoff := time.Duration(attempt) * stepRetryBackoff
+	backoff := time.Duration(attempt) * getStepRetryBackoff()
 	emit(stream.StreamEvent{Type: stream.EventRetry, Retry: &stream.RetryInfo{
 		Attempt: attempt, BackoffMs: backoff.Milliseconds(), Reason: reason,
 	}})
@@ -1115,7 +1149,7 @@ func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.R
 				return DecideTimeout
 			}
 		}
-		timer := time.NewTimer(permissionTimeout)
+		timer := time.NewTimer(getPermissionTimeout())
 		defer timer.Stop()
 		select {
 		case d := <-answer:
