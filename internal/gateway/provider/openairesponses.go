@@ -406,7 +406,7 @@ func retryStaleState(ctx context.Context, o *OpenAIResponses, req CompletionRequ
 			wire := o.buildRequest(req, nil)
 			body, err := json.Marshal(wire)
 			if err != nil {
-				emit(ctx, out, errEvent(fmt.Errorf("openairesponses: marshal retry request: %w", err)))
+				emit(ctx, out, errEvent(fmt.Errorf("openairesponses: marshal retry request: %w", err), o.cfg.Timeout))
 				return
 			}
 			retry := runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), o.buildFor(body), o.relay)
