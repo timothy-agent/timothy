@@ -566,6 +566,13 @@ export function AssistantMessage({
           {n}
         </Badge>
       ))}
+      {msg.stopped && (
+        <div className="mt-3 flex items-center gap-2">
+          <Badge variant="neutral" data-testid="stopped">
+            Stopped
+          </Badge>
+        </div>
+      )}
       {msg.error && (
         <div className="mt-3 flex items-center gap-2">
           <Badge variant="destructive" data-testid="error">
