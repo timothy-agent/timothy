@@ -11,6 +11,12 @@ const (
 	DecideOnce    = "once"
 	DecideSession = "session"
 	DecideDeny    = "deny"
+	// DecideTimeout is never a user answer: askUser returns it when its
+	// wait ends without one (the 10-minute chat timer, or the turn's own
+	// context ending) — issue #650 split this out of DecideDeny so the
+	// event log and the model stop being told the user denied a call
+	// nobody was ever asked to decide.
+	DecideTimeout = "timeout"
 )
 
 // PermBroker connects parked tool calls to their answers: the loop

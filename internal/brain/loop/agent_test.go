@@ -2300,6 +2300,115 @@ func TestAskUserEmitsResolvedOnAnswer(t *testing.T) {
 	}
 }
 
+// TestAskUserTimeoutWordingDistinctFromDeny pins issue #650: a chat
+// turn's unanswered permission ask reports a timeout, not a denial —
+// the model and the event log must not be told the user answered when
+// nobody did.
+func TestAskUserTimeoutWordingDistinctFromDeny(t *testing.T) {
+	old := permissionTimeout
+	permissionTimeout = 20 * time.Millisecond
+	defer func() { permissionTimeout = old }()
+
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+		finalStep("adapted"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+	a.perms = askPerms{}
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	resolved := ofType(evs, stream.EventPermissionResolved)
+	if len(resolved) != 1 || resolved[0].Resolved.Decision != DecideTimeout {
+		t.Fatalf("resolved = %+v, want one DecideTimeout", resolved)
+	}
+	results := ofType(evs, stream.EventToolResult)
+	if len(results) != 1 || results[0].ToolResult.Status != "denied" {
+		t.Fatalf("tool result = %+v, want denied status", results)
+	}
+	second := gw.requests[1]
+	var content string
+	for _, m := range second.Messages {
+		if m.ToolResult != nil {
+			content = m.ToolResult.Content
+		}
+	}
+	if strings.Contains(content, "the user denied") {
+		t.Fatalf("model feedback wrongly says the user denied: %q", content)
+	}
+	if !strings.Contains(content, "no decision") {
+		t.Fatalf("model feedback = %q, want it to name the timeout", content)
+	}
+}
+
+// TestAskUserAttendedMissionIgnoresLoopTimeout pins issue #650's other
+// half: an attended mission turn (MissionID set, Unattended false) is
+// not subject to the loop's own permissionTimeout at all — the parked
+// call is the mission's pause point, and only the turn's own context
+// ending (or an explicit answer) resolves it. Shrinking
+// permissionTimeout to near-zero and letting real time pass well past
+// it proves the attended-mission wait ignored it.
+func TestAskUserAttendedMissionIgnoresLoopTimeout(t *testing.T) {
+	old := permissionTimeout
+	permissionTimeout = 10 * time.Millisecond
+	defer func() { permissionTimeout = old }()
+
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
+		finalStep("after decision"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+	a.perms = askPerms{}
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding", MissionID: "m1", Unattended: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var requestID string
+	deadline := time.After(5 * time.Second)
+	sawRequest := make(chan struct{})
+	resolvedEarly := make(chan stream.PermissionResolvedEvent, 1)
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for ev := range ch {
+			if ev.Type == stream.EventPermissionRequest {
+				requestID = ev.Permission.ID
+				close(sawRequest)
+			}
+			if ev.Type == stream.EventPermissionResolved {
+				select {
+				case resolvedEarly <- *ev.Resolved:
+				default:
+				}
+			}
+		}
+	}()
+	select {
+	case <-sawRequest:
+	case <-deadline:
+		t.Fatal("never saw the permission request")
+	}
+
+	// Outlive the shrunk permissionTimeout several times over: an
+	// attended mission turn must still be waiting.
+	time.Sleep(20 * permissionTimeout)
+	select {
+	case ev := <-resolvedEarly:
+		t.Fatalf("resolved before the answer arrived: %+v (loop timeout leaked into an attended mission turn)", ev)
+	default:
+	}
+	if !a.broker.Resolve(requestID, DecideOnce) {
+		t.Fatal("broker no longer knows the prompt id — it must have resolved on its own")
+	}
+	<-drained
+}
+
 // TestWaitToolsReadyNilIsNoOp confirms the default (before main.go
 // wires SetWaitToolsReady) behaves exactly as before D-043 — no hook,
 // no wait.
