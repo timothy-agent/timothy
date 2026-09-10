@@ -1951,7 +1951,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
 
     expect(await screen.findByText('Proposed from the goal')).toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'GitHub' })).toHaveAttribute('aria-checked', 'true')
-    expect(screen.getByRole('button', { name: 'octocat/hello-world' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'octocat/hello-world' })).toBeInTheDocument()
   })
 
   it('labels a fuzzy match as a guess', async () => {

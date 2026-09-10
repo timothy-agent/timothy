@@ -739,6 +739,9 @@ func TestChatTitlesUntitledSessionWithCompletedTurns(t *testing.T) {
 		defer log.mu.Unlock()
 		return log.titles["s1"] != ""
 	})
+	// The stream closes before turnDone frees the slot (D-042): wait for
+	// the slot itself, not the earlier close, before starting turn 2.
+	waitFor(t, func() bool { return !s.TurnActive("s1") })
 
 	// Simulate the title call having timed out: the turn completed but
 	// no title landed.
