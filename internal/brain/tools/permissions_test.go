@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -42,6 +44,8 @@ func TestGuardSubject(t *testing.T) {
 
 		{name: "quoted regex leading slash", command: "awk '/^#{1,6}/ {print}' README.md"},
 		{name: "quoted regex alternation", command: "grep -E '^(foo|bar)$' /workspace/file"},
+		{name: "awk program with spaces and braces", command: "awk '/R1/{ok=1} END{exit !ok}' rules-checklist.md"},
+		{name: "grep pattern with leading space", command: "grep -c '^### ' ideas.md"},
 		{name: "quoted sed pattern", command: "sed 's/^#//' notes.md"},
 		{name: "quoted secret path still denied", command: "cat '/etc/passwd'", blocked: "system dirs"},
 		{name: "quoted plain path still denied", command: "cat '/Users/someone/x'", blocked: "outside the workspace"},
@@ -93,6 +97,49 @@ func TestGuardSubject(t *testing.T) {
 	// The guard only applies to shell.
 	if got := guardSubject(root, "fetch_url", "https://example.com/.env"); got != "" {
 		t.Fatalf("non-shell tool guarded: %q", got)
+	}
+}
+
+// TestGuardedCommandsRunAsIntended is a real /bin/sh round-trip for
+// the two commands issue #653 found the guard misreading as paths:
+// a fake pass here would mean the guard's tokenizer parsed something
+// the shell itself does not, since quoting bugs forgive themselves in
+// mocks (see real-shell-tests-for-composed-commands.md).
+func TestGuardedCommandsRunAsIntended(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	checklist := "R1: ok\nR2: ok\n"
+	ideas := "### one\n### two\nnot a heading\n"
+	if err := os.WriteFile(dir+"/rules-checklist.md", []byte(checklist), 0o644); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/ideas.md", []byte(ideas), 0o644); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{name: "awk", command: "awk '/R1/{ok=1} END{exit !ok}' rules-checklist.md; echo $?", want: "0\n"},
+		{name: "grep", command: "grep -c '^### ' ideas.md", want: "2\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := guardSubject("/workspace", "shell", tc.command); got != "" {
+				t.Fatalf("guardSubject(%q) = %q, want allowed", tc.command, got)
+			}
+			cmd := exec.Command("/bin/sh", "-c", tc.command) //nolint:gosec // test-table command, not external input
+			cmd.Dir = dir
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("sh -c %q: %v", tc.command, err)
+			}
+			if string(out) != tc.want {
+				t.Fatalf("sh -c %q output = %q, want %q", tc.command, out, tc.want)
+			}
+		})
 	}
 }
 

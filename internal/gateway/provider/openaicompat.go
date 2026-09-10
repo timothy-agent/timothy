@@ -324,7 +324,7 @@ func retryMaxCompletionTokens(ctx context.Context, o *OpenAICompat, req Completi
 	wire.MaxTokens = 0
 	body, err := json.Marshal(wire)
 	if err != nil {
-		emit(ctx, out, errEvent(fmt.Errorf("openaicompat: marshal retry request: %w", err)))
+		emit(ctx, out, errEvent(fmt.Errorf("openaicompat: marshal retry request: %w", err), o.cfg.Timeout))
 		return
 	}
 	retry := runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), o.buildFor(body), o.relay)
@@ -341,7 +341,7 @@ func retryReasoningEffortStripped(ctx context.Context, o *OpenAICompat, req Comp
 	wire.ReasoningEffort = ""
 	body, err := json.Marshal(wire)
 	if err != nil {
-		emit(ctx, out, errEvent(fmt.Errorf("openaicompat: marshal retry request: %w", err)))
+		emit(ctx, out, errEvent(fmt.Errorf("openaicompat: marshal retry request: %w", err), o.cfg.Timeout))
 		return
 	}
 	retry := runStream(ctx, o.client, o.cfg.Timeout, retriesFor(req.FinalAttempt), o.buildFor(body), o.relay)
