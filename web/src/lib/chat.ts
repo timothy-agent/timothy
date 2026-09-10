@@ -5,7 +5,7 @@ export interface ToolRun {
   id: string
   name: string
   args?: string
-  status: 'running' | 'ok' | 'error' | 'denied'
+  status: 'running' | 'ok' | 'error' | 'denied' | 'canceled'
   digest?: string
   durationMs?: number
   // The permission prompt (if any) this call parked on, so its result
@@ -23,6 +23,7 @@ export interface AssistantState {
   // call-result order.
   media: MediaRef[]
   error?: string
+  stopped?: boolean
   meta?: {
     provider?: string
     model?: string
@@ -104,6 +105,7 @@ export function applyEvent(msg: AssistantState, ev: ChatEvent): AssistantState {
     case 'incomplete':
       return { ...msg, notices: [...msg.notices, `incomplete: ${ev.text || 'stream cut off'}`] }
     case 'error':
+      if (ev.error?.code === 'stopped') return { ...msg, stopped: true }
       return { ...msg, error: `${ev.error?.code}: ${ev.error?.message}` }
     case 'meta':
       return {
