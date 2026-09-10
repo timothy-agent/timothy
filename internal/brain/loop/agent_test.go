@@ -2483,7 +2483,8 @@ func TestAgentEndTurnToolsErrorContinues(t *testing.T) {
 
 // TestAgentRequestMaxToolCallsRefusesPastCap pins D-097: with
 // MaxToolCalls 2, the third tool call of a turn is not executed and
-// comes back as an error result carrying toolCallCapMessage, while an
+// comes back as an error result carrying toolCallCapMessage inside the
+// D-104 structured error, while an
 // end-turn (sentinel) call past the cap still runs and ends the turn.
 // 0 leaves the count unbounded.
 func TestAgentRequestMaxToolCallsRefusesPastCap(t *testing.T) {
@@ -2499,9 +2500,10 @@ func TestAgentRequestMaxToolCallsRefusesPastCap(t *testing.T) {
 		maxCalls      int
 		wantExecuted  int
 		wantThirdText string
+		wantCode      string
 	}{
-		{"cap of 2 refuses the third", 2, 3, toolCallCapMessage}, // 2 echo + sentinel
-		{"zero runs every call", 0, 4, "echo: call 3"},
+		{"cap of 2 refuses the third", 2, 3, toolCallCapMessage, codeCallCap}, // 2 echo + sentinel
+		{"zero runs every call", 0, 4, "echo: call 3", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2533,8 +2535,21 @@ func TestAgentRequestMaxToolCallsRefusesPastCap(t *testing.T) {
 			}
 			msgs := gw.requests[3].Messages
 			third := msgs[len(msgs)-1].ToolResult
-			if third == nil || third.Content != tc.wantThirdText {
-				t.Fatalf("third call's result = %+v, want content %q", third, tc.wantThirdText)
+			if third == nil {
+				t.Fatal("third call has no tool result")
+			}
+			if tc.wantCode == "" {
+				if third.Content != tc.wantThirdText {
+					t.Fatalf("third call's result = %+v, want content %q", third, tc.wantThirdText)
+				}
+			} else {
+				var te toolError
+				if err := json.Unmarshal([]byte(third.Content), &te); err != nil {
+					t.Fatalf("third call's result is not structured: %q", third.Content)
+				}
+				if te.Error != tc.wantCode || te.Message != tc.wantThirdText || te.Retryable {
+					t.Fatalf("third call's structured error = %+v, want code %q message %q retryable false", te, tc.wantCode, tc.wantThirdText)
+				}
 			}
 			if tc.maxCalls > 0 && !third.IsError {
 				t.Fatal("refused call's result must be an error so the model keeps full effort")
