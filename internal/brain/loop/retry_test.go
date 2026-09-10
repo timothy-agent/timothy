@@ -56,9 +56,8 @@ func errorAfterChunkStep() []stream.StreamEvent {
 
 func withShortRetryBackoff(t *testing.T) {
 	t.Helper()
-	orig := stepRetryBackoff
-	stepRetryBackoff = time.Millisecond
-	t.Cleanup(func() { stepRetryBackoff = orig })
+	orig := setStepRetryBackoff(time.Millisecond)
+	t.Cleanup(func() { setStepRetryBackoff(orig) })
 }
 
 func TestAgentRetriesStreamErrorBeforeContentThenSucceeds(t *testing.T) {
