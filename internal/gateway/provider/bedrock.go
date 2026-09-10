@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -143,15 +145,17 @@ func (b *Bedrock) lazyClient(ctx context.Context) (*bedrockruntime.Client, error
 }
 
 // Stream implements the normalized streaming contract using Bedrock
-// ConverseStream. req.Effort is ignored: Converse exposes no
-// reasoning-effort dial for Nova/Titan models.
+// ConverseStream. The D-020 effort dial reaches Anthropic models
+// through AdditionalModelRequestFields (see buildConverseStreamInput);
+// Nova and Titan have no equivalent control, so the hint is ignored
+// there.
 func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan stream.StreamEvent, error) {
 	client, err := b.lazyClient(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	input := buildConverseStreamInput(req)
+	input, extraFields := buildConverseStreamInput(req)
 
 	outCh := make(chan stream.StreamEvent, 64)
 
@@ -163,6 +167,15 @@ func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan str
 		defer cancel()
 
 		resp, err := client.ConverseStream(sctx, input)
+		if err != nil && rejectsOutputConfig(err, extraFields) {
+			// The effort field was rejected before the stream opened, so
+			// nothing has been emitted yet: drop it and retry once inline,
+			// mirroring the OpenAI-compatible strip-and-retry fallback.
+			slog.Default().Debug("bedrock: output_config rejected, retrying without the effort field",
+				"model", req.Model)
+			input.AdditionalModelRequestFields = withoutOutputConfig(extraFields)
+			resp, err = client.ConverseStream(sctx, input)
+		}
 		if err != nil {
 			emit(sctx, outCh, stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 				Code:      "bedrock_error",
@@ -297,7 +310,11 @@ func (b *Bedrock) Stream(ctx context.Context, req CompletionRequest) (<-chan str
 // sequence. topK has no field on InferenceConfiguration; Nova reads it
 // from AdditionalModelRequestFields instead. Titan has no such
 // failure mode and no topK field, so the workaround is gated to Nova.
-func buildConverseStreamInput(req CompletionRequest) *bedrockruntime.ConverseStreamInput {
+// The returned map is the same model-native field set that was placed
+// on AdditionalModelRequestFields, handed back so the caller can strip
+// a rejected field without reading the document back (a LazyDocument
+// does not round-trip cleanly).
+func buildConverseStreamInput(req CompletionRequest) (*bedrockruntime.ConverseStreamInput, map[string]any) {
 	toolConfig := converseTools(req.Tools)
 	input := &bedrockruntime.ConverseStreamInput{
 		ModelId: aws.String(req.Model),
@@ -318,21 +335,63 @@ func buildConverseStreamInput(req CompletionRequest) *bedrockruntime.ConverseStr
 			MaxTokens: aws.Int32(int32(req.MaxTokens)), //nolint:gosec // token caps are far below int32 max
 		}
 	}
+	extra := map[string]any{}
 	if len(req.Tools) > 0 && strings.Contains(req.Model, "amazon.nova") {
 		if input.InferenceConfig == nil {
 			input.InferenceConfig = &types.InferenceConfiguration{}
 		}
 		input.InferenceConfig.Temperature = aws.Float32(0)
-		input.AdditionalModelRequestFields = document.NewLazyDocument(map[string]any{
-			"inferenceConfig": map[string]any{"topK": 1},
-		})
+		extra["inferenceConfig"] = map[string]any{"topK": 1}
+	}
+	// D-020: Converse has no effort field of its own, but it forwards
+	// model-native request fields verbatim through
+	// AdditionalModelRequestFields (AWS documents that path with
+	// Anthropic's own top_k). Anthropic models on Bedrock therefore take
+	// the same output_config.effort object the native driver sends.
+	if req.Effort == "low" {
+		if effort := effortFor(req); effort != nil {
+			extra["output_config"] = map[string]any{"effort": effort.Effort}
+		}
+	}
+	if len(extra) > 0 {
+		input.AdditionalModelRequestFields = document.NewLazyDocument(extra)
 	}
 	if req.ForceTool != "" && input.ToolConfig != nil && converseSupportsToolChoice(req.Model) {
 		input.ToolConfig.ToolChoice = &types.ToolChoiceMemberTool{
 			Value: types.SpecificToolChoice{Name: aws.String(req.ForceTool)},
 		}
 	}
-	return input
+	return input, extra
+}
+
+// rejectsOutputConfig reports whether err is Bedrock refusing the
+// output_config field this request carried. Converse validates
+// AdditionalModelRequestFields against the target model, so a model
+// that does not know the field answers with a ValidationException
+// naming it; every other error (throttling, access denied, a genuine
+// bad request) must surface unchanged.
+func rejectsOutputConfig(err error, extra map[string]any) bool {
+	if _, ok := extra["output_config"]; !ok {
+		return false
+	}
+	var ve *types.ValidationException
+	if !errors.As(err, &ve) {
+		return false
+	}
+	return strings.Contains(aws.ToString(ve.Message), "output_config")
+}
+
+// withoutOutputConfig rebuilds AdditionalModelRequestFields with the
+// effort field removed, keeping any other model-native field (the Nova
+// topK workaround) intact. Nil when nothing else is left, so the retry
+// sends no field at all. It mutates extra, which the caller drops
+// straight after.
+func withoutOutputConfig(extra map[string]any) document.Interface {
+	delete(extra, "output_config")
+	if len(extra) == 0 {
+		return nil
+	}
+	return document.NewLazyDocument(extra)
 }
 
 // converseSupportsToolChoice reports whether Converse's ToolChoice

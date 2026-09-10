@@ -26,11 +26,15 @@ func NewAggregator(db *pgpool.Pool) *Aggregator {
 // SQL and must never come from the caller unchecked.
 var buckets = map[string]string{"hour": "hour", "day": "day", "week": "week"}
 
-// groups whitelists the series group column for the same reason.
+// groups whitelists the series group column for the same reason. The
+// value is the SQL expression, not a bare column name: effort is
+// nullable (NULL means full effort, D-020) and the group label must
+// still be a string, so it coalesces to 'full'.
 var groups = map[string]string{
 	"provider": "provider",
 	"model":    "model",
 	"route":    "route",
+	"effort":   "COALESCE(effort, 'full')",
 }
 
 const notTest = `purpose IS DISTINCT FROM 'test'`

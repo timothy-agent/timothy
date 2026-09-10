@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -77,6 +79,59 @@ type anthropicRequest struct {
 	Tools     []anthropicTool      `json:"tools,omitempty"`
 	// ToolChoice forces a specific tool call (D-063: CompletionRequest.ForceTool).
 	ToolChoice any `json:"tool_choice,omitempty"`
+	// OutputConfig carries the D-020 dial as the Messages API's effort
+	// parameter. Omitted at full effort: the API default is "high",
+	// which is exactly equivalent to not sending the field, so the wire
+	// stays byte-identical to what the driver sent before.
+	OutputConfig *anthropicOutputConfig `json:"output_config,omitempty"`
+}
+
+// anthropicOutputConfig is the Messages API output_config object. Only
+// effort is ever set.
+type anthropicOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
+}
+
+// anthropicEffortModels lists the model-family substrings whose models
+// accept output_config.effort. Taken from the effort parameter's
+// supported-model list (platform.claude.com/docs/en/build-with-claude/
+// effort): the Fable, Mythos, Opus 4.6 and later, and Sonnet 4.6 and
+// later families. Claude 3.x, Haiku, and Opus 4.5 and earlier reject
+// or ignore it, so they never get the field. Substring matching
+// mirrors converseSupportsToolChoice: model IDs are configuration, and
+// vendor prefixes (bedrock's "anthropic.", regional "us." variants)
+// must still match.
+var anthropicEffortModels = []string{
+	"claude-fable-", "claude-mythos-",
+	"claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
+	"claude-sonnet-4-6", "claude-sonnet-5",
+}
+
+// anthropicSupportsEffort reports whether output_config.effort is
+// honored for this model.
+func anthropicSupportsEffort(model string) bool {
+	for _, m := range anthropicEffortModels {
+		if strings.Contains(model, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// effortFor maps the D-020 dial onto an output_config value: only the
+// "low" hint produces a field, and only on a model that takes it.
+// Anything else returns nil, leaving the request as it was before this
+// driver learned the dial.
+func effortFor(req CompletionRequest) *anthropicOutputConfig {
+	if req.Effort != "low" {
+		return nil
+	}
+	if !anthropicSupportsEffort(req.Model) {
+		slog.Default().Debug("anthropic: model has no effort control, ignoring the D-020 hint",
+			"model", req.Model)
+		return nil
+	}
+	return &anthropicOutputConfig{Effort: "low"}
 }
 
 // anthropicMessage carries either a plain string or content blocks
@@ -241,12 +296,21 @@ func (a *Anthropic) Stream(ctx context.Context, req CompletionRequest) (<-chan s
 	if req.Model == "" {
 		return nil, fmt.Errorf("anthropic: model is required")
 	}
-	body, err := json.Marshal(a.buildRequest(req))
+	wire := a.buildRequest(req)
+	body, err := json.Marshal(wire)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
 
-	build := func(ctx context.Context) (*http.Request, error) {
+	first := runStream(ctx, a.client, a.cfg.Timeout, retriesFor(req.FinalAttempt), a.buildFor(body), a.relay)
+	if wire.OutputConfig == nil {
+		return first, nil
+	}
+	return a.retryEffortStrippedOn400(ctx, req, wire, first), nil
+}
+
+func (a *Anthropic) buildFor(body []byte) func(context.Context) (*http.Request, error) {
+	return func(ctx context.Context) (*http.Request, error) {
 		r, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.BaseURL+"/v1/messages", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
@@ -259,7 +323,52 @@ func (a *Anthropic) Stream(ctx context.Context, req CompletionRequest) (<-chan s
 		}
 		return r, nil
 	}
-	return runStream(ctx, a.client, a.cfg.Timeout, retriesFor(req.FinalAttempt), build, a.relay), nil
+}
+
+// retryEffortStrippedOn400 mirrors openaicompat's retryOn400: peek the
+// first event, and if it is a bare http_400 then output_config was
+// rejected before any stream activity (per the runStream contract a
+// request-level permanent failure emits exactly one error event and
+// closes), so retry once without the field. Any other first event
+// means relay already ran, so pass everything through event by event
+// and keep the success path streaming live. A proxy or an older
+// gateway in front of the Messages API is the case this covers: the
+// field is GA on api.anthropic.com.
+func (a *Anthropic) retryEffortStrippedOn400(ctx context.Context, req CompletionRequest, wire anthropicRequest, first <-chan stream.StreamEvent) <-chan stream.StreamEvent {
+	out := make(chan stream.StreamEvent)
+	go func() {
+		defer close(out)
+		ev, ok := <-first
+		if !ok {
+			return
+		}
+		if isHTTP400(ev) {
+			slog.Default().Debug("anthropic: output_config rejected, retrying without the effort field",
+				"model", req.Model)
+			wire.OutputConfig = nil
+			body, err := json.Marshal(wire)
+			if err != nil {
+				emit(ctx, out, errEvent(fmt.Errorf("anthropic: marshal retry request: %w", err)))
+				return
+			}
+			retry := runStream(ctx, a.client, a.cfg.Timeout, retriesFor(req.FinalAttempt), a.buildFor(body), a.relay)
+			for ev := range retry {
+				if !emit(ctx, out, ev) {
+					return
+				}
+			}
+			return
+		}
+		if !emit(ctx, out, ev) {
+			return
+		}
+		for ev := range first {
+			if !emit(ctx, out, ev) {
+				return
+			}
+		}
+	}()
+	return out
 }
 
 func (a *Anthropic) buildRequest(req CompletionRequest) anthropicRequest {
@@ -274,8 +383,10 @@ func (a *Anthropic) buildRequest(req CompletionRequest) anthropicRequest {
 		Messages:  anthropicMessages(req.Messages),
 	}
 	markLastBlockCached(out.Messages)
-	// req.Effort: no thinking control is wired for this driver yet, so
-	// the hint is ignored per D-020.
+	// D-020: the dial rides output_config.effort. "low" is the reduced
+	// setting; full effort sends nothing, because the API default is
+	// "high" and omitting the field means exactly that.
+	out.OutputConfig = effortFor(req)
 	if req.System != "" {
 		// cache_control on the system block enables prompt caching for
 		// the stable prefix (D-018); the conversation breakpoint above

@@ -76,8 +76,10 @@ func seedAgg(t *testing.T, led *Ledger) (from, to time.Time) {
 			Usage:     &stream.Usage{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 20},
 			LatencyMS: 100, Status: "ok", Cost: usd(0.10), ToolDefTokensEstimate: 400},
 		{Provider: aggMarker + "a", Model: "m1", Route: "coding", SessionID: "s1",
-			Usage:     &stream.Usage{InputTokens: 200, OutputTokens: 100},
-			LatencyMS: 300, Status: "ok", Cost: usd(0.20), ToolDefTokensEstimate: 600},
+			Usage: &stream.Usage{InputTokens: 200, OutputTokens: 100},
+			// The one reduced-effort row: D-020 analytics compare output
+			// tokens against the full-effort rows above and below.
+			LatencyMS: 300, Status: "ok", Cost: usd(0.20), ToolDefTokensEstimate: 600, Effort: "low"},
 		{Provider: aggMarker + "b", Model: "m2", Route: "mini", SessionID: "s2",
 			Usage:     &stream.Usage{InputTokens: 10, OutputTokens: 5},
 			LatencyMS: 50, Status: "ok", Cost: usd(0.01)},
@@ -803,5 +805,35 @@ func TestAggregateSeriesRejectsUnknownParams(t *testing.T) {
 	}
 	if _, err := agg.Series(t.Context(), time.Now().Add(-time.Hour), time.Now(), "day", "purpose; DROP TABLE"); err == nil {
 		t.Fatal("unknown group must error")
+	}
+}
+
+// TestAggregateSeriesByEffort asserts the D-020 effort level is stored
+// per row and groups like any other dimension, which is what makes
+// output tokens per effort level answerable without new SQL.
+func TestAggregateSeriesByEffort(t *testing.T) {
+	agg, led := testAggregator(t)
+	from, to := seedAgg(t, led)
+
+	points, err := agg.Series(t.Context(), from, to, "day", "effort")
+	if err != nil {
+		t.Fatalf("Series by effort: %v", err)
+	}
+	byEffort := map[string]int64{}
+	for _, p := range points {
+		byEffort[p.Group] += p.OutputTokens
+	}
+	// The fixture's single low-effort row carries 100 output tokens.
+	// Other rows in a shared DB may add to either bucket, so only the
+	// floor is asserted.
+	if _, ok := byEffort["low"]; !ok {
+		t.Fatal("no low-effort group came back; the effort column is not being stored")
+	}
+	if byEffort["low"] < 100 {
+		t.Fatalf("low-effort output tokens = %d, want at least the fixture's 100", byEffort["low"])
+	}
+	// Full-effort rows store NULL and must still group, under 'full'.
+	if _, ok := byEffort["full"]; !ok {
+		t.Fatal("no full-effort group came back; NULL effort must group as 'full'")
 	}
 }
