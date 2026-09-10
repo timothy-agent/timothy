@@ -13,8 +13,8 @@ require (
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-message v0.18.2
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/moby/moby/api v1.55.0
-	github.com/moby/moby/client v0.5.1
+	github.com/moby/moby/api v1.56.0
+	github.com/moby/moby/client v0.6.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/pkoukk/tiktoken-go-loader v0.0.2
 	github.com/prometheus/client_golang v1.24.1
