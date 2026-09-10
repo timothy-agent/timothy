@@ -270,20 +270,27 @@ func TestResolveSandboxOpaqueGuardStillDenies(t *testing.T) {
 	}
 }
 
-// TestResolveLoadedMCPToolAsks pins issue #643's safety AC: a
-// deferred MCP tool the model pulled in through load_tool goes
-// through the same chain as an eager one. Its namespaced name has no
-// standing grant and no exemption, so it asks.
-func TestResolveLoadedMCPToolAsks(t *testing.T) {
+// TestResolveConnectorLoadToolPath pins the deferred-tool permission
+// path end to end against the real chain: the index entry point is
+// allowed without a prompt (exempt, like load_skill), while a tool
+// loaded through it has no grant and no exemption, so it asks exactly
+// as the eager tool it stands in for would.
+func TestResolveConnectorLoadToolPath(t *testing.T) {
 	p, sid := integrationPermissions(t)
 
-	for _, name := range []string{"github_load_tool", "github_create_issue"} {
-		res, err := p.Resolve(t.Context(), sid, name, json.RawMessage(`{"q":"x"}`))
-		if err != nil {
-			t.Fatalf("Resolve %s: %v", name, err)
-		}
-		if res.Decision != DecisionAsk {
-			t.Fatalf("%s = %+v, want ask", name, res)
-		}
+	res, err := p.Resolve(t.Context(), sid, "github_load_tool", json.RawMessage(`{"name":"create_issue"}`))
+	if err != nil {
+		t.Fatalf("Resolve entry point: %v", err)
+	}
+	if res.Decision != DecisionAllow || res.Rationale != "exempt tool" {
+		t.Fatalf("github_load_tool = %+v, want an exempt allow", res)
+	}
+
+	res, err = p.Resolve(t.Context(), sid, "github_create_issue", json.RawMessage(`{"title":"x"}`))
+	if err != nil {
+		t.Fatalf("Resolve loaded tool: %v", err)
+	}
+	if res.Decision != DecisionAsk {
+		t.Fatalf("github_create_issue = %+v, want ask", res)
 	}
 }
