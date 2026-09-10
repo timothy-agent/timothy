@@ -269,3 +269,21 @@ func TestResolveSandboxOpaqueGuardStillDenies(t *testing.T) {
 		t.Fatalf("res = %+v, want hard deny (system dirs guard)", res)
 	}
 }
+
+// TestResolveLoadedMCPToolAsks pins issue #643's safety AC: a
+// deferred MCP tool the model pulled in through load_tool goes
+// through the same chain as an eager one. Its namespaced name has no
+// standing grant and no exemption, so it asks.
+func TestResolveLoadedMCPToolAsks(t *testing.T) {
+	p, sid := integrationPermissions(t)
+
+	for _, name := range []string{"github_load_tool", "github_create_issue"} {
+		res, err := p.Resolve(t.Context(), sid, name, json.RawMessage(`{"q":"x"}`))
+		if err != nil {
+			t.Fatalf("Resolve %s: %v", name, err)
+		}
+		if res.Decision != DecisionAsk {
+			t.Fatalf("%s = %+v, want ask", name, res)
+		}
+	}
+}

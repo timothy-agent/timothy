@@ -31,10 +31,29 @@ type mcpConfig struct {
 	Headers  map[string]string `json:"headers"`
 }
 
+// MCPDeferral is what an mcp source needs to defer tool schemas
+// behind an index (issue #643): the threshold above which a server's
+// tools stop being injected eagerly, and the sink a load_tool call
+// reports the loaded tool to. A zero value (or a nil Threshold) keeps
+// every connector eager, so tests and callers that don't wire it get
+// today's behavior.
+type MCPDeferral struct {
+	// Threshold returns the tool count above which the index replaces
+	// eager schemas; 0 disables deferral. Read per build, not cached,
+	// so a settings change takes effect on the next connector reload.
+	Threshold func(ctx context.Context) int
+	// OnLoad records a tool the model loaded, under its final
+	// namespaced name, for the rest of that session's turns. nil means
+	// nothing records it, so deferral stays off.
+	OnLoad func(sessionID string, t *tools.Tool)
+}
+
 // MCPBuilder returns the Builder for kind='mcp'. The credential ref
 // resolves to a bearer token; an empty or unresolvable ref builds
 // without auth and lets the server's 401 surface at initialize.
-func MCPBuilder(client *http.Client) Builder {
+// deferral is optional: its zero value keeps every server's schemas
+// eager.
+func MCPBuilder(client *http.Client, deferral MCPDeferral) Builder {
 	if client == nil {
 		client = &http.Client{}
 	}
@@ -56,6 +75,12 @@ func MCPBuilder(client *http.Client) Builder {
 		if err := src.connect(ctx); err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
 		}
+		if deferral.Threshold != nil && deferral.OnLoad != nil {
+			if n := deferral.Threshold(ctx); n > 0 && len(src.toolList) > n {
+				src.indexed = true
+				src.onLoad = deferral.OnLoad
+			}
+		}
 		return src, nil
 	}
 }
@@ -72,6 +97,13 @@ type mcpSource struct {
 	sessionID string // Mcp-Session-Id, captured at initialize
 	nextID    atomic.Int64
 	toolList  []*tools.Tool
+
+	// indexed defers this server's schemas behind load_tool (issue
+	// #643): Tools() then returns that single entry point instead of
+	// toolList, whose schemas the model pulls in one at a time. The
+	// zero value is eager, today's behavior.
+	indexed bool
+	onLoad  func(sessionID string, t *tools.Tool)
 }
 
 // connect runs the MCP handshake and caches the tool list.
@@ -120,8 +152,114 @@ func (s *mcpSource) connect(ctx context.Context) error {
 }
 
 // Tools returns the server's tools, un-namespaced — the manager
-// prefixes connector names when it aggregates.
-func (s *mcpSource) Tools() []*tools.Tool { return s.toolList }
+// prefixes connector names when it aggregates. An indexed source
+// returns exactly one synthetic load_tool whose description carries
+// the index, so a large server costs one tool def per turn instead of
+// one per remote tool; the manager namespaces it to
+// "<connector>_load_tool", which is what we want, one entry point per
+// connector.
+func (s *mcpSource) Tools() []*tools.Tool {
+	if !s.indexed {
+		return s.toolList
+	}
+	return []*tools.Tool{s.loadTool()}
+}
+
+// IndexText renders the deferred tool index: one line per remote tool,
+// name plus the first line of its description.
+func (s *mcpSource) IndexText() string {
+	var b strings.Builder
+	for _, t := range s.toolList {
+		summary := strings.TrimSpace(firstLine(t.Description))
+		if len(summary) > mcpIndexSummaryMax {
+			summary = summary[:mcpIndexSummaryMax] + "…"
+		}
+		if summary == "" {
+			fmt.Fprintf(&b, "- %s\n", t.Name)
+			continue
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", t.Name, summary)
+	}
+	return b.String()
+}
+
+// mcpIndexSummaryMax caps one index line's description so a server
+// with verbose docs can't undo the saving the index exists for.
+const mcpIndexSummaryMax = 160
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// loadTool is the deferred index's entry point: the model names a
+// tool from the index, and the tool's full schema joins the session's
+// surface from the next step on. The loaded tool carries the SAME
+// namespaced name the eager path would have given it, so grants and
+// the D-036 suffix rule behave identically; it takes no permission
+// exemption from having been loaded this way.
+func (s *mcpSource) loadTool() *tools.Tool {
+	byName := make(map[string]*tools.Tool, len(s.toolList))
+	names := make([]string, 0, len(s.toolList))
+	for _, t := range s.toolList {
+		byName[t.Name] = t
+		names = append(names, t.Name)
+	}
+	return &tools.Tool{
+		Name: "load_tool",
+		Description: `Loads one of this connector's tools so you can call it.
+
+The ` + s.name + ` connector serves too many tools to describe them all
+up front, so their schemas are deferred. Pick one from the index below
+by what you need to do, load it, then call it by its own name on your
+next step.
+
+Arguments:
+- name (string, required): the tool's name exactly as listed below.
+
+Returns the tool's description and argument schema; the tool stays
+callable for the rest of this conversation. Loading a tool does not
+grant permission to use it: the usual approval still applies when you
+call it.
+
+Tools available from ` + s.name + `:
+` + s.IndexText(),
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"name": {
+					"type": "string",
+					"description": "Tool name from the index in this description"
+				}
+			},
+			"required": ["name"],
+			"additionalProperties": false
+		}`),
+		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			var args struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			t, ok := byName[args.Name]
+			if !ok {
+				return "", fmt.Errorf("unknown tool %q on connector %s — available: %s", args.Name, s.name, strings.Join(names, ", "))
+			}
+			sessionID := tools.SessionIDFromContext(ctx)
+			if sessionID == "" {
+				return "", fmt.Errorf("load_tool: no session in context")
+			}
+			loaded := *t
+			loaded.Name = NamespacedName(s.name, t.Name)
+			s.onLoad(sessionID, &loaded)
+			return fmt.Sprintf("Loaded %s. Call it as %q.\n\nDescription: %s\n\nInput schema: %s",
+				t.Name, loaded.Name, t.Description, string(t.InputSchema)), nil
+		},
+	}
+}
 
 // Test re-lists tools: proves the session, auth, and endpoint are
 // still good without side effects.

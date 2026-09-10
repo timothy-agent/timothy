@@ -218,15 +218,23 @@ func (m *Manager) AccountConnector(toolName string, args json.RawMessage) string
 func namespacedTools(name string, ts []*tools.Tool) []*tools.Tool {
 	out := make([]*tools.Tool, 0, len(ts))
 	for _, t := range ts {
-		full := toolNameSanitizer.ReplaceAllString(name+"_"+t.Name, "_")
-		if len(full) > 128 {
-			full = full[:128]
-		}
 		clone := *t
-		clone.Name = full
+		clone.Name = NamespacedName(name, t.Name)
 		out = append(out, &clone)
 	}
 	return out
+}
+
+// NamespacedName is the "<connector>_<tool>" form namespacedTools
+// gives a split tool: sanitized and length-capped. Exported so a
+// deferred MCP tool loaded mid-session (mcp.go's load_tool) lands on
+// exactly the name the eager path would have produced.
+func NamespacedName(connector, tool string) string {
+	full := toolNameSanitizer.ReplaceAllString(connector+"_"+tool, "_")
+	if len(full) > 128 {
+		full = full[:128]
+	}
+	return full
 }
 
 // accountInfo is the optional Source capability that reports the

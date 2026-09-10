@@ -172,6 +172,15 @@ type Service struct {
 	seededMu sync.Mutex
 	seeded   map[string]bool
 
+	// loadedTools holds the MCP tools a session pulled in through a
+	// connector's load_tool (issue #643), keyed by session id and
+	// replayed as turn-scoped ExtraTools for the rest of the session.
+	// Process-local by design, same tradeoff as seeded above: a
+	// restart just makes the model load the tool again, which costs
+	// one step and no correctness.
+	loadedMu    sync.Mutex
+	loadedTools map[string][]*tools.Tool
+
 	// turns is the live-turn broadcaster registry (broadcast.go): a
 	// session ID present here means that session has a turn in flight,
 	// full stop. There is no separate turn_active bool anywhere: the
@@ -376,6 +385,44 @@ func (s *Service) seedApprovalGrants(ctx context.Context, sessionID string, prof
 			s.logger.Warn("chat: approval allowlist grant failed", "session_id", sessionID, "tool", tool, "error", err)
 		}
 	}
+}
+
+// RecordLoadedTool remembers a deferred MCP tool a session loaded
+// through a connector's load_tool (issue #643) so every later turn in
+// that session offers it. The tool arrives already namespaced and is
+// wrapped in schema validation here, matching what the eager path
+// gets from tools.Constrained: turn-scoped ExtraTools skip that check
+// otherwise, and a remote server's schema is not this repo's code.
+// Loading grants no permission: the call still walks the whole chain.
+func (s *Service) RecordLoadedTool(sessionID string, t *tools.Tool) {
+	if sessionID == "" || t == nil {
+		return
+	}
+	validated, err := tools.Validated(t)
+	if err != nil {
+		s.logger.Warn("chat: loaded tool schema rejected", "session_id", sessionID, "tool", t.Name, "error", err)
+		return
+	}
+	s.loadedMu.Lock()
+	defer s.loadedMu.Unlock()
+	if s.loadedTools == nil {
+		s.loadedTools = map[string][]*tools.Tool{}
+	}
+	for i, existing := range s.loadedTools[sessionID] {
+		if existing.Name == validated.Name {
+			s.loadedTools[sessionID][i] = validated
+			return
+		}
+	}
+	s.loadedTools[sessionID] = append(s.loadedTools[sessionID], validated)
+}
+
+// LoadedTools returns the tools this session has loaded, in load
+// order.
+func (s *Service) LoadedTools(sessionID string) []*tools.Tool {
+	s.loadedMu.Lock()
+	defer s.loadedMu.Unlock()
+	return slices.Clone(s.loadedTools[sessionID])
 }
 
 // New builds the service. packs are the loaded skill definitions: their
@@ -1371,6 +1418,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	}
 
 	var extraTools []*tools.Tool
+	extraTools = append(extraTools, s.LoadedTools(sessionID)...)
 	if t := s.kbSearchTool(boost); t != nil {
 		extraTools = append(extraTools, t)
 	}

@@ -156,6 +156,11 @@ const EXECUTOR_RUN_BUDGET_DEFAULT_MIN = 480
 // for the placeholder; the server applies the real default.
 const REVIEW_TOKEN_CEILING_DEFAULT = 1_500_000
 
+// MCP_TOOL_INDEX_THRESHOLD_DEFAULT mirrors
+// settings.DefaultMCPToolIndexThreshold for the placeholder; the
+// server applies the real default.
+const MCP_TOOL_INDEX_THRESHOLD_DEFAULT = 8
+
 // Descriptor for a plain value card: an Input or Select field, one
 // settings key, and how its committed value maps to the field's
 // working value. save() receives the trimmed working value.
@@ -239,6 +244,24 @@ const valueCardDescriptors: ValueCardDescriptor[] = [
         placeholder={String(REVIEW_TOKEN_CEILING_DEFAULT)}
         className="h-9 w-40"
         aria-label="Review token ceiling"
+      />
+    ),
+    toPatchValue: (v) => v.trim(),
+  },
+  {
+    key: 'mcp_tool_index_threshold',
+    title: 'MCP tool index threshold',
+    description:
+      'An MCP connector with more tools than this offers a one-line index plus a load_tool entry point instead of every schema, so a large server does not tax every turn. Empty uses the default (8), 0 keeps every connector eager.',
+    render: (value, setValue) => (
+      <Input
+        type="number"
+        min={0}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={String(MCP_TOOL_INDEX_THRESHOLD_DEFAULT)}
+        className="h-9 w-40"
+        aria-label="MCP tool index threshold"
       />
     ),
     toPatchValue: (v) => v.trim(),

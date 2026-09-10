@@ -329,3 +329,17 @@ func TestGuardEmbeddedPath(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadedMCPToolsAreNotExempt guards the loading path against
+// quietly becoming a permission bypass (issue #643): neither the
+// entry point nor a tool loaded through it may appear in the exempt
+// map, unlike load_skill, whose result is inert text.
+func TestLoadedMCPToolsAreNotExempt(t *testing.T) {
+	t.Parallel()
+	p := NewPermissions(nil, "/workspace")
+	for _, name := range []string{"load_tool", "github_load_tool", "github_create_issue"} {
+		if p.exempt[name] {
+			t.Fatalf("%s must not be exempt from the permission chain", name)
+		}
+	}
+}

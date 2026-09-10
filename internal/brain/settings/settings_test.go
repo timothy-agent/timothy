@@ -61,3 +61,13 @@ func TestAllAppliesKnownKeysOffDefault(t *testing.T) {
 		t.Fatal("All()[KeyKBImageCaptioning] = true, want false by default")
 	}
 }
+
+// TestMCPToolIndexThresholdDefault pins the accessor's fallback: an
+// absent row (or a degraded database) means the built-in threshold,
+// not deferral-off, so a large MCP server is indexed out of the box.
+func TestMCPToolIndexThresholdDefault(t *testing.T) {
+	s := degradedStore(t)
+	if got := s.MCPToolIndexThreshold(context.Background()); got != DefaultMCPToolIndexThreshold {
+		t.Fatalf("MCPToolIndexThreshold = %d, want %d", got, DefaultMCPToolIndexThreshold)
+	}
+}

@@ -10,7 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
 
 // fakeMCP is a minimal streamable-HTTP MCP server: initialize,
@@ -24,6 +26,10 @@ type fakeMCP struct {
 	gotProto  string
 	gotCalls  []string
 	sessionID string
+	// toolsJSON overrides the default two-tool list (the "tools" array
+	// body only), for the deferred-index tests that need a server over
+	// the threshold.
+	toolsJSON string
 }
 
 func (f *fakeMCP) handler() http.HandlerFunc {
@@ -75,6 +81,10 @@ func (f *fakeMCP) handler() http.HandlerFunc {
 				return
 			}
 			// One line: SSE data frames must not contain raw newlines.
+			if f.toolsJSON != "" {
+				respond(`{"tools":` + f.toolsJSON + `}`)
+				return
+			}
 			respond(`{"tools":[{"name":"create_issue","description":"Create a GitHub issue","inputSchema":{"type":"object","properties":{"title":{"type":"string"}}}},{"name":"search code","description":"Search"}]}`)
 		case "tools/call":
 			var p struct {
@@ -96,10 +106,15 @@ func (f *fakeMCP) handler() http.HandlerFunc {
 
 func buildMCP(t *testing.T, f *fakeMCP, token string) Source {
 	t.Helper()
+	return buildMCPWith(t, f, token, MCPDeferral{})
+}
+
+func buildMCPWith(t *testing.T, f *fakeMCP, token string, deferral MCPDeferral) Source {
+	t.Helper()
 	srv := httptest.NewServer(f.handler())
 	t.Cleanup(srv.Close)
 	//nolint:gosec // G101: CredentialRef is a ref NAME, not a credential value.
-	src, err := MCPBuilder(srv.Client())(t.Context(), Connector{
+	src, err := MCPBuilder(srv.Client(), deferral)(t.Context(), Connector{
 		Name: "github", Kind: "mcp",
 		Config:        json.RawMessage(`{"endpoint":"` + srv.URL + `"}`),
 		CredentialRef: "GITHUB_MCP_TOKEN",
@@ -175,7 +190,7 @@ func TestMCPSSEResponses(t *testing.T) {
 
 func TestMCPBuildFailures(t *testing.T) {
 	t.Parallel()
-	builder := MCPBuilder(nil)
+	builder := MCPBuilder(nil, MCPDeferral{})
 	resolve := func(context.Context, string) (string, error) { return "", nil }
 
 	// Endpoint is required.
@@ -186,7 +201,7 @@ func TestMCPBuildFailures(t *testing.T) {
 	f := &fakeMCP{token: "right"}
 	srv := httptest.NewServer(f.handler())
 	t.Cleanup(srv.Close)
-	_, err := MCPBuilder(srv.Client())(t.Context(), Connector{
+	_, err := MCPBuilder(srv.Client(), MCPDeferral{})(t.Context(), Connector{
 		Name: "x", Config: json.RawMessage(`{"endpoint":"` + srv.URL + `"}`),
 	}, func(context.Context, string) (string, error) { return "wrong", nil })
 	if err == nil || !strings.Contains(err.Error(), "401") {
@@ -301,4 +316,197 @@ func TestManagerNamespacesMCPToolReservedByBuiltin(t *testing.T) {
 	if names["search code"] {
 		t.Fatalf("tools = %v, reserved raw name must never be served directly", names)
 	}
+}
+
+// bigToolsJSON builds a tools/list body with n tools named tool_0..n-1.
+func bigToolsJSON(n int) string {
+	var b strings.Builder
+	b.WriteString("[")
+	for i := range n {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"name":"tool_%d","description":"Does thing %d","inputSchema":{"type":"object","properties":{"q":{"type":"string"}},"required":["q"],"additionalProperties":false}}`, i, i)
+	}
+	b.WriteString("]")
+	return b.String()
+}
+
+func indexDeferral(threshold int, loaded *[]*tools.Tool, sessions *[]string) MCPDeferral {
+	return MCPDeferral{
+		Threshold: func(context.Context) int { return threshold },
+		OnLoad: func(sessionID string, t *tools.Tool) {
+			*sessions = append(*sessions, sessionID)
+			*loaded = append(*loaded, t)
+		},
+	}
+}
+
+// TestMCPDefersLargeToolSetBehindIndex pins issue #643's headline
+// behavior: over the threshold, the turn sees one load_tool whose
+// description carries every remote tool's name, not every schema.
+func TestMCPDefersLargeToolSetBehindIndex(t *testing.T) {
+	t.Parallel()
+	f := &fakeMCP{toolsJSON: bigToolsJSON(9)}
+	var loaded []*tools.Tool
+	var sessions []string
+	src := buildMCPWith(t, f, "", indexDeferral(8, &loaded, &sessions))
+
+	list := src.Tools()
+	if len(list) != 1 || list[0].Name != "load_tool" {
+		t.Fatalf("tools = %+v, want a single load_tool", list)
+	}
+	index := src.(*mcpSource).IndexText()
+	for i := range 9 {
+		name := fmt.Sprintf("tool_%d", i)
+		if !strings.Contains(index, "- "+name+": Does thing") {
+			t.Fatalf("index missing %s:\n%s", name, index)
+		}
+		if !strings.Contains(list[0].Description, name) {
+			t.Fatalf("load_tool description missing %s", name)
+		}
+	}
+	// The index carries names and one-line summaries, never schemas.
+	if strings.Contains(list[0].Description, "additionalProperties") {
+		t.Fatalf("index leaked a schema:\n%s", list[0].Description)
+	}
+}
+
+// TestMCPUnderThresholdStaysEager pins the unchanged case: a small
+// server injects every schema exactly as before, and never grows a
+// load_tool.
+func TestMCPUnderThresholdStaysEager(t *testing.T) {
+	t.Parallel()
+	f := &fakeMCP{toolsJSON: bigToolsJSON(8)}
+	var loaded []*tools.Tool
+	var sessions []string
+	src := buildMCPWith(t, f, "", indexDeferral(8, &loaded, &sessions))
+
+	list := src.Tools()
+	if len(list) != 8 {
+		t.Fatalf("tools = %d, want all 8 eager", len(list))
+	}
+	for _, tl := range list {
+		if tl.Name == "load_tool" {
+			t.Fatalf("under-threshold server grew a load_tool")
+		}
+	}
+}
+
+// TestMCPThresholdZeroDisablesDeferral pins the off switch: 0 keeps a
+// large server fully eager, and so does an unwired deferral.
+func TestMCPThresholdZeroDisablesDeferral(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		deferral MCPDeferral
+	}{
+		{"threshold zero", MCPDeferral{Threshold: func(context.Context) int { return 0 }, OnLoad: func(string, *tools.Tool) {}}},
+		{"not wired", MCPDeferral{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := &fakeMCP{toolsJSON: bigToolsJSON(20)}
+			src := buildMCPWith(t, f, "", tc.deferral)
+			if len(src.Tools()) != 20 {
+				t.Fatalf("tools = %d, want 20 eager", len(src.Tools()))
+			}
+		})
+	}
+}
+
+// TestMCPLoadToolRoundTrip proves the full path: load a tool by name,
+// get it back under the namespaced name the eager path would have
+// given it, then call it through the source's own RPC.
+func TestMCPLoadToolRoundTrip(t *testing.T) {
+	t.Parallel()
+	f := &fakeMCP{toolsJSON: bigToolsJSON(9)}
+	var loaded []*tools.Tool
+	var sessions []string
+	src := buildMCPWith(t, f, "", indexDeferral(8, &loaded, &sessions))
+
+	load := src.Tools()[0]
+	ctx := tools.WithSessionID(t.Context(), "sess-abc")
+	out, err := load.Execute(ctx, json.RawMessage(`{"name":"tool_3"}`))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !strings.Contains(out, "github_tool_3") {
+		t.Fatalf("load result = %q, want the namespaced name", out)
+	}
+	if len(loaded) != 1 || loaded[0].Name != "github_tool_3" {
+		t.Fatalf("recorded = %+v, want github_tool_3", loaded)
+	}
+	if len(sessions) != 1 || sessions[0] != "sess-abc" {
+		t.Fatalf("sessions = %v, want sess-abc", sessions)
+	}
+	// The recorded tool keeps the remote schema and actually calls.
+	if !strings.Contains(string(loaded[0].InputSchema), `"q"`) {
+		t.Fatalf("schema = %s", loaded[0].InputSchema)
+	}
+	res, err := loaded[0].Execute(t.Context(), json.RawMessage(`{"q":"x"}`))
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if res != "issue #42 created" {
+		t.Fatalf("call result = %q", res)
+	}
+	// The remote sees the RAW name, not the namespaced one.
+	if len(f.gotCalls) != 1 || !strings.HasPrefix(f.gotCalls[0], "tool_3 ") {
+		t.Fatalf("remote calls = %v", f.gotCalls)
+	}
+}
+
+func TestMCPLoadToolRejectsUnknownAndSessionless(t *testing.T) {
+	t.Parallel()
+	f := &fakeMCP{toolsJSON: bigToolsJSON(9)}
+	var loaded []*tools.Tool
+	var sessions []string
+	src := buildMCPWith(t, f, "", indexDeferral(8, &loaded, &sessions))
+	load := src.Tools()[0]
+
+	_, err := load.Execute(tools.WithSessionID(t.Context(), "s1"), json.RawMessage(`{"name":"nope"}`))
+	if err == nil || !strings.Contains(err.Error(), "tool_0") {
+		t.Fatalf("unknown name error = %v, want the available list", err)
+	}
+	if _, err := load.Execute(t.Context(), json.RawMessage(`{"name":"tool_1"}`)); err == nil {
+		t.Fatalf("load with no session in context must fail")
+	}
+	if len(loaded) != 0 {
+		t.Fatalf("nothing should have been recorded, got %+v", loaded)
+	}
+}
+
+// TestMCPIndexTokenCost is the before/after measurement issue #643
+// asks for: the tool-definition tokens a turn pays for a large MCP
+// server, eager versus indexed.
+func TestMCPIndexTokenCost(t *testing.T) {
+	t.Parallel()
+	f := &fakeMCP{toolsJSON: bigToolsJSON(30)}
+	var loaded []*tools.Tool
+	var sessions []string
+	eager := buildMCPWith(t, f, "", MCPDeferral{})
+	indexed := buildMCPWith(t, &fakeMCP{toolsJSON: bigToolsJSON(30)}, "", indexDeferral(8, &loaded, &sessions))
+
+	before, err := session.EstimateToolTokens(toolDefs(eager.Tools()))
+	if err != nil {
+		t.Fatalf("estimate eager: %v", err)
+	}
+	after, err := session.EstimateToolTokens(toolDefs(indexed.Tools()))
+	if err != nil {
+		t.Fatalf("estimate indexed: %v", err)
+	}
+	t.Logf("tool-definition tokens for a 30-tool MCP server: eager=%d indexed=%d saved=%d (%.0f%%)",
+		before, after, before-after, 100*float64(before-after)/float64(before))
+	if after >= before {
+		t.Fatalf("indexed surface (%d) must cost fewer tokens than eager (%d)", after, before)
+	}
+}
+
+func toolDefs(ts []*tools.Tool) []provider.ToolDef {
+	out := make([]provider.ToolDef, 0, len(ts))
+	for _, t := range ts {
+		out = append(out, provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+	}
+	return out
 }

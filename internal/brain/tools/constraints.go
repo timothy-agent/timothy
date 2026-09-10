@@ -299,3 +299,48 @@ func NeedsRetrievalCoercion(category string, toolCalls int, alreadyCoerced bool)
 	}
 	return toolCalls < minCalls
 }
+
+// Validated wraps one tool so its arguments are schema-checked before
+// Execute runs, the same check Constrained applies to registered
+// tools. Turn-scoped ExtraTools bypass Constrained entirely
+// (loop.withExtraTools), which is fine for this repo's own callers but
+// not for a tool whose schema came from a remote MCP server: a
+// deferred tool loaded mid-session must be no less validated than the
+// eager one it stands in for (issue #643). A schema that fails to
+// compile is reported, not silently skipped.
+func Validated(t *Tool) (*Tool, error) {
+	schema := t.InputSchema
+	if len(schema) == 0 {
+		schema = json.RawMessage(`{"type":"object"}`)
+	}
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schema))
+	if err != nil {
+		return nil, fmt.Errorf("tools: %s schema: %w", t.Name, err)
+	}
+	compiler := jsonschema.NewCompiler()
+	if err := compiler.AddResource(t.Name+".json", doc); err != nil {
+		return nil, fmt.Errorf("tools: %s schema: %w", t.Name, err)
+	}
+	compiled, err := compiler.Compile(t.Name + ".json")
+	if err != nil {
+		return nil, fmt.Errorf("tools: %s schema: %w", t.Name, err)
+	}
+	inner := t.Execute
+	clone := *t
+	clone.Execute = func(ctx context.Context, args json.RawMessage) (string, error) {
+		if len(args) == 0 {
+			args = json.RawMessage(`{}`)
+		}
+		argDoc, uerr := jsonschema.UnmarshalJSON(bytes.NewReader(args))
+		if uerr != nil {
+			return "", &Violation{Msg: fmt.Sprintf(
+				"arguments for %s are not valid JSON: %v — resend the call with corrected arguments", clone.Name, uerr)}
+		}
+		if verr := compiled.Validate(argDoc); verr != nil {
+			return "", &Violation{Msg: fmt.Sprintf(
+				"arguments for %s failed validation: %v — check the tool description for the expected format and resend", clone.Name, verr)}
+		}
+		return inner(ctx, args)
+	}
+	return &clone, nil
+}

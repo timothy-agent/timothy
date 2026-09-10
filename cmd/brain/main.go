@@ -226,8 +226,22 @@ func main() {
 	}
 
 	conns, goog, msft, markItDownURL := buildConnectors(app.DB, secrets, app.Log)
+	// recordLoadedTool is set to the chat service's recorder once that
+	// exists (below); connectors are built long before it, and a
+	// connector reload can only fire after the HTTP server is up, so
+	// the indirection is never read while still nil in practice. Left
+	// nil-safe anyway: a load_tool call with no sink just reports the
+	// schema and nothing sticks.
+	var recordLoadedTool func(sessionID string, t *tools.Tool)
 	if conns != nil {
-		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil))
+		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil, connectors.MCPDeferral{
+			Threshold: flags.MCPToolIndexThreshold,
+			OnLoad: func(sessionID string, t *tools.Tool) {
+				if recordLoadedTool != nil {
+					recordLoadedTool(sessionID, t)
+				}
+			},
+		}))
 		conns.RegisterBuilder("github", connectors.GitHubBuilder(nil))
 		if goog != nil {
 			conns.RegisterBuilder("google", goog.Builder())
@@ -538,6 +552,10 @@ func main() {
 	// agent loop's own Resolve chain reads from: seeding here is
 	// visible to that exact chain, not a parallel grant store.
 	svc.SetApprovalGrants(chatPerms)
+	// Closes the loop opened where the mcp builder was registered: a
+	// deferred MCP tool the model loads mid-session lands in this
+	// session's turn-scoped ExtraTools from the next turn on.
+	recordLoadedTool = svc.RecordLoadedTool
 	compactor.SetSensitiveTools(sensitiveTools)
 	// extractDeny fetches system-owned values a proposed fact must not
 	// restate (currently just the operator's timezone). Read per-call,

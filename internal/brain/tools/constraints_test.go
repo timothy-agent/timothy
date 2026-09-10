@@ -345,3 +345,48 @@ func TestNeedsRetrievalCoercion(t *testing.T) {
 		})
 	}
 }
+
+// TestValidatedRejectsBadArgs pins the validation parity a deferred
+// MCP tool needs (issue #643): turn-scoped ExtraTools bypass
+// Constrained, so a loaded tool wraps its own schema check and gives
+// the same *Violation feedback rather than handing junk to a remote
+// server.
+func TestValidatedRejectsBadArgs(t *testing.T) {
+	t.Parallel()
+	var got json.RawMessage
+	v, err := Validated(&Tool{
+		Name:        "github_create_issue",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"title":{"type":"string"}},"required":["title"],"additionalProperties":false}`),
+		Execute: func(_ context.Context, args json.RawMessage) (string, error) {
+			got = args
+			return "ok", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Validated: %v", err)
+	}
+
+	if _, err := v.Execute(context.Background(), json.RawMessage(`{"title":42}`)); !IsViolation(err) {
+		t.Fatalf("wrong type = %v, want a violation", err)
+	}
+	if _, err := v.Execute(context.Background(), json.RawMessage(`{}`)); !IsViolation(err) {
+		t.Fatalf("missing required = %v, want a violation", err)
+	}
+	if got != nil {
+		t.Fatalf("inner Execute ran on invalid args: %s", got)
+	}
+	out, err := v.Execute(context.Background(), json.RawMessage(`{"title":"hi"}`))
+	if err != nil || out != "ok" {
+		t.Fatalf("valid call = %q, %v", out, err)
+	}
+	if string(got) != `{"title":"hi"}` {
+		t.Fatalf("inner got %s", got)
+	}
+}
+
+func TestValidatedRejectsBrokenSchema(t *testing.T) {
+	t.Parallel()
+	if _, err := Validated(&Tool{Name: "broken", InputSchema: json.RawMessage(`{"type":`)}); err == nil {
+		t.Fatal("a malformed schema must be reported, not silently accepted")
+	}
+}
