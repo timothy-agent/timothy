@@ -3,10 +3,14 @@ package provider
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
 func TestBackoffGrowsWithJitter(t *testing.T) {
@@ -93,10 +97,98 @@ func TestIsContextLengthMessage(t *testing.T) {
 	}
 }
 
+// TestRunStreamIdleResetsOnReadNotOnlyEmit pins issue #653... issue
+// #654's fix: a driver's relay reads several silent SSE events (e.g.
+// function-call argument deltas) that are never forwarded to relayCh,
+// so resetIdle is never called from inside relay itself — only the
+// raw byte reads off the wire keep the idle watchdog from firing. A
+// server that trickles bytes slower than the idle window but never
+// stops must not be cut off.
+func TestRunStreamIdleResetsOnReadNotOnlyEmit(t *testing.T) {
+	t.Parallel()
+	const idle = 80 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		for range 5 {
+			_, _ = w.Write([]byte("x"))
+			flusher.Flush()
+			time.Sleep(idle / 2)
+		}
+	}))
+	defer srv.Close()
+
+	build := func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	}
+	// relay never emits to ch — every byte read is silent stream
+	// activity, the way an unforwarded SSE event kind is.
+	relay := func(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
+		buf := make([]byte, 1)
+		for {
+			_, err := body.Read(buf)
+			if err != nil {
+				if err == io.EOF {
+					return true, nil
+				}
+				return false, err
+			}
+		}
+	}
+
+	ch := runStream(context.Background(), http.DefaultClient, idle, 1, build, relay)
+	for ev := range ch {
+		if ev.Type == stream.EventError || ev.Type == stream.EventIncomplete {
+			t.Fatalf("stream cut short despite continuous read activity: %+v", ev.Err)
+		}
+	}
+}
+
+// TestRunStreamIdleTimeoutMessage pins the AC in #654: a genuinely
+// stalled stream (one read, then nothing) is cancelled with a message
+// naming the cause, not a bare "context canceled".
+func TestRunStreamIdleTimeoutMessage(t *testing.T) {
+	t.Parallel()
+	const idle = 30 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hj, _, _ := w.(http.Hijacker).Hijack()
+		defer func() { _ = hj.Close() }()
+		_, _ = hj.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\nx"))
+		time.Sleep(time.Second)
+	}))
+	defer srv.Close()
+
+	build := func(ctx context.Context) (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, srv.URL, nil)
+	}
+	relay := func(ctx context.Context, body io.Reader, ch chan<- stream.StreamEvent) (bool, error) {
+		buf := make([]byte, 1)
+		if _, err := body.Read(buf); err != nil {
+			return false, err
+		}
+		_, err := body.Read(buf) // blocks until the idle watchdog cancels ctx
+		return false, err
+	}
+
+	ch := runStream(context.Background(), http.DefaultClient, idle, 1, build, relay)
+	var got *stream.StreamEvent
+	for ev := range ch {
+		if ev.Type == stream.EventIncomplete {
+			e := ev
+			got = &e
+		}
+	}
+	if got == nil {
+		t.Fatal("want an incomplete event, got none")
+	}
+	if !strings.Contains(got.Text, "idle for") {
+		t.Fatalf("incomplete text = %q, want it to name the idle cause", got.Text)
+	}
+}
+
 func TestErrEventContextLengthCode(t *testing.T) {
 	t.Parallel()
 	err := &permanentError{status: 400, err: fmt.Errorf("http 400: Your input exceeds the context window of this model")}
-	ev := errEvent(err)
+	ev := errEvent(err, defaultTimeout)
 	if ev.Err.Code != "context_length" {
 		t.Fatalf("code = %q, want context_length", ev.Err.Code)
 	}
@@ -108,7 +200,7 @@ func TestErrEventContextLengthCode(t *testing.T) {
 func TestErrEventHTTPStatusCode(t *testing.T) {
 	t.Parallel()
 	err := &permanentError{status: 401, err: fmt.Errorf("http 401: invalid api key")}
-	ev := errEvent(err)
+	ev := errEvent(err, defaultTimeout)
 	if ev.Err.Code != "http_401" {
 		t.Fatalf("code = %q, want http_401", ev.Err.Code)
 	}

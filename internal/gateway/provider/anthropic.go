@@ -377,7 +377,7 @@ func (a *Anthropic) retryEffortStrippedOn400(ctx context.Context, req Completion
 			wire.OutputConfig = nil
 			body, err := json.Marshal(wire)
 			if err != nil {
-				emit(ctx, out, errEvent(fmt.Errorf("anthropic: marshal retry request: %w", err)))
+				emit(ctx, out, errEvent(fmt.Errorf("anthropic: marshal retry request: %w", err), a.cfg.Timeout))
 				return
 			}
 			retry := runStream(ctx, a.client, a.cfg.Timeout, retriesFor(req.FinalAttempt), a.buildFor(body), a.relay)

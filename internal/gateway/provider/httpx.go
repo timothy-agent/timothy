@@ -111,13 +111,18 @@ func (e *permanentError) Error() string { return e.err.Error() }
 func (e *permanentError) Unwrap() error { return e.err }
 
 // errEvent builds the terminal error event for a request failure.
-func errEvent(err error) stream.StreamEvent {
+// idleTimeout is the idle-gap ceiling that was in force, used only to
+// phrase a deadline-exceeded error concretely; it does not change how
+// the error is classified.
+func errEvent(err error, idleTimeout time.Duration) stream.StreamEvent {
 	var perm *permanentError
 	retryable := !errors.As(err, &perm)
 	code := "provider_error"
+	message := err.Error()
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		code = "timeout"
+		message = fmt.Sprintf("provider idle for %s: no stream activity", idleTimeout)
 	case perm != nil && isContextLengthMessage(perm.Error()):
 		code = "context_length"
 	case perm != nil && perm.status != 0:
@@ -125,7 +130,7 @@ func errEvent(err error) stream.StreamEvent {
 	}
 	return stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{
 		Code:      code,
-		Message:   err.Error(),
+		Message:   message,
 		Retryable: retryable,
 	}}
 }
@@ -208,7 +213,7 @@ func runStream(ctx context.Context, client *http.Client, timeout time.Duration, 
 			// Terminal events gate on the PARENT ctx: the per-call
 			// timeout expiring is exactly when the consumer must still
 			// receive the error.
-			emit(ctx, ch, errEvent(err))
+			emit(ctx, ch, errEvent(err, timeout))
 			return
 		}
 		defer func() { _ = resp.Body.Close() }()
@@ -227,7 +232,14 @@ func runStream(ctx context.Context, client *http.Client, timeout time.Duration, 
 				}
 			}
 		}()
-		finished, readErr := relay(callCtx, resp.Body, relayCh)
+		// A driver's relay only calls resetIdle indirectly, by emitting
+		// to relayCh — but several SSE event kinds (e.g. a function-call
+		// argument delta) are accumulated silently and never emitted on
+		// their own. Those bytes are still live stream activity, so the
+		// idle watchdog resets on every read off the wire too, not only
+		// on parsed-and-emitted events; whichever fires more often wins.
+		body := &idleResettingReader{r: resp.Body, reset: resetIdle}
+		finished, readErr := relay(callCtx, body, relayCh)
 		close(relayCh)
 		<-done
 
@@ -238,11 +250,31 @@ func runStream(ctx context.Context, client *http.Client, timeout time.Duration, 
 		if readErr != nil {
 			reason = readErr.Error()
 		}
+		if errors.Is(readErr, context.DeadlineExceeded) || errors.Is(callCtx.Err(), context.DeadlineExceeded) {
+			reason = fmt.Sprintf("provider idle for %s", timeout)
+		}
 		if emit(ctx, ch, stream.StreamEvent{Type: stream.EventIncomplete, Text: reason}) {
 			emit(ctx, ch, stream.StreamEvent{Type: stream.EventDone})
 		}
 	}()
 	return ch
+}
+
+// idleResettingReader resets the idle watchdog on every read that
+// returns data, so the timeout tracks real gaps in wire activity
+// rather than only the subset of stream events a driver chooses to
+// emit.
+type idleResettingReader struct {
+	r     io.Reader
+	reset func()
+}
+
+func (r *idleResettingReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if n > 0 {
+		r.reset()
+	}
+	return n, err
 }
 
 // toolAccumulator assembles streamed tool calls. Providers emit a

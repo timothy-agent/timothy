@@ -460,6 +460,9 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			if res.entry.Status == "" {
 				res.entry.Status = "incomplete"
 			}
+			if strings.HasPrefix(ev.Text, "provider idle for ") {
+				res.entry.ErrorCode = "timeout"
+			}
 			send(ev)
 		case stream.EventChunk, stream.EventReasoningChunk, stream.EventToolStart, stream.EventToolEnd:
 			res.streamed = true
