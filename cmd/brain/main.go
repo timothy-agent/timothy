@@ -1091,12 +1091,17 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// when the packet is built. Retrieval is global: memoryd's
 	// handleRetrieve ignores session_id, so the empty session here
 	// recalls the same set chat does.
-	nativeRunner.SetSearchMemory(func(ctx context.Context, query string) ([]builtin.SearchMemoryHit, error) {
+	nativeRunner.SetSearchMemory(func(ctx context.Context, query string, limit int) ([]builtin.SearchMemoryHit, error) {
 		rctx, cancel := context.WithTimeout(ctx, retrieveBudget)
 		defer cancel()
 		memories, err := mc.Retrieve(rctx, "", query)
 		if err != nil {
 			return nil, err
+		}
+		// /v1/retrieve has no limit parameter; the tool's ceiling is
+		// applied to the returned set.
+		if len(memories) > limit {
+			memories = memories[:limit]
 		}
 		out := make([]builtin.SearchMemoryHit, len(memories))
 		for i, m := range memories {

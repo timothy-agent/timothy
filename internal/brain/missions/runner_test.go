@@ -3381,7 +3381,7 @@ func hasTool(req loop.Request, name string) bool {
 // tool is offered where the operator's preferences change the work, and
 // withheld from review, whose tool set is deliberately narrow (D-093).
 func TestSearchMemoryReachesWorkingPhases(t *testing.T) {
-	recall := func(context.Context, string) ([]builtin.SearchMemoryHit, error) {
+	recall := func(context.Context, string, int) ([]builtin.SearchMemoryHit, error) {
 		return []builtin.SearchMemoryHit{{Type: "semantic", Content: "Prefers Go."}}, nil
 	}
 	m := Mission{ID: "m1", Route: "default", ReviewRoute: "default", Goal: "build a thing"}
@@ -3480,7 +3480,7 @@ func TestSearchMemoryPlanNotForcedWhenOffered(t *testing.T) {
 
 	withMem := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, planArgs)}}}
 	mr := newTestRunner(withMem)
-	mr.SetSearchMemory(func(context.Context, string) ([]builtin.SearchMemoryHit, error) { return nil, nil })
+	mr.SetSearchMemory(func(context.Context, string, int) ([]builtin.SearchMemoryHit, error) { return nil, nil })
 	if _, err := mr.PlanSession(context.Background(), m, ""); err != nil {
 		t.Fatalf("PlanSession with memory: %v", err)
 	}

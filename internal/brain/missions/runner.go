@@ -516,7 +516,7 @@ type KBSearchFunc func(ctx context.Context, query string, boostCollections []str
 // SearchMemoryFunc runs one search_memory recall over long-term
 // memory: main curries memclient.Client.Retrieve in, the same call
 // chat's own per-turn recall makes.
-type SearchMemoryFunc func(ctx context.Context, query string) ([]builtin.SearchMemoryHit, error)
+type SearchMemoryFunc func(ctx context.Context, query string, limit int) ([]builtin.SearchMemoryHit, error)
 
 // KBReadFunc loads one kb document by id, unscoped by collection
 // (D-078: collections no longer gate read access: issue #368).
@@ -592,8 +592,8 @@ func (r *nativeRunner) searchMemoryTool() *tools.Tool {
 	if r.recall == nil {
 		return nil
 	}
-	return builtin.SearchMemory(func(ctx context.Context, query string) ([]builtin.SearchMemoryHit, error) {
-		return r.recall(ctx, query)
+	return builtin.SearchMemory(func(ctx context.Context, query string, limit int) ([]builtin.SearchMemoryHit, error) {
+		return r.recall(ctx, query, limit)
 	})
 }
 

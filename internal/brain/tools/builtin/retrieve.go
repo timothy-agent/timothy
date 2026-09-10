@@ -30,6 +30,10 @@ when the digest is not enough and you need the complete output — for
 example to quote an exact line, inspect a section the excerpt cut, or
 process the whole result.
 
+Do not use this to re-run the tool that produced the digest; the
+output is already stored, so retrieve_output returns it without
+spending another call on shell or search_web.
+
 Arguments:
 - ref (string, required): the ref id exactly as it appeared in the
   digest, e.g. "9be4c1d2-04a7-47a1-a1a9-3f6d2c9f1e10".

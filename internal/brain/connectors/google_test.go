@@ -1219,3 +1219,18 @@ func TestGoogleSourceTestRefreshesToken(t *testing.T) {
 		t.Fatal("corrupt bundle accepted")
 	}
 }
+
+// TestSearchDriveDescriptionNamesReadDriveFile is issue #645's drift
+// guard for the drive search surface, kept here rather than in the
+// cross-kind test because search_drive is google-only.
+func TestSearchDriveDescriptionNamesReadDriveFile(t *testing.T) {
+	t.Parallel()
+	src, _ := connectedDriveDocsSource(t, &fakeGoogle{})
+	desc := toolByName(t, src, "search_drive").Description
+	if !strings.Contains(strings.ToLower(desc), "do not use this") {
+		t.Error("search_drive: description states no negative space")
+	}
+	if !strings.Contains(desc, "read_drive_file") {
+		t.Error("search_drive: description does not name read_drive_file")
+	}
+}

@@ -10,6 +10,11 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
+const (
+	searchMemoryDefaultLimit = 8
+	searchMemoryMaxLimit     = 20
+)
+
 // SearchMemoryHit is one recalled long-term memory; memclient.Memory
 // satisfies this shape, passed in as a plain struct to keep this
 // package free of a memclient import.
@@ -21,10 +26,11 @@ type SearchMemoryHit struct {
 
 // SearchMemoryFunc runs one retrieval over long-term memory; main
 // curries memclient.Client.Retrieve in with the session already bound.
-type SearchMemoryFunc func(ctx context.Context, query string) ([]SearchMemoryHit, error)
+type SearchMemoryFunc func(ctx context.Context, query string, limit int) ([]SearchMemoryHit, error)
 
 type searchMemoryArgs struct {
 	Query string `json:"query"`
+	Limit *int   `json:"limit"`
 }
 
 // SearchMemory lets the model recall what Timothy knows about the
@@ -42,9 +48,15 @@ asked for, tools and infrastructure they already run, decisions they
 have already made. Search before assuming a default that the operator
 may have already stated.
 
+Do not use this to look up documented reference material, internal
+docs, or uploaded files; use search_kb for those. This tool answers
+what the operator has told Timothy, not what a document says.
+
 Arguments:
 - query (string, required): what to recall, in the operator's terms
   ("preferred programming language", "deployment setup").
+- limit (integer, optional): how many memories to return, 1-20,
+  default 8.
 
 Returns numbered memories, each with its tier (semantic for durable
 facts and preferences, episodic for events, procedural for how-tos).
@@ -56,6 +68,12 @@ the operator has no preference.`,
 				"query": {
 					"type": "string",
 					"description": "What to recall about the operator."
+				},
+				"limit": {
+					"type": "integer",
+					"minimum": 1,
+					"maximum": 20,
+					"description": "Number of memories to return; defaults to 8."
 				}
 			},
 			"required": ["query"],
@@ -69,9 +87,21 @@ the operator has no preference.`,
 			if strings.TrimSpace(args.Query) == "" {
 				return "", fmt.Errorf("search_memory: query must not be empty")
 			}
-			hits, err := recall(ctx, args.Query)
+			limit := searchMemoryDefaultLimit
+			if args.Limit != nil {
+				limit = *args.Limit
+				if limit < 1 || limit > searchMemoryMaxLimit {
+					return "", fmt.Errorf("search_memory: limit must be between 1 and %d, got %d", searchMemoryMaxLimit, limit)
+				}
+			}
+			hits, err := recall(ctx, args.Query, limit)
 			if err != nil {
 				return "", fmt.Errorf("search_memory: %w", err)
+			}
+			// memoryd's /v1/retrieve has no limit parameter, so the
+			// ceiling is enforced here rather than trusted to a backend.
+			if len(hits) > limit {
+				hits = hits[:limit]
 			}
 			return formatMemoryHits(hits), nil
 		},

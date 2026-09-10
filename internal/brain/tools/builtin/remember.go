@@ -30,6 +30,9 @@ Use ONLY when the user explicitly asks to remember something ("remember
 that...", "don't forget...", "make a note that..."). Never store facts
 the user did not ask to keep — routine facts are captured automatically.
 
+Do not use this to look something up; use search_memory to read what
+is already stored. This tool only writes.
+
 Arguments:
 - content (string, required): the fact, one self-contained sentence
   with absolute dates and full names (no "he", "it", "tomorrow").

@@ -38,6 +38,9 @@ Use after search_kb when the returned passages are not enough — to see
 a passage's surrounding context, or to read the whole document a hit
 came from.
 
+Do not use this to find a document you do not already have a reference
+for; use search_kb first and read_kb only on a reference it returned.
+
 Arguments:
 - ref (string, required): the "kb://<document-id>" reference from a
   search_kb result's "Source:" line (the bare document id also works).

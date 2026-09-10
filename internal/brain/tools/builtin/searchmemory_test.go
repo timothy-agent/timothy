@@ -39,6 +39,22 @@ func TestSearchMemory(t *testing.T) {
 			want: "1. Bare fact.",
 		},
 		{
+			name: "limit truncates the returned set",
+			args: `{"query":"anything","limit":1}`,
+			hits: []SearchMemoryHit{{Content: "First."}, {Content: "Second."}},
+			want: "1. First.",
+		},
+		{
+			name:    "limit above the maximum rejected",
+			args:    `{"query":"anything","limit":21}`,
+			wantErr: "limit must be between 1 and 20",
+		},
+		{
+			name:    "limit below one rejected",
+			args:    `{"query":"anything","limit":0}`,
+			wantErr: "limit must be between 1 and 20",
+		},
+		{
 			name:    "empty query rejected",
 			args:    `{"query":"   "}`,
 			wantErr: "query must not be empty",
@@ -59,8 +75,10 @@ func TestSearchMemory(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotQuery string
-			tool := SearchMemory(func(_ context.Context, query string) ([]SearchMemoryHit, error) {
+			var gotLimit int
+			tool := SearchMemory(func(_ context.Context, query string, limit int) ([]SearchMemoryHit, error) {
 				gotQuery = query
+				gotLimit = limit
 				return tc.hits, tc.recErr
 			})
 			if tool.Name != "search_memory" {
@@ -82,12 +100,15 @@ func TestSearchMemory(t *testing.T) {
 			if gotQuery == "" {
 				t.Fatal("query was not passed through to the backend")
 			}
+			if gotLimit < 1 {
+				t.Fatalf("limit passed to the backend = %d, want at least 1", gotLimit)
+			}
 		})
 	}
 }
 
 func TestSearchMemorySchemaValid(t *testing.T) {
-	tool := SearchMemory(func(context.Context, string) ([]SearchMemoryHit, error) { return nil, nil })
+	tool := SearchMemory(func(context.Context, string, int) ([]SearchMemoryHit, error) { return nil, nil })
 	var schema map[string]any
 	if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
 		t.Fatalf("input schema is not valid json: %v", err)
@@ -95,5 +116,16 @@ func TestSearchMemorySchemaValid(t *testing.T) {
 	req, ok := schema["required"].([]any)
 	if !ok || len(req) != 1 || req[0] != "query" {
 		t.Fatalf("required = %v, want [query]", schema["required"])
+	}
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("properties = %v, want an object", schema["properties"])
+	}
+	limit, ok := props["limit"].(map[string]any)
+	if !ok {
+		t.Fatal("schema has no limit property")
+	}
+	if limit["maximum"] != float64(searchMemoryMaxLimit) {
+		t.Fatalf("limit maximum = %v, want %d", limit["maximum"], searchMemoryMaxLimit)
 	}
 }
