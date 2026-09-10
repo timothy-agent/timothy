@@ -2424,9 +2424,8 @@ func TestAskUserEmitsResolvedOnAnswer(t *testing.T) {
 // the model and the event log must not be told the user answered when
 // nobody did.
 func TestAskUserTimeoutWordingDistinctFromDeny(t *testing.T) {
-	old := permissionTimeout
-	permissionTimeout = 20 * time.Millisecond
-	defer func() { permissionTimeout = old }()
+	old := setPermissionTimeout(20 * time.Millisecond)
+	defer func() { setPermissionTimeout(old) }()
 
 	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
 		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
@@ -2472,9 +2471,8 @@ func TestAskUserTimeoutWordingDistinctFromDeny(t *testing.T) {
 // permissionTimeout to near-zero and letting real time pass well past
 // it proves the attended-mission wait ignored it.
 func TestAskUserAttendedMissionIgnoresLoopTimeout(t *testing.T) {
-	old := permissionTimeout
-	permissionTimeout = 10 * time.Millisecond
-	defer func() { permissionTimeout = old }()
+	old := setPermissionTimeout(10 * time.Millisecond)
+	defer func() { setPermissionTimeout(old) }()
 
 	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
 		toolCallStep([2]string{"echo", `{"text":"hi"}`}),
