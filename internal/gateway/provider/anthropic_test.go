@@ -428,3 +428,129 @@ func TestAnthropicUsageCacheWriteSplit(t *testing.T) {
 		})
 	}
 }
+
+// TestAnthropicEffort covers the D-020 dial: "low" sends
+// output_config.effort on a model that supports it, full effort and
+// unsupported models send nothing at all.
+func TestAnthropicEffort(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		model  string
+		effort string
+		want   string // JSON of output_config, "" for absent
+	}{
+		{"low on supported model", "claude-opus-5", "low", `{"effort":"low"}`},
+		{"low on bedrock-style id", "anthropic.claude-sonnet-5", "low", `{"effort":"low"}`},
+		{"full effort omits", "claude-opus-5", "", ""},
+		{"normal omits", "claude-opus-5", "normal", ""},
+		{"unsupported model omits", "claude-3-5-haiku-20241022", "low", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var body map[string]json.RawMessage
+			p := anthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				w.Header().Set("Content-Type", "text/event-stream")
+				sseWrite(w, "message_stop", `{"type":"message_stop"}`)
+			})
+			ch, err := p.Stream(t.Context(), CompletionRequest{
+				Model: tc.model, Effort: tc.effort,
+				Messages: []Message{{Role: "user", Content: "hi"}},
+			})
+			if err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+			collect(t, ch)
+
+			got, present := body["output_config"]
+			if tc.want == "" {
+				if present {
+					t.Fatalf("output_config sent = %s, want absent", got)
+				}
+				return
+			}
+			if !present {
+				t.Fatal("output_config absent, want it sent")
+			}
+			if string(got) != tc.want {
+				t.Fatalf("output_config = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAnthropicEffortStrippedOn400 asserts the compatibility fallback:
+// an HTTP 400 as the very first event retries exactly once without
+// output_config, and the retried stream reaches the caller.
+func TestAnthropicEffortStrippedOn400(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	var secondHadEffort atomic.Bool
+	p := anthropicServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"output_config: unsupported"}}`))
+			return
+		}
+		_, present := body["output_config"]
+		secondHadEffort.Store(present)
+		w.Header().Set("Content-Type", "text/event-stream")
+		sseWrite(w, "content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text"}}`)
+		sseWrite(w, "content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"retried"}}`)
+		sseWrite(w, "message_stop", `{"type":"message_stop"}`)
+	})
+
+	ch, err := p.Stream(t.Context(), CompletionRequest{
+		Model: "claude-opus-5", Effort: "low", FinalAttempt: true,
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch)
+
+	if calls.Load() != 2 {
+		t.Fatalf("requests = %d, want exactly 2 (one retry)", calls.Load())
+	}
+	if secondHadEffort.Load() {
+		t.Fatal("retry still carried output_config")
+	}
+	if got := textOf(events, stream.EventChunk); got != "retried" {
+		t.Fatalf("chunks = %q, want retried", got)
+	}
+	if lastType(t, events) != stream.EventDone {
+		t.Fatalf("last event = %v, want done", lastType(t, events))
+	}
+}
+
+// TestAnthropicHTTP400NoEffortNoRetry: without the field there is
+// nothing to strip, so the 400 surfaces as-is on a single request.
+func TestAnthropicHTTP400NoEffortNoRetry(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	p := anthropicServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"bad"}}`))
+	})
+
+	ch, err := p.Stream(t.Context(), CompletionRequest{
+		Model: "claude-opus-5", FinalAttempt: true,
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch)
+
+	if calls.Load() != 1 {
+		t.Fatalf("requests = %d, want 1", calls.Load())
+	}
+	if lastType(t, events) != stream.EventError {
+		t.Fatalf("last event = %v, want error", lastType(t, events))
+	}
+}

@@ -306,6 +306,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			Route: req.Route, Agent: req.Agent, Purpose: req.Purpose,
 			SessionID: req.SessionID, MissionID: req.MissionID, Local: local,
 			ToolDefTokensEstimate: req.ToolDefTokensEstimate,
+			Effort:                req.Effort,
 		}, prices, send)
 
 		if res.failedOver() {

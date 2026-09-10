@@ -382,7 +382,7 @@ func TestBuildConverseStreamInput(t *testing.T) {
 		Tools:     []ToolDef{{Name: "calc", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 		MaxTokens: 512,
 	}
-	input := buildConverseStreamInput(novaTools)
+	input, _ := buildConverseStreamInput(novaTools)
 	if input.InferenceConfig == nil || input.InferenceConfig.Temperature == nil || *input.InferenceConfig.Temperature != 0 {
 		t.Fatalf("nova+tools: InferenceConfig = %#v, want Temperature 0", input.InferenceConfig)
 	}
@@ -394,7 +394,7 @@ func TestBuildConverseStreamInput(t *testing.T) {
 	}
 
 	novaNoTools := CompletionRequest{Model: "us.amazon.nova-pro-v1:0", MaxTokens: 512}
-	input = buildConverseStreamInput(novaNoTools)
+	input, _ = buildConverseStreamInput(novaNoTools)
 	if input.InferenceConfig == nil || input.InferenceConfig.Temperature != nil {
 		t.Fatalf("nova without tools: Temperature must stay unset, got %#v", input.InferenceConfig)
 	}
@@ -410,7 +410,7 @@ func TestBuildConverseStreamInput(t *testing.T) {
 		Tools:     []ToolDef{{Name: "calc", InputSchema: json.RawMessage(`{"type":"object"}`)}},
 		MaxTokens: 256,
 	}
-	input = buildConverseStreamInput(titanTools)
+	input, _ = buildConverseStreamInput(titanTools)
 	if input.InferenceConfig == nil || input.InferenceConfig.Temperature != nil {
 		t.Fatalf("titan+tools: Temperature must stay unset, got %#v", input.InferenceConfig)
 	}
@@ -442,7 +442,7 @@ func TestBuildConverseStreamInputForceTool(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			input := buildConverseStreamInput(CompletionRequest{
+			input, _ := buildConverseStreamInput(CompletionRequest{
 				Model: tc.model, Tools: tools, ForceTool: "submit_plan",
 			})
 			if !tc.wantSet {
@@ -619,5 +619,129 @@ func TestParseTitanEmbedding(t *testing.T) {
 	}
 	if _, _, err := parseTitanEmbedding([]byte(`not json`)); err == nil {
 		t.Fatal("garbage must error")
+	}
+}
+
+// TestBuildConverseStreamInputEffort covers the D-020 dial on
+// Converse: Anthropic models get output_config through
+// AdditionalModelRequestFields, Nova ignores it, and the Nova topK
+// workaround survives alongside it.
+func TestBuildConverseStreamInputEffort(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		req        CompletionRequest
+		wantEffort string // "" means no output_config
+		wantTopK   bool
+	}{
+		{
+			name:       "claude low effort",
+			req:        CompletionRequest{Model: "us.anthropic.claude-sonnet-5", Effort: "low"},
+			wantEffort: "low",
+		},
+		{
+			name: "claude full effort",
+			req:  CompletionRequest{Model: "us.anthropic.claude-sonnet-5"},
+		},
+		{
+			name: "claude model without the control",
+			req:  CompletionRequest{Model: "anthropic.claude-3-5-haiku-20241022-v1:0", Effort: "low"},
+		},
+		{
+			name: "nova ignores effort",
+			req:  CompletionRequest{Model: "us.amazon.nova-pro-v1:0", Effort: "low"},
+		},
+		{
+			name: "nova keeps topK with effort set",
+			req: CompletionRequest{
+				Model:  "us.amazon.nova-pro-v1:0",
+				Effort: "low",
+				Tools:  []ToolDef{{Name: "calc", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+			},
+			wantTopK: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			input, fields := buildConverseStreamInput(tc.req)
+
+			oc, present := fields["output_config"]
+			if tc.wantEffort == "" {
+				if present {
+					t.Fatalf("output_config = %v, want absent", oc)
+				}
+			} else {
+				m, ok := oc.(map[string]any)
+				if !ok {
+					t.Fatalf("output_config = %#v, want a map", oc)
+				}
+				if m["effort"] != tc.wantEffort {
+					t.Fatalf("effort = %v, want %q", m["effort"], tc.wantEffort)
+				}
+			}
+
+			if _, ok := fields["inferenceConfig"]; ok != tc.wantTopK {
+				t.Fatalf("inferenceConfig present = %v, want %v", ok, tc.wantTopK)
+			}
+			if tc.wantEffort == "" && !tc.wantTopK && input.AdditionalModelRequestFields != nil {
+				t.Fatal("AdditionalModelRequestFields set with nothing to send")
+			}
+		})
+	}
+}
+
+// TestBedrockOutputConfigRetry covers the strip-and-retry gate: only a
+// ValidationException naming the field, on a request that actually
+// sent it, triggers the retry, and stripping keeps the Nova topK
+// field intact.
+func TestBedrockOutputConfigRetry(t *testing.T) {
+	t.Parallel()
+
+	_, claude := buildConverseStreamInput(CompletionRequest{
+		Model: "us.anthropic.claude-sonnet-5", Effort: "low",
+	})
+	rejection := &types.ValidationException{
+		Message: aws.String("The model returned the following errors: output_config: extra fields not permitted"),
+	}
+	if !rejectsOutputConfig(rejection, claude) {
+		t.Fatal("a ValidationException naming output_config must trigger the retry")
+	}
+	if rejectsOutputConfig(&types.ThrottlingException{Message: aws.String("output_config")}, claude) {
+		t.Fatal("a throttling error must never trigger the retry")
+	}
+	if rejectsOutputConfig(&types.ValidationException{Message: aws.String("toolConfig required")}, claude) {
+		t.Fatal("an unrelated ValidationException must not trigger the retry")
+	}
+
+	_, nova := buildConverseStreamInput(CompletionRequest{
+		Model: "us.amazon.nova-pro-v1:0",
+		Tools: []ToolDef{{Name: "calc", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+	})
+	if rejectsOutputConfig(rejection, nova) {
+		t.Fatal("a request that never sent output_config must not retry")
+	}
+
+	// Stripping the claude request leaves nothing, so the retry sends
+	// no model-native fields at all.
+	if got := withoutOutputConfig(claude); got != nil {
+		t.Fatalf("stripped claude fields = %#v, want nil", got)
+	}
+
+	// Stripping a request that also carries topK keeps topK.
+	_, bothFields := buildConverseStreamInput(CompletionRequest{
+		Model:  "us.amazon.nova-pro-v1:0",
+		Effort: "low",
+		Tools:  []ToolDef{{Name: "calc", InputSchema: json.RawMessage(`{"type":"object"}`)}},
+	})
+	bothFields["output_config"] = map[string]any{"effort": "low"} // as if Nova took it
+	if stripped := withoutOutputConfig(bothFields); stripped == nil {
+		t.Fatal("stripping must keep the topK field")
+	}
+	if _, ok := bothFields["output_config"]; ok {
+		t.Fatal("output_config survived stripping")
+	}
+	if _, ok := bothFields["inferenceConfig"]; !ok {
+		t.Fatal("inferenceConfig lost during stripping")
 	}
 }

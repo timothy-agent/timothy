@@ -100,7 +100,11 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
     -- definitions cost in prompt tokens: measurement only, so the
     -- operator can see the tool surface's share of prompt spend.
     -- Never billed, cost stays on provider-reported usage.
-    tool_def_tokens_estimate integer
+    tool_def_tokens_estimate integer,
+    -- D-020 effort level the request was served at: 'low' on routine
+    -- post-tool continuations, NULL at full effort. Lets analytics
+    -- compare output tokens per effort level.
+    effort             text
 );
 
 CREATE INDEX IF NOT EXISTS cost_ledger_ts_idx ON cost_ledger (ts);

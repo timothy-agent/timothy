@@ -54,6 +54,10 @@ type Entry struct {
 	// the prompt tokens spent on this turn's tool definitions. Recorded
 	// for tool-surface overhead visibility only, never priced.
 	ToolDefTokensEstimate int
+	// Effort is the D-020 dial the request was served at ("low", or
+	// empty for full effort). Stored so output tokens can be compared
+	// per effort level.
+	Effort string
 }
 
 // Recorder is what the API layer depends on; tests supply an in-memory
@@ -108,12 +112,12 @@ func (l *Ledger) Record(ctx context.Context, e Entry) {
 		(id, provider, model, route, agent, purpose, session_id, mission_id,
 		 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, reasoning_tokens,
 		 latency_ms, status, error_code, cost, currency, unbilled, provider_request_id,
-		 tool_def_tokens_estimate)
+		 tool_def_tokens_estimate, effort)
 		VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()),
-		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, ''), $18, $19, $20, NULLIF($21, ''), $22)`,
+		 $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''), $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, ''), $18, $19, $20, NULLIF($21, ''), $22, NULLIF($23, ''))`,
 		e.ID, e.Provider, e.Model, e.Route, e.Agent, e.Purpose, e.SessionID, e.MissionID,
 		in, out, cr, cw, cw1h, rt, e.LatencyMS, e.Status, e.ErrorCode, e.Cost, currency, e.Unbilled, e.ProviderRequestID,
-		e.ToolDefTokensEstimate)
+		e.ToolDefTokensEstimate, e.Effort)
 	if err != nil {
 		l.log.Warn("ledger write failed", "error", err, "provider", e.Provider, "status", e.Status)
 	}
