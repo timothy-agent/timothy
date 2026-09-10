@@ -561,21 +561,71 @@ type quotedToken struct {
 }
 
 // commandTokensQuoted is CommandTokens plus per-token quoting info.
+//
+// It scans char-by-char tracking quote nesting rather than splitting
+// on whitespace first, so a space inside a quoted fragment (an awk or
+// grep program like '/R1/{ok=1} END{exit !ok}') does not get cut into
+// two tokens before the quoting is seen. A token is "quoted" if any
+// part of it was produced while inside a quote — nested or not — so
+// the regex/pattern skip in guardSubject still applies to something
+// like "awk '/^###/ ...'" wrapped in an outer sh -c "...".
 func commandTokensQuoted(command string) []quotedToken {
-	// '=' splits too, so --output=/abs/path exposes its path part.
-	fields := strings.Fields(strings.ReplaceAll(command, "=", " "))
-	out := make([]quotedToken, 0, len(fields))
-	for _, f := range fields {
-		// Redirect/fd syntax (>, <, 2>) only ever prefixes a path, never
-		// trails it — trimming from both ends would also strip a
-		// literal "<tag>" down to "/tag", a false absolute-path hit.
-		f = strings.TrimLeft(f, "<>0123456789")
-		trimmed := strings.Trim(f, `'";|&()`)
-		if trimmed == "" {
+	// '=' splits too, so --output=/abs/path exposes its path part —
+	// but not inside quotes, where '=' can be literal program text.
+	var quote rune
+	runes := []rune(command)
+	for i, r := range runes {
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			}
 			continue
 		}
-		quoted := (strings.HasPrefix(f, "'") || strings.HasPrefix(f, `"`)) && trimmed != f
-		out = append(out, quotedToken{text: trimmed, quoted: quoted})
+		switch r {
+		case '\'', '"':
+			quote = r
+		case '=':
+			runes[i] = ' '
+		}
 	}
+	command = string(runes)
+
+	var out []quotedToken
+	var cur strings.Builder
+	curQuoted := false
+	quote = 0
+	flush := func() {
+		trimmed := strings.Trim(cur.String(), `;|&()`)
+		if !curQuoted {
+			// Redirect/fd syntax (>, <, 2>) only ever prefixes a path,
+			// never trails it, and is never quoted literal content.
+			trimmed = strings.TrimLeft(trimmed, "<>0123456789")
+		}
+		cur.Reset()
+		if trimmed == "" {
+			curQuoted = false
+			return
+		}
+		out = append(out, quotedToken{text: trimmed, quoted: curQuoted})
+		curQuoted = false
+	}
+	for _, r := range command {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+				continue
+			}
+			cur.WriteRune(r)
+		case r == '\'' || r == '"':
+			quote = r
+			curQuoted = true
+		case r == ' ' || r == '\t' || r == '\n':
+			flush()
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	flush()
 	return out
 }
