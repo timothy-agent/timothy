@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -2579,5 +2580,46 @@ func TestAgentLoadSkillErrorDigestIsTruthful(t *testing.T) {
 	}
 	if !saw {
 		t.Fatal("no tool_result event")
+	}
+}
+
+// TestAgentToolDefTokensEstimate pins issue #642: the turn's tool
+// definitions are measured once and the estimate rides every outgoing
+// StreamRequest, except the forced-synthesis step that offers no
+// schemas at all. Three identical echo calls trip RepeatGuard's
+// "stuck" path, which forces synthesis on the next step.
+func TestAgentToolDefTokensEstimate(t *testing.T) {
+	t.Parallel()
+	repeat := toolCallStep([2]string{"echo", `{"text":"x"}`})
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		repeat, repeat, repeat, finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+
+	if len(gw.requests) != 4 {
+		t.Fatalf("requests = %d, want 4 (3 repeats + forced synthesis)", len(gw.requests))
+	}
+	want, err := session.EstimateToolTokens(gw.requests[0].Tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want <= 0 {
+		t.Fatalf("estimate for the offered tools = %d, want positive", want)
+	}
+	for i, req := range gw.requests[:3] {
+		if req.ToolDefTokensEstimate != want {
+			t.Fatalf("request %d ToolDefTokensEstimate = %d, want %d", i, req.ToolDefTokensEstimate, want)
+		}
+	}
+	last := gw.requests[3]
+	if len(last.Tools) != 0 || last.ToolDefTokensEstimate != 0 {
+		t.Fatalf("forced-synthesis request = %d tools / estimate %d, want 0 / 0",
+			len(last.Tools), last.ToolDefTokensEstimate)
 	}
 }

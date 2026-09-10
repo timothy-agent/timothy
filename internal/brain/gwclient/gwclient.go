@@ -51,6 +51,11 @@ type StreamRequest struct {
 	// ProviderState is opaque driver continuation state (D-067), echoed
 	// back from the previous step's done Meta.ProviderState.
 	ProviderState json.RawMessage `json:"provider_state,omitempty"`
+	// ToolDefTokensEstimate is the brain-side tokenizer's estimate of
+	// what the Tools array costs in prompt tokens. Ledger tag only:
+	// it never affects routing or the provider call, and is never
+	// priced (cost stays on provider-reported usage).
+	ToolDefTokensEstimate int `json:"tool_def_tokens_estimate,omitempty"`
 }
 
 // ErrGatewayUnavailable reports that the gateway itself is not yet

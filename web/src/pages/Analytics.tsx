@@ -174,6 +174,15 @@ const bucketLabel = (iso: string, bucket: string) => {
     : d.toLocaleDateString([], { month: 'short', day: 'numeric' })
 }
 
+// TOOL_DEFS is the tokens panel's third series: the brain-side
+// tokenizer's estimate of what a turn's tool definitions cost in
+// prompt tokens. The key doubles as the legend label (StatsLegend
+// renders the group name), so it says "est." to keep it from reading
+// as provider-reported usage. It is never used in any cost figure.
+const TOOL_DEFS = 'tool defs (est.)'
+const TOKEN_SERIES = ['input', 'output', TOOL_DEFS]
+const tokenSeriesColor = (g: string) => (g === 'input' ? palette[0] : g === 'output' ? palette[2] : palette[3])
+
 // ChartView is the bars/lines toggle shared by the two cost-over-time
 // panels — a compact segmented control matching the range picker's style.
 type ChartView = 'bars' | 'lines'
@@ -295,11 +304,12 @@ export function Analytics() {
   )
   const tokens = useMemo(() => {
     if (!data) return []
-    const byBucket = new Map<string, { bucket: string; input: number; output: number }>()
+    const byBucket = new Map<string, { bucket: string; input: number; output: number; [TOOL_DEFS]: number }>()
     for (const p of data.byProvider) {
-      const row = byBucket.get(p.bucket) ?? { bucket: p.bucket, input: 0, output: 0 }
+      const row = byBucket.get(p.bucket) ?? { bucket: p.bucket, input: 0, output: 0, [TOOL_DEFS]: 0 }
       row.input += p.input_tokens
       row.output += p.output_tokens
+      row[TOOL_DEFS] += p.tool_def_tokens_estimate
       byBucket.set(p.bucket, row)
     }
     return [...byBucket.values()]
@@ -329,7 +339,7 @@ export function Analytics() {
   )
 
   const costLegend = useSeriesSelection(cost.groups)
-  const tokensLegend = useSeriesSelection(['input', 'output'])
+  const tokensLegend = useSeriesSelection(TOKEN_SERIES)
   const modelCostLegend = useSeriesSelection(modelCost.groups)
   const modelTokensLegend = useSeriesSelection(modelTokens.groups)
 
@@ -604,17 +614,17 @@ export function Analytics() {
         <EChart
           option={(tokensView === 'bars' ? stackedBarsOption : areaLinesOption)(
             tokens as unknown as Record<string, number | string>[],
-            ['input', 'output'],
+            TOKEN_SERIES,
             tokensLegend.hidden,
-            (g) => (g === 'input' ? palette[0] : palette[2]),
+            tokenSeriesColor,
             (v) => bucketLabel(v, bucket),
             compact,
           )}
         />
         <StatsLegend
           rows={tokens as unknown as Record<string, number | string>[]}
-          groups={['input', 'output']}
-          colorOf={(g) => (g === 'input' ? palette[0] : palette[2])}
+          groups={TOKEN_SERIES}
+          colorOf={tokenSeriesColor}
           hidden={tokensLegend.hidden}
           onSelect={tokensLegend.onSelect}
           valueLabel={compact}

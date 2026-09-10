@@ -120,6 +120,10 @@ type SeriesPoint struct {
 	Errors               int64     `json:"errors"`
 	UnpricedInputTokens  int64     `json:"unpriced_input_tokens"`
 	UnpricedOutputTokens int64     `json:"unpriced_output_tokens"`
+	// ToolDefTokensEstimate is the summed brain-side estimate of the
+	// prompt tokens this bucket's tool definitions cost. Estimate, not
+	// provider-reported, and never priced.
+	ToolDefTokensEstimate int64 `json:"tool_def_tokens_estimate"`
 }
 
 // Series returns bucketed usage grouped by provider, model, or
@@ -145,7 +149,8 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 			COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 			COUNT(*), COUNT(*) FILTER (WHERE status = 'error'),
 			COALESCE(SUM(input_tokens) FILTER (WHERE cost IS NULL), 0),
-			COALESCE(SUM(output_tokens) FILTER (WHERE cost IS NULL), 0)
+			COALESCE(SUM(output_tokens) FILTER (WHERE cost IS NULL), 0),
+			COALESCE(SUM(tool_def_tokens_estimate), 0)
 		FROM cost_ledger
 		WHERE ts >= $1 AND ts < $2 AND `+notTest+`
 		GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`, from, to)
@@ -159,7 +164,7 @@ func (a *Aggregator) Series(ctx context.Context, from, to time.Time, bucket, gro
 		var p SeriesPoint
 		if err := rows.Scan(&p.Bucket, &p.Group, &p.Currency, &p.Cost, &p.UnbilledCost,
 			&p.InputTokens, &p.OutputTokens, &p.Requests, &p.Errors,
-			&p.UnpricedInputTokens, &p.UnpricedOutputTokens); err != nil {
+			&p.UnpricedInputTokens, &p.UnpricedOutputTokens, &p.ToolDefTokensEstimate); err != nil {
 			return nil, fmt.Errorf("usage series: %w", err)
 		}
 		out = append(out, p)

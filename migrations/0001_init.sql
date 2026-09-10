@@ -91,7 +91,12 @@ CREATE TABLE IF NOT EXISTS cost_ledger (
     -- Provider's own id for this request (OpenAI resp_.../chatcmpl-...,
     -- Anthropic msg_...), distinct from id above: lets a row be
     -- reconciled against the provider's own usage export.
-    provider_request_id text
+    provider_request_id text,
+    -- Brain-side tokenizer estimate of what this turn's tool
+    -- definitions cost in prompt tokens: measurement only, so the
+    -- operator can see the tool surface's share of prompt spend.
+    -- Never billed, cost stays on provider-reported usage.
+    tool_def_tokens_estimate integer
 );
 
 CREATE INDEX IF NOT EXISTS cost_ledger_ts_idx ON cost_ledger (ts);

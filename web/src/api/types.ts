@@ -321,6 +321,10 @@ export interface UsagePoint extends ConvertedMoney {
   errors: number
   unpriced_input_tokens: number
   unpriced_output_tokens: number
+  // tool_def_tokens_estimate is a brain-side tokenizer estimate of the
+  // prompt tokens this bucket's tool definitions cost. Displayed as an
+  // estimate, never used for cost.
+  tool_def_tokens_estimate: number
 }
 
 // GroupTotal is one group's totals over a whole range: the

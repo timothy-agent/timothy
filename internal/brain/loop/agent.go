@@ -429,6 +429,20 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	for _, d := range defs {
 		toolNames[d.Name] = true
 	}
+	// toolDefTokens is the tokenizer's estimate of what the offered
+	// tool schemas cost on every step of this turn. Measurement only:
+	// it rides to the ledger next to prompt tokens so tool-surface
+	// overhead is visible per session and per mission, and is never
+	// priced (cost stays on provider-reported usage).
+	toolDefTokens, err := session.EstimateToolTokens(defs)
+	if err != nil {
+		a.logger.Warn("tool def token estimate failed", "error", err, "tools", len(defs))
+		toolDefTokens = 0
+	}
+	a.logger.Debug("turn assembled",
+		"session_id", req.SessionID, "mission_id", req.MissionID,
+		"agent", req.Agent, "route", req.Route,
+		"tools", len(defs), "tool_def_tokens", toolDefTokens)
 	// ForceTool is wire-invalid against a tool the turn doesn't actually
 	// offer (D-063) — defensive only, callers are expected to name a
 	// tool already in their own ToolAllow.
@@ -496,6 +510,8 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			MissionID:     req.MissionID,
 			ForceTool:     forceTool,
 			ProviderState: providerState,
+			// Ledger tag only, never priced (issue #642).
+			ToolDefTokensEstimate: toolDefTokens,
 		}
 		switch directive {
 		case tools.StepWarnFinalize:
@@ -507,6 +523,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			// offered is a wire error.
 			sreq.Tools = nil
 			sreq.ForceTool = ""
+			sreq.ToolDefTokensEstimate = 0
 		}
 
 		// Inner attempt loop: a stream that dies before anything
