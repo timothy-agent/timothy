@@ -2372,14 +2372,20 @@ func TestAskUserAttendedMissionIgnoresLoopTimeout(t *testing.T) {
 	var requestID string
 	deadline := time.After(5 * time.Second)
 	sawRequest := make(chan struct{})
+	resolvedEarly := make(chan stream.PermissionResolvedEvent, 1)
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		for ev := range ch {
 			if ev.Type == stream.EventPermissionRequest {
 				requestID = ev.Permission.ID
 				close(sawRequest)
 			}
 			if ev.Type == stream.EventPermissionResolved {
-				t.Errorf("resolved before the answer arrived: %+v (loop timeout leaked into an attended mission turn)", ev.Resolved)
+				select {
+				case resolvedEarly <- *ev.Resolved:
+				default:
+				}
 			}
 		}
 	}()
@@ -2392,9 +2398,15 @@ func TestAskUserAttendedMissionIgnoresLoopTimeout(t *testing.T) {
 	// Outlive the shrunk permissionTimeout several times over: an
 	// attended mission turn must still be waiting.
 	time.Sleep(20 * permissionTimeout)
+	select {
+	case ev := <-resolvedEarly:
+		t.Fatalf("resolved before the answer arrived: %+v (loop timeout leaked into an attended mission turn)", ev)
+	default:
+	}
 	if !a.broker.Resolve(requestID, DecideOnce) {
 		t.Fatal("broker no longer knows the prompt id — it must have resolved on its own")
 	}
+	<-drained
 }
 
 // TestWaitToolsReadyNilIsNoOp confirms the default (before main.go
