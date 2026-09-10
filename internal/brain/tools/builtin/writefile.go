@@ -41,6 +41,9 @@ This is the ONLY correct way to create or update a file — do not use
 shell redirects (>, >>) or heredocs, which require interactive
 approval and often fail.
 
+Do not use this to inspect, move, or delete existing files; use shell
+for those. This tool only writes whole file contents.
+
 Arguments:
 - path (string, required): workspace-relative file path, e.g.
   "summary.md" or "reports/http-429.md". Absolute paths and paths

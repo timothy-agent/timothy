@@ -65,6 +65,9 @@ fetch_url) to find options and prices, then tell the user what you
 found and that they need to complete the booking themselves — do not
 retry the search hoping for a different kind of result.
 
+Do not use this to read a URL you already have; use fetch_url for
+that. Search finds pages, fetch_url reads one.
+
 Arguments:
 - query (string, required): the search query.
 - time_range (string, optional): "day", "week", "month", or "year" —

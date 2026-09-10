@@ -1,6 +1,7 @@
 package connectors
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -85,5 +86,33 @@ func TestSharedToolSchemasMatchAcrossKinds(t *testing.T) {
 	}
 	if shared == 0 {
 		t.Fatal("no shared tool names found across kinds: test setup is broken")
+	}
+
+	// Issue #645: the read-vs-search and list-vs-search contrasts must
+	// stay in these descriptions so the model routes between them
+	// without guessing.
+	contrasts := map[string]string{
+		"search_mail":          "read_mail",
+		"read_mail":            "search_mail",
+		"list_calendar_events": "search_mail",
+	}
+	for name, want := range contrasts {
+		var checked int
+		for kind, tls := range byKind {
+			shape, ok := tls[name]
+			if !ok {
+				continue
+			}
+			checked++
+			if !strings.Contains(strings.ToLower(shape.desc), "do not use this") {
+				t.Errorf("tool %s (%s): description states no negative space", name, kind)
+			}
+			if !strings.Contains(shape.desc, want) {
+				t.Errorf("tool %s (%s): description does not name %s", name, kind, want)
+			}
+		}
+		if checked == 0 {
+			t.Errorf("tool %s was served by no kind: test setup is broken", name)
+		}
 	}
 }

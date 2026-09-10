@@ -299,7 +299,10 @@ func (s *googleSource) gmailSearch() *tools.Tool {
 		Description: `Search a connected mail account. Returns up to max_results
 (default 10) messages as id, date, from, subject, snippet. Use
 read_mail with an id for the full body. See the tool description's
-Connected accounts list for this account's query syntax.`,
+Connected accounts list for this account's query syntax.
+Do not use this to read a message you already have an id for; use
+read_mail for that. Search returns snippets, read_mail returns the
+body.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"query":{"type":"string","description":"search query"},
 			"max_results":{"type":"integer","minimum":1,"maximum":25}
@@ -389,7 +392,7 @@ func (s *googleSource) gmailRead() *tools.Tool {
 	return &tools.Tool{
 		Name:        "read_mail",
 		ReadOnly:    true,
-		Description: "Read one email's full content by message id (from search_mail). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use read_mail_attachment with the message id and a filename from that list to read an attachment's content.",
+		Description: "Read one email's full content by message id (from search_mail). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use read_mail_attachment with the message id and a filename from that list to read an attachment's content. Do not use this to find messages, and never guess an id; use search_mail and read_mail only on an id it returned.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"message id"}
 		},"required":["id"],"additionalProperties":false}`),
@@ -528,7 +531,7 @@ func (s *googleSource) calendarListEvents() *tools.Tool {
 	return &tools.Tool{
 		Name:        "list_calendar_events",
 		ReadOnly:    true,
-		Description: "List events from the connected calendar in a time window. Omit time_min/time_max for the default window, the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, title, and location per event.",
+		Description: "List events from the connected calendar in a time window. Omit time_min/time_max for the default window, the next 7 days from now; set them (RFC3339 UTC) only when the goal needs a different window, computed from today's actual date. Returns start, end, title, and location per event. Do not use this to search mail for an invitation or a booking confirmation; use search_mail for that. This tool lists a calendar window, it does not search by keyword.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"time_min":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
 			"time_max":{"type":"string","description":"RFC3339 UTC timestamp; omit for the default window"},
@@ -670,7 +673,10 @@ func (s *googleSource) driveSearch() *tools.Tool {
 against file names and, for supported formats, document content
 (Drive's "fullText contains" search). Returns up to max_results
 (default 20) files as id, name, mimeType, modifiedTime, webViewLink.
-Use read_drive_file with an id to read a file's content.`,
+Use read_drive_file with an id to read a file's content.
+Do not use this to read a file you already have an id for; use
+read_drive_file for that. Search lists files, read_drive_file returns
+the content.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"query":{"type":"string","description":"words to match against file name and content"},
 			"max_results":{"type":"integer","minimum":1,"maximum":50}

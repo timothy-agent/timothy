@@ -393,7 +393,10 @@ func (s *imapSource) mailSearch() *tools.Tool {
 		Description: `Search a connected mail account. Returns up to max_results
 (default 10) messages as id, date, from, subject, snippet. Use
 read_mail with an id for the full body. See the tool description's
-Connected accounts list for this account's query syntax.`,
+Connected accounts list for this account's query syntax.
+Do not use this to read a message you already have an id for; use
+read_mail for that. Search returns snippets, read_mail returns the
+body.`,
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"query":{"type":"string","description":"search query"},
 			"max_results":{"type":"integer","minimum":1,"maximum":25}
@@ -444,7 +447,7 @@ func (s *imapSource) mailRead() *tools.Tool {
 	return &tools.Tool{
 		Name:        "read_mail",
 		ReadOnly:    true,
-		Description: "Read one email's full content by message id (from search_mail). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use read_mail_attachment with the message id and a filename from that list to read an attachment's content.",
+		Description: "Read one email's full content by message id (from search_mail). Returns headers and the body as readable text, plus a list of attachment filenames, if any. Use read_mail_attachment with the message id and a filename from that list to read an attachment's content. Do not use this to find messages, and never guess an id; use search_mail and read_mail only on an id it returned.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
 			"id":{"type":"string","description":"message id"}
 		},"required":["id"],"additionalProperties":false}`),

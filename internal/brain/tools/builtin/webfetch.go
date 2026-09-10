@@ -61,6 +61,9 @@ Use to read the content of a specific URL the user gave you or one you
 already know. It is a plain GET — no search, no JavaScript rendering,
 no login. Private and internal addresses are refused.
 
+Do not use this to find a page when you have no URL yet; use
+search_web first and fetch_url on a result.
+
 Arguments:
 - url (string, required): full http:// or https:// URL including
   scheme, e.g. "https://example.com/pricing".

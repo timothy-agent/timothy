@@ -55,6 +55,9 @@ Use when the user asks about something that might be documented in the
 knowledge base (internal docs, reference material, uploaded files)
 rather than general knowledge or long-term memory.
 
+Do not use this to recall the operator's own preferences, conventions,
+or past decisions; use search_memory for those.
+
 Arguments:
 - query (string, required): what to search for.
 - mode (string, optional): "hybrid" (default, vector + keyword),

@@ -92,6 +92,9 @@ the workspace. The command executes with /bin/sh -c, so pipes,
 redirects, and globs work. Every command starts in the workspace root
 — use absolute paths under it or paths relative to it.
 
+Do not use this to create or update a file; use write_file, which is
+the only supported way to write in the workspace.
+
 Arguments:
 - command (string, required): the command line to run, e.g.
   "ls -la reports/" or "grep -rn 'TODO' src/ | head -20".
