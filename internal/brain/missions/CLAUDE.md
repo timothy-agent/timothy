@@ -42,7 +42,11 @@ CLAUDE.md so other work does not pay for it every session.
   shared with memory extraction) is snapshotted into `parent_context`
   at create and rendered into discover/plan/work prompts. Worktree bases
   on the parent branch when reachable, else the repo default. Never
-  reopen a terminal mission.
+  reopen a terminal mission. `followup_mission`/`CreateFollowUp` also
+  accept `attach` (parent workspace files, copied into the child
+  workspace by the provisioner before discover and recorded as "pdf"
+  sources with `MissionID` set) and `brief` (a "brief" source rendered
+  as referenced context).
 - Mission attachments (issue #359): PDF/text converted via markitdown,
   images captioned via the vision route (`chat.CaptionImageOverGateway`),
   audio transcribed via the whisper sidecar, all ONCE at create (prompt-

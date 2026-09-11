@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -127,5 +129,67 @@ func TestFollowUpBaseRefNoPROpenedEventUsesParentBranch(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("resolvePRState called %d times, want 0 with no pr_opened event", calls)
+	}
+}
+
+// TestEnsureProvisionedCopiesCarriedArtifacts proves a "pdf" source
+// entry naming another mission materializes that file into the new
+// mission's workspace before anything drives it.
+func TestEnsureProvisionedCopiesCarriedArtifacts(t *testing.T) {
+	parentWS := t.TempDir()
+	content := "# Ideas\n\nOne good one.\n"
+	writeAttachFile(t, parentWS, "ideas.md", content)
+	writeAttachFile(t, parentWS, "sub/notes.txt", "plain notes\n")
+
+	store := newFakeStore()
+	store.put("parent", Mission{ID: "parent", Kind: "general", Workspace: parentWS})
+	child := Mission{
+		ID: "child", Kind: "general", Goal: "build it", ParentMissionID: "parent",
+		Sources: []SourceEntry{
+			{Source: SourceKindPDF, Name: "ideas.md", MissionID: "parent"},
+			{Source: SourceKindPDF, Name: "sub/notes.txt", MissionID: "parent"},
+		},
+	}
+	store.put("child", child)
+	p := &provisioner{store: store, workspace: NewWorkspace(t.TempDir(), nil, slog.Default()), log: slog.Default()}
+
+	got, err := p.ensureProvisioned(context.Background(), child)
+	if err != nil {
+		t.Fatalf("ensureProvisioned: %v", err)
+	}
+	if got.Workspace == "" {
+		t.Fatal("child mission was not provisioned")
+	}
+	data, err := os.ReadFile(filepath.Join(got.WorkRoot(), "ideas.md"))
+	if err != nil {
+		t.Fatalf("read carried ideas.md: %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("carried ideas.md = %q, want %q", string(data), content)
+	}
+	if _, err := os.Stat(filepath.Join(got.WorkRoot(), "sub", "notes.txt")); err != nil {
+		t.Fatalf("carried sub/notes.txt: %v", err)
+	}
+}
+
+// TestEnsureProvisionedMissingCarriedArtifactFails proves a carried
+// artifact that is gone from the parent's workspace fails provisioning
+// rather than starting a mission without its inputs.
+func TestEnsureProvisionedMissingCarriedArtifactFails(t *testing.T) {
+	store := newFakeStore()
+	store.put("parent", Mission{ID: "parent", Kind: "general", Workspace: t.TempDir()})
+	child := Mission{
+		ID: "child", Kind: "general", Goal: "build it", ParentMissionID: "parent",
+		Sources: []SourceEntry{{Source: SourceKindPDF, Name: "ideas.md", MissionID: "parent"}},
+	}
+	store.put("child", child)
+	p := &provisioner{store: store, workspace: NewWorkspace(t.TempDir(), nil, slog.Default()), log: slog.Default()}
+
+	got, err := p.ensureProvisioned(context.Background(), child)
+	if err == nil {
+		t.Fatal("expected a provisioning error for a missing carried artifact")
+	}
+	if got.Workspace != "" {
+		t.Fatalf("got.Workspace = %q, want empty so a retry re-provisions", got.Workspace)
 	}
 }

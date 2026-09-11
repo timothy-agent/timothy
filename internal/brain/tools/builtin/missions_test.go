@@ -400,11 +400,13 @@ type fakeMissionFollowUpCreator struct {
 	err     error
 	calls   int
 	gotGoal string
+	gotReq  FollowUpRequest
 }
 
-func (f *fakeMissionFollowUpCreator) CreateFollowUpMission(ctx context.Context, parentID, goal string) (string, error) {
+func (f *fakeMissionFollowUpCreator) CreateFollowUpMission(ctx context.Context, parentID string, req FollowUpRequest) (string, error) {
 	f.calls++
-	f.gotGoal = goal
+	f.gotGoal = req.Goal
+	f.gotReq = req
 	if f.err != nil {
 		return "", f.err
 	}
@@ -521,6 +523,49 @@ func TestFollowupMissionHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(out, "m2") || !strings.Contains(out, "m1") {
 		t.Fatalf("out = %q, want it to mention both the new and parent mission ids", out)
+	}
+	brief := creator.gotReq.Brief
+	if len(creator.gotReq.Attach) != 0 || brief.Objective != "" || brief.Scope != "" ||
+		brief.NonGoals != "" || len(brief.AcceptanceCriteria) != 0 || len(brief.References) != 0 {
+		t.Fatalf("goal-only call sent %+v, want empty attach and a zero brief", creator.gotReq)
+	}
+}
+
+// TestFollowupMissionPassesAttachAndBrief proves attach paths and every
+// brief field reach the creator, and the result reports the file count.
+func TestFollowupMissionPassesAttachAndBrief(t *testing.T) {
+	t.Parallel()
+	store := newFakeMissionStore()
+	store.add(terminalMissionRecord())
+	creator := &fakeMissionFollowUpCreator{childID: "m2"}
+	tool := FollowupMission(store, creator)
+	out, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
+		"goal":   "build the ranked idea",
+		"id":     "m1",
+		"attach": []string{"ideas.md", "rules-checklist.md"},
+		"brief": map[string]any{
+			"objective":           "ship the ranked idea",
+			"scope":               "the demo slice",
+			"non_goals":           "no billing",
+			"acceptance_criteria": []string{"demo recorded"},
+			"references":          []string{"ideas.md"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := creator.gotReq
+	if len(got.Attach) != 2 || got.Attach[0] != "ideas.md" || got.Attach[1] != "rules-checklist.md" {
+		t.Fatalf("attach = %+v, want both paths in order", got.Attach)
+	}
+	if got.Brief.Objective != "ship the ranked idea" || got.Brief.Scope != "the demo slice" ||
+		got.Brief.NonGoals != "no billing" || len(got.Brief.AcceptanceCriteria) != 1 ||
+		got.Brief.AcceptanceCriteria[0] != "demo recorded" || len(got.Brief.References) != 1 ||
+		got.Brief.References[0] != "ideas.md" {
+		t.Fatalf("brief = %+v, want every field passed through", got.Brief)
+	}
+	if !strings.Contains(out, "2 attached file(s)") {
+		t.Fatalf("out = %q, want it to report the attached file count", out)
 	}
 }
 

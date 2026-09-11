@@ -688,7 +688,7 @@ export function MissionDetail() {
       {mission.attachments && mission.attachments.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-1.5">
           {mission.attachments.map((a) => (
-            <Badge key={a.id} variant="outline" size="sm">
+            <Badge key={a.id || a.name} variant="outline" size="sm">
               <FileText aria-hidden />
               {a.name ?? a.id.slice(0, 8)}
             </Badge>
