@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -169,6 +170,56 @@ func TestEnsureProvisionedCopiesCarriedArtifacts(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(got.WorkRoot(), "sub", "notes.txt")); err != nil {
 		t.Fatalf("carried sub/notes.txt: %v", err)
+	}
+}
+
+// TestEnsureProvisionedSkipsOwnAttachments proves an ordinary "pdf"
+// attachment (no MissionID) is never treated as a carried file.
+func TestEnsureProvisionedSkipsOwnAttachments(t *testing.T) {
+	store := newFakeStore()
+	child := Mission{
+		ID: "child", Kind: "general", Goal: "build it",
+		Sources: []SourceEntry{{Source: SourceKindPDF, ID: "att-1", Name: "spec.pdf", Markdown: "spec"}},
+	}
+	store.put("child", child)
+	p := &provisioner{store: store, workspace: NewWorkspace(t.TempDir(), nil, slog.Default()), log: slog.Default()}
+
+	got, err := p.ensureProvisioned(context.Background(), child)
+	if err != nil {
+		t.Fatalf("ensureProvisioned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(got.WorkRoot(), "spec.pdf")); !os.IsNotExist(err) {
+		t.Fatalf("spec.pdf stat err = %v, want not-exist: own attachments are never materialized", err)
+	}
+}
+
+// TestEnsureProvisionedCarriedArtifactErrors proves an escaping path or
+// an unknown parent fails provisioning and leaves Workspace empty.
+func TestEnsureProvisionedCarriedArtifactErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		entry   SourceEntry
+		wantErr string
+	}{
+		{"escaping", SourceEntry{Source: SourceKindPDF, Name: "../ideas.md", MissionID: "parent"}, "escapes the workspace"},
+		{"unknown parent", SourceEntry{Source: SourceKindPDF, Name: "ideas.md", MissionID: "ghost"}, "parent mission ghost"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.put("parent", Mission{ID: "parent", Kind: "general", Workspace: t.TempDir()})
+			child := Mission{ID: "child", Kind: "general", Goal: "build it", Sources: []SourceEntry{tc.entry}}
+			store.put("child", child)
+			p := &provisioner{store: store, workspace: NewWorkspace(t.TempDir(), nil, slog.Default()), log: slog.Default()}
+
+			got, err := p.ensureProvisioned(context.Background(), child)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want %q", err, tc.wantErr)
+			}
+			if got.Workspace != "" {
+				t.Fatalf("got.Workspace = %q, want empty", got.Workspace)
+			}
+		})
 	}
 }
 

@@ -271,6 +271,120 @@ func TestCreateFollowUpAttachRejectsBadPaths(t *testing.T) {
 	}
 }
 
+// TestCreateFollowUpRejectsEmptyGoal proves a blank goal is refused
+// before the parent is even looked up.
+func TestCreateFollowUpRejectsEmptyGoal(t *testing.T) {
+	store := newFakeStore()
+	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone})
+	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+
+	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "   "})
+	if err == nil || !strings.Contains(err.Error(), "goal is required") {
+		t.Fatalf("err = %v, want goal is required", err)
+	}
+}
+
+// TestCreateFollowUpAttachNeedsParentWorkspace proves attach is refused
+// when the parent never got a workspace, with no mission created.
+func TestCreateFollowUpAttachNeedsParentWorkspace(t *testing.T) {
+	store := newFakeStore()
+	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone})
+	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+
+	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "build it", Attach: []string{"ideas.md"}})
+	if err == nil || !strings.Contains(err.Error(), "no workspace") {
+		t.Fatalf("err = %v, want a no-workspace error", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.missions) != 1 {
+		t.Fatalf("store holds %d missions, want only the parent", len(store.missions))
+	}
+}
+
+// TestCreateFollowUpAttachRejectsSymlinkEscape proves a symlink inside
+// the parent workspace pointing outside it is refused as an escape,
+// not read.
+func TestCreateFollowUpAttachRejectsSymlinkEscape(t *testing.T) {
+	ws := t.TempDir()
+	outside := t.TempDir()
+	writeAttachFile(t, outside, "secret.md", "secret\n")
+	if err := os.Symlink(filepath.Join(outside, "secret.md"), filepath.Join(ws, "link.md")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	store := newFakeStore()
+	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone, Workspace: ws})
+	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+
+	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "build it", Attach: []string{"link.md"}})
+	if err == nil || !strings.Contains(err.Error(), "outside the parent mission's workspace") {
+		t.Fatalf("err = %v, want an outside-workspace error", err)
+	}
+}
+
+// TestCreateFollowUpAttachBinaryFile proves a non-text file is carried
+// with no markdown and an octet-stream mime, so it copies but never
+// renders into a prompt.
+func TestCreateFollowUpAttachBinaryFile(t *testing.T) {
+	ws := t.TempDir()
+	writeAttachFile(t, ws, "blob.bin", "\x00\x01\x02binary")
+	store := newFakeStore()
+	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone, Workspace: ws})
+	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+
+	id, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "build it", Attach: []string{"blob.bin"}})
+	if err != nil {
+		t.Fatalf("CreateFollowUp: %v", err)
+	}
+	child, _ := store.Get(context.Background(), id)
+	got := child.Attachments()
+	if len(got) != 1 || got[0].Markdown != "" || got[0].Mime != "application/octet-stream" {
+		t.Fatalf("attachments = %+v, want one octet-stream entry with no markdown", got)
+	}
+}
+
+// TestCreateFollowUpAttachRejectsOversizeFile proves a file over
+// maxFollowUpAttachmentBytes is refused with no mission created.
+func TestCreateFollowUpAttachRejectsOversizeFile(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "big.md"), make([]byte, maxFollowUpAttachmentBytes+1), 0o600); err != nil {
+		t.Fatalf("write big.md: %v", err)
+	}
+	store := newFakeStore()
+	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone, Workspace: ws})
+	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+
+	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "build it", Attach: []string{"big.md"}})
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("err = %v, want an oversize error", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.missions) != 1 {
+		t.Fatalf("store holds %d missions, want only the parent", len(store.missions))
+	}
+}
+
+// TestBriefRenderSkipsBlankItems proves blank list entries and fields
+// render nothing, and a brief of only blanks counts as zero.
+func TestBriefRenderSkipsBlankItems(t *testing.T) {
+	blank := Brief{Objective: "  ", AcceptanceCriteria: []string{" ", ""}, References: []string{""}}
+	if !blank.IsZero() {
+		t.Fatalf("Brief with only blanks should be zero: %+v", blank)
+	}
+	if got := blank.Render(); got != "" {
+		t.Fatalf("Render() = %q, want empty", got)
+	}
+	partial := Brief{Objective: "ship", AcceptanceCriteria: []string{" ", "tests pass"}}
+	if partial.IsZero() {
+		t.Fatal("Brief with an objective should not be zero")
+	}
+	got := partial.Render()
+	if got != "Objective: ship\nAcceptance criteria:\n- tests pass" {
+		t.Fatalf("Render() = %q", got)
+	}
+}
+
 // writeAttachFile writes rel under root, creating parent directories.
 func writeAttachFile(t *testing.T, root, rel, content string) {
 	t.Helper()

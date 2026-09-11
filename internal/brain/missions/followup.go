@@ -31,10 +31,9 @@ type Brief struct {
 	References         []string
 }
 
-// IsZero reports whether every brief field is empty.
+// IsZero reports whether the brief renders nothing: every field blank.
 func (b Brief) IsZero() bool {
-	return strings.TrimSpace(b.Objective) == "" && strings.TrimSpace(b.Scope) == "" &&
-		strings.TrimSpace(b.NonGoals) == "" && len(b.AcceptanceCriteria) == 0 && len(b.References) == 0
+	return b.Render() == ""
 }
 
 // Render formats the brief as prompt text, skipping empty fields.

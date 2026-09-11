@@ -417,6 +417,22 @@ func terminalMissionRecord() MissionRecord {
 	return MissionRecord{ID: "m1", Name: "Fix login bug", Goal: "fix the login bug", Phase: "done"}
 }
 
+// TestFollowupMissionInvalidArguments proves malformed JSON (a brief
+// that is not an object) is rejected before touching the store.
+func TestFollowupMissionInvalidArguments(t *testing.T) {
+	t.Parallel()
+	store := newFakeMissionStore()
+	creator := &fakeMissionFollowUpCreator{}
+	tool := FollowupMission(store, creator)
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"goal":"x","id":"m1","brief":"not an object"}`))
+	if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
+		t.Fatalf("err = %v, want invalid arguments", err)
+	}
+	if creator.calls != 0 {
+		t.Fatalf("creator called %d times, want 0", creator.calls)
+	}
+}
+
 // TestFollowupMissionRequiresGoal proves a missing goal is rejected
 // before touching the store at all.
 func TestFollowupMissionRequiresGoal(t *testing.T) {
