@@ -24,6 +24,11 @@ import (
 
 const migrateRetryDelay = 5 * time.Second
 
+// Version is the release this binary was built from, set at link time
+// by deploy/Dockerfile with -ldflags "-X ...service.Version=<tag>".
+// Local builds leave it empty; /health then omits the field.
+var Version string
+
 // App is a bootstrapped service. Register routes on Server, then Run.
 type App struct {
 	Config  config.Service
@@ -97,7 +102,7 @@ func (a *App) health() httpserver.Health {
 			status = "degraded"
 		}
 	}
-	return httpserver.Health{Status: status, Checks: checks}
+	return httpserver.Health{Status: status, Version: Version, Checks: checks}
 }
 
 func (a *App) migrationsCheck() httpserver.Check {

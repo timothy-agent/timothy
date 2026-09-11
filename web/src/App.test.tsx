@@ -140,3 +140,52 @@ describe('API token dialog', () => {
     expect(screen.getByText(/not an LLM provider API key/)).toBeTruthy()
   })
 })
+
+// The footer's version comes from brain's /health, not the constant
+// Vite baked in: release.yml copies an unchanged web image forward, so
+// the baked string goes stale while the backend moves to a new tag.
+describe('Footer version', () => {
+  it('shows the version reported by /health', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        if (String(input) === '/health') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ status: 'ok', version: '9.9.9-from-brain' }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            }),
+          )
+        }
+        return Promise.reject(new Error('no network in tests'))
+      }),
+    )
+    renderAt('/')
+    expect(await screen.findByText(`v9.9.9-from-brain (${__GIT_SHA__})`)).toBeTruthy()
+  })
+
+  it('falls back to the baked version when /health fails', async () => {
+    renderAt('/')
+    expect(await screen.findByText(`v${__APP_VERSION__} (${__GIT_SHA__})`)).toBeTruthy()
+  })
+
+  it('falls back to the baked version while the fetch is in flight', () => {
+    vi.stubGlobal('fetch', vi.fn().mockReturnValue(new Promise(() => {})))
+    renderAt('/')
+    expect(screen.getByText(`v${__APP_VERSION__} (${__GIT_SHA__})`)).toBeTruthy()
+  })
+
+  it('falls back to the baked version when /health reports no version', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ status: 'ok' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    )
+    renderAt('/')
+    expect(await screen.findByText(`v${__APP_VERSION__} (${__GIT_SHA__})`)).toBeTruthy()
+  })
+})

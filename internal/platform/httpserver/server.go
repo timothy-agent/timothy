@@ -28,10 +28,12 @@ type Check struct {
 
 // Health is the /health response body. Status is "ok" or "degraded";
 // the endpoint always answers 200 — it reports liveness, and a
-// degraded service is alive by design.
+// degraded service is alive by design. Version is the release the
+// running binary was built from, empty on a build with none baked in.
 type Health struct {
-	Status string           `json:"status"`
-	Checks map[string]Check `json:"checks,omitempty"`
+	Status  string           `json:"status"`
+	Version string           `json:"version,omitempty"`
+	Checks  map[string]Check `json:"checks,omitempty"`
 }
 
 // HealthFunc supplies the current health snapshot.

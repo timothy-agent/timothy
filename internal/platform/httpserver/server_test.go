@@ -56,6 +56,46 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+// TestHealthVersion: the version a service reports rides in the health
+// body, and an empty one (a local build with none baked in) is omitted
+// rather than rendered as an empty string.
+func TestHealthVersion(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		version   string
+		wantField bool
+	}{
+		{"baked version", "0.1.0-alpha.84", true},
+		{"local build", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestServer(func() Health {
+				return Health{Status: "ok", Version: tc.version}
+			})
+
+			rec := httptest.NewRecorder()
+			s.srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			var h Health
+			if err := json.Unmarshal(rec.Body.Bytes(), &h); err != nil {
+				t.Fatalf("body not JSON: %v", err)
+			}
+			if h.Version != tc.version {
+				t.Fatalf("version = %q, want %q", h.Version, tc.version)
+			}
+			if got := strings.Contains(rec.Body.String(), `"version"`); got != tc.wantField {
+				t.Fatalf("body %s: version field present = %v, want %v", rec.Body.String(), got, tc.wantField)
+			}
+		})
+	}
+}
+
 func TestMetricsEndpoint(t *testing.T) {
 	t.Parallel()
 	s := newTestServer(func() Health { return Health{Status: "ok"} })

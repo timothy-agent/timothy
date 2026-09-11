@@ -11,9 +11,16 @@ COPY internal/ internal/
 COPY migrations/ migrations/
 
 ARG SERVICE
+# APP_VERSION is baked into the binary so /health reports the release
+# it was built from. The web footer reads that, instead of a version
+# baked into a web image release.yml may have copied forward unchanged.
+# Unset (local `make build`) links an empty string, which /health omits.
+ARG APP_VERSION
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -trimpath -o /out/app ./cmd/${SERVICE}
+    CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-X github.com/SumonMSelim/timothy/internal/platform/service.Version=${APP_VERSION}" \
+    -o /out/app ./cmd/${SERVICE}
 
 # Brain's shell tool needs /bin/sh; alpine provides busybox sh while
 # staying minimal. Select with build target runtime-shell. Everything
