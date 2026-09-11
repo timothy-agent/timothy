@@ -99,12 +99,36 @@ export function ToolCallCard({
   )
 }
 
+// StepNotes lists a turn's narration lines, the text the model emitted
+// before each tool call, as muted rows above the tool calls.
+function StepNotes({ notes }: { notes: string[] }) {
+  return (
+    <div className="space-y-0.5 py-1" data-testid="step-notes">
+      {notes.map((note, i) => (
+        <p key={i} className="text-sm text-muted-foreground">
+          {note}
+        </p>
+      ))}
+    </div>
+  )
+}
+
 // ToolCallGroup folds several tool calls into one group row (14.5); a
 // single call renders as a plain ToolCallCard with no group chrome,
 // wrapped in the same recess TraceGroup applies so single and
-// multiple calls sit at identical indentation.
-export function ToolCallGroup({ runs, defaultOpen = false }: { runs: ToolRun[]; defaultOpen?: boolean }) {
-  if (runs.length === 1)
+// multiple calls sit at identical indentation. Step notes, when the
+// turn has them, sit at the top of the expanded panel.
+export function ToolCallGroup({
+  runs,
+  stepNotes,
+  defaultOpen = false,
+}: {
+  runs: ToolRun[]
+  stepNotes?: string[]
+  defaultOpen?: boolean
+}) {
+  const notes = stepNotes && stepNotes.length > 0 ? stepNotes : undefined
+  if (runs.length === 1 && !notes)
     return (
       <div className="ml-1 border-l-2 border-border pl-3">
         <ToolCallCard run={runs[0]} defaultOpen={defaultOpen} />
@@ -112,12 +136,14 @@ export function ToolCallGroup({ runs, defaultOpen = false }: { runs: ToolRun[]; 
     )
 
   const anyRunning = runs.some((r) => r.status === 'running')
+  const summary = runs.length === 1 ? '1 tool call' : `${runs.length} tool calls`
   return (
     <TraceGroup
-      summary={`${runs.length} tool calls`}
+      summary={summary}
       duration={formatDuration(totalDuration(runs))}
       defaultOpen={defaultOpen || anyRunning}
     >
+      {notes && <StepNotes notes={notes} />}
       {runs.map((run) => (
         <ToolCallCard key={run.id} run={run} />
       ))}

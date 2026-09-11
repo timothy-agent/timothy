@@ -15,6 +15,14 @@ export interface ToolRun {
 
 export interface AssistantState {
   text: string
+  // stepNotes are the turn's earlier agent-loop text segments (the
+  // short narration lines before each tool call); `text` holds only
+  // the final segment, the answer.
+  stepNotes?: string[]
+  // sawTool marks a tool event landed since the last text chunk.
+  // Mirrors brain's segment rule: the next chunk after a tool event,
+  // with text already present, opens a new agent-loop segment.
+  sawTool?: boolean
   reasoning: string
   notices: string[]
   tools: ToolRun[]
@@ -45,14 +53,26 @@ export function emptyAssistant(): AssistantState {
 // applyEvent folds one SSE event into the assistant message state.
 export function applyEvent(msg: AssistantState, ev: ChatEvent): AssistantState {
   switch (ev.type) {
-    case 'chunk':
-      return { ...msg, text: msg.text + (ev.text ?? '') }
+    case 'chunk': {
+      // A chunk arriving after a tool event, with text already in
+      // hand, closes the previous segment: it becomes a step note and
+      // text restarts from this chunk. Brain persists the same split.
+      if (msg.sawTool && msg.text !== '')
+        return {
+          ...msg,
+          stepNotes: [...(msg.stepNotes ?? []), msg.text],
+          text: ev.text ?? '',
+          sawTool: false,
+        }
+      return { ...msg, text: msg.text + (ev.text ?? ''), sawTool: false }
+    }
     case 'reasoning_chunk':
       return { ...msg, reasoning: msg.reasoning + (ev.text ?? '') }
     case 'tool_start': {
       if (!ev.tool_call) return msg
       return {
         ...msg,
+        sawTool: true,
         tools: [...msg.tools, { id: ev.tool_call.id, name: ev.tool_call.name, status: 'running' }],
       }
     }
@@ -61,6 +81,7 @@ export function applyEvent(msg: AssistantState, ev: ChatEvent): AssistantState {
       const { id, input } = ev.tool_call
       return {
         ...msg,
+        sawTool: true,
         tools: msg.tools.map((t) =>
           t.id === id ? { ...t, args: input === undefined ? t.args : JSON.stringify(input) } : t,
         ),
@@ -71,6 +92,7 @@ export function applyEvent(msg: AssistantState, ev: ChatEvent): AssistantState {
       const r = ev.tool_result
       return {
         ...msg,
+        sawTool: true,
         tools: msg.tools.map((t) =>
           t.id === r.id
             ? { ...t, status: r.status, digest: r.digest, durationMs: r.duration_ms }

@@ -65,6 +65,105 @@ describe('fromTranscript', () => {
     expect(items[0]).toMatchObject({ role: 'assistant', text: 'part one\n\npart two' })
   })
 
+  it('splits text blocks into step notes and a message when the turn ran tools', () => {
+    const items = fromTranscript([
+      { seq: 1, kind: 'tool', tool: { call_id: 'c1', name: 'load_skill', status: 'ok' }, created_at: at },
+      { seq: 2, kind: 'tool', tool: { call_id: 'c2', name: 'search_kb', status: 'ok' }, created_at: at },
+      {
+        seq: 3,
+        kind: 'assistant',
+        blocks: [
+          { type: 'text', text: 'Checking your notes for tone.' },
+          { type: 'text', text: 'Loading the writing skill.' },
+          { type: 'text', text: 'Reading your samples.' },
+          { type: 'text', text: 'Here is the answer.' },
+        ],
+        created_at: at,
+      },
+    ])
+    expect(items).toHaveLength(1)
+    if (items[0].role !== 'assistant') throw new Error('expected assistant')
+    expect(items[0].stepNotes).toEqual([
+      'Checking your notes for tone.',
+      'Loading the writing skill.',
+      'Reading your samples.',
+    ])
+    expect(items[0].text).toBe('Here is the answer.')
+  })
+
+  it('leaves a single text block alone even when the turn ran tools', () => {
+    const items = fromTranscript([
+      { seq: 1, kind: 'tool', tool: { call_id: 'c1', name: 'shell', status: 'ok' }, created_at: at },
+      { seq: 2, kind: 'assistant', blocks: [{ type: 'text', text: 'just the answer' }], created_at: at },
+    ])
+    if (items[0].role !== 'assistant') throw new Error('expected assistant')
+    expect(items[0].stepNotes).toBeUndefined()
+    expect(items[0].text).toBe('just the answer')
+  })
+
+  it('leaves multiple text blocks joined when the turn ran no tools', () => {
+    const items = fromTranscript([
+      {
+        seq: 1,
+        kind: 'assistant',
+        blocks: [
+          { type: 'text', text: 'part one' },
+          { type: 'text', text: 'part two' },
+        ],
+        created_at: at,
+      },
+    ])
+    if (items[0].role !== 'assistant') throw new Error('expected assistant')
+    expect(items[0].stepNotes).toBeUndefined()
+    expect(items[0].text).toBe('part one\n\npart two')
+  })
+
+  it('skips empty text blocks so they never become step notes', () => {
+    const items = fromTranscript([
+      { seq: 1, kind: 'tool', tool: { call_id: 'c1', name: 'shell', status: 'ok' }, created_at: at },
+      {
+        seq: 2,
+        kind: 'assistant',
+        blocks: [
+          { type: 'text' },
+          { type: 'text', text: 'Looking that up.' },
+          { type: 'text' },
+          { type: 'text', text: 'Found it.' },
+        ],
+        created_at: at,
+      },
+    ])
+    if (items[0].role !== 'assistant') throw new Error('expected assistant')
+    expect(items[0].stepNotes).toEqual(['Looking that up.'])
+    expect(items[0].text).toBe('Found it.')
+  })
+
+  it('splits live step notes the same way the replay projection does', () => {
+    const events: ChatEvent[] = [
+      { type: 'chunk', text: 'Checking your notes for tone.' },
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'search_kb' } },
+      { type: 'tool_result', tool_result: { id: 'c1', name: 'search_kb', status: 'ok', duration_ms: 5 } },
+      { type: 'chunk', text: 'Loading the writing skill.' },
+      { type: 'tool_start', tool_call: { id: 'c2', name: 'load_skill' } },
+      { type: 'tool_result', tool_result: { id: 'c2', name: 'load_skill', status: 'ok', duration_ms: 5 } },
+      { type: 'chunk', text: 'Here is ' },
+      { type: 'chunk', text: 'the answer.' },
+    ]
+    const live = events.reduce(applyEvent, emptyAssistant())
+    expect(live.stepNotes).toEqual(['Checking your notes for tone.', 'Loading the writing skill.'])
+    expect(live.text).toBe('Here is the answer.')
+  })
+
+  it('keeps live text whole when no tool runs between chunks', () => {
+    const events: ChatEvent[] = [
+      { type: 'chunk', text: 'part ' },
+      { type: 'chunk', text: 'one' },
+    ]
+    const live = events.reduce(applyEvent, emptyAssistant())
+    expect(live.stepNotes).toBeUndefined()
+    expect(live.text).toBe('part one')
+  })
+
   it('replays a media block into the assistant item', () => {
     const items = fromTranscript([
       {
