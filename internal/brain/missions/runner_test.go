@@ -2964,6 +2964,50 @@ func TestRunWorkerOffersKBSearch(t *testing.T) {
 	})
 }
 
+// TestRunnerKBSearchBoostsWritingSamplesCollection pins the mission
+// search_kb boost: nil with no writing resolver wired, the operator's
+// writing-samples collection when one is configured.
+func TestRunnerKBSearchBoostsWritingSamplesCollection(t *testing.T) {
+	run := func(t *testing.T, writing func(context.Context) (string, string)) []string {
+		t.Helper()
+		var gotBoost []string
+		r := newTestRunner(&scriptedAgent{})
+		r.kbSearch = func(_ context.Context, _ string, boost []string, _ string, _ int) ([]builtin.KBSearchHit, error) {
+			gotBoost = boost
+			return nil, nil
+		}
+		r.writing = writing
+		tool := r.kbSearchTool(Mission{ID: "m1"}, nil)
+		if tool == nil {
+			t.Fatal("kbSearchTool returned nil with a backend wired")
+		}
+		if _, err := tool.Execute(context.Background(), []byte(`{"query":"x"}`)); err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return gotBoost
+	}
+
+	t.Run("unwired", func(t *testing.T) {
+		if got := run(t, nil); got != nil {
+			t.Fatalf("boost = %v, want nil", got)
+		}
+	})
+
+	t.Run("no collection configured", func(t *testing.T) {
+		got := run(t, func(context.Context) (string, string) { return "Short sentences.", "" })
+		if got != nil {
+			t.Fatalf("boost = %v, want nil", got)
+		}
+	})
+
+	t.Run("collection configured", func(t *testing.T) {
+		got := run(t, func(context.Context) (string, string) { return "", "my-writing" })
+		if !slices.Equal(got, []string{"my-writing"}) {
+			t.Fatalf("boost = %v, want [my-writing]", got)
+		}
+	})
+}
+
 // fakeProgressReader is a ProgressReader backed by an in-memory slice,
 // mutable between polls so tests can simulate a note posted mid-turn.
 type fakeProgressReader struct {

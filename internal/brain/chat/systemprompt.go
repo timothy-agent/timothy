@@ -1,9 +1,13 @@
 package chat
 
-import "time"
+import (
+	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
+)
 
 // systemPromptVersion increments with any change to the prompt text.
-const systemPromptVersion = 7
+const systemPromptVersion = 8
 
 // systemPrompt is Timothy's identity. Additions APPEND after the
 // existing text and the terseness steer stays the LAST line: the
@@ -33,8 +37,11 @@ const systemPromptClose = `Be concise; do not restate context or repeat the ques
 const timezoneSteer = " Present all dates and times in this timezone unless the user asks otherwise."
 
 // assembleSystem builds the full system prompt: identity, then the
-// optional per-deploy skills index, then a current-date line, then the
-// closing steer. now must be evaluated at request time (never cached
+// optional operator writing-style block, then the optional per-deploy
+// skills index, then a current-date line, then the closing steer. The
+// writing-style block is operator-edited and stable between edits, so
+// it belongs in the cacheable prefix (D-018). now must be evaluated at
+// request time (never cached
 // at construction) so the date line is fresh every turn — a model
 // with no other way to know "today" otherwise anchors on training
 // data and mangles date-bounded tool calls (e.g. Gmail after:/before:
@@ -42,13 +49,17 @@ const timezoneSteer = " Present all dates and times in this timezone unless the 
 // provider prompt cache's tail every single request, where a date
 // busts it once per day (D-018), acceptable. loc is the operator's
 // configured timezone; nil renders in UTC.
-func assembleSystem(skillsIndex string, now time.Time, loc *time.Location) string {
+func assembleSystem(skillsIndex, style string, samples bool, now time.Time, loc *time.Location) string {
 	if loc == nil {
 		loc = time.UTC
 	}
 	dateLine := "Today is " + now.In(loc).Format("Monday, 2006-01-02 (MST).") + timezoneSteer
-	if skillsIndex == "" {
-		return systemPrompt + "\n\n" + dateLine + "\n\n" + systemPromptClose
+	out := systemPrompt
+	if block := missions.WritingStyleBlock(style, samples); block != "" {
+		out += "\n\n" + block
 	}
-	return systemPrompt + "\n\n" + skillsIndex + "\n\n" + dateLine + "\n\n" + systemPromptClose
+	if skillsIndex != "" {
+		out += "\n\n" + skillsIndex
+	}
+	return out + "\n\n" + dateLine + "\n\n" + systemPromptClose
 }

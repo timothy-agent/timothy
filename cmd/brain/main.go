@@ -518,6 +518,7 @@ func main() {
 	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
 		flags.Location, agentReg.ResolveByID, app.Log)
+	svc.SetWriting(writingSettings(flags))
 	svc.SetAgentResolverByName(agentReg.Resolve)
 	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
 	svc.SetSensitiveTools(sensitiveTools)
@@ -869,6 +870,14 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 	return mgr, goog, msft, markItDownURL
 }
 
+// writingSettings curries the operator's writing-style settings into
+// the one closure chat and the mission harness both take.
+func writingSettings(flags *settings.Store) func(context.Context) (string, string) {
+	return func(ctx context.Context) (string, string) {
+		return flags.WritingStyle(ctx), flags.WritingSamplesCollection(ctx)
+	}
+}
+
 // buildDestinations wires the destinations control plane (store +
 // adapters + Deliverer). missionStore nil (WORKSPACES unset) disables
 // it entirely: delivery has no meaning without missions. conns/goog
@@ -1174,6 +1183,10 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		return skills.Index(skills.Allowed(packs, a.Skills))
 	}
 	driver.SetSkillsIndex(missionSkillsIndex)
+	// Same operator writing-style settings chat turns get: the style
+	// text rides worker packets, the samples collection boosts search_kb.
+	driver.SetWriting(writingSettings(flags))
+	nativeRunner.SetWriting(writingSettings(flags))
 	// Issue #628: discover and plan get the same index, so a skill that
 	// defines the mission's output shape is loadable before the plan is
 	// committed rather than first seen in build.

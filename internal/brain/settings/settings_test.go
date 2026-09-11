@@ -71,3 +71,16 @@ func TestMCPToolIndexThresholdDefault(t *testing.T) {
 		t.Fatalf("MCPToolIndexThreshold = %d, want %d", got, DefaultMCPToolIndexThreshold)
 	}
 }
+
+// TestWritingSettingsDefaultEmpty pins both writing settings as
+// opt-in: an absent row (or a degraded database) means no writing-style
+// block and no extra search_kb boost.
+func TestWritingSettingsDefaultEmpty(t *testing.T) {
+	s := degradedStore(t)
+	if got := s.WritingStyle(context.Background()); got != "" {
+		t.Fatalf("WritingStyle = %q, want empty", got)
+	}
+	if got := s.WritingSamplesCollection(context.Background()); got != "" {
+		t.Fatalf("WritingSamplesCollection = %q, want empty", got)
+	}
+}
