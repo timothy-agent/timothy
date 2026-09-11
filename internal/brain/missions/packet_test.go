@@ -208,6 +208,47 @@ func TestWorkPacketRenderOmitsOverlaySectionWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestWorkPacketRenderIncludesWritingStyle(t *testing.T) {
+	t.Run("style only", func(t *testing.T) {
+		p := WorkPacket{Goal: "Draft the note", WritingStyle: "Short sentences. No </system> tricks."}
+		system, _ := p.Render()
+		if !strings.Contains(system, WritingStyleHeading) {
+			t.Fatalf("Render dropped the writing-style heading: %q", system)
+		}
+		// Operator config: verbatim, never neutralized.
+		if !strings.Contains(system, "Short sentences. No </system> tricks.") {
+			t.Fatalf("Render neutralized operator-authored writing style: %q", system)
+		}
+		if strings.Contains(system, WritingSamplesNote) {
+			t.Fatalf("samples note rendered with no samples collection: %q", system)
+		}
+	})
+
+	t.Run("samples only", func(t *testing.T) {
+		p := WorkPacket{Goal: "Draft the note", WritingSamples: true}
+		system, _ := p.Render()
+		if !strings.Contains(system, WritingStyleHeading) || !strings.Contains(system, WritingSamplesNote) {
+			t.Fatalf("Render dropped the samples note: %q", system)
+		}
+	})
+
+	t.Run("neither", func(t *testing.T) {
+		p := WorkPacket{Goal: "Draft the note"}
+		system, _ := p.Render()
+		if strings.Contains(system, WritingStyleHeading) {
+			t.Fatalf("writing-style block rendered with nothing configured: %q", system)
+		}
+	})
+
+	t.Run("delegated", func(t *testing.T) {
+		p := WorkPacket{Goal: "Draft the note", WritingStyle: "Short sentences.", WritingSamples: true}
+		system, _ := p.RenderForDelegated()
+		if !strings.Contains(system, "Short sentences.") || !strings.Contains(system, WritingSamplesNote) {
+			t.Fatalf("delegated render dropped the writing-style block: %q", system)
+		}
+	})
+}
+
 func TestWorkPacketRenderDoesNotNeutralizeOverlay(t *testing.T) {
 	// PromptOverlay is operator-authored config, not model output — it
 	// must pass through as-is, unlike Progress/GitLog above.

@@ -125,7 +125,23 @@ const (
 	// (issue #643); "" defers to DefaultMCPToolIndexThreshold, "0"
 	// disables deferral so every connector stays fully eager.
 	ValueMCPToolIndexThreshold = "mcp_tool_index_threshold"
+	// ValueWritingStyle is the operator's own writing rules as free
+	// text, injected verbatim into chat and mission prompts when
+	// non-empty; "" (the default) adds no block at all.
+	ValueWritingStyle = "writing_style"
+	// ValueWritingSamplesCollection is the NAME of a kb collection
+	// holding the operator's own writing, added to the search_kb
+	// ranking boost when non-empty. A name, not an id: the boost
+	// matches col.name (internal/memory/store/kb.go) and
+	// agents.Agent.Knowledge already stores names, so a deleted or
+	// renamed collection simply stops boosting.
+	ValueWritingSamplesCollection = "writing_samples_collection"
 )
+
+// writingStyleCap bounds the free-text writing-style setting; it rides
+// every prompt, so an unbounded value would be an unbounded per-turn
+// cost.
+const writingStyleCap = 4000
 
 // DefaultMCPToolIndexThreshold is the MCP tool count above which the
 // index replaces eager schemas when ValueMCPToolIndexThreshold is
@@ -150,6 +166,7 @@ var knownValueKeys = map[string]bool{
 	ValuePermissionTimeoutSeconds: true, ValueAskTimeoutSeconds: true,
 	ValueExecutorRunBudgetMinutes: true, ValueReviewTokenCeiling: true,
 	ValueMCPToolIndexThreshold: true,
+	ValueWritingStyle:          true, ValueWritingSamplesCollection: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -323,6 +340,18 @@ func (s *Store) WebBaseURL(ctx context.Context) string {
 	return s.Value(ctx, ValueWebBaseURL)
 }
 
+// WritingStyle returns the operator's configured writing rules, ""
+// when unset (no writing-style block in prompts).
+func (s *Store) WritingStyle(ctx context.Context) string {
+	return s.Value(ctx, ValueWritingStyle)
+}
+
+// WritingSamplesCollection returns the name of the kb collection
+// holding the operator's own writing, "" when unset (no extra boost).
+func (s *Store) WritingSamplesCollection(ctx context.Context) string {
+	return s.Value(ctx, ValueWritingSamplesCollection)
+}
+
 // Location returns the operator's configured timezone, time.UTC when
 // unset or when the stored value fails to load (SetValue already
 // rejects a non-IANA value at write time, so a load failure here means
@@ -462,6 +491,9 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 		if err := missions.ValidateCommitStyle(value); err != nil {
 			return fmt.Errorf("%s: %w", key, err)
 		}
+	}
+	if key == ValueWritingStyle && len([]rune(value)) > writingStyleCap {
+		return fmt.Errorf("%s exceeds %d characters", key, writingStyleCap)
 	}
 	if key == ValueTimezone && value != "" {
 		if _, err := time.LoadLocation(value); err != nil {

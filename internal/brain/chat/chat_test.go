@@ -19,6 +19,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -1114,6 +1115,55 @@ func TestKBToolsUnionDedupesAgentAndSessionCollections(t *testing.T) {
 	}
 }
 
+// TestKBToolsUnionIncludesWritingSamplesCollection pins that the
+// operator's configured writing-samples collection joins the boost and
+// dedupes against the agent's and session's own names.
+func TestKBToolsUnionIncludesWritingSamplesCollection(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{events: okEvents("ok")}
+	log := newFakeLog()
+	log.knowledge["s1"] = []string{"b"}
+	resolver := func(context.Context, string) (agents.Agent, bool) {
+		return agents.Agent{Memory: true, Knowledge: []string{"a"}}, true
+	}
+	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
+	s.SetWriting(func(context.Context) (string, string) { return "Short sentences.", "b" })
+
+	var gotBoost []string
+	s.SetKBSearch(func(_ context.Context, _ string, boost []string, _ string, _ int) ([]builtin.KBSearchHit, error) {
+		gotBoost = boost
+		return nil, nil
+	})
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hi"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	var tool *tools.Tool
+	for _, et := range chatRequest(t, gw).ExtraTools {
+		if et.Name == "search_kb" {
+			tool = et
+		}
+	}
+	if tool == nil {
+		t.Fatalf("search_kb not offered, extra tools = %v", extraToolNames(chatRequest(t, gw)))
+	}
+	if _, err := tool.Execute(t.Context(), []byte(`{"query":"x"}`)); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	sort.Strings(gotBoost)
+	if !slices.Equal(gotBoost, []string{"a", "b"}) {
+		t.Fatalf("bound boost collections = %v, want [a b] (settings name deduped)", gotBoost)
+	}
+
+	sys := chatRequest(t, gw).System
+	if !strings.Contains(sys, "Short sentences.") || !strings.Contains(sys, missions.WritingSamplesNote) {
+		t.Fatalf("writing-style block missing from system prompt:\n%s", sys)
+	}
+}
+
 // TestKBToolsFallBackOnSessionKnowledgeLookupFailure pins the
 // best-effort contract: s.log.Knowledge erroring must not kill the
 // turn. search_kb still gets offered from the agent's own Knowledge
@@ -1663,7 +1713,7 @@ func TestMemoryRetrieveEmptyLeavesSystemUntouched(t *testing.T) {
 	drain(t, ch)
 
 	got := chatRequest(t, gw).System
-	want := assembleSystem(skills.Index(svc.allowedPacks(t.Context(), agents.Agent{Memory: true})), time.Now(), nil)
+	want := assembleSystem(skills.Index(svc.allowedPacks(t.Context(), agents.Agent{Memory: true})), "", false, time.Now(), nil)
 	if got != want {
 		t.Fatalf("system modified on empty recall:\n%q\nvs\n%q", got, want)
 	}

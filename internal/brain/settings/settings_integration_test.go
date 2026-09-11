@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,6 +189,42 @@ func TestRuntimeValueSettings(t *testing.T) {
 	}
 	if err := s.SetValue(ctx, ValueReviewTokenCeiling, ""); err != nil {
 		t.Fatalf("clear review token ceiling: %v", err)
+	}
+
+	// Writing settings: free text with a length cap, and a collection
+	// name with no validation at all.
+	if got := s.WritingStyle(ctx); got != "" {
+		t.Fatalf("WritingStyle default = %q, want empty", got)
+	}
+	if got := s.WritingSamplesCollection(ctx); got != "" {
+		t.Fatalf("WritingSamplesCollection default = %q, want empty", got)
+	}
+	if err := s.SetValue(ctx, ValueWritingStyle, strings.Repeat("x", writingStyleCap+1)); err == nil {
+		t.Fatal("over-cap writing style accepted")
+	}
+	if err := s.SetValue(ctx, ValueWritingStyle, "Short sentences. No em dashes."); err != nil {
+		t.Fatalf("SetValue writing style: %v", err)
+	}
+	if got := s.WritingStyle(ctx); got != "Short sentences. No em dashes." {
+		t.Fatalf("WritingStyle = %q", got)
+	}
+	if err := s.SetValue(ctx, ValueWritingStyle, ""); err != nil {
+		t.Fatalf("clear writing style: %v", err)
+	}
+	if got := s.WritingStyle(ctx); got != "" {
+		t.Fatalf("WritingStyle after clear = %q, want empty", got)
+	}
+	if err := s.SetValue(ctx, ValueWritingSamplesCollection, "my writing"); err != nil {
+		t.Fatalf("SetValue writing samples collection: %v", err)
+	}
+	if got := s.WritingSamplesCollection(ctx); got != "my writing" {
+		t.Fatalf("WritingSamplesCollection = %q", got)
+	}
+	if err := s.SetValue(ctx, ValueWritingSamplesCollection, ""); err != nil {
+		t.Fatalf("clear writing samples collection: %v", err)
+	}
+	if got := s.WritingSamplesCollection(ctx); got != "" {
+		t.Fatalf("WritingSamplesCollection after clear = %q, want empty", got)
 	}
 
 	if err := s.SetValue(ctx, ValueTokenBudget, "120000"); err != nil {

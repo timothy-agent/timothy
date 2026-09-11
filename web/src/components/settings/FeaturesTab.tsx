@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { ChevronDownIcon } from 'lucide-react'
 import { toast } from 'sonner'
-import { getSettings, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
-import type { AdminRoute } from '../../api/types'
+import { getSettings, listKbCollections, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
+import type { AdminRoute, KbCollection } from '../../api/types'
 import { CURRENCIES } from '../../lib/currencies'
 import { getNotificationSoundEnabled, setNotificationSoundEnabled } from '../../lib/sound'
 import { Button } from '../ui/button'
@@ -10,6 +10,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Input } from '../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { Textarea } from '../ui/textarea'
 import { Alert, AlertDescription } from '../ui/alert'
 import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
@@ -121,6 +122,7 @@ export function FeaturesTab() {
         {values && <SensitiveRouteCard values={values} onSaved={refresh} />}
         {values && <TimezoneCard values={values} onSaved={refresh} />}
         {values && <PlainValueCards values={values} onSaved={refresh} />}
+        {values && <WritingSamplesCard values={values} onSaved={refresh} />}
         <NotificationSoundCard />
       </div>
     </PageShell>
@@ -160,6 +162,9 @@ const REVIEW_TOKEN_CEILING_DEFAULT = 1_500_000
 // settings.DefaultMCPToolIndexThreshold for the placeholder; the
 // server applies the real default.
 const MCP_TOOL_INDEX_THRESHOLD_DEFAULT = 8
+
+// WRITING_STYLE_MAX_LEN mirrors the server's cap on writing_style.
+const WRITING_STYLE_MAX_LEN = 4000
 
 // Descriptor for a plain value card: an Input or Select field, one
 // settings key, and how its committed value maps to the field's
@@ -298,6 +303,23 @@ const valueCardDescriptors: ValueCardDescriptor[] = [
       </Select>
     ),
   },
+  {
+    key: 'writing_style',
+    title: 'Writing style',
+    description:
+      'Your writing rules. Timothy follows them whenever it drafts or rewrites text for you, in chat and in missions. Leave empty for the built-in defaults.',
+    render: (value, setValue) => (
+      <Textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="Short sentences. British spelling. No em dashes. Bangla in চলিত register."
+        maxLength={WRITING_STYLE_MAX_LEN}
+        className="w-full"
+        aria-label="Writing style"
+      />
+    ),
+    toPatchValue: (v) => v.trim(),
+  },
 ]
 
 // PlainValueCards renders every value card whose control is an Input
@@ -422,6 +444,79 @@ function SensitiveRouteCard({ values, onSaved }: { values: Record<string, string
           placeholder="empty = off"
           className="h-9 w-56"
           aria-label="Sensitive tool route"
+        />
+      )}
+    </SettingValueCard>
+  )
+}
+
+// WritingSamplesCard picks the knowledge-base collection holding the
+// operator's own writing, stored by name. Fetches the collection list
+// on mount; if that fetch fails, falls back to a plain text input like
+// SensitiveRouteCard. A stored name missing from the list (collection
+// deleted or renamed) still shows as an item so the Select is never
+// blank.
+function WritingSamplesCard({ values, onSaved }: { values: Record<string, string>; onSaved: () => void }) {
+  const baseline = values.writing_samples_collection ?? ''
+  const [collection, setCollection] = useState(baseline)
+  const [collections, setCollections] = useState<KbCollection[] | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const dirty = collection !== baseline
+
+  useEffect(() => {
+    listKbCollections().then(setCollections, () => setCollections(null))
+  }, [])
+
+  const save = () => {
+    setSaving(true)
+    setError(null)
+    patchSettingValues({ writing_samples_collection: collection.trim() })
+      .then(() => {
+        setSaving(false)
+        toast.success('Saved')
+        onSaved()
+      })
+      .catch((err: unknown) => {
+        setSaving(false)
+        setError(errText(err))
+      })
+  }
+
+  const missing = collection !== '' && collections !== null && !collections.some((c) => c.name === collection)
+
+  return (
+    <SettingValueCard
+      title="Writing samples"
+      description="Knowledge-base collection holding your own writing. Timothy searches it for voice and register before drafting."
+      dirty={dirty}
+      saving={saving}
+      error={error}
+      onRetry={save}
+      onSave={save}
+    >
+      {collections ? (
+        <Select value={collection || UNSET} onValueChange={(v) => setCollection(v === UNSET ? '' : v)}>
+          <SelectTrigger className="h-9 w-56" aria-label="Writing samples collection">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={UNSET}>Off (default)</SelectItem>
+            {missing && <SelectItem value={collection}>{`${collection} (missing)`}</SelectItem>}
+            {collections.map((c) => (
+              <SelectItem key={c.id} value={c.name}>
+                {c.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : (
+        <Input
+          value={collection}
+          onChange={(e) => setCollection(e.target.value)}
+          placeholder="empty = off"
+          className="h-9 w-56"
+          aria-label="Writing samples collection"
         />
       )}
     </SettingValueCard>

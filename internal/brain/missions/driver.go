@@ -127,6 +127,10 @@ type Driver struct {
 	// prompts (SetSkillsIndex) — nil means workers get no index.
 	skillsIndex func(ctx context.Context, agentID string) string
 
+	// writing resolves the operator's writing-style settings for worker
+	// packets (SetWriting); nil means no writing-style block.
+	writing func(ctx context.Context) (style, samplesCollection string)
+
 	// provision holds the mission-provisioning slice split out into its
 	// own type (D-074): ensureProvisioned, grantSessionDefaults,
 	// followUpBaseRef and their resolver deps. Driver's Set* setters
@@ -335,6 +339,13 @@ func (d *Driver) agentName(ctx context.Context, agentID string) string {
 // optional dependency.
 func (d *Driver) SetSkillsIndex(fn func(ctx context.Context, agentID string) string) {
 	d.skillsIndex = fn
+}
+
+// SetWriting wires the operator's writing-style settings into worker
+// packets; a setter for the same construction-order reason
+// SetSkillsIndex is. nil means no writing-style block.
+func (d *Driver) SetWriting(fn func(ctx context.Context) (style, samplesCollection string)) {
+	d.writing = fn
 }
 
 // SetFXRates wires the stored USD-base rate table the budget brake
@@ -2076,6 +2087,10 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	}
 	if d.skillsIndex != nil && m.AgentID != "" {
 		p.SkillsIndex = d.skillsIndex(ctx, m.AgentID)
+	}
+	if d.writing != nil {
+		style, samples := d.writing(ctx)
+		p.WritingStyle, p.WritingSamples = style, samples != ""
 	}
 	return p, nil
 }
