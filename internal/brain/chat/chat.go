@@ -146,6 +146,7 @@ type Service struct {
 	packs          []skills.Skill
 	skillAllow     func(context.Context, string) bool   // nil: all packs allowed
 	location       func(context.Context) *time.Location // nil: date line renders in UTC
+	writing        func(context.Context) (style, samplesCollection string) // nil: both empty, no writing-style block
 	skillBodies    map[string]string                    // name -> full pack body, for skill_hint
 	flushEvery     time.Duration                        // pending-state flush cadence mid-stream
 	turnTimeout    time.Duration                        // detached-turn ceiling; defaults to the turnTimeout const, overridable in tests
@@ -283,6 +284,13 @@ type KBSearch func(ctx context.Context, query string, boostCollections []string,
 // agent's Knowledge list (same "the dependency's absence turns the
 // feature off entirely" contract as SetMemoryRetrieve/SetAttachments).
 func (s *Service) SetKBSearch(fn KBSearch) { s.kbSearch = fn }
+
+// SetWriting wires the operator's writing-style settings: the free-text
+// rules and the name of the kb collection holding their own writing.
+// Optional: nil means both read empty.
+func (s *Service) SetWriting(fn func(ctx context.Context) (style, samplesCollection string)) {
+	s.writing = fn
+}
 
 // kbSearchTool builds this turn's search_kb ExtraTool, or nil when no
 // backing search call is wired (KB feature off entirely). boost (the
@@ -1374,7 +1382,11 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	if s.location != nil {
 		loc = s.location(turnCtx)
 	}
-	system := assembleSystem(skills.Index(s.allowedPacks(turnCtx, profile)), time.Now(), loc)
+	var style, samplesCollection string
+	if s.writing != nil {
+		style, samplesCollection = s.writing(turnCtx)
+	}
+	system := assembleSystem(skills.Index(s.allowedPacks(turnCtx, profile)), style, samplesCollection != "", time.Now(), loc)
 	// The agent overlay is stable for a given agent, so it sits ahead
 	// of the per-turn tail and stays inside the cacheable prefix.
 	if profile.PromptOverlay != "" {
@@ -1407,6 +1419,12 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 				boost = append(boost, name)
 			}
 		}
+	}
+
+	// The writing-samples collection joins the boost so the model's
+	// search_kb calls surface the owner's own writing first.
+	if samplesCollection != "" && !slices.Contains(boost, samplesCollection) {
+		boost = append(boost, samplesCollection)
 	}
 
 	// A pinned collection is an explicit user signal to search it, not

@@ -248,6 +248,11 @@ type nativeRunner struct {
 	// plan prompt (issue #649); nil-safe like skillsIndex.
 	skillBody func(ctx context.Context, agentID, name string) string
 
+	// writing resolves the operator's writing-style settings; only the
+	// samples collection is used here, as the search_kb boost. nil-safe
+	// like skillsIndex.
+	writing func(ctx context.Context) (style, samplesCollection string)
+
 	// askParker backs ask_user's park (D-088): nil means ask_user is
 	// never offered on any mission turn, same nil-safe contract as
 	// kbSearch/kbRead: a store wiring bug degrades to "no ask_user"
@@ -332,6 +337,13 @@ func (r *nativeRunner) SetSkillsIndex(fn func(ctx context.Context, agentID strin
 // means the plan prompt carries the index alone, as before.
 func (r *nativeRunner) SetSkillBody(fn func(ctx context.Context, agentID, name string) string) {
 	r.skillBody = fn
+}
+
+// SetWriting wires the operator's writing-style settings; the runner
+// uses the samples collection as the search_kb boost. Unset means an
+// unboosted search, the behavior before this existed.
+func (r *nativeRunner) SetWriting(fn func(ctx context.Context) (style, samplesCollection string)) {
+	r.writing = fn
 }
 
 // loadedSkillsPrefix opens the first line of discover notes when the
@@ -506,11 +518,10 @@ func (r *nativeRunner) SetConnectorReads(resolve ConnectorReadsResolver) {
 
 // KBSearchFunc runs one search_kb call over the whole KB: main curries
 // memclient.Client.KBSearch in, same shape as chat.go's KBSearch type.
-// boostCollections is always nil for a mission turn (issue #482 dropped
-// the mission's own Knowledge snapshot, and search_kb was never scoped
-// by it to begin with, D-078/issue #368) -- kept as a parameter only
-// because memclient.Client.KBSearch's signature is shared with chat's
-// live-agent-boosted calls.
+// boostCollections carries the operator's writing-samples collection
+// when one is configured, nil otherwise (issue #482 dropped the
+// mission's own Knowledge snapshot, and search_kb was never scoped by
+// it to begin with, D-078/issue #368) -- a boost only, never a filter.
 type KBSearchFunc func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error)
 
 // SearchMemoryFunc runs one search_memory recall over long-term
@@ -559,12 +570,25 @@ func (r *nativeRunner) kbSearchTool(m Mission, sink *kbRefSink) *tools.Tool {
 		return nil
 	}
 	return builtin.KBSearch(func(ctx context.Context, query, mode string, k int) ([]builtin.KBSearchHit, error) {
-		hits, err := r.kbSearch(ctx, query, nil, mode, k)
+		hits, err := r.kbSearch(ctx, query, r.boostCollections(ctx), mode, k)
 		if err == nil && sink != nil {
 			sink.record(hits)
 		}
 		return hits, err
 	})
+}
+
+// boostCollections is the search_kb ranking boost for a mission turn:
+// the operator's writing-samples collection when configured, nil
+// otherwise.
+func (r *nativeRunner) boostCollections(ctx context.Context) []string {
+	if r.writing == nil {
+		return nil
+	}
+	if _, samples := r.writing(ctx); samples != "" {
+		return []string{samples}
+	}
+	return nil
 }
 
 // kbReadTool builds this turn's read_kb ExtraTool, gated exactly like

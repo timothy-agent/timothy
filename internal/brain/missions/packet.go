@@ -84,6 +84,40 @@ type WorkPacket struct {
 	Findings    []Finding
 	ReworkRound int
 	MaxRounds   int
+	// WritingStyle is the operator's configured writing rules
+	// (settings writing_style), rendered after PromptOverlay.
+	WritingStyle string
+	// WritingSamples marks that a writing-samples kb collection is
+	// configured, adding WritingSamplesNote to the same block.
+	WritingSamples bool
+}
+
+// WritingStyleHeading and WritingSamplesNote are the operator
+// writing-style block's shared text. Chat (internal/brain/chat) renders
+// the same block, so both constants and WritingStyleBlock live here,
+// the package chat already imports.
+const (
+	WritingStyleHeading = "# Owner writing style"
+	WritingSamplesNote  = "The owner's own writing is in the knowledge base. Before drafting or rewriting prose, search_kb for two or three pieces in the same language and of the same kind, and match their voice."
+)
+
+// WritingStyleBlock renders the operator writing-style block, "" when
+// there is neither style text nor a samples collection.
+func WritingStyleBlock(style string, samples bool) string {
+	if style == "" && !samples {
+		return ""
+	}
+	b := WritingStyleHeading + "\n\n"
+	if style != "" {
+		b += style
+		if samples {
+			b += "\n\n"
+		}
+	}
+	if samples {
+		b += WritingSamplesNote
+	}
+	return b
 }
 
 // toolDisciplineNote is the tool-loop stop-rule contract shared by the
@@ -139,6 +173,10 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 		// Operator-authored config, not model output — unlike Progress/
 		// GitLog below, this never passes through NeutralizeSlot.
 		system += "\n\n" + p.PromptOverlay
+	}
+	// Operator config like PromptOverlay: never neutralized.
+	if block := WritingStyleBlock(p.WritingStyle, p.WritingSamples); block != "" {
+		system += "\n\n" + block
 	}
 
 	var b strings.Builder

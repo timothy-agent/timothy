@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { FeaturesTab } from './FeaturesTab'
+import type { KbCollection } from '../../api/types'
 
 // FeaturesTab now renders PageHeader's breadcrumb links, which need a
 // Router context, so every render is wrapped in MemoryRouter.
@@ -15,13 +16,14 @@ function renderTab() {
 
 vi.mock('../../api/client', () => ({
   getSettings: vi.fn(),
+  listKbCollections: vi.fn(),
   listRoutes: vi.fn(),
   patchSettings: vi.fn(),
   patchSettingValues: vi.fn(),
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { getSettings, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
+import { getSettings, listKbCollections, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
 import { toast } from 'sonner'
 
 afterEach(cleanup)
@@ -30,8 +32,23 @@ beforeEach(() => {
   vi.clearAllMocks()
   localStorage.clear()
   vi.mocked(listRoutes).mockResolvedValue([])
+  vi.mocked(listKbCollections).mockResolvedValue([])
   vi.mocked(patchSettingValues).mockResolvedValue(undefined)
 })
+
+function kbCollection(name: string): KbCollection {
+  return {
+    id: name,
+    name,
+    description: '',
+    doc_count: 0,
+    chunk_count: 0,
+    failed_count: 0,
+    retrieval_weight: 1,
+    created_at: '2026-09-11T00:00:00Z',
+    updated_at: '2026-09-11T00:00:00Z',
+  }
+}
 
 describe('FeaturesTab review token ceiling', () => {
   it('shows the stored ceiling beside the run budget and saves an edit', async () => {
@@ -168,6 +185,77 @@ describe('FeaturesTab plain value cards', () => {
     await waitFor(() =>
       expect(patchSettingValues).toHaveBeenCalledWith({ git_branch_pattern: '{type}/{slug}' }),
     )
+  })
+
+  it('saves an edited writing style, trimmed', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    renderTab()
+
+    const textarea = await screen.findByRole('textbox', { name: 'Writing style' })
+    expect(textarea).toHaveAttribute('maxlength', '4000')
+    fireEvent.change(textarea, { target: { value: '  Short sentences. British spelling.  ' } })
+    const region = screen.getByRole('region', { name: 'Writing style' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchSettingValues).toHaveBeenCalledWith({ writing_style: 'Short sentences. British spelling.' }),
+    )
+  })
+})
+
+describe('FeaturesTab writing samples collection', () => {
+  it('picks a collection from the loaded list and saves its name', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    vi.mocked(listKbCollections).mockResolvedValue([kbCollection('my-writing')])
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Writing samples collection' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'my-writing' }))
+    const region = screen.getByRole('region', { name: 'Writing samples' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() =>
+      expect(patchSettingValues).toHaveBeenCalledWith({ writing_samples_collection: 'my-writing' }),
+    )
+  })
+
+  it('falls back to a plain text input when the collection list fails to load', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: {},
+      values: { writing_samples_collection: 'my-writing' },
+    })
+    vi.mocked(listKbCollections).mockRejectedValue(new Error('down'))
+    renderTab()
+
+    const input = await screen.findByRole('textbox', { name: 'Writing samples collection' })
+    expect((input as HTMLInputElement).value).toBe('my-writing')
+  })
+
+  it('keeps a stored name missing from the list selectable, marked missing', async () => {
+    vi.mocked(getSettings).mockResolvedValue({
+      settings: {},
+      values: { writing_samples_collection: 'renamed-away' },
+    })
+    vi.mocked(listKbCollections).mockResolvedValue([kbCollection('my-writing')])
+    renderTab()
+
+    const trigger = await screen.findByRole('combobox', { name: 'Writing samples collection' })
+    await waitFor(() => expect(trigger).toHaveTextContent('renamed-away (missing)'))
+  })
+
+  it('shows a retryable alert when saving the collection fails', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    vi.mocked(listKbCollections).mockResolvedValue([kbCollection('my-writing')])
+    vi.mocked(patchSettingValues).mockRejectedValueOnce(new Error('network down'))
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Writing samples collection' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'my-writing' }))
+    const region = screen.getByRole('region', { name: 'Writing samples' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+
+    const alert = await within(region).findByRole('alert')
+    expect(alert).toHaveTextContent('network down')
   })
 })
 

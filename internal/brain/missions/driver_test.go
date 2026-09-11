@@ -1200,6 +1200,33 @@ func TestDriverPacketOmitsDiscoverNotesForNonPlanlessFlow(t *testing.T) {
 	}
 }
 
+// TestDriverPacketCarriesWritingSettings confirms the operator's
+// writing-style settings reach a worker packet, and that an unwired
+// resolver leaves both fields zero.
+func TestDriverPacketCarriesWritingSettings(t *testing.T) {
+	store := newFakeStore()
+	m := Mission{ID: "m1", Kind: "general", Flow: FlowFull, Phase: PhaseBuild, Status: StatusWorking}
+	store.put("m1", m)
+
+	d := testDriver(store, &scriptedRunner{})
+	p, err := d.packet(context.Background(), m)
+	if err != nil {
+		t.Fatalf("packet: %v", err)
+	}
+	if p.WritingStyle != "" || p.WritingSamples {
+		t.Fatalf("unwired writing resolver gave %q/%v, want empty/false", p.WritingStyle, p.WritingSamples)
+	}
+
+	d.SetWriting(func(context.Context) (string, string) { return "Short sentences.", "my-writing" })
+	p, err = d.packet(context.Background(), m)
+	if err != nil {
+		t.Fatalf("packet: %v", err)
+	}
+	if p.WritingStyle != "Short sentences." || !p.WritingSamples {
+		t.Fatalf("packet writing settings = %q/%v, want \"Short sentences.\"/true", p.WritingStyle, p.WritingSamples)
+	}
+}
+
 // TestDriverNonLightDoneStillGoesThroughReview confirms the light
 // short-circuit is gated on m.RunsPlanless() (Flow == FlowLight): an
 // ordinary general mission with a unit that has no declared artifacts
