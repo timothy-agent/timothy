@@ -524,7 +524,11 @@ export function AssistantMessage({
 
       {msg.tools.length > 0 && (
         <div className="mt-3 w-full min-w-0">
-          <ToolCallGroup runs={msg.tools} defaultOpen={msg.tools.some((t) => t.status === 'running')} />
+          <ToolCallGroup
+            runs={msg.tools}
+            stepNotes={msg.stepNotes}
+            defaultOpen={msg.tools.some((t) => t.status === 'running')}
+          />
         </div>
       )}
 

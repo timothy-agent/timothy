@@ -272,6 +272,38 @@ describe('copy buttons', () => {
     vi.unstubAllGlobals()
   })
 
+  it('copies the message text only, never the step notes', () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    const msg = play([
+      { type: 'chunk', text: 'Checking your notes for tone.' },
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'search_kb' } },
+      { type: 'tool_result', tool_result: { id: 'c1', name: 'search_kb', status: 'ok', duration_ms: 5 } },
+      { type: 'chunk', text: 'the answer' },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    fireEvent.click(screen.getByTestId('copy-button'))
+    expect(writeText).toHaveBeenCalledWith('the answer')
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps step notes out of the message bubble', () => {
+    const msg = play([
+      { type: 'chunk', text: 'Checking your notes for tone.' },
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'search_kb' } },
+      { type: 'tool_result', tool_result: { id: 'c1', name: 'search_kb', status: 'ok', duration_ms: 5 } },
+      { type: 'chunk', text: 'the answer' },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    expect(screen.getByText('the answer')).toBeInTheDocument()
+    expect(screen.queryByText('Checking your notes for tone.')).not.toBeInTheDocument()
+  })
+
   it('copies the user message text', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })

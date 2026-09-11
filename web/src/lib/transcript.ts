@@ -89,24 +89,33 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
         if (item.permission) pendingPermissions.push({ seq: item.seq, permission: item.permission })
         break
       case 'assistant': {
-        let text = ''
+        // An empty block serializes without its text key (omitempty);
+        // it is skipped so it never becomes a blank note or a literal
+        // "undefined".
+        const segments: string[] = []
         let reasoning = ''
         let media: NonNullable<(typeof item)['blocks']>[number]['media'] = undefined
         for (const b of item.blocks ?? []) {
-          // An empty block serializes without its text key (omitempty);
-          // naive concat would render a literal "undefined".
-          if (b.type === 'text') text += (text && b.text ? '\n\n' : '') + (b.text ?? '')
-          else if (b.type === 'reasoning') reasoning += b.text ?? ''
+          if (b.type === 'text') {
+            if (b.text) segments.push(b.text)
+          } else if (b.type === 'reasoning') reasoning += b.text ?? ''
           else if (b.type === 'media' && b.media) media = [...(media ?? []), ...b.media]
         }
         const tools = pendingTools.map((p) => toToolRun(p.tool))
         const permissions = pendingPermissions.map((p) => p.permission)
         pendingTools = []
         pendingPermissions = []
+        // With tool runs, every segment but the last is a step note
+        // (the narration line before a tool call) and the last is the
+        // answer. Without them the segments stay one message.
+        const split = tools.length > 0 && segments.length > 1
+        const text = split ? segments[segments.length - 1] : segments.join('\n\n')
+        const stepNotes = split ? segments.slice(0, -1) : undefined
         out.push({
           id,
           role: 'assistant',
           text,
+          stepNotes,
           reasoning,
           notices: [],
           tools,

@@ -153,4 +153,26 @@ describe('ToolCallGroup', () => {
     expect(screen.getByText('Search web')).toBeInTheDocument()
     expect(screen.getByText('Read file')).toBeInTheDocument()
   })
+
+  it('hides step notes while collapsed and shows them when expanded', () => {
+    const runs: ToolRun[] = [
+      { id: '1', name: 'search_web', status: 'ok' },
+      { id: '2', name: 'read_file', status: 'ok' },
+    ]
+    const notes = ['Checking your notes for tone.', 'Loading the writing skill.']
+    render(<ToolCallGroup runs={runs} stepNotes={notes} />)
+
+    expect(screen.queryByText(notes[0])).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText('2 tool calls'))
+    expect(screen.getByText(notes[0])).toBeInTheDocument()
+    expect(screen.getByText(notes[1])).toBeInTheDocument()
+  })
+
+  it('keeps group chrome for a single run that carries step notes', () => {
+    const runs: ToolRun[] = [{ id: '1', name: 'search_web', status: 'ok' }]
+    render(<ToolCallGroup runs={runs} stepNotes={['Looking that up.']} />)
+
+    fireEvent.click(screen.getByText('1 tool call'))
+    expect(screen.getByText('Looking that up.')).toBeInTheDocument()
+  })
 })
