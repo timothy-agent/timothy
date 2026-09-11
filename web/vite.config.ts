@@ -48,6 +48,11 @@ export default defineConfig({
         target: process.env.BRAIN_URL ?? 'http://localhost:8300',
         changeOrigin: true,
       },
+      // brain's /health, which the footer reads for the running version.
+      '/health': {
+        target: process.env.BRAIN_URL ?? 'http://localhost:8300',
+        changeOrigin: true,
+      },
     },
   },
   test: {

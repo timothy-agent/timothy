@@ -56,6 +56,26 @@ func TestMigrationsStateTransitions(t *testing.T) {
 	}
 }
 
+// TestHealthCarriesVersion: the link-time Version reaches /health.
+// Empty (an unset -ldflags on a local build) is a valid state, not an
+// error, and simply omits the field from the response.
+func TestHealthCarriesVersion(t *testing.T) {
+	app := newTestApp(t)
+
+	original := Version
+	t.Cleanup(func() { Version = original })
+
+	Version = ""
+	if v := app.health().Version; v != "" {
+		t.Fatalf("version = %q, want empty on an unset build", v)
+	}
+
+	Version = "0.1.0-alpha.84"
+	if v := app.health().Version; v != "0.1.0-alpha.84" {
+		t.Fatalf("version = %q, want 0.1.0-alpha.84", v)
+	}
+}
+
 func TestProbeHealth(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
