@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -15,9 +16,13 @@ import (
 const (
 	writingSamplesDefaultK = 3
 	writingSamplesMaxK     = 5
-	// writingSamplesTextCap bounds one rendered sample; several full
-	// documents would otherwise dominate the turn's context.
-	writingSamplesTextCap = 3000
+	// writingSamplesTotalByteBudget bounds the whole rendered result,
+	// not each sample: Bangla runes are 3 bytes each, so a per-sample
+	// rune cap let two samples cross the tool result offload threshold
+	// (loop.DefaultOffloadThreshold, 8KB) and the model never saw them
+	// inline. Sized so the default k stays comfortably under that with
+	// headroom for titles, dates, and separators.
+	writingSamplesTotalByteBudget = 6000
 	// bengaliShare is the fraction of letter runes in the Bengali block
 	// above which a text counts as Bangla.
 	bengaliShare = 0.3
@@ -129,6 +134,7 @@ and its text (long pieces are cut).`,
 }
 
 func formatWritingSamples(docs []kb.DocumentText) string {
+	perSample := writingSamplesTotalByteBudget / len(docs)
 	var b strings.Builder
 	for i, d := range docs {
 		if i > 0 {
@@ -140,19 +146,27 @@ func formatWritingSamples(docs []kb.DocumentText) string {
 		b.WriteString("\n")
 		b.WriteString(d.CreatedAt.Format("2006-01-02"))
 		b.WriteString("\n\n")
-		b.WriteString(capRunes(d.Text, writingSamplesTextCap))
+		b.WriteString(capBytes(d.Text, perSample))
 		b.WriteString("\n")
 	}
 	return strings.TrimSpace(b.String())
 }
 
-// capRunes cuts s to at most n runes, marking a cut with " ...".
-func capRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
+// capBytes cuts s to at most n bytes, backing off to the nearest rune
+// boundary so a multi-byte character is never split, and marks a cut
+// with " ...". n <= 0 returns "".
+func capBytes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if len(s) <= n {
 		return s
 	}
-	return string(r[:n]) + " ..."
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + " ..."
 }
 
 // detectLanguage reports "bn" when Bengali-block runes make up at

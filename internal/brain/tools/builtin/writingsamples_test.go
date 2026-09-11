@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 )
@@ -165,17 +166,46 @@ func TestWritingSamplesEmptyCollection(t *testing.T) {
 
 func TestWritingSamplesTruncates(t *testing.T) {
 	t.Parallel()
-	long := strings.Repeat("অ", writingSamplesTextCap+500)
+	// One doc gets the whole budget; each rune is 3 bytes ("অ" is in
+	// the Bengali block), so this comfortably exceeds it.
+	long := strings.Repeat("অ", writingSamplesTotalByteBudget)
 	fk := &fakeSamples{docs: []kb.DocumentText{{Title: "Long", Text: long}}}
-	out, err := execTool(t, "samples", fk, map[string]any{"language": "bn"})
+	out, err := execTool(t, "samples", fk, map[string]any{"language": "bn", "k": 1})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if !strings.HasSuffix(strings.TrimSpace(out), " ...") {
 		t.Fatalf("truncated sample must end with the cut marker:\n%s", out[len(out)-40:])
 	}
-	if n := strings.Count(out, "অ"); n != writingSamplesTextCap {
-		t.Fatalf("kept %d runes, want %d", n, writingSamplesTextCap)
+	if !utf8.ValidString(out) {
+		t.Fatalf("cut split a multi-byte rune: %q", out)
+	}
+}
+
+// TestWritingSamplesStayUnderOffloadThreshold reproduces the original
+// bug: several full-length Bangla documents at a per-sample RUNE cap
+// crossed the tool result offload threshold (8KB), so the model never
+// saw the samples inline (issue #691). The total-byte budget must keep
+// the whole rendered result under that regardless of how many samples
+// or how long the source documents are.
+func TestWritingSamplesStayUnderOffloadThreshold(t *testing.T) {
+	t.Parallel()
+	const offloadThreshold = 8 << 10
+	long := strings.Repeat("অ ", 2000) // ~12KB of Bangla text per doc
+	fk := &fakeSamples{docs: []kb.DocumentText{
+		{Title: "One", Text: long},
+		{Title: "Two", Text: long},
+		{Title: "Three", Text: long},
+	}}
+	out, err := execTool(t, "samples", fk, map[string]any{"language": "bn"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(out) >= offloadThreshold {
+		t.Fatalf("rendered result is %d bytes, want under the %d byte offload threshold", len(out), offloadThreshold)
+	}
+	if !utf8.ValidString(out) {
+		t.Fatalf("cut split a multi-byte rune: %q", out)
 	}
 }
 
