@@ -321,6 +321,7 @@ const (
 	SourceKindMission = "mission"
 	SourceKindChat    = "chat"
 	SourceKindKB      = "kb"
+	SourceKindBrief   = "brief"
 )
 
 // SourceEntry is one input a mission's discover/plan/work prompts draw
@@ -346,6 +347,12 @@ const (
 //     SessionID/MissionID/DocID plus Digest -- one entry per resolved
 //     composer pick, additive to the parent-lineage "mission" entry (a
 //     follow-up mission can also carry its own picked references).
+//
+// A "pdf" entry whose MissionID is set is an artifact carried from that
+// mission's workspace at path Name, materialized into this mission's
+// workspace by the provisioner (see provision.go) before the first
+// turn. A "brief" entry carries a follow-up brief in Digest, with Name
+// "Brief".
 type SourceEntry struct {
 	Source      string `json:"source"`
 	ConnectorID string `json:"connector_id,omitempty"`
@@ -424,8 +431,8 @@ func (m Mission) ParentContext() string {
 }
 
 // ReferencedContext renders every picked #-mention reference entry
-// (kinds "chat"/"kb", plus any "mission" entry that is NOT the parent
-// lineage snapshot ParentContext already covers) into one digest, the
+// (kinds "chat"/"kb"/"brief", plus any "mission" entry that is NOT the
+// parent lineage snapshot ParentContext already covers) into one digest, the
 // same "name:\ndigest\n\n" shape api/missions.go's pre-#481
 // resolveReferenceContext produced -- the pre-#481
 // Mission.ReferencedContext column's replacement.
@@ -433,7 +440,7 @@ func (m Mission) ReferencedContext() string {
 	var b strings.Builder
 	for _, e := range m.Sources {
 		switch e.Source {
-		case SourceKindChat, SourceKindKB:
+		case SourceKindChat, SourceKindKB, SourceKindBrief:
 		case SourceKindMission:
 			if e.ID == ParentLineageID {
 				continue // the lineage snapshot, not a referenced pick

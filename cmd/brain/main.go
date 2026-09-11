@@ -1427,8 +1427,18 @@ type missionFollowUpCreatorAdapter struct {
 	driver *missions.Driver
 }
 
-func (a missionFollowUpCreatorAdapter) CreateFollowUpMission(ctx context.Context, parentID, goal string) (string, error) {
-	return a.driver.CreateFollowUp(ctx, parentID, goal)
+func (a missionFollowUpCreatorAdapter) CreateFollowUpMission(ctx context.Context, parentID string, req builtin.FollowUpRequest) (string, error) {
+	return a.driver.CreateFollowUp(ctx, parentID, missions.FollowUpOptions{
+		Goal:   req.Goal,
+		Attach: req.Attach,
+		Brief: missions.Brief{
+			Objective:          req.Brief.Objective,
+			Scope:              req.Brief.Scope,
+			NonGoals:           req.Brief.NonGoals,
+			AcceptanceCriteria: req.Brief.AcceptanceCriteria,
+			References:         req.Brief.References,
+		},
+	})
 }
 
 // credResolveTimeout bounds one credential_ref resolution the delegated

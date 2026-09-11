@@ -9,7 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -206,6 +210,15 @@ func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (M
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)
 		}
+		workRoot := worktree
+		if workRoot == "" {
+			workRoot = workspace
+		}
+		// Before SetProvisioned so a failed copy leaves Workspace empty and
+		// a retry re-provisions from scratch.
+		if err := p.copyParentArtifacts(ctx, m, workRoot); err != nil {
+			return m, fmt.Errorf("provision: copy parent artifacts: %w", err)
+		}
 		if err := p.store.SetProvisioned(ctx, m.ID, workspace, branch, baseCommit); err != nil {
 			return m, err
 		}
@@ -249,6 +262,53 @@ func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (M
 		}
 	}
 	return m, nil
+}
+
+// copyParentArtifacts materializes every attachment carried from
+// another mission's workspace (a "pdf" source entry with MissionID set,
+// see followup.go) into workRoot at the entry's own path. Create runs
+// ensureProvisioned synchronously before the first Drive, so the files
+// are in place before the discover turn.
+func (p *provisioner) copyParentArtifacts(ctx context.Context, m Mission, workRoot string) error {
+	for _, e := range m.Attachments() {
+		if e.MissionID == "" {
+			continue
+		}
+		cleaned := filepath.Clean(e.Name)
+		if filepath.IsAbs(cleaned) || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("carried artifact %q escapes the workspace", e.Name)
+		}
+		parent, err := p.store.Get(ctx, e.MissionID)
+		if err != nil {
+			return fmt.Errorf("carried artifact %q: parent mission %s: %w", e.Name, e.MissionID, err)
+		}
+		if err := copyWorkspaceFile(parent.WorkRoot(), cleaned, filepath.Join(workRoot, cleaned)); err != nil {
+			return fmt.Errorf("carried artifact %q: %w", e.Name, err)
+		}
+	}
+	return nil
+}
+
+// copyWorkspaceFile copies srcRoot/rel to dst, creating dst's parent
+// directories.
+func copyWorkspaceFile(srcRoot, rel, dst string) error {
+	src, _, err := OpenFile(srcRoot, rel)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = src.Close() }()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600) //nolint:gosec // dst is workRoot-joined from a cleaned, escape-checked relative path
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, src); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // githubBranchPattern resolves the precedence a mission's github

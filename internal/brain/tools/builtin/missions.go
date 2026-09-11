@@ -408,13 +408,41 @@ var missionTerminalPhases = map[string]bool{"done": true, "failed": true}
 // followup_mission needs — *missions.Driver.CreateFollowUp satisfies
 // it via cmd/brain/main.go's adapter.
 type missionFollowUpCreator interface {
-	CreateFollowUpMission(ctx context.Context, parentID, goal string) (string, error)
+	CreateFollowUpMission(ctx context.Context, parentID string, req FollowUpRequest) (string, error)
+}
+
+// FollowUpBrief is the tool's view of missions.Brief, a local struct
+// for the same import-cycle reason MissionRecord is one.
+type FollowUpBrief struct {
+	Objective          string
+	Scope              string
+	NonGoals           string
+	AcceptanceCriteria []string
+	References         []string
+}
+
+// FollowUpRequest is one followup_mission call's inputs: the child's
+// goal, the parent workspace files to carry over, and the brief.
+type FollowUpRequest struct {
+	Goal   string
+	Attach []string
+	Brief  FollowUpBrief
+}
+
+type followupBriefArgs struct {
+	Objective          string   `json:"objective"`
+	Scope              string   `json:"scope"`
+	NonGoals           string   `json:"non_goals"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	References         []string `json:"references"`
 }
 
 type missionFollowupArgs struct {
-	Goal  string `json:"goal"`
-	ID    string `json:"id"`
-	Query string `json:"query"`
+	Goal   string             `json:"goal"`
+	ID     string             `json:"id"`
+	Query  string             `json:"query"`
+	Attach []string           `json:"attach"`
+	Brief  *followupBriefArgs `json:"brief"`
 }
 
 // FollowupMission is permission-GATED for the same reason PushMissionBranch
@@ -440,17 +468,45 @@ Arguments:
 - query (string): a name/goal substring to find the parent mission by;
   must match exactly one mission, otherwise you get the list of
   candidates to disambiguate with id.
+- attach (string[], optional): parent workspace-relative file paths
+  copied into the follow-up's workspace before its first turn and
+  attached to it, so the new mission reads them as documents. A path
+  outside the parent's workspace, or one that does not exist, fails
+  without creating a mission. Max 8.
+- brief (object, optional): a structured hand-off rendered into the
+  follow-up's own prompts: objective, scope, non_goals,
+  acceptance_criteria (string[]), references (string[]).
 
 Exactly one of id/query is required.
 
-Example: {"id": "3fa1...", "goal": "now add tests for the new endpoint"}
+Example: {"id": "3fa1...", "goal": "build the ranked idea", "attach":
+["ideas.md", "rules-checklist.md"], "brief": {"objective": "ship the
+top-ranked idea end to end", "acceptance_criteria": ["demo video
+recorded"]}}
 → creates a follow-up mission of 3fa1..., returns its id.`,
 		InputSchema: json.RawMessage(`{
 			"type": "object",
 			"properties": {
 				"goal": {"type": "string", "description": "The follow-up mission's own goal"},
 				"id": {"type": "string", "description": "Exact parent mission id"},
-				"query": {"type": "string", "description": "Name/goal substring to find the parent mission by"}
+				"query": {"type": "string", "description": "Name/goal substring to find the parent mission by"},
+				"attach": {
+					"type": "array",
+					"items": {"type": "string"},
+					"description": "Parent workspace-relative file paths to copy into the follow-up's workspace and attach"
+				},
+				"brief": {
+					"type": "object",
+					"description": "Structured hand-off rendered into the follow-up's prompts",
+					"properties": {
+						"objective": {"type": "string", "description": "What the follow-up must achieve"},
+						"scope": {"type": "string", "description": "What is in scope"},
+						"non_goals": {"type": "string", "description": "What is explicitly out of scope"},
+						"acceptance_criteria": {"type": "array", "items": {"type": "string"}, "description": "Conditions the result must satisfy"},
+						"references": {"type": "array", "items": {"type": "string"}, "description": "Links or file paths worth reading"}
+					},
+					"additionalProperties": false
+				}
 			},
 			"required": ["goal"],
 			"additionalProperties": false
@@ -473,9 +529,19 @@ Example: {"id": "3fa1...", "goal": "now add tests for the new endpoint"}
 			if !missionTerminalPhases[parent.Phase] {
 				return "", fmt.Errorf("mission %s is not finished (phase %s); follow-ups need a terminal parent", parent.ID, parent.Phase)
 			}
-			childID, err := creator.CreateFollowUpMission(ctx, parent.ID, args.Goal)
+			req := FollowUpRequest{Goal: args.Goal, Attach: args.Attach}
+			if args.Brief != nil {
+				req.Brief = FollowUpBrief{
+					Objective: args.Brief.Objective, Scope: args.Brief.Scope, NonGoals: args.Brief.NonGoals,
+					AcceptanceCriteria: args.Brief.AcceptanceCriteria, References: args.Brief.References,
+				}
+			}
+			childID, err := creator.CreateFollowUpMission(ctx, parent.ID, req)
 			if err != nil {
 				return "", fmt.Errorf("create follow-up mission: %w", err)
+			}
+			if len(req.Attach) > 0 {
+				return fmt.Sprintf("created follow-up mission %s of %s with %d attached file(s): %s", childID, parent.ID, len(req.Attach), args.Goal), nil
 			}
 			return fmt.Sprintf("created follow-up mission %s of %s: %s", childID, parent.ID, args.Goal), nil
 		},
