@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/brain/tools/builtin"
@@ -213,6 +214,10 @@ type nativeRunner struct {
 	// kbRead backs the per-turn read_kb ExtraTool: same nil contract
 	// as kbSearch.
 	kbRead KBReadFunc
+
+	// kbSamples backs the per-turn writing_samples ExtraTool: same nil
+	// contract as kbSearch.
+	kbSamples KBSamplesFunc
 
 	// recall backs the per-turn search_memory ExtraTool: same nil
 	// contract as kbSearch. Missions get memory as a tool rather than
@@ -533,6 +538,10 @@ type SearchMemoryFunc func(ctx context.Context, query string, limit int) ([]buil
 // (D-078: collections no longer gate read access: issue #368).
 type KBReadFunc func(ctx context.Context, documentID string) (builtin.KBDocument, error)
 
+// KBSamplesFunc returns the newest ready documents in a collection as
+// plain text: main curries kb.Store.RecentDocumentTexts in.
+type KBSamplesFunc func(ctx context.Context, name string, limit int) ([]kb.DocumentText, error)
+
 // NewNativeRunner wraps a production *loop.Agent as a Runner. The
 // agent instance is expected to be brain's existing chat agent: a
 // mission worker turn is just another loop.Agent caller, not a
@@ -599,6 +608,29 @@ func (r *nativeRunner) kbReadTool(m Mission) *tools.Tool {
 	}
 	return builtin.KBRead(func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
 		return r.kbRead(ctx, documentID)
+	})
+}
+
+// SetKBSamples wires the writing_samples tool's backing fetch.
+// Optional: unwired means writing_samples is never offered, exactly as
+// kbSearch behaves.
+func (r *nativeRunner) SetKBSamples(fn KBSamplesFunc) { r.kbSamples = fn }
+
+// writingSamplesTool builds this turn's writing_samples ExtraTool,
+// gated exactly like kbSearchTool. The collection name comes from the
+// operator's writing settings (SetWriting), never from the model.
+func (r *nativeRunner) writingSamplesTool() *tools.Tool {
+	if r.kbSamples == nil {
+		return nil
+	}
+	return builtin.WritingSamples(func(ctx context.Context) string {
+		if r.writing == nil {
+			return ""
+		}
+		_, samples := r.writing(ctx)
+		return samples
+	}, func(ctx context.Context, name string, limit int) ([]kb.DocumentText, error) {
+		return r.kbSamples(ctx, name, limit)
 	})
 }
 
@@ -1238,6 +1270,9 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		extra = append(extra, t)
 	}
 	if t := r.kbReadTool(m); t != nil {
+		extra = append(extra, t)
+	}
+	if t := r.writingSamplesTool(); t != nil {
 		extra = append(extra, t)
 	}
 	if t := r.searchMemoryTool(); t != nil {

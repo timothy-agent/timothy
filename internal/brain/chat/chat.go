@@ -158,6 +158,7 @@ type Service struct {
 	whisperHTTP    *http.Client                         // shared client for the whisper sidecar call
 	kbSearch       KBSearch                             // nil: search_kb never offered, regardless of agent config; whole-KB by default, agent Knowledge only boosts ranking
 	kbRead         KBRead                               // nil: read_kb never offered, regardless of agent config; reaches any document, not just the agent's Knowledge collections
+	kbSamples      KBSamples                            // nil: writing_samples never offered
 	missions       MissionStore                         // nil: mission #-mention references never resolve
 	kbDocs         KBDocStore                           // nil: kb doc #-mention references never resolve
 	logger         *slog.Logger
@@ -325,6 +326,34 @@ func (s *Service) kbReadTool() *tools.Tool {
 	}
 	return builtin.KBRead(func(ctx context.Context, documentID string) (builtin.KBDocument, error) {
 		return s.kbRead(ctx, documentID)
+	})
+}
+
+// KBSamples returns the newest ready documents in the named
+// collection as plain text; main curries kb.Store.RecentDocumentTexts
+// in.
+type KBSamples func(ctx context.Context, name string, limit int) ([]kb.DocumentText, error)
+
+// SetKBSamples wires the writing_samples tool's backing fetch.
+// Optional: same nil contract as SetKBSearch.
+func (s *Service) SetKBSamples(fn KBSamples) { s.kbSamples = fn }
+
+// writingSamplesTool builds this turn's writing_samples ExtraTool,
+// gated exactly like kbSearchTool: no backend wired means the tool is
+// not offered. The collection name comes from settings via SetWriting,
+// never from the model.
+func (s *Service) writingSamplesTool() *tools.Tool {
+	if s.kbSamples == nil {
+		return nil
+	}
+	return builtin.WritingSamples(func(ctx context.Context) string {
+		if s.writing == nil {
+			return ""
+		}
+		_, samples := s.writing(ctx)
+		return samples
+	}, func(ctx context.Context, name string, limit int) ([]kb.DocumentText, error) {
+		return s.kbSamples(ctx, name, limit)
 	})
 }
 
@@ -1441,6 +1470,9 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 		extraTools = append(extraTools, t)
 	}
 	if t := s.kbReadTool(); t != nil {
+		extraTools = append(extraTools, t)
+	}
+	if t := s.writingSamplesTool(); t != nil {
 		extraTools = append(extraTools, t)
 	}
 	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{

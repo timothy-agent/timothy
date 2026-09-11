@@ -27,3 +27,24 @@ func TestTruncate(t *testing.T) {
 		t.Fatal("truncate must keep the original prefix")
 	}
 }
+
+// TestRecentTextsFetch pins the writing_samples over-fetch: a caller
+// filtering by language needs more candidates than it returns, bounded
+// so a large k cannot pull the whole collection.
+func TestRecentTextsFetch(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		limit int
+		want  int
+	}{
+		{1, recentTextsFetchFactor},
+		{3, 3 * recentTextsFetchFactor},
+		{5, 5 * recentTextsFetchFactor},
+		{100, recentTextsFetchCap},
+	}
+	for _, tc := range cases {
+		if got := recentTextsFetch(tc.limit); got != tc.want {
+			t.Fatalf("recentTextsFetch(%d) = %d, want %d", tc.limit, got, tc.want)
+		}
+	}
+}

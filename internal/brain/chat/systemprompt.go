@@ -7,7 +7,7 @@ import (
 )
 
 // systemPromptVersion increments with any change to the prompt text.
-const systemPromptVersion = 8
+const systemPromptVersion = 9
 
 // systemPrompt is Timothy's identity. Additions APPEND after the
 // existing text and the terseness steer stays the LAST line: the

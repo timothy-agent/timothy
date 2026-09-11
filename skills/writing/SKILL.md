@@ -9,7 +9,7 @@ description: Drafts, rewrites, and edits prose in the owner's own voice, in Bang
 
 - The owner's voice is data on this instance, not something to invent. Before drafting, look for it in this order and stop at the first hit that covers the task:
   1. Style rules in the system prompt or the task brief. They win over every default below.
-  2. If a search_kb tool is available, search the knowledge base for the owner's own writing in the same language and of the same kind (email, post, note). Two or three close samples are enough. Read them for sentence length, register, how they open and close, which words they never use.
+  2. If a writing_samples tool is available, call it with the language of the piece you are about to write and k of 2 or 3. It returns the owner's own writing selected by language, not by topic, so the samples will be about unrelated subjects. Read them for sentence length, register, how they open and close, which words they never use. Take voice only, never content. If writing_samples is not offered, fall back to search_kb for the owner's own writing in the same language and of the same kind (email, post, note).
   3. If a search_memory tool is available, search long-term memory for standing writing preferences: forbidden words, spelling convention, sign-off, address form (আপনি/তুমি, first name/title).
 - Match what you found. When samples and defaults disagree, samples win. When two samples disagree, follow the one closest in kind and audience.
 - When nothing is configured, use the defaults below and say so in one line only if the owner asked how the voice was chosen. Never pad the answer with a note about it otherwise.
@@ -68,7 +68,7 @@ Fluent text is cheap. Two kinds of slop need two fixes: epistemic slop (invented
 
 | Excuse                                                    | Rebuttal                                                                                                    |
 |-----------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
-| "It is a short email, no need to check samples"           | Short pieces show voice mismatch fastest; one search_kb call costs less than a rewrite.                     |
+| "It is a short email, no need to check samples"           | Short pieces show voice mismatch fastest; one writing_samples call costs less than a rewrite.               |
 | "The owner will edit it anyway"                           | The job is text the owner can send. Editing debt is the failure mode this skill exists to prevent.          |
 | "A little balance makes it sound fair"                    | Unrequested balance is hedging. Say the thing, then the real exception if one exists.                       |
 | "The reader expects an introduction"                      | The reader expects the point. Cut the paragraph that restates the request.                                  |
@@ -80,7 +80,7 @@ Fluent text is cheap. Two kinds of slop need two fixes: epistemic slop (invented
 
 ## Red flags: stop and re-check
 
-- You are about to produce prose without having searched for the owner's samples or rules when a search_kb or search_memory tool is available.
+- You are about to produce prose without having called writing_samples (or searched for the owner's samples) when a writing_samples, search_kb, or search_memory tool is available.
 - The draft contains a number, date, name, quotation, or capability that neither the request nor a retrieved source contains.
 - The draft opens by restating the request or closes by summarizing itself.
 - Three items in a row, three adjectives in a row, or three parallel clauses that content did not demand.
@@ -93,7 +93,7 @@ Fluent text is cheap. Two kinds of slop need two fixes: epistemic slop (invented
 
 ## Evidence required
 
-- Which voice source was used: prompt rules, knowledge-base samples, memory preferences, or defaults. One line, only when the owner asks.
+- Which voice source was used: prompt rules, writing_samples, knowledge-base search, memory preferences, or defaults. One line, only when the owner asks.
 - On the full path: the claim list exists and every consequential claim in the text maps to a labelled entry with a supporting source.
 - No fact in the text that the request or retrieved sources did not supply.
 - The prose pass ran after the claims pass, not merged with it.

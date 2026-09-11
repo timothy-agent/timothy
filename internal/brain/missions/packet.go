@@ -98,7 +98,7 @@ type WorkPacket struct {
 // the package chat already imports.
 const (
 	WritingStyleHeading = "# Owner writing style"
-	WritingSamplesNote  = "The owner's own writing is in the knowledge base. Before drafting or rewriting prose, search_kb for two or three pieces in the same language and of the same kind, and match their voice."
+	WritingSamplesNote  = "The owner's own writing is in the knowledge base. Before drafting or rewriting prose, call writing_samples with the language of the piece and match the voice of what comes back."
 )
 
 // WritingStyleBlock renders the operator writing-style block, "" when

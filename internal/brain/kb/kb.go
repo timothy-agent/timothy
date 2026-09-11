@@ -483,3 +483,64 @@ func (s *Store) DeleteDocument(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// DocumentText is one ready document with its chunks reassembled into
+// plain text: the writing_samples tool's row shape.
+type DocumentText struct {
+	Title     string
+	CreatedAt time.Time
+	Text      string
+}
+
+// recentTextsFetchFactor over-fetches so the caller can drop documents
+// in the wrong language and still fill its own limit.
+const recentTextsFetchFactor = 4
+
+// recentTextsFetchCap bounds the over-fetch regardless of limit.
+const recentTextsFetchCap = 40
+
+// RecentDocumentTexts returns the newest ready documents in the
+// collection with that exact name, each document's kb_chunks content
+// joined in seq order. An unknown collection name returns an empty
+// slice, not an error. Returns up to limit*recentTextsFetchFactor rows
+// (capped) so a caller filtering by language still has candidates.
+func (s *Store) RecentDocumentTexts(ctx context.Context, collectionName string, limit int) ([]DocumentText, error) {
+	if limit < 1 {
+		return []DocumentText{}, nil
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("kb recent document texts: %w", err)
+	}
+	rows, err := db.Query(ctx, `
+		SELECT d.title, d.created_at,
+		       COALESCE((SELECT string_agg(c.content, E'\n\n' ORDER BY c.seq)
+		                 FROM kb_chunks c WHERE c.document_id = d.id), '')
+		FROM kb_documents d
+		JOIN kb_collections col ON col.id = d.collection_id
+		WHERE col.name = $1 AND d.status = 'ready'
+		ORDER BY d.created_at DESC
+		LIMIT $2`, collectionName, recentTextsFetch(limit))
+	if err != nil {
+		return nil, fmt.Errorf("kb recent document texts: %w", err)
+	}
+	defer rows.Close()
+	out := []DocumentText{}
+	for rows.Next() {
+		var d DocumentText
+		if err := rows.Scan(&d.Title, &d.CreatedAt, &d.Text); err != nil {
+			return nil, fmt.Errorf("kb recent document texts: %w", err)
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// recentTextsFetch is the over-fetch size for a caller asking for
+// limit documents.
+func recentTextsFetch(limit int) int {
+	if n := limit * recentTextsFetchFactor; n < recentTextsFetchCap {
+		return n
+	}
+	return recentTextsFetchCap
+}
