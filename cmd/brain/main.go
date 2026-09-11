@@ -755,6 +755,10 @@ func main() {
 		return out, nil
 	})
 	svc.SetKBRead(kbReadFromStore(kbStore))
+	// writing_samples: the operator's own writing by language, which
+	// search_kb (topic similarity) cannot surface. The collection name
+	// comes from settings via SetWriting.
+	svc.SetKBSamples(kbStore.RecentDocumentTexts)
 	svc.SetKBDocStore(kbStore)
 	// missionStore backs kind=mission #-mention references (chat.go's
 	// ResolveReferences); nil-boxing guard, same reasoning as
@@ -1109,7 +1113,9 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		}
 		return out, nil
 	}
-	nativeRunner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, kbSearch, kbReadFromStore(kb.New(db)), log)
+	missionKB := kb.New(db)
+	nativeRunner := missions.NewNativeRunnerWithFloor(agent, parker, floorDeny, sandboxMgr.Exec, kbSearch, kbReadFromStore(missionKB), log)
+	nativeRunner.SetKBSamples(missionKB.RecentDocumentTexts)
 	// search_memory: nil-safe in the same sense as kbSearch above (mc
 	// is never nil), calling the same memclient.Retrieve chat's own
 	// per-turn recall uses. Missions read memory as a tool rather than

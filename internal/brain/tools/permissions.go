@@ -109,6 +109,10 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// read_kb is the same pure read, one document at a time,
 			// with the collection allowlist bound the same way.
 			"read_kb": true,
+			// writing_samples is a pure read of the operator's own
+			// writing collection, whose name is bound in Go from
+			// settings, never model input.
+			"writing_samples": true,
 			// search_memory is the same class of read over long-term
 			// memory (issue #648): the query is the only argument and
 			// nothing it returns reaches a side effect.
