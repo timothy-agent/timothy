@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -275,8 +276,24 @@ func TestOpenAIResponsesContinuationMatchingDriver(t *testing.T) {
 	if len(got.Input) != 1 {
 		t.Fatalf("input items = %d, want 1 (only the tool result): %+v", len(got.Input), got.Input)
 	}
-	if got.Input[0].Type != "function_call_output" || got.Input[0].CallID != "call_1" || got.Input[0].Output != "sunny" {
+	if got.Input[0].Type != "function_call_output" || got.Input[0].CallID != "call_1" || got.Input[0].Output == nil || *got.Input[0].Output != "sunny" {
 		t.Fatalf("input[0] = %+v", got.Input[0])
+	}
+}
+
+// TestOpenAIResponsesEmptyToolResultKeepsOutputField pins issue #702: a
+// tool that returned nothing must still serialize "output": "" on its
+// function_call_output item, or the API rejects the whole request with
+// missing_required_parameter.
+func TestOpenAIResponsesEmptyToolResultKeepsOutputField(t *testing.T) {
+	t.Parallel()
+	items := appendMessage(nil, Message{Role: "tool", ToolResult: &ToolResult{ID: "call_1", Content: ""}})
+	raw, err := json.Marshal(items)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"output":""`) {
+		t.Fatalf("empty tool result dropped the output field: %s", raw)
 	}
 }
 

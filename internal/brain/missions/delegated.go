@@ -1091,13 +1091,30 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, run cliR
 	case runEndResult:
 		return r.finish(ctx, m, run, st, start, exitCode)
 	case runEndIdle:
-		return forcedRetryVerdict("the executor produced no output for the idle timeout and was killed"), st.textBuf.String(), nil
+		v := forcedRetryVerdict("the executor produced no output for the idle timeout and was killed")
+		stampServed(&v, run, st)
+		return v, st.textBuf.String(), nil
 	default:
 		reason, err := r.finishNoResult(ctx, m, run, workRoot, rdir, st, start, exitCode)
 		if err != nil {
 			return WorkerVerdict{}, st.textBuf.String(), err
 		}
-		return forcedRetryVerdict(reason), st.textBuf.String(), nil
+		v := forcedRetryVerdict(reason)
+		stampServed(&v, run, st)
+		return v, st.textBuf.String(), nil
+	}
+}
+
+// stampServed records which chain entry ran the turn on the verdict
+// (issue #701): the paired entry's provider and model, the harness's
+// own reported model taking precedence, same rule recordLedger uses.
+// Applied on every worker end, including deaths, since the entry is
+// known before the process ever starts.
+func stampServed(v *WorkerVerdict, run cliRun, st *pollState) {
+	v.Provider = run.entry.ProviderName
+	v.Model = run.entry.Model
+	if st.reportedModel != "" {
+		v.Model = st.reportedModel
 	}
 }
 
@@ -1452,15 +1469,7 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, run cliRun, st 
 			verdict = forcedRetryVerdict("executor finished without a status report")
 		}
 	}
-	// issue #507: the executor did produce a result (or a text-form
-	// sentinel), so the entry that ran it is who served the turn.
-	// reportedModel (the harness's own claimed model) takes precedence
-	// over entry.Model, same precedence recordLedger already uses.
-	verdict.Provider = run.entry.ProviderName
-	verdict.Model = run.entry.Model
-	if st.reportedModel != "" {
-		verdict.Model = st.reportedModel
-	}
+	stampServed(&verdict, run, st)
 
 	if err := r.finishCommon(ctx, m, run, st, start, exitCode, parseKind, strings.ToUpper(verdict.Outcome)); err != nil {
 		return WorkerVerdict{}, st.textBuf.String(), err

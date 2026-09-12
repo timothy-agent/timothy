@@ -71,8 +71,10 @@ type orsInputItem struct {
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
-	// function_call_output field
-	Output string `json:"output,omitempty"`
+	// function_call_output field: a pointer so an empty tool result
+	// still serializes as "output": "", which the API requires on
+	// every function_call_output item (issue #702).
+	Output *string `json:"output,omitempty"`
 }
 
 type orsTool struct {
@@ -224,7 +226,7 @@ func appendMessage(items []orsInputItem, m Message) []orsInputItem {
 			output = "ERROR: " + output
 		}
 		return append(items, orsInputItem{
-			Type: "function_call_output", CallID: m.ToolResult.ID, Output: output,
+			Type: "function_call_output", CallID: m.ToolResult.ID, Output: &output,
 		})
 	case len(m.ToolCalls) > 0:
 		if m.Content != "" {
