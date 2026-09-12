@@ -69,6 +69,10 @@ const featureCopy: Record<string, { label: string; description: string }> = {
     label: 'KB image captioning',
     description: 'On: images in ingested documents get a vision-model caption, spending gateway tokens per image.',
   },
+  pr_attribution_enabled: {
+    label: 'PR attribution',
+    description: 'On: pull requests Timothy opens end with a line crediting Timothy Agent and linking to its repository.',
+  },
 }
 
 export function FeaturesTab() {

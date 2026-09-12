@@ -30,11 +30,16 @@ const (
 	// switch here it defaults OFF for an absent row (knownKeysOff), since
 	// enabling it means real gateway spend the operator must opt into.
 	KeyKBImageCaptioning = "kb_image_captioning_enabled"
+	// KeyPRAttribution gates the closing line on pull requests the
+	// github destination opens, crediting Timothy Agent with a link to
+	// its repository. Default on; off leaves the PR body at goal and
+	// units only.
+	KeyPRAttribution = "pr_attribution_enabled"
 )
 
 var knownKeys = map[string]bool{
 	KeyTools: true, KeyMemoryExtraction: true, KeyCompaction: true, KeyScheduler: true,
-	KeyKBImageCaptioning: true,
+	KeyKBImageCaptioning: true, KeyPRAttribution: true,
 }
 
 // knownKeysOff lists switches from knownKeys whose absent-row default is
