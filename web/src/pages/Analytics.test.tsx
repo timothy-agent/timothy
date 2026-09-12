@@ -634,6 +634,43 @@ describe('Analytics latency panel', () => {
   })
 })
 
+describe('Analytics model cost table with subscription-covered spend', () => {
+  function modelRows() {
+    const table = screen.getByText('Cost breakdown by model').closest('[data-density]') as HTMLElement
+    return within(table).getAllByRole('row').map((row) => row.textContent ?? '')
+  }
+
+  it('shows the unbilled figure instead of 0 and marks it as subscription', async () => {
+    const subscription: UsagePoint = { ...providerPoint, group: 'claude-sonnet-5', cost: 0, unbilled_cost: 2.5 }
+    vi.mocked(usageSeries).mockImplementation(async (_from, _to, _bucket, group) => (group === 'model' ? [subscription] : []))
+    renderPage()
+    await screen.findByText('Cost breakdown by model')
+    const row = modelRows().find((r) => r.includes('claude-sonnet-5'))
+    expect(row).toContain('$2.50')
+    expect(row).toContain('subscription')
+  })
+
+  it('sums billed and unbilled for a mixed row', async () => {
+    const mixed: UsagePoint = { ...providerPoint, group: 'claude-sonnet-5', cost: 1, unbilled_cost: 2.5 }
+    vi.mocked(usageSeries).mockImplementation(async (_from, _to, _bucket, group) => (group === 'model' ? [mixed] : []))
+    renderPage()
+    await screen.findByText('Cost breakdown by model')
+    const row = modelRows().find((r) => r.includes('claude-sonnet-5'))
+    expect(row).toContain('$3.50')
+    expect(row).toContain('subscription')
+  })
+
+  it('leaves a fully billed row unmarked', async () => {
+    const billed: UsagePoint = { ...providerPoint, group: 'gpt-5.4', cost: 1.5, unbilled_cost: 0 }
+    vi.mocked(usageSeries).mockImplementation(async (_from, _to, _bucket, group) => (group === 'model' ? [billed] : []))
+    renderPage()
+    await screen.findByText('Cost breakdown by model')
+    const row = modelRows().find((r) => r.includes('gpt-5.4'))
+    expect(row).toContain('$1.50')
+    expect(row).not.toContain('subscription')
+  })
+})
+
 describe('Analytics provider cost table sorting', () => {
   // cost puts openai first by default (cost desc); alphabetical sort puts anthropic
   // first, so the two orders are distinguishable in the assertions below.
