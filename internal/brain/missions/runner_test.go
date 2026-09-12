@@ -1577,6 +1577,31 @@ func TestRunTurnOmitsProviderModelWhenNeverServed(t *testing.T) {
 	}
 }
 
+// TestRunTurnProviderRejectedIsTyped: a terminal error carrying one of
+// the gateway's no-failover codes surfaces as ErrProviderRejected so
+// the driver pauses instead of retrying an identical request (#704).
+func TestRunTurnProviderRejectedIsTyped(t *testing.T) {
+	for _, tc := range []struct {
+		code string
+		want bool
+	}{
+		{"http_404", true}, {"http_400", true}, {"invalid_request", true},
+		{"http_500", false}, {"", false},
+	} {
+		agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+			{{Type: stream.EventError, Err: &stream.StreamError{Code: tc.code, Message: "provider rejected the request (" + tc.code + ")"}}},
+		}}
+		r := newTestRunner(agent)
+		_, err := r.runTurn(context.Background(), loop.Request{MissionID: "m1"}, missionStatusToolName, PhaseBuild)
+		if err == nil {
+			t.Fatalf("code %q: expected an error", tc.code)
+		}
+		if got := errors.Is(err, ErrProviderRejected); got != tc.want {
+			t.Fatalf("code %q: errors.Is(ErrProviderRejected) = %v, want %v (err %v)", tc.code, got, tc.want, err)
+		}
+	}
+}
+
 // TestRunWorkerGetsMissionScopedShell: the worker turn must carry a
 // turn-scoped shell tool rooted in the mission's own workspace: the
 // root cause of the workspace-split failure family was workers running

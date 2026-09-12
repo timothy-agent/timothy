@@ -124,10 +124,14 @@ type fakeSandbox struct {
 	launches   int
 	launchErr  error
 	lastLaunch string
+	lastEnv    map[string]string
 	pollErrN   int // fail this many poll calls with an infra error before succeeding
 	pollErrs   int
 
 	stderrText string
+	// seedWorktree, when set, is the WT: summary every poll reports
+	// ("0 0 0" = clean), modelling the git worktree state (issue #706).
+	seedWorktree string
 
 	// containerAlive gates probeContainerMarker's command (D-103, issue
 	// #499): true (the default) simulates the same container instance
@@ -257,6 +261,7 @@ func (s *fakeSandbox) launch(command string, env map[string]string) (int, error)
 	defer s.mu.Unlock()
 	s.launches++
 	s.lastLaunch = command
+	s.lastEnv = env
 	if s.launchErr != nil {
 		return 1, s.launchErr
 	}
@@ -305,6 +310,9 @@ func (s *fakeSandbox) poll(command string, out io.Writer) (int, error) {
 	}
 	if !r.exited && !r.killed {
 		buf.WriteString("ALIVE\n")
+	}
+	if s.seedWorktree != "" {
+		fmt.Fprintf(buf, "WT:%s\n", s.seedWorktree)
 	}
 	_, _ = out.Write(buf.Bytes())
 	return 0, nil
@@ -432,6 +440,21 @@ func harnessEntry(credRef string) gwclient.ResolvedRouteEntry {
 // fakeNative is a minimal Runner recording whether RunWorker was
 // called — the dispatch/fallback tests assert against this instead of
 // a real nativeRunner, which needs a full loop.Agent to construct.
+// wantUnavailable asserts err is an ExecutorUnavailableError whose
+// reason contains want (issue #704: a requested harness never falls
+// back to native, it reports why it could not run).
+func wantUnavailable(t *testing.T, err error, want string) *ExecutorUnavailableError {
+	t.Helper()
+	var unavailable *ExecutorUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("err = %v, want *ExecutorUnavailableError", err)
+	}
+	if !strings.Contains(unavailable.Reason, want) {
+		t.Fatalf("unavailable reason = %q, want it to contain %q", unavailable.Reason, want)
+	}
+	return unavailable
+}
+
 type fakeNative struct {
 	mu      sync.Mutex
 	called  int
@@ -554,6 +577,36 @@ func TestDelegatedRunWorker_HappyPath(t *testing.T) {
 	}
 }
 
+// TestDelegatedRunWorker_WritesReferenceFiles (issue #705): the
+// prompt's reference documents are written under the run dir's refs/.
+func TestDelegatedRunWorker_WritesReferenceFiles(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+	packet := WorkPacket{Goal: "test", ParentContext: "parent digest", References: []SourceEntry{{Source: SourceKindKB, Name: "Design", Digest: "kb body"}}}
+
+	if _, _, err := r.RunWorker(testCtx(t), m, packet); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	rdir, _ := spawnedPayload(t, events)["run_dir"].(string)
+	for rel, want := range map[string]string{"refs/parent-mission.md": "parent digest", "refs/01-design.md": "kb body"} {
+		got, err := os.ReadFile(filepath.Join(rdir, rel)) //nolint:gosec // G304: test-owned run dir.
+		if err != nil || string(got) != want {
+			t.Fatalf("%s = %q, %v; want %q", rel, got, err, want)
+		}
+	}
+	prompt, _ := os.ReadFile(filepath.Join(rdir, "prompt.md")) //nolint:gosec // G304: test-owned run dir.
+	if strings.Contains(string(prompt), "kb body") || !strings.Contains(string(prompt), filepath.Join(rdir, "refs", "01-design.md")) {
+		t.Fatalf("prompt inlines the reference or lacks its path:\n%s", prompt)
+	}
+}
+
 // TestDelegatedRunWorker_HappyPath_VerdictCarriesServedProviderAndModel
 // covers issue #507: a delegated turn's verdict reports the executor's
 // own chain entry as who served it (the same values executor.spawned
@@ -640,6 +693,9 @@ func TestDelegatedRunWorker_RunBudgetExit_RecordedAsRunBudget(t *testing.T) {
 	if budgetReads != 1 {
 		t.Fatalf("run budget read %d times, want once per launch", budgetReads)
 	}
+	if _, cooled := r.cooledUntil(m.Harness, entry); cooled {
+		t.Fatal("run-budget kill cooled the entry down; it says nothing about the provider (issue #704)")
+	}
 	if !strings.Contains(sandbox.lastLaunchCmd(), "timeout -k 30 10800 ") {
 		t.Fatalf("launch cmd does not carry the settings-backed budget: %s", sandbox.lastLaunchCmd())
 	}
@@ -679,6 +735,193 @@ func TestDelegatedRunWorker_IdleHang_KilledAndRetried(t *testing.T) {
 	}
 	if verdict.Provider != entry.ProviderName || verdict.Model != entry.Model {
 		t.Fatalf("verdict provider/model = %q/%q, want %q/%q", verdict.Provider, verdict.Model, entry.ProviderName, entry.Model)
+	}
+	if _, cooled := r.cooledUntil(m.Harness, entry); cooled {
+		t.Fatal("idle kill cooled the entry down; it says nothing about the provider (issue #704)")
+	}
+}
+
+// --- scenario 3b: DONE that changed nothing (issue #706) -----------------
+
+// TestDelegatedRunWorker_DoneWithCleanWorktree_ForcedFreshRetry: a DONE
+// verdict over a worktree the run left untouched is a refusal, not a
+// result: forced retry, and the result event marks the session reset
+// so the next run starts fresh instead of resuming a session that
+// already decided the unit was done.
+func TestDelegatedRunWorker_DoneWithCleanWorktree_ForcedFreshRetry(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	sandbox.seedWorktree = "0 0 0"
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "retry" || !verdict.Forced {
+		t.Fatalf("verdict = %+v, want forced retry", verdict)
+	}
+	if !strings.Contains(verdict.Analysis, "changed nothing") {
+		t.Fatalf("verdict analysis = %q, want it to say nothing changed", verdict.Analysis)
+	}
+	if verdict.Provider != entry.ProviderName || verdict.Model != entry.Model {
+		t.Fatalf("verdict provider/model = %q/%q, want %q/%q", verdict.Provider, verdict.Model, entry.ProviderName, entry.Model)
+	}
+	result, ok := events.last("executor.result")
+	if !ok {
+		t.Fatal("no executor.result event")
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(result.Payload, &payload)
+	if payload["status"] != "RETRY" || payload["session_reset"] != true {
+		t.Fatalf("executor.result payload = %v, want status RETRY and session_reset true", payload)
+	}
+	if _, cooled := r.cooledUntil(m.Harness, entry); cooled {
+		t.Fatal("a DONE without work cooled the entry; the provider did nothing wrong")
+	}
+}
+
+// TestDelegatedRunWorker_DoneWithDirtyWorktree_Accepted: the same DONE
+// over a worktree with changes is a real result.
+func TestDelegatedRunWorker_DoneWithDirtyWorktree_Accepted(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	sandbox.seedWorktree = "2 1 1735689600"
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "done" {
+		t.Fatalf("verdict = %+v, want done", verdict)
+	}
+	result, _ := events.last("executor.result")
+	var payload map[string]any
+	_ = json.Unmarshal(result.Payload, &payload)
+	if _, has := payload["session_reset"]; has {
+		t.Fatalf("executor.result payload = %v, want no session_reset", payload)
+	}
+}
+
+// TestDelegatedRunWorker_SessionResume_ResetSessionStartsFresh: a prior
+// run whose result carried session_reset (issue #706) never resumes,
+// even with a session id, a resume-capable adapter and a live container.
+func TestDelegatedRunWorker_SessionResume_ResetSessionStartsFresh(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.containerAlive = true
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+	lastRun := func(ctx context.Context, missionID string) (*runState, error) {
+		return &runState{Harness: "claude-cli", RunID: "prior", RunDir: "/x", Finished: true, SessionID: "sess-prior-123", SessionReset: true}, nil
+	}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, lastRun, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if strings.Contains(sandbox.lastLaunchCmd(), "--resume") {
+		t.Fatalf("launch command resumed a reset session: %s", sandbox.lastLaunchCmd())
+	}
+	payload := spawnedPayload(t, events)
+	if payload["resumed"] != false || payload["resume_reason"] != "session_reset" {
+		t.Fatalf("executor.spawned resumed/resume_reason = %v/%v, want false/session_reset", payload["resumed"], payload["resume_reason"])
+	}
+}
+
+// --- scenario 3c: lost session and shared executor home (issue #707) ----
+
+// TestDelegatedRunWorker_SessionLost_FreshRetryNoCooldown: a CLI that
+// cannot find the session it was asked to resume dies with
+// session_lost, marks the session reset so the next run starts fresh,
+// and never cools the entry (the provider did nothing wrong).
+func TestDelegatedRunWorker_SessionLost_FreshRetryNoCooldown(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = nil
+	sandbox.seedExitCode = 1
+	sandbox.stderrText = "Error: no rollout found for thread id 019a-7c"
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+
+	verdict, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if verdict.Outcome != "retry" || !verdict.Forced {
+		t.Fatalf("verdict = %+v, want forced retry", verdict)
+	}
+	died, ok := events.last("executor.died")
+	if !ok {
+		t.Fatal("no executor.died event")
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(died.Payload, &payload)
+	if payload["reason"] != "session_lost" || payload["session_reset"] != true {
+		t.Fatalf("executor.died payload = %v, want reason session_lost and session_reset true", payload)
+	}
+	if _, cooled := r.cooledUntil(m.Harness, entry); cooled {
+		t.Fatal("a lost session cooled the entry down")
+	}
+}
+
+// TestDelegatedRunWorker_CodexHomeSharedAcrossRuns: two runs of one
+// mission launch codex with the same CODEX_HOME under the mission's
+// executor dir, and the home's files land there, so a resume can find
+// the rollout the first run wrote.
+func TestDelegatedRunWorker_CodexHomeSharedAcrossRuns(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = nil
+	sandbox.seedExitCode = 1
+	sandbox.stderrText = "boom"
+	events := &fakeEventSink{}
+	entry := gwclient.ResolvedRouteEntry{
+		ProviderID: "prov-oa", ProviderName: "openai", Driver: "openaicompat", Wire: "openai",
+		Model: "gpt-5.3-codex", CredentialRef: "OPENAI_KEY", Usable: true,
+	}
+	route := &gwclient.ResolvedRoute{Route: "builder", Entries: []gwclient.ResolvedRouteEntry{entry}}
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("sk-test", nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+	m.Harness = "codex-cli"
+	want := filepath.Join(m.Workspace, "executor", "codex-cli")
+
+	homes := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		r.cooldown = map[cooldownKey]time.Time{} // transport death cools the entry; the test is about the home, not the cooldown
+		if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+			t.Fatalf("RunWorker %d: %v", i, err)
+		}
+		homes[sandbox.lastEnv["CODEX_HOME"]] = true
+	}
+	if len(homes) != 1 || !homes[want] {
+		t.Fatalf("CODEX_HOME across runs = %v, want only %q", homes, want)
+	}
+	if _, err := os.Stat(filepath.Join(want, "config.toml")); err != nil {
+		t.Fatalf("config.toml not written under the state dir: %v", err)
+	}
+	if sandbox.launches != 2 {
+		t.Fatalf("launches = %d, want 2", sandbox.launches)
 	}
 }
 
@@ -1061,7 +1304,7 @@ func TestDelegatedRunWorker_SessionRecordedOnceWhenFirstSeen(t *testing.T) {
 // every executor-axis entry is cooled down there is no "next native
 // entry" to walk to within the same resolve result — the floor is
 // native.RunWorker itself, same as an unusable/empty resolve.
-func TestDelegatedRunWorker_CooldownSkipsToNativeFallback(t *testing.T) {
+func TestDelegatedRunWorker_Cooldown_PausesWithUntil(t *testing.T) {
 	sandbox := newFakeSandbox()
 	sandbox.seedLines = nil
 	sandbox.seedExitCode = 1
@@ -1085,12 +1328,19 @@ func TestDelegatedRunWorker_CooldownSkipsToNativeFallback(t *testing.T) {
 	}
 
 	// Second call: the entry is now cooled down, so the walk finds
-	// nothing usable and falls back to native.RunWorker.
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("second RunWorker: %v", err)
+	// nothing usable and reports the cooldown with its expiry instead
+	// of running a native turn (issue #704).
+	_, _, err = r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	unavailable := wantUnavailable(t, err, "cooling down")
+	exp, cooled := r.cooledUntil(m.Harness, failing)
+	if !cooled || !unavailable.Until.Equal(exp) {
+		t.Fatalf("unavailable until = %v, want the cooldown expiry %v (cooled=%v)", unavailable.Until, exp, cooled)
 	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1 (cooldown should fall back to native)", native.callCount())
+	if !strings.Contains(err.Error(), "retry after ") {
+		t.Fatalf("err = %v, want it to name the retry time", err)
+	}
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if sandbox.launches != 1 {
 		t.Fatalf("sandbox launches = %d, want 1 (second call must not retry the cooled-down entry)", sandbox.launches)
@@ -1115,11 +1365,11 @@ func TestDelegatedRunWorker_CooldownSkipsToNativeFallback(t *testing.T) {
 	}
 }
 
-// TestDelegatedRunWorker_Dispatch_NoUsableEntryFallsBackToNative covers
+// TestDelegatedRunWorker_Dispatch_NoUsableEntryPauses covers
 // the route-had-entries-but-none-Usable case, distinct from cooldown:
 // no entry was ever usable in the first place, so there is nothing to
 // cool down.
-func TestDelegatedRunWorker_Dispatch_NoUsableEntryFallsBackToNative(t *testing.T) {
+func TestDelegatedRunWorker_Dispatch_NoUsableEntryPauses(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	sandbox := newFakeSandbox()
 	events := &fakeEventSink{}
@@ -1132,11 +1382,10 @@ func TestDelegatedRunWorker_Dispatch_NoUsableEntryFallsBackToNative(t *testing.T
 	r := newTestDelegatedRunner(native, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
 	m := testMission("m1", t.TempDir())
 
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
-	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1", native.callCount())
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	_ = wantUnavailable(t, err, "no usable route entry")
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if events.count("executor.skipped") != 1 {
 		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
@@ -1957,7 +2206,7 @@ func TestDelegatedRunWorker_Dispatch_EmptyHarnessSkipsResolve(t *testing.T) {
 	}
 }
 
-func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.T) {
+func TestDelegatedRunWorker_Dispatch_UnknownHarnessPauses(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	sandbox := newFakeSandbox()
 	events := &fakeEventSink{}
@@ -1966,11 +2215,10 @@ func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.
 	m := testMission("m1", t.TempDir())
 	m.Harness = "codex-cli-unregistered"
 
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
-	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1", native.callCount())
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	_ = wantUnavailable(t, err, "unknown harness")
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if events.count("executor.skipped") != 1 {
 		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
@@ -1987,10 +2235,10 @@ func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.
 }
 
 // D-072: a general mission with Harness set (a row predating
-// ValidateCreate's coding-only rule, or inserted around it) must fall
-// back to native and record why — enforces the coding-only harness
-// rule in-package instead of trusting the caller already checked it.
-func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralFallsBackToNative(t *testing.T) {
+// ValidateCreate's coding-only rule, or inserted around it) must pause
+// and record why: enforces the coding-only harness rule in-package
+// instead of trusting the caller already checked it.
+func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralPauses(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	resolveCalled := false
 	resolve := func(ctx context.Context, name, harness string) (*gwclient.ResolvedRoute, error) {
@@ -2004,11 +2252,10 @@ func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralFallsBackToNative(t *testin
 	m := testMission("m1", t.TempDir())
 	m.Kind = "general"
 
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
-	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1", native.callCount())
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	_ = wantUnavailable(t, err, "harness not allowed for kind")
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if resolveCalled {
 		t.Fatal("resolveRoute called for a harness-not-allowed mission; want it skipped entirely")
@@ -2027,7 +2274,7 @@ func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralFallsBackToNative(t *testin
 	}
 }
 
-func TestDelegatedRunWorker_Dispatch_ResolveErrorFallsBackToNative(t *testing.T) {
+func TestDelegatedRunWorker_Dispatch_ResolveErrorPauses(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	sandbox := newFakeSandbox()
 	events := &fakeEventSink{}
@@ -2035,11 +2282,10 @@ func TestDelegatedRunWorker_Dispatch_ResolveErrorFallsBackToNative(t *testing.T)
 	r := newTestDelegatedRunner(native, scriptedResolver(nil, fmt.Errorf("gateway unreachable")), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
 	m := testMission("m1", t.TempDir())
 
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
-	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1", native.callCount())
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	_ = wantUnavailable(t, err, "route resolve failed")
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if events.count("executor.skipped") != 1 {
 		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))

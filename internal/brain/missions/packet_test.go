@@ -121,8 +121,9 @@ func TestWorkPacketRenderOpenFindings(t *testing.T) {
 	if strings.Contains(user, "F1") || strings.Contains(user, "</system>") {
 		t.Fatalf("Render leaked a resolved finding or raw injected text:\n%s", user)
 	}
-	_, delegated := p.RenderForDelegated()
-	if !strings.Contains(delegated, want) {
+	_, delegated, _ := p.RenderForDelegated("/run")
+	findings := want[strings.Index(want, "Current work:"):]
+	if !strings.Contains(delegated, findings) {
 		t.Fatalf("RenderForDelegated findings block mismatch:\n%s", delegated)
 	}
 
@@ -144,7 +145,7 @@ func TestWorkPacketRenderForDelegatedOmitsNativePreamble(t *testing.T) {
 		Goal: "Merge dependabot PRs",
 		Plan: Plan{Units: []PlanUnit{{Title: "Assess PRs"}}},
 	}
-	system, user := p.RenderForDelegated()
+	system, user, _ := p.RenderForDelegated("/run")
 	if strings.Contains(system, "mission_status") || strings.Contains(system, "write_file") {
 		t.Fatalf("RenderForDelegated system prompt mentions native-only tools: %q", system)
 	}
@@ -153,6 +154,47 @@ func TestWorkPacketRenderForDelegatedOmitsNativePreamble(t *testing.T) {
 	}
 	if !strings.Contains(user, "Assess PRs") {
 		t.Fatal("RenderForDelegated did not include the plan")
+	}
+}
+
+// TestWorkPacketRenderForDelegatedShape (issue #705): the delegated
+// prompt names lineage and references as files, never inlines them,
+// and ends with the current unit's artifacts and verify command.
+func TestWorkPacketRenderForDelegatedShape(t *testing.T) {
+	p := WorkPacket{
+		Goal:          "Implement slice 1",
+		Plan:          Plan{Units: []PlanUnit{{Title: "Core codes", Artifacts: []string{"internal/core/code.go"}, VerifyCmd: "go test ./internal/core/"}}},
+		GitLog:        "abc123 chore: scaffold",
+		ParentContext: "Parent goal: docs only. Terminal state: done.",
+		References:    []SourceEntry{{Source: SourceKindKB, Name: "Design: URL Shortener", Digest: "very long kb article body"}},
+		Progress:      []ProgressNote{{At: time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC), Note: "started"}},
+	}
+	_, user, files := p.RenderForDelegated("/w/runs/r1")
+
+	for _, inline := range []string{"Terminal state: done", "very long kb article body"} {
+		if strings.Contains(user, inline) {
+			t.Fatalf("prompt inlines %q, want it only in a file:\n%s", inline, user)
+		}
+	}
+	if files["refs/parent-mission.md"] != p.ParentContext || files["refs/01-design-url-shortener.md"] != "very long kb article body" {
+		t.Fatalf("files = %v, want the digest and the reference under refs/", files)
+	}
+	for _, path := range []string{"/w/runs/r1/refs/parent-mission.md", "/w/runs/r1/refs/01-design-url-shortener.md"} {
+		if !strings.Contains(user, path) {
+			t.Fatalf("prompt does not point at %s:\n%s", path, user)
+		}
+	}
+	order := []string{"Goal:", "Follow-up of a previous mission", "Referenced documents", "Plan:", "Progress so far:", "Recent commits", "Current unit: Core codes", "must produce (exact path): internal/core/code.go", "verified by: go test ./internal/core/", "Do this unit now."}
+	last := -1
+	for _, marker := range order {
+		i := strings.Index(user, marker)
+		if i < 0 || i < last {
+			t.Fatalf("marker %q missing or out of order (at %d after %d):\n%s", marker, i, last, user)
+		}
+		last = i
+	}
+	if !strings.HasSuffix(strings.TrimSpace(user), "Do this unit now.") {
+		t.Fatalf("prompt does not end with the unit:\n%s", user)
 	}
 }
 
@@ -242,7 +284,7 @@ func TestWorkPacketRenderIncludesWritingStyle(t *testing.T) {
 
 	t.Run("delegated", func(t *testing.T) {
 		p := WorkPacket{Goal: "Draft the note", WritingStyle: "Short sentences.", WritingSamples: true}
-		system, _ := p.RenderForDelegated()
+		system, _, _ := p.RenderForDelegated("/run")
 		if !strings.Contains(system, "Short sentences.") || !strings.Contains(system, WritingSamplesNote) {
 			t.Fatalf("delegated render dropped the writing-style block: %q", system)
 		}
@@ -481,7 +523,7 @@ func TestWorkPacketRenderSkillsIndex(t *testing.T) {
 	if !strings.Contains(system, "email-research") {
 		t.Fatal("native render missing skills index")
 	}
-	system, _ = p.RenderForDelegated()
+	system, _, _ = p.RenderForDelegated("/run")
 	if strings.Contains(system, "email-research") {
 		t.Fatal("delegated render must not carry the skills index")
 	}

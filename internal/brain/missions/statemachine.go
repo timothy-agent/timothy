@@ -334,6 +334,10 @@ type StepInput struct {
 	// InputReviewInfraFailure when the gateway found no usable provider;
 	// empty otherwise.
 	Route string
+	// Until, set on InputReviewInfraFailure when the failure has a known
+	// expiry (a cooled-down executor entry, issue #704), is written to
+	// the pause payload so autoResumeInfra waits for it; zero otherwise.
+	Until time.Time
 	// ReviewRoute/ReviewRouteModel are the new values an
 	// InputRouteChange writes (D-100).
 	ReviewRoute      string
@@ -453,6 +457,9 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 		payload := map[string]any{"reason": string(PauseInfra), "detail": in.Reason}
 		if in.Route != "" {
 			payload["route"] = in.Route
+		}
+		if !in.Until.IsZero() {
+			payload["until"] = in.Until.UTC().Format(time.RFC3339)
 		}
 		return Transition{
 			Next:   withPause(s, PauseInfra),

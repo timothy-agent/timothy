@@ -224,6 +224,34 @@ func TestAutoResumeInfraLadder(t *testing.T) {
 	}
 }
 
+// TestAutoResumeInfraWaitsForResumeAfter: a pause that named when a
+// retry can succeed (a cooled-down executor entry, issue #704) is not
+// resumed before that time even when the ladder delay has passed.
+func TestAutoResumeInfraWaitsForResumeAfter(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, tc := range []struct {
+		name        string
+		resumeAfter time.Time
+		wantResume  bool
+	}{
+		{"until in the future, wait", time.Now().Add(time.Hour), false},
+		{"until passed, resume", time.Now().Add(-time.Second), true},
+		{"no until, ladder alone", time.Time{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := fakePausedByReasonStore{
+				paused: []BackoffPausedMission{{ID: "m1", UpdatedAt: time.Now().Add(-999 * time.Hour), ResumeAfter: tc.resumeAfter}},
+				counts: map[string]int{"m1": 1},
+			}
+			signaler := &fakeSignaler{}
+			autoResumeInfra(context.Background(), signaler, store, nil, log)
+			if resumed := len(signaler.signaled) == 1; resumed != tc.wantResume {
+				t.Fatalf("signaled = %v, want resume=%v", signaler.signaled, tc.wantResume)
+			}
+		})
+	}
+}
+
 // TestAutoResumeInfraNotifiesOncePerTick confirms the exhausted path
 // notifies exactly once per sweep tick (NotifyMessage's own dedupe in
 // notify.go covers repeat ticks) — mirrors the backoff sweep's
