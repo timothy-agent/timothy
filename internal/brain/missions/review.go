@@ -120,9 +120,12 @@ type ReviewPacket struct {
 	// Goal is set only for legacy plans whose units carry no criteria
 	// (rows written before D-095); the criteria replace it otherwise.
 	Goal string
-	// Units are the plan units this round judges.
-	Units []PlanUnit
-	Plan  Plan
+	// Units are the plan units this round judges; UnitIndex holds each
+	// one's plan index, the number the criteria rubric answers under
+	// (issue #718). nil renders the headings without indices.
+	Units     []PlanUnit
+	UnitIndex []int
+	Plan      Plan
 	// DiffStat is `git diff --stat` for the whole change; Diff is the
 	// diff restricted to the reviewed units' scope paths.
 	DiffStat string
@@ -412,6 +415,20 @@ var reviewVerdictSchema = json.RawMessage(`{
 					"type": "array",
 					"items": {"type": "string"},
 					"description": "Ids of prior-round findings (F1, F2, ...) this round's work closed."
+				},
+				"criteria": {
+					"type": "array",
+					"description": "Per-criterion rubric: every acceptance criterion of every unit under review must appear here exactly once, answered met, not_met or cannot_tell with cited evidence. A criterion answered not_met sends the unit back to the worker.",
+					"items": {
+						"type": "object",
+						"properties": {
+							"unit": {"type": "integer", "description": "The unit's plan index, as shown in its heading."},
+							"criterion": {"type": "integer", "description": "Zero-based index of the criterion in that unit's listed criteria."},
+							"status": {"type": "string", "enum": ["met", "not_met", "cannot_tell"], "description": "met only when the evidence shows the criterion satisfied."},
+							"evidence": {"type": "string", "description": "A file and a line quoted verbatim from the diff, an artifact or the harness output that supports the status."}
+						},
+						"required": ["unit", "criterion", "status"]
+					}
 				}
 			},
 			"required": ["decision"]
@@ -471,6 +488,25 @@ func OpenFindings(findings []Finding) []Finding {
 	return out
 }
 
+// Criterion verdict statuses (issue #718).
+const (
+	CriterionMet        = "met"
+	CriterionNotMet     = "not_met"
+	CriterionCannotTell = "cannot_tell"
+)
+
+// CriterionVerdict is the reviewer's answer for one unit criterion
+// (issue #718): the deterministic check_cmd says the code runs, this
+// says the criteria are met.
+type CriterionVerdict struct {
+	// Unit is the criterion's plan index; Criterion its zero-based
+	// index in that unit's criteria list.
+	Unit      int    `json:"unit"`
+	Criterion int    `json:"criterion"`
+	Status    string `json:"status"`
+	Evidence  string `json:"evidence,omitempty"`
+}
+
 // ReviewVerdict is the parsed review_verdict call.
 type ReviewVerdict struct {
 	Approved bool
@@ -478,6 +514,9 @@ type ReviewVerdict struct {
 	// Resolved names prior-round finding ids the reviewer considers
 	// closed.
 	Resolved []string
+	// Criteria is the per-criterion rubric (issue #718); empty on a
+	// reviewer that answered none, which is logged, never penalised.
+	Criteria []CriterionVerdict
 	// Provider/Model (issue #507) are who served the review turn; set by
 	// RunReview after parsing.
 	Provider string
@@ -485,12 +524,15 @@ type ReviewVerdict struct {
 }
 
 // parseReviewVerdict decodes a review_verdict tool call's arguments.
-// An unknown severity is read as blocking, same as an absent one.
+// An unknown severity is read as blocking, same as an absent one; an
+// unknown criterion status is read as cannot_tell (issue #718), the
+// answer that neither blocks nor claims the criterion is met.
 func parseReviewVerdict(args json.RawMessage) (ReviewVerdict, error) {
 	var raw struct {
-		Decision string    `json:"decision"`
-		Findings []Finding `json:"findings"`
-		Resolved []string  `json:"resolved"`
+		Decision string             `json:"decision"`
+		Findings []Finding          `json:"findings"`
+		Resolved []string           `json:"resolved"`
+		Criteria []CriterionVerdict `json:"criteria"`
 	}
 	if err := json.Unmarshal(args, &raw); err != nil {
 		return ReviewVerdict{}, err
@@ -500,7 +542,14 @@ func parseReviewVerdict(args json.RawMessage) (ReviewVerdict, error) {
 			raw.Findings[i].Severity = SeverityBlocking
 		}
 	}
-	return ReviewVerdict{Approved: raw.Decision == "approve", Findings: raw.Findings, Resolved: raw.Resolved}, nil
+	for i := range raw.Criteria {
+		switch raw.Criteria[i].Status {
+		case CriterionMet, CriterionNotMet, CriterionCannotTell:
+		default:
+			raw.Criteria[i].Status = CriterionCannotTell
+		}
+	}
+	return ReviewVerdict{Approved: raw.Decision == "approve", Findings: raw.Findings, Resolved: raw.Resolved, Criteria: raw.Criteria}, nil
 }
 
 // baselineDiffExcludes are pathspecs excluded from the reviewer's
@@ -625,6 +674,93 @@ func truncateDiff(diff string, limit int) string {
 	}
 	fmt.Fprintf(&b, "\n[diff truncated: %d files omitted]", len(files)-kept)
 	return b.String()
+}
+
+// criterionText returns the criterion's own line from the plan, or ""
+// when the reviewer named a unit or index the plan does not have.
+func criterionText(plan Plan, c CriterionVerdict) string {
+	if c.Unit < 0 || c.Unit >= len(plan.Units) {
+		return ""
+	}
+	crit := plan.Units[c.Unit].Criteria
+	if c.Criterion < 0 || c.Criterion >= len(crit) {
+		return ""
+	}
+	return crit[c.Criterion]
+}
+
+// criteriaFindings turns a rubric into findings (issue #718): one
+// blocking finding per not_met criterion, one minor per cannot_tell,
+// plus whether any criterion was not_met. Skipped: a criterion on a
+// unit outside units (mergeFindings would stamp it onto the wrong
+// one), and a title already open or already synthesized. A not_met
+// quoting no evidence is read as cannot_tell, since the D-095
+// evidence gate would demote its finding to minor anyway.
+func criteriaFindings(plan Plan, units []int, criteria []CriterionVerdict, open []Finding) (out []Finding, notMet bool) {
+	isOpen := func(title string) bool {
+		for _, f := range open {
+			if f.Open() && f.Title == title {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range criteria {
+		if c.Status == CriterionMet || !slices.Contains(units, c.Unit) {
+			continue
+		}
+		title := criterionText(plan, c)
+		if title == "" {
+			continue
+		}
+		status := c.Status
+		if status == CriterionNotMet && strings.TrimSpace(c.Evidence) == "" {
+			status = CriterionCannotTell
+		}
+		if status == CriterionNotMet {
+			notMet = true
+		}
+		if isOpen(title) || slices.ContainsFunc(out, func(f Finding) bool { return f.Title == title }) {
+			continue
+		}
+		f := Finding{
+			Unit:     c.Unit,
+			Title:    title,
+			Detail:   "criterion not met",
+			Evidence: c.Evidence,
+			Severity: SeverityBlocking,
+		}
+		if status == CriterionCannotTell {
+			f.Detail, f.Severity = "reviewer could not tell", SeverityMinor
+		}
+		if len(plan.Units[c.Unit].Artifacts) > 0 {
+			f.File = plan.Units[c.Unit].Artifacts[0]
+		}
+		out = append(out, f)
+	}
+	return out, notMet
+}
+
+// missingCriteria counts the criteria of the units under review the
+// rubric left unanswered (issue #718). Logged only, never a failure:
+// the round's other evidence still stands.
+func missingCriteria(plan Plan, units []int, criteria []CriterionVerdict) int {
+	answered := make(map[[2]int]bool, len(criteria))
+	for _, c := range criteria {
+		answered[[2]int{c.Unit, c.Criterion}] = true
+	}
+	missing := 0
+	for _, u := range units {
+		if u < 0 || u >= len(plan.Units) {
+			continue
+		}
+		for i := range plan.Units[u].Criteria {
+			if !answered[[2]int{u, i}] {
+				missing++
+			}
+		}
+	}
+	return missing
 }
 
 // findingDemotion is one blocking finding the evidence gate demoted,

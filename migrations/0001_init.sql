@@ -710,6 +710,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- resume, 'fresh' starts every unit cold so only the packet's
     -- progress notes and recent commits carry over.
     executor_session_policy text NOT NULL DEFAULT '',
+    harness_retries integer NOT NULL DEFAULT 0,
     -- Mission worker turns run through loop.Agent same as chat, but
     -- tool-call bookkeeping (session_events, tools audit) hard-requires
     -- a real session_id uuid FK -- a mission has no chat session of its

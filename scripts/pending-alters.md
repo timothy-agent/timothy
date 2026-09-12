@@ -26,3 +26,10 @@ WHERE plan ? 'units' AND jsonb_typeof(plan->'units') = 'array'
 -- today's resume behaviour, 'fresh' starts every unit cold).
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS executor_session_policy text NOT NULL DEFAULT '';
 ```
+
+```sql
+-- issue #718: lifetime count of retries the harness attributed to
+-- itself (unreadable sentinel, runner error, executor death). They
+-- spend no iteration, so mission_harness_retry_cap is their ceiling.
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS harness_retries integer NOT NULL DEFAULT 0;
+```

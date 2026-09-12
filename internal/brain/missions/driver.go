@@ -191,6 +191,16 @@ type Driver struct {
 	// (D-097, see SetReviewTokenCeiling); nil or 0 disables the check.
 	reviewTokenCeiling func(ctx context.Context) int64
 
+	// ceilings reads the settings-backed statemachine brakes (issue
+	// #718, see SetCeilings); nil leaves cfg's own values in place.
+	ceilings func(ctx context.Context) (backoffFailures, stallRounds, harnessRetryCap int)
+
+	// autoResumeBackoffMax/autoResumeInfraMax read the sweep's
+	// settings-backed auto-resume caps (issue #718, see
+	// SetAutoResumeMax); nil falls back to the constants in sweep.go.
+	autoResumeBackoffMax func(ctx context.Context) int
+	autoResumeInfraMax   func(ctx context.Context) int
+
 	// location resolves the operator's configured timezone for the
 	// worker packet's exec-environment note and progress-note timestamps
 	// (see SetLocation), nil-safe: unset renders both in UTC.
@@ -517,6 +527,38 @@ func (d *Driver) SetRouteResolver(fn routeResolver) {
 // (D-097).
 func (d *Driver) SetReviewTokenCeiling(fn func(ctx context.Context) int64) {
 	d.reviewTokenCeiling = fn
+}
+
+// SetCeilings wires the settings-backed retry brakes: every Step call
+// reads them, so an operator's change takes effect on the next turn
+// without a restart. A getter returning 0 for a brake keeps cfg's.
+func (d *Driver) SetCeilings(fn func(ctx context.Context) (backoffFailures, stallRounds, harnessRetryCap int)) {
+	d.ceilings = fn
+}
+
+// SetAutoResumeMax wires the settings-backed auto-resume pause caps
+// the sweep reads (issue #718).
+func (d *Driver) SetAutoResumeMax(backoff, infra func(ctx context.Context) int) {
+	d.autoResumeBackoffMax, d.autoResumeInfraMax = backoff, infra
+}
+
+// config is d.cfg with the settings-backed brakes folded in.
+func (d *Driver) config(ctx context.Context) Config {
+	cfg := d.cfg
+	if d.ceilings == nil {
+		return cfg
+	}
+	backoff, stall, harnessCap := d.ceilings(ctx)
+	if backoff > 0 {
+		cfg.BackoffFailures = backoff
+	}
+	if stall > 0 {
+		cfg.StallRounds = stall
+	}
+	if harnessCap > 0 {
+		cfg.HarnessRetryCap = harnessCap
+	}
+	return cfg
 }
 
 // GatewayReviewWindow builds a Driver.reviewWindow over the gateway
@@ -959,7 +1001,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// phase-run error takes below.
 			d.log.Error("driver: provisioning failed", "mission_id", id, "agent", d.agentName(ctx, m.AgentID), "error", provErr)
 			in := StepInput{Input: InputReviewInfraFailure, Reason: "provisioning failed: " + provErr.Error()}
-			t := Step(d.toStepState(ctx, m), in, d.cfg)
+			t := Step(d.toStepState(ctx, m), in, d.config(ctx))
 			if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 				return false, fmt.Errorf("driver advance: apply transition after provisioning failure: %w", err)
 			}
@@ -1030,8 +1072,11 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// review_infra_failure is prove's error input; other phases
 			// report the equivalent-shaped worker_failed so the same
 			// backoff/pause machinery applies uniformly regardless of
-			// which phase actually failed.
-			in = StepInput{Input: InputWorkerFailed, Reason: err.Error()}
+			// which phase actually failed. A turn that errored out (the
+			// executor died, the turn failed, an idle timeout fired) is
+			// the harness's fault, never the worker's, so it spends no
+			// iteration (issue #718); the backoff brake still counts it.
+			in = StepInput{Input: InputWorkerFailed, Reason: err.Error(), HarnessCaused: true}
 		}
 	}
 	// Turn telemetry: one event per phase run, so a mission's cost in
@@ -1077,7 +1122,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		return false, fmt.Errorf("driver advance: reload after phase: %w", err)
 	}
 	state := d.toStepState(ctx, m)
-	t := Step(state, in, d.cfg)
+	t := Step(state, in, d.config(ctx))
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 		if errors.Is(err, ErrTerminal) {
 			// The mission reached a terminal state (e.g. cancel) while this
@@ -1175,7 +1220,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 		return ErrTerminal
 	}
 	before := m.Status
-	t := Step(d.toStepState(ctx, m), StepInput{Input: input}, d.cfg)
+	t := Step(d.toStepState(ctx, m), StepInput{Input: input}, d.config(ctx))
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 		return fmt.Errorf("driver: signal: apply transition: %w", err)
 	}
@@ -1257,7 +1302,7 @@ func (d *Driver) ChangeRouting(ctx context.Context, id, reviewRoute, reviewRoute
 	if m.Status != StatusPaused {
 		return ErrNotPaused
 	}
-	t := Step(d.toStepState(ctx, m), StepInput{Input: InputRouteChange, ReviewRoute: reviewRoute, ReviewRouteModel: reviewRouteModel}, d.cfg)
+	t := Step(d.toStepState(ctx, m), StepInput{Input: InputRouteChange, ReviewRoute: reviewRoute, ReviewRouteModel: reviewRouteModel}, d.config(ctx))
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 		return fmt.Errorf("driver: change routing: apply transition: %w", err)
 	}
@@ -1283,7 +1328,7 @@ func (d *Driver) DecidePlan(ctx context.Context, id string, input Input, feedbac
 		return ErrNotAwaitingApproval
 	}
 	before := m.Status
-	t := Step(d.toStepState(ctx, m), StepInput{Input: input, Reason: feedback}, d.cfg)
+	t := Step(d.toStepState(ctx, m), StepInput{Input: input, Reason: feedback}, d.config(ctx))
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 		return fmt.Errorf("driver: decide plan: apply transition: %w", err)
 	}
@@ -1342,7 +1387,7 @@ func (d *Driver) toStepState(ctx context.Context, m Mission) StepState {
 	return StepState{
 		Phase: m.Phase, Status: m.Status, PauseReason: m.PauseReason,
 		Iteration: m.Iteration, MaxIterations: m.MaxIterations,
-		ConsecutiveFailures: m.ConsecutiveFailures, LastGapFingerprint: m.LastGapFingerprint,
+		ConsecutiveFailures: m.ConsecutiveFailures, LastGapFingerprint: m.LastGapFingerprint, HarnessRetries: m.HarnessRetries,
 		StallCount: m.StallCount, Spent: spent, Budget: m.BudgetAmount,
 		MixedCurrencySpend: mixed, RateAsOf: rateAsOf,
 		Units: m.Plan.Units, ReplanUsed: m.ReplanUsed,
@@ -1751,6 +1796,9 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 			// sentinel-less turns instead of grinding to max_iterations on
 			// a model that never learns to end its turn correctly.
 			in.GapFingerprint = "no_sentinel"
+			// The worker did not choose this retry (issue #718), so it
+			// costs no iteration; the stall brake above still stops it.
+			in.HarnessCaused = true
 		}
 		return in, nil
 	}
@@ -1926,10 +1974,10 @@ func (d *Driver) reviewWithShrink(ctx context.Context, m Mission, packet ReviewP
 // the diff restricted to the units' scope and, per unit, the changed
 // files inside its own scope (D-098). The returned files are every path
 // the change touches, for the evidence gate.
-func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, units []PlanUnit) (ReviewPacket, []string, error) {
+func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, idx []int, units []PlanUnit) (ReviewPacket, []string, error) {
 	var changedFiles []string
 	packet := ReviewPacket{
-		Plan: m.Plan, Units: units, Evidence: m.LastEvidence,
+		Plan: m.Plan, Units: units, UnitIndex: idx, Evidence: m.LastEvidence,
 		Listing: ListWorkspace(m.WorkRoot()), Progress: m.Progress,
 		OpenFindings: OpenFindings(m.ReviewFindings),
 	}
@@ -2030,7 +2078,7 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	if open := OpenFindings(m.ReviewFindings); len(open) > 0 && m.Plan.LastReviewCommit != "" && m.WorktreePath() != "" {
 		packet, changedFiles, err = d.findingsReviewPacket(ctx, m, open)
 	} else {
-		packet, changedFiles, err = d.fullReviewPacket(ctx, m, units)
+		packet, changedFiles, err = d.fullReviewPacket(ctx, m, idx, units)
 	}
 	if err != nil {
 		return StepInput{}, err
@@ -2054,6 +2102,25 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 	if err != nil {
 		return StepInput{}, err
 	}
+	// Per-criterion rubric (issue #718): the reviewer answers every
+	// criterion met / not_met / cannot_tell, and the decision about what
+	// that means is made here in Go, not left to the reviewer's own
+	// approve/rework call. A not_met criterion is a blocking finding and
+	// overrides an approval; a cannot_tell is a minor finding so the gap
+	// is visible without blocking. Omitted criteria are logged, never
+	// penalised.
+	rubric, notMet := criteriaFindings(m.Plan, idx, verdict.Criteria, OpenFindings(m.ReviewFindings))
+	verdict.Findings = append(verdict.Findings, rubric...)
+	if notMet && verdict.Approved {
+		d.log.Warn("driver: reviewer approved with a criterion not met, overriding to rework",
+			"mission_id", m.ID, "criteria", len(verdict.Criteria))
+		verdict.Approved = false
+	}
+	// A findings-only round carries no criteria at all (the packet drops
+	// them), so there is nothing to have left unanswered.
+	if missing := missingCriteria(m.Plan, idx, verdict.Criteria); missing > 0 && !packet.FindingsOnly {
+		d.log.Warn("driver: reviewer left criteria unanswered", "mission_id", m.ID, "missing", missing)
+	}
 	// D-095 evidence gate: a blocking finding must name a changed or
 	// declared file and quote evidence, or it is demoted to minor here,
 	// deterministically. A rework whose findings all end up minor, with
@@ -2069,7 +2136,10 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 			}
 		}
 		verdict.Findings = gated
-		if !blockingRemain(gated, packet.OpenFindings, verdict.Resolved) {
+		// A not_met criterion blocks regardless of what the evidence
+		// gate did to its synthesized finding (issue #718): the rubric
+		// answer, not the quoted line, is the harness's own reading.
+		if !notMet && !blockingRemain(gated, packet.OpenFindings, verdict.Resolved) {
 			verdict.Approved = true
 		}
 	}
@@ -2094,7 +2164,8 @@ func (d *Driver) runReview(ctx context.Context, m Mission) (StepInput, error) {
 		decision = "approved"
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.review_verdict", map[string]any{
-		"decision": decision, "findings": verdict.Findings, "resolved": verdict.Resolved, "findings_only": packet.FindingsOnly,
+		"decision": decision, "findings": verdict.Findings, "resolved": verdict.Resolved,
+		"findings_only": packet.FindingsOnly, "criteria": verdict.Criteria,
 	}); err != nil {
 		d.log.Warn("driver: record review verdict failed", "mission_id", m.ID, "error", err)
 	}

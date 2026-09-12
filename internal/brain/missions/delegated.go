@@ -211,6 +211,7 @@ type delegatedRunner struct {
 	// knobs read once per launch (issue #720); nil means neither is
 	// set on the spec, today's behaviour.
 	reviewMaxTurnsFn func(context.Context) int
+	workerMaxTurnsFn func(context.Context) int
 	thinkingTokensFn func(context.Context) int
 
 	mu       sync.Mutex
@@ -241,10 +242,20 @@ func (r *delegatedRunner) SetProgressReader(pr ProgressReader) {
 	r.progressReader = pr
 }
 
-// SetExecutorKnobs wires the settings-backed CLI turn cap and thinking
-// budget (issue #720); either may be nil, leaving that knob unset.
-func (r *delegatedRunner) SetExecutorKnobs(reviewMaxTurns, thinkingTokens func(context.Context) int) {
-	r.reviewMaxTurnsFn, r.thinkingTokensFn = reviewMaxTurns, thinkingTokens
+// SetExecutorKnobs wires the settings-backed CLI turn caps and thinking
+// budget (issue #720, worker cap issue #718); any may be nil, leaving
+// that knob unset.
+func (r *delegatedRunner) SetExecutorKnobs(reviewMaxTurns, workerMaxTurns, thinkingTokens func(context.Context) int) {
+	r.reviewMaxTurnsFn, r.workerMaxTurnsFn, r.thinkingTokensFn = reviewMaxTurns, workerMaxTurns, thinkingTokens
+}
+
+// effectiveWorkerMaxTurns is the worker run's CLI turn cap; 0 leaves
+// the CLI's own loop uncapped.
+func (r *delegatedRunner) effectiveWorkerMaxTurns(ctx context.Context) int {
+	if r.workerMaxTurnsFn == nil {
+		return 0
+	}
+	return r.workerMaxTurnsFn(ctx)
 }
 
 // effectiveReviewMaxTurns is the review run's CLI turn cap; 0 leaves
@@ -332,7 +343,7 @@ const (
 // review_verdict tool, its structured result is the verdict channel,
 // and the read-only tool surface the adapter enforces is spelled out so
 // the model does not waste turns trying to edit.
-const delegatedReviewSystemAppend = " You are running as a delegated read-only CLI reviewer, not through a review_verdict tool. The diff in the prompt is authoritative: judge the work from it, and read a file in the working directory only when the diff alone cannot settle a criterion. You cannot modify files or run commands, so never try. End your turn by producing the required structured output: decision approve or rework, findings (each with title, file, detail, severity and quoted evidence) and the resolved ids of prior findings the work closed."
+const delegatedReviewSystemAppend = " You are running as a delegated read-only CLI reviewer, not through a review_verdict tool. The diff in the prompt is authoritative: judge the work from it, and read a file in the working directory only when the diff alone cannot settle a criterion. You cannot modify files or run commands, so never try. End your turn by producing the required structured output: decision approve or rework, findings (each with title, file, detail, severity and quoted evidence), the resolved ids of prior findings the work closed, and criteria answering every numbered criterion listed under every unit exactly once as met, not_met or cannot_tell, each citing the file and the line you read it from as evidence."
 
 // runDelegatedReview resolves the review harness, route and entry, runs
 // the review packet through the CLI read-only, and parses its result as
@@ -882,8 +893,16 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 			ResultSchema: workerResultSchema(adapter), RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
 			ResumeSessionID: decision.sessionID,
 			StateDir:        executorStateDir(m.Workspace, m.Harness),
-			// MaxTurns stays 0: a worker turn does the work, so only its
-			// thinking is budgeted (issue #720).
+			// MaxTurns bounds the CLI's own agent loop (issue #718): a
+			// worker does real multi-step work, so its cap is far above
+			// the reviewer's, but no run may loop without one. A run that
+			// ends on the cap comes back as an error result with no
+			// structured output, so finish parses no status and returns a
+			// forced retry: harness-caused, spending no iteration, and
+			// the next turn resumes the same session and continues where
+			// it stopped. The harness retry cap is what bounds that, so a
+			// worker gets max_turns-sized chunks and then parks.
+			MaxTurns:       r.effectiveWorkerMaxTurns(ctx),
 			ThinkingTokens: r.effectiveThinkingTokens(ctx),
 		}
 		if err := r.launchRun(ctx, m, run, workRoot, rdir, runID, spec, user, refFiles, decision); err != nil {

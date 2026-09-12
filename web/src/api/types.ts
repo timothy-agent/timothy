@@ -745,6 +745,17 @@ export interface ReviewFinding {
   untouched_rounds?: number
 }
 
+// CriterionVerdict is the reviewer's answer for one unit acceptance
+// criterion (missions.CriterionVerdict, issue #718), carried on a
+// mission.review_verdict event's criteria field. unit is the plan
+// index, criterion the zero-based index into that unit's criteria.
+export interface CriterionVerdict {
+  unit: number
+  criterion: number
+  status: 'met' | 'not_met' | 'cannot_tell'
+  evidence?: string
+}
+
 // Mission is one long-running, agent-driven unit of work
 // (internal/brain/missions): discover -> plan -> build -> prove ->
 // result under a state machine.
@@ -805,6 +816,10 @@ export interface Mission {
   consecutive_failures: number
   last_gap_fingerprint?: string
   stall_count: number
+  // harness_retries counts the retries the harness attributed to itself
+  // (issue #718): they spend no iteration, so they have their own cap
+  // (settings.mission_harness_retry_cap) and nothing resets them.
+  harness_retries?: number
   budget_amount?: number
   budget_currency?: string
   route: string

@@ -528,8 +528,8 @@ func TestRenderReviewContentMultiUnitFiles(t *testing.T) {
 	})
 	for _, want := range []string{
 		"The change set below spans all of these units. Judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone",
-		"### add changelog [harness-verified]\nAcceptance criteria:\n- no other root files modified\nFiles this unit changed (changed files inside its scope): CHANGELOG.md\n",
-		"### add contributing [harness-verified]\nAcceptance criteria:\n- no other root files modified\nFiles this unit changed (changed files inside its scope): CONTRIBUTING.md\n",
+		"### add changelog [harness-verified]\nAcceptance criteria (answer each by its number in criteria):\n0. no other root files modified\nFiles this unit changed (changed files inside its scope): CHANGELOG.md\n",
+		"### add contributing [harness-verified]\nAcceptance criteria (answer each by its number in criteria):\n0. no other root files modified\nFiles this unit changed (changed files inside its scope): CONTRIBUTING.md\n",
 		"### legacy unit [harness-verified]\nFiles this unit changed (no scope declared, so every changed file): CHANGELOG.md, CONTRIBUTING.md\n",
 		"### untouched unit [harness-verified]\nFiles this unit changed: none\n",
 		"Changed files (whole change, spanning every unit above; each unit's own files are listed in its block):\n" + stat,
@@ -3356,8 +3356,8 @@ func TestRenderReviewContentCriteriaReplaceGoal(t *testing.T) {
 	for _, want := range []string{
 		"Units under review (judge each against its acceptance criteria):",
 		"### Write summary [harness-verified]",
-		"- summary.md names RFC 6585",
-		"- under 200 words",
+		"0. summary.md names RFC 6585",
+		"1. under 200 words",
 		"Harness check_cmd check: passed",
 		"Verify output:\ngrep ok\n",
 		"Changed files (whole change):\n summary.md | 3 +++",
@@ -3715,5 +3715,23 @@ func TestDiscoverMaxSteps(t *testing.T) {
 				t.Fatalf("discoverMaxSteps = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestRenderReviewContentFindingsOnlyHasNoRubric pins issue #718: a
+// findings-only round asks no per-criterion rubric, so its units render
+// without the numbering instruction.
+func TestRenderReviewContentFindingsOnlyHasNoRubric(t *testing.T) {
+	p := ReviewPacket{
+		FindingsOnly: true,
+		Units:        []PlanUnit{{Title: "Write summary", Criteria: []string{"names RFC 6585"}, HarnessPassed: true}},
+		OpenFindings: []Finding{{ID: "F1", Title: "wrong status text", File: "summary.md", Status: FindingOpen, Severity: SeverityBlocking, Evidence: "429"}},
+	}
+	got := renderReviewContent(p)
+	if strings.Contains(got, "answer each by its number") {
+		t.Fatalf("findings-only content asks for the rubric:\n%s", got)
+	}
+	if !strings.Contains(got, "Acceptance criteria:\n- names RFC 6585") {
+		t.Fatalf("findings-only content lost the plain criteria list:\n%s", got)
 	}
 }
