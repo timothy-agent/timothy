@@ -214,3 +214,55 @@ func TestCheckOwnArtifacts(t *testing.T) {
 		t.Fatalf("checkOwnArtifacts rejected a unit that adds encoder.go: %v", err)
 	}
 }
+
+// TestCheckUnitGranularity pins the coarse-unit gate (issue #720): a
+// designed coding plan that splits a small single-directory change is
+// rejected, in transcribe mode too; multi-package and larger plans are not.
+func TestCheckUnitGranularity(t *testing.T) {
+	fourUnitsOneDir := []PlanUnit{
+		{Title: "base62", Artifacts: []string{"internal/core/base62.go", "internal/core/base62_test.go"}},
+		{Title: "store", Artifacts: []string{"internal/core/store.go", "internal/core/store_test.go"}},
+		{Title: "shorten", Artifacts: []string{"internal/core/shorten.go", "internal/core/shorten_test.go"}},
+		{Title: "resolve", Artifacts: []string{"internal/core/resolve.go", "internal/core/resolve_test.go"}},
+	}
+	cases := []struct {
+		name    string
+		kind    string
+		hasPlan bool
+		units   []PlanUnit
+		wantErr string
+	}{
+		{"eval slice shape rejected", KindCoding, false, fourUnitsOneDir, "they are one unit of work"},
+		{"two packages accepted", KindCoding, false, []PlanUnit{
+			{Title: "core", Artifacts: []string{"internal/core/a.go"}},
+			{Title: "api", Artifacts: []string{"internal/api/b.go"}},
+		}, ""},
+		{"transcribe mode merged too", KindCoding, true, fourUnitsOneDir, "they are one unit of work"},
+		{"general kind not applied", KindGeneral, false, fourUnitsOneDir, ""},
+		{"nine artifacts in one dir accepted", KindCoding, false, []PlanUnit{
+			{Title: "a", Artifacts: []string{"pkg/a1.go", "pkg/a2.go", "pkg/a3.go", "pkg/a4.go", "pkg/a5.go"}},
+			{Title: "b", Artifacts: []string{"pkg/b1.go", "pkg/b2.go", "pkg/b3.go", "pkg/b4.go"}},
+		}, ""},
+		{"single unit accepted", KindCoding, false, []PlanUnit{
+			{Title: "only", Artifacts: []string{"internal/core/a.go", "internal/core/b.go"}},
+		}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkUnitGranularity(Plan{Units: tc.units}, Mission{Kind: tc.kind, HasPlan: tc.hasPlan})
+			if tc.kind != KindCoding {
+				// checkPlanGates is where the kind gate lives.
+				err = checkPlanGates(Plan{Units: tc.units}, Mission{Kind: tc.kind})
+			}
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("checkUnitGranularity: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("checkUnitGranularity = %v, want %q", err, tc.wantErr)
+			}
+		})
+	}
+}

@@ -1487,6 +1487,12 @@ func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gw
 	}); ok {
 		withSteering.SetProgressReader(store)
 	}
+	// issue #720: settings-backed CLI turn cap and thinking budget.
+	if withKnobs, ok := runner.(interface {
+		SetExecutorKnobs(func(context.Context) int, func(context.Context) int)
+	}); ok {
+		withKnobs.SetExecutorKnobs(flags.ExecutorReviewMaxTurns, flags.ExecutorThinkingTokens)
+	}
 	return runner
 }
 

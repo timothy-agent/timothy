@@ -466,6 +466,10 @@ type createMissionRequest struct {
 	// or "native" (stored as "") keeps the native reviewer, anything
 	// else must name a registered harness. No settings default.
 	ReviewHarness string `json:"review_harness"`
+	// ExecutorSessionPolicy (issue #720) selects whether a delegated
+	// worker run resumes the prior CLI session: "" or "resume" keeps
+	// resume, "fresh" starts every unit cold.
+	ExecutorSessionPolicy string `json:"executor_session_policy"`
 	// Environment selects the per-language sandbox image (D-05x) a
 	// coding mission's container runs: "" auto-detects from the repo at
 	// provisioning (falling back to base), a registered key forces that
@@ -805,6 +809,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveTools: autoApproveTools, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
 		ReviewHarness:            req.ReviewHarness,
+		ExecutorSessionPolicy:    req.ExecutorSessionPolicy,
 		HasPlan:                  req.HasPlan,
 		ParentMissionID:          parentMissionID,
 		Sources:                  sources,

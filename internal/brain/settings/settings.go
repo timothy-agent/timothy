@@ -141,7 +141,20 @@ const (
 	// agents.Agent.Knowledge already stores names, so a deleted or
 	// renamed collection simply stops boosting.
 	ValueWritingSamplesCollection = "writing_samples_collection"
+	// ValueExecutorReviewMaxTurns caps a delegated review run's own CLI
+	// agent loop (missions/delegated.go, issue #720); "" defers to
+	// DefaultExecutorReviewMaxTurns, "0" removes the cap. The reviewer
+	// judges a diff the prompt already carries, so it needs few turns.
+	ValueExecutorReviewMaxTurns = "executor_review_max_turns"
+	// ValueExecutorThinkingTokens caps the per-turn thinking budget a
+	// delegated worker or review run gets (issue #720); "" or "0" (the
+	// default) leaves the CLI's own default in place.
+	ValueExecutorThinkingTokens = "executor_thinking_tokens"
 )
+
+// DefaultExecutorReviewMaxTurns is the delegated review run's turn cap
+// when ValueExecutorReviewMaxTurns is unset.
+const DefaultExecutorReviewMaxTurns = 6
 
 // writingStyleCap bounds the free-text writing-style setting; it rides
 // every prompt, so an unbounded value would be an unbounded per-turn
@@ -172,6 +185,7 @@ var knownValueKeys = map[string]bool{
 	ValueExecutorRunBudgetMinutes: true, ValueReviewTokenCeiling: true,
 	ValueMCPToolIndexThreshold: true,
 	ValueWritingStyle:          true, ValueWritingSamplesCollection: true,
+	ValueExecutorReviewMaxTurns: true, ValueExecutorThinkingTokens: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -297,6 +311,29 @@ func (s *Store) ExecutorRunBudget(ctx context.Context) time.Duration {
 		}
 	}
 	return DefaultExecutorRunBudget
+}
+
+// ExecutorReviewMaxTurns parses the delegated review turn cap, falling
+// back to DefaultExecutorReviewMaxTurns when unset or unparsable; 0
+// removes the cap.
+func (s *Store) ExecutorReviewMaxTurns(ctx context.Context) int {
+	if v := s.Value(ctx, ValueExecutorReviewMaxTurns); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return DefaultExecutorReviewMaxTurns
+}
+
+// ExecutorThinkingTokens parses the per-turn thinking budget a
+// delegated run gets; 0 (the default) leaves the CLI's own default.
+func (s *Store) ExecutorThinkingTokens(ctx context.Context) int {
+	if v := s.Value(ctx, ValueExecutorThinkingTokens); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // ReviewTokenCeiling parses the per-mission review input token cap:
@@ -469,7 +506,7 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 			return fmt.Errorf("%s must be a positive integer or empty", key)
 		}
 	}
-	if (key == ValuePermissionTimeoutSeconds || key == ValueAskTimeoutSeconds || key == ValueReviewTokenCeiling || key == ValueMCPToolIndexThreshold) && value != "" {
+	if (key == ValuePermissionTimeoutSeconds || key == ValueAskTimeoutSeconds || key == ValueReviewTokenCeiling || key == ValueMCPToolIndexThreshold || key == ValueExecutorReviewMaxTurns || key == ValueExecutorThinkingTokens) && value != "" {
 		if n, err := strconv.Atoi(value); err != nil || n < 0 {
 			return fmt.Errorf("%s must be a non-negative integer or empty", key)
 		}

@@ -867,6 +867,10 @@ export interface Mission {
   // phase's review round runs as a read-only delegated CLI; "" or
   // absent keeps the native reviewer (also the fallback on any failure).
   review_harness?: string
+  // executor_session_policy (issue #720) decides whether a delegated
+  // worker run resumes the prior CLI session: "" or "resume" keeps
+  // resume, "fresh" starts every unit cold.
+  executor_session_policy?: string
   // top_model/top_model_provider are decorated onto the list/get
   // response from the cost ledger's top-served-model-per-mission
   // lookup (internal/brain/api/missions.go's decorateTopModels): the

@@ -84,3 +84,15 @@ func TestWritingSettingsDefaultEmpty(t *testing.T) {
 		t.Fatalf("WritingSamplesCollection = %q, want empty", got)
 	}
 }
+
+// TestExecutorKnobDefaults pins the issue #720 accessors: an absent row
+// means the built-in review turn cap and no thinking budget at all.
+func TestExecutorKnobDefaults(t *testing.T) {
+	s := degradedStore(t)
+	if got := s.ExecutorReviewMaxTurns(context.Background()); got != DefaultExecutorReviewMaxTurns {
+		t.Fatalf("ExecutorReviewMaxTurns = %d, want %d", got, DefaultExecutorReviewMaxTurns)
+	}
+	if got := s.ExecutorThinkingTokens(context.Background()); got != 0 {
+		t.Fatalf("ExecutorThinkingTokens = %d, want 0", got)
+	}
+}

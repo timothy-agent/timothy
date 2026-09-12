@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -73,7 +74,48 @@ func checkPlanGates(plan Plan, m Mission) error {
 	if m.Kind != KindCoding {
 		return nil
 	}
+	if err := checkUnitGranularity(plan, m); err != nil {
+		return err
+	}
 	return checkCodeFloor(plan, m.Environment)
+}
+
+// smallPlanArtifactCap is the plan size below which a single-directory
+// coding plan is one unit: each extra unit costs a CLI session
+// bootstrap and a reviewed evidence set (issue #720).
+const smallPlanArtifactCap = 8
+
+// checkUnitGranularity rejects a coding plan that splits a small
+// single-directory change into several units. Every extra unit pays
+// for another session bootstrap and another evidence set, and the files
+// share a package, so the work is one unit. Applies in transcribe mode
+// too (D-102): an operator's file list is not a unit split.
+func checkUnitGranularity(plan Plan, m Mission) error {
+	if len(plan.Units) < 2 {
+		return nil
+	}
+	dir := ""
+	count := 0
+	titles := make([]string, 0, len(plan.Units))
+	for _, u := range plan.Units {
+		for _, a := range u.Artifacts {
+			count++
+			d := path.Dir(cleanArtifact(a))
+			if dir == "" {
+				dir = d
+			} else if d != dir {
+				return nil
+			}
+		}
+		titles = append(titles, strconv.Quote(u.Title))
+	}
+	if count == 0 || count > smallPlanArtifactCap {
+		return nil
+	}
+	if dir == "." {
+		dir = "the workspace root"
+	}
+	return fmt.Errorf("mission runner: units %s all produce files in %s and the plan has only %d artifacts, so they are one unit of work; merge them into a single unit with the combined artifacts, criteria and one check_cmd covering all of them", strings.Join(titles, ", "), dir, count)
 }
 
 // checkOwnArtifacts rejects a unit whose every artifact is already

@@ -20,3 +20,9 @@ SET plan = jsonb_set(
 WHERE plan ? 'units' AND jsonb_typeof(plan->'units') = 'array'
   AND EXISTS (SELECT 1 FROM jsonb_array_elements(plan->'units') AS u WHERE u ? 'verify_cmd');
 ```
+
+```sql
+-- issue #720: per-mission executor session policy ('' / 'resume' keep
+-- today's resume behaviour, 'fresh' starts every unit cold).
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS executor_session_policy text NOT NULL DEFAULT '';
+```

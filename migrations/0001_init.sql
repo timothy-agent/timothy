@@ -705,6 +705,11 @@ CREATE TABLE IF NOT EXISTS missions (
     -- "" keeps the native gateway reviewer, which every delegated
     -- failure also falls back to.
     review_harness        text NOT NULL DEFAULT '',
+    -- ExecutorSessionPolicy (issue #720) decides whether a delegated
+    -- worker run resumes the prior CLI session: '' and 'resume' keep
+    -- resume, 'fresh' starts every unit cold so only the packet's
+    -- progress notes and recent commits carry over.
+    executor_session_policy text NOT NULL DEFAULT '',
     -- Mission worker turns run through loop.Agent same as chat, but
     -- tool-call bookkeeping (session_events, tools audit) hard-requires
     -- a real session_id uuid FK -- a mission has no chat session of its

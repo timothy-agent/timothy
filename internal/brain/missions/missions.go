@@ -111,6 +111,12 @@ type Mission struct {
 	// keeps the native gateway reviewer. Native is the floor: every
 	// delegated failure falls back to it.
 	ReviewHarness string `json:"review_harness,omitempty"`
+	// ExecutorSessionPolicy decides whether a delegated worker run
+	// resumes the prior CLI session (issue #720). "" and
+	// SessionPolicyResume keep today's behaviour; SessionPolicyFresh
+	// starts every unit cold, so the packet's progress notes and recent
+	// commits are the only carried context. Coding-only, like Harness.
+	ExecutorSessionPolicy string `json:"executor_session_policy,omitempty"`
 	// Flow is the phase set this mission runs (D-090, issue #459),
 	// chosen once at create time, snapshotted here, never model-
 	// mutable. FlowLight (D-069, general kind only) skips discover/plan/
