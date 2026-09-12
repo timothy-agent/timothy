@@ -623,6 +623,30 @@ describe('MissionForm: follow-up', () => {
       ),
     )
   })
+
+  it('seeds the goal field from initialGoal and submits it', async () => {
+    vi.mocked(createMission).mockResolvedValue({ id: 'm-picked' } as Mission)
+    renderForm(
+      <MissionForm
+        mode="create"
+        initialGoal={'Build "Signal Router".\n\nObjective: Routes alerts.'}
+        parentMissionId="parent-1"
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByLabelText('Goal')).toHaveValue(
+      'Build "Signal Router".\n\nObjective: Routes alerts.',
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ goal: 'Build "Signal Router".\n\nObjective: Routes alerts.' }),
+      ),
+    )
+  })
 })
 
 describe('MissionForm: kind and light pre-fill (#447)', () => {

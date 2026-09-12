@@ -303,6 +303,7 @@ export function MissionForm({
   mode,
   schedule,
   initial,
+  initialGoal,
   parentMissionId,
   onDone,
   onCancel,
@@ -310,11 +311,15 @@ export function MissionForm({
   mode: 'create' | 'edit'
   schedule?: Schedule
   // initial seeds the form's create-mode state from a parent mission
-  // (a follow-up): everything except goal, which is left empty for
-  // the user to type. Read only once, in the useState initializers
+  // (a follow-up): everything except goal, which comes from
+  // initialGoal or is left empty for the user to type. Read only
+  // once, in the useState initializers
   // below, so the caller must render this component only once initial
   // is settled (e.g. after an async parent fetch resolves).
   initial?: Partial<CreateMissionInput>
+  // initialGoal seeds the goal field (a follow-up from a picked
+  // shortlist option). Read only once, same contract as initial.
+  initialGoal?: string
   // parentMissionId, when set, is included on the create payload:
   // makes this a follow-up mission (see CreateMissionInput).
   parentMissionId?: string
@@ -324,7 +329,7 @@ export function MissionForm({
   const agents = useAgents()
   const routes = useRoutes()
   const enabledRoutes = routes?.filter((r) => r.enabled) ?? []
-  const [goal, setGoal] = useState('')
+  const [goal, setGoal] = useState(initialGoal ?? '')
   const goalWordCount = useMemo(
     () => (goal.trim() === '' ? 0 : goal.trim().split(/\s+/).length),
     [goal],

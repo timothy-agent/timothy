@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MissionFile } from '../../api/types'
 import { FileViewer } from './FileViewer'
@@ -163,5 +164,59 @@ describe('FileViewer', () => {
     expect(exportMissionPdf).toHaveBeenCalledWith('m1', 'notes.md')
     await screen.findByRole('button', { name: 'Export this file as a typeset PDF' })
     expect(downloadMissionPdfExport).toHaveBeenCalledWith('att-1', 'notes.pdf')
+  })
+})
+
+const shortlistDoc = [
+  '### Signal Router',
+  '**Pitch:** Routes alerts to the right human.',
+  '**Fit:** satisfies R1.',
+  '**Differentiation:** closest is Thing, crowded.',
+  '**Build:** Go service plus a React panel.',
+  '**Demo:** three beats.',
+  '**Why choose it:** the judges asked for it.',
+  '**Why not:** ingest may not finish.',
+].join('\n')
+
+describe('FileViewer option shortlist', () => {
+  it('renders a matching markdown artifact as the shortlist view', async () => {
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob([shortlistDoc]))
+    render(
+      <MemoryRouter>
+        <FileViewer missionId="m1" file={file('ideas.md')} />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Signal Router')
+    expect(screen.getByText('Routes alerts to the right human.')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Pick' })).toBeTruthy()
+    expect(screen.queryByText('three beats.', { exact: false })).toBeNull()
+  })
+
+  it('still shows the plain source when raw markdown is toggled on', async () => {
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob([shortlistDoc]))
+    render(
+      <MemoryRouter>
+        <FileViewer missionId="m1" file={file('ideas.md')} />
+      </MemoryRouter>,
+    )
+
+    await screen.findByText('Signal Router')
+    fireEvent.click(screen.getByRole('button', { name: 'Show raw markdown source' }))
+    expect(await screen.findByText('**Pitch:**', { exact: false })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Pick' })).toBeNull()
+  })
+
+  it('renders a non-matching markdown artifact as plain markdown', async () => {
+    vi.mocked(fetchMissionFileBlob).mockResolvedValue(new Blob(['# Report\n\n### Background\n\nProse.']))
+    render(
+      <MemoryRouter>
+        <FileViewer missionId="m1" file={file('report.md')} />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('heading', { name: 'Report' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Background' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Pick' })).toBeNull()
   })
 })

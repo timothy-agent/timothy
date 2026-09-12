@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router'
+import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { getMission, type CreateMissionInput } from '../api/client'
 import type { Mission } from '../api/types'
 import { MissionForm } from '../components/missions/MissionForm'
@@ -30,6 +30,10 @@ export function NewMission() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const parentID = searchParams.get('parent') ?? undefined
+  // A shortlist pick carries its goal text through router state
+  // rather than the URL: an option's section is long and means
+  // nothing as a query param.
+  const { pickedOptionGoal } = (useLocation().state ?? {}) as { pickedOptionGoal?: string }
 
   // MissionForm's initial prop only ever seeds its useState
   // initializers (they run once) — so a follow-up's form must not
@@ -68,6 +72,7 @@ export function NewMission() {
           <MissionForm
             mode="create"
             initial={parent ? missionToInitial(parent) : undefined}
+            initialGoal={pickedOptionGoal}
             parentMissionId={parent?.id}
             onCancel={() => navigate(-1)}
             onDone={(result) => {
