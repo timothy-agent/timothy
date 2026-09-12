@@ -19,6 +19,8 @@ import { CopyButton } from '../Message'
 import { errText } from '../../lib/errors'
 import { TooltipProvider } from '../ui/tooltip'
 import { previewKindOf } from './filePreviewKind'
+import { parseOptionShortlist } from '../../lib/optionShortlist'
+import { ArtifactShortlist } from './ArtifactShortlist'
 
 function humanSize(n: number): string {
   if (n < 1024) return `${n} B`
@@ -126,6 +128,8 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
   }
 
   const lineCount = state.status === 'text' ? state.text.split('\n').length : undefined
+  const shortlist =
+    kind === 'markdown' && state.status === 'text' ? parseOptionShortlist(state.text) : null
 
   return (
     <TooltipProvider>
@@ -203,7 +207,11 @@ export function FileViewer({ missionId, file }: { missionId: string; file: Missi
             <iframe src={state.url} title={file.path} className="size-full border-0" />
           )}
           {state.status === 'text' && kind === 'markdown' && (
-            <FileMarkdownBlock text={state.text} raw={showRawMarkdown} />
+            shortlist && !showRawMarkdown ? (
+              <ArtifactShortlist missionId={missionId} shortlist={shortlist} />
+            ) : (
+              <FileMarkdownBlock text={state.text} raw={showRawMarkdown} />
+            )
           )}
           {state.status === 'text' && kind === 'code' && (
             <FileCodeBlock code={state.text} path={file.path} />
