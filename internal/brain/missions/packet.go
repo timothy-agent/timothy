@@ -34,11 +34,11 @@ type WorkPacket struct {
 	// system prompt, same instructions a chat session with that agent
 	// would get.
 	PromptOverlay string
-	// ExecEnvironmentNote describes what shell/verify_cmd commands
+	// ExecEnvironmentNote describes what shell/check_cmd commands
 	// actually run against (sandbox container vs the minimal in-process
 	// shell) — without this a worker has no way to know whether e.g.
 	// python3 exists, and can report "done" on a step whose own
-	// verify_cmd will fail for want of a runtime that was never there.
+	// check_cmd will fail for want of a runtime that was never there.
 	ExecEnvironmentNote string
 	// ParentContext is the parent mission's outcome digest, set only
 	// for a follow-up mission (Mission.ParentContext()) -- gives the
@@ -229,8 +229,8 @@ func (p WorkPacket) RenderForDelegated(runDir string) (system, user string, file
 			for _, a := range unit.Artifacts {
 				fmt.Fprintf(&b, "  must produce (exact path): %s\n", NeutralizeSlot(a))
 			}
-			if unit.VerifyCmd != "" {
-				fmt.Fprintf(&b, "  verified by: %s\n", NeutralizeSlot(unit.VerifyCmd))
+			if unit.CheckCmd != "" {
+				fmt.Fprintf(&b, "  checked by: %s\n", NeutralizeSlot(unit.CheckCmd))
 			}
 			b.WriteString("Do this unit now.\n")
 		}
@@ -337,8 +337,8 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 			for _, a := range u.Artifacts {
 				fmt.Fprintf(&b, "  must produce (exact path): %s\n", NeutralizeSlot(a))
 			}
-			if u.VerifyCmd != "" {
-				fmt.Fprintf(&b, "  verified by: %s\n", NeutralizeSlot(u.VerifyCmd))
+			if u.CheckCmd != "" {
+				fmt.Fprintf(&b, "  checked by: %s\n", NeutralizeSlot(u.CheckCmd))
 			}
 		}
 		b.WriteString("\n")
@@ -444,7 +444,7 @@ func renderOpenFindings(findings []Finding, round, maxRounds int) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Do not re-verify the whole project. Change code, run the affected unit's verify_cmd, commit, and report per finding what changed.\n\n")
+	b.WriteString("Do not re-verify the whole project. Change code, run the affected unit's check_cmd, commit, and report per finding what changed.\n\n")
 	return b.String()
 }
 

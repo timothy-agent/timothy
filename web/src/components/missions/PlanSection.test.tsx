@@ -5,7 +5,7 @@ import { PlanSection } from './PlanSection'
 
 afterEach(cleanup)
 
-const units: PlanUnit[] = [{ title: 'Add validation', verify_cmd: 'go test ./...', passes: true }]
+const units: PlanUnit[] = [{ title: 'Add validation', check_cmd: 'go test ./...', passes: true }]
 
 describe('PlanSection', () => {
   it('renders no plan message when there are no units', () => {
@@ -17,10 +17,10 @@ describe('PlanSection', () => {
     render(
       <PlanSection
         units={[
-          { title: 'done', verify_cmd: '', passes: true, harness_passed: true },
-          { title: 'awaiting review', verify_cmd: '', passes: false, harness_passed: true },
-          { title: 'broke', verify_cmd: '', passes: false, regressed: true, verify_check: 'artifacts', verify_excerpt: 'a.md: not found' },
-          { title: 'todo', verify_cmd: '', passes: false },
+          { title: 'done', check_cmd: '', passes: true, harness_passed: true },
+          { title: 'awaiting review', check_cmd: '', passes: false, harness_passed: true },
+          { title: 'broke', check_cmd: '', passes: false, regressed: true, verify_check: 'artifacts', verify_excerpt: 'a.md: not found' },
+          { title: 'todo', check_cmd: '', passes: false },
         ]}
       />,
     )
@@ -41,8 +41,8 @@ describe('PlanSection', () => {
     render(
       <PlanSection
         units={[
-          { title: 'with criteria', verify_cmd: '', passes: false, criteria: ['report.md names RFC 6585', 'under 200 words'] },
-          { title: 'legacy', verify_cmd: '', passes: false },
+          { title: 'with criteria', check_cmd: '', passes: false, criteria: ['report.md names RFC 6585', 'under 200 words'] },
+          { title: 'legacy', check_cmd: '', passes: false },
         ]}
       />,
     )

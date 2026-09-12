@@ -542,11 +542,19 @@ type PlanAssumption struct {
 // harness (RunVerify + CheckArtifacts), never by model output, and
 // only on that harness-run evidence.
 type PlanUnit struct {
-	Title     string `json:"title"`
-	VerifyCmd string `json:"verify_cmd"`
+	Title string `json:"title"`
+	// CheckCmd is the deterministic gate: a POSIX shell command the
+	// harness runs after every worker turn (issue #718 renamed it from
+	// verify_cmd: it checks mechanical facts such as tests passing, it
+	// never verifies that the criteria are met; the reviewer does that).
+	CheckCmd string `json:"check_cmd"`
+	// LegacyVerifyCmd reads plans stored before the rename; normalize
+	// folds it into CheckCmd and clears it, so it is never written.
+	// Drop once scripts/pending-alters.md's key rename has run everywhere.
+	LegacyVerifyCmd string `json:"verify_cmd,omitempty"`
 	// Artifacts are workspace-relative paths this unit must produce.
 	// The harness checks each exists and is non-empty BEFORE running
-	// verify_cmd — a tautological verify_cmd (echo 'done') can no
+	// check_cmd: a tautological check_cmd (echo 'done') can no
 	// longer fake completion when the declared artifact is missing.
 	Artifacts []string `json:"artifacts,omitempty"`
 	// Criteria (D-095, issue #520) are the unit's acceptance criteria,
@@ -563,11 +571,11 @@ type PlanUnit struct {
 	// HarnessPassed (legacy rows written before D-094 excepted).
 	Passes bool `json:"passes"`
 	// HarnessPassed (D-094, issue #518) is the batch verifier's own
-	// verdict: artifacts present and verify_cmd exit 0 after the last
+	// verdict: artifacts present and check_cmd exit 0 after the last
 	// worker turn. Cleared when a later turn regresses the unit.
 	HarnessPassed bool `json:"harness_passed"`
 	// VerifyCheck names the check that decided the last verification
-	// (artifacts, citations, verify_cmd, timeout); VerifyExcerpt is its
+	// (artifacts, citations, check_cmd, timeout); VerifyExcerpt is its
 	// trailing output, capped at verifyExcerptCap, rendered into the
 	// worker packet while the unit is failing.
 	VerifyCheck   string `json:"verify_check,omitempty"`
@@ -580,6 +588,18 @@ type PlanUnit struct {
 // verified reports whether the harness has passed this unit: Passes
 // implies it for rows written before HarnessPassed existed.
 func (u PlanUnit) verified() bool { return u.HarnessPassed || u.Passes }
+
+// normalize folds the pre-rename verify_cmd key into CheckCmd on every
+// unit (issue #718) so callers only ever read CheckCmd. Idempotent.
+func (p *Plan) normalize() {
+	for i := range p.Units {
+		u := &p.Units[i]
+		if u.CheckCmd == "" && u.LegacyVerifyCmd != "" {
+			u.CheckCmd = u.LegacyVerifyCmd
+		}
+		u.LegacyVerifyCmd = ""
+	}
+}
 
 // PendingInput is ask_user's park detail (D-088, issue #457): the
 // structured question a phase turn is waiting on the operator to

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -759,9 +760,9 @@ func workerResultSchema(adapter executor.Adapter) json.RawMessage {
 // the structured status output instead of a mission_status tool call
 // (the harness has no such tool; ResultSchema is how it reports back),
 // and that DONE means every acceptance criterion is met even though the
-// harness-side verify_cmd/CheckArtifacts runs regardless of what it
+// harness-side check_cmd/CheckArtifacts runs regardless of what it
 // reports.
-const delegatedSystemAppend = " You are running as a delegated coding CLI, not through mission_status. End your turn by producing the required structured output with status DONE, RETRY, or BLOCKED and a short note. Only report DONE when every acceptance criterion for the current unit is genuinely met — the harness independently verifies your artifacts and verify_cmd regardless of what you report, so a false DONE only costs a wasted review round, never actually passes. The harness commits the unit's files itself after your turn, so never run git add, commit, reset, stash, or checkout."
+const delegatedSystemAppend = " You are running as a delegated coding CLI, not through mission_status. End your turn by producing the required structured output with status DONE, RETRY, or BLOCKED and a short note. Only report DONE when every acceptance criterion for the current unit is genuinely met: the harness independently verifies your artifacts and check_cmd regardless of what you report, so a false DONE only costs a wasted review round, never actually passes. The harness commits the unit's files itself after your turn, so never run git add, commit, reset, stash, or checkout."
 
 // delegatedVerdictShapeAppend spells out the result contract for an
 // adapter that cannot be sent a schema (issue #716). The object must
@@ -823,38 +824,59 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 	}
 	run := workerRun(m, entry, adapter, authMode)
 
-	runID, err := newRunID()
-	if err != nil {
-		return WorkerVerdict{}, "", err
-	}
-	rdir := runDir(m.Workspace, runID)
-	system, user, refFiles := packet.RenderForDelegated(rdir)
-	system += delegatedSystemAppend
-	if adapter.Capabilities().SchemaSuppressesTools {
-		// No schema is sent (issue #716), so the shape has to be asked
-		// for in words; the adapter reads the trailing JSON object of
-		// the final message.
-		system += delegatedVerdictShapeAppend
-	}
-
 	decision := r.planSessionResume(ctx, m, workRoot, adapter)
+	for attempt := 0; ; attempt++ {
+		runID, err := newRunID()
+		if err != nil {
+			return WorkerVerdict{}, "", err
+		}
+		rdir := runDir(m.Workspace, runID)
+		system, user, refFiles := packet.RenderForDelegated(rdir)
+		system += delegatedSystemAppend
+		if adapter.Capabilities().SchemaSuppressesTools {
+			// No schema is sent (issue #716), so the shape has to be asked
+			// for in words; the adapter reads the trailing JSON object of
+			// the final message.
+			system += delegatedVerdictShapeAppend
+		}
 
-	spec := executor.InvocationSpec{
-		MissionID: m.ID, Workdir: workRoot,
-		PromptPath:   filepath.Join(rdir, "prompt.md"),
-		SystemAppend: system,
-		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
-		AllowTools: delegatedAllowTools, DenyTools: delegatedDenyTools,
-		ResultSchema: workerResultSchema(adapter), RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
-		ResumeSessionID: decision.sessionID,
-		StateDir:        executorStateDir(m.Workspace, m.Harness),
-	}
-	if err := r.launchRun(ctx, m, run, workRoot, rdir, runID, spec, user, refFiles, decision); err != nil {
-		return WorkerVerdict{}, "", err
-	}
+		spec := executor.InvocationSpec{
+			MissionID: m.ID, Workdir: workRoot,
+			PromptPath:   filepath.Join(rdir, "prompt.md"),
+			SystemAppend: system,
+			Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
+			AllowTools: delegatedAllowTools, DenyTools: delegatedDenyTools,
+			ResultSchema: workerResultSchema(adapter), RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
+			ResumeSessionID: decision.sessionID,
+			StateDir:        executorStateDir(m.Workspace, m.Harness),
+		}
+		if err := r.launchRun(ctx, m, run, workRoot, rdir, runID, spec, user, refFiles, decision); err != nil {
+			return WorkerVerdict{}, "", err
+		}
 
-	return r.pollToVerdict(ctx, m, run, workRoot, rdir, runID, 0)
+		verdict, text, err := r.pollToVerdict(ctx, m, run, workRoot, rdir, runID, 0)
+		if err != nil {
+			return verdict, text, err
+		}
+		// A run that made no tool call did not start the unit (issue
+		// #718: a resumed codex session answers with a verdict and
+		// nothing else). One fresh relaunch before it counts; a block
+		// that diagnoses the plan is kept, that is information, not
+		// idleness.
+		diagnosedPlan := verdict.Outcome == "blocked" && namesPlanDefect(verdict.Question, m.Plan)
+		if verdict.noWork && attempt < maxNoWorkRelaunch && !diagnosedPlan {
+			r.recordEventForce(ctx, m.ID, "executor.relaunched", map[string]any{"phase": run.phase, "run_id": runID, "reason": "no_tool_calls", "status": strings.ToUpper(verdict.Outcome)})
+			decision = resumeDecision{reason: resumeReasonSessionReset}
+			continue
+		}
+		return verdict, text, nil
+	}
 }
+
+// maxNoWorkRelaunch is how many fresh relaunches RunWorker grants a
+// turn whose runs make no tool call before the verdict reaches the
+// driver and costs an iteration.
+const maxNoWorkRelaunch = 1
 
 // launchRun builds the invocation, writes prompt.md (plus a Steerer's
 // prompt.jsonl/steer.jsonl), records executor.spawned and starts the
@@ -903,8 +925,15 @@ func (r *delegatedRunner) launchRun(ctx context.Context, m Mission, run cliRun, 
 	r.recordSpawned(ctx, m.ID, run, runID, rdir, decision)
 
 	if err := r.launch(ctx, m.ID, m.Environment, workRoot, rdir, inv, spec.RunBudget, isSteerer); err != nil {
-		r.coolDown(run.harness, run.entry)
 		r.recordDied(ctx, m.ID, run.phase, "spawn_failed", nil, err.Error())
+		// A sandbox that cannot start the CLI (image missing, sandboxd
+		// down) says nothing about the provider (issue #718): pause as
+		// infra with a short retry and leave the entry alone. Anything
+		// else from launch is the CLI itself failing to start.
+		if isSandboxError(err) {
+			return &ExecutorUnavailableError{Harness: run.harness, Reason: "sandbox unavailable: " + err.Error(), Until: time.Now().Add(sandboxRetryDelay)}
+		}
+		r.coolDown(run.harness, run.entry)
 		return fmt.Errorf("delegated runner: launch: %w", err)
 	}
 	return nil
@@ -1164,7 +1193,12 @@ func (r *delegatedRunner) pollToVerdict(ctx context.Context, m Mission, run cliR
 	}
 	switch end {
 	case runEndResult:
-		return r.finish(ctx, m, run, st, start, exitCode)
+		v, text, err := r.finish(ctx, m, run, st, start, exitCode)
+		// noWork marks only a run that RAN and reported: an idle kill or
+		// a transport death has its own handling and must not be
+		// relaunched a second time on top of it (issue #718).
+		v.noWork = st.toolCalls == 0
+		return v, text, err
 	case runEndIdle:
 		v := forcedRetryVerdict("the executor produced no output for the idle timeout and was killed")
 		stampServed(&v, run, st)
@@ -1522,6 +1556,17 @@ func (r *delegatedRunner) killRun(ctx context.Context, missionID, environment, w
 // sentinel in the accumulated text; failing that, a forced retry noting
 // the executor never reported a status.
 func (r *delegatedRunner) finish(ctx context.Context, m Mission, run cliRun, st *pollState, start time.Time, exitCode int) (WorkerVerdict, string, error) {
+	// The provider ended the run (issue #718: a 429 for balance, a 404
+	// for a model the wire does not serve): nothing a worker retry can
+	// change, so it is never a verdict. Record the run, cool the entry,
+	// and hand the driver an infra pause that waits out the cooldown.
+	if e := st.resultEvent.Err; e != "" && !isAuthFailure(e) && isProviderRejection(e) {
+		if err := r.finishCommon(ctx, m, run, st, start, exitCode, "none", "REJECTED", false); err != nil {
+			return WorkerVerdict{}, st.textBuf.String(), err
+		}
+		r.coolDown(run.harness, run.entry)
+		return WorkerVerdict{}, st.textBuf.String(), &ExecutorUnavailableError{Harness: run.harness, Reason: "provider rejected the run: " + truncate(e, 300), Until: time.Now().Add(cooldownTTL)}
+	}
 	res, ok := run.adapter.ParseResult(st.resultEvent)
 	parseKind := "schema"
 	var verdict WorkerVerdict
@@ -1552,6 +1597,11 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, run cliRun, st 
 	sessionReset := false
 	if ok && verdict.Outcome == "done" && st.worktree != nil && st.worktree.Untracked == 0 && st.worktree.Modified == 0 {
 		verdict = forcedRetryVerdict("executor reported DONE but changed nothing in the worktree; the unit is not done")
+		sessionReset = true
+	}
+	// A run with no tool call at all did nothing, whatever it said
+	// (issue #718): the session that produced it is not worth resuming.
+	if st.toolCalls == 0 {
 		sessionReset = true
 	}
 	stampServed(&verdict, run, st)
@@ -1666,6 +1716,54 @@ var authFailureSignatures = []string{
 	"please run /login",
 	"authentication_error",
 }
+
+// providerRejectionSignatures are the shapes a CLI's terminal error
+// takes when the provider, not the model, ended the run (issue #718):
+// billing, quota, a wire the model does not serve, a malformed
+// request. None of them is the worker's fault and none improves on a
+// retry of the same entry.
+var providerRejectionSignatures = []string{
+	"request rejected",
+	"insufficient balance",
+	"insufficient_quota",
+	"exceeded your current quota",
+	"rate limit",
+	"rate_limit",
+	"not supported in the v1/chat/completions endpoint",
+	"use the v1/responses endpoint",
+	"invalid_request_error",
+	"model_not_found",
+	"api error",
+}
+
+// providerStatusCode matches an HTTP status a CLI quotes in its error
+// text, in an HTTP shape only ("(429)", "404: {", "HTTP 503",
+// "status 502") so a bare number in a test failure never cools a
+// provider; 401/403 are left to isAuthFailure.
+var providerStatusCode = regexp.MustCompile(`(?i)(?:^|\(|\b(?:status|http|error)\b\D{0,4})(400|402|404|408|409|413|422|429|500|502|503|529)\b`)
+
+// isProviderRejection reports whether a result's error text is the
+// provider refusing the run.
+func isProviderRejection(text string) bool {
+	lower := strings.ToLower(text)
+	for _, sig := range providerRejectionSignatures {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return providerStatusCode.MatchString(text)
+}
+
+// isSandboxError reports whether err came from the sandbox client
+// rather than the CLI it was asked to start.
+func isSandboxError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "sandboxclient:")
+}
+
+// sandboxRetryDelay is how long an infra pause for a sandbox launch
+// failure asks the sweep to wait: long enough for an image pull or a
+// sandboxd restart, short enough not to stall a mission for a blip.
+const sandboxRetryDelay = 2 * time.Minute
 
 // sessionLostSignatures are the stderr lines a CLI prints when a
 // resume names a session it no longer has (codex, claude).

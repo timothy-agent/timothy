@@ -23,7 +23,7 @@ description: Decomposes complex research questions into independent sub-question
 - Stop researching a sub-question once it has an adequately supported answer. If a query goes nowhere, note the dead end briefly and try a materially different research angle rather than repeating the same query.
 - The final unit is synthesis only: read every `findings-*.md` file and do not perform new web research. Write `report.md` with an overview plus a section per sub-question, using claims supported by the findings files. If synthesis discovers a material evidence gap, return it to the appropriate research unit rather than silently filling it.
 - Close `report.md` with one consolidated `## Sources` list merged from the findings files. Every substantive factual claim in the report must be traceable to a cited source in those findings files; analytical conclusions should be clearly identified as inference when appropriate.
-- Verify each research unit's artifact with a verify_cmd that confirms the findings file exists, contains a `## Sources` heading, and contains at least one retrieved source URL. Verify the synthesis unit's verify_cmd confirms `report.md` exists and contains a `## Sources` heading.
+- Verify each research unit's artifact with a check_cmd that confirms the findings file exists, contains a `## Sources` heading, and contains at least one retrieved source URL. Verify the synthesis unit's check_cmd confirms `report.md` exists and contains a `## Sources` heading.
 - Conflicting credible sources must be reported explicitly as a conflict in both the relevant findings file and, when load-bearing, the final report. Do not silently pick a side.
 
 ## Anti-rationalization

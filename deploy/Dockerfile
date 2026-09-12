@@ -25,9 +25,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Brain's shell tool needs /bin/sh; alpine provides busybox sh while
 # staying minimal. Select with build target runtime-shell. Everything
 # else keeps the distroless default (last stage). curl is installed
-# explicitly: busybox wget is present by default, but plan/verify_cmd
+# explicitly: busybox wget is present by default, but plan/check_cmd
 # content (model-authored) reaches for curl as the more common default,
-# and a missing binary fails a verify_cmd with a misleading exit code
+# and a missing binary fails a check_cmd with a misleading exit code
 # instead of a clear "not found". git is required by coding missions:
 # the missions engine execs `git worktree add`, `git diff`, rollback,
 # and teardown inside this container. openssh-keygen provides

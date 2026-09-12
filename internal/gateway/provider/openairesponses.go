@@ -71,10 +71,11 @@ type orsInputItem struct {
 	CallID    string `json:"call_id,omitempty"`
 	Name      string `json:"name,omitempty"`
 	Arguments string `json:"arguments,omitempty"`
-	// function_call_output field: a pointer so an empty tool result
-	// still serializes as "output": "", which the API requires on
-	// every function_call_output item (issue #702).
-	Output *string `json:"output,omitempty"`
+	// function_call_output field. Never empty on such an item: the API
+	// rejects "output": "" as missing_required_parameter exactly like
+	// an absent key (issues #702, #718), so appendMessage substitutes
+	// emptyToolOutput.
+	Output string `json:"output,omitempty"`
 }
 
 type orsTool struct {
@@ -211,6 +212,10 @@ func messageItem(m Message) orsInputItem {
 	return item
 }
 
+// emptyToolOutput stands in for a tool result with no content: the
+// Responses API rejects "output": "" as a missing parameter (issue #718).
+const emptyToolOutput = "(no output)"
+
 // appendMessage translates one req.Messages entry into its input
 // item(s), mirroring openaicompat.buildRequest's per-message switch:
 // a plain message becomes a message item, an assistant's tool calls
@@ -225,8 +230,11 @@ func appendMessage(items []orsInputItem, m Message) []orsInputItem {
 			// native is_error flag on this shape either.
 			output = "ERROR: " + output
 		}
+		if output == "" {
+			output = emptyToolOutput
+		}
 		return append(items, orsInputItem{
-			Type: "function_call_output", CallID: m.ToolResult.ID, Output: &output,
+			Type: "function_call_output", CallID: m.ToolResult.ID, Output: output,
 		})
 	case len(m.ToolCalls) > 0:
 		if m.Content != "" {

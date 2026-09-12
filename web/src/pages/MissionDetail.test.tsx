@@ -84,7 +84,7 @@ const baseMission: Mission = {
   branch: 'mission/fix-login',
   base_commit: 'abc123def456',
   workspace: 'ws-1',
-  plan: { units: [{ title: 'Add validation', verify_cmd: 'go test', passes: true }] },
+  plan: { units: [{ title: 'Add validation', check_cmd: 'go test', passes: true }] },
   progress: [{ at: '2026-01-01T00:00:00Z', note: 'found the root cause' }],
   iteration: 2,
   max_iterations: 8,
@@ -1477,7 +1477,7 @@ describe('MissionDetail plan approval gate', () => {
       status: 'paused',
       pause_reason: 'approval',
       plan: {
-        units: [{ title: 'Add validation', verify_cmd: 'go test', passes: true }],
+        units: [{ title: 'Add validation', check_cmd: 'go test', passes: true }],
         assumptions: [{ assumption: 'staging only', default: 'high' }],
       },
     })

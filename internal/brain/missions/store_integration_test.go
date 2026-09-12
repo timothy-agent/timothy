@@ -893,7 +893,7 @@ func TestApplyTransitionPersistsUnitVerifyState(t *testing.T) {
 	}
 
 	plan := Plan{
-		Units:       []PlanUnit{{Title: "write a.md", Artifacts: []string{"a.md"}, VerifyCmd: "test -s a.md"}, {Title: "write b.md"}},
+		Units:       []PlanUnit{{Title: "write a.md", Artifacts: []string{"a.md"}, CheckCmd: "test -s a.md"}, {Title: "write b.md"}},
 		Assumptions: []PlanAssumption{{Assumption: "format", Default: "markdown"}},
 	}
 	if err := s.SetPlan(ctx, id, plan); err != nil {
@@ -903,7 +903,7 @@ func TestApplyTransitionPersistsUnitVerifyState(t *testing.T) {
 	// Turn 1: unit 0 passes on harness evidence.
 	passed := Step(
 		StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: plan.Units},
-		StepInput{Input: InputReviewApprove, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
+		StepInput{Input: InputReviewApprove, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "check_cmd", Excerpt: "ok"}}},
 		DefaultConfig,
 	)
 	if err := s.ApplyTransition(ctx, id, passed); err != nil {
@@ -913,7 +913,7 @@ func TestApplyTransitionPersistsUnitVerifyState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if u := m.Plan.Units[0]; !u.Passes || !u.HarnessPassed || u.VerifyCheck != "verify_cmd" || u.VerifyExcerpt != "ok" {
+	if u := m.Plan.Units[0]; !u.Passes || !u.HarnessPassed || u.VerifyCheck != "check_cmd" || u.VerifyExcerpt != "ok" {
 		t.Fatalf("unit 0 after pass = %+v, want passed on harness evidence with the excerpt", u)
 	}
 	if len(m.Plan.Assumptions) != 1 || m.Plan.Units[1].Title != "write b.md" {

@@ -183,6 +183,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		}
 	}
 	_ = json.Unmarshal(plan, &m.Plan)
+	m.Plan.normalize()
 	_ = json.Unmarshal(progress, &m.Progress)
 	if m.Progress == nil {
 		m.Progress = []ProgressNote{}
@@ -269,6 +270,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		}
 	}
 	_ = json.Unmarshal(plan, &m.Plan)
+	m.Plan.normalize()
 	_ = json.Unmarshal(progress, &m.Progress)
 	if m.Progress == nil {
 		m.Progress = []ProgressNote{}
