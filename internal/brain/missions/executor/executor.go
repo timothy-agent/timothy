@@ -68,6 +68,11 @@ type InvocationSpec struct {
 	// The runner only ever sets this when Capabilities().SupportsResume
 	// is true for the adapter in play.
 	ResumeSessionID string
+	// StateDir, when non-empty, is a per-mission directory the CLI keeps
+	// its own session state in across runs (issue #707): codex's
+	// CODEX_HOME, so `codex exec resume` finds the rollout the previous
+	// run wrote. Empty keeps state inside the run dir.
+	StateDir string
 	// ReadOnly asks for a run that can read the workdir but never
 	// modify it or run shell commands (issue #582, the delegated
 	// reviewer). Each adapter maps it onto its own CLI knob; an adapter
@@ -91,9 +96,10 @@ type Invocation struct {
 	Argv       []string
 	Env        map[string]string // allowlisted names only; values never logged
 	PromptFile string
-	// Files are extra files the runner writes into the run dir before
-	// spawn, keyed by slash-separated path relative to the run dir
-	// (e.g. "pi-agent/models.json"). Values are never logged.
+	// Files are extra files the runner writes before spawn, keyed by
+	// slash-separated path relative to the run dir (e.g.
+	// "pi-agent/models.json") or by an absolute path under the mission's
+	// StateDir. Values are never logged.
 	Files map[string]string
 }
 

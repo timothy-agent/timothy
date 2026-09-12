@@ -1022,6 +1022,12 @@ func (s *Store) LastRunState(ctx context.Context, missionID string) (*runState, 
 				state = &runState{}
 			}
 			state.Finished = true
+			var result struct {
+				SessionReset bool `json:"session_reset"`
+			}
+			if err := json.Unmarshal(payload, &result); err == nil && result.SessionReset {
+				state.SessionReset = true
+			}
 		case "executor.progress":
 			if state == nil {
 				state = &runState{}

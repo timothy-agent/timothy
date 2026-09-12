@@ -1663,7 +1663,12 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	case "blocked":
 		return StepInput{Input: InputWorkerBlocked, Message: verdict.Question, Provider: verdict.Provider, Model: verdict.Model}, nil
 	default: // "retry" or anything unrecognized
-		if wt := m.WorktreePath(); wt != "" {
+		// Only a RETRY the worker itself declared rolls the tree back
+		// (issue #706): a forced retry comes from transport death, an
+		// idle or run-budget kill, or an unreadable result, none of
+		// which says the edits so far are wrong, and the retry works
+		// on top of them.
+		if wt := m.WorktreePath(); wt != "" && !verdict.Forced {
 			if err := d.workspace.Rollback(ctx, wt, m.Kind); err != nil {
 				d.log.Warn("driver: rollback failed", "mission_id", m.ID, "error", err)
 			}
@@ -2085,7 +2090,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	p := WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Plan: m.Plan, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
-		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext(), ReferencedContext: m.ReferencedContext(), Attachments: m.Attachments(),
+		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext(), ReferencedContext: m.ReferencedContext(), References: m.ReferenceEntries(), Attachments: m.Attachments(),
 		Light: m.RunsPlanless(), Location: loc,
 		Findings: m.ReviewFindings, ReworkRound: m.ReworkRounds, MaxRounds: m.MaxIterations,
 	}

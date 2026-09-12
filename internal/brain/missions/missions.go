@@ -180,15 +180,15 @@ type Mission struct {
 	// time, same as AutoApproveTools; scheduler.go and the workflow
 	// engine both force this true regardless of template/step input:
 	// an unattended mission has nobody to approve its plan.
-	AutoApprovePlan bool   `json:"auto_approve_plan"`
+	AutoApprovePlan bool `json:"auto_approve_plan"`
 	// HasPlan (D-102, issue #496) marks a mission whose goal already
 	// carries the operator's own plan: the plan turn runs in transcribe
 	// mode (PlanSession), converting the goal's plan into units instead
 	// of designing one from scratch. Snapshotted at create time, never
 	// model-mutable; light missions never plan, so this has no effect
 	// there.
-	HasPlan         bool   `json:"has_plan,omitempty"`
-	ScheduleID      string `json:"schedule_id,omitempty"`
+	HasPlan    bool   `json:"has_plan,omitempty"`
+	ScheduleID string `json:"schedule_id,omitempty"`
 	// ParentMissionID names the terminal mission this one follows up on
 	// (api/missions.go's create) — empty for an ordinary mission.
 	ParentMissionID string `json:"parent_mission_id,omitempty"`
@@ -438,6 +438,17 @@ func (m Mission) ParentContext() string {
 // Mission.ReferencedContext column's replacement.
 func (m Mission) ReferencedContext() string {
 	var b strings.Builder
+	for _, e := range m.ReferenceEntries() {
+		fmt.Fprintf(&b, "%s:\n%s\n\n", referenceName(e), e.Digest)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// ReferenceEntries returns the picked reference sources ReferencedContext
+// renders, in order: a delegated worker gets each as a file in its run
+// dir instead of inline text (issue #705).
+func (m Mission) ReferenceEntries() []SourceEntry {
+	var out []SourceEntry
 	for _, e := range m.Sources {
 		switch e.Source {
 		case SourceKindChat, SourceKindKB, SourceKindBrief:
@@ -451,13 +462,18 @@ func (m Mission) ReferencedContext() string {
 		if e.Digest == "" {
 			continue
 		}
-		name := e.Name
-		if name == "" {
-			name = e.MissionID + e.SessionID + e.DocID
-		}
-		fmt.Fprintf(&b, "%s:\n%s\n\n", name, e.Digest)
+		out = append(out, e)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return out
+}
+
+// referenceName labels a reference entry in prompts: its name, else
+// the ids that identify it.
+func referenceName(e SourceEntry) string {
+	if e.Name != "" {
+		return e.Name
+	}
+	return e.MissionID + e.SessionID + e.DocID
 }
 
 // WorktreePath derives the worktree directory (issue #479 dropped the
