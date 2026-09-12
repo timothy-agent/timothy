@@ -137,6 +137,10 @@ function pivot(points: UsagePoint[], metric: (p: UsagePoint) => number, onlyGrou
 interface TotalsRow extends ConvertedRow {
   group: string
   cost: number
+  // unbilled is subscription-covered spend the executor reported
+  // (issue #710): shown in the per-model table, never in cost.
+  unbilled: number
+  converted_unbilled?: number
   requests: number
   errors: number
   tokens: number
@@ -154,17 +158,31 @@ function totals(points: UsagePoint[]): TotalsRow[] {
   for (const p of points) {
     const key = `${p.group} ${p.currency}`
     const t = acc.get(key) ?? {
-      group: p.group, currency: p.currency, cost: 0, requests: 0, errors: 0, tokens: 0,
+      group: p.group, currency: p.currency, cost: 0, unbilled: 0, requests: 0, errors: 0, tokens: 0,
       converted_amount: p.converted_amount != null ? 0 : undefined, converted_currency: p.converted_currency,
+      converted_unbilled: p.converted_unbilled_cost != null ? 0 : undefined,
     }
     t.cost += p.cost
+    t.unbilled += p.unbilled_cost
     t.requests += p.requests
     t.errors += p.errors
     t.tokens += p.input_tokens + p.output_tokens
     if (t.converted_amount != null && p.converted_amount != null) t.converted_amount += p.converted_amount
+    if (t.converted_unbilled != null && p.converted_unbilled_cost != null) t.converted_unbilled += p.converted_unbilled_cost
     acc.set(key, t)
   }
-  return [...acc.values()].sort((a, b) => b.cost - a.cost)
+  return [...acc.values()].sort((a, b) => b.cost + b.unbilled - (a.cost + a.unbilled))
+}
+
+// withUnbilled folds a row's subscription-covered spend into the
+// amounts the per-model table shows (issue #710): the operator wants
+// to see what the work would have cost, the tiles keep the true bill.
+function withUnbilled(t: TotalsRow): { row: ConvertedRow; amount: number } {
+  if (t.unbilled <= 0) return { row: t, amount: t.cost }
+  return {
+    row: { ...t, converted_amount: t.converted_amount != null ? t.converted_amount + (t.converted_unbilled ?? 0) : undefined },
+    amount: t.cost + t.unbilled,
+  }
 }
 
 const bucketLabel = (iso: string, bucket: string) => {
@@ -742,15 +760,28 @@ function BreakdownTable({
     <Panel title={title} density="operational">
       <Table>
         <TableBody>
-          {rows.map((t) => (
+          {rows.map((t) => {
+            const { row, amount } = withUnbilled(t)
+            return (
             <TableRow key={`${t.group} ${t.currency}`}>
               <TableCell className="max-w-36 truncate">{t.group}</TableCell>
               <TableCell numeric className="text-muted-foreground">{compact(t.tokens)} tok</TableCell>
               <TableCell numeric className="font-medium">
-                {primaryMoney(t, t.cost)}
-                {secondaryMoney(t, t.cost) && (
+                {primaryMoney(row, amount)}
+                {secondaryMoney(row, amount) && (
                   <span className="ml-1 text-xs font-normal text-muted-foreground">
-                    ({secondaryMoney(t, t.cost)})
+                    ({secondaryMoney(row, amount)})
+                  </span>
+                )}
+                {t.unbilled > 0 && (
+                  <span
+                    className="ml-1 text-xs font-normal text-muted-foreground"
+                    title={`${primaryMoney(
+                      { ...t, converted_amount: t.converted_unbilled },
+                      t.unbilled,
+                    )} of this is covered by a subscription and not billed`}
+                  >
+                    subscription
                   </span>
                 )}
                 {(estimates?.get(t.group) ?? 0) > 0 && (
@@ -763,7 +794,8 @@ function BreakdownTable({
                 )}
               </TableCell>
             </TableRow>
-          ))}
+            )
+          })}
           {rows.length === 0 && (
             <TableRow>
               <TableCell className="py-6 text-center text-muted-foreground">Nothing in range.</TableCell>
