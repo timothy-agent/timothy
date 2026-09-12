@@ -153,7 +153,7 @@ services:
       # off) since whisper itself defaults off — see its service
       # comment.
       WHISPER_URL: ${WHISPER_URL:-}
-      # sandboxd's internal address — mission shell/verify_cmd execution
+      # sandboxd's internal address: mission shell/check_cmd execution
       # always runs there; brain never touches the Docker socket
       # directly.
       SANDBOXD_URL: http://sandboxd:8083

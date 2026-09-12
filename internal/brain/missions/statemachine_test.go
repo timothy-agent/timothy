@@ -139,6 +139,27 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseBuild, Status: StatusWaitingForInput},
 		},
 		{
+			name:  "plan_defect spends the automatic replan instead of parking (issue #718)",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 2, ConsecutiveFailures: 1},
+			input: StepInput{Input: InputPlanDefect, Reason: "unit cannot pass in isolation", Message: "unit cannot pass in isolation"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
+		},
+		{
+			name:  "plan_defect after the replan is spent parks like a block",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ReplanUsed: true},
+			input: StepInput{Input: InputPlanDefect, Reason: "gate cannot pass", Message: "gate cannot pass"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWaitingForInput, MaxIterations: 8, ReplanUsed: true},
+		},
+		{
+			name:  "plan_defect on a light mission parks (it never plans)",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Flow: FlowLight},
+			input: StepInput{Input: InputPlanDefect, Reason: "gate cannot pass", Message: "gate cannot pass"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWaitingForInput, MaxIterations: 8, Flow: FlowLight},
+		},
+		{
 			name:  "worker_failed below backoff threshold just retries",
 			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 1},
 			input: StepInput{Input: InputWorkerFailed},
@@ -599,24 +620,24 @@ func TestStepAppliesVerification(t *testing.T) {
 		wantEvents []string
 	}{
 		{
-			name:  "worker_retry records the failing excerpt without flipping anything",
-			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "a"}}},
-			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Verified: []UnitVerification{{Unit: 0, Check: "verify_cmd", Excerpt: long}}},
-			wantUnits: []PlanUnit{{Title: "a", VerifyCheck: "verify_cmd", VerifyExcerpt: long[:verifyExcerptCap] + "…"}},
+			name:      "worker_retry records the failing excerpt without flipping anything",
+			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "a"}}},
+			input:     StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Verified: []UnitVerification{{Unit: 0, Check: "check_cmd", Excerpt: long}}},
+			wantUnits: []PlanUnit{{Title: "a", VerifyCheck: "check_cmd", VerifyExcerpt: long[:verifyExcerptCap] + "…"}},
 			wantPhase: PhaseBuild, wantEvents: []string{"mission.retry"},
 		},
 		{
-			name:  "phase_complete marks a passing unit harness-passed and stays in build while a unit is pending (D-096)",
-			state: StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}},
-			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
-			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}, {Title: "b"}},
+			name:      "phase_complete marks a passing unit harness-passed and stays in build while a unit is pending (D-096)",
+			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}},
+			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "check_cmd", Excerpt: "ok"}}},
+			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "check_cmd", VerifyExcerpt: "ok"}, {Title: "b"}},
 			wantPhase: PhaseBuild, wantEvents: []string{"mission.generate_continued"},
 		},
 		{
-			name:  "phase_complete enters prove once every unit is harness-passed, Passes waits for approval",
-			state: StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}}},
-			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 1, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
-			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}},
+			name:      "phase_complete enters prove once every unit is harness-passed, Passes waits for approval",
+			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}}},
+			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 1, Passed: true, Check: "check_cmd", Excerpt: "ok"}}},
+			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", HarnessPassed: true, VerifyCheck: "check_cmd", VerifyExcerpt: "ok"}},
 			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
 		},
 		{
@@ -641,19 +662,19 @@ func TestStepAppliesVerification(t *testing.T) {
 				{Title: "a", Passes: true, HarnessPassed: true}, {Title: "b"},
 			}},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "regression:unit_0", Verified: []UnitVerification{
-				{Unit: 0, Check: "artifacts", Excerpt: "a.md: not found"}, {Unit: 1, Passed: true, Check: "verify_cmd"},
+				{Unit: 0, Check: "artifacts", Excerpt: "a.md: not found"}, {Unit: 1, Passed: true, Check: "check_cmd"},
 			}},
 			wantUnits: []PlanUnit{
 				{Title: "a", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "a.md: not found"},
-				{Title: "b", HarnessPassed: true, VerifyCheck: "verify_cmd"},
+				{Title: "b", HarnessPassed: true, VerifyCheck: "check_cmd"},
 			},
 			wantPhase: PhaseBuild, wantEvents: []string{"mission.unit_regressed", "mission.retry"},
 		},
 		{
 			name:      "a regressed unit passing again clears the regression marker",
 			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "gone"}}},
-			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
-			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}},
+			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "check_cmd", Excerpt: "ok"}}},
+			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "check_cmd", VerifyExcerpt: "ok"}},
 			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
 		},
 		{
@@ -690,14 +711,14 @@ func TestStepAppliesVerification(t *testing.T) {
 func TestStepRegressionEventPayload(t *testing.T) {
 	got := Step(
 		StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "write a.md", Passes: true, HarnessPassed: true}}},
-		StepInput{Input: InputWorkerRetry, Verified: []UnitVerification{{Unit: 0, Check: "verify_cmd", Excerpt: strings.Repeat("y", 600)}}},
+		StepInput{Input: InputWorkerRetry, Verified: []UnitVerification{{Unit: 0, Check: "check_cmd", Excerpt: strings.Repeat("y", 600)}}},
 		DefaultConfig,
 	)
 	if len(got.Events) == 0 || got.Events[0].Kind != "mission.unit_regressed" {
 		t.Fatalf("events = %+v, want mission.unit_regressed first", got.Events)
 	}
 	p := got.Events[0].Payload
-	if p["unit"] != 0 || p["title"] != "write a.md" || p["check"] != "verify_cmd" || len(p["excerpt"].(string)) > 510 {
+	if p["unit"] != 0 || p["title"] != "write a.md" || p["check"] != "check_cmd" || len(p["excerpt"].(string)) > 510 {
 		t.Fatalf("payload = %+v, want unit 0, the title, the check and a bounded excerpt", p)
 	}
 }

@@ -47,7 +47,7 @@ func TestOutcomeDigest(t *testing.T) {
 				Plan: Plan{Units: []PlanUnit{{Title: "only unit", Passes: true}}},
 			},
 			events: []Event{
-				{Kind: "mission.review_skipped", Payload: json.RawMessage(`{"unit":0,"reason":"artifacts and verify_cmd passed harness checks"}`)},
+				{Kind: "mission.review_skipped", Payload: json.RawMessage(`{"unit":0,"reason":"artifacts and check_cmd passed harness checks"}`)},
 			},
 			terminal:     PhaseDone,
 			wantContains: []string{"review: skipped"},

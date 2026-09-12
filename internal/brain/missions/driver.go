@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -116,7 +117,7 @@ type Driver struct {
 	log       *slog.Logger
 	cfg       Config
 
-	// sandboxExec routes a plan unit's verify_cmd through the mission's
+	// sandboxExec routes a plan unit's check_cmd through the mission's
 	// sandbox container — the same backend nativeRunner uses for
 	// worker/reviewer shell calls. sandboxRemove tears the container
 	// down at a mission's terminal transition.
@@ -1455,7 +1456,7 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 	}
 	if m.ReplanUsed {
 		// Carry forward prior harness evidence: a unit the new plan kept
-		// unchanged (same title, same verify_cmd) and that had already
+		// unchanged (same title, same check_cmd) and that had already
 		// passed stays passed -- the planner's own parsePlan forces every
 		// unit to passes=false, since it can't itself claim pre-verified.
 		restorePassedUnits(&plan, priorPlan)
@@ -1538,21 +1539,81 @@ func progressWithOperatorNotes(notes []ProgressNote, n int, render func(string) 
 	return b.String()
 }
 
-// restorePassedUnits re-marks plan's units passed when a prior unit
-// with the exact same title and verify_cmd had already passed — harness
-// evidence a replan must not silently erase for work it didn't touch.
+// restorePassedUnits carries harness evidence across a replan (issue
+// #718): a new unit that matches a prior verified unit, by title plus
+// check_cmd or by producing exactly the same artifacts, keeps that
+// unit's HarnessPassed. Reviewer approval (Passes) survives only the
+// exact match: a rewritten unit carries new criteria, so the reviewer
+// judges it again. A replan rewrites titles freely, so the artifact set
+// is the stable key; the worktree is untouched by a replan.
 func restorePassedUnits(plan *Plan, prior Plan) {
-	passed := make(map[string]bool, len(prior.Units))
+	byKey := make(map[string]PlanUnit, len(prior.Units))
+	byArtifacts := make(map[string]PlanUnit, len(prior.Units))
 	for _, u := range prior.Units {
-		if u.Passes {
-			passed[u.Title+"\x00"+u.VerifyCmd] = true
+		if !u.verified() {
+			continue
+		}
+		byKey[u.Title+"\x00"+u.CheckCmd] = u
+		if k := artifactKey(u.Artifacts); k != "" {
+			byArtifacts[k] = u
 		}
 	}
 	for i := range plan.Units {
-		if passed[plan.Units[i].Title+"\x00"+plan.Units[i].VerifyCmd] {
-			plan.Units[i].Passes, plan.Units[i].HarnessPassed = true, true
+		u := &plan.Units[i]
+		prev, ok := byKey[u.Title+"\x00"+u.CheckCmd]
+		exact := ok
+		if k := artifactKey(u.Artifacts); !ok && k != "" {
+			prev, ok = byArtifacts[k]
+		}
+		if !ok {
+			continue
+		}
+		u.HarnessPassed = true
+		u.Passes = exact && prev.Passes
+	}
+}
+
+// artifactKey is a unit's sorted, cleaned artifact list as one string;
+// empty when the unit declares none, which never matches.
+func artifactKey(artifacts []string) string {
+	if len(artifacts) == 0 {
+		return ""
+	}
+	clean := make([]string, 0, len(artifacts))
+	for _, a := range artifacts {
+		clean = append(clean, cleanArtifact(a))
+	}
+	sort.Strings(clean)
+	return strings.Join(clean, "\x00")
+}
+
+// planDefectMarkers are the phrases a worker uses when the thing it
+// cannot get past is the plan rather than the codebase or the operator.
+var planDefectMarkers = []string{
+	"check_cmd", "verify_cmd", "acceptance check", "acceptance criter", "criterion", "criteria",
+	"cannot pass", "can never pass", "can't pass", "in isolation", "this unit cannot", "unit cannot",
+	"later unit", "earlier unit", "another unit", "the gate", "verify command", "check command",
+}
+
+// namesPlanDefect reports whether a worker's BLOCKED note is about the
+// plan: it uses one of planDefectMarkers or names one of the plan's
+// artifacts. Anything else (a credential, an ambiguous goal, a design
+// choice) stays a question for the operator.
+func namesPlanDefect(question string, plan Plan) bool {
+	q := strings.ToLower(question)
+	for _, marker := range planDefectMarkers {
+		if strings.Contains(q, marker) {
+			return true
 		}
 	}
+	for _, u := range plan.Units {
+		for _, a := range u.Artifacts {
+			if a = strings.TrimSpace(a); a != "" && strings.Contains(q, strings.ToLower(a)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // effectiveCommitStyle resolves the precedence destination override >
@@ -1661,18 +1722,25 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		}
 		return in, nil
 	case "blocked":
+		// A block that names the plan itself (its gate, a criterion, an
+		// artifact, unit boundaries) is a diagnosis the planner can act
+		// on, not a question for the operator (issue #718): it goes back
+		// to planning with the worker's note, once. The note is recorded
+		// as progress so replanNotes carries it into the planner prompt.
+		if namesPlanDefect(verdict.Question, m.Plan) {
+			if err := d.store.AppendProgress(ctx, m.ID, "Worker blocked on a plan defect: "+truncate(verdict.Question, 500)); err != nil {
+				d.log.Warn("driver: record plan defect note failed", "mission_id", m.ID, "error", err)
+			}
+			return StepInput{Input: InputPlanDefect, Reason: truncate(verdict.Question, 500), Message: verdict.Question, Provider: verdict.Provider, Model: verdict.Model}, nil
+		}
 		return StepInput{Input: InputWorkerBlocked, Message: verdict.Question, Provider: verdict.Provider, Model: verdict.Model}, nil
 	default: // "retry" or anything unrecognized
-		// Only a RETRY the worker itself declared rolls the tree back
-		// (issue #706): a forced retry comes from transport death, an
-		// idle or run-budget kill, or an unreadable result, none of
-		// which says the edits so far are wrong, and the retry works
-		// on top of them.
-		if wt := m.WorktreePath(); wt != "" && !verdict.Forced {
-			if err := d.workspace.Rollback(ctx, wt, m.Kind); err != nil {
-				d.log.Warn("driver: rollback failed", "mission_id", m.ID, "error", err)
-			}
-		}
+		// No rollback on a retry of any kind (issue #718): a worker's
+		// own RETRY reports unfinished work, not wrong work, and the next
+		// turn continues on the files it left (a delegated CLI wrote
+		// permute.go and its test, said RETRY to fix the inverse, and the
+		// old rollback deleted both). Only a review rework discards the
+		// tree (runReview).
 		in := StepInput{Input: InputWorkerRetry, Reason: truncate(verdict.Analysis, 500), Provider: verdict.Provider, Model: verdict.Model}
 		if verdict.Forced {
 			// Neither a tool call nor a text-form sentinel (runner.go's
@@ -1710,7 +1778,7 @@ func (d *Driver) routeVerified(ctx context.Context, m Mission, verified []UnitVe
 		}
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.review_skipped", map[string]any{
-		"units": pending, "reason": "artifacts and verify_cmd passed harness checks",
+		"units": pending, "reason": "artifacts and check_cmd passed harness checks",
 	}); err != nil {
 		d.log.Warn("driver: record review skip failed", "mission_id", m.ID, "error", err)
 	}

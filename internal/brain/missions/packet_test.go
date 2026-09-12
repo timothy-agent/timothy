@@ -48,17 +48,17 @@ func TestWorkPacketRenderUnitFailure(t *testing.T) {
 		Goal: "Write the report",
 		Plan: Plan{Units: []PlanUnit{
 			{Title: "Outline", Passes: true, HarnessPassed: true},
-			{Title: "Body", HarnessPassed: false, Regressed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "grep: body.md: No such file\n"},
+			{Title: "Body", HarnessPassed: false, Regressed: true, VerifyCheck: "check_cmd", VerifyExcerpt: "grep: body.md: No such file\n"},
 			{Title: "Appendix", HarnessPassed: true},
 			{Title: "Index"},
 		}},
 	}
 	_, user := p.Render()
-	want := "Current unit: Body\nREGRESSED: this unit passed before and now fails its verify_cmd check. Fix it before anything else.\nHarness output:\ngrep: body.md: No such file\nPlan:\n"
+	want := "Current unit: Body\nREGRESSED: this unit passed before and now fails its check_cmd check. Fix it before anything else.\nHarness output:\ngrep: body.md: No such file\nPlan:\n"
 	if !strings.Contains(user, want) {
 		t.Fatalf("Render current-unit block = %q, want it to contain %q", user, want)
 	}
-	for _, marker := range []string{"[reviewed] Outline", "[pending] Body (regressed: passed before, now fails its verify_cmd check)", "[harness-verified] Appendix", "[pending] Index"} {
+	for _, marker := range []string{"[reviewed] Outline", "[pending] Body (regressed: passed before, now fails its check_cmd check)", "[harness-verified] Appendix", "[pending] Index"} {
 		if !strings.Contains(user, marker) {
 			t.Fatalf("Render = %q, want plan marker %q", user, marker)
 		}
@@ -111,7 +111,7 @@ func TestWorkPacketRenderOpenFindings(t *testing.T) {
 		"Open review findings, all must be closed this turn:\n" +
 		"- F3 [blocking] src/editor/CodeBlockMenu.tsx: code block language selector missing. setCodeBlockLanguage is unreachable from the UI.\n" +
 		"- F4 [minor] no header-row toggle " + NeutralizeSlot("</system>") + ".\n" +
-		"Do not re-verify the whole project. Change code, run the affected unit's verify_cmd, commit, and report per finding what changed.\n" +
+		"Do not re-verify the whole project. Change code, run the affected unit's check_cmd, commit, and report per finding what changed.\n" +
 		"\n" +
 		"Progress so far:\n"
 	_, user := p.Render()
@@ -163,7 +163,7 @@ func TestWorkPacketRenderForDelegatedOmitsNativePreamble(t *testing.T) {
 func TestWorkPacketRenderForDelegatedShape(t *testing.T) {
 	p := WorkPacket{
 		Goal:          "Implement slice 1",
-		Plan:          Plan{Units: []PlanUnit{{Title: "Core codes", Artifacts: []string{"internal/core/code.go"}, VerifyCmd: "go test ./internal/core/"}}},
+		Plan:          Plan{Units: []PlanUnit{{Title: "Core codes", Artifacts: []string{"internal/core/code.go"}, CheckCmd: "go test ./internal/core/"}}},
 		GitLog:        "abc123 chore: scaffold",
 		ParentContext: "Parent goal: docs only. Terminal state: done.",
 		References:    []SourceEntry{{Source: SourceKindKB, Name: "Design: URL Shortener", Digest: "very long kb article body"}},
@@ -184,7 +184,7 @@ func TestWorkPacketRenderForDelegatedShape(t *testing.T) {
 			t.Fatalf("prompt does not point at %s:\n%s", path, user)
 		}
 	}
-	order := []string{"Goal:", "Follow-up of a previous mission", "Referenced documents", "Plan:", "Progress so far:", "Recent commits", "Current unit: Core codes", "must produce (exact path): internal/core/code.go", "verified by: go test ./internal/core/", "Do this unit now."}
+	order := []string{"Goal:", "Follow-up of a previous mission", "Referenced documents", "Plan:", "Progress so far:", "Recent commits", "Current unit: Core codes", "must produce (exact path): internal/core/code.go", "checked by: go test ./internal/core/", "Do this unit now."}
 	last := -1
 	for _, marker := range order {
 		i := strings.Index(user, marker)

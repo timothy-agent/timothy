@@ -701,7 +701,7 @@ export interface KbDocument {
 // verify_check/verify_excerpt.
 export interface PlanUnit {
   title: string
-  verify_cmd: string
+  check_cmd: string
   artifacts?: string[]
   // criteria (D-095) are the unit's acceptance criteria, 2 to 6 short
   // lines the reviewer judges against; scope lists the paths the unit

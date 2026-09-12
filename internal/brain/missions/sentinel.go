@@ -92,9 +92,9 @@ func PlanTool() *tools.Tool {
 								"items": {"type": "string"},
 								"description": "Workspace-relative file path(s) this unit must produce. Required: at least one. Files only — the harness rejects directories."
 							},
-							"verify_cmd": {
+							"check_cmd": {
 								"type": "string",
-								"description": "A real POSIX shell command, run as /bin/sh -c \"<verify_cmd>\" in the mission's workspace, that checks the CONTENT of the artifacts."
+								"description": "A real POSIX shell command, run as /bin/sh -c \"<check_cmd>\" in the mission's workspace, that must fail before the unit's work exists and pass after; follow the check_cmd rules above."
 							},
 							"criteria": {
 								"type": "array",
@@ -107,7 +107,7 @@ func PlanTool() *tools.Tool {
 								"description": "Workspace-relative files or directory prefixes this unit may touch. Optional: defaults to the directories of its artifacts."
 							}
 						},
-						"required": ["title", "artifacts", "verify_cmd", "criteria"]
+						"required": ["title", "artifacts", "check_cmd", "criteria"]
 					}
 				},
 				"infeasible": {
@@ -213,6 +213,10 @@ type WorkerVerdict struct {
 	// carrier. json tag needed because Go's case-insensitive field match
 	// doesn't cross the underscore.
 	FinalOutput string `json:"final_output"`
+	// noWork marks a delegated run that made no tool call at all (issue
+	// #718): whatever it reported, it did not touch the unit. RunWorker
+	// relaunches such a run fresh once before the verdict counts.
+	noWork bool
 	// Forced marks a verdict the runner fabricated because NEITHER a
 	// tool call NOR a text-form sentinel (extractTextSentinel) could be
 	// found after the recovery re-run — set true ONLY on that path
@@ -329,7 +333,7 @@ var attrPattern = regexp.MustCompile(`([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(?:"([^"]*)
 // Trust note: a text-form sentinel is trust-equivalent to the tool-call
 // form — both are the model's own self-report of its own turn, neither
 // is verified here. The harness's own evidence (CheckArtifacts,
-// verify_cmd, RunVerify) is what actually gates a unit's Passes flag;
+// check_cmd, RunVerify) is what actually gates a unit's Passes flag;
 // this function only saves a turn from being misread as "said nothing"
 // when it in fact reported an outcome in the wrong shape.
 func extractTextSentinel(text, toolName string) (json.RawMessage, bool) {

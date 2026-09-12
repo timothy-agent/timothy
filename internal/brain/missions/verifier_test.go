@@ -16,9 +16,9 @@ func newFakeVerifier() *verifier {
 	return &verifier{store: newFakeStore(), sandboxExec: fakeSandboxExec, log: slog.Default()}
 }
 
-// TestVerifyAllNoVerifyCmdPasses covers the simplest case: a unit with
-// no declared artifacts and no verify_cmd passes outright.
-func TestVerifyAllNoVerifyCmdPasses(t *testing.T) {
+// TestVerifyAllNoCheckCmdPasses covers the simplest case: a unit with
+// no declared artifacts and no check_cmd passes outright.
+func TestVerifyAllNoCheckCmdPasses(t *testing.T) {
 	v := newFakeVerifier()
 	m := Mission{ID: "m1", Plan: Plan{Units: []PlanUnit{{Title: "only unit"}}}}
 
@@ -58,10 +58,10 @@ func TestVerifyAllMissingArtifactFailsCurrentSkipsLater(t *testing.T) {
 	}
 }
 
-// TestVerifyAllVerifyCmdGatesPass confirms verify_cmd's exit code, not
+// TestVerifyAllCheckCmdGatesPass confirms check_cmd's exit code, not
 // any model claim, is what passes a unit, and that a later unit whose
 // artifacts already exist is verified in the same pass.
-func TestVerifyAllVerifyCmdGatesPass(t *testing.T) {
+func TestVerifyAllCheckCmdGatesPass(t *testing.T) {
 	v := newFakeVerifier()
 	workRoot := t.TempDir()
 	for _, f := range []string{"out.txt", "later.txt"} {
@@ -72,8 +72,8 @@ func TestVerifyAllVerifyCmdGatesPass(t *testing.T) {
 	m := Mission{
 		ID: "m1", Workspace: workRoot,
 		Plan: Plan{Units: []PlanUnit{
-			{Title: "writes and checks", Artifacts: []string{"out.txt"}, VerifyCmd: "echo boom; exit 1"},
-			{Title: "later", Artifacts: []string{"later.txt"}, VerifyCmd: "exit 0"},
+			{Title: "writes and checks", Artifacts: []string{"out.txt"}, CheckCmd: "echo boom; exit 1"},
+			{Title: "later", Artifacts: []string{"later.txt"}, CheckCmd: "exit 0"},
 		}},
 	}
 
@@ -84,16 +84,16 @@ func TestVerifyAllVerifyCmdGatesPass(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("verifyAll = %+v, want both units checked", got)
 	}
-	if got[0].Passed || got[0].Check != "verify_cmd" || !strings.Contains(got[0].Excerpt, "boom") {
-		t.Fatalf("unit 0 = %+v, want a verify_cmd failure carrying the output", got[0])
+	if got[0].Passed || got[0].Check != "check_cmd" || !strings.Contains(got[0].Excerpt, "boom") {
+		t.Fatalf("unit 0 = %+v, want a check_cmd failure carrying the output", got[0])
 	}
 	if !got[1].Passed {
-		t.Fatalf("unit 1 = %+v, want passed (its artifact exists and verify_cmd exits 0)", got[1])
+		t.Fatalf("unit 1 = %+v, want passed (its artifact exists and check_cmd exits 0)", got[1])
 	}
 }
 
 // TestVerifyAllRegressionSubsetRerunsPassedUnits confirms an already
-// harness-passed unit is re-checked (artifacts and verify_cmd) and
+// harness-passed unit is re-checked (artifacts and check_cmd) and
 // reported failed when its artifact vanished, without a citations
 // check that would false-fail it for want of this turn's seenURLs.
 func TestVerifyAllRegressionSubsetRerunsPassedUnits(t *testing.T) {
@@ -106,7 +106,7 @@ func TestVerifyAllRegressionSubsetRerunsPassedUnits(t *testing.T) {
 		ID: "m1", Kind: "general", Workspace: workRoot,
 		Plan: Plan{Units: []PlanUnit{
 			{Title: "gone", Artifacts: []string{"a.md"}, HarnessPassed: true, Passes: true},
-			{Title: "intact", Artifacts: []string{"b.md"}, VerifyCmd: "exit 0", HarnessPassed: true, Passes: true},
+			{Title: "intact", Artifacts: []string{"b.md"}, CheckCmd: "exit 0", HarnessPassed: true, Passes: true},
 		}},
 	}
 
@@ -154,7 +154,7 @@ func TestVerifyAllCitationsOnlyForUnverifiedUnits(t *testing.T) {
 	}
 }
 
-// TestRunVerifyTimedHungCommandCountsAsFailed confirms a verify_cmd that
+// TestRunVerifyTimedHungCommandCountsAsFailed confirms a check_cmd that
 // outlives its timeout is reported as a failed result naming the
 // timeout, never as an infrastructure error (the driver would otherwise
 // route it to worker_failed and retry the same hang).

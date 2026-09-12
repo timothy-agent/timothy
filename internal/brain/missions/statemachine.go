@@ -156,6 +156,7 @@ const (
 	InputPhaseComplete      Input = "phase_complete"
 	InputWorkerRetry        Input = "worker_retry"
 	InputWorkerBlocked      Input = "worker_blocked"
+	InputPlanDefect         Input = "plan_defect"
 	InputWorkerFailed       Input = "worker_failed"
 	InputReviewApprove      Input = "review_approve"
 	InputReviewRework       Input = "review_rework"
@@ -437,10 +438,17 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 	case InputWorkerRetry:
 		return stepWorkerRetry(s, in, cfg)
 	case InputWorkerBlocked:
-		return Transition{
-			Next:   withStatus(s, StatusWaitingForInput),
-			Events: []EventDraft{{Kind: "mission.blocked", Payload: map[string]any{"question": in.Message}}},
+		return stepWorkerBlocked(s, in)
+	case InputPlanDefect:
+		// A worker's diagnosis of the plan (issue #718) spends the one
+		// automatic replan, carrying the note; once that is spent, or
+		// for a mission that never plans, it parks like any other block.
+		if !s.ReplanUsed && !s.neverVisitsPlan() {
+			t := replanTransition(s, in)
+			t.Events[0].Payload["cause"] = "worker_blocked"
+			return t
 		}
+		return stepWorkerBlocked(s, in)
 	case InputAskUser:
 		// The store already appended mission.input_requested (SetPendingInput)
 		// before this input reaches Step: no separate event here, same as
@@ -706,7 +714,7 @@ func stepWorkerFailed(s StepState, in StepInput, cfg Config) Transition {
 // backoff brake — the worker is still making an attempt, not silently
 // failing. It still tracks the stall brake same as stepReviewRework:
 // two consecutive rounds with an IDENTICAL gap fingerprint (e.g. the
-// same harness verify_cmd failing the same way every time) mean no
+// same harness check_cmd failing the same way every time) mean no
 // real progress is happening, most likely because the check itself
 // can never pass — grinding to max_iterations wastes the rest of the
 // budget on a foregone conclusion.
@@ -1136,5 +1144,15 @@ func stepResultFailed(s StepState, in StepInput) Transition {
 	return Transition{
 		Next:   withPause(s, PauseInfra),
 		Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "detail": in.Reason}}},
+	}
+}
+
+// stepWorkerBlocked parks the mission for the operator with the
+// worker's question; the same landing for a plan defect once the
+// automatic replan is spent.
+func stepWorkerBlocked(s StepState, in StepInput) Transition {
+	return Transition{
+		Next:   withStatus(s, StatusWaitingForInput),
+		Events: []EventDraft{{Kind: "mission.blocked", Payload: map[string]any{"question": in.Message}}},
 	}
 }

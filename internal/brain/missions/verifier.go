@@ -16,7 +16,7 @@ import (
 )
 
 // verifier runs the harness's own deterministic checks (declared
-// artifacts, citations, verify_cmd) for a mission's plan units.
+// artifacts, citations, check_cmd) for a mission's plan units.
 type verifier struct {
 	store       driverStore
 	sandboxExec sandboxExec
@@ -27,12 +27,12 @@ type verifier struct {
 // UnitVerification per unit checked:
 //   - a unit not yet harness-passed gets CheckArtifacts, then (citations
 //     true, general missions only, D-059) CheckCitations against seenURLs,
-//     then verify_cmd. A unit after the current one whose artifacts are
+//     then check_cmd. A unit after the current one whose artifacts are
 //     missing is skipped: not started yet, nothing to record.
-//   - an already harness-passed unit gets CheckArtifacts plus verify_cmd
+//   - an already harness-passed unit gets CheckArtifacts plus check_cmd
 //     as the regression subset.
 //
-// A hung verify_cmd counts as failed (RunVerifyWithBackend's TimedOut);
+// A hung check_cmd counts as failed (RunVerifyWithBackend's TimedOut);
 // any other exec error aborts the pass as an infrastructure failure.
 func (v *verifier) verifyAll(ctx context.Context, m Mission, seenURLs []string, citations bool) ([]UnitVerification, error) {
 	workRoot := m.WorkRoot()
@@ -53,14 +53,14 @@ func (v *verifier) verifyAll(ctx context.Context, m Mission, seenURLs []string, 
 		}
 		payload := map[string]any{"unit": i, "regression": u.verified()}
 		if res.Check == "" {
-			if u.VerifyCmd == "" {
+			if u.CheckCmd == "" {
 				res.Passed, res.Check = true, "artifacts"
 			} else {
-				r, err := v.runVerify(ctx, m.ID, m.Environment, workRoot, u.VerifyCmd)
+				r, err := v.runVerify(ctx, m.ID, m.Environment, workRoot, u.CheckCmd)
 				if err != nil {
 					return nil, fmt.Errorf("driver: verify unit %d: %w", i, err)
 				}
-				res.Passed, res.Check, res.Excerpt = r.Passed, "verify_cmd", r.Excerpt
+				res.Passed, res.Check, res.Excerpt = r.Passed, "check_cmd", r.Excerpt
 				if r.TimedOut {
 					res.Check = "timeout"
 				}
@@ -102,7 +102,7 @@ func failedUnits(verified []UnitVerification) []UnitVerification {
 	return out
 }
 
-// runVerify executes verify_cmd via the mission's sandbox container,
+// runVerify executes check_cmd via the mission's sandbox container,
 // the verify-side counterpart of nativeRunner routing shell/write_file
 // through the same backend. environment (D-05x) only matters on the
 // mission's first exec, since a container's image is fixed once

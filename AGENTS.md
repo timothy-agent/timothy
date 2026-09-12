@@ -75,7 +75,7 @@ via the existing `--env-file` Make targets.
 - Worker turns end on successful sentinel execution
   (`loop.Request.EndTurnTools`); never add a post-sentinel model call.
 - Harness-owned verification: `CheckArtifacts` runs BEFORE any
-  model-authored `verify_cmd`; `passes` flags flip only on harness
+  model-authored `check_cmd`; `passes` flags flip only on harness
   evidence, never on model claims.
 - Follow-up missions: terminal mission → new mission with
   `parent_mission_id`; parent outcome digest snapshotted into

@@ -98,7 +98,7 @@ turns = [e for e in events if e["kind"] == "mission.turn"]
 total_ms = sum((e.get("payload") or {}).get("duration_ms", 0) for e in turns)
 
 # mission.unit_verified fires once per check (artifacts/citations/
-# verify_cmd/review) per unit, in order — retries on a failed check
+# check_cmd/review) per unit, in order; retries on a failed check
 # (e.g. an uncited URL) are allowed mid-run, but the LAST verified
 # event recorded for each unit must be passed:true, or "done" was
 # claimed without the harness ever proving it for that unit.

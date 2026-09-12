@@ -5,7 +5,7 @@ import { PlanApprovalGate } from './PlanApprovalGate'
 
 afterEach(cleanup)
 
-const units: PlanUnit[] = [{ title: 'Add validation', verify_cmd: 'go test ./...', passes: false }]
+const units: PlanUnit[] = [{ title: 'Add validation', check_cmd: 'go test ./...', passes: false }]
 
 describe('PlanApprovalGate', () => {
   it('renders the plan units and assumptions', () => {

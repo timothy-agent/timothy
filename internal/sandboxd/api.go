@@ -26,7 +26,7 @@ const (
 	// execMinTimeout / execMaxTimeout clamp a client-supplied
 	// timeout_seconds server-side — never trust the caller's number
 	// unbounded, even though brain is the only caller today. 15m covers
-	// verify_cmd's own ceiling (10m) with room to spare.
+	// check_cmd's own ceiling (10m) with room to spare.
 	execMinTimeout = 1 * time.Second
 	execMaxTimeout = 15 * time.Minute
 

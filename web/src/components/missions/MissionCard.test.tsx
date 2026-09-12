@@ -224,7 +224,7 @@ describe('MissionCard removed fields', () => {
       ...baseMission,
       phase: 'build',
       iteration: 3,
-      plan: { units: [{ title: 'a', verify_cmd: '', passes: true }, { title: 'b', verify_cmd: '', passes: false }] },
+      plan: { units: [{ title: 'a', check_cmd: '', passes: true }, { title: 'b', check_cmd: '', passes: false }] },
     })
     expect(screen.queryByText(/Retries/)).not.toBeInTheDocument()
     expect(screen.queryByText(/\d+\/\d+ units/)).not.toBeInTheDocument()

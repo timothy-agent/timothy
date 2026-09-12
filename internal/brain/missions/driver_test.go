@@ -367,7 +367,7 @@ func (r *scriptedRunner) DiscoverSession(ctx context.Context, m Mission) (string
 }
 
 // fakeSandboxExec runs command via /bin/sh -c directly in workdir —
-// tests exercising verify_cmd need the real exit code/output a plan's
+// tests exercising check_cmd need the real exit code/output a plan's
 // check produces, not a mocked one, and don't care that it isn't
 // actually containerized.
 func fakeSandboxExec(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
@@ -421,7 +421,7 @@ func TestDriverHappyPathToDone(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true})
 	runner := &scriptedRunner{
-		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit", VerifyCmd: ""}}}},
+		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit", CheckCmd: ""}}}},
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
@@ -1256,7 +1256,7 @@ func TestDriverNonLightDoneStillGoesThroughReview(t *testing.T) {
 // TestDriverNoProveStillReviewsWithoutArtifacts confirms flow=no_prove
 // does NOT approve a unit directly when it has no declared artifacts:
 // routeVerified's skip mechanism requires real harness evidence
-// (artifacts + verify_cmd), same as an ordinary flow=full general
+// (artifacts + check_cmd), same as an ordinary flow=full general
 // mission (TestDriverNonLightDoneStillGoesThroughReview). no_prove
 // keeps discover/plan and a real plan's units; it is not a planless
 // flow, unlike discover_build.
@@ -1289,7 +1289,7 @@ func TestDriverNoProveStillChecksArtifacts(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Flow: FlowNoProve, Phase: PhaseBuild, Status: StatusWorking,
 		MaxIterations: 8, Workspace: t.TempDir(),
-		Plan: Plan{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, VerifyCmd: "echo done"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, CheckCmd: "echo done"}}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it (no it didn't)"}}}
 	d := testDriver(store, runner)
@@ -1502,9 +1502,9 @@ func TestDriverReworkUntouchedEvent(t *testing.T) {
 	requireGit(t)
 	finding := Finding{ID: "F1", Title: "missing validation", File: "x.go", Severity: SeverityBlocking, Status: FindingOpen, RoundOpened: 1}
 	cases := []struct {
-		name         string
-		touch        string
-		wantEvent    bool
+		name          string
+		touch         string
+		wantEvent     bool
 		wantUntouched int
 	}{
 		{"other file touched", "y.go", true, 1},
@@ -1559,18 +1559,17 @@ func TestDriverReworkUntouchedEvent(t *testing.T) {
 	}
 }
 
-// TestDriverRetryRollbackOnlyForWorkerDeclaredRetry (issue #706): a
-// forced retry (transport death, idle or run-budget kill, unreadable
-// result) keeps the worktree's edits; only a RETRY the worker declared
-// rolls them back.
-func TestDriverRetryRollbackOnlyForWorkerDeclaredRetry(t *testing.T) {
+// TestDriverRetryNeverRollsBack (issue #718): no retry discards the
+// worktree, forced or worker-declared; a RETRY reports unfinished work
+// and the next turn continues on it. Only a review rework rolls back.
+func TestDriverRetryNeverRollsBack(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		verdict  WorkerVerdict
 		wantKept bool
 	}{
 		{"forced retry keeps the tree", forcedRetryVerdict("executor process was lost"), true},
-		{"worker retry rolls back", WorkerVerdict{Outcome: "retry", Analysis: "wrong approach"}, false},
+		{"worker retry keeps the tree", WorkerVerdict{Outcome: "retry", Analysis: "not finished yet"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -1927,7 +1926,7 @@ func TestDriverDriveIsSerializedPerMission(t *testing.T) {
 // TestDriverReviewApprovalContradictedByVerifyRoutesToRework
 // reproduces a real bug: the reviewer approves a unit whose evidence
 // doesn't hold up (e.g. a worker claiming a file exists when it never
-// wrote one) — the harness's own verify_cmd then fails. This must NOT
+// wrote one): the harness's own check_cmd then fails. This must NOT
 // be treated as an infra fault (which just parks the mission for a
 // human to blindly resume forever); it must route through rework,
 // back to execute, so the worker gets another attempt with the actual
@@ -1936,7 +1935,7 @@ func TestDriverReviewApprovalContradictedByVerifyRoutesToRework(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8,
-		Plan: Plan{Units: []PlanUnit{{Title: "write summary.md", VerifyCmd: "test -f /nonexistent-verify-target"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary.md", CheckCmd: "test -f /nonexistent-verify-target"}}},
 	})
 	d := testDriver(store, &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}})
 
@@ -1948,16 +1947,16 @@ func TestDriverReviewApprovalContradictedByVerifyRoutesToRework(t *testing.T) {
 		t.Fatalf("mission phase = %q, want execute (rework path), not stuck on an infra pause", m.Phase)
 	}
 	if m.PauseReason == PauseInfra {
-		t.Fatal("a failed verify_cmd after approval must not be classified as an infra fault")
+		t.Fatal("a failed check_cmd after approval must not be classified as an infra fault")
 	}
 	if m.Iteration != 1 {
 		t.Fatalf("iteration = %d, want 1 (rework costs an iteration like any other rework)", m.Iteration)
 	}
-	if open := OpenFindings(m.ReviewFindings); len(open) != 1 || !strings.Contains(open[0].Title, "verify_cmd check failed for unit 1") {
-		t.Fatalf("open findings = %+v, want one harness-authored verify_cmd finding", open)
+	if open := OpenFindings(m.ReviewFindings); len(open) != 1 || !strings.Contains(open[0].Title, "check_cmd check failed for unit 1") {
+		t.Fatalf("open findings = %+v, want one harness-authored check_cmd finding", open)
 	}
-	if u := m.Plan.Units[0]; u.HarnessPassed || u.VerifyCheck != "verify_cmd" {
-		t.Fatalf("unit = %+v, want the failed verify_cmd check recorded on it for the next worker packet", u)
+	if u := m.Plan.Units[0]; u.HarnessPassed || u.VerifyCheck != "check_cmd" {
+		t.Fatalf("unit = %+v, want the failed check_cmd check recorded on it for the next worker packet", u)
 	}
 }
 
@@ -2709,7 +2708,7 @@ func TestDriverArtifactCheckBlocksTautologicalDone(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking,
 		MaxIterations: 8, Workspace: t.TempDir(),
-		Plan: Plan{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, VerifyCmd: "echo done"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "write summary", Artifacts: []string{"summary.md"}, CheckCmd: "echo done"}}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote it (no it didn't)"}}}
 	d := testDriver(store, runner)
@@ -2893,8 +2892,8 @@ func TestDriverBatchVerifyPassesLaterUnitInSameTurn(t *testing.T) {
 		ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root,
 		Plan: Plan{Units: []PlanUnit{
-			{Title: "unit0", Artifacts: []string{"a.md"}, VerifyCmd: "grep -q content a.md"},
-			{Title: "unit1", Artifacts: []string{"b.md"}, VerifyCmd: "grep -q content b.md"},
+			{Title: "unit0", Artifacts: []string{"a.md"}, CheckCmd: "grep -q content a.md"},
+			{Title: "unit1", Artifacts: []string{"b.md"}, CheckCmd: "grep -q content b.md"},
 		}},
 	})
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "wrote both"}}}
@@ -2918,7 +2917,7 @@ func TestDriverBatchVerifyPassesLaterUnitInSameTurn(t *testing.T) {
 
 // TestDriverCodingVerifyFailureRetriesBeforeReview confirms a coding
 // mission's worker claim is harness-checked at the end of its turn
-// (D-094): a failing verify_cmd buys another worker turn with the
+// (D-094): a failing check_cmd buys another worker turn with the
 // excerpt on the unit, and no review round runs on failing work.
 func TestDriverCodingVerifyFailureRetriesBeforeReview(t *testing.T) {
 	root, base := codingWorktree(t)
@@ -2926,7 +2925,7 @@ func TestDriverCodingVerifyFailureRetriesBeforeReview(t *testing.T) {
 	store.put("m1", Mission{
 		ID: "m1", Kind: "coding", Phase: PhaseBuild, Status: StatusWorking,
 		MaxIterations: 8, Workspace: root, BaseCommit: base,
-		Plan: Plan{Units: []PlanUnit{{Title: "add feature", VerifyCmd: "echo tests failed; exit 1"}}},
+		Plan: Plan{Units: []PlanUnit{{Title: "add feature", CheckCmd: "echo tests failed; exit 1"}}},
 	})
 	runner := &scriptedRunner{
 		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
@@ -2946,8 +2945,8 @@ func TestDriverCodingVerifyFailureRetriesBeforeReview(t *testing.T) {
 	if len(runner.reviewCalls) != 0 {
 		t.Fatal("a review round ran on work the harness had already failed")
 	}
-	if u := m.Plan.Units[0]; u.HarnessPassed || u.VerifyCheck != "verify_cmd" || !strings.Contains(u.VerifyExcerpt, "tests failed") {
-		t.Fatalf("unit = %+v, want the verify_cmd failure and output recorded", u)
+	if u := m.Plan.Units[0]; u.HarnessPassed || u.VerifyCheck != "check_cmd" || !strings.Contains(u.VerifyExcerpt, "tests failed") {
+		t.Fatalf("unit = %+v, want the check_cmd failure and output recorded", u)
 	}
 	if m.LastGapFingerprint != "verify_failed:unit_0" {
 		t.Fatalf("fingerprint = %q, want verify_failed:unit_0 for the stall brake", m.LastGapFingerprint)
@@ -3055,7 +3054,7 @@ func TestDriverNoRegressionAdvancesNormally(t *testing.T) {
 
 // TestDriverReplanPreservesMatchingPassedUnitsResetsOthers confirms
 // runPlan's restorePassedUnits: after a replan, a unit whose title and
-// verify_cmd are unchanged from a previously-passed unit is re-marked
+// check_cmd are unchanged from a previously-passed unit is re-marked
 // passed (harness evidence carried forward); a unit the new plan
 // changed (or that is genuinely new) stays unverified, since
 // parsePlan's own zeroing is correct for anything actually different.
@@ -3065,13 +3064,13 @@ func TestDriverReplanPreservesMatchingPassedUnitsResetsOthers(t *testing.T) {
 		ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusIdle,
 		MaxIterations: 8, ReplanUsed: true,
 		Plan: Plan{Units: []PlanUnit{
-			{Title: "unit0", VerifyCmd: "test -f a.md", Passes: true},
-			{Title: "unit1", VerifyCmd: "test -f b.md", Passes: false},
+			{Title: "unit0", CheckCmd: "test -f a.md", Passes: true},
+			{Title: "unit1", CheckCmd: "test -f b.md", Passes: false},
 		}},
 	})
 	runner := &scriptedRunner{plans: []Plan{{Units: []PlanUnit{
-		{Title: "unit0", VerifyCmd: "test -f a.md"}, // unchanged: must be restored to passed
-		{Title: "unit1", VerifyCmd: "test -f c.md"}, // verify_cmd changed: must stay unverified
+		{Title: "unit0", CheckCmd: "test -f a.md"}, // unchanged: must be restored to passed
+		{Title: "unit1", CheckCmd: "test -f c.md"}, // check_cmd changed: must stay unverified
 	}}}}
 	d := testDriver(store, runner)
 
@@ -3080,10 +3079,10 @@ func TestDriverReplanPreservesMatchingPassedUnitsResetsOthers(t *testing.T) {
 	}
 	m, _ := store.Get(context.Background(), "m1")
 	if !m.Plan.Units[0].Passes {
-		t.Fatal("unit0 (title+verify_cmd unchanged) should have been restored to passed")
+		t.Fatal("unit0 (title+check_cmd unchanged) should have been restored to passed")
 	}
 	if m.Plan.Units[1].Passes {
-		t.Fatal("unit1 (verify_cmd changed) must stay unverified")
+		t.Fatal("unit1 (check_cmd changed) must stay unverified")
 	}
 }
 

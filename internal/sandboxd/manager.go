@@ -1,6 +1,6 @@
 // Package sandboxd drives per-mission Docker containers that execute
 // model-authored shell commands (mission worker/reviewer shell calls,
-// verify_cmd) OUTSIDE brain's own process — so a command never inherits
+// check_cmd) OUTSIDE brain's own process, so a command never inherits
 // brain's environment (DATABASE_URL, TIMOTHY_MASTER_KEY, API tokens)
 // or reaches brain's filesystem/binaries. Harness-authored git
 // operations stay in brain; only model/plan-authored commands route
