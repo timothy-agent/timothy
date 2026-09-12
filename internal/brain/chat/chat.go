@@ -161,6 +161,7 @@ type Service struct {
 	kbSamples      KBSamples                            // nil: writing_samples never offered
 	missions       MissionStore                         // nil: mission #-mention references never resolve
 	kbDocs         KBDocStore                           // nil: kb doc #-mention references never resolve
+	kbEnrich       *kb.Enricher                         // nil: chat PDF attachments skip image/scanned-page captioning (issue #350)
 	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -271,6 +272,12 @@ func (s *Service) SetWhisper(url string) {
 		s.whisperHTTP = &http.Client{}
 	}
 }
+
+// SetKBEnrich wires the KB image/scanned-page captioner (issue #350)
+// for chat's own PDF attachment conversion. Optional: nil (captioning
+// disabled or no gateway wiring) leaves a chat PDF attachment's
+// markdown as markitdown produced it.
+func (s *Service) SetKBEnrich(enrich *kb.Enricher) { s.kbEnrich = enrich }
 
 // KBSearch runs one knowledge-base search over the whole KB, boosted
 // toward boostCollections: main curries memclient.Client.KBSearch in;
@@ -1188,6 +1195,9 @@ func (s *Service) validateAttachments(ctx context.Context, refs []AttachmentRef)
 			if err != nil {
 				return nil, nil, fmt.Errorf("chat: convert attachment %q: %w", ref.ID, err)
 			}
+			if s.kbEnrich != nil {
+				md = s.enrichPDF(ctx, md, raw)
+			}
 			documents = append(documents, session.DocumentRef{ID: att.ID, Mime: att.Mime, Markdown: markitdown.TruncateMarkdown(md), Name: ref.Name})
 		case att.Mime == "text/plain":
 			raw, err := s.readAttachmentBytes(ctx, att.ID)
@@ -1211,6 +1221,19 @@ func (s *Service) validateAttachments(ctx context.Context, refs []AttachmentRef)
 		}
 	}
 	return images, documents, nil
+}
+
+// enrichPDF captions a PDF attachment's embedded images and scanned
+// pages (issue #350): a sidecar or captioning failure logs and returns
+// md unchanged, never failing the conversion that already succeeded.
+func (s *Service) enrichPDF(ctx context.Context, md string, raw []byte) string {
+	res, err := markitdown.PDFImages(ctx, s.markitdownHTTP, s.markitdownURL, raw)
+	if err != nil {
+		s.logger.Warn("chat: pdf image extraction failed", "error", err)
+		return md
+	}
+	enriched, _ := s.kbEnrich.EnrichPDF(ctx, md, res)
+	return enriched
 }
 
 // readAttachmentBytes opens and fully reads one attachment's bytes.

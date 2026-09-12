@@ -2,11 +2,20 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
+
+func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
 // TestAttachmentResolverResolve table-tests the shared attachment
 // conversion path (issue #359): pdf/text unchanged from the pre-#359
@@ -156,4 +165,88 @@ func TestAttachmentResolverResolveEmptyInput(t *testing.T) {
 	if err != nil || out != nil {
 		t.Fatalf("Resolve(nil) = %v, %v, want nil, nil", out, err)
 	}
+}
+
+// TestAttachmentResolverResolvePDFEnrichment covers issue #350: a PDF
+// attachment with r.enrich set runs the sidecar's /pdf/images
+// extraction and captions embedded images into the converted markdown.
+func TestAttachmentResolverResolvePDFEnrichment(t *testing.T) {
+	t.Parallel()
+
+	fa := &fakeMissionAttachments{
+		byID: map[string]attachments.Attachment{"doc1": {ID: "doc1", Mime: "application/pdf"}},
+		data: map[string][]byte{"doc1": []byte("%PDF-1.4")},
+	}
+	sidecar := fakePDFMarkitdownServer(t, "# converted", markitdown.PDFImagesResult{
+		Pages: []markitdown.PDFPage{{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}}},
+	})
+	enrich := &kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { return "a flowchart" },
+		Enabled: func(context.Context) bool { return true },
+		Log:     discardLog(),
+	}
+	r := &attachmentResolver{store: fa, markitdownURL: sidecar.URL, markitdownHTTP: sidecar.Client(), enrich: enrich}
+
+	out, err := r.Resolve(context.Background(), []missionAttachmentInput{{ID: "doc1", Name: "spec.pdf"}})
+	if err != nil {
+		t.Fatalf("Resolve() unexpected error: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("Resolve() = %d entries, want 1", len(out))
+	}
+	if !strings.Contains(out[0].Markdown, "a flowchart") {
+		t.Fatalf("Markdown = %q, want it to contain the embedded image's caption", out[0].Markdown)
+	}
+}
+
+// TestAttachmentResolverResolvePDFEnrichmentSidecarFailureKeepsMarkdown
+// confirms a /pdf/images call that errors (sidecar unreachable) never
+// fails the attachment resolve: the already-converted markdown is kept
+// as-is.
+func TestAttachmentResolverResolvePDFEnrichmentSidecarFailureKeepsMarkdown(t *testing.T) {
+	t.Parallel()
+
+	fa := &fakeMissionAttachments{
+		byID: map[string]attachments.Attachment{"doc1": {ID: "doc1", Mime: "application/pdf"}},
+		data: map[string][]byte{"doc1": []byte("%PDF-1.4")},
+	}
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/pdf/images" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"markdown": "# converted"})
+	}))
+	t.Cleanup(sidecar.Close)
+	enrich := &kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { return "a flowchart" },
+		Enabled: func(context.Context) bool { return true },
+		Log:     discardLog(),
+	}
+	r := &attachmentResolver{store: fa, markitdownURL: sidecar.URL, markitdownHTTP: sidecar.Client(), enrich: enrich, log: discardLog()}
+
+	out, err := r.Resolve(context.Background(), []missionAttachmentInput{{ID: "doc1", Name: "spec.pdf"}})
+	if err != nil {
+		t.Fatalf("Resolve() unexpected error: %v", err)
+	}
+	if out[0].Markdown != "# converted" {
+		t.Fatalf("Markdown = %q, want unchanged when /pdf/images fails", out[0].Markdown)
+	}
+}
+
+// fakePDFMarkitdownServer serves /convert with markdown and /pdf/images
+// with res, JSON-encoded, matching the sidecar's two-endpoint shape.
+func fakePDFMarkitdownServer(t *testing.T, markdown string, res markitdown.PDFImagesResult) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/pdf/images" {
+			_ = json.NewEncoder(w).Encode(res)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"markdown": markdown})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
 }

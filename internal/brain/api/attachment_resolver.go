@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 	"github.com/SumonMSelim/timothy/internal/platform/whisper"
@@ -51,6 +53,11 @@ type attachmentResolver struct {
 	// nil (no gateway wiring) makes every image attachment fail with the
 	// same "could not be described" error an empty caption would.
 	caption func(ctx context.Context, mediaType string, data []byte) string
+	// enrich captions a PDF attachment's embedded images and scanned
+	// pages (issue #350); nil (captioning disabled or no gateway wiring)
+	// leaves the PDF's converted markdown as markitdown produced it.
+	enrich *kb.Enricher
+	log    *slog.Logger
 }
 
 // imageMimes/audioMimes are the mission-attachable subsets of
@@ -130,6 +137,9 @@ func (r *attachmentResolver) Resolve(ctx context.Context, in []missionAttachment
 			if err != nil {
 				return nil, attachErr(http.StatusInternalServerError, err.Error())
 			}
+			if r.enrich != nil {
+				md = r.enrichPDF(ctx, md, raw)
+			}
 			md = markitdown.TruncateMarkdown(md)
 		case att.Mime == "text/plain":
 			md = markitdown.TruncateMarkdown(string(raw))
@@ -154,6 +164,22 @@ func (r *attachmentResolver) Resolve(ctx context.Context, in []missionAttachment
 		})
 	}
 	return out, nil
+}
+
+// enrichPDF captions a PDF attachment's embedded images and scanned
+// pages (issue #350), same helper as kbAPI.enrichPDF: a sidecar or
+// captioning failure logs and returns md unchanged, never failing the
+// conversion that already succeeded.
+func (r *attachmentResolver) enrichPDF(ctx context.Context, md string, raw []byte) string {
+	res, err := markitdown.PDFImages(ctx, r.markitdownHTTP, r.markitdownURL, raw)
+	if err != nil {
+		if r.log != nil {
+			r.log.Warn("attachment resolve: pdf image extraction failed", "error", err)
+		}
+		return md
+	}
+	enriched, _ := r.enrich.EnrichPDF(ctx, md, res)
+	return enriched
 }
 
 // readAttachment opens and fully reads one stored attachment's bytes.

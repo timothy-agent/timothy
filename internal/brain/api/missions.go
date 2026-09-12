@@ -107,7 +107,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 			return a.Harness, true
 		}
 	}
-	resolver := &attachmentResolver{store: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: &http.Client{}, caption: caption}
+	resolver := &attachmentResolver{store: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: &http.Client{}, caption: caption, enrich: kbEnrich, log: a.log}
 	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))

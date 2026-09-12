@@ -208,7 +208,21 @@ func main() {
 	fxStore := fxrates.NewStore(app.DB)
 	go fxrates.NewFetcher(fxStore, settings.AllowedCurrencies(), app.Log).Run(ctx)
 
-	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, flags.Location, mc.Add, app.Log, toolCalls, sensitiveRoute, fxStore)
+	// captionImage converts an image's bytes into a plain-prose
+	// description: built once and shared by the KB enricher below and
+	// mission/schedule attachment resolution (issue #359) so both draw
+	// on the same vision-route mechanism.
+	captionImage := chat.CaptionImageOverGateway(gwc, app.Log)
+	// KB image captioning (issues #349/#350): default-off, gated on
+	// settings.KeyKBImageCaptioning; shared by the manual ingest funnel,
+	// the retry sweep, mission promotion, and every PDF-consuming attachment
+	// path (chat, mission attachments, webfetch) so none of them diverge
+	// on what "captioned" means.
+	kbEnrich := api.NewKBEnricher(captionImage, func(ctx context.Context) bool {
+		return flags.Enabled(ctx, settings.KeyKBImageCaptioning)
+	}, app.Log)
+
+	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, flags.Location, mc.Add, app.Log, toolCalls, sensitiveRoute, fxStore, kbEnrich)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -305,18 +319,6 @@ func main() {
 	// below) can close over the same store the kb admin API and mission
 	// promotion hook use later in this function.
 	kbStore := kb.New(app.DB)
-	// captionImage converts an image's bytes into a plain-prose
-	// description: built once and shared by the KB enricher below and
-	// mission/schedule attachment resolution (issue #359) so both draw
-	// on the same vision-route mechanism.
-	captionImage := chat.CaptionImageOverGateway(gwc, app.Log)
-	// KB image captioning (issues #349/#350): default-off, gated on
-	// settings.KeyKBImageCaptioning; shared by the manual ingest funnel,
-	// the retry sweep, and mission promotion so none of the three diverge
-	// on what "captioned" means.
-	kbEnrich := api.NewKBEnricher(captionImage, func(ctx context.Context) bool {
-		return flags.Enabled(ctx, settings.KeyKBImageCaptioning)
-	}, app.Log)
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, gwc,
@@ -642,6 +644,7 @@ func main() {
 	if whisperURL != "" {
 		svc.SetWhisper(whisperURL)
 	}
+	svc.SetKBEnrich(kbEnrich)
 
 	// pdfService is nil-gated on both PDFGEN_URL and attachmentStore
 	// (ATTACHMENTS_DIR): backs POST /v1/missions/{id}/export-pdf (#379)
@@ -1613,13 +1616,13 @@ func (r turnRouter) RouteForRole(ctx context.Context, role string) (string, bool
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010). The returned builtin set is the fixed half of
 // the tool surface; connector tools join it via swapAgentTools.
-func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, defaultLoc func(context.Context) *time.Location, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string, fxStore *fxrates.Store) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, *tools.Permissions, error) {
+func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, defaultLoc func(context.Context) *time.Location, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string, fxStore *fxrates.Store, kbEnrich *kb.Enricher) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, *tools.Permissions, error) {
 	outputs := tools.NewOutputs(db)
 	set := []*tools.Tool{
 		builtin.CurrentTime(time.Now, defaultLoc),
 		builtin.ConvertTime(),
 		builtin.Calculator(),
-		builtin.WebFetch(builtin.WebFetchConfig{MarkitdownURL: markitdownURL}),
+		builtin.WebFetch(builtin.WebFetchConfig{MarkitdownURL: markitdownURL, Enrich: kbEnrich}),
 		builtin.Shell(builtin.ShellConfig{WorkspaceRoot: workspace}),
 		builtin.RetrieveOutput(outputs),
 		builtin.Remember(remember),

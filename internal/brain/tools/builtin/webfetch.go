@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/net/html"
 
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 	"github.com/SumonMSelim/timothy/internal/platform/netguard"
@@ -35,6 +36,10 @@ type WebFetchConfig struct {
 	// readable; empty falls back to the built-in DOM text extractor
 	// and PDFs stay unsupported.
 	MarkitdownURL string
+	// Enrich captions a fetched PDF's embedded images and scanned pages
+	// (issue #350); nil (captioning disabled or no gateway wiring)
+	// leaves the PDF's converted markdown as markitdown produced it.
+	Enrich *kb.Enricher
 }
 
 // WebFetch fetches a public URL and returns a readable text extract.
@@ -92,12 +97,12 @@ History — Go 1.26 (released 2026-02-10) ..."`,
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return "", fmt.Errorf("invalid arguments: %w", err)
 			}
-			return fetchReadable(ctx, client, cfg.MarkitdownURL, args.URL)
+			return fetchReadable(ctx, client, cfg.MarkitdownURL, cfg.Enrich, args.URL)
 		},
 	}
 }
 
-func fetchReadable(ctx context.Context, client *http.Client, markitdownURL, rawURL string) (string, error) {
+func fetchReadable(ctx context.Context, client *http.Client, markitdownURL string, enrich *kb.Enricher, rawURL string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", fmt.Errorf("invalid url: %w", err)
@@ -160,6 +165,11 @@ func fetchReadable(ctx context.Context, client *http.Client, markitdownURL, rawU
 		md, err := markitdown.Convert(ctx, nil, markitdownURL, "page.pdf", "application/pdf", body)
 		if err != nil {
 			return "", fmt.Errorf("pdf conversion failed: %w", err)
+		}
+		if enrich != nil {
+			if res, err := markitdown.PDFImages(ctx, nil, markitdownURL, body); err == nil {
+				md, _ = enrich.EnrichPDF(ctx, md, res)
+			}
 		}
 		text = md
 	case strings.HasPrefix(ct, "text/"),
