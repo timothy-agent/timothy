@@ -91,6 +91,8 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			return fmt.Errorf("%w: harness is only valid for kind=coding missions", ErrInvalidMission)
 		case m.Environment != "":
 			return fmt.Errorf("%w: environment is only valid for kind=coding missions", ErrInvalidMission)
+		case m.ExecutorSessionPolicy != "":
+			return fmt.Errorf("%w: executor_session_policy is only valid for kind=coding missions", ErrInvalidMission)
 		case repoURL != "":
 			return fmt.Errorf("%w: repo_url is only valid for kind=coding missions", ErrInvalidMission)
 		}
@@ -104,6 +106,11 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 		if _, ok := executor.Lookup(m.ReviewHarness); !ok {
 			return fmt.Errorf("%w: unknown review_harness %q", ErrInvalidMission, m.ReviewHarness)
 		}
+	}
+	switch m.ExecutorSessionPolicy {
+	case "", SessionPolicyResume, SessionPolicyFresh:
+	default:
+		return fmt.Errorf("%w: unknown executor_session_policy %q", ErrInvalidMission, m.ExecutorSessionPolicy)
 	}
 	if !ValidEnvironment(m.Environment) {
 		return fmt.Errorf("%w: unknown environment %q", ErrInvalidMission, m.Environment)

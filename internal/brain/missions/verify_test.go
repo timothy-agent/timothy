@@ -127,7 +127,7 @@ func TestRunVerifyWithBackendInfraErrorPropagates(t *testing.T) {
 
 // TestTailBufferBoundsMemoryKeepsEnd confirms the streamed excerpt is
 // bounded to the cap and keeps the TAIL of the output, not the head —
-// a verify_cmd with runaway output must not balloon memory, and the
+// a check_cmd with runaway output must not balloon memory, and the
 // kept slice must still show what actually failed at the end.
 func TestTailBufferBoundsMemoryKeepsEnd(t *testing.T) {
 	tail := &tailBuffer{max: 5}

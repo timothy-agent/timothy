@@ -3,6 +3,7 @@ package executor
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -112,11 +113,17 @@ func (claudeAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 	if spec.ResumeSessionID != "" {
 		argv = append(argv, "--resume", spec.ResumeSessionID)
 	}
+	if spec.MaxTurns > 0 {
+		argv = append(argv, "--max-turns", strconv.Itoa(spec.MaxTurns))
+	}
 
 	// nodeMaxOldSpaceMB (D-056) bounds the CLI's node heap: unbounded,
 	// node sizes its heap from cgroup limits, and a long run's transcript
 	// heap balloons toward the sandbox's 2 GiB cap.
 	env := map[string]string{"NO_COLOR": "1", "NODE_OPTIONS": "--max-old-space-size=768"}
+	if spec.ThinkingTokens > 0 {
+		env["MAX_THINKING_TOKENS"] = strconv.Itoa(spec.ThinkingTokens)
+	}
 	if spec.AuthMode == AuthAPIKey {
 		env["ANTHROPIC_API_KEY"] = spec.APIKey
 	}

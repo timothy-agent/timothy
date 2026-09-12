@@ -138,7 +138,7 @@ func TestAutoResumeBackoffLadder(t *testing.T) {
 			}
 			signaler := &fakeSignaler{}
 			notifier := &fakeMessageNotifier{}
-			autoResumeBackoff(context.Background(), signaler, store, notifier, log)
+			autoResumeBackoff(context.Background(), signaler, store, notifier, nil, log)
 
 			if resumed := len(signaler.signaled) == 1; resumed != tc.wantResume {
 				t.Fatalf("signaled = %v, want resume=%v", signaler.signaled, tc.wantResume)
@@ -160,7 +160,7 @@ func TestAutoResumeBackoffNilNotifierSafe(t *testing.T) {
 		counts: map[string]int{"m1": 4},
 	}
 	signaler := &fakeSignaler{}
-	autoResumeBackoff(context.Background(), signaler, store, nil, log)
+	autoResumeBackoff(context.Background(), signaler, store, nil, nil, log)
 	if len(signaler.signaled) != 0 {
 		t.Fatal("exhausted mission must never be resumed")
 	}
@@ -212,13 +212,41 @@ func TestAutoResumeInfraLadder(t *testing.T) {
 			}
 			signaler := &fakeSignaler{}
 			notifier := &fakeMessageNotifier{}
-			autoResumeInfra(context.Background(), signaler, store, notifier, log)
+			autoResumeInfra(context.Background(), signaler, store, notifier, nil, log)
 
 			if resumed := len(signaler.signaled) == 1; resumed != tc.wantResume {
 				t.Fatalf("signaled = %v, want resume=%v", signaler.signaled, tc.wantResume)
 			}
 			if notified := len(notifier.notified) == 1; notified != tc.wantNotify {
 				t.Fatalf("notified = %v, want notify=%v", notifier.notified, tc.wantNotify)
+			}
+		})
+	}
+}
+
+// TestAutoResumeInfraWaitsForResumeAfter: a pause that named when a
+// retry can succeed (a cooled-down executor entry, issue #704) is not
+// resumed before that time even when the ladder delay has passed.
+func TestAutoResumeInfraWaitsForResumeAfter(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, tc := range []struct {
+		name        string
+		resumeAfter time.Time
+		wantResume  bool
+	}{
+		{"until in the future, wait", time.Now().Add(time.Hour), false},
+		{"until passed, resume", time.Now().Add(-time.Second), true},
+		{"no until, ladder alone", time.Time{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := fakePausedByReasonStore{
+				paused: []BackoffPausedMission{{ID: "m1", UpdatedAt: time.Now().Add(-999 * time.Hour), ResumeAfter: tc.resumeAfter}},
+				counts: map[string]int{"m1": 1},
+			}
+			signaler := &fakeSignaler{}
+			autoResumeInfra(context.Background(), signaler, store, nil, nil, log)
+			if resumed := len(signaler.signaled) == 1; resumed != tc.wantResume {
+				t.Fatalf("signaled = %v, want resume=%v", signaler.signaled, tc.wantResume)
 			}
 		})
 	}
@@ -238,7 +266,7 @@ func TestAutoResumeInfraNotifiesOncePerTick(t *testing.T) {
 	}
 	signaler := &fakeSignaler{}
 	notifier := &fakeMessageNotifier{}
-	autoResumeInfra(context.Background(), signaler, store, notifier, log)
+	autoResumeInfra(context.Background(), signaler, store, notifier, nil, log)
 	if len(notifier.notified) != 1 {
 		t.Fatalf("notified = %d, want 1", len(notifier.notified))
 	}
@@ -257,7 +285,7 @@ func TestAutoResumeInfraNilNotifierSafe(t *testing.T) {
 		counts: map[string]int{"m1": 3},
 	}
 	signaler := &fakeSignaler{}
-	autoResumeInfra(context.Background(), signaler, store, nil, log)
+	autoResumeInfra(context.Background(), signaler, store, nil, nil, log)
 	if len(signaler.signaled) != 0 {
 		t.Fatal("exhausted mission must never be resumed")
 	}
@@ -653,4 +681,54 @@ func TestWaitForGatewayReadyRespectsContextCancellation(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("waitForGatewayReady did not return promptly after context cancellation")
 	}
+}
+
+// TestAutoResumeCapsComeFromSettings covers issue #718: both ladders
+// read their exhausted cap from the settings getter, so lowering it to
+// 2 stops resuming a mission the built-in cap would still have retried.
+func TestAutoResumeCapsComeFromSettings(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cap2 := func(context.Context) int { return 2 }
+	old := time.Now().Add(-999 * time.Hour)
+
+	t.Run("backoff", func(t *testing.T) {
+		store := fakeBackoffStore{
+			paused: []BackoffPausedMission{{ID: "m1", UpdatedAt: old}},
+			counts: map[string]int{"m1": 2},
+		}
+		signaler, notifier := &fakeSignaler{}, &fakeMessageNotifier{}
+		autoResumeBackoff(context.Background(), signaler, store, notifier, cap2, log)
+		if len(signaler.signaled) != 0 {
+			t.Fatal("2 prior pauses must exhaust a cap of 2, never resume")
+		}
+		if len(notifier.notified) != 1 {
+			t.Fatalf("notified = %d, want 1", len(notifier.notified))
+		}
+		// The same state under the built-in cap of 4 still resumes.
+		signaler = &fakeSignaler{}
+		autoResumeBackoff(context.Background(), signaler, store, &fakeMessageNotifier{}, nil, log)
+		if len(signaler.signaled) != 1 {
+			t.Fatalf("signaled = %d under the default cap, want 1", len(signaler.signaled))
+		}
+	})
+
+	t.Run("infra", func(t *testing.T) {
+		store := fakePausedByReasonStore{
+			paused: []BackoffPausedMission{{ID: "m1", UpdatedAt: old}},
+			counts: map[string]int{"m1": 2},
+		}
+		signaler, notifier := &fakeSignaler{}, &fakeMessageNotifier{}
+		autoResumeInfra(context.Background(), signaler, store, notifier, cap2, log)
+		if len(signaler.signaled) != 0 {
+			t.Fatal("2 prior pauses must exhaust a cap of 2, never resume")
+		}
+		if len(notifier.notified) != 1 {
+			t.Fatalf("notified = %d, want 1", len(notifier.notified))
+		}
+		signaler = &fakeSignaler{}
+		autoResumeInfra(context.Background(), signaler, store, &fakeMessageNotifier{}, nil, log)
+		if len(signaler.signaled) != 1 {
+			t.Fatalf("signaled = %d under the default cap, want 1", len(signaler.signaled))
+		}
+	})
 }

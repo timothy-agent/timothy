@@ -39,6 +39,19 @@ var ErrModelFloor = errors.New("mission turn served by a below-floor model")
 // an ordinary infra failure.
 var ErrPromptTooLong = errors.New("mission turn rejected: prompt exceeds the model context window")
 
+// ErrProviderRejected reports that the provider refused the request
+// itself (gateway noFailoverCodes: http_400/404/413/422,
+// invalid_request), issue #704. The same request fails the same way
+// on every retry, so the driver pauses the mission as infra with the
+// provider's message instead of burning iterations on it.
+var ErrProviderRejected = errors.New("mission turn rejected by the provider")
+
+// providerRejectedCodes mirrors the gateway's noFailoverCodes: a
+// terminal error carrying one of these never gets better on retry.
+var providerRejectedCodes = map[string]bool{
+	"invalid_request": true, "http_400": true, "http_404": true, "http_413": true, "http_422": true,
+}
+
 // ErrAskedUser reports that a turn ended via a successful ask_user
 // call (D-088) rather than the phase's own sentinel: every phase
 // entry point (RunWorker/DiscoverSession/PlanSession/RunReview) returns
@@ -721,7 +734,7 @@ func (s *kbRefSink) all() []string {
 // mission's OWN directory (worktree for coding, workspace otherwise):
 // a shell that replaces the global workspace-rooted one for the turn:
 // the root cause of a whole failure family was workers writing into
-// the shared root while verify_cmd and the reviewer looked in the
+// the shared root while check_cmd and the reviewer looked in the
 // per-mission directory: and write_file, so artifact writes never go
 // through destructive-classified shell redirects. The shell's Runner
 // routes commands into the mission's own Docker container (see
@@ -1024,6 +1037,9 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			if strings.Contains(msg, "context_length") {
 				return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("%w: %s", ErrPromptTooLong, msg)
 			}
+			if ev.Err != nil && providerRejectedCodes[ev.Err.Code] {
+				return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("%w: %s", ErrProviderRejected, msg)
+			}
 			return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("mission runner: %s", msg)
 		}
 	}
@@ -1108,10 +1124,10 @@ const kbSearchNoHits = "no matching passages found"
 // document id and its fused score together.
 var kbSearchSourceLine = regexp.MustCompile(`^Source: kb://(\S+) \(score ([-\d.]+)\)$`)
 
-// verifyCmdGitInvocation matches a git invocation as a shell word: at the
+// checkCmdGitInvocation matches a git invocation as a shell word: at the
 // start of the command or after a non-word character, so it catches
 // "git status" and "&& git diff" but not "digit" or "widget.md".
-var verifyCmdGitInvocation = regexp.MustCompile(`(^|\W)git\s`)
+var checkCmdGitInvocation = regexp.MustCompile(`(^|\W)git\s`)
 
 // kbSearchHitTrace pulls document ids, titles, and fused scores out of
 // search_kb's rendered result (kbsearch.go's formatKBHits), the same
@@ -1340,7 +1356,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	// non-frontier models (GLM-5.2's XML-ish self-closing tag, qwen3:30b's
 	// bare "mission_status" token followed by a JSON object). A text-form
 	// verdict is trust-equivalent to the tool-call form: both are the
-	// model's own self-report, and the harness's own verify_cmd/
+	// model's own self-report, and the harness's own check_cmd/
 	// CheckArtifacts evidence: never model output: is what actually
 	// gates a unit's Passes flag. This is strictly a fallback: the
 	// tool-call path above always wins when it succeeds.
@@ -1397,6 +1413,31 @@ func forcedRetryVerdict(reason string) WorkerVerdict {
 	return WorkerVerdict{Outcome: "retry", Forced: true, Analysis: reason}
 }
 
+// specifiedGoalDiscoverSteps caps discover for a goal that is already
+// fully specified (issue #720).
+const specifiedGoalDiscoverSteps = 4
+
+// goalNamesFiles matches a path-like token: a directory separator and a
+// file extension, e.g. internal/core/base62.go. A clone URL's .git is
+// not a file the goal names; discoverMaxSteps skips it.
+var goalNamesFiles = regexp.MustCompile(`[\w.-]+/[\w./-]*\w+\.[A-Za-z0-9]+`)
+
+// discoverMaxSteps bounds the discover turn. A mission whose goal
+// carries the operator's own plan (D-102) and names the files it
+// touches has nothing left to explore, so it gets a short orientation;
+// every other goal keeps the agent's default ceiling (0).
+func discoverMaxSteps(m Mission) int {
+	if !m.HasPlan {
+		return 0
+	}
+	for _, tok := range goalNamesFiles.FindAllString(m.Goal, -1) {
+		if !strings.HasSuffix(tok, ".git") {
+			return specifiedGoalDiscoverSteps
+		}
+	}
+	return 0
+}
+
 // DiscoverSession runs the mission's discover turn: explore the goal
 // before planning commits to a shape. Unlike RunWorker's sentinel
 // ladder, a missing discover_notes call never fails the phase: the
@@ -1450,6 +1491,10 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 		// turns (issue #458): a note posted while discover is in flight
 		// reaches this turn instead of only the next phase's prompt.
 		Steering: r.steeringFor(m.ID, m.Progress),
+		// issue #720: a goal that already carries the operator's plan and
+		// names its files leaves discover nothing to design, so it gets a
+		// short orientation instead of open-ended exploration.
+		MaxSteps: discoverMaxSteps(m),
 	}
 
 	res, err := r.runTurn(ctx, req, discoverNotesToolName, PhaseDiscover)
@@ -1545,7 +1590,7 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 // reuses the body with its own closing instruction, so the native
 // prompt stays byte-identical.
 const (
-	reviewSystemPrompt   = "You are reviewing units of a mission's work. Each unit's acceptance criteria, the harness's own check results, the diff and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: a criterion the work does not satisfy, unsupported claims, missing substance. Do NOT reject for material you were not given (the harness supplies everything there is) and do not re-run checks the harness already reports as passed. Every blocking finding must name a file that appears in the diff or the artifacts and quote the line that shows the gap in evidence; a blocking finding without both is demoted to minor. The changed-files stat spans every unit of the plan: judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone, never against another unit's files. Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings."
+	reviewSystemPrompt   = "You are reviewing units of a mission's work. Each unit's acceptance criteria, the harness's own check results, the diff and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: a criterion the work does not satisfy, unsupported claims, missing substance. Do NOT reject for material you were not given (the harness supplies everything there is) and do not re-run checks the harness already reports as passed. Every blocking finding must name a file that appears in the diff or the artifacts and quote the line that shows the gap in evidence; a blocking finding without both is demoted to minor. The changed-files stat spans every unit of the plan: judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone, never against another unit's files. Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings. Answer every numbered criterion listed under every unit exactly once in criteria, as met, not_met or cannot_tell, each citing the file and the line you read it from as evidence."
 	reviewSystemToolCall = " End your turn with exactly one review_verdict tool call."
 )
 
@@ -1669,15 +1714,29 @@ func renderReviewContent(p ReviewPacket) string {
 				b.WriteString("The change set below spans all of these units. Judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone; a file another unit changed is never a gap for this one.\n")
 			}
 		}
+		hasIndex := len(p.UnitIndex) == len(p.Units)
 		for i, u := range p.Units {
-			fmt.Fprintf(&b, "\n### %s [%s]\n", NeutralizeSlot(u.Title), unitStatus(u))
+			if hasIndex {
+				fmt.Fprintf(&b, "\n### Unit %d: %s [%s]\n", p.UnitIndex[i], NeutralizeSlot(u.Title), unitStatus(u))
+			} else {
+				fmt.Fprintf(&b, "\n### %s [%s]\n", NeutralizeSlot(u.Title), unitStatus(u))
+			}
 			if u.Regressed && !u.verified() {
 				b.WriteString("Regressed: this unit passed before and fails now.\n")
 			}
+			// A findings-only round asks no rubric (the packet drops the
+			// criteria), so it never gets the numbering instruction.
 			if len(u.Criteria) > 0 {
-				b.WriteString("Acceptance criteria:\n")
-				for _, c := range u.Criteria {
-					fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(c))
+				if p.FindingsOnly {
+					b.WriteString("Acceptance criteria:\n")
+					for _, c := range u.Criteria {
+						fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(c))
+					}
+				} else {
+					b.WriteString("Acceptance criteria (answer each by its number in criteria):\n")
+					for n, c := range u.Criteria {
+						fmt.Fprintf(&b, "%d. %s\n", n, NeutralizeSlot(c))
+					}
 				}
 			}
 			if unitFiles {
@@ -1796,7 +1855,9 @@ func renderReviewContent(p ReviewPacket) string {
 			b.WriteString(progressWithOperatorNotes(p.Progress, progressRenderCap, NeutralizeSlot))
 		}
 	}
-	if p.Evidence != "" {
+	// A delegated worker's report is also its last progress note; the
+	// block is skipped when the note above already carries it verbatim.
+	if p.Evidence != "" && !reportInProgress(p) {
 		b.WriteString("\nWorker's own report (verify against the artifacts above, do not take at face value):\n")
 		b.WriteString(NeutralizeSlot(p.Evidence))
 		b.WriteString("\n")
@@ -1804,15 +1865,24 @@ func renderReviewContent(p ReviewPacket) string {
 	return b.String()
 }
 
+// reportInProgress reports whether the packet's last rendered progress
+// note is the worker's report itself.
+func reportInProgress(p ReviewPacket) bool {
+	if len(p.Progress) == 0 || p.FindingsOnly {
+		return false
+	}
+	return strings.TrimSpace(p.Progress[len(p.Progress)-1].Note) == strings.TrimSpace(p.Evidence)
+}
+
 // planUnitShapeRules is the unit-shape contract every plan must
 // satisfy regardless of how it was derived (designed from scratch or
 // transcribed from an operator-supplied plan, D-102): artifacts,
-// criteria, scope, verify_cmd's POSIX-shell/no-substitution/content-
+// criteria, scope, check_cmd's POSIX-shell/no-substitution/content-
 // check rules, workspace-relative paths, the infeasible escape hatch
 // (D-077), and assumptions. Kept as one shared string so
 // build/prove's unit parsing (parsePlan) never has to distinguish
 // which mode produced a plan.
-const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). verify_cmd is executed literally as `/bin/sh -c \"<verify_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command) and must check the CONTENT of the artifacts (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in verify_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`. The harness commits each unit's files itself after the worker turn, so criteria and verify_cmd must judge file CONTENT only, never git status, staging, untracked, or uncommitted state. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
+const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). check_cmd is executed literally as `/bin/sh -c \"<check_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command). It is a gate, not a proof: it must FAIL against the workspace as it stands now and PASS once the unit's work exists, and the harness runs it once at plan acceptance to confirm the first half, rejecting a gate that already passes. For a unit whose artifacts are source files it must build, test or run them with the environment's toolchain (`go test ./pkg/...`, `python3 -m pytest tests/`, `npm test`); a grep against source only proves text is present, so greps may accompany the toolchain call but never stand alone. A toolchain call alone passes while the unit's files are still missing (`go test ./pkg/ -run TestX` exits 0 when no test file exists, `gofmt -l` prints nothing for absent files, pytest collects nothing), so anchor each code unit's check_cmd on a symbol the unit adds, e.g. `grep -q 'func TestBase62' internal/core/base62_test.go && go test ./internal/core/ -run TestBase62`. For document artifacts check CONTENT (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in check_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`; to assert a command prints nothing (gofmt -l, a linter) pipe it into `awk 'END{exit NR>0}'`, NEVER `grep -q '^$'`, which exits 1 on empty input. Do not add a separate final \"format and verify\" unit: put the toolchain call in every code unit's own check_cmd. For a small coding change (at most 8 source files, all in one directory or package), submit ONE unit covering all of them rather than one unit per file, since each extra unit costs a separate session and review round. The harness commits each unit's files itself after the worker turn, so criteria and check_cmd must judge file CONTENT only, never git status, staging, untracked, or uncommitted state. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
 
 // planSystemPrompt builds PlanSession's system prompt: the design-mode
 // opening (break the goal into units from scratch) or, when hasPlan is
@@ -1824,7 +1894,7 @@ const planUnitShapeRules = " Every unit must list at least one artifact, the wor
 // to a transcribed plan as to a designed one.
 func planSystemPrompt(hasPlan bool) string {
 	if hasPlan {
-		return "You are transcribing a mission plan. The goal below already contains the operator's own plan: convert it into an ordered list of verifiable units faithfully, preserving its steps and order. Do not redesign the plan, do not add scope or steps the operator didn't ask for, and do not merge or split steps the operator kept separate, except where the shape rules below force a natural split (e.g. one step whose own deliverable would truncate a single worker turn)." + planUnitShapeRules
+		return "You are transcribing a mission plan. The goal below already contains the operator's own plan: convert it into an ordered list of verifiable units faithfully, preserving its steps and order. Do not redesign the plan, do not add scope or steps the operator didn't ask for, and do not merge or split steps the operator kept separate, except where the shape rules below force a split (one step whose own deliverable would truncate a single worker turn) or a merge (a small change inside one directory)." + planUnitShapeRules
 	}
 	return "You are planning one mission. Break the goal into the SMALLEST ordered list of verifiable units that achieves it: one unit is correct for a simple goal; never pad the plan. A worker turn is one continuous model generation: if a single unit's own deliverable would demand a very long uninterrupted output (many chapters, dozens of sections, a large multi-file dataset, or similar), a long stream is more likely to truncate mid-generation, so split that unit along its own natural boundaries (one unit per chapter/section/file) instead of one unit for the whole deliverable; this applies regardless of the goal's subject matter." + planUnitShapeRules
 }
@@ -1905,7 +1975,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 		return Plan{}, ErrAskedUser
 	}
 	if len(args) > 0 {
-		if plan, planErr := parsePlan(string(args)); planErr == nil {
+		if plan, planErr := r.acceptPlan(ctx, m, string(args)); planErr == nil {
 			plan.Provider, plan.Model = res.provider, res.model
 			return plan, nil
 		}
@@ -1919,7 +1989,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	var recoverReason string
 	if len(args) == 0 {
 		recoverReason = "you did not call submit_plan"
-	} else if _, planErr := parsePlan(string(args)); planErr != nil {
+	} else if _, planErr := r.acceptPlan(ctx, m, string(args)); planErr != nil {
 		recoverReason = planErr.Error()
 	}
 	recoverReq := req
@@ -1936,7 +2006,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 		r.log.Warn("mission planner ended without a submit_plan call", "mission_id", m.ID, "route", oversightRoute(m), "text", text, "recover_text", recoverText)
 		return Plan{}, fmt.Errorf("mission runner: planner ended without a submit_plan call")
 	}
-	plan, err := parsePlan(string(recoverArgs))
+	plan, err := r.acceptPlan(ctx, m, string(recoverArgs))
 	if err != nil {
 		r.log.Warn("mission planner submitted an invalid plan twice", "mission_id", m.ID, "route", oversightRoute(m), "text", text, "recover_text", recoverText, "error", err)
 		return Plan{}, err
@@ -1946,10 +2016,10 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 }
 
 // execEnvironmentNote tells the planner what execution environment
-// verify_cmd and shell commands actually run in: without this, a
+// check_cmd and shell commands actually run in: without this, a
 // planner with no sandbox has no way to know whether e.g. python3
-// exists, and can author a verify_cmd for a runtime that was never
-// there (the root cause of a real stuck mission: a plan's verify_cmd
+// exists, and can author a check_cmd for a runtime that was never
+// there (the root cause of a real stuck mission: a plan's check_cmd
 // assumed Python in an environment that had none). WorkPacket.Render
 // carries the same text to the worker via ExecEnvironmentNote.
 func (r *nativeRunner) execEnvironmentNote(ctx context.Context) string {
@@ -1994,6 +2064,7 @@ func parsePlan(raw string) (Plan, error) {
 	if err := dec.Decode(&plan); err != nil {
 		return Plan{}, fmt.Errorf("mission runner: invalid plan JSON: %w", err)
 	}
+	plan.normalize()
 	// D-077: the schema itself no longer requires units (infeasible=true
 	// needs none), so the units-empty/infeasible split is validated here.
 	if plan.Infeasible {
@@ -2005,11 +2076,11 @@ func parsePlan(raw string) (Plan, error) {
 	if len(plan.Units) == 0 {
 		return Plan{}, fmt.Errorf("mission runner: plan has no units")
 	}
-	// verify_cmd runs through RunVerify (a plain /bin/sh -c): harness-
+	// check_cmd runs through RunVerify (a plain /bin/sh -c): harness-
 	// side, outside the permission chain entirely, so D-050's sandbox
 	// relaxation (which only changes how a worker/reviewer's own shell
 	// TOOL CALL is classified) has no bearing here. The rejection below
-	// is a determinism concern, not a permission one: verify_cmd must
+	// is a determinism concern, not a permission one: check_cmd must
 	// check the CONTENT of declared artifacts reproducibly, and command
 	// substitution invites exactly the kind of "prove nothing" or
 	// environment-dependent check (e.g. $(date) in the expected value)
@@ -2017,16 +2088,16 @@ func parsePlan(raw string) (Plan, error) {
 	// empty-plan check already rejects a bad plan, so the planner's
 	// retry loop sees the real problem immediately.
 	for _, u := range plan.Units {
-		if strings.Contains(u.VerifyCmd, "$(") || strings.Contains(u.VerifyCmd, "`") {
-			return Plan{}, fmt.Errorf("mission runner: verify_cmd must not use command substitution ($(...) or backticks), write the direct command instead")
+		if strings.Contains(u.CheckCmd, "$(") || strings.Contains(u.CheckCmd, "`") {
+			return Plan{}, fmt.Errorf("mission runner: check_cmd must not use command substitution ($(...) or backticks), write the direct command instead")
 		}
 	}
 	// The harness commits every unit's files itself after the worker turn
-	// (Workspace.CommitUnit), so a verify_cmd that runs git always checks
+	// (Workspace.CommitUnit), so a check_cmd that runs git always checks
 	// a stale or wrong assumption about working-tree state.
 	for _, u := range plan.Units {
-		if verifyCmdGitInvocation.MatchString(u.VerifyCmd) {
-			return Plan{}, fmt.Errorf("mission runner: unit %q verify_cmd must not run git: the harness commits each unit itself, check artifact content instead", u.Title)
+		if checkCmdGitInvocation.MatchString(u.CheckCmd) {
+			return Plan{}, fmt.Errorf("mission runner: unit %q check_cmd must not run git: the harness commits each unit itself, check artifact content instead", u.Title)
 		}
 	}
 	// D-068: every unit must declare at least one artifact so the
@@ -2050,13 +2121,13 @@ func parsePlan(raw string) (Plan, error) {
 			u.Scope = defaultScope(u.Artifacts)
 		}
 	}
-	// D-068: reject verify_cmds that succeed regardless of outcome.
+	// D-068: reject check_cmds that succeed regardless of outcome.
 	// Deny-set on the first shell word only, deliberately not a shell
 	// parser; a no-op buried after && is out of scope.
 	for _, u := range plan.Units {
-		cmd := strings.TrimSpace(u.VerifyCmd)
+		cmd := strings.TrimSpace(u.CheckCmd)
 		if cmd == "" {
-			return Plan{}, fmt.Errorf("mission runner: unit %q must have a verify_cmd that checks the CONTENT of its artifacts (e.g. grep), a bare echo, true, :, or printf proves nothing", u.Title)
+			return Plan{}, fmt.Errorf("mission runner: unit %q must have a check_cmd that checks the CONTENT of its artifacts (e.g. grep), a bare echo, true, :, or printf proves nothing", u.Title)
 		}
 		firstWord := cmd
 		if i := strings.IndexAny(cmd, " \t"); i >= 0 {
@@ -2064,22 +2135,22 @@ func parsePlan(raw string) (Plan, error) {
 		}
 		switch firstWord {
 		case "echo", "true", ":", "printf":
-			return Plan{}, fmt.Errorf("mission runner: unit %q verify_cmd must check the CONTENT of its artifacts (e.g. grep), a bare echo, true, :, or printf proves nothing", u.Title)
+			return Plan{}, fmt.Errorf("mission runner: unit %q check_cmd must check the CONTENT of its artifacts (e.g. grep), a bare echo, true, :, or printf proves nothing", u.Title)
 		}
 	}
-	// D-068: verify_cmd must parse as POSIX shell (-n never executes).
+	// D-068: check_cmd must parse as POSIX shell (-n never executes).
 	// Skip silently if /bin/sh is missing so tests stay hermetic.
 	if shPath, err := exec.LookPath("/bin/sh"); err == nil {
 		for _, u := range plan.Units {
 			shCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			out, err := exec.CommandContext(shCtx, shPath, "-n", "-c", u.VerifyCmd).CombinedOutput() //nolint:gosec // G204: shPath is LookPath("/bin/sh"); -n parses only, never executes
+			out, err := exec.CommandContext(shCtx, shPath, "-n", "-c", u.CheckCmd).CombinedOutput() //nolint:gosec // G204: shPath is LookPath("/bin/sh"); -n parses only, never executes
 			cancel()
 			if err != nil {
 				stderr := strings.TrimSpace(string(out))
 				if len(stderr) > 200 {
 					stderr = stderr[:200]
 				}
-				return Plan{}, fmt.Errorf("mission runner: unit %q verify_cmd does not parse as POSIX shell: %s", u.Title, stderr)
+				return Plan{}, fmt.Errorf("mission runner: unit %q check_cmd does not parse as POSIX shell: %s", u.Title, stderr)
 			}
 		}
 	}

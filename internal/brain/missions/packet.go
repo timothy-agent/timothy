@@ -2,6 +2,7 @@ package missions
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -33,11 +34,11 @@ type WorkPacket struct {
 	// system prompt, same instructions a chat session with that agent
 	// would get.
 	PromptOverlay string
-	// ExecEnvironmentNote describes what shell/verify_cmd commands
+	// ExecEnvironmentNote describes what shell/check_cmd commands
 	// actually run against (sandbox container vs the minimal in-process
 	// shell) — without this a worker has no way to know whether e.g.
 	// python3 exists, and can report "done" on a step whose own
-	// verify_cmd will fail for want of a runtime that was never there.
+	// check_cmd will fail for want of a runtime that was never there.
 	ExecEnvironmentNote string
 	// ParentContext is the parent mission's outcome digest, set only
 	// for a follow-up mission (Mission.ParentContext()) -- gives the
@@ -48,6 +49,10 @@ type WorkPacket struct {
 	// the worker the content of what the user explicitly pinned at
 	// create time.
 	ReferencedContext string
+	// References are the same picks as entries (Mission.ReferenceEntries());
+	// RenderForDelegated writes each to a file in the run dir and lists
+	// the paths instead of inlining the digests (issue #705).
+	References []SourceEntry
 	// Attachments are the mission's create-time documents, images, and
 	// audio clips ("pdf" Sources entries, issue #359) -- reach every
 	// worker turn via Render, including a delegated executor's turn
@@ -158,12 +163,112 @@ func (p WorkPacket) Render() (system, user string) {
 // to confuse a model into reporting BLOCKED over tools it was never
 // offered, rather than using its own native file-edit/patch tool and
 // the harness's structured-output contract.
-func (p WorkPacket) RenderForDelegated() (system, user string) {
-	return p.render("")
+//
+// The body order differs from Render (issue #705): a one-shot CLI reads
+// the prompt top to bottom and weighs the tail, so lineage and
+// references are one line each pointing at files under runDir/refs
+// (returned in files, keyed relative to runDir), and the current unit
+// with its artifacts and verify command comes last. Codex once read a
+// parent digest saying "done, docs only" as the final word and reported
+// DONE without a single tool call.
+func (p WorkPacket) RenderForDelegated(runDir string) (system, user string, files map[string]string) {
+	system = p.systemPrompt("")
+	files = map[string]string{}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Goal: %s\n", NeutralizeSlot(p.Goal))
+	fmt.Fprintf(&b, "Iteration: %d\n\n", p.Iteration)
+
+	if p.DiscoverNotes != "" {
+		b.WriteString("Discovery findings:\n")
+		b.WriteString(NeutralizeSlot(p.DiscoverNotes))
+		b.WriteString("\n\n")
+	}
+
+	if p.ParentContext != "" {
+		files["refs/parent-mission.md"] = p.ParentContext
+		fmt.Fprintf(&b, "Follow-up of a previous mission; its outcome digest is at %s (background only, this mission's plan below is the work).\n\n", filepath.Join(runDir, "refs", "parent-mission.md"))
+	}
+	if len(p.References) > 0 {
+		b.WriteString("Referenced documents, read when the unit needs them:\n")
+		for i, e := range p.References {
+			rel := filepath.Join("refs", fmt.Sprintf("%02d-%s.md", i+1, slugify(referenceName(e))))
+			files[rel] = e.Digest
+			fmt.Fprintf(&b, "- %s: %s\n", NeutralizeSlot(referenceName(e)), filepath.Join(runDir, rel))
+		}
+		b.WriteString("\n")
+	}
+
+	if len(p.Plan.Units) > 0 {
+		b.WriteString("Plan:\n")
+		for _, u := range p.Plan.Units {
+			b.WriteString(renderPlanLine(u))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString(renderOpenFindings(p.Findings, p.ReworkRound, p.MaxRounds))
+	b.WriteString(p.renderProgress())
+
+	if p.GitLog != "" {
+		b.WriteString("Recent commits in this worktree:\n")
+		b.WriteString(NeutralizeSlot(p.GitLog))
+		b.WriteString("\n")
+	}
+
+	b.WriteString(renderAttachments(p.Attachments))
+
+	if len(p.Plan.Units) > 0 {
+		if unit, _ := currentUnit(p.Plan); unit != nil {
+			b.WriteString("\n")
+			fmt.Fprintf(&b, "Current unit: %s\n", NeutralizeSlot(unit.Title))
+			b.WriteString(renderUnitFailure(*unit))
+			for _, c := range unit.Criteria {
+				fmt.Fprintf(&b, "  criterion: %s\n", NeutralizeSlot(c))
+			}
+			for _, a := range unit.Artifacts {
+				fmt.Fprintf(&b, "  must produce (exact path): %s\n", NeutralizeSlot(a))
+			}
+			if unit.CheckCmd != "" {
+				fmt.Fprintf(&b, "  checked by: %s\n", NeutralizeSlot(unit.CheckCmd))
+			}
+			b.WriteString("Do this unit now.\n")
+		}
+	}
+
+	return system, b.String(), files
 }
 
-func (p WorkPacket) render(preamble string) (system, user string) {
-	system = preamble + p.ExecEnvironmentNote
+// slugify turns a reference name into a short filename stem.
+func slugify(name string) string {
+	var b strings.Builder
+	last := '-'
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			last = r
+		default:
+			if last != '-' {
+				b.WriteRune('-')
+				last = '-'
+			}
+		}
+		if b.Len() >= 40 {
+			break
+		}
+	}
+	s := strings.Trim(b.String(), "-")
+	if s == "" {
+		return "reference"
+	}
+	return s
+}
+
+// systemPrompt assembles the system half shared by Render and
+// RenderForDelegated.
+func (p WorkPacket) systemPrompt(preamble string) string {
+	system := preamble + p.ExecEnvironmentNote
 	if preamble != "" && p.SkillsIndex != "" {
 		// preamble=="" is the delegated path (RenderForDelegated) —
 		// no load_skill tool there, so the index would only mislead.
@@ -178,6 +283,35 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 	if block := WritingStyleBlock(p.WritingStyle, p.WritingSamples); block != "" {
 		system += "\n\n" + block
 	}
+	return system
+}
+
+// renderProgress is the "Progress so far" block, capped at
+// progressRenderCap notes.
+func (p WorkPacket) renderProgress() string {
+	if len(p.Progress) == 0 {
+		return ""
+	}
+	loc := p.Location
+	if loc == nil {
+		loc = time.UTC
+	}
+	var b strings.Builder
+	b.WriteString("Progress so far:\n")
+	notes := p.Progress
+	if len(notes) > progressRenderCap {
+		fmt.Fprintf(&b, "(%d earlier notes omitted)\n", len(notes)-progressRenderCap)
+		notes = notes[len(notes)-progressRenderCap:]
+	}
+	for _, n := range notes {
+		fmt.Fprintf(&b, "- %s: %s\n", n.At.In(loc).Format("2006-01-02 15:04 MST"), NeutralizeSlot(n.Note))
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+func (p WorkPacket) render(preamble string) (system, user string) {
+	system = p.systemPrompt(preamble)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal: %s\n", NeutralizeSlot(p.Goal))
@@ -203,31 +337,15 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 			for _, a := range u.Artifacts {
 				fmt.Fprintf(&b, "  must produce (exact path): %s\n", NeutralizeSlot(a))
 			}
-			if u.VerifyCmd != "" {
-				fmt.Fprintf(&b, "  verified by: %s\n", NeutralizeSlot(u.VerifyCmd))
+			if u.CheckCmd != "" {
+				fmt.Fprintf(&b, "  checked by: %s\n", NeutralizeSlot(u.CheckCmd))
 			}
 		}
 		b.WriteString("\n")
 	}
 
 	b.WriteString(renderOpenFindings(p.Findings, p.ReworkRound, p.MaxRounds))
-
-	if len(p.Progress) > 0 {
-		loc := p.Location
-		if loc == nil {
-			loc = time.UTC
-		}
-		b.WriteString("Progress so far:\n")
-		notes := p.Progress
-		if len(notes) > progressRenderCap {
-			fmt.Fprintf(&b, "(%d earlier notes omitted)\n", len(notes)-progressRenderCap)
-			notes = notes[len(notes)-progressRenderCap:]
-		}
-		for _, n := range notes {
-			fmt.Fprintf(&b, "- %s: %s\n", n.At.In(loc).Format("2006-01-02 15:04 MST"), NeutralizeSlot(n.Note))
-		}
-		b.WriteString("\n")
-	}
+	b.WriteString(p.renderProgress())
 
 	if p.GitLog != "" {
 		b.WriteString("Recent commits in this worktree:\n")
@@ -326,7 +444,7 @@ func renderOpenFindings(findings []Finding, round, maxRounds int) string {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Do not re-verify the whole project. Change code, run the affected unit's verify_cmd, commit, and report per finding what changed.\n\n")
+	b.WriteString("Do not re-verify the whole project. Change code, run the affected unit's check_cmd, commit, and report per finding what changed.\n\n")
 	return b.String()
 }
 

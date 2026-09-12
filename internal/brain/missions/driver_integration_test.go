@@ -41,7 +41,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	}
 
 	runner := &scriptedRunner{
-		plans: []Plan{{Units: []PlanUnit{{Title: "add a file", VerifyCmd: "test -f new-file.txt"}}}},
+		plans: []Plan{{Units: []PlanUnit{{Title: "add a file", CheckCmd: "test -f new-file.txt"}}}},
 		workerVerdicts: []WorkerVerdict{
 			{Outcome: "done", Evidence: "created new-file.txt"},
 		},
@@ -50,7 +50,7 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	d := NewDriver(store, runner, workspace, nil, nil, nil, fakeSandboxExec, nil, log)
 
 	// The scripted worker "does the work" by actually creating the file
-	// the verify_cmd checks for — RunVerify runs for real against the
+	// the check_cmd checks for; RunVerify runs for real against the
 	// worktree, so the harness's own evidence must be genuine, not
 	// merely claimed.
 	if err := os.WriteFile(wt+"/new-file.txt", []byte("hello"), 0o644); err != nil {

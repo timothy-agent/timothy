@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -277,6 +278,30 @@ func TestOpenAIResponsesContinuationMatchingDriver(t *testing.T) {
 	}
 	if got.Input[0].Type != "function_call_output" || got.Input[0].CallID != "call_1" || got.Input[0].Output != "sunny" {
 		t.Fatalf("input[0] = %+v", got.Input[0])
+	}
+}
+
+// TestOpenAIResponsesEmptyToolResultGetsPlaceholder pins issues #702 and
+// #718: a tool that returned nothing serializes a non-empty output on its
+// function_call_output item. The API rejects a missing key and an empty
+// string alike with missing_required_parameter (confirmed live against
+// gpt-5.4: "output": "" -> 400, "(no output)" -> 200).
+func TestOpenAIResponsesEmptyToolResultGetsPlaceholder(t *testing.T) {
+	t.Parallel()
+	items := appendMessage(nil, Message{Role: "tool", ToolResult: &ToolResult{ID: "call_1", Content: ""}})
+	raw, err := json.Marshal(items)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"output":"`+emptyToolOutput+`"`) {
+		t.Fatalf("empty tool result must carry the placeholder output: %s", raw)
+	}
+	if strings.Contains(string(raw), `"output":""`) {
+		t.Fatalf("empty output string reached the wire: %s", raw)
+	}
+	errItems := appendMessage(nil, Message{Role: "tool", ToolResult: &ToolResult{ID: "call_2", Content: "", IsError: true}})
+	if errItems[0].Output != "ERROR: " {
+		t.Fatalf("errored empty result = %q, want the ERROR prefix alone (already non-empty)", errItems[0].Output)
 	}
 }
 

@@ -66,7 +66,7 @@ CLAUDE.md so other work does not pay for it every session.
   (`Driver.SetNameMission`) if still empty.
 - Harness-owned verification: `CheckArtifacts` (declared artifact paths
   must exist, non-empty, inside the workspace) runs BEFORE any
-  model-authored `verify_cmd`. `passes` flags flip only on harness
+  model-authored `check_cmd`. `passes` flags flip only on harness
   evidence, never on model claims.
 - Batch verification (D-094, issue #518): after every build turn
   `verifier.verifyAll` checks every unit (unverified ones fully,
@@ -112,11 +112,118 @@ CLAUDE.md so other work does not pay for it every session.
   `ExtraTools` that shadow base tools by name. Workers must create files
   with `write_file` only; shell redirects/heredocs classify destructive
   and park the turn.
-- Non-coding units whose artifacts + verify_cmd pass harness checks skip
+- Non-coding units whose artifacts + check_cmd pass harness checks skip
   LLM review entirely (`mission.review_skipped`).
 - Delegated reviewer (issue #582): a mission's opt-in `review_harness`
   runs the prove round as a read-only CLI (`executor.InvocationSpec.
   ReadOnly`, enforced per adapter in Go) in the sandbox/worktree with
   the rendered review packet as prompt; native review is the floor,
   every failure records `review.delegated_fallback` and runs it.
+- Explicit worker harness is a contract (issue #704): when no chain
+  entry can serve `harness` (cooldown, unusable, resolve failed,
+  unknown) `RunWorker` returns `ExecutorUnavailableError` and the
+  driver pauses as infra with `until` in the pause payload, which
+  `autoResumeInfra` waits for. Never a native turn in its place.
+  Cooldown fires only on provider signals (transport death, spawn
+  failure, auth failure), never on local file errors, idle or
+  run-budget kills. Gateway no-failover codes (400/404/413/422,
+  invalid_request) surface as `ErrProviderRejected` and pause as infra.
+- A delegated DONE over an untouched worktree (WT summary clean) is a
+  forced retry with `session_reset` on `executor.result` (issue #706);
+  `LastRunState` reads it and the next run starts fresh. No retry of
+  any kind rolls the worktree back (issue #718: a RETRY reports
+  unfinished work); only a review rework does.
+- Delegated failure classes (issue #718): a result whose error text is
+  a provider rejection (`isProviderRejection`: billing, quota, 4xx/5xx,
+  "use the v1/responses endpoint") is never a verdict; `finish` records
+  it, cools the entry and returns `ExecutorUnavailableError` (infra
+  pause with `until`). A sandbox launch error (`isSandboxError`,
+  `sandboxclient:` prefix) pauses as infra for `sandboxRetryDelay` and
+  never cools a provider. The router marks a `harnessChatOnly` harness
+  (pi) unusable on a Responses-only catalog model, and any harness
+  entry that resolves to no model (`emptyModelSkip`: chain pins none,
+  provider row has no `default_model`) unusable instead of letting
+  `BuildInvocation` fail three retries later. A retry the harness
+  caused (`StepInput.HarnessCaused`: an unreadable sentinel, a runner
+  error, an executor death, an idle timeout) spends no iteration and
+  skips the `MaxIterations` ceiling, marked `harness_caused` on
+  `mission.retry`; the stall and backoff brakes still count it, so a
+  harness that keeps failing still pauses, including on a planless flow
+  where the stall pause is the only stop left. `missions.harness_retries`
+  is their lifetime count, capped by
+  `settings.mission_harness_retry_cap` (pause cause
+  `harness_retries_exhausted`) and reset by nothing. On a
+  harness-caused FAILURE the cap is checked before the backoff brake:
+  resume clears the pause but not `ConsecutiveFailures`, so a
+  backoff-first order would re-pause as backoff on every resumed harness
+  failure and the cap would be dead code. On a harness-caused RETRY the
+  stall brake still comes first.
+- A tool result with no content (`git status --short` on a clean tree)
+  used to 400 every OpenAI Responses turn: the API rejects
+  `"output": ""` as missing, the continuation retry resends the full
+  history with the same item and fails again, and the log shows only
+  the second failure (`input[N].output`, N = the empty item's index in
+  the full map). `openairesponses.appendMessage` substitutes
+  `emptyToolOutput` ("(no output)"); the two-request shape is why the
+  index never pointed at a one-item continuation body (issue #718).
+- A run with zero tool calls did nothing (issue #718): `pollToVerdict`
+  marks the verdict `noWork`, `finish` sets `session_reset`, and
+  `RunWorker` relaunches once fresh (`executor.relaunched`,
+  `maxNoWorkRelaunch`) before the verdict reaches the driver; a BLOCKED
+  that names a plan defect is kept as information.
+- A plan unit whose every artifact belongs to an earlier unit (a
+  trailing "format and verify" unit) is rejected at plan acceptance
+  (`checkOwnArtifacts`): its commands belong in the producing units.
+- Plan defects travel back to the planner (issue #718): a worker
+  BLOCKED note that names the plan (`namesPlanDefect`: a gate,
+  criterion, artifact path, "cannot pass", "in isolation") is
+  `InputPlanDefect`, which spends the one automatic replan with the
+  note recorded as progress; once spent it parks like any block. A
+  replan keeps harness evidence: `restorePassedUnits` matches prior
+  verified units by title+check_cmd or by identical artifact set and
+  carries `harness_passed` (and `passes`) forward.
+- CLI session state lives in `<workspace>/executor/<harness>`
+  (`InvocationSpec.StateDir`, issue #707): codex's CODEX_HOME is shared
+  by every run of a mission so `codex exec resume` finds its rollout.
+  A resume whose stderr says the session is gone dies as
+  `session_lost` with `session_reset`, no cooldown, next run fresh.
+- `RenderForDelegated(runDir)` (issue #705) orders the CLI prompt goal,
+  lineage line, reference list, plan, findings, progress, git log,
+  attachments, then the current unit last with artifacts and verify
+  command. Parent digest and references are files under `runs/<id>/refs/`
+  (returned as files, written by `launchRun`), never inline.
+- Plan gates (issue #718): a unit's `check_cmd` (renamed from
+  `verify_cmd`; `Plan.normalize` reads the old key until the
+  pending-alters rename runs) is a gate, never a proof. `acceptPlan`
+  rejects, with one planner recovery turn: the `| grep -q '^$'` idiom
+  (exits 1 on empty output), a coding unit with source artifacts and no
+  toolchain call (`checkCodeFloor`, per sandbox environment), and, via
+  a 60 s sandbox probe against the pre-work tree, a gate that already
+  exits 0 or names a command the environment lacks. Verifying that the
+  criteria are met is the reviewer's job, not the gate's.
+- Per-criterion review rubric (issue #718): `review_verdict` carries
+  `criteria` (unit index, criterion index, met/not_met/cannot_tell,
+  evidence), optional so existing fixtures still parse and an unknown
+  status reads as cannot_tell. `Driver.runReview` decides in Go, not in
+  the prompt: a not_met criterion opens a blocking finding titled with
+  the criterion and forces rework even on an approve decision (Warn
+  logged), a cannot_tell opens a minor finding, a title already open
+  opens nothing, and unanswered criteria are only logged. Skipped: a
+  criterion on a unit outside the round (`mergeFindings` stamps every
+  finding with the reviewed unit) and a not_met quoting no evidence,
+  read as cannot_tell since the D-095 gate would demote it anyway. The
+  full-round packet numbers each unit's criteria and heads each unit
+  with its plan index; a findings-only round asks no rubric.
+- Every retry, iteration and auto-resume ceiling is an operator
+  setting, read per turn rather than compiled in (issue #718):
+  `mission_default_max_iterations` (Store.Create/scheduler via
+  `SetDefaultMaxIterations`), `mission_backoff_failures`,
+  `mission_stall_rounds` and `mission_harness_retry_cap` (the
+  statemachine `Config`, built per Advance by `Driver.config` from
+  `SetCeilings`), `mission_auto_resume_backoff_max` and
+  `mission_auto_resume_infra_max` (the sweep ladders' exhausted caps via
+  `SetAutoResumeMax`). `DefaultConfig` and the `sweep.go` constants stay
+  as the fallbacks. Delegated CLI runs are capped too:
+  `executor_worker_max_turns` (40) alongside
+  `executor_review_max_turns` (6), both on `SetExecutorKnobs`.
 - `make canary` is the regression gate for any harness change.

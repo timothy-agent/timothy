@@ -18,7 +18,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
-// verifyBackend runs verify_cmd via a sandbox container instead of
+// verifyBackend runs check_cmd via a sandbox container instead of
 // brain's own process, streaming combined output to out and returning
 // the exit code — RunVerifyWithBackend's counterpart to
 // missionTools' shell Runner hook. err is non-nil only for an
@@ -26,7 +26,7 @@ import (
 // evidence-bearing outcome reported via the exit code).
 type verifyBackend func(ctx context.Context, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error)
 
-// verifyTimeout bounds one plan unit's verify_cmd.
+// verifyTimeout bounds one plan unit's check_cmd.
 const verifyTimeout = 10 * time.Minute
 
 // verifyExcerptCap is the trailing slice of output kept alongside the
@@ -42,7 +42,7 @@ type VerifyResult struct {
 	OutputSHA256 string
 	Excerpt      string
 	Passed       bool
-	// TimedOut marks a verify_cmd that hit verifyTimeout: a failure
+	// TimedOut marks a check_cmd that hit verifyTimeout: a failure
 	// with the timeout named in Excerpt, never an infrastructure error.
 	TimedOut bool
 }
@@ -53,14 +53,14 @@ type VerifyResult struct {
 type UnitVerification struct {
 	Unit    int
 	Passed  bool
-	Check   string // artifacts, citations, verify_cmd, timeout
+	Check   string // artifacts, citations, check_cmd, timeout
 	Excerpt string
 }
 
-// RunVerifyWithBackend executes a plan unit's verify_cmd via backend
+// RunVerifyWithBackend executes a plan unit's check_cmd via backend
 // (the mission's sandbox container) in the work root. Output is
 // streamed into a sha256 hash and a bounded tail buffer rather than
-// collected in full — a verify_cmd with runaway output must not
+// collected in full: a check_cmd with runaway output must not
 // balloon memory. Evidence recorded: exit code, sha256 digest of the
 // full output, and a trailing excerpt — "done is auditable from
 // events alone."
@@ -79,14 +79,14 @@ func runVerifyTimed(ctx context.Context, backend verifyBackend, workRoot, verify
 	exitCode, err := backend(cctx, workRoot, verifyCmd, timeout, io.MultiWriter(hash, tail))
 	if err != nil {
 		// Our own deadline firing (not the caller's cancel), or sandboxd's
-		// server-side timeout for the same duration, is a hung verify_cmd:
+		// server-side timeout for the same duration, is a hung check_cmd:
 		// real evidence the unit did not pass, not infra.
 		sandboxTimeout := strings.Contains(err.Error(), "timed out")
 		if ctx.Err() == nil && (cctx.Err() != nil || sandboxTimeout) {
 			return VerifyResult{
 				ExitCode:     exitCode,
 				OutputSHA256: hex.EncodeToString(hash.Sum(nil)),
-				Excerpt:      tail.String() + fmt.Sprintf("\nverify_cmd timed out after %s", timeout),
+				Excerpt:      tail.String() + fmt.Sprintf("\ncheck_cmd timed out after %s", timeout),
 				TimedOut:     true,
 			}, nil
 		}
@@ -101,7 +101,7 @@ func runVerifyTimed(ctx context.Context, backend verifyBackend, workRoot, verify
 }
 
 // tailBuffer keeps only the last max bytes written to it — a bounded
-// alternative to buffering a verify_cmd's entire (potentially huge)
+// alternative to buffering a check_cmd's entire (potentially huge)
 // output just to keep its trailing excerpt.
 type tailBuffer struct {
 	buf []byte
@@ -121,8 +121,8 @@ func (t *tailBuffer) String() string { return string(t.buf) }
 // CheckArtifacts verifies each declared workspace-relative artifact
 // path exists under workRoot and is non-empty, returning a
 // human-readable problem per failing path. This deterministic check
-// runs BEFORE verify_cmd and is the harness's own evidence — a plan
-// whose verify_cmd is a tautology still cannot pass a unit whose
+// runs BEFORE check_cmd and is the harness's own evidence; a plan
+// whose check_cmd is a tautology still cannot pass a unit whose
 // artifact was never written. A path that escapes workRoot (absolute,
 // or climbing out via ..) is reported as a problem, never resolved.
 func CheckArtifacts(workRoot string, artifacts []string) []string {

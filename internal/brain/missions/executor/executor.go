@@ -41,6 +41,15 @@ type Capabilities struct {
 	// issue #499). False means the runner must never set
 	// ResumeSessionID for this adapter: it always starts fresh.
 	SupportsResume bool
+	// SchemaSuppressesTools declares that asking this CLI for a strict
+	// structured result costs it the ability to call tools at all, so
+	// the runner must not send ResultSchema (issue #716). Observed on
+	// codex against the Responses API: the turn comes back as one
+	// schema-shaped message with zero function calls, and the model
+	// says it was never allowed to run anything. Such an adapter reads
+	// its verdict out of the final message instead, so the contract
+	// still holds, one rung lower on the ladder.
+	SchemaSuppressesTools bool
 }
 
 // InvocationSpec is what the runner supplies to build one CLI invocation.
@@ -68,12 +77,26 @@ type InvocationSpec struct {
 	// The runner only ever sets this when Capabilities().SupportsResume
 	// is true for the adapter in play.
 	ResumeSessionID string
+	// StateDir, when non-empty, is a per-mission directory the CLI keeps
+	// its own session state in across runs (issue #707): codex's
+	// CODEX_HOME, so `codex exec resume` finds the rollout the previous
+	// run wrote. Empty keeps state inside the run dir.
+	StateDir string
 	// ReadOnly asks for a run that can read the workdir but never
 	// modify it or run shell commands (issue #582, the delegated
 	// reviewer). Each adapter maps it onto its own CLI knob; an adapter
 	// with no such knob returns ErrReadOnlyUnsupported from
 	// BuildInvocation instead of pretending.
 	ReadOnly bool
+	// MaxTurns, when > 0, caps the CLI's own agent loop at that many
+	// turns (issue #720). Set for review runs, which judge a diff the
+	// prompt already carries; an adapter whose CLI has no such flag
+	// ignores it.
+	MaxTurns int
+	// ThinkingTokens, when > 0, caps the model's per-turn thinking
+	// budget (issue #720). An adapter whose CLI exposes no such knob
+	// ignores it.
+	ThinkingTokens int
 }
 
 // ErrReadOnlyUnsupported is returned by BuildInvocation when
@@ -91,9 +114,10 @@ type Invocation struct {
 	Argv       []string
 	Env        map[string]string // allowlisted names only; values never logged
 	PromptFile string
-	// Files are extra files the runner writes into the run dir before
-	// spawn, keyed by slash-separated path relative to the run dir
-	// (e.g. "pi-agent/models.json"). Values are never logged.
+	// Files are extra files the runner writes before spawn, keyed by
+	// slash-separated path relative to the run dir (e.g.
+	// "pi-agent/models.json") or by an absolute path under the mission's
+	// StateDir. Values are never logged.
 	Files map[string]string
 }
 

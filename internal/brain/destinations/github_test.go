@@ -3,6 +3,7 @@ package destinations
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -39,6 +40,7 @@ type fakePRSource struct {
 	prNumber      int
 	createErr     error
 	createCalls   int
+	lastTitle     string
 
 	repoExists      bool
 	existsErr       error
@@ -52,8 +54,9 @@ func (f *fakePRSource) DefaultBranch(_ context.Context, _, _, _ string) (string,
 	return f.defaultBranch, f.defaultErr
 }
 
-func (f *fakePRSource) CreatePR(_ context.Context, _, _, _, _, _, _, _ string) (string, int, error) {
+func (f *fakePRSource) CreatePR(_ context.Context, _, _, _, title, _, _, _ string) (string, int, error) {
 	f.createCalls++
+	f.lastTitle = title
 	if f.createErr != nil {
 		return "", 0, f.createErr
 	}
@@ -359,6 +362,7 @@ func TestDeliverMissionModes(t *testing.T) {
 	t.Run("push_pr records branch, pr url and number", func(t *testing.T) {
 		t.Parallel()
 		m := pushableMission(t)
+		m.Name = "Molla-go URL Shortener Design"
 		p := &fakePusher{host: "github.com"}
 		pr := &fakePRSource{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/1", prNumber: 1}
 		resolveToken := func(context.Context, string) (string, error) { return "tok", nil }
@@ -371,6 +375,9 @@ func TestDeliverMissionModes(t *testing.T) {
 		}
 		if e.PRURL != "https://github.com/octo/repo/pull/1" || e.PRNumber != 1 {
 			t.Fatalf("entry after push_pr = %+v", e)
+		}
+		if pr.lastTitle != "feat: molla-go url shortener design" {
+			t.Fatalf("PR title = %q, want a Conventional Commits title (issue #709)", pr.lastTitle)
 		}
 	})
 
@@ -388,4 +395,34 @@ func TestDeliverMissionModes(t *testing.T) {
 			t.Fatal("DeliverMission with a rejected push: want an error, got nil")
 		}
 	})
+}
+
+func TestPRBody(t *testing.T) {
+	m := missions.Mission{Goal: "Add base62"}
+	m.Plan.Units = []missions.PlanUnit{{Title: "encode", Passes: true}, {Title: "decode"}}
+	got := PRBody(m, true)
+	for _, want := range []string{
+		"Add base62\n\n## Units\n\n",
+		"- [x] encode\n",
+		"- [ ] decode\n",
+		"_PR was created by [Timothy Agent](https://github.com/timothy-agent/timothy)._\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("PRBody missing %q in:\n%s", want, got)
+		}
+	}
+	if off := PRBody(m, false); strings.Contains(off, "Timothy Agent") {
+		t.Errorf("PRBody(attribution=false) still carries the attribution line:\n%s", off)
+	}
+}
+
+func TestGitHubAdapterAttributionDefaultsOn(t *testing.T) {
+	a := &GitHubAdapter{}
+	if !a.attribution(context.Background()) {
+		t.Fatal("nil Attribution hook = false, want true")
+	}
+	a.Attribution = func(context.Context) bool { return false }
+	if a.attribution(context.Background()) {
+		t.Fatal("Attribution hook returning false was ignored")
+	}
 }

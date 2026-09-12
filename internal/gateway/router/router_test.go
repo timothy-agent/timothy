@@ -377,6 +377,41 @@ func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
 	}
 }
 
+// TestResolveDetailSkipsResponsesOnlyModelOnChatDriver (issue #708): a
+// catalog model in Responses-only mode is unusable on an openaicompat
+// row, whose native calls go to chat/completions, but stays usable on
+// an openai-responses row for the same model.
+func TestResolveDetailSkipsResponsesOnlyModelOnChatDriver(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "openai", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.com/v1",
+			DefaultModel: "gpt-5.3-codex", CredentialRef: "OPENAI_KEY", Enabled: true},
+		{ID: "p2", Name: "openai-responses", Kind: "api", Driver: "openai-responses", BaseURL: "https://api.openai.com/v1",
+			DefaultModel: "gpt-5.3-codex", CredentialRef: "OPENAI_KEY", Enabled: true},
+	}
+	routeRows := []RouteRow{{Name: "builder", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "gpt-5.3-codex"},
+		{ProviderID: "p2", Model: "gpt-5.3-codex"},
+	}, Enabled: true}}
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("gpt-5.3-codex", "responses", nil)}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
+
+	d := snap.ResolveDetail("builder")
+	if len(d) != 2 {
+		t.Fatalf("ResolveDetail = %d entries, want 2", len(d))
+	}
+	if d[0].Usable || !strings.HasPrefix(d[0].SkipReason, "responses_only") {
+		t.Fatalf("chat row = usable %v, skip %q; want unusable with a responses_only reason", d[0].Usable, d[0].SkipReason)
+	}
+	if !d[1].Usable {
+		t.Fatalf("openai-responses row skip = %q, want usable", d[1].SkipReason)
+	}
+	attempts, err := snap.Resolve("builder", "", Sticky{})
+	if err != nil || len(attempts) != 1 || attempts[0].ProviderName != "openai-responses" {
+		t.Fatalf("Resolve = %d attempts, %v; want only the openai-responses row", len(attempts), err)
+	}
+}
+
 // TestResolveVisionRejectsModelDeclaringOnlyChat confirms a catalog
 // model that does NOT declare SupportsVision is skipped when the
 // caller asks for CapVision as an extra requirement (D-045) — the
@@ -1656,5 +1691,67 @@ func TestPricesOperatorOverride(t *testing.T) {
 
 	if p := snap.Prices("anthropic", "haiku"); p != nil {
 		t.Fatalf("Prices(anthropic, haiku) = %+v, want nil (no override, no catalog entry)", p)
+	}
+}
+
+// TestResolveRouteMarksChatOnlyHarnessUnusableOnResponsesModel (issue
+// #718): pi speaks chat/completions on its openai wire, so a catalog
+// model in Responses-only mode is unusable for it (it 404ed every
+// turn), while codex-cli and opencode, which speak Responses, keep the
+// same row.
+func TestResolveRouteMarksChatOnlyHarnessUnusableOnResponsesModel(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "openai", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.com/v1",
+			DefaultModel: "gpt-5.3-codex", CredentialRef: "OPENAI_KEY", Enabled: true},
+	}
+	routeRows := []RouteRow{{Name: "builder", Chain: []ChainEntry{{ProviderID: "p1", Model: "gpt-5.3-codex"}}, Enabled: true}}
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("gpt-5.3-codex", "responses", nil)}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
+
+	pi, ok := snap.ResolveRoute("builder", "pi")
+	if !ok || len(pi) != 1 {
+		t.Fatalf("ResolveRoute pi = %v, %v", pi, ok)
+	}
+	if pi[0].Usable || !strings.HasPrefix(pi[0].SkipReason, "responses_only") {
+		t.Fatalf("pi entry = usable %v, skip %q; want unusable with a responses_only reason", pi[0].Usable, pi[0].SkipReason)
+	}
+	for _, h := range []string{"codex-cli", "opencode"} {
+		entries, _ := snap.ResolveRoute("builder", h)
+		if len(entries) != 1 || !entries[0].Usable {
+			t.Fatalf("%s entry = %+v, want usable", h, entries)
+		}
+	}
+}
+
+// TestResolveRouteMarksEmptyModelUnusable (issue #718): a cursor-cli
+// provider row with no default_model reported usable and then failed
+// every build turn with "executor/cursor: empty model". An entry that
+// resolves to no model is unusable at resolution, on the self-paired
+// path and on the chain path alike.
+func TestResolveRouteMarksEmptyModelUnusable(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "cielara", Kind: "cli", Driver: "cursor-cli", CredentialRef: "K", Enabled: true},
+		{ID: "p2", Name: "anthropic", Kind: "api", Driver: "anthropic", BaseURL: "https://api.anthropic.com",
+			CredentialRef: "K", Enabled: true},
+	}
+	routeRows := []RouteRow{{Name: "builder", Chain: []ChainEntry{{ProviderID: "p2"}}, Enabled: true}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, &fakeCatalog{})
+
+	cursor, ok := snap.ResolveRoute("builder", "cursor-cli")
+	if !ok || len(cursor) != 1 {
+		t.Fatalf("ResolveRoute cursor-cli = %v, %v", cursor, ok)
+	}
+	if cursor[0].Usable || cursor[0].SkipReason != emptyModelSkip {
+		t.Fatalf("self-paired entry = usable %v, skip %q; want unusable with %q", cursor[0].Usable, cursor[0].SkipReason, emptyModelSkip)
+	}
+
+	claude, _ := snap.ResolveRoute("builder", "claude-cli")
+	if len(claude) != 1 {
+		t.Fatalf("ResolveRoute claude-cli = %v", claude)
+	}
+	if claude[0].Usable || claude[0].SkipReason != emptyModelSkip {
+		t.Fatalf("chain entry = usable %v, skip %q; want unusable with %q", claude[0].Usable, claude[0].SkipReason, emptyModelSkip)
 	}
 }

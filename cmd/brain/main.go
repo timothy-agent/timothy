@@ -276,7 +276,7 @@ func main() {
 		})
 	}
 
-	// Mission shell/verify_cmd execution always runs sandboxed via
+	// Mission shell/check_cmd execution always runs sandboxed via
 	// sandboxd (it holds the Docker socket, brain no longer touches it
 	// directly). Brain doesn't fail closed if sandboxd itself is
 	// unreachable at boot: that surfaces as a degraded health check
@@ -341,6 +341,9 @@ func main() {
 			githubPR = connsPRSource{conns}
 		}
 		githubAdapter = destinations.NewGitHubAdapter(missionWorkspace, missionStore, resolveGitHubToken, githubPR)
+		githubAdapter.Attribution = func(ctx context.Context) bool {
+			return flags.Enabled(ctx, settings.KeyPRAttribution)
+		}
 	}
 	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, githubAdapter, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
@@ -1092,7 +1095,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		}
 	}
 	// sandboxMgr routes model-authored command execution (the
-	// worker/reviewer shell, verify_cmd) OUT of brain's own process,
+	// worker/reviewer shell, check_cmd) OUT of brain's own process,
 	// through sandboxd, into a per-mission Docker container.
 	// search_kb: nil-safe (mc is never nil, MEMORYD_URL always resolves
 	// to a default), same shape as chat's own SetKBSearch wiring:
@@ -1173,6 +1176,13 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetReviewWindow(missions.GatewayReviewWindow(gwc.ResolveRoute, gwc.ModelWindows))
 	driver.SetRouteResolver(gwc.ResolveRoute)
 	driver.SetReviewTokenCeiling(flags.ReviewTokenCeiling)
+	// issue #718: every retry ceiling is an operator setting, read per
+	// turn so a change lands on the next turn without a restart.
+	driver.SetCeilings(func(ctx context.Context) (int, int, int) {
+		return flags.MissionBackoffFailures(ctx), flags.MissionStallRounds(ctx), flags.MissionHarnessRetryCap(ctx)
+	})
+	driver.SetAutoResumeMax(flags.MissionAutoResumeBackoffMax, flags.MissionAutoResumeInfraMax)
+	store.SetDefaultMaxIterations(flags.MissionDefaultMaxIterations)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
 	driver.SetNameMission(chat.TitleOverGateway(gwc, log))
@@ -1455,7 +1465,7 @@ const credResolveTimeout = 3 * time.Second
 
 // buildDelegatedRunner wraps native with missions.NewDelegatedRunner
 // when a sandbox manager is present: missions already require one for
-// the native shell/verify_cmd path, so its absence here would mean
+// the native shell/check_cmd path, so its absence here would mean
 // missions are disabled entirely (buildMissions already returned early
 // in that case). A nil secrets store still lets subscription-mode
 // executors run (the literal "subscription" credential_ref never
@@ -1483,6 +1493,12 @@ func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gw
 		SetProgressReader(missions.ProgressReader)
 	}); ok {
 		withSteering.SetProgressReader(store)
+	}
+	// issue #720: settings-backed CLI turn cap and thinking budget.
+	if withKnobs, ok := runner.(interface {
+		SetExecutorKnobs(func(context.Context) int, func(context.Context) int, func(context.Context) int)
+	}); ok {
+		withKnobs.SetExecutorKnobs(flags.ExecutorReviewMaxTurns, flags.ExecutorWorkerMaxTurns, flags.ExecutorThinkingTokens)
 	}
 	return runner
 }

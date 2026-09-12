@@ -2,7 +2,7 @@
 
 # Go environment variant (tag timothy-sandbox-go): adds the Go
 # toolchain to the base mission sandbox — missions writing Go need
-# `go build`/`go test` for their verify_cmd.
+# `go build`/`go test` for their check_cmd.
 ARG SANDBOX_BASE=timothy-sandbox-base:latest
 FROM golang:1.26.6 AS go-dist
 

@@ -30,11 +30,16 @@ const (
 	// switch here it defaults OFF for an absent row (knownKeysOff), since
 	// enabling it means real gateway spend the operator must opt into.
 	KeyKBImageCaptioning = "kb_image_captioning_enabled"
+	// KeyPRAttribution gates the closing line on pull requests the
+	// github destination opens, crediting Timothy Agent with a link to
+	// its repository. Default on; off leaves the PR body at goal and
+	// units only.
+	KeyPRAttribution = "pr_attribution_enabled"
 )
 
 var knownKeys = map[string]bool{
 	KeyTools: true, KeyMemoryExtraction: true, KeyCompaction: true, KeyScheduler: true,
-	KeyKBImageCaptioning: true,
+	KeyKBImageCaptioning: true, KeyPRAttribution: true,
 }
 
 // knownKeysOff lists switches from knownKeys whose absent-row default is
@@ -136,7 +141,58 @@ const (
 	// agents.Agent.Knowledge already stores names, so a deleted or
 	// renamed collection simply stops boosting.
 	ValueWritingSamplesCollection = "writing_samples_collection"
+	// ValueExecutorReviewMaxTurns caps a delegated review run's own CLI
+	// agent loop (missions/delegated.go, issue #720); "" defers to
+	// DefaultExecutorReviewMaxTurns, "0" removes the cap. The reviewer
+	// judges a diff the prompt already carries, so it needs few turns.
+	ValueExecutorReviewMaxTurns = "executor_review_max_turns"
+	// ValueExecutorThinkingTokens caps the per-turn thinking budget a
+	// delegated worker or review run gets (issue #720); "" or "0" (the
+	// default) leaves the CLI's own default in place.
+	ValueExecutorThinkingTokens = "executor_thinking_tokens"
+	// ValueExecutorWorkerMaxTurns caps a delegated WORKER run's own CLI
+	// agent loop (missions/delegated.go, issue #718); "" defers to
+	// DefaultExecutorWorkerMaxTurns, "0" removes the cap. A worker does
+	// real multi-step work, so its cap is far above the reviewer's.
+	ValueExecutorWorkerMaxTurns = "executor_worker_max_turns"
+	// ValueMissionDefaultMaxIterations is the iteration ceiling a
+	// mission created without one gets (issue #718); "" defers to
+	// DefaultMissionMaxIterations.
+	ValueMissionDefaultMaxIterations = "mission_default_max_iterations"
+	// ValueMissionBackoffFailures is the statemachine's backoff brake:
+	// consecutive worker_failed inputs before a backoff pause.
+	ValueMissionBackoffFailures = "mission_backoff_failures"
+	// ValueMissionStallRounds is the statemachine's no-progress brake:
+	// consecutive rounds with an identical gap fingerprint.
+	ValueMissionStallRounds = "mission_stall_rounds"
+	// ValueMissionHarnessRetryCap bounds the retries the harness
+	// attributed to itself over a mission's life (issue #718); they
+	// spend no iteration, so this is their only ceiling.
+	ValueMissionHarnessRetryCap = "mission_harness_retry_cap"
+	// ValueMissionAutoResumeBackoffMax bounds how many times the sweep
+	// auto-resumes a backoff pause before leaving it for the operator.
+	ValueMissionAutoResumeBackoffMax = "mission_auto_resume_backoff_max"
+	// ValueMissionAutoResumeInfraMax is the same bound for infra pauses.
+	ValueMissionAutoResumeInfraMax = "mission_auto_resume_infra_max"
 )
+
+// Mission ceiling defaults, used when the matching setting is unset.
+const (
+	DefaultMissionMaxIterations        = 3
+	DefaultMissionBackoffFailures      = 3
+	DefaultMissionStallRounds          = 2
+	DefaultMissionHarnessRetryCap      = 3
+	DefaultMissionAutoResumeBackoffMax = 4
+	DefaultMissionAutoResumeInfraMax   = 3
+)
+
+// DefaultExecutorWorkerMaxTurns is the delegated worker run's turn cap
+// when ValueExecutorWorkerMaxTurns is unset.
+const DefaultExecutorWorkerMaxTurns = 40
+
+// DefaultExecutorReviewMaxTurns is the delegated review run's turn cap
+// when ValueExecutorReviewMaxTurns is unset.
+const DefaultExecutorReviewMaxTurns = 6
 
 // writingStyleCap bounds the free-text writing-style setting; it rides
 // every prompt, so an unbounded value would be an unbounded per-turn
@@ -167,6 +223,23 @@ var knownValueKeys = map[string]bool{
 	ValueExecutorRunBudgetMinutes: true, ValueReviewTokenCeiling: true,
 	ValueMCPToolIndexThreshold: true,
 	ValueWritingStyle:          true, ValueWritingSamplesCollection: true,
+	ValueExecutorReviewMaxTurns: true, ValueExecutorThinkingTokens: true,
+	ValueExecutorWorkerMaxTurns:      true,
+	ValueMissionDefaultMaxIterations: true, ValueMissionBackoffFailures: true,
+	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
+	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
+}
+
+// nonNegativeIntKeys are the settings whose value must parse as an
+// integer >= 0 when set.
+var nonNegativeIntKeys = map[string]bool{
+	ValuePermissionTimeoutSeconds: true, ValueAskTimeoutSeconds: true,
+	ValueReviewTokenCeiling: true, ValueMCPToolIndexThreshold: true,
+	ValueExecutorReviewMaxTurns: true, ValueExecutorThinkingTokens: true,
+	ValueExecutorWorkerMaxTurns:      true,
+	ValueMissionDefaultMaxIterations: true, ValueMissionBackoffFailures: true,
+	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
+	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -292,6 +365,78 @@ func (s *Store) ExecutorRunBudget(ctx context.Context) time.Duration {
 		}
 	}
 	return DefaultExecutorRunBudget
+}
+
+// ExecutorReviewMaxTurns parses the delegated review turn cap, falling
+// back to DefaultExecutorReviewMaxTurns when unset or unparsable; 0
+// removes the cap.
+func (s *Store) ExecutorReviewMaxTurns(ctx context.Context) int {
+	if v := s.Value(ctx, ValueExecutorReviewMaxTurns); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return DefaultExecutorReviewMaxTurns
+}
+
+// ExecutorWorkerMaxTurns parses the delegated worker turn cap, falling
+// back to DefaultExecutorWorkerMaxTurns when unset or unparsable; 0
+// removes the cap.
+func (s *Store) ExecutorWorkerMaxTurns(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueExecutorWorkerMaxTurns, DefaultExecutorWorkerMaxTurns)
+}
+
+// MissionDefaultMaxIterations is the iteration ceiling a mission
+// created without one gets.
+func (s *Store) MissionDefaultMaxIterations(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueMissionDefaultMaxIterations, DefaultMissionMaxIterations)
+}
+
+// MissionBackoffFailures is the statemachine's backoff brake.
+func (s *Store) MissionBackoffFailures(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueMissionBackoffFailures, DefaultMissionBackoffFailures)
+}
+
+// MissionStallRounds is the statemachine's no-progress brake.
+func (s *Store) MissionStallRounds(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueMissionStallRounds, DefaultMissionStallRounds)
+}
+
+// MissionHarnessRetryCap bounds a mission's harness-caused retries.
+func (s *Store) MissionHarnessRetryCap(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueMissionHarnessRetryCap, DefaultMissionHarnessRetryCap)
+}
+
+// MissionAutoResumeBackoffMax bounds the sweep's backoff auto-resumes.
+func (s *Store) MissionAutoResumeBackoffMax(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueMissionAutoResumeBackoffMax, DefaultMissionAutoResumeBackoffMax)
+}
+
+// MissionAutoResumeInfraMax bounds the sweep's infra auto-resumes.
+func (s *Store) MissionAutoResumeInfraMax(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueMissionAutoResumeInfraMax, DefaultMissionAutoResumeInfraMax)
+}
+
+// nonNegativeInt reads key as an integer >= 0, falling back to def when
+// unset or unparsable.
+func (s *Store) nonNegativeInt(ctx context.Context, key string, def int) int {
+	if v := s.Value(ctx, key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return def
+}
+
+// ExecutorThinkingTokens parses the per-turn thinking budget a
+// delegated run gets; 0 (the default) leaves the CLI's own default.
+func (s *Store) ExecutorThinkingTokens(ctx context.Context) int {
+	if v := s.Value(ctx, ValueExecutorThinkingTokens); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 0
 }
 
 // ReviewTokenCeiling parses the per-mission review input token cap:
@@ -464,7 +609,7 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 			return fmt.Errorf("%s must be a positive integer or empty", key)
 		}
 	}
-	if (key == ValuePermissionTimeoutSeconds || key == ValueAskTimeoutSeconds || key == ValueReviewTokenCeiling || key == ValueMCPToolIndexThreshold) && value != "" {
+	if nonNegativeIntKeys[key] && value != "" {
 		if n, err := strconv.Atoi(value); err != nil || n < 0 {
 			return fmt.Errorf("%s must be a non-negative integer or empty", key)
 		}

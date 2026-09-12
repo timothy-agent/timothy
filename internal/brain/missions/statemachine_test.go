@@ -139,6 +139,27 @@ func TestStep(t *testing.T) {
 			want:  StepState{Phase: PhaseBuild, Status: StatusWaitingForInput},
 		},
 		{
+			name:  "plan_defect spends the automatic replan instead of parking (issue #718)",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 2, ConsecutiveFailures: 1},
+			input: StepInput{Input: InputPlanDefect, Reason: "unit cannot pass in isolation", Message: "unit cannot pass in isolation"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhasePlan, Status: StatusIdle, MaxIterations: 8, ReplanUsed: true},
+		},
+		{
+			name:  "plan_defect after the replan is spent parks like a block",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ReplanUsed: true},
+			input: StepInput{Input: InputPlanDefect, Reason: "gate cannot pass", Message: "gate cannot pass"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWaitingForInput, MaxIterations: 8, ReplanUsed: true},
+		},
+		{
+			name:  "plan_defect on a light mission parks (it never plans)",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Flow: FlowLight},
+			input: StepInput{Input: InputPlanDefect, Reason: "gate cannot pass", Message: "gate cannot pass"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWaitingForInput, MaxIterations: 8, Flow: FlowLight},
+		},
+		{
 			name:  "worker_failed below backoff threshold just retries",
 			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 1},
 			input: StepInput{Input: InputWorkerFailed},
@@ -168,6 +189,128 @@ func TestStep(t *testing.T) {
 			input: StepInput{Input: InputWorkerFailed},
 			cfg:   Config{BackoffFailures: 3, StallRounds: 10},
 			want:  StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 3, Iteration: 3, ConsecutiveFailures: 3},
+		},
+		{
+			// issue #718: an executor death or turn error is not the
+			// worker's mistake, so it spends no iteration; the backoff
+			// counter still climbs.
+			name:  "harness-caused worker_failed spends no iteration",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 1, Iteration: 2},
+			input: StepInput{Input: InputWorkerFailed, HarnessCaused: true},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, Iteration: 2, HarnessRetries: 1},
+		},
+		{
+			name:  "harness-caused worker_failed at the ceiling keeps working instead of failing",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1, Iteration: 0},
+			input: StepInput{Input: InputWorkerFailed, HarnessCaused: true},
+			cfg:   Config{BackoffFailures: 10, StallRounds: 10},
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1, ConsecutiveFailures: 1, Iteration: 0, HarnessRetries: 1},
+		},
+		{
+			name:  "harness-caused worker_failed still trips the backoff brake",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2},
+			input: StepInput{Input: InputWorkerFailed, HarnessCaused: true},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseBackoff, MaxIterations: 8, ConsecutiveFailures: 3, HarnessRetries: 1},
+		},
+		{
+			name:  "harness-caused worker_retry spends no iteration",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 2},
+			input: StepInput{Input: InputWorkerRetry, HarnessCaused: true, GapFingerprint: "no_sentinel"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Iteration: 2, StallCount: 1, LastGapFingerprint: "no_sentinel", HarnessRetries: 1},
+		},
+		{
+			name:  "harness-caused worker_retry at the ceiling keeps working instead of failing",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1, Iteration: 0},
+			input: StepInput{Input: InputWorkerRetry, HarnessCaused: true},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 1, Iteration: 0, HarnessRetries: 1},
+		},
+		{
+			name:  "harness-caused worker_retry still trips the stall brake",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, StallCount: 1, LastGapFingerprint: "no_sentinel", ReplanUsed: true},
+			input: StepInput{Input: InputWorkerRetry, HarnessCaused: true, GapFingerprint: "no_sentinel"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, StallCount: 2, LastGapFingerprint: "no_sentinel", ReplanUsed: true, HarnessRetries: 1},
+		},
+		{
+			// issue #718: a planless flow skips the replan brake and a
+			// harness-caused retry skips the ceiling, so the stall pause
+			// is the only stop left; without it the mission loops forever.
+			name:  "harness-caused worker_retry on a light flow pauses on the stall brake",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Flow: FlowLight, StallCount: 1, LastGapFingerprint: "no_sentinel"},
+			input: StepInput{Input: InputWorkerRetry, HarnessCaused: true, GapFingerprint: "no_sentinel"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, Flow: FlowLight, StallCount: 2, LastGapFingerprint: "no_sentinel", HarnessRetries: 1},
+		},
+		{
+			// The same light flow with a worker-caused retry keeps the
+			// pre-#718 behaviour: the ceiling is its stop, not a pause.
+			name:  "worker-caused retry on a light flow still falls through the stall brake",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Flow: FlowLight, StallCount: 1, LastGapFingerprint: "fp"},
+			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "fp"},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Flow: FlowLight, Iteration: 1, StallCount: 2, LastGapFingerprint: "fp"},
+		},
+		{
+			// issue #718: harness retries spend no iteration, so the
+			// lifetime cap is their only ceiling. The 2nd is still a retry.
+			name:  "2nd harness-caused retry is below the cap and keeps working",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, HarnessRetries: 1},
+			input: StepInput{Input: InputWorkerRetry, HarnessCaused: true},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, HarnessRetries: 2},
+		},
+		{
+			name:  "3rd harness-caused retry hits the cap and pauses",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, HarnessRetries: 2},
+			input: StepInput{Input: InputWorkerRetry, HarnessCaused: true},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, HarnessRetries: 3},
+		},
+		{
+			name:  "2nd harness-caused failure is below the cap and keeps working",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, HarnessRetries: 1},
+			input: StepInput{Input: InputWorkerFailed, HarnessCaused: true},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 1, HarnessRetries: 2},
+		},
+		{
+			name:  "3rd harness-caused failure hits the cap and pauses",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, HarnessRetries: 2},
+			input: StepInput{Input: InputWorkerFailed, HarnessCaused: true},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, ConsecutiveFailures: 1, HarnessRetries: 3},
+		},
+		{
+			// The cap wins when both brakes trip on the same failure:
+			// resume clears the pause but not ConsecutiveFailures, so a
+			// backoff-first order would never let the cap be reached.
+			name:  "harness cap beats backoff on the same failure",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, HarnessRetries: 2},
+			input: StepInput{Input: InputWorkerFailed, HarnessCaused: true},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, ConsecutiveFailures: 3, HarnessRetries: 3},
+		},
+		{
+			// A resumed harness failure below the cap still backs off:
+			// the cap is a lifetime bound, not a replacement for backoff.
+			name:  "harness failure below the cap still pauses for backoff",
+			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ConsecutiveFailures: 2, HarnessRetries: 0},
+			input: StepInput{Input: InputWorkerFailed, HarnessCaused: true},
+			cfg:   Config{BackoffFailures: 3, StallRounds: 2, HarnessRetryCap: 9},
+			want:  StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseBackoff, MaxIterations: 8, ConsecutiveFailures: 3, HarnessRetries: 1},
+		},
+		{
+			// The cap is a lifetime count: resuming the pause it caused
+			// must not hand the mission three more harness retries.
+			name:  "resume leaves the harness retry count alone",
+			state: StepState{Phase: PhaseBuild, Status: StatusPaused, PauseReason: PauseNoProgress, MaxIterations: 8, HarnessRetries: 3},
+			input: StepInput{Input: InputResume},
+			cfg:   DefaultConfig,
+			want:  StepState{Phase: PhaseBuild, Status: StatusIdle, MaxIterations: 8, HarnessRetries: 3},
 		},
 		{
 			name:  "worker_retry costs an iteration and resets consecutive failures",
@@ -599,24 +742,24 @@ func TestStepAppliesVerification(t *testing.T) {
 		wantEvents []string
 	}{
 		{
-			name:  "worker_retry records the failing excerpt without flipping anything",
-			state: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "a"}}},
-			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Verified: []UnitVerification{{Unit: 0, Check: "verify_cmd", Excerpt: long}}},
-			wantUnits: []PlanUnit{{Title: "a", VerifyCheck: "verify_cmd", VerifyExcerpt: long[:verifyExcerptCap] + "…"}},
+			name:      "worker_retry records the failing excerpt without flipping anything",
+			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "a"}}},
+			input:     StepInput{Input: InputWorkerRetry, GapFingerprint: "verify_failed:unit_0", Verified: []UnitVerification{{Unit: 0, Check: "check_cmd", Excerpt: long}}},
+			wantUnits: []PlanUnit{{Title: "a", VerifyCheck: "check_cmd", VerifyExcerpt: long[:verifyExcerptCap] + "…"}},
 			wantPhase: PhaseBuild, wantEvents: []string{"mission.retry"},
 		},
 		{
-			name:  "phase_complete marks a passing unit harness-passed and stays in build while a unit is pending (D-096)",
-			state: StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}},
-			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
-			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}, {Title: "b"}},
+			name:      "phase_complete marks a passing unit harness-passed and stays in build while a unit is pending (D-096)",
+			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}},
+			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "check_cmd", Excerpt: "ok"}}},
+			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "check_cmd", VerifyExcerpt: "ok"}, {Title: "b"}},
 			wantPhase: PhaseBuild, wantEvents: []string{"mission.generate_continued"},
 		},
 		{
-			name:  "phase_complete enters prove once every unit is harness-passed, Passes waits for approval",
-			state: StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}}},
-			input: StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 1, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
-			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}},
+			name:      "phase_complete enters prove once every unit is harness-passed, Passes waits for approval",
+			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b"}}},
+			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 1, Passed: true, Check: "check_cmd", Excerpt: "ok"}}},
+			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", HarnessPassed: true, VerifyCheck: "check_cmd", VerifyExcerpt: "ok"}},
 			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
 		},
 		{
@@ -641,19 +784,19 @@ func TestStepAppliesVerification(t *testing.T) {
 				{Title: "a", Passes: true, HarnessPassed: true}, {Title: "b"},
 			}},
 			input: StepInput{Input: InputWorkerRetry, GapFingerprint: "regression:unit_0", Verified: []UnitVerification{
-				{Unit: 0, Check: "artifacts", Excerpt: "a.md: not found"}, {Unit: 1, Passed: true, Check: "verify_cmd"},
+				{Unit: 0, Check: "artifacts", Excerpt: "a.md: not found"}, {Unit: 1, Passed: true, Check: "check_cmd"},
 			}},
 			wantUnits: []PlanUnit{
 				{Title: "a", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "a.md: not found"},
-				{Title: "b", HarnessPassed: true, VerifyCheck: "verify_cmd"},
+				{Title: "b", HarnessPassed: true, VerifyCheck: "check_cmd"},
 			},
 			wantPhase: PhaseBuild, wantEvents: []string{"mission.unit_regressed", "mission.retry"},
 		},
 		{
 			name:      "a regressed unit passing again clears the regression marker",
 			state:     StepState{Phase: PhaseBuild, Status: StatusWorking, Units: []PlanUnit{{Title: "a", Regressed: true, VerifyCheck: "artifacts", VerifyExcerpt: "gone"}}},
-			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "verify_cmd", Excerpt: "ok"}}},
-			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "verify_cmd", VerifyExcerpt: "ok"}},
+			input:     StepInput{Input: InputPhaseComplete, Verified: []UnitVerification{{Unit: 0, Passed: true, Check: "check_cmd", Excerpt: "ok"}}},
+			wantUnits: []PlanUnit{{Title: "a", HarnessPassed: true, VerifyCheck: "check_cmd", VerifyExcerpt: "ok"}},
 			wantPhase: PhaseProve, wantEvents: []string{"mission.phase_started"},
 		},
 		{
@@ -690,14 +833,14 @@ func TestStepAppliesVerification(t *testing.T) {
 func TestStepRegressionEventPayload(t *testing.T) {
 	got := Step(
 		StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, Units: []PlanUnit{{Title: "write a.md", Passes: true, HarnessPassed: true}}},
-		StepInput{Input: InputWorkerRetry, Verified: []UnitVerification{{Unit: 0, Check: "verify_cmd", Excerpt: strings.Repeat("y", 600)}}},
+		StepInput{Input: InputWorkerRetry, Verified: []UnitVerification{{Unit: 0, Check: "check_cmd", Excerpt: strings.Repeat("y", 600)}}},
 		DefaultConfig,
 	)
 	if len(got.Events) == 0 || got.Events[0].Kind != "mission.unit_regressed" {
 		t.Fatalf("events = %+v, want mission.unit_regressed first", got.Events)
 	}
 	p := got.Events[0].Payload
-	if p["unit"] != 0 || p["title"] != "write a.md" || p["check"] != "verify_cmd" || len(p["excerpt"].(string)) > 510 {
+	if p["unit"] != 0 || p["title"] != "write a.md" || p["check"] != "check_cmd" || len(p["excerpt"].(string)) > 510 {
 		t.Fatalf("payload = %+v, want unit 0, the title, the check and a bounded excerpt", p)
 	}
 }
@@ -1323,5 +1466,73 @@ func TestStepReviewInfraFailureCarriesRoute(t *testing.T) {
 	got = Step(StepState{Phase: PhaseProve, Status: StatusWorking}, StepInput{Input: InputReviewInfraFailure, Reason: "dead"}, DefaultConfig)
 	if _, ok := got.Events[0].Payload["route"]; ok {
 		t.Fatalf("payload = %+v, want no route key", got.Events[0].Payload)
+	}
+	if _, ok := got.Events[0].Payload["until"]; ok {
+		t.Fatalf("payload = %+v, want no until key", got.Events[0].Payload)
+	}
+	until := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	got = Step(StepState{Phase: PhaseBuild, Status: StatusWorking}, StepInput{Input: InputReviewInfraFailure, Reason: "cooling", Until: until}, DefaultConfig)
+	if u, _ := got.Events[0].Payload["until"].(string); u != "2026-09-12T10:00:00Z" {
+		t.Fatalf("payload = %+v, want until=2026-09-12T10:00:00Z (issue #704)", got.Events[0].Payload)
+	}
+}
+
+// TestRetryPayloadMarksHarnessCaused pins issue #718's event contract:
+// a retry the harness attributed to itself says so in the payload, and
+// a worker's own retry carries no such flag.
+func TestRetryPayloadMarksHarnessCaused(t *testing.T) {
+	base := StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8}
+	for _, tc := range []struct {
+		name  string
+		input StepInput
+		want  bool
+	}{
+		{"harness retry", StepInput{Input: InputWorkerRetry, HarnessCaused: true}, true},
+		{"worker retry", StepInput{Input: InputWorkerRetry}, false},
+		{"harness failure", StepInput{Input: InputWorkerFailed, HarnessCaused: true}, true},
+		{"worker failure", StepInput{Input: InputWorkerFailed}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := Step(base, tc.input, DefaultConfig)
+			if len(tr.Events) != 1 || tr.Events[0].Kind != "mission.retry" {
+				t.Fatalf("want one mission.retry event, got %+v", tr.Events)
+			}
+			flag, ok := tr.Events[0].Payload["harness_caused"].(bool)
+			if got := ok && flag; got != tc.want {
+				t.Fatalf("harness_caused = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestHarnessRetryCapPausePayload pins the cap's event contract (issue
+// #718): the pause names its cause and the count that reached it.
+func TestHarnessRetryCapPausePayload(t *testing.T) {
+	base := StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, HarnessRetries: 2}
+	for _, input := range []Input{InputWorkerRetry, InputWorkerFailed} {
+		t.Run(string(input), func(t *testing.T) {
+			tr := Step(base, StepInput{Input: input, HarnessCaused: true, Reason: "executor died"}, DefaultConfig)
+			if tr.Next.PauseReason != PauseNoProgress {
+				t.Fatalf("pause reason = %q, want no_progress", tr.Next.PauseReason)
+			}
+			if len(tr.Events) != 1 || tr.Events[0].Kind != "mission.paused" {
+				t.Fatalf("events = %+v, want one mission.paused", tr.Events)
+			}
+			p := tr.Events[0].Payload
+			if p["cause"] != "harness_retries_exhausted" || p["harness_retries"] != 3 || p["detail"] != "executor died" {
+				t.Fatalf("payload = %+v, want the cause, count 3 and the detail", p)
+			}
+		})
+	}
+}
+
+// TestHarnessRetryCapFromConfig pins that the cap is configurable
+// (issue #718): a Config with a cap of 1 pauses on the first one.
+func TestHarnessRetryCapFromConfig(t *testing.T) {
+	cfg := Config{BackoffFailures: 3, StallRounds: 2, HarnessRetryCap: 1}
+	tr := Step(StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8},
+		StepInput{Input: InputWorkerRetry, HarnessCaused: true}, cfg)
+	if tr.Next.PauseReason != PauseNoProgress {
+		t.Fatalf("pause reason = %q, want no_progress on a cap of 1", tr.Next.PauseReason)
 	}
 }

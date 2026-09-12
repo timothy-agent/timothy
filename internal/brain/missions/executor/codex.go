@@ -39,6 +39,12 @@ func (codexAdapter) Capabilities() Capabilities {
 		// resume --help`); BuildInvocation switches to that subcommand
 		// form when ResumeSessionID is set.
 		SupportsResume: true,
+		// issue #716: --output-schema on the Responses wire turns the
+		// turn into a single structured message with no function calls,
+		// so codex can never touch the worktree. The verdict is read
+		// from the trailing JSON object of its final message instead
+		// (buildResultEvent).
+		SchemaSuppressesTools: true,
 	}
 }
 
@@ -74,11 +80,20 @@ func (codexAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		baseURL = codexDefaultBaseURL
 	}
 
+	// CODEX_HOME holds the session rollouts `codex exec resume` reads,
+	// so it lives in the mission's StateDir when the runner gives one
+	// (issue #707) and every run of the mission shares it; a run-local
+	// home made every resume fail with "no rollout found".
 	runDir := filepath.Dir(spec.PromptPath)
 	codexHome := filepath.Join(runDir, "codex-home")
+	homeFile := func(name string) string { return "codex-home/" + name }
+	if spec.StateDir != "" {
+		codexHome = spec.StateDir
+		homeFile = func(name string) string { return filepath.Join(codexHome, name) }
+	}
 
 	files := map[string]string{
-		"codex-home/config.toml": codexConfigTOML(baseURL),
+		homeFile("config.toml"): codexConfigTOML(baseURL),
 	}
 
 	// `codex exec resume <SESSION_ID>` is a distinct subcommand form
@@ -107,7 +122,7 @@ func (codexAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		if err != nil {
 			return Invocation{}, fmt.Errorf("executor/codex: result schema: %w", err)
 		}
-		files["codex-home/schema.json"] = compact
+		files[homeFile("schema.json")] = compact
 		argv = append(argv, "--output-schema", schemaPath)
 	}
 	argv = append(argv, "@PROMPT@") // substituted by the runner via PromptFile
@@ -117,7 +132,7 @@ func (codexAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 	// codex's docs: "Custom instructions with AGENTS.md"), so
 	// SystemAppend rides that file instead.
 	if spec.SystemAppend != "" {
-		files["codex-home/AGENTS.md"] = spec.SystemAppend
+		files[homeFile("AGENTS.md")] = spec.SystemAppend
 	}
 
 	env := map[string]string{

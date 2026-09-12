@@ -156,6 +156,7 @@ const (
 	InputPhaseComplete      Input = "phase_complete"
 	InputWorkerRetry        Input = "worker_retry"
 	InputWorkerBlocked      Input = "worker_blocked"
+	InputPlanDefect         Input = "plan_defect"
 	InputWorkerFailed       Input = "worker_failed"
 	InputReviewApprove      Input = "review_approve"
 	InputReviewRework       Input = "review_rework"
@@ -213,6 +214,10 @@ type StepState struct {
 	ConsecutiveFailures int
 	LastGapFingerprint  string
 	StallCount          int
+	// HarnessRetries counts the retries the harness attributed to
+	// itself over the mission's whole life (issue #718). It spends no
+	// iteration, so this is its own ceiling; nothing resets it.
+	HarnessRetries int
 	// Spent is this mission's spend in Budget's currency, INCLUDING any
 	// other-currency spend the driver could convert via a stored fx
 	// rate (toStepState) — 0 if there is no spend at all yet, honest
@@ -296,6 +301,11 @@ type StepInput struct {
 	Input          Input
 	GapFingerprint string // set on InputWorkerRetry (verify/regression/no_sentinel stalls)
 	Message        string // set on InputWorkerBlocked / pause explanations
+	// HarnessCaused marks a retry the harness attributed to itself
+	// (issue #718): an unreadable sentinel, a runner error, an executor
+	// death, an idle timeout. It spends no iteration; the stall and
+	// backoff brakes still apply.
+	HarnessCaused bool
 	// Reason is WHY this input happened (a worker's retry analysis, an
 	// error string, flattened review findings) — carried into the
 	// transition's event payloads so a mission's failure cause is
@@ -334,6 +344,10 @@ type StepInput struct {
 	// InputReviewInfraFailure when the gateway found no usable provider;
 	// empty otherwise.
 	Route string
+	// Until, set on InputReviewInfraFailure when the failure has a known
+	// expiry (a cooled-down executor entry, issue #704), is written to
+	// the pause payload so autoResumeInfra waits for it; zero otherwise.
+	Until time.Time
 	// ReviewRoute/ReviewRouteModel are the new values an
 	// InputRouteChange writes (D-100).
 	ReviewRoute      string
@@ -363,10 +377,14 @@ type Config struct {
 	// fingerprint worker retries, or consecutive worker turns that left
 	// an open blocking finding's file untouched (D-092).
 	StallRounds int
+	// HarnessRetryCap bounds the retries the harness attributed to
+	// itself (issue #718): they spend no iteration, so without this a
+	// failing harness would retry forever.
+	HarnessRetryCap int
 }
 
 // DefaultConfig matches the reference design's thresholds.
-var DefaultConfig = Config{BackoffFailures: 3, StallRounds: 2}
+var DefaultConfig = Config{BackoffFailures: 3, StallRounds: 2, HarnessRetryCap: 3}
 
 // Step is the pure state machine transition function: no I/O, fully
 // deterministic given (state, input). Cross-cutting order, checked
@@ -433,10 +451,17 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 	case InputWorkerRetry:
 		return stepWorkerRetry(s, in, cfg)
 	case InputWorkerBlocked:
-		return Transition{
-			Next:   withStatus(s, StatusWaitingForInput),
-			Events: []EventDraft{{Kind: "mission.blocked", Payload: map[string]any{"question": in.Message}}},
+		return stepWorkerBlocked(s, in)
+	case InputPlanDefect:
+		// A worker's diagnosis of the plan (issue #718) spends the one
+		// automatic replan, carrying the note; once that is spent, or
+		// for a mission that never plans, it parks like any other block.
+		if !s.ReplanUsed && !s.neverVisitsPlan() {
+			t := replanTransition(s, in)
+			t.Events[0].Payload["cause"] = "worker_blocked"
+			return t
 		}
+		return stepWorkerBlocked(s, in)
 	case InputAskUser:
 		// The store already appended mission.input_requested (SetPendingInput)
 		// before this input reaches Step: no separate event here, same as
@@ -453,6 +478,9 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 		payload := map[string]any{"reason": string(PauseInfra), "detail": in.Reason}
 		if in.Route != "" {
 			payload["route"] = in.Route
+		}
+		if !in.Until.IsZero() {
+			payload["until"] = in.Until.UTC().Format(time.RFC3339)
 		}
 		return Transition{
 			Next:   withPause(s, PauseInfra),
@@ -667,6 +695,24 @@ func stepRouteChange(s StepState, in StepInput) Transition {
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.route_changed", Payload: payload}}}
 }
 
+// harnessRetryExhausted counts one harness-caused retry against the
+// mission's lifetime cap (issue #718) and returns the pause transition
+// when it is reached. Harness retries spend no iteration, so this is
+// the only ceiling they have; PauseNoProgress is never auto-resumed,
+// so a broken harness stops here instead of looping.
+func harnessRetryExhausted(s StepState, in StepInput, cfg Config) (Transition, bool) {
+	if cfg.HarnessRetryCap <= 0 || s.HarnessRetries < cfg.HarnessRetryCap {
+		return Transition{}, false
+	}
+	return Transition{
+		Next: withPause(s, PauseNoProgress),
+		Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
+			"reason": string(PauseNoProgress), "cause": "harness_retries_exhausted",
+			"harness_retries": s.HarnessRetries, "detail": in.Reason,
+		}}},
+	}, true
+}
+
 // stepWorkerFailed counts consecutive failures toward the backoff
 // brake; progress resets the counter elsewhere in this file
 // (stepPhaseComplete, stepWorkerRetry, stepReviewApprove all zero it).
@@ -675,13 +721,28 @@ func stepRouteChange(s StepState, in StepInput) Transition {
 // a hard stop, and a backoff pause must only ever happen below the
 // ceiling. Checking backoff first would let a mission repeatedly
 // resumed after backoff pauses exceed its iteration ceiling forever.
+//
+// A harness-caused failure (issue #718) spends no iteration and skips
+// the ceiling: the worker made no mistake. The backoff brake still
+// counts it, so a harness failing over and over still pauses.
 func stepWorkerFailed(s StepState, in StepInput, cfg Config) Transition {
 	s.ConsecutiveFailures++
-	s.Iteration++
-	if s.Iteration >= s.MaxIterations {
-		return Transition{
-			Next:   withPhaseFailed(s),
-			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": in.Reason}}},
+	// The harness-retry cap is checked BEFORE the backoff brake: resume
+	// clears the pause but not ConsecutiveFailures, so a backoff pause
+	// checked first would re-pause as backoff on every resumed harness
+	// failure and the cap would never be reached.
+	if in.HarnessCaused {
+		s.HarnessRetries++
+		if t, done := harnessRetryExhausted(s, in, cfg); done {
+			return t
+		}
+	} else {
+		s.Iteration++
+		if s.Iteration >= s.MaxIterations {
+			return Transition{
+				Next:   withPhaseFailed(s),
+				Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": in.Reason}}},
+			}
 		}
 	}
 	if s.ConsecutiveFailures >= cfg.BackoffFailures {
@@ -690,7 +751,17 @@ func stepWorkerFailed(s StepState, in StepInput, cfg Config) Transition {
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseBackoff), "detail": in.Reason}}},
 		}
 	}
-	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry", Payload: map[string]any{"cause": "worker_failed", "reason": in.Reason}}}}
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry", Payload: retryPayload("worker_failed", in)}}}
+}
+
+// retryPayload builds a mission.retry payload, marking the retries the
+// harness attributed to itself (issue #718).
+func retryPayload(cause string, in StepInput) map[string]any {
+	payload := map[string]any{"cause": cause, "reason": in.Reason}
+	if in.HarnessCaused {
+		payload["harness_caused"] = true
+	}
+	return payload
 }
 
 // stepWorkerRetry is a worker's own self-reported RETRY (failure
@@ -699,12 +770,17 @@ func stepWorkerFailed(s StepState, in StepInput, cfg Config) Transition {
 // backoff brake — the worker is still making an attempt, not silently
 // failing. It still tracks the stall brake same as stepReviewRework:
 // two consecutive rounds with an IDENTICAL gap fingerprint (e.g. the
-// same harness verify_cmd failing the same way every time) mean no
+// same harness check_cmd failing the same way every time) mean no
 // real progress is happening, most likely because the check itself
 // can never pass — grinding to max_iterations wastes the rest of the
 // budget on a foregone conclusion.
 func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 	s.ConsecutiveFailures = 0
+	// Counted before any brake: a harness retry that ends in a stall
+	// pause still happened, and the count is what the next resume reads.
+	if in.HarnessCaused {
+		s.HarnessRetries++
+	}
 	if in.GapFingerprint != "" {
 		if in.GapFingerprint == s.LastGapFingerprint {
 			s.StallCount++
@@ -717,8 +793,12 @@ func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 		// brake entirely and falls straight through to the plain
 		// retry/max_iterations path below, same as stepWorkerFailed's
 		// backoff ceiling.
-		if s.StallCount >= cfg.StallRounds && !s.neverVisitsPlan() {
-			if !s.ReplanUsed {
+		// A harness-caused retry spends no iteration below, so for a
+		// planless mission the stall brake is the ONLY stop left
+		// (issue #718): it pauses instead of falling through and
+		// looping forever on a model that never ends its turn.
+		if s.StallCount >= cfg.StallRounds && (!s.neverVisitsPlan() || in.HarnessCaused) {
+			if !s.ReplanUsed && !s.neverVisitsPlan() {
 				return replanTransition(s, in)
 			}
 			return Transition{
@@ -727,14 +807,23 @@ func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 			}
 		}
 	}
-	s.Iteration++
-	if s.Iteration >= s.MaxIterations {
-		return Transition{
-			Next:   withPhaseFailed(s),
-			Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": in.Reason}}},
+	// A harness-caused retry (issue #718: no readable sentinel) spends
+	// no iteration; the stall brake above and the lifetime harness-retry
+	// cap here are what stop a harness that keeps failing.
+	if in.HarnessCaused {
+		if t, done := harnessRetryExhausted(s, in, cfg); done {
+			return t
+		}
+	} else {
+		s.Iteration++
+		if s.Iteration >= s.MaxIterations {
+			return Transition{
+				Next:   withPhaseFailed(s),
+				Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{"reason": "max_iterations", "detail": in.Reason}}},
+			}
 		}
 	}
-	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry", Payload: map[string]any{"cause": "worker_retry", "reason": in.Reason}}}}
+	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry", Payload: retryPayload("worker_retry", in)}}}
 }
 
 // replanTransition sends a first-time stall back to planning instead of
@@ -1129,5 +1218,15 @@ func stepResultFailed(s StepState, in StepInput) Transition {
 	return Transition{
 		Next:   withPause(s, PauseInfra),
 		Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "detail": in.Reason}}},
+	}
+}
+
+// stepWorkerBlocked parks the mission for the operator with the
+// worker's question; the same landing for a plan defect once the
+// automatic replan is spent.
+func stepWorkerBlocked(s StepState, in StepInput) Transition {
+	return Transition{
+		Next:   withStatus(s, StatusWaitingForInput),
+		Events: []EventDraft{{Kind: "mission.blocked", Payload: map[string]any{"question": in.Message}}},
 	}
 }

@@ -701,7 +701,7 @@ export interface KbDocument {
 // verify_check/verify_excerpt.
 export interface PlanUnit {
   title: string
-  verify_cmd: string
+  check_cmd: string
   artifacts?: string[]
   // criteria (D-095) are the unit's acceptance criteria, 2 to 6 short
   // lines the reviewer judges against; scope lists the paths the unit
@@ -743,6 +743,17 @@ export interface ReviewFinding {
   status?: 'open' | 'resolved' | 'accepted'
   round_opened?: number
   untouched_rounds?: number
+}
+
+// CriterionVerdict is the reviewer's answer for one unit acceptance
+// criterion (missions.CriterionVerdict, issue #718), carried on a
+// mission.review_verdict event's criteria field. unit is the plan
+// index, criterion the zero-based index into that unit's criteria.
+export interface CriterionVerdict {
+  unit: number
+  criterion: number
+  status: 'met' | 'not_met' | 'cannot_tell'
+  evidence?: string
 }
 
 // Mission is one long-running, agent-driven unit of work
@@ -805,6 +816,10 @@ export interface Mission {
   consecutive_failures: number
   last_gap_fingerprint?: string
   stall_count: number
+  // harness_retries counts the retries the harness attributed to itself
+  // (issue #718): they spend no iteration, so they have their own cap
+  // (settings.mission_harness_retry_cap) and nothing resets them.
+  harness_retries?: number
   budget_amount?: number
   budget_currency?: string
   route: string
@@ -867,6 +882,10 @@ export interface Mission {
   // phase's review round runs as a read-only delegated CLI; "" or
   // absent keeps the native reviewer (also the fallback on any failure).
   review_harness?: string
+  // executor_session_policy (issue #720) decides whether a delegated
+  // worker run resumes the prior CLI session: "" or "resume" keeps
+  // resume, "fresh" starts every unit cold.
+  executor_session_policy?: string
   // top_model/top_model_provider are decorated onto the list/get
   // response from the cost ledger's top-served-model-per-mission
   // lookup (internal/brain/api/missions.go's decorateTopModels): the

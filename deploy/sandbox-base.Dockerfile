@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Mission sandbox base: the container model-authored shell commands
-# (mission worker/reviewer shell calls, verify_cmd) execute inside,
+# (mission worker/reviewer shell calls, check_cmd) execute inside,
 # instead of brain's own process — see internal/brain/sandbox. This is
 # a warm exec target (created once per mission, `sleep infinity` as
 # PID 1 under tini via --init at runtime, reused across a mission's

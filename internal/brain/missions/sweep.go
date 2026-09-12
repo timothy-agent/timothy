@@ -180,6 +180,17 @@ type signaler interface {
 // happens — see that ladder's own comment for the split's rationale.
 var autoResumeBackoffDelays = [...]time.Duration{5 * time.Minute, 15 * time.Minute, 60 * time.Minute}
 
+// autoResumeMax resolves an auto-resume cap from its settings getter,
+// falling back to def when unwired or unset (issue #718).
+func autoResumeMax(ctx context.Context, get func(context.Context) int, def int) int {
+	if get != nil {
+		if n := get(ctx); n > 0 {
+			return n
+		}
+	}
+	return def
+}
+
 // autoResumeExhaustedAfter is the prior-backoff-pause count at and
 // above which autoResumeBackoff stops resuming a mission and instead
 // notifies once and leaves it paused for a human.
@@ -324,8 +335,8 @@ func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurren
 		case <-ticker.C:
 			sweepOrphanSandboxes(ctx, store, sandbox, log)
 			reDriveStaleWorking(ctx, d, store, log)
-			autoResumeBackoff(ctx, d, store, notify, log)
-			autoResumeInfra(ctx, d, store, notify, log)
+			autoResumeBackoff(ctx, d, store, notify, d.autoResumeBackoffMax, log)
+			autoResumeInfra(ctx, d, store, notify, d.autoResumeInfraMax, log)
 			sweepPermissionTimeouts(ctx, d, store, globalPermissionTimeout, resolveBroker, notify, log)
 			sweepAskTimeouts(ctx, d, store, globalAskTimeout, notify, log)
 			// D-056: skip the claim entirely this tick if the host can't
@@ -391,7 +402,8 @@ func reDriveStaleWorking(ctx context.Context, d *Driver, store *Store, log *slog
 // before the input switch), not 'backoff' — it naturally leaves
 // BackoffPaused's result set on the very next tick, no special case
 // needed here.
-func autoResumeBackoff(ctx context.Context, d signaler, store backoffStore, notify messageNotifier, log *slog.Logger) {
+func autoResumeBackoff(ctx context.Context, d signaler, store backoffStore, notify messageNotifier, maxPauses func(context.Context) int, log *slog.Logger) {
+	exhaustedAfter := autoResumeMax(ctx, maxPauses, autoResumeExhaustedAfter)
 	missions, err := store.BackoffPaused(ctx)
 	if err != nil {
 		log.Error("auto-resume backoff sweep: list failed", "error", err)
@@ -406,7 +418,7 @@ func autoResumeBackoff(ctx context.Context, d signaler, store backoffStore, noti
 		if n <= 0 {
 			continue // no recorded backoff pause yet — nothing to ladder from
 		}
-		if n >= autoResumeExhaustedAfter {
+		if n >= exhaustedAfter {
 			if notify != nil {
 				msg := fmt.Sprintf("this mission has paused for backoff %d times and will not auto-resume again — it needs a human look", n)
 				if err := notify.NotifyMessage(ctx, m.ID, "auto_resume_exhausted", msg); err != nil {
@@ -444,7 +456,8 @@ func autoResumeBackoff(ctx context.Context, d signaler, store backoffStore, noti
 // checks run before the input switch) — it naturally leaves
 // PausedByReason's result set on the very next tick if that reason
 // isn't 'infra', no special case needed here.
-func autoResumeInfra(ctx context.Context, d signaler, store pausedByReasonStore, notify messageNotifier, log *slog.Logger) {
+func autoResumeInfra(ctx context.Context, d signaler, store pausedByReasonStore, notify messageNotifier, maxPauses func(context.Context) int, log *slog.Logger) {
+	exhaustedAfter := autoResumeMax(ctx, maxPauses, autoResumeInfraExhaustedAfter)
 	missions, err := store.PausedByReason(ctx, string(PauseInfra))
 	if err != nil {
 		log.Error("auto-resume infra sweep: list failed", "error", err)
@@ -459,7 +472,7 @@ func autoResumeInfra(ctx context.Context, d signaler, store pausedByReasonStore,
 		if n <= 0 {
 			continue // no recorded infra pause yet — nothing to ladder from
 		}
-		if n >= autoResumeInfraExhaustedAfter {
+		if n >= exhaustedAfter {
 			if notify != nil {
 				msg := fmt.Sprintf("this mission has paused for infra failure %d times and will not auto-resume again — it needs a human look", n)
 				if err := notify.NotifyMessage(ctx, m.ID, "auto_resume_exhausted", msg); err != nil {
@@ -474,6 +487,9 @@ func autoResumeInfra(ctx context.Context, d signaler, store pausedByReasonStore,
 		}
 		if time.Since(m.UpdatedAt) < autoResumeInfraDelays[idx] {
 			continue // not due yet
+		}
+		if time.Now().Before(m.ResumeAfter) {
+			continue // the pause named when a retry can succeed (issue #704); resuming earlier re-pauses at once
 		}
 		log.Info("auto-resume infra sweep: resuming an infra-paused mission", "mission_id", m.ID, "prior_pauses", n)
 		if err := d.Signal(ctx, m.ID, InputResume); err != nil {

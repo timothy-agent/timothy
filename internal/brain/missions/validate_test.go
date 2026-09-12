@@ -66,6 +66,18 @@ func TestValidateCreate(t *testing.T) {
 			m.Kind, m.ReviewHarness = "coding", "pi"
 			return m
 		}, ValidateDeps{}, false},
+		{"unknown executor_session_policy", func(m Mission) Mission {
+			m.Kind, m.ExecutorSessionPolicy = "coding", "sometimes"
+			return m
+		}, ValidateDeps{}, true},
+		{"fresh executor_session_policy", func(m Mission) Mission {
+			m.Kind, m.ExecutorSessionPolicy = "coding", SessionPolicyFresh
+			return m
+		}, ValidateDeps{}, false},
+		{"executor_session_policy on general", func(m Mission) Mission {
+			m.ExecutorSessionPolicy = SessionPolicyFresh
+			return m
+		}, ValidateDeps{}, true},
 		{"environment on general", func(m Mission) Mission {
 			m.Environment = "go"
 			return m

@@ -60,6 +60,10 @@ type Mission struct {
 	ConsecutiveFailures int    `json:"consecutive_failures"`
 	LastGapFingerprint  string `json:"last_gap_fingerprint,omitempty"`
 	StallCount          int    `json:"stall_count"`
+	// HarnessRetries counts the retries the harness attributed to itself
+	// over this mission's life (issue #718): they spend no iteration, so
+	// they have their own cap and nothing resets them.
+	HarnessRetries int `json:"harness_retries"`
 	// ReplanUsed reports whether this mission already spent its one
 	// automatic replan-on-stall attempt (statemachine.go's
 	// stepWorkerRetry).
@@ -111,6 +115,12 @@ type Mission struct {
 	// keeps the native gateway reviewer. Native is the floor: every
 	// delegated failure falls back to it.
 	ReviewHarness string `json:"review_harness,omitempty"`
+	// ExecutorSessionPolicy decides whether a delegated worker run
+	// resumes the prior CLI session (issue #720). "" and
+	// SessionPolicyResume keep today's behaviour; SessionPolicyFresh
+	// starts every unit cold, so the packet's progress notes and recent
+	// commits are the only carried context. Coding-only, like Harness.
+	ExecutorSessionPolicy string `json:"executor_session_policy,omitempty"`
 	// Flow is the phase set this mission runs (D-090, issue #459),
 	// chosen once at create time, snapshotted here, never model-
 	// mutable. FlowLight (D-069, general kind only) skips discover/plan/
@@ -180,15 +190,15 @@ type Mission struct {
 	// time, same as AutoApproveTools; scheduler.go and the workflow
 	// engine both force this true regardless of template/step input:
 	// an unattended mission has nobody to approve its plan.
-	AutoApprovePlan bool   `json:"auto_approve_plan"`
+	AutoApprovePlan bool `json:"auto_approve_plan"`
 	// HasPlan (D-102, issue #496) marks a mission whose goal already
 	// carries the operator's own plan: the plan turn runs in transcribe
 	// mode (PlanSession), converting the goal's plan into units instead
 	// of designing one from scratch. Snapshotted at create time, never
 	// model-mutable; light missions never plan, so this has no effect
 	// there.
-	HasPlan         bool   `json:"has_plan,omitempty"`
-	ScheduleID      string `json:"schedule_id,omitempty"`
+	HasPlan    bool   `json:"has_plan,omitempty"`
+	ScheduleID string `json:"schedule_id,omitempty"`
 	// ParentMissionID names the terminal mission this one follows up on
 	// (api/missions.go's create) — empty for an ordinary mission.
 	ParentMissionID string `json:"parent_mission_id,omitempty"`
@@ -438,6 +448,17 @@ func (m Mission) ParentContext() string {
 // Mission.ReferencedContext column's replacement.
 func (m Mission) ReferencedContext() string {
 	var b strings.Builder
+	for _, e := range m.ReferenceEntries() {
+		fmt.Fprintf(&b, "%s:\n%s\n\n", referenceName(e), e.Digest)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// ReferenceEntries returns the picked reference sources ReferencedContext
+// renders, in order: a delegated worker gets each as a file in its run
+// dir instead of inline text (issue #705).
+func (m Mission) ReferenceEntries() []SourceEntry {
+	var out []SourceEntry
 	for _, e := range m.Sources {
 		switch e.Source {
 		case SourceKindChat, SourceKindKB, SourceKindBrief:
@@ -451,13 +472,18 @@ func (m Mission) ReferencedContext() string {
 		if e.Digest == "" {
 			continue
 		}
-		name := e.Name
-		if name == "" {
-			name = e.MissionID + e.SessionID + e.DocID
-		}
-		fmt.Fprintf(&b, "%s:\n%s\n\n", name, e.Digest)
+		out = append(out, e)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return out
+}
+
+// referenceName labels a reference entry in prompts: its name, else
+// the ids that identify it.
+func referenceName(e SourceEntry) string {
+	if e.Name != "" {
+		return e.Name
+	}
+	return e.MissionID + e.SessionID + e.DocID
 }
 
 // WorktreePath derives the worktree directory (issue #479 dropped the
@@ -526,11 +552,19 @@ type PlanAssumption struct {
 // harness (RunVerify + CheckArtifacts), never by model output, and
 // only on that harness-run evidence.
 type PlanUnit struct {
-	Title     string `json:"title"`
-	VerifyCmd string `json:"verify_cmd"`
+	Title string `json:"title"`
+	// CheckCmd is the deterministic gate: a POSIX shell command the
+	// harness runs after every worker turn (issue #718 renamed it from
+	// verify_cmd: it checks mechanical facts such as tests passing, it
+	// never verifies that the criteria are met; the reviewer does that).
+	CheckCmd string `json:"check_cmd"`
+	// LegacyVerifyCmd reads plans stored before the rename; normalize
+	// folds it into CheckCmd and clears it, so it is never written.
+	// Drop once scripts/pending-alters.md's key rename has run everywhere.
+	LegacyVerifyCmd string `json:"verify_cmd,omitempty"`
 	// Artifacts are workspace-relative paths this unit must produce.
 	// The harness checks each exists and is non-empty BEFORE running
-	// verify_cmd — a tautological verify_cmd (echo 'done') can no
+	// check_cmd: a tautological check_cmd (echo 'done') can no
 	// longer fake completion when the declared artifact is missing.
 	Artifacts []string `json:"artifacts,omitempty"`
 	// Criteria (D-095, issue #520) are the unit's acceptance criteria,
@@ -547,11 +581,11 @@ type PlanUnit struct {
 	// HarnessPassed (legacy rows written before D-094 excepted).
 	Passes bool `json:"passes"`
 	// HarnessPassed (D-094, issue #518) is the batch verifier's own
-	// verdict: artifacts present and verify_cmd exit 0 after the last
+	// verdict: artifacts present and check_cmd exit 0 after the last
 	// worker turn. Cleared when a later turn regresses the unit.
 	HarnessPassed bool `json:"harness_passed"`
 	// VerifyCheck names the check that decided the last verification
-	// (artifacts, citations, verify_cmd, timeout); VerifyExcerpt is its
+	// (artifacts, citations, check_cmd, timeout); VerifyExcerpt is its
 	// trailing output, capped at verifyExcerptCap, rendered into the
 	// worker packet while the unit is failing.
 	VerifyCheck   string `json:"verify_check,omitempty"`
@@ -564,6 +598,18 @@ type PlanUnit struct {
 // verified reports whether the harness has passed this unit: Passes
 // implies it for rows written before HarnessPassed existed.
 func (u PlanUnit) verified() bool { return u.HarnessPassed || u.Passes }
+
+// normalize folds the pre-rename verify_cmd key into CheckCmd on every
+// unit (issue #718) so callers only ever read CheckCmd. Idempotent.
+func (p *Plan) normalize() {
+	for i := range p.Units {
+		u := &p.Units[i]
+		if u.CheckCmd == "" && u.LegacyVerifyCmd != "" {
+			u.CheckCmd = u.LegacyVerifyCmd
+		}
+		u.LegacyVerifyCmd = ""
+	}
+}
 
 // PendingInput is ask_user's park detail (D-088, issue #457): the
 // structured question a phase turn is waiting on the operator to

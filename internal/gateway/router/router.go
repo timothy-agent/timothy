@@ -159,6 +159,11 @@ var harnessDrivers = map[string]map[string]bool{
 // executorUsable against the row's probed OpenAIResponses flag.
 var harnessNeedsResponses = map[string]bool{"codex-cli": true}
 
+// harnessChatOnly names harnesses whose openai wire is
+// chat/completions with no Responses fallback (pi's openai-completions
+// api); opencode and codex speak Responses themselves.
+var harnessChatOnly = map[string]bool{"pi": true}
+
 // RouteRow mirrors one routes table row. Strategy picks the chain
 // order at resolve time: "ordered" keeps the written priority; "auto",
 // "price", and "latency" score entries from recent ledger stats and
@@ -490,7 +495,24 @@ func (s *Snapshot) entryGate(row ProviderRow, model string, required []provider.
 			return nil, row.Name + "/" + model, fmt.Sprintf("lacks %s capability", want)
 		}
 	}
+	if s.responsesOnly(row, model) {
+		return nil, row.Name + "/" + model, "responses_only: the model serves /v1/responses only, not chat/completions; use an openai-responses provider row"
+	}
 	return p, "", ""
+}
+
+// responsesOnly reports whether row would send model over
+// chat/completions when the catalog says the model only speaks the
+// Responses API (LiteLLM mode "responses", the gpt-5.x-codex family),
+// issue #708. The chat driver gets a 404 on every call there, so the
+// native walk skips the row instead of failing over into it. A
+// missing catalog match keeps the row usable: the driver decides.
+func (s *Snapshot) responsesOnly(row ProviderRow, model string) bool {
+	if row.Driver != "openaicompat" {
+		return false
+	}
+	m, ok := s.catalogModel(row, model)
+	return ok && m.Mode == "responses"
 }
 
 // Strategy weights: relative importance of each additive factor,
@@ -747,6 +769,15 @@ func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bo
 				re.BaseURL = row.AnthropicBaseURL
 			}
 			re.Usable, re.SkipReason = executorUsable(row, harness)
+			// A harness whose openai wire is chat/completions only cannot
+			// run a model the catalog marks Responses-only (issue #718: pi
+			// on gpt-5.3-codex got a 404 every turn).
+			if re.Usable && harnessChatOnly[harness] && s.responsesOnly(row, re.Model) {
+				re.Usable, re.SkipReason = false, "responses_only: "+harness+" speaks chat/completions and this model serves only /v1/responses"
+			}
+			if re.Usable && re.Model == "" {
+				re.Usable, re.SkipReason = false, emptyModelSkip
+			}
 			if row.Kind != "cli" {
 				re.Wire = harnessWire(row.Driver, overrideApplied)
 			}
@@ -780,6 +811,9 @@ func (s *Snapshot) resolveSelfPaired(harness string) []ResolvedRouteEntry {
 		}
 		re.Prices = s.Prices(row.Name, re.Model)
 		re.Usable, re.SkipReason = executorUsable(row, harness)
+		if re.Usable && re.Model == "" {
+			re.Usable, re.SkipReason = false, emptyModelSkip
+		}
 		out = append(out, re)
 	}
 	return out
@@ -834,6 +868,14 @@ func executorUsable(row ProviderRow, harness string) (bool, string) {
 	}
 	return true, ""
 }
+
+// emptyModelSkip is the skip reason for an entry that resolved to no
+// model at all: the chain pinned none and the provider row carries no
+// default_model. Every adapter's BuildInvocation rejects an empty model
+// (issue #718: a cursor-cli row with no default_model reported usable,
+// then failed every build turn with "executor/cursor: empty model"), so
+// the entry is unusable here rather than three retries later.
+const emptyModelSkip = "provider row has no default_model and the route pins none"
 
 // sortedKeys returns m's keys, sorted — used only to keep an operator-
 // facing skip-reason string deterministic.

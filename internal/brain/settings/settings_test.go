@@ -84,3 +84,45 @@ func TestWritingSettingsDefaultEmpty(t *testing.T) {
 		t.Fatalf("WritingSamplesCollection = %q, want empty", got)
 	}
 }
+
+// TestExecutorKnobDefaults pins the issue #720 accessors: an absent row
+// means the built-in review turn cap and no thinking budget at all.
+func TestExecutorKnobDefaults(t *testing.T) {
+	s := degradedStore(t)
+	if got := s.ExecutorReviewMaxTurns(context.Background()); got != DefaultExecutorReviewMaxTurns {
+		t.Fatalf("ExecutorReviewMaxTurns = %d, want %d", got, DefaultExecutorReviewMaxTurns)
+	}
+	if got := s.ExecutorThinkingTokens(context.Background()); got != 0 {
+		t.Fatalf("ExecutorThinkingTokens = %d, want 0", got)
+	}
+}
+
+// TestMissionCeilingDefaults pins the issue #718 accessors: with no
+// row set, every mission retry ceiling reads its built-in default.
+func TestMissionCeilingDefaults(t *testing.T) {
+	s := degradedStore(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{ValueExecutorWorkerMaxTurns, s.ExecutorWorkerMaxTurns(ctx), DefaultExecutorWorkerMaxTurns},
+		{ValueMissionDefaultMaxIterations, s.MissionDefaultMaxIterations(ctx), DefaultMissionMaxIterations},
+		{ValueMissionBackoffFailures, s.MissionBackoffFailures(ctx), DefaultMissionBackoffFailures},
+		{ValueMissionStallRounds, s.MissionStallRounds(ctx), DefaultMissionStallRounds},
+		{ValueMissionHarnessRetryCap, s.MissionHarnessRetryCap(ctx), DefaultMissionHarnessRetryCap},
+		{ValueMissionAutoResumeBackoffMax, s.MissionAutoResumeBackoffMax(ctx), DefaultMissionAutoResumeBackoffMax},
+		{ValueMissionAutoResumeInfraMax, s.MissionAutoResumeInfraMax(ctx), DefaultMissionAutoResumeInfraMax},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
+		}
+		if !knownValueKeys[tc.name] {
+			t.Errorf("%s is not in knownValueKeys, so it cannot be set", tc.name)
+		}
+		if !nonNegativeIntKeys[tc.name] {
+			t.Errorf("%s is not validated as a non-negative integer", tc.name)
+		}
+	}
+}

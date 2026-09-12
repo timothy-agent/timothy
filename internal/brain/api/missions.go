@@ -466,6 +466,10 @@ type createMissionRequest struct {
 	// or "native" (stored as "") keeps the native reviewer, anything
 	// else must name a registered harness. No settings default.
 	ReviewHarness string `json:"review_harness"`
+	// ExecutorSessionPolicy (issue #720) selects whether a delegated
+	// worker run resumes the prior CLI session: "" or "resume" keeps
+	// resume, "fresh" starts every unit cold.
+	ExecutorSessionPolicy string `json:"executor_session_policy"`
 	// Environment selects the per-language sandbox image (D-05x) a
 	// coding mission's container runs: "" auto-detects from the repo at
 	// provisioning (falling back to base), a registered key forces that
@@ -609,7 +613,13 @@ type missionAttachmentInput struct {
 // turn happen in the background; this returns {id} immediately.
 func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	var req createMissionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Unknown fields are rejected rather than dropped: a misspelled or
+	// invented key (a "sources" array, "repoURL" for "repo_url") used to
+	// create a mission that silently lost the setting and only failed
+	// minutes later, mid-run, with an unrelated reason.
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
@@ -805,6 +815,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveTools: autoApproveTools, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
 		ReviewHarness:            req.ReviewHarness,
+		ExecutorSessionPolicy:    req.ExecutorSessionPolicy,
 		HasPlan:                  req.HasPlan,
 		ParentMissionID:          parentMissionID,
 		Sources:                  sources,
