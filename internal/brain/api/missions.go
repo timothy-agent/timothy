@@ -613,7 +613,13 @@ type missionAttachmentInput struct {
 // turn happen in the background; this returns {id} immediately.
 func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	var req createMissionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	// Unknown fields are rejected rather than dropped: a misspelled or
+	// invented key (a "sources" array, "repoURL" for "repo_url") used to
+	// create a mission that silently lost the setting and only failed
+	// minutes later, mid-run, with an unrelated reason.
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
