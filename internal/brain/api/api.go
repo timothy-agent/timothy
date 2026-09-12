@@ -165,7 +165,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 		destLookup = destinationStore
 	}
 	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveRoute, nameMission, topModels, conns, missionAttachments, markitdownURL, pdfService, kbStore, kbIngest, kbEnrich, whisperURL, caption)
-	resolver := &attachmentResolver{store: missionAttachments, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: whisperClient, caption: caption}
+	resolver := &attachmentResolver{store: missionAttachments, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: whisperClient, caption: caption, enrich: kbEnrich, log: log}
 	a.registerSchedules(srv.Handle, missionStore, destLookup, resolver)
 	// destinationRefs/destinationScheduleRefs are *missions.Store itself
 	// (ActiveMissionReferencesDestination / ScheduleReferencingDestinationID) —

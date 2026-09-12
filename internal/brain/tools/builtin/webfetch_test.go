@@ -3,11 +3,16 @@ package builtin
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
 
 func TestWebFetchRefusesLocalAddresses(t *testing.T) {
@@ -73,7 +78,7 @@ func TestFetchReadableTruncatesLongText(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := fetchReadable(context.Background(), srv.Client(), "", srv.URL)
+	got, err := fetchReadable(context.Background(), srv.Client(), "", nil, srv.URL)
 	if err != nil {
 		t.Fatalf("fetchReadable: %v", err)
 	}
@@ -98,7 +103,7 @@ func TestFetchReadableStripsUserinfo(t *testing.T) {
 	// Inject credentials into the URL; they must not become a header.
 	u, _ := url.Parse(srv.URL)
 	authed := u.Scheme + "://user:secret@" + u.Host + "/"
-	if _, err := fetchReadable(context.Background(), srv.Client(), "", authed); err != nil {
+	if _, err := fetchReadable(context.Background(), srv.Client(), "", nil, authed); err != nil {
 		t.Fatalf("fetchReadable: %v", err)
 	}
 	if gotAuth != "" {
@@ -119,11 +124,11 @@ func TestFetchReadableRejectsNonTextAndErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := fetchReadable(context.Background(), srv.Client(), "", srv.URL+"/bin"); err == nil ||
+	if _, err := fetchReadable(context.Background(), srv.Client(), "", nil, srv.URL+"/bin"); err == nil ||
 		!strings.Contains(err.Error(), "unsupported content type") {
 		t.Fatalf("binary fetch err = %v", err)
 	}
-	if _, err := fetchReadable(context.Background(), srv.Client(), "", srv.URL+"/missing"); err == nil ||
+	if _, err := fetchReadable(context.Background(), srv.Client(), "", nil, srv.URL+"/missing"); err == nil ||
 		!strings.Contains(err.Error(), "http 404") {
 		t.Fatalf("404 fetch err = %v", err)
 	}
@@ -151,7 +156,7 @@ func TestFetchReadableHTMLPrefersMarkitdown(t *testing.T) {
 		_, _ = w.Write([]byte(`<html><body><h1>Plans</h1><table><tr><td>basic</td><td>$5</td></tr></table></body></html>`))
 	})
 
-	got, err := fetchReadable(context.Background(), page.Client(), md.URL, page.URL)
+	got, err := fetchReadable(context.Background(), page.Client(), md.URL, nil, page.URL)
 	if err != nil {
 		t.Fatalf("fetchReadable: %v", err)
 	}
@@ -170,7 +175,7 @@ func TestFetchReadableHTMLFallsBackWhenSidecarFails(t *testing.T) {
 		_, _ = w.Write([]byte(`<html><head><title>Pricing</title></head><body><p>Basic costs $5.</p></body></html>`))
 	})
 
-	got, err := fetchReadable(context.Background(), page.Client(), md.URL, page.URL)
+	got, err := fetchReadable(context.Background(), page.Client(), md.URL, nil, page.URL)
 	if err != nil {
 		t.Fatalf("fetchReadable: %v", err)
 	}
@@ -192,7 +197,7 @@ func TestFetchReadablePDF(t *testing.T) {
 		_, _ = w.Write([]byte("%PDF-1.7 fake"))
 	})
 
-	got, err := fetchReadable(context.Background(), pdf.Client(), md.URL, pdf.URL)
+	got, err := fetchReadable(context.Background(), pdf.Client(), md.URL, nil, pdf.URL)
 	if err != nil {
 		t.Fatalf("fetchReadable: %v", err)
 	}
@@ -201,7 +206,7 @@ func TestFetchReadablePDF(t *testing.T) {
 	}
 
 	// Without the sidecar, PDFs stay unsupported with a clear reason.
-	if _, err := fetchReadable(context.Background(), pdf.Client(), "", pdf.URL); err == nil ||
+	if _, err := fetchReadable(context.Background(), pdf.Client(), "", nil, pdf.URL); err == nil ||
 		!strings.Contains(err.Error(), "markitdown sidecar") {
 		t.Fatalf("unconfigured pdf fetch err = %v", err)
 	}
@@ -210,8 +215,82 @@ func TestFetchReadablePDF(t *testing.T) {
 	broken := fakeMarkitdown(t, func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "conversion failed", http.StatusUnprocessableEntity)
 	})
-	if _, err := fetchReadable(context.Background(), pdf.Client(), broken.URL, pdf.URL); err == nil ||
+	if _, err := fetchReadable(context.Background(), pdf.Client(), broken.URL, nil, pdf.URL); err == nil ||
 		!strings.Contains(err.Error(), "pdf conversion failed") {
 		t.Fatalf("broken sidecar pdf fetch err = %v", err)
+	}
+}
+
+// TestFetchReadablePDFCaptionsEmbeddedImages confirms a fetched PDF
+// with an Enrich captioner wired runs the sidecar's /pdf/images
+// extraction and captions embedded images into the returned text
+// (issue #350).
+func TestFetchReadablePDFCaptionsEmbeddedImages(t *testing.T) {
+	t.Parallel()
+	md := fakeMarkitdown(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/pdf/images" {
+			_ = json.NewEncoder(w).Encode(markitdown.PDFImagesResult{
+				Pages: []markitdown.PDFPage{{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}}},
+			})
+			return
+		}
+		_, _ = w.Write([]byte(`{"markdown": "# Q3 Report\n\nRevenue grew."}`))
+	})
+	pdf := fakeMarkitdown(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-1.7 fake"))
+	})
+	enrich := &kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { return "a flowchart" },
+		Enabled: func(context.Context) bool { return true },
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	got, err := fetchReadable(context.Background(), pdf.Client(), md.URL, enrich, pdf.URL)
+	if err != nil {
+		t.Fatalf("fetchReadable: %v", err)
+	}
+	if !strings.Contains(got, "a flowchart") {
+		t.Fatalf("got %q, want it to contain the embedded image's caption", got)
+	}
+}
+
+// TestFetchReadablePDFEnrichDisabledLeavesMarkdownUnchanged confirms a
+// fetched PDF with Enrich wired but Enabled() false (the settings
+// default-off state) never calls the captioner and returns the
+// markitdown conversion unchanged (issue #350).
+func TestFetchReadablePDFEnrichDisabledLeavesMarkdownUnchanged(t *testing.T) {
+	t.Parallel()
+	md := fakeMarkitdown(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/pdf/images" {
+			_ = json.NewEncoder(w).Encode(markitdown.PDFImagesResult{
+				Pages: []markitdown.PDFPage{{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}}},
+			})
+			return
+		}
+		_, _ = w.Write([]byte(`{"markdown": "# Q3 Report\n\nRevenue grew."}`))
+	})
+	pdf := fakeMarkitdown(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-1.7 fake"))
+	})
+	captioned := false
+	enrich := &kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { captioned = true; return "a flowchart" },
+		Enabled: func(context.Context) bool { return false },
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	got, err := fetchReadable(context.Background(), pdf.Client(), md.URL, enrich, pdf.URL)
+	if err != nil {
+		t.Fatalf("fetchReadable: %v", err)
+	}
+	if got != "# Q3 Report\n\nRevenue grew." {
+		t.Fatalf("got %q, want markdown unchanged when captioning disabled", got)
+	}
+	if captioned {
+		t.Fatal("captioner called despite Enabled() returning false")
 	}
 }

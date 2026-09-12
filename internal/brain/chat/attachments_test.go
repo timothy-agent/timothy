@@ -6,14 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
+	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
 
 // fakeAttachments is an in-memory AttachmentStore fake: ids map
@@ -389,6 +392,103 @@ func TestChatPDFAttachmentConvertsToDocument(t *testing.T) {
 	}
 	if um.Documents[0].Markdown != "# Converted Title" {
 		t.Fatalf("markdown = %q, want converted markdown persisted", um.Documents[0].Markdown)
+	}
+}
+
+// fakePDFMarkitdown serves /convert with markdown and /pdf/images with
+// res, same two-endpoint shape as the real sidecar (issue #350).
+func fakePDFMarkitdown(t *testing.T, markdown string, res markitdown.PDFImagesResult) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/pdf/images" {
+			_ = json.NewEncoder(w).Encode(res)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"markdown": markdown})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestChatPDFAttachmentCaptionsEmbeddedImages confirms a PDF attachment
+// with SetKBEnrich wired runs the sidecar's /pdf/images extraction and
+// captions embedded images into the persisted markdown (issue #350).
+func TestChatPDFAttachmentCaptionsEmbeddedImages(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("read your pdf")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("doc1", "application/pdf", []byte("%PDF-1.4 fake"))
+	svc.SetAttachments(fa)
+	md := fakePDFMarkitdown(t, "# Converted Title", markitdown.PDFImagesResult{
+		Pages: []markitdown.PDFPage{{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}}},
+	})
+	svc.SetMarkitdown(md.URL)
+	svc.SetKBEnrich(&kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { return "a flowchart" },
+		Enabled: func(context.Context) bool { return true },
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "doc1"}}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 || !strings.Contains(um.Documents[0].Markdown, "a flowchart") {
+		t.Fatalf("documents = %+v, want markdown containing the embedded image's caption", um.Documents)
+	}
+}
+
+// TestChatPDFAttachmentEnrichDisabledLeavesMarkdownUnchanged confirms
+// a PDF attachment with SetKBEnrich wired but Enabled() false (the
+// settings.KeyKBImageCaptioning default-off state) never calls the
+// captioner and persists the markitdown conversion unchanged.
+func TestChatPDFAttachmentEnrichDisabledLeavesMarkdownUnchanged(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("read your pdf")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("doc1", "application/pdf", []byte("%PDF-1.4 fake"))
+	svc.SetAttachments(fa)
+	md := fakePDFMarkitdown(t, "# Converted Title", markitdown.PDFImagesResult{
+		Pages: []markitdown.PDFPage{{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}}},
+	})
+	svc.SetMarkitdown(md.URL)
+	captioned := false
+	svc.SetKBEnrich(&kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { captioned = true; return "a flowchart" },
+		Enabled: func(context.Context) bool { return false },
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "doc1"}}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 || um.Documents[0].Markdown != "# Converted Title" {
+		t.Fatalf("documents = %+v, want markdown unchanged when captioning disabled", um.Documents)
+	}
+	if captioned {
+		t.Fatal("captioner called despite Enabled() returning false")
 	}
 }
 

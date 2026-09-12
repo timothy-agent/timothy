@@ -377,6 +377,84 @@ func TestKBDocumentUploadCaptionsImageLinkWhenEnabled(t *testing.T) {
 	}
 }
 
+// TestKBDocumentUploadCaptionsPDFEmbeddedImage exercises issue #350's
+// end-to-end wiring: a real .pdf upload through registerKB's
+// decodeUpload PDF branch, which calls markitdown.Convert then
+// h.enrichPDF (markitdown.PDFImages + Enricher.EnrichPDF), landing the
+// embedded image's caption in the stored markdown before ingest ever
+// sees it — the gap TestKBDocumentUploadCaptionsImageLinkWhenEnabled
+// doesn't cover (that test uploads a .md, never reaching the PDF
+// branch).
+func TestKBDocumentUploadCaptionsPDFEmbeddedImage(t *testing.T) {
+	store := testKBStore(t)
+	ingester := &fakeIngester{}
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/pdf/images" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"pages": []map[string]any{
+					{"page": 1, "images": []map[string]any{
+						{"media_type": "image/png", "data_b64": "AAAA"},
+					}},
+				},
+			})
+			return
+		}
+		_, _ = w.Write([]byte(`{"markdown": "# Report\n\nSome text."}`))
+	}))
+	defer sidecar.Close()
+	enrich := &kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { return "a bar chart" },
+		Enabled: func(context.Context) bool { return true },
+		Log:     discard(),
+	}
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerKB(m.Handle, store, ingester, sidecar.URL, fixedClassifier, nil, enrich)
+
+	collID, err := store.CreateCollection(context.Background(), "itest-pdf-caption", "", 0)
+	if err != nil {
+		t.Fatalf("CreateCollection: %v", err)
+	}
+
+	body, contentType := multipartFile(t, "file", "report.pdf", []byte("%PDF-1.4 fake"))
+	req := httptest.NewRequest("POST", "/v1/admin/kb/collections/"+collID+"/documents", body)
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("Content-Type", contentType)
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("upload status = %d body %s", w.Code, w.Body)
+	}
+	var doc struct {
+		ID string `json:"id"`
+	}
+	if err := decodeBody(t, w.Body.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if ingester.callCount() > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := ingester.callCount(); got != 1 {
+		t.Fatalf("ingester calls = %d, want 1", got)
+	}
+	final, err := store.GetDocument(context.Background(), doc.ID)
+	if err != nil {
+		t.Fatalf("GetDocument: %v", err)
+	}
+	if !strings.Contains(final.Markdown, "a bar chart") {
+		t.Fatalf("stored markdown = %q, want the embedded image's caption", final.Markdown)
+	}
+	if !strings.Contains(final.Markdown, "Some text.") {
+		t.Fatalf("stored markdown = %q, want the sidecar's converted text kept", final.Markdown)
+	}
+}
+
 // TestKBSearchDocumentsCrossCollectionTitleMatch covers GET
 // /v1/admin/kb/documents?q=: a case-insensitive title match across
 // EVERY collection (the composer #-mention "find a kb document"
