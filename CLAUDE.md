@@ -51,7 +51,8 @@ First run: `cp deploy/env.example deploy/.env` and set
   (google/microsoft/github/mcp/imap/caldav, unified capability tools:
   `search_mail`, `read_mail`, `send_mail`, `list_calendar_events`,
   `create_calendar_event` route to the right connector/account via an
-  `account` parameter — see `manager.go`'s `aggregateTools`),
+  `account` parameter — see `manager.go`'s `aggregateTools`; the
+  `github` kind also serves read-only PR tools in `github_tools.go`),
   `destinations` (mission result delivery: email/webhook/
   telegram/github, the last pushing/opening a PR through a github
   connector via `GitHubAdapter`), `kb` (knowledge-base collections/documents; image

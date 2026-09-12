@@ -65,9 +65,10 @@ const (
 	githubRepoMaxRepos = 300
 )
 
-// GitHubBuilder returns the Builder for kind='github'. The source
-// serves zero tools by design: identity/credential connector only,
-// chat tools stay on the MCP-based GitHub connector.
+// GitHubBuilder returns the Builder for kind='github'. The source is
+// the identity/credential connector missions clone, push, and open PRs
+// through, plus the read-only pull request tools in github_tools.go
+// (issue #727). Write tools stay on the MCP-based GitHub connector.
 func GitHubBuilder(client *http.Client) Builder {
 	if client == nil {
 		client = &http.Client{}
@@ -80,8 +81,9 @@ func GitHubBuilder(client *http.Client) Builder {
 	}
 }
 
-// githubSource is a built github-kind connector: no tools, Test
-// resolves the PAT and confirms it authenticates against the GitHub API.
+// githubSource is a built github-kind connector: read-only PR tools,
+// and a Test that resolves the PAT and confirms it authenticates
+// against the GitHub API.
 type githubSource struct {
 	name          string
 	credentialRef string
@@ -89,8 +91,13 @@ type githubSource struct {
 	client        *http.Client
 }
 
-// Tools is empty: identity/credential connector, no chat tools.
-func (s *githubSource) Tools() []*tools.Tool { return nil }
+// Tools is the read-only pull request surface (github_tools.go).
+func (s *githubSource) Tools() []*tools.Tool { return s.prTools() }
+
+// AccountInfo reports the kind and, since the PAT's login is only
+// known after a network call, no email: the aggregated description
+// then lists the connector by name alone.
+func (s *githubSource) AccountInfo() (kind, email string) { return "github", "" }
 
 func (s *githubSource) Test(ctx context.Context) error {
 	token, err := s.resolve(ctx, s.credentialRef)
@@ -456,10 +463,17 @@ func resolveEmail(ctx context.Context, client *http.Client, token string, user g
 	return fmt.Sprintf("%d+%s@users.noreply.github.com", user.ID, user.Login), nil
 }
 
-// githubRequest issues one authenticated GitHub API GET. The token
-// never appears in an error: only the status code and a short body
-// snippet are surfaced.
+// githubRequest issues one authenticated GitHub API GET for JSON. The
+// token never appears in an error: only the status code and a short
+// body snippet are surfaced.
 func githubRequest(ctx context.Context, client *http.Client, token, path string) (*http.Response, error) {
+	return githubRequestAccept(ctx, client, token, path, "application/vnd.github+json")
+}
+
+// githubRequestAccept is githubRequest with an explicit Accept media
+// type, for the endpoints that render a non-JSON body on request
+// (get_pull_request_diff's application/vnd.github.diff).
+func githubRequestAccept(ctx context.Context, client *http.Client, token, path, accept string) (*http.Response, error) {
 	cctx, cancel := context.WithTimeout(ctx, githubCallTimeout)
 	req, err := http.NewRequestWithContext(cctx, http.MethodGet, githubAPIBase+path, nil)
 	if err != nil {
@@ -467,7 +481,7 @@ func githubRequest(ctx context.Context, client *http.Client, token, path string)
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Accept", accept)
 	req.Header.Set("X-GitHub-Api-Version", githubAPIVersion)
 	resp, err := client.Do(req)
 	if err != nil {

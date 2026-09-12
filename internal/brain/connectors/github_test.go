@@ -196,7 +196,7 @@ func TestGitHubBuilderRequiresCredentialRef(t *testing.T) {
 	}
 }
 
-func TestGitHubSourceServesNoTools(t *testing.T) {
+func TestGitHubSourceServesReadOnlyPRTools(t *testing.T) {
 	t.Parallel()
 	b := GitHubBuilder(nil)
 	src, err := b(t.Context(), Connector{Name: "gh", Kind: "github", CredentialRef: "GH_PAT"},
@@ -204,8 +204,18 @@ func TestGitHubSourceServesNoTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if got := src.Tools(); len(got) != 0 {
-		t.Fatalf("Tools() = %v, want none: github is identity-only in this slice", got)
+	want := []string{"list_pull_requests", "get_pull_request", "get_pull_request_diff", "list_pull_request_comments"}
+	got := src.Tools()
+	if len(got) != len(want) {
+		t.Fatalf("Tools() has %d tools, want %d", len(got), len(want))
+	}
+	for i, tl := range got {
+		if tl.Name != want[i] {
+			t.Errorf("Tools()[%d] = %s, want %s", i, tl.Name, want[i])
+		}
+		if !tl.ReadOnly {
+			t.Errorf("%s must be ReadOnly: it is a pure GET and missions rely on the marker", tl.Name)
+		}
 	}
 }
 

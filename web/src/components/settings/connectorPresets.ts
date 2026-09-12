@@ -87,7 +87,7 @@ export const connectorPresets: ConnectorPreset[] = [
     id: 'github-account',
     name: 'GitHub',
     kind: 'github',
-    description: 'Identity for mission clone/push/PR, no chat tools',
+    description: 'Identity for mission clone/push/PR, read-only pull request tools',
     logo: 'github',
     brandColor: '#24292F',
     tokenPlaceholder: 'ghp_… or github_pat_…',
