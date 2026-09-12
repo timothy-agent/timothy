@@ -1704,3 +1704,18 @@ export async function patchSchedule(
 export async function deleteSchedule(id: string): Promise<void> {
   await request<void>(`/v1/schedules/${id}`, { method: 'DELETE' })
 }
+
+// backendVersion reads the running brain's version from /health. That
+// endpoint is unauthenticated and returns no version on a build with
+// none baked in, so this skips `request`'s bearer token and 401
+// handling and returns '' rather than throwing on any failure.
+export async function backendVersion(): Promise<string> {
+  try {
+    const res = await fetch('/health')
+    if (!res.ok) return ''
+    const body = (await res.json()) as { version?: string }
+    return body.version ?? ''
+  } catch {
+    return ''
+  }
+}

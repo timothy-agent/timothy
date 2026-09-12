@@ -2,7 +2,7 @@ import { Brain, ChartColumn, ChevronRight, House, KeyRound, Library, MessageCirc
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { toast, Toaster } from 'sonner'
-import { getToken, subscribeNeedToken } from './api/client'
+import { backendVersion, getToken, subscribeNeedToken } from './api/client'
 import { BrandMark } from './components/BrandMark'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
@@ -95,6 +95,26 @@ function breadcrumbFor(pathname: string): string[] {
   return [match?.label ?? 'Timothy']
 }
 
+// useRunningVersion reports the version of the brain actually serving
+// this app. The baked-in __APP_VERSION__ can be stale: release.yml
+// copies the web image forward unchanged when nothing under web/
+// changed for a tag, so it keeps the previous tag's string while the
+// backend moves on. Falls back to the baked constant while the fetch
+// is in flight and if it fails, so the footer is never blank.
+function useRunningVersion(): string {
+  const [version, setVersion] = useState('')
+  useEffect(() => {
+    let active = true
+    backendVersion().then((v) => {
+      if (active) setVersion(v)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+  return version || __APP_VERSION__
+}
+
 // AppSidebar is the persistent left navigation: icon-collapsible via
 // the shadcn Sidebar primitive, a flat destination list (this app has
 // no "workspace" concept to group under), and the chat history panel
@@ -122,6 +142,7 @@ function AppSidebar({
   // it from there, same "sticky until touched" feel as the rest of
   // the sidebar's collapse state.
   const [settingsOpen, setSettingsOpen] = useState(() => pathname.startsWith('/settings'))
+  const version = useRunningVersion()
   // Icon-collapsed mode hides the submenu entirely (no room for it),
   // so a click there jumps straight to the first area instead of
   // toggling an invisible expand state.
@@ -234,7 +255,7 @@ function AppSidebar({
           </SidebarMenuItem>
         </SidebarMenu>
         <div className="whitespace-nowrap px-2 py-1 text-xs text-muted-foreground transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
-          v{__APP_VERSION__} ({__GIT_SHA__})
+          v{version} ({__GIT_SHA__})
         </div>
       </SidebarFooter>
     </Sidebar>

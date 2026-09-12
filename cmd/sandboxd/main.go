@@ -87,7 +87,7 @@ func health(ctx context.Context, mgr *sandboxd.Manager) httpserver.Health {
 	} else {
 		checks["image"] = httpserver.Check{Status: "ok"}
 	}
-	return httpserver.Health{Status: status, Checks: checks}
+	return httpserver.Health{Status: status, Version: service.Version, Checks: checks}
 }
 
 // execConfig reads the concurrency caps from the environment — bare

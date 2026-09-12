@@ -607,6 +607,11 @@ func TestDelegatedRunWorker_MissingResult_ForcedRetry(t *testing.T) {
 	if events.count("executor.died") != 1 {
 		t.Fatalf("executor.died count = %d, want 1", events.count("executor.died"))
 	}
+	// issue #701: a death still names the entry that ran, so the turn
+	// timeline shows the model instead of falling back to the route.
+	if verdict.Provider != entry.ProviderName || verdict.Model != entry.Model {
+		t.Fatalf("verdict provider/model = %q/%q, want %q/%q", verdict.Provider, verdict.Model, entry.ProviderName, entry.Model)
+	}
 }
 
 // --- scenario 2b: wall-clock run budget hit (issue #498) -----------------
@@ -671,6 +676,9 @@ func TestDelegatedRunWorker_IdleHang_KilledAndRetried(t *testing.T) {
 	}
 	if events.count("executor.idle_killed") != 1 {
 		t.Fatalf("executor.idle_killed count = %d, want 1", events.count("executor.idle_killed"))
+	}
+	if verdict.Provider != entry.ProviderName || verdict.Model != entry.Model {
+		t.Fatalf("verdict provider/model = %q/%q, want %q/%q", verdict.Provider, verdict.Model, entry.ProviderName, entry.Model)
 	}
 }
 
