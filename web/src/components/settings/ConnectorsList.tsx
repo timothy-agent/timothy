@@ -149,7 +149,7 @@ function ConnectorCard({
         ? (connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')
         : connector.kind === 'imap' || connector.kind === 'caldav'
           ? String(connector.config.username ?? '')
-          : 'Identity for mission use, no chat tools'
+          : 'Identity for mission use, read-only pull request tools'
 
   return (
     <EntityCard

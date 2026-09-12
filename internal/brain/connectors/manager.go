@@ -716,10 +716,10 @@ type identifier interface {
 
 // TestIdentity is Test plus, for a kind that can report one (github,
 // microsoft, google), the resolved identity — the evidence a working
-// credential was configured, since a github connector serves no tools
-// to prove itself with otherwise (microsoft's tools require a scope
-// the operator may not have granted, so the identity check is useful
-// there too). identity is nil for kinds with no identity concept.
+// credential was configured, since a github connector's tools only
+// prove themselves against a repo the operator names (microsoft's
+// tools require a scope the operator may not have granted, so the
+// identity check is useful there too). identity is nil for kinds with no identity concept.
 func (m *Manager) TestIdentity(ctx context.Context, id string) (*GitHubIdentity, error) {
 	c, err := m.rows.Get(ctx, id)
 	if err != nil {

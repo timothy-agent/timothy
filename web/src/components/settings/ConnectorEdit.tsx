@@ -389,7 +389,7 @@ function ConnectorEditForm({
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
                   {connector.kind === 'github' ? (
-                    'Identity for mission clone/push/PR use, no chat tools.'
+                    'Identity for mission clone/push/PR use, plus read-only pull request tools.'
                   ) : connector.kind === 'imap' ? (
                     <>
                       <span className="font-mono">
