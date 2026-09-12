@@ -345,7 +345,7 @@ func (r *delegatedRunner) runDelegatedReview(ctx context.Context, m Mission, pac
 		PromptPath:   filepath.Join(rdir, "prompt.md"),
 		SystemAppend: reviewSystemPrompt + delegatedReviewSystemAppend,
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
-		ResultSchema: reviewVerdictSchema, RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
+		ResultSchema: reviewSchemaFor(adapter), RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
 		StateDir: executorStateDir(m.Workspace, m.ReviewHarness),
 		// ResumeSessionID stays empty: every review round is a cold
 		// session (D-092). ReadOnly is the enforced safety knob.
@@ -733,6 +733,27 @@ func newRunID() (string, error) {
 // schema without it.
 var resultSchemaJSON = json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["DONE","RETRY","BLOCKED"]},"note":{"type":"string"}},"required":["status","note"],"additionalProperties":false}`)
 
+// reviewSchemaFor is workerResultSchema's review counterpart (issue
+// #716): a reviewer that loses its tools to a schema cannot read the
+// diff it is meant to review.
+func reviewSchemaFor(adapter executor.Adapter) json.RawMessage {
+	if adapter.Capabilities().SchemaSuppressesTools {
+		return nil
+	}
+	return reviewVerdictSchema
+}
+
+// workerResultSchema is the structured-result schema for adapter, or
+// nil when asking for one would cost the CLI its tools (issue #716).
+// The prompt still demands the same shape, and the adapter reads it
+// back from the final message, so the verdict contract is unchanged.
+func workerResultSchema(adapter executor.Adapter) json.RawMessage {
+	if adapter.Capabilities().SchemaSuppressesTools {
+		return nil
+	}
+	return resultSchemaJSON
+}
+
 // delegatedSystemAppend is appended to the packet's own system prompt
 // (WorkPacket.Render's SystemAppend) — it tells the harness to end with
 // the structured status output instead of a mission_status tool call
@@ -741,6 +762,11 @@ var resultSchemaJSON = json.RawMessage(`{"type":"object","properties":{"status":
 // harness-side verify_cmd/CheckArtifacts runs regardless of what it
 // reports.
 const delegatedSystemAppend = " You are running as a delegated coding CLI, not through mission_status. End your turn by producing the required structured output with status DONE, RETRY, or BLOCKED and a short note. Only report DONE when every acceptance criterion for the current unit is genuinely met — the harness independently verifies your artifacts and verify_cmd regardless of what you report, so a false DONE only costs a wasted review round, never actually passes. The harness commits the unit's files itself after your turn, so never run git add, commit, reset, stash, or checkout."
+
+// delegatedVerdictShapeAppend spells out the result contract for an
+// adapter that cannot be sent a schema (issue #716). The object must
+// come last so the adapter's trailing-JSON extraction finds it.
+const delegatedVerdictShapeAppend = " Finish your final message with a single JSON object on its own line and nothing after it: {\"status\": \"DONE\" | \"RETRY\" | \"BLOCKED\", \"note\": \"<one sentence>\"}. Do the unit's actual work with your tools first; the object reports what you did, it is never a substitute for doing it."
 
 // delegatedAllowTools/delegatedDenyTools are the delegated worker's
 // static tool surface, passed as the CLI's own allow/deny flags at
@@ -804,6 +830,12 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 	rdir := runDir(m.Workspace, runID)
 	system, user, refFiles := packet.RenderForDelegated(rdir)
 	system += delegatedSystemAppend
+	if adapter.Capabilities().SchemaSuppressesTools {
+		// No schema is sent (issue #716), so the shape has to be asked
+		// for in words; the adapter reads the trailing JSON object of
+		// the final message.
+		system += delegatedVerdictShapeAppend
+	}
 
 	decision := r.planSessionResume(ctx, m, workRoot, adapter)
 
@@ -813,7 +845,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		SystemAppend: system,
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
 		AllowTools: delegatedAllowTools, DenyTools: delegatedDenyTools,
-		ResultSchema: resultSchemaJSON, RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
+		ResultSchema: workerResultSchema(adapter), RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
 		ResumeSessionID: decision.sessionID,
 		StateDir:        executorStateDir(m.Workspace, m.Harness),
 	}

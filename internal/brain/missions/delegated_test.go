@@ -741,6 +741,68 @@ func TestDelegatedRunWorker_IdleHang_KilledAndRetried(t *testing.T) {
 	}
 }
 
+// --- scenario 3a2: schema suppresses tools (issue #716) ------------------
+
+// schemaSuppressingAdapter wraps a registered adapter, declaring that a
+// strict result schema would cost it its tools.
+type schemaSuppressingAdapter struct{ executor.Adapter }
+
+func (a schemaSuppressingAdapter) Capabilities() executor.Capabilities {
+	caps := a.Adapter.Capabilities()
+	caps.SchemaSuppressesTools = true
+	return caps
+}
+
+// TestWorkerResultSchema_OmittedWhenItWouldSuppressTools (issue #716):
+// codex answered the Responses API with one schema-shaped message and
+// zero tool calls, so an adapter that declares the conflict is sent no
+// schema, while every other adapter still gets one.
+func TestWorkerResultSchema_OmittedWhenItWouldSuppressTools(t *testing.T) {
+	plain, ok := executor.Lookup("claude-cli")
+	if !ok {
+		t.Fatal("claude-cli adapter not registered")
+	}
+	if got := workerResultSchema(plain); len(got) == 0 {
+		t.Fatal("workerResultSchema for a normal adapter = empty, want the schema")
+	}
+	if got := reviewSchemaFor(plain); len(got) == 0 {
+		t.Fatal("reviewSchemaFor for a normal adapter = empty, want the schema")
+	}
+	suppressing := schemaSuppressingAdapter{Adapter: plain}
+	if got := workerResultSchema(suppressing); got != nil {
+		t.Fatalf("workerResultSchema for a schema-suppressing adapter = %s, want nil", got)
+	}
+	if got := reviewSchemaFor(suppressing); got != nil {
+		t.Fatalf("reviewSchemaFor for a schema-suppressing adapter = %s, want nil", got)
+	}
+}
+
+// TestCodexDeclaresSchemaSuppressesTools pins the adapter's own
+// declaration: the runner's behavior above hangs off it.
+func TestCodexDeclaresSchemaSuppressesTools(t *testing.T) {
+	codex, ok := executor.Lookup("codex-cli")
+	if !ok {
+		t.Fatal("codex-cli adapter not registered")
+	}
+	if !codex.Capabilities().SchemaSuppressesTools {
+		t.Fatal("codex-cli Capabilities().SchemaSuppressesTools = false, want true (issue #716)")
+	}
+	if workerResultSchema(codex) != nil {
+		t.Fatal("codex-cli is still sent a result schema")
+	}
+}
+
+// TestDelegatedSystemAppend_CarriesVerdictShapeWithoutSchema: with no
+// schema to enforce the shape, the system prompt must ask for it and
+// insist the work happens first (issue #716).
+func TestDelegatedSystemAppend_CarriesVerdictShapeWithoutSchema(t *testing.T) {
+	for _, want := range []string{`{"status"`, "DONE", "RETRY", "BLOCKED", "tools first"} {
+		if !strings.Contains(delegatedVerdictShapeAppend, want) {
+			t.Fatalf("delegatedVerdictShapeAppend does not mention %q: %s", want, delegatedVerdictShapeAppend)
+		}
+	}
+}
+
 // --- scenario 3b: DONE that changed nothing (issue #706) -----------------
 
 // TestDelegatedRunWorker_DoneWithCleanWorktree_ForcedFreshRetry: a DONE
