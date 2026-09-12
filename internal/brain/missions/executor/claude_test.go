@@ -397,6 +397,35 @@ func TestClaudeAdapter_BuildInvocation(t *testing.T) {
 			},
 		},
 		{
+			name: "max turns and thinking tokens set the flag and env (issue #720)",
+			spec: InvocationSpec{
+				Model: "sonnet", PromptPath: "/tmp/p.txt", AuthMode: AuthSubscription,
+				MaxTurns: 6, ThinkingTokens: 4000,
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if !containsFlagValue(inv.Argv, "--max-turns", "6") {
+					t.Errorf("argv %v missing --max-turns 6", inv.Argv)
+				}
+				if inv.Env["MAX_THINKING_TOKENS"] != "4000" {
+					t.Errorf("MAX_THINKING_TOKENS = %q, want 4000", inv.Env["MAX_THINKING_TOKENS"])
+				}
+			},
+		},
+		{
+			name: "zero max turns and thinking tokens leave the invocation unchanged (issue #720)",
+			spec: InvocationSpec{
+				Model: "sonnet", PromptPath: "/tmp/p.txt", AuthMode: AuthSubscription,
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if containsFlag(inv.Argv, "--max-turns") {
+					t.Errorf("argv %v must not carry --max-turns when MaxTurns is 0", inv.Argv)
+				}
+				if _, ok := inv.Env["MAX_THINKING_TOKENS"]; ok {
+					t.Error("MAX_THINKING_TOKENS must not be set when ThinkingTokens is 0")
+				}
+			},
+		},
+		{
 			name: "resume session id appends --resume flag (D-103, issue #499)",
 			spec: InvocationSpec{
 				Model: "sonnet", PromptPath: "/tmp/p.txt", AuthMode: AuthSubscription,

@@ -3691,3 +3691,29 @@ func TestParsePlanReadsLegacyVerifyCmd(t *testing.T) {
 		t.Fatalf("marshalled unit still carries verify_cmd: %s", out)
 	}
 }
+
+// TestDiscoverMaxSteps pins the discover shortcut (issue #720): a goal
+// that carries the operator's plan AND names its files gets a short
+// orientation; every other goal keeps the agent's default ceiling.
+func TestDiscoverMaxSteps(t *testing.T) {
+	cases := []struct {
+		name    string
+		hasPlan bool
+		goal    string
+		want    int
+	}{
+		{"plan naming files", true, "1. add internal/core/base62.go\n2. add internal/core/base62_test.go", specifiedGoalDiscoverSteps},
+		{"plan without file names", true, "1. design the scheme\n2. write it up", 0},
+		{"files without a plan", false, "make internal/core/base62.go shorter", 0},
+		{"neither", false, "research the shortener market", 0},
+		{"bare word with a dot is not a path", true, "1. update the README.md\n2. ship it", 0},
+		{"clone url alone is not a file list", true, "1. clone https://github.com/x/y.git\n2. read it", 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := discoverMaxSteps(Mission{HasPlan: tc.hasPlan, Goal: tc.goal}); got != tc.want {
+				t.Fatalf("discoverMaxSteps = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

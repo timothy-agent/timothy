@@ -207,6 +207,11 @@ type delegatedRunner struct {
 	// runBudgetFn, when set, is read once per launch and wins over
 	// runBudget: the settings-backed cap (issue #498).
 	runBudgetFn func(context.Context) time.Duration
+	// reviewMaxTurnsFn/thinkingTokensFn are the settings-backed CLI
+	// knobs read once per launch (issue #720); nil means neither is
+	// set on the spec, today's behaviour.
+	reviewMaxTurnsFn func(context.Context) int
+	thinkingTokensFn func(context.Context) int
 
 	mu       sync.Mutex
 	cooldown map[cooldownKey]time.Time
@@ -234,6 +239,30 @@ func NewDelegatedRunner(native Runner, resolveRoute routeResolver, resolveCred c
 // cmd/brain/main.go can pass the same *Store both runners share.
 func (r *delegatedRunner) SetProgressReader(pr ProgressReader) {
 	r.progressReader = pr
+}
+
+// SetExecutorKnobs wires the settings-backed CLI turn cap and thinking
+// budget (issue #720); either may be nil, leaving that knob unset.
+func (r *delegatedRunner) SetExecutorKnobs(reviewMaxTurns, thinkingTokens func(context.Context) int) {
+	r.reviewMaxTurnsFn, r.thinkingTokensFn = reviewMaxTurns, thinkingTokens
+}
+
+// effectiveReviewMaxTurns is the review run's CLI turn cap; 0 leaves
+// the CLI's own loop uncapped.
+func (r *delegatedRunner) effectiveReviewMaxTurns(ctx context.Context) int {
+	if r.reviewMaxTurnsFn == nil {
+		return 0
+	}
+	return r.reviewMaxTurnsFn(ctx)
+}
+
+// effectiveThinkingTokens is the per-turn thinking budget for a launch
+// happening now; 0 leaves the CLI's own default.
+func (r *delegatedRunner) effectiveThinkingTokens(ctx context.Context) int {
+	if r.thinkingTokensFn == nil {
+		return 0
+	}
+	return r.thinkingTokensFn(ctx)
 }
 
 // effectiveRunBudget is the wall-clock cap for a launch happening now.
@@ -303,7 +332,7 @@ const (
 // review_verdict tool, its structured result is the verdict channel,
 // and the read-only tool surface the adapter enforces is spelled out so
 // the model does not waste turns trying to edit.
-const delegatedReviewSystemAppend = " You are running as a delegated read-only CLI reviewer, not through a review_verdict tool. You may read files in the working directory to spot-check; you cannot modify files or run commands, so never try. End your turn by producing the required structured output: decision approve or rework, findings (each with title, file, detail, severity and quoted evidence) and the resolved ids of prior findings the work closed."
+const delegatedReviewSystemAppend = " You are running as a delegated read-only CLI reviewer, not through a review_verdict tool. The diff in the prompt is authoritative: judge the work from it, and read a file in the working directory only when the diff alone cannot settle a criterion. You cannot modify files or run commands, so never try. End your turn by producing the required structured output: decision approve or rework, findings (each with title, file, detail, severity and quoted evidence) and the resolved ids of prior findings the work closed."
 
 // runDelegatedReview resolves the review harness, route and entry, runs
 // the review packet through the CLI read-only, and parses its result as
@@ -351,6 +380,10 @@ func (r *delegatedRunner) runDelegatedReview(ctx context.Context, m Mission, pac
 		// ResumeSessionID stays empty: every review round is a cold
 		// session (D-092). ReadOnly is the enforced safety knob.
 		ReadOnly: true,
+		// issue #720: the reviewer judges a diff the prompt already
+		// carries, so its own agent loop is capped.
+		MaxTurns:       r.effectiveReviewMaxTurns(ctx),
+		ThinkingTokens: r.effectiveThinkingTokens(ctx),
 	}
 	if err := r.launchRun(ctx, m, run, workRoot, rdir, runID, spec, renderReviewContent(packet), nil, resumeDecision{reason: resumeReasonNoPriorRun}); err != nil {
 		if errors.Is(err, executor.ErrReadOnlyUnsupported) {
@@ -849,6 +882,9 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 			ResultSchema: workerResultSchema(adapter), RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
 			ResumeSessionID: decision.sessionID,
 			StateDir:        executorStateDir(m.Workspace, m.Harness),
+			// MaxTurns stays 0: a worker turn does the work, so only its
+			// thinking is budgeted (issue #720).
+			ThinkingTokens: r.effectiveThinkingTokens(ctx),
 		}
 		if err := r.launchRun(ctx, m, run, workRoot, rdir, runID, spec, user, refFiles, decision); err != nil {
 			return WorkerVerdict{}, "", err
@@ -982,6 +1018,9 @@ const (
 	resumeReasonSessionReset       = "session_reset"
 	resumeReasonAdapterUnsupported = "adapter_unsupported"
 	resumeReasonContainerRecreated = "container_recreated"
+	// resumeReasonPolicyFresh is the mission's own executor session
+	// policy asking for a cold session every unit (issue #720).
+	resumeReasonPolicyFresh = "policy_fresh"
 )
 
 // resumeDecision is what planSessionResume works out before a fresh
@@ -999,11 +1038,15 @@ type resumeDecision struct {
 // run (handled=false there means the prior run, if any, already reached
 // a terminal event or never existed), so a non-nil, Finished state
 // here means the prior run genuinely ended (executor.died, most often)
-// and this is a retry. Gates, in order: a prior run must exist for this
+// and this is a retry. Gates, in order: the mission's session policy
+// must not be fresh (issue #720); a prior run must exist for this
 // harness; it must have recorded a session id; the adapter must
 // support resume; and the SAME sandbox container (never recreated
 // since that run's launch) must still be alive.
 func (r *delegatedRunner) planSessionResume(ctx context.Context, m Mission, workRoot string, adapter executor.Adapter) resumeDecision {
+	if m.ExecutorSessionPolicy == SessionPolicyFresh {
+		return resumeDecision{reason: resumeReasonPolicyFresh}
+	}
 	if r.lastRun == nil {
 		return resumeDecision{reason: resumeReasonNoPriorRun}
 	}

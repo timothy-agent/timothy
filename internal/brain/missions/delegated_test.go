@@ -2941,3 +2941,134 @@ func TestRecordLedgerPrefersReportedModel(t *testing.T) {
 		})
 	}
 }
+
+// TestDelegatedRunWorker_SessionPolicyFreshStartsFresh covers issue
+// #720: a mission whose executor session policy is fresh never resumes,
+// even when every other resume gate would have passed.
+func TestDelegatedRunWorker_SessionPolicyFreshStartsFresh(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.containerAlive = true
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	sandbox.seedExitCode = 0
+	events := &fakeEventSink{}
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+	lastRun := diedRunLastRun("claude-cli", "prior-run-id", "/does/not/matter", "sess-prior-123")
+
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, lastRun, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+	m.ExecutorSessionPolicy = SessionPolicyFresh
+
+	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if strings.Contains(sandbox.lastLaunchCmd(), "--resume") {
+		t.Fatalf("fresh policy must not resume: %s", sandbox.lastLaunchCmd())
+	}
+	payload := spawnedPayload(t, events)
+	if payload["resumed"] != false {
+		t.Fatalf("executor.spawned resumed = %v, want false", payload["resumed"])
+	}
+	if payload["resume_reason"] != resumeReasonPolicyFresh {
+		t.Fatalf("executor.spawned resume_reason = %v, want %q", payload["resume_reason"], resumeReasonPolicyFresh)
+	}
+}
+
+// TestDelegatedRunWorker_SessionPolicyResumeUnchanged pins that the
+// default policy leaves the resume path exactly as it was (issue #720).
+func TestDelegatedRunWorker_SessionPolicyResumeUnchanged(t *testing.T) {
+	for _, policy := range []string{"", SessionPolicyResume} {
+		t.Run("policy="+policy, func(t *testing.T) {
+			sandbox := newFakeSandbox()
+			sandbox.containerAlive = true
+			sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+			sandbox.seedExitCode = 0
+			events := &fakeEventSink{}
+			entry := harnessEntry("subscription")
+			route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+			lastRun := diedRunLastRun("claude-cli", "prior-run-id", "/does/not/matter", "sess-prior-123")
+
+			r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, lastRun, &fakeLedger{})
+			m := testMission("m1", t.TempDir())
+			m.ExecutorSessionPolicy = policy
+
+			if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
+				t.Fatalf("RunWorker: %v", err)
+			}
+			payload := spawnedPayload(t, events)
+			if payload["resumed"] != true {
+				t.Fatalf("executor.spawned resumed = %v, want true", payload["resumed"])
+			}
+		})
+	}
+}
+
+// TestDelegatedExecutorKnobs covers issue #720: a review spec carries
+// the settings-backed turn cap and thinking budget, a worker spec
+// carries the thinking budget only.
+func TestDelegatedExecutorKnobs(t *testing.T) {
+	r := &delegatedRunner{}
+	ctx := testCtx(t)
+	if got := r.effectiveReviewMaxTurns(ctx); got != 0 {
+		t.Fatalf("unset reviewMaxTurns = %d, want 0", got)
+	}
+	if got := r.effectiveThinkingTokens(ctx); got != 0 {
+		t.Fatalf("unset thinkingTokens = %d, want 0", got)
+	}
+	r.SetExecutorKnobs(func(context.Context) int { return 6 }, func(context.Context) int { return 4000 })
+	if got := r.effectiveReviewMaxTurns(ctx); got != 6 {
+		t.Fatalf("reviewMaxTurns = %d, want 6", got)
+	}
+	if got := r.effectiveThinkingTokens(ctx); got != 4000 {
+		t.Fatalf("thinkingTokens = %d, want 4000", got)
+	}
+}
+
+// TestDelegatedKnobsReachTheLaunch covers issue #720 end to end: a
+// claude-cli review run's launch carries --max-turns and
+// MAX_THINKING_TOKENS, a worker run carries the thinking budget only.
+func TestDelegatedKnobsReachTheLaunch(t *testing.T) {
+	newRunner := func(events *fakeEventSink, sandbox *fakeSandbox) *delegatedRunner {
+		entry := harnessEntry("subscription")
+		route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+		r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+		r.SetExecutorKnobs(func(context.Context) int { return 6 }, func(context.Context) int { return 4000 })
+		return r
+	}
+
+	t.Run("review carries both", func(t *testing.T) {
+		sandbox := newFakeSandbox()
+		sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+		sandbox.seedExitCode = 0
+		r := newRunner(&fakeEventSink{}, sandbox)
+		m := testMission("m1", t.TempDir())
+		m.ReviewHarness = "claude-cli"
+		if _, err := r.RunReview(testCtx(t), m, ReviewPacket{Goal: "review"}); err != nil {
+			t.Fatalf("RunReview: %v", err)
+		}
+		cmd := sandbox.lastLaunchCmd()
+		if !strings.Contains(cmd, "--max-turns") || !strings.Contains(cmd, "6") {
+			t.Fatalf("review launch missing --max-turns 6: %s", cmd)
+		}
+		if sandbox.lastEnv["MAX_THINKING_TOKENS"] != "4000" {
+			t.Fatalf("review launch env MAX_THINKING_TOKENS = %q, want 4000", sandbox.lastEnv["MAX_THINKING_TOKENS"])
+		}
+	})
+
+	t.Run("worker carries the thinking budget only", func(t *testing.T) {
+		sandbox := newFakeSandbox()
+		sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+		sandbox.seedExitCode = 0
+		r := newRunner(&fakeEventSink{}, sandbox)
+		if _, _, err := r.RunWorker(testCtx(t), testMission("m1", t.TempDir()), WorkPacket{Goal: "test"}); err != nil {
+			t.Fatalf("RunWorker: %v", err)
+		}
+		cmd := sandbox.lastLaunchCmd()
+		if strings.Contains(cmd, "--max-turns") {
+			t.Fatalf("worker launch must not carry a turn cap: %s", cmd)
+		}
+		if sandbox.lastEnv["MAX_THINKING_TOKENS"] != "4000" {
+			t.Fatalf("worker launch env MAX_THINKING_TOKENS = %q, want 4000", sandbox.lastEnv["MAX_THINKING_TOKENS"])
+		}
+	})
+}

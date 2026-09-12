@@ -88,6 +88,15 @@ type InvocationSpec struct {
 	// with no such knob returns ErrReadOnlyUnsupported from
 	// BuildInvocation instead of pretending.
 	ReadOnly bool
+	// MaxTurns, when > 0, caps the CLI's own agent loop at that many
+	// turns (issue #720). Set for review runs, which judge a diff the
+	// prompt already carries; an adapter whose CLI has no such flag
+	// ignores it.
+	MaxTurns int
+	// ThinkingTokens, when > 0, caps the model's per-turn thinking
+	// budget (issue #720). An adapter whose CLI exposes no such knob
+	// ignores it.
+	ThinkingTokens int
 }
 
 // ErrReadOnlyUnsupported is returned by BuildInvocation when

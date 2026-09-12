@@ -7,6 +7,15 @@ const (
 	KindGeneral = "general"
 )
 
+// SessionPolicyResume and SessionPolicyFresh are Mission.
+// ExecutorSessionPolicy's values (issue #720): resume (the default,
+// "" means the same) carries the prior CLI session into the next unit;
+// fresh starts every run cold.
+const (
+	SessionPolicyResume = "resume"
+	SessionPolicyFresh  = "fresh"
+)
+
 // Flow names the phase set a mission runs, chosen once at create time
 // and snapshotted onto the row (D-090, issue #459): never model-
 // mutable, no tool or sentinel arg can change it.
