@@ -39,6 +39,12 @@ func (codexAdapter) Capabilities() Capabilities {
 		// resume --help`); BuildInvocation switches to that subcommand
 		// form when ResumeSessionID is set.
 		SupportsResume: true,
+		// issue #716: --output-schema on the Responses wire turns the
+		// turn into a single structured message with no function calls,
+		// so codex can never touch the worktree. The verdict is read
+		// from the trailing JSON object of its final message instead
+		// (buildResultEvent).
+		SchemaSuppressesTools: true,
 	}
 }
 

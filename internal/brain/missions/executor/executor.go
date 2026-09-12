@@ -41,6 +41,15 @@ type Capabilities struct {
 	// issue #499). False means the runner must never set
 	// ResumeSessionID for this adapter: it always starts fresh.
 	SupportsResume bool
+	// SchemaSuppressesTools declares that asking this CLI for a strict
+	// structured result costs it the ability to call tools at all, so
+	// the runner must not send ResultSchema (issue #716). Observed on
+	// codex against the Responses API: the turn comes back as one
+	// schema-shaped message with zero function calls, and the model
+	// says it was never allowed to run anything. Such an adapter reads
+	// its verdict out of the final message instead, so the contract
+	// still holds, one rung lower on the ladder.
+	SchemaSuppressesTools bool
 }
 
 // InvocationSpec is what the runner supplies to build one CLI invocation.
