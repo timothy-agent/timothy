@@ -168,7 +168,7 @@ func (a *GitHubAdapter) openPRFor(ctx context.Context, m missions.Mission, token
 	if base == "" {
 		return "", 0, fmt.Errorf("pr: repo has no default branch")
 	}
-	url, number, err = a.PR.CreatePR(ctx, connectorID, owner, repo, missions.PRTitle(m), m.Branch, base, PRBody(m, a.attribution(ctx)))
+	url, number, err = a.PR.CreatePR(ctx, connectorID, owner, repo, missions.ConventionalPRTitle(m), m.Branch, base, PRBody(m, a.attribution(ctx)))
 	if err != nil {
 		return "", 0, fmt.Errorf("pr: %w", err)
 	}

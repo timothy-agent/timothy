@@ -40,6 +40,7 @@ type fakePRSource struct {
 	prNumber      int
 	createErr     error
 	createCalls   int
+	lastTitle     string
 
 	repoExists      bool
 	existsErr       error
@@ -53,8 +54,9 @@ func (f *fakePRSource) DefaultBranch(_ context.Context, _, _, _ string) (string,
 	return f.defaultBranch, f.defaultErr
 }
 
-func (f *fakePRSource) CreatePR(_ context.Context, _, _, _, _, _, _, _ string) (string, int, error) {
+func (f *fakePRSource) CreatePR(_ context.Context, _, _, _, title, _, _, _ string) (string, int, error) {
 	f.createCalls++
+	f.lastTitle = title
 	if f.createErr != nil {
 		return "", 0, f.createErr
 	}
@@ -360,6 +362,7 @@ func TestDeliverMissionModes(t *testing.T) {
 	t.Run("push_pr records branch, pr url and number", func(t *testing.T) {
 		t.Parallel()
 		m := pushableMission(t)
+		m.Name = "Molla-go URL Shortener Design"
 		p := &fakePusher{host: "github.com"}
 		pr := &fakePRSource{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/1", prNumber: 1}
 		resolveToken := func(context.Context, string) (string, error) { return "tok", nil }
@@ -372,6 +375,9 @@ func TestDeliverMissionModes(t *testing.T) {
 		}
 		if e.PRURL != "https://github.com/octo/repo/pull/1" || e.PRNumber != 1 {
 			t.Fatalf("entry after push_pr = %+v", e)
+		}
+		if pr.lastTitle != "feat: molla-go url shortener design" {
+			t.Fatalf("PR title = %q, want a Conventional Commits title (issue #709)", pr.lastTitle)
 		}
 	})
 
