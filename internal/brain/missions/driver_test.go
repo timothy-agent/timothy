@@ -1559,6 +1559,55 @@ func TestDriverReworkUntouchedEvent(t *testing.T) {
 	}
 }
 
+// TestDriverRetryRollbackOnlyForWorkerDeclaredRetry (issue #706): a
+// forced retry (transport death, idle or run-budget kill, unreadable
+// result) keeps the worktree's edits; only a RETRY the worker declared
+// rolls them back.
+func TestDriverRetryRollbackOnlyForWorkerDeclaredRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		verdict  WorkerVerdict
+		wantKept bool
+	}{
+		{"forced retry keeps the tree", forcedRetryVerdict("executor process was lost"), true},
+		{"worker retry rolls back", WorkerVerdict{Outcome: "retry", Analysis: "wrong approach"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			wt := filepath.Join(root, "wt")
+			if err := os.MkdirAll(wt, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			gitRun(t, wt, "init", "-q", "-b", "main")
+			if err := os.WriteFile(filepath.Join(wt, "base.go"), []byte("package x\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			gitRun(t, wt, "add", "base.go")
+			gitRun(t, wt, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "base")
+			store := newFakeStore()
+			store.put("m1", Mission{
+				ID: "m1", Kind: "coding", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8,
+				Workspace: root, Plan: Plan{Units: []PlanUnit{{Title: "u1"}}},
+			})
+			runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{tc.verdict}}
+			workspace := NewWorkspace(root, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			d := NewDriver(store, runner, workspace, nil, nil, nil, fakeSandboxExec, nil, slog.Default())
+			edited := filepath.Join(wt, "x.go")
+			if err := os.WriteFile(edited, []byte("package x\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := d.Advance(context.Background(), "m1"); err != nil {
+				t.Fatalf("Advance: %v", err)
+			}
+			_, statErr := os.Stat(edited)
+			if kept := statErr == nil; kept != tc.wantKept {
+				t.Fatalf("x.go kept = %v, want %v", kept, tc.wantKept)
+			}
+		})
+	}
+}
+
 // TestDriverReplanOnFirstStall confirms a mission's FIRST stall (two
 // identical-fingerprint worker retries, ReplanUsed still false) goes
 // back to planning instead of pausing, the driver-level counterpart of

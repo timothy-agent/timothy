@@ -142,6 +142,9 @@ type runState struct {
 	// polling it, only (if genuinely still needed) treat it as already
 	// decided.
 	Finished bool
+	// SessionReset is true when the latest run's executor.result carried
+	// session_reset (issue #706): its session must not be resumed.
+	SessionReset bool
 	// SessionID is the harness's own CLI session id (issue #499),
 	// recorded by the executor.session event once the run's first
 	// KindSystem line reported one. Empty when the run died before any
@@ -343,11 +346,12 @@ func (r *delegatedRunner) runDelegatedReview(ctx context.Context, m Mission, pac
 		SystemAppend: reviewSystemPrompt + delegatedReviewSystemAppend,
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
 		ResultSchema: reviewVerdictSchema, RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
+		StateDir: executorStateDir(m.Workspace, m.ReviewHarness),
 		// ResumeSessionID stays empty: every review round is a cold
 		// session (D-092). ReadOnly is the enforced safety knob.
 		ReadOnly: true,
 	}
-	if err := r.launchRun(ctx, m, run, workRoot, rdir, runID, spec, renderReviewContent(packet), resumeDecision{reason: resumeReasonNoPriorRun}); err != nil {
+	if err := r.launchRun(ctx, m, run, workRoot, rdir, runID, spec, renderReviewContent(packet), nil, resumeDecision{reason: resumeReasonNoPriorRun}); err != nil {
 		if errors.Is(err, executor.ErrReadOnlyUnsupported) {
 			return ReviewVerdict{}, fallbackRefused, err
 		}
@@ -385,7 +389,7 @@ func (r *delegatedRunner) finishReview(ctx context.Context, m Mission, run cliRu
 	if perr != nil {
 		parseKind = "none"
 	}
-	authErr := r.finishCommon(ctx, m, run, st, start, exitCode, parseKind, decision)
+	authErr := r.finishCommon(ctx, m, run, st, start, exitCode, parseKind, decision, false)
 	if authErr != nil {
 		return ReviewVerdict{}, fallbackAuthFailed, authErr
 	}
@@ -671,6 +675,14 @@ func (r *delegatedRunner) resolveCredential(ctx context.Context, ref string, cap
 	return executor.AuthAPIKey, key, nil
 }
 
+// executorStateDir is the per-mission home a CLI keeps its session
+// state in across runs (issue #707): a sibling of runs/, outside the
+// worktree, one per harness so a review harness never shares state
+// with the worker's.
+func executorStateDir(missionRoot, harness string) string {
+	return filepath.Join(missionRoot, "executor", harness)
+}
+
 // runDir builds the per-run scratch directory path as a sibling of the
 // worktree, under the mission's own directory (Mission.Workspace) rather
 // than inside the git worktree itself — keeps it out of git
@@ -690,6 +702,9 @@ func runDir(missionRoot, runID string) string {
 func writeInvocationFiles(rdir string, files map[string]string) error {
 	for rel, content := range files {
 		full := filepath.Join(rdir, rel)
+		if filepath.IsAbs(rel) {
+			full = rel // a StateDir file (issue #707), shared across runs
+		}
 		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
 			return err
 		}
@@ -787,7 +802,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		return WorkerVerdict{}, "", err
 	}
 	rdir := runDir(m.Workspace, runID)
-	system, user := packet.RenderForDelegated()
+	system, user, refFiles := packet.RenderForDelegated(rdir)
 	system += delegatedSystemAppend
 
 	decision := r.planSessionResume(ctx, m, workRoot, adapter)
@@ -800,8 +815,9 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		AllowTools: delegatedAllowTools, DenyTools: delegatedDenyTools,
 		ResultSchema: resultSchemaJSON, RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
 		ResumeSessionID: decision.sessionID,
+		StateDir:        executorStateDir(m.Workspace, m.Harness),
 	}
-	if err := r.launchRun(ctx, m, run, workRoot, rdir, runID, spec, user, decision); err != nil {
+	if err := r.launchRun(ctx, m, run, workRoot, rdir, runID, spec, user, refFiles, decision); err != nil {
 		return WorkerVerdict{}, "", err
 	}
 
@@ -813,7 +829,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 // CLI detached. Shared by worker and review runs (issue #582). Only a
 // spawn failure cools the entry down: the file and invocation errors
 // before it are local to this brain, not the provider's fault.
-func (r *delegatedRunner) launchRun(ctx context.Context, m Mission, run cliRun, workRoot, rdir, runID string, spec executor.InvocationSpec, user string, decision resumeDecision) error {
+func (r *delegatedRunner) launchRun(ctx context.Context, m Mission, run cliRun, workRoot, rdir, runID string, spec executor.InvocationSpec, user string, refFiles map[string]string, decision resumeDecision) error {
 	inv, err := run.adapter.BuildInvocation(spec)
 	if err != nil {
 		return fmt.Errorf("delegated runner: build invocation: %w", err)
@@ -826,6 +842,11 @@ func (r *delegatedRunner) launchRun(ctx context.Context, m Mission, run cliRun, 
 	}
 	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte(user), 0o600); err != nil {
 		return fmt.Errorf("delegated runner: write prompt: %w", err)
+	}
+	// refFiles are the prompt's lineage and reference documents (issue
+	// #705), read by the CLI on demand from rdir/refs rather than inlined.
+	if err := writeInvocationFiles(rdir, refFiles); err != nil {
+		return fmt.Errorf("delegated runner: write reference files: %w", err)
 	}
 	if err := writeInvocationFiles(rdir, inv.Files); err != nil {
 		return fmt.Errorf("delegated runner: write invocation files: %w", err)
@@ -897,6 +918,7 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 const (
 	resumeReasonNoPriorRun         = "no_prior_run"
 	resumeReasonNoSessionID        = "no_session_id"
+	resumeReasonSessionReset       = "session_reset"
 	resumeReasonAdapterUnsupported = "adapter_unsupported"
 	resumeReasonContainerRecreated = "container_recreated"
 )
@@ -927,6 +949,9 @@ func (r *delegatedRunner) planSessionResume(ctx context.Context, m Mission, work
 	state, err := r.lastRun(ctx, m.ID)
 	if err != nil || state == nil || state.Harness != m.Harness {
 		return resumeDecision{reason: resumeReasonNoPriorRun}
+	}
+	if state.SessionReset {
+		return resumeDecision{reason: resumeReasonSessionReset}
 	}
 	if state.SessionID == "" {
 		return resumeDecision{reason: resumeReasonNoSessionID}
@@ -1485,9 +1510,21 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, run cliRun, st 
 			verdict = forcedRetryVerdict("executor finished without a status report")
 		}
 	}
+	// A DONE that left the worktree exactly as it found it is a
+	// refusal, not a result (issue #706): the CLI read its prompt and
+	// concluded the unit was already finished. Nothing to verify, so
+	// the harness artifact check would only catch it one turn later and
+	// then resume the same session that already decided. Forced retry
+	// instead, and the session is reset so the next run starts fresh.
+	// A nil summary (no git worktree) proves nothing and passes through.
+	sessionReset := false
+	if ok && verdict.Outcome == "done" && st.worktree != nil && st.worktree.Untracked == 0 && st.worktree.Modified == 0 {
+		verdict = forcedRetryVerdict("executor reported DONE but changed nothing in the worktree; the unit is not done")
+		sessionReset = true
+	}
 	stampServed(&verdict, run, st)
 
-	if err := r.finishCommon(ctx, m, run, st, start, exitCode, parseKind, strings.ToUpper(verdict.Outcome)); err != nil {
+	if err := r.finishCommon(ctx, m, run, st, start, exitCode, parseKind, strings.ToUpper(verdict.Outcome), sessionReset); err != nil {
 		return WorkerVerdict{}, st.textBuf.String(), err
 	}
 	return verdict, st.textBuf.String(), nil
@@ -1498,7 +1535,7 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, run cliRun, st 
 // check, which cools the entry down and returns ErrExecutorAuth since
 // retrying the same entry is futile. status is the parsed verdict
 // (DONE/RETRY/BLOCKED for a worker, APPROVE/REWORK for a review).
-func (r *delegatedRunner) finishCommon(ctx context.Context, m Mission, run cliRun, st *pollState, start time.Time, exitCode int, parseKind, status string) error {
+func (r *delegatedRunner) finishCommon(ctx context.Context, m Mission, run cliRun, st *pollState, start time.Time, exitCode int, parseKind, status string, sessionReset bool) error {
 	authFailed := st.resultEvent.Err != "" && isAuthFailure(st.resultEvent.Err)
 	errorCode := ""
 	if authFailed {
@@ -1516,7 +1553,7 @@ func (r *delegatedRunner) finishCommon(ctx context.Context, m Mission, run cliRu
 	// different, provider-priced figure or none at all, so the UI must
 	// not present the raw CLI number as billed.
 	cliCostTrusted := run.authMode == executor.AuthAPIKey && run.entry.Driver == "anthropic" && run.adapter.Capabilities().ReportsCost
-	r.recordResult(ctx, m.ID, run.phase, st, start, exitCode, st.resultEvent, parseKind, status, cliCostTrusted)
+	r.recordResult(ctx, m.ID, run.phase, st, start, exitCode, st.resultEvent, parseKind, status, cliCostTrusted, sessionReset)
 	r.recordLedger(ctx, m, run, st.resultEvent.Usage, start, exitCode == 0 && st.resultEvent.Err == "", errorCode, st.reportedModel)
 	if authFailed {
 		r.coolDown(run.harness, run.entry)
@@ -1558,6 +1595,19 @@ func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, run cli
 		return "", fmt.Errorf("%w: %s", ErrExecutorAuth, stderrTail)
 	}
 
+	if exitCode != 0 && isSessionLost(stderrTail) {
+		// The CLI could not find the session it was asked to resume
+		// (issue #707). The provider did nothing wrong, so no cooldown;
+		// session_reset makes LastRunState start the next run fresh.
+		payload := map[string]any{
+			"reason": "session_lost", "stderr_tail": NeutralizeSlot(truncate(stderrTail, 2000)),
+			"phase": run.phase, "exit_code": exitCode, "session_reset": true,
+		}
+		r.recordEventForce(ctx, m.ID, "executor.died", payload)
+		r.recordLedger(ctx, m, run, nil, start, false, "", st.reportedModel)
+		return "executor could not find the session it was asked to resume; the next run starts fresh", nil
+	}
+
 	r.recordDied(ctx, m.ID, run.phase, "transport_death", &exitCode, stderrTail)
 	r.recordLedger(ctx, m, run, nil, start, false, "", st.reportedModel)
 	r.coolDown(run.harness, run.entry)
@@ -1583,6 +1633,21 @@ var authFailureSignatures = []string{
 	"invalid api key",
 	"please run /login",
 	"authentication_error",
+}
+
+// sessionLostSignatures are the stderr lines a CLI prints when a
+// resume names a session it no longer has (codex, claude).
+var sessionLostSignatures = []string{"no rollout found", "no conversation found"}
+
+// isSessionLost reports whether text carries a lost-session signature.
+func isSessionLost(text string) bool {
+	lower := strings.ToLower(text)
+	for _, sig := range sessionLostSignatures {
+		if strings.Contains(lower, sig) {
+			return true
+		}
+	}
+	return false
 }
 
 func isAuthFailure(text string) bool {
@@ -1668,11 +1733,17 @@ func (r *delegatedRunner) recordProgressThrottled(ctx context.Context, missionID
 // cost_usd is priced against Anthropic's table and was never booked at
 // all). The UI keys off this to avoid presenting an unbooked number as
 // billed.
-func (r *delegatedRunner) recordResult(ctx context.Context, missionID, phase string, st *pollState, start time.Time, exitCode int, ev executor.Event, parseKind, status string, cliCostTrusted bool) {
+func (r *delegatedRunner) recordResult(ctx context.Context, missionID, phase string, st *pollState, start time.Time, exitCode int, ev executor.Event, parseKind, status string, cliCostTrusted, sessionReset bool) {
 	payload := map[string]any{
 		"status": status, "is_error": ev.Err != "",
 		"duration_ms": time.Since(start).Milliseconds(),
 		"exit_code":   exitCode, "parse": parseKind, "phase": phase,
+		"tool_calls": st.toolCalls,
+	}
+	if sessionReset {
+		// issue #706: the run reported DONE without changing anything;
+		// LastRunState reads this so the next run never resumes it.
+		payload["session_reset"] = true
 	}
 	if len(ev.Denials) > 0 {
 		payload["denials"] = ev.Denials

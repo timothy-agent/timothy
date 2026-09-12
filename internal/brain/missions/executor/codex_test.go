@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -302,6 +303,30 @@ func TestCodexAdapter_BuildInvocation(t *testing.T) {
 					t.Errorf("CODEX_HOME = %q, want /tmp/run/codex-home", inv.Env["CODEX_HOME"])
 				}
 				assertCodexConfigTOML(t, inv, "http://host.docker.internal:11434/v1")
+			},
+		},
+		{
+			name: "state dir hosts codex home across runs",
+			spec: InvocationSpec{
+				Model: "gpt-5.3-codex", PromptPath: "/ws/runs/r1/prompt.md", Workdir: "/ws/wt",
+				AuthMode: AuthAPIKey, APIKey: "sk-test", Wire: "openai",
+				StateDir: "/ws/executor/codex-cli", ResultSchema: json.RawMessage(`{"type":"object"}`), SystemAppend: "rules",
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if inv.Env["CODEX_HOME"] != "/ws/executor/codex-cli" {
+					t.Errorf("CODEX_HOME = %q, want the state dir", inv.Env["CODEX_HOME"])
+				}
+				for _, name := range []string{"config.toml", "schema.json", "AGENTS.md"} {
+					if _, ok := inv.Files["/ws/executor/codex-cli/"+name]; !ok {
+						t.Errorf("Files lacks %s under the state dir: %v", name, keys(inv.Files))
+					}
+				}
+				if _, ok := inv.Files["codex-home/config.toml"]; ok {
+					t.Error("Files still carries a run-local codex-home/config.toml")
+				}
+				if !slices.Contains(inv.Argv, "/ws/executor/codex-cli/schema.json") {
+					t.Errorf("argv --output-schema does not point into the state dir: %v", inv.Argv)
+				}
 			},
 		},
 		{
@@ -613,4 +638,13 @@ func flagIndex(argv []string, flag string) int {
 		}
 	}
 	return -1
+}
+
+func keys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
 }

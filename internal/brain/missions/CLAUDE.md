@@ -128,4 +128,19 @@ CLAUDE.md so other work does not pay for it every session.
   failure, auth failure), never on local file errors, idle or
   run-budget kills. Gateway no-failover codes (400/404/413/422,
   invalid_request) surface as `ErrProviderRejected` and pause as infra.
+- A delegated DONE over an untouched worktree (WT summary clean) is a
+  forced retry with `session_reset` on `executor.result` (issue #706);
+  `LastRunState` reads it and the next run starts fresh. Forced
+  retries never roll the worktree back; only a worker-declared RETRY
+  or a review rework does.
+- CLI session state lives in `<workspace>/executor/<harness>`
+  (`InvocationSpec.StateDir`, issue #707): codex's CODEX_HOME is shared
+  by every run of a mission so `codex exec resume` finds its rollout.
+  A resume whose stderr says the session is gone dies as
+  `session_lost` with `session_reset`, no cooldown, next run fresh.
+- `RenderForDelegated(runDir)` (issue #705) orders the CLI prompt goal,
+  lineage line, reference list, plan, findings, progress, git log,
+  attachments, then the current unit last with artifacts and verify
+  command. Parent digest and references are files under `runs/<id>/refs/`
+  (returned as files, written by `launchRun`), never inline.
 - `make canary` is the regression gate for any harness change.
