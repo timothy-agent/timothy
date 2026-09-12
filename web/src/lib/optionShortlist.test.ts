@@ -91,6 +91,44 @@ describe('parseOptionShortlist', () => {
     expect(parseOptionShortlist('   \n\n')).toBeNull()
   })
 
+  it('folds a continuation into a field whose own line carried no text', () => {
+    const text = option('Empty Label', 'Line one.').replace(
+      '**Build:** Go service plus a React panel.',
+      '**Build:**\nGo service plus a React panel.',
+    )
+    const parsed = parseOptionShortlist(text)
+    expect(parsed!.options[0].fields[3].text).toBe('Go service plus a React panel.')
+  })
+
+  it('ignores a level-2 section that is not the dropped list', () => {
+    const text = [option('Kept', 'A kept idea.'), '## Notes', '- not a dropped entry'].join('\n')
+    const parsed = parseOptionShortlist(text)
+    expect(parsed!.options).toHaveLength(1)
+    expect(parsed!.dropped).toBeUndefined()
+  })
+
+  it('leaves dropped unset when the section carries no entries', () => {
+    const text = [option('Kept', 'A kept idea.'), '## Dropped', '', '   '].join('\n')
+    const parsed = parseOptionShortlist(text)
+    expect(parsed!.options).toHaveLength(1)
+    expect(parsed!.dropped).toBeUndefined()
+  })
+
+  it('parses dropped entries written as plain lines', () => {
+    const text = [
+      option('Kept', 'A kept idea.'),
+      '## Dropped',
+      '',
+      'Prompt Wrapper: thin wrapper, no agent work.',
+      'violates R3 (team size)',
+    ].join('\n')
+    const parsed = parseOptionShortlist(text)
+    expect(parsed!.dropped!.entries).toEqual([
+      { name: 'Prompt Wrapper', reason: 'thin wrapper, no agent work.' },
+      { reason: 'violates R3 (team size)' },
+    ])
+  })
+
   it('ignores headings inside fenced code blocks', () => {
     const text = ['# Doc', '', '```md', option('Fenced', 'Inside a fence.'), '```'].join('\n')
     expect(parseOptionShortlist(text)).toBeNull()
@@ -107,6 +145,18 @@ describe('followUpGoal', () => {
         'Objective: Routes alerts.',
         'Scope: Go service plus a React panel.',
       ].join('\n'),
+    )
+  })
+
+  it('omits the scope line when the option carries no build text', () => {
+    const parsed = parseOptionShortlist(
+      option('No Build', 'Just an objective.').replace(
+        '**Build:** Go service plus a React panel.',
+        '**Build:**',
+      ),
+    )
+    expect(followUpGoal(parsed!.options[0])).toBe(
+      ['Build "No Build".', '', 'Objective: Just an objective.'].join('\n'),
     )
   })
 })

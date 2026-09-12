@@ -63,7 +63,6 @@ function parseDropped(body: string[]): DroppedEntry[] {
     if (line === '') continue
     const item = /^(?:[-*+]|\d+\.)\s+(.*)$/.exec(line)
     const text = item ? item[1].trim() : line
-    if (text === '') continue
     const named = /^\*\*(.+?):?\*\*:?\s*(.*)$/.exec(text)
     if (named && named[2].trim() !== '') {
       entries.push({ name: named[1].trim(), reason: named[2].trim() })
