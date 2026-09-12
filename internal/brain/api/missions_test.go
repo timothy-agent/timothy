@@ -423,6 +423,48 @@ func TestMissionsCreateValidatesRepoURL(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateRejectsUnknownFields covers the strict decode: a
+// key the request struct doesn't carry (an invented "sources" array, a
+// misspelled "repoURL") 400s at decode time instead of being dropped,
+// which used to create a mission missing the setting the caller thought
+// they'd sent and fail it minutes later for an unrelated reason.
+func TestMissionsCreateRejectsUnknownFields(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+
+	post := func(body string) (int, string) {
+		m := mux(a)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+
+	for _, body := range []string{
+		`{"goal":"g","kind":"coding","sources":[{"source":"github","repo_url":"https://github.com/o/r"}]}`,
+		`{"goal":"g","kind":"coding","repoURL":"https://github.com/o/r"}`,
+	} {
+		code, got := post(body)
+		if code != 400 {
+			t.Fatalf("%s = %d, want 400", body, code)
+		}
+		if !strings.Contains(got, "unknown field") {
+			t.Fatalf("%s error = %q, want an unknown field message", body, got)
+		}
+	}
+
+	// A body of known keys only still reaches goal validation rather
+	// than tripping the decoder.
+	if code, got := post(`{"kind":"coding","repo_url":"https://github.com/o/r","connector_id":"1"}`); code != 400 || !strings.Contains(got, "goal is required") {
+		t.Fatalf("known-keys body = %d %q, want 400 goal is required", code, got)
+	}
+}
+
 // TestMissionsCreateValidatesParentMission covers the follow-up gate:
 // an unresolvable parent_mission_id 400s ("parent mission not found")
 // before Driver.Create is ever reached — against a degraded pool
