@@ -377,6 +377,41 @@ func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
 	}
 }
 
+// TestResolveDetailSkipsResponsesOnlyModelOnChatDriver (issue #708): a
+// catalog model in Responses-only mode is unusable on an openaicompat
+// row, whose native calls go to chat/completions, but stays usable on
+// an openai-responses row for the same model.
+func TestResolveDetailSkipsResponsesOnlyModelOnChatDriver(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "openai", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.com/v1",
+			DefaultModel: "gpt-5.3-codex", CredentialRef: "OPENAI_KEY", Enabled: true},
+		{ID: "p2", Name: "openai-responses", Kind: "api", Driver: "openai-responses", BaseURL: "https://api.openai.com/v1",
+			DefaultModel: "gpt-5.3-codex", CredentialRef: "OPENAI_KEY", Enabled: true},
+	}
+	routeRows := []RouteRow{{Name: "builder", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "gpt-5.3-codex"},
+		{ProviderID: "p2", Model: "gpt-5.3-codex"},
+	}, Enabled: true}}
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("gpt-5.3-codex", "responses", nil)}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
+
+	d := snap.ResolveDetail("builder")
+	if len(d) != 2 {
+		t.Fatalf("ResolveDetail = %d entries, want 2", len(d))
+	}
+	if d[0].Usable || !strings.HasPrefix(d[0].SkipReason, "responses_only") {
+		t.Fatalf("chat row = usable %v, skip %q; want unusable with a responses_only reason", d[0].Usable, d[0].SkipReason)
+	}
+	if !d[1].Usable {
+		t.Fatalf("openai-responses row skip = %q, want usable", d[1].SkipReason)
+	}
+	attempts, err := snap.Resolve("builder", "", Sticky{})
+	if err != nil || len(attempts) != 1 || attempts[0].ProviderName != "openai-responses" {
+		t.Fatalf("Resolve = %d attempts, %v; want only the openai-responses row", len(attempts), err)
+	}
+}
+
 // TestResolveVisionRejectsModelDeclaringOnlyChat confirms a catalog
 // model that does NOT declare SupportsVision is skipped when the
 // caller asks for CapVision as an extra requirement (D-045) — the
