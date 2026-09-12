@@ -235,6 +235,40 @@ func TestAttachmentResolverResolvePDFEnrichmentSidecarFailureKeepsMarkdown(t *te
 	}
 }
 
+// TestAttachmentResolverResolvePDFEnrichDisabledLeavesMarkdownUnchanged
+// confirms a PDF attachment with r.enrich wired but Enabled() false
+// (the settings default-off state) never calls the captioner and
+// keeps the markitdown conversion unchanged (issue #350).
+func TestAttachmentResolverResolvePDFEnrichDisabledLeavesMarkdownUnchanged(t *testing.T) {
+	t.Parallel()
+
+	fa := &fakeMissionAttachments{
+		byID: map[string]attachments.Attachment{"doc1": {ID: "doc1", Mime: "application/pdf"}},
+		data: map[string][]byte{"doc1": []byte("%PDF-1.4")},
+	}
+	sidecar := fakePDFMarkitdownServer(t, "# converted", markitdown.PDFImagesResult{
+		Pages: []markitdown.PDFPage{{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}}},
+	})
+	captioned := false
+	enrich := &kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { captioned = true; return "a flowchart" },
+		Enabled: func(context.Context) bool { return false },
+		Log:     discardLog(),
+	}
+	r := &attachmentResolver{store: fa, markitdownURL: sidecar.URL, markitdownHTTP: sidecar.Client(), enrich: enrich}
+
+	out, err := r.Resolve(context.Background(), []missionAttachmentInput{{ID: "doc1", Name: "spec.pdf"}})
+	if err != nil {
+		t.Fatalf("Resolve() unexpected error: %v", err)
+	}
+	if len(out) != 1 || out[0].Markdown != "# converted" {
+		t.Fatalf("Markdown = %+v, want unchanged when captioning disabled", out)
+	}
+	if captioned {
+		t.Fatal("captioner called despite Enabled() returning false")
+	}
+}
+
 // fakePDFMarkitdownServer serves /convert with markdown and /pdf/images
 // with res, JSON-encoded, matching the sidecar's two-endpoint shape.
 func fakePDFMarkitdownServer(t *testing.T, markdown string, res markitdown.PDFImagesResult) *httptest.Server {

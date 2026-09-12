@@ -255,3 +255,42 @@ func TestFetchReadablePDFCaptionsEmbeddedImages(t *testing.T) {
 		t.Fatalf("got %q, want it to contain the embedded image's caption", got)
 	}
 }
+
+// TestFetchReadablePDFEnrichDisabledLeavesMarkdownUnchanged confirms a
+// fetched PDF with Enrich wired but Enabled() false (the settings
+// default-off state) never calls the captioner and returns the
+// markitdown conversion unchanged (issue #350).
+func TestFetchReadablePDFEnrichDisabledLeavesMarkdownUnchanged(t *testing.T) {
+	t.Parallel()
+	md := fakeMarkitdown(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/pdf/images" {
+			_ = json.NewEncoder(w).Encode(markitdown.PDFImagesResult{
+				Pages: []markitdown.PDFPage{{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}}},
+			})
+			return
+		}
+		_, _ = w.Write([]byte(`{"markdown": "# Q3 Report\n\nRevenue grew."}`))
+	})
+	pdf := fakeMarkitdown(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		_, _ = w.Write([]byte("%PDF-1.7 fake"))
+	})
+	captioned := false
+	enrich := &kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { captioned = true; return "a flowchart" },
+		Enabled: func(context.Context) bool { return false },
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	got, err := fetchReadable(context.Background(), pdf.Client(), md.URL, enrich, pdf.URL)
+	if err != nil {
+		t.Fatalf("fetchReadable: %v", err)
+	}
+	if got != "# Q3 Report\n\nRevenue grew." {
+		t.Fatalf("got %q, want markdown unchanged when captioning disabled", got)
+	}
+	if captioned {
+		t.Fatal("captioner called despite Enabled() returning false")
+	}
+}

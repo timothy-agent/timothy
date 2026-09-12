@@ -449,6 +449,49 @@ func TestChatPDFAttachmentCaptionsEmbeddedImages(t *testing.T) {
 	}
 }
 
+// TestChatPDFAttachmentEnrichDisabledLeavesMarkdownUnchanged confirms
+// a PDF attachment with SetKBEnrich wired but Enabled() false (the
+// settings.KeyKBImageCaptioning default-off state) never calls the
+// captioner and persists the markitdown conversion unchanged.
+func TestChatPDFAttachmentEnrichDisabledLeavesMarkdownUnchanged(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("read your pdf")}
+	svc := newService(gw, log)
+	fa := newFakeAttachments()
+	fa.seed("doc1", "application/pdf", []byte("%PDF-1.4 fake"))
+	svc.SetAttachments(fa)
+	md := fakePDFMarkitdown(t, "# Converted Title", markitdown.PDFImagesResult{
+		Pages: []markitdown.PDFPage{{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}}},
+	})
+	svc.SetMarkitdown(md.URL)
+	captioned := false
+	svc.SetKBEnrich(&kb.Enricher{
+		Caption: func(context.Context, string, []byte) string { captioned = true; return "a flowchart" },
+		Enabled: func(context.Context) bool { return false },
+		Log:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "summarize", Attachments: []AttachmentRef{{ID: "doc1"}}})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+	waitFor(t, func() bool { return len(log.kinds("s1")) == 3 })
+
+	events, _ := log.Events(t.Context(), "s1")
+	var um session.UserMessage
+	if err := json.Unmarshal(events[1].Payload, &um); err != nil {
+		t.Fatalf("decode user_message: %v", err)
+	}
+	if len(um.Documents) != 1 || um.Documents[0].Markdown != "# Converted Title" {
+		t.Fatalf("documents = %+v, want markdown unchanged when captioning disabled", um.Documents)
+	}
+	if captioned {
+		t.Fatal("captioner called despite Enabled() returning false")
+	}
+}
+
 // TestChatPDFAttachmentWithoutMarkitdownIsBadRequest confirms a PDF
 // ref 400s when the sidecar isn't wired (MARKITDOWN_URL unset) —
 // SetMarkitdown never called, so s.markitdownURL stays "".
