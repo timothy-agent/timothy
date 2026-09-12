@@ -39,6 +39,27 @@ var ErrExecutorAuth = errors.New("executor: authentication failed")
 // to native on it, only the driver's infra pause.
 var ErrGatewayUnavailable = errors.New("delegated runner: gateway unavailable")
 
+// ExecutorUnavailableError reports that a mission asked for a harness
+// and no chain entry can serve it right now (issue #704): cooled down,
+// unusable, pinned entry gone, route resolve failed, or the harness
+// is unknown. A requested harness is a contract, so RunWorker never
+// falls back to a native turn; the driver pauses the mission as infra
+// with Reason, and Until (zero when the reason has no expiry) tells
+// the sweep when a retry can succeed.
+type ExecutorUnavailableError struct {
+	Harness string
+	Reason  string
+	Until   time.Time
+}
+
+func (e *ExecutorUnavailableError) Error() string {
+	msg := e.Harness + ": " + e.Reason
+	if !e.Until.IsZero() {
+		msg += "; retry after " + e.Until.UTC().Format(time.RFC3339)
+	}
+	return msg
+}
+
 // D-052: the delegated run protocol. A launch is one detached sandboxd
 // exec (setsid + nohup-style backgrounding via `&`, pid captured to a
 // file) so the CLI keeps running past the 60s ExecEnv call that started
@@ -434,41 +455,42 @@ func (r *delegatedRunner) pickEntry(entries []gwclient.ResolvedRouteEntry, harne
 	return gwclient.ResolvedRouteEntry{}, fallbackNoUsableEntry
 }
 
-// RunWorker dispatches on m.Harness (D-051 rework): "" defers straight
-// to native.RunWorker (which itself lets the gateway walk any native
+// RunWorker dispatches on m.Harness: "" defers straight to
+// native.RunWorker (which itself lets the gateway walk any native
 // chain). Otherwise it looks up the adapter and resolves the worker
 // route on the executor axis, walking the first usable, non-cooled
-// entry into the delegated protocol. An unknown harness or no usable
-// entry at all falls back to native.RunWorker unchanged: today's
-// behavior is always the floor, but a mission that explicitly asked
-// for a harness must not fall back silently: an executor.skipped event
-// is recorded first (see recordSkipped) so the mission's own history
-// shows the requested harness was never actually used. A route resolve
-// that fails because the gateway itself is unavailable (D-101, issue
-// #511) is different: that is transient infra, not "no delegated
-// route", so resolveRouteFor retries it with bounded backoff and,
-// if still failing, this returns ErrGatewayUnavailable instead of
-// falling back: the driver pauses the mission as infra rather than
-// running a native worker turn behind a delegated run that may still be
-// alive in the sandbox.
+// entry into the delegated protocol. A requested harness is a contract
+// (issue #704): when no entry can serve it, an executor.skipped event
+// records why and RunWorker returns ExecutorUnavailableError so the
+// driver pauses the mission as infra. It never runs a native turn in
+// the harness's place: the worker contract (tools, system preamble,
+// write discipline) would change mid-mission behind the operator's
+// back, and a native chain can hold rows the harness's own provider
+// cannot serve over chat (a Responses-only model answers 404 there).
+// A route resolve that fails because the gateway itself is unavailable
+// (D-101, issue #511) is retried with bounded backoff first and, if
+// still failing, returns ErrGatewayUnavailable.
 func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkPacket) (WorkerVerdict, string, error) {
 	if m.Harness == "" {
 		return r.native.RunWorker(ctx, m, packet)
+	}
+	unavailable := func(reason string, until time.Time) (WorkerVerdict, string, error) {
+		return WorkerVerdict{}, "", &ExecutorUnavailableError{Harness: m.Harness, Reason: reason, Until: until}
 	}
 	if !missionPolicyFor(m).canDelegate {
 		// D-072: enforces the documented coding-only harness rule
 		// in-package — ValidateCreate already rejects a non-coding
 		// mission with harness set, so this only fires for a row that
 		// predates that check or was inserted around it.
-		r.log.Warn("delegated runner: harness not allowed for kind; falling back to native", "mission_id", m.ID, "kind", m.Kind, "harness", m.Harness)
+		r.log.Warn("delegated runner: harness not allowed for kind; pausing as infra", "mission_id", m.ID, "kind", m.Kind, "harness", m.Harness)
 		r.recordSkipped(ctx, m.ID, m.Harness, "harness not allowed for kind", nil)
-		return r.native.RunWorker(ctx, m, packet)
+		return unavailable("harness not allowed for kind "+m.Kind, time.Time{})
 	}
 	adapter, ok := executor.Lookup(m.Harness)
 	if !ok {
-		r.log.Warn("delegated runner: unknown harness; falling back to native", "mission_id", m.ID, "harness", m.Harness)
+		r.log.Warn("delegated runner: unknown harness; pausing as infra", "mission_id", m.ID, "harness", m.Harness)
 		r.recordSkipped(ctx, m.ID, m.Harness, "unknown_harness", nil)
-		return r.native.RunWorker(ctx, m, packet)
+		return unavailable("unknown harness", time.Time{})
 	}
 
 	route, err := r.resolveRouteFor(ctx, m, workerRoute(m), m.Harness)
@@ -478,20 +500,19 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 			r.recordSkipped(ctx, m.ID, m.Harness, "gateway_unavailable", map[string]any{"error": truncate(err.Error(), 2000)})
 			return WorkerVerdict{}, "", fmt.Errorf("%w: %v", ErrGatewayUnavailable, err)
 		}
-		r.log.Warn("delegated runner: route resolve failed; falling back to native", "mission_id", m.ID, "error", err)
+		r.log.Warn("delegated runner: route resolve failed; pausing as infra", "mission_id", m.ID, "error", err)
 		r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": truncate(err.Error(), 2000)})
-		return r.native.RunWorker(ctx, m, packet)
+		return unavailable("route resolve failed: "+truncate(err.Error(), 500), time.Time{})
 	}
 	if route == nil {
 		r.recordSkipped(ctx, m.ID, m.Harness, "resolve_failed", map[string]any{"error": "resolved route was nil without an error"})
-		return r.native.RunWorker(ctx, m, packet)
+		return unavailable("route resolve returned nothing", time.Time{})
 	}
 
 	// route_model pin (D-078): prefer the exact chain entry it names over
 	// the first-usable walk below. Absent, unusable, or cooled falls
-	// through to that walk rather than failing — the pin names an entry
-	// in this route's chain, and a chain can drift out from under it
-	// after create, so today's fallback behavior stays the floor.
+	// through to that walk: the pin names an entry in this route's
+	// chain, and a chain can drift out from under it after create.
 	if pin := workerModel(m); pin != "" {
 		for i, entry := range route.Entries {
 			if pin != entry.ProviderName+"/"+entry.Model {
@@ -535,15 +556,15 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 	}
 
 	if cooledEntry != nil {
-		r.log.Warn("delegated runner: every usable entry cooled down; falling back to native", "mission_id", m.ID, "harness", m.Harness)
+		r.log.Warn("delegated runner: every usable entry cooled down; pausing as infra", "mission_id", m.ID, "harness", m.Harness, "until", cooledUntil.UTC().Format(time.RFC3339))
 		r.recordSkipped(ctx, m.ID, m.Harness, "cooldown", map[string]any{
 			"until": cooledUntil.UTC().Format(time.RFC3339), "provider": cooledEntry.ProviderName, "model": cooledEntry.Model,
 		})
-	} else {
-		r.log.Warn("delegated runner: no usable route entry; falling back to native", "mission_id", m.ID, "harness", m.Harness)
-		r.recordSkipped(ctx, m.ID, m.Harness, "no_usable_entry", map[string]any{"skip_reasons": boundStrings(skipReasons, 5)})
+		return unavailable(fmt.Sprintf("%s/%s is cooling down after a failure", cooledEntry.ProviderName, cooledEntry.Model), cooledUntil)
 	}
-	return r.native.RunWorker(ctx, m, packet)
+	r.log.Warn("delegated runner: no usable route entry; pausing as infra", "mission_id", m.ID, "harness", m.Harness)
+	r.recordSkipped(ctx, m.ID, m.Harness, "no_usable_entry", map[string]any{"skip_reasons": boundStrings(skipReasons, 5)})
+	return unavailable("no usable route entry: "+strings.Join(boundStrings(skipReasons, 5), "; "), time.Time{})
 }
 
 // resolveRouteFor resolves route on harness's executor axis,
@@ -615,9 +636,12 @@ func (r *delegatedRunner) cooledUntil(harness string, entry gwclient.ResolvedRou
 	return exp, ok && time.Now().Before(exp)
 }
 
-// coolDown marks entry unusable for cooldownTTL — set on transport
-// death, spawn failure, or auth failure so the NEXT worker turn walks
-// past it instead of retrying the same broken entry immediately.
+// coolDown marks entry unusable for cooldownTTL, set only on signals
+// that point at the provider or its process: transport death, spawn
+// failure, auth failure. Local file errors, idle kills, run-budget
+// kills and a cancelled context never cool an entry (issue #704): they
+// say nothing about the provider, and cooling took a working model
+// away from every mission in the process for ten minutes.
 func (r *delegatedRunner) coolDown(harness string, entry gwclient.ResolvedRouteEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -760,7 +784,6 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 
 	runID, err := newRunID()
 	if err != nil {
-		r.coolDown(m.Harness, entry)
 		return WorkerVerdict{}, "", err
 	}
 	rdir := runDir(m.Workspace, runID)
@@ -787,27 +810,24 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 
 // launchRun builds the invocation, writes prompt.md (plus a Steerer's
 // prompt.jsonl/steer.jsonl), records executor.spawned and starts the
-// CLI detached. Shared by worker and review runs (issue #582); every
-// failure cools the entry down before returning.
+// CLI detached. Shared by worker and review runs (issue #582). Only a
+// spawn failure cools the entry down: the file and invocation errors
+// before it are local to this brain, not the provider's fault.
 func (r *delegatedRunner) launchRun(ctx context.Context, m Mission, run cliRun, workRoot, rdir, runID string, spec executor.InvocationSpec, user string, decision resumeDecision) error {
 	inv, err := run.adapter.BuildInvocation(spec)
 	if err != nil {
-		r.coolDown(run.harness, run.entry)
 		return fmt.Errorf("delegated runner: build invocation: %w", err)
 	}
 
 	// 0750/0600 suffice: brain and the sandbox CLI share uid 65534 on
 	// the workspace volume, so owner permissions cover both readers.
 	if err := os.MkdirAll(rdir, 0o750); err != nil {
-		r.coolDown(run.harness, run.entry)
 		return fmt.Errorf("delegated runner: create run dir: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte(user), 0o600); err != nil {
-		r.coolDown(run.harness, run.entry)
 		return fmt.Errorf("delegated runner: write prompt: %w", err)
 	}
 	if err := writeInvocationFiles(rdir, inv.Files); err != nil {
-		r.coolDown(run.harness, run.entry)
 		return fmt.Errorf("delegated runner: write invocation files: %w", err)
 	}
 	// issue #358: a Steerer adapter (pi) takes its prompt and any
@@ -820,11 +840,9 @@ func (r *delegatedRunner) launchRun(ctx context.Context, m Mission, run cliRun, 
 	steerer, isSteerer := run.adapter.(executor.Steerer)
 	if isSteerer {
 		if err := os.WriteFile(filepath.Join(rdir, "prompt.jsonl"), []byte(steerer.PromptCommand(user)+"\n"), 0o600); err != nil {
-			r.coolDown(run.harness, run.entry)
 			return fmt.Errorf("delegated runner: write prompt.jsonl: %w", err)
 		}
 		if err := os.WriteFile(filepath.Join(rdir, "steer.jsonl"), nil, 0o600); err != nil {
-			r.coolDown(run.harness, run.entry)
 			return fmt.Errorf("delegated runner: create steer.jsonl: %w", err)
 		}
 	}
@@ -1160,7 +1178,6 @@ func (r *delegatedRunner) pollRun(ctx context.Context, m Mission, run cliRun, wo
 		case <-ctx.Done():
 			r.killRun(context.WithoutCancel(ctx), m.ID, m.Environment, workRoot, rdir)
 			r.recordDied(context.WithoutCancel(ctx), m.ID, run.phase, "ctx_cancelled", nil, ctx.Err().Error())
-			r.coolDown(run.harness, run.entry)
 			return st, runEndNoResult, -1, ctx.Err()
 		case <-ticker.C:
 		}
@@ -1222,7 +1239,6 @@ func (r *delegatedRunner) pollRun(ctx context.Context, m Mission, run cliRun, wo
 		if time.Since(st.lastByteMove) > r.idleTimeout {
 			r.killRun(ctx, m.ID, m.Environment, workRoot, rdir)
 			r.recordEvent(ctx, m.ID, st, "executor.idle_killed", map[string]any{"idle_s": int(r.idleTimeout.Seconds()), "phase": run.phase})
-			r.coolDown(run.harness, run.entry)
 			return st, runEndIdle, -1, nil
 		}
 	}
@@ -1531,7 +1547,6 @@ func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, run cli
 		reason = "executor exceeded the run budget and was killed"
 		r.recordDied(ctx, m.ID, run.phase, "run_budget", &exitCode, stderrTail)
 		r.recordLedger(ctx, m, run, nil, start, false, "", st.reportedModel)
-		r.coolDown(run.harness, run.entry)
 		return reason, nil
 	}
 

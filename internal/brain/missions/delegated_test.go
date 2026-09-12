@@ -432,6 +432,21 @@ func harnessEntry(credRef string) gwclient.ResolvedRouteEntry {
 // fakeNative is a minimal Runner recording whether RunWorker was
 // called — the dispatch/fallback tests assert against this instead of
 // a real nativeRunner, which needs a full loop.Agent to construct.
+// wantUnavailable asserts err is an ExecutorUnavailableError whose
+// reason contains want (issue #704: a requested harness never falls
+// back to native, it reports why it could not run).
+func wantUnavailable(t *testing.T, err error, want string) *ExecutorUnavailableError {
+	t.Helper()
+	var unavailable *ExecutorUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("err = %v, want *ExecutorUnavailableError", err)
+	}
+	if !strings.Contains(unavailable.Reason, want) {
+		t.Fatalf("unavailable reason = %q, want it to contain %q", unavailable.Reason, want)
+	}
+	return unavailable
+}
+
 type fakeNative struct {
 	mu      sync.Mutex
 	called  int
@@ -640,6 +655,9 @@ func TestDelegatedRunWorker_RunBudgetExit_RecordedAsRunBudget(t *testing.T) {
 	if budgetReads != 1 {
 		t.Fatalf("run budget read %d times, want once per launch", budgetReads)
 	}
+	if _, cooled := r.cooledUntil(m.Harness, entry); cooled {
+		t.Fatal("run-budget kill cooled the entry down; it says nothing about the provider (issue #704)")
+	}
 	if !strings.Contains(sandbox.lastLaunchCmd(), "timeout -k 30 10800 ") {
 		t.Fatalf("launch cmd does not carry the settings-backed budget: %s", sandbox.lastLaunchCmd())
 	}
@@ -679,6 +697,9 @@ func TestDelegatedRunWorker_IdleHang_KilledAndRetried(t *testing.T) {
 	}
 	if verdict.Provider != entry.ProviderName || verdict.Model != entry.Model {
 		t.Fatalf("verdict provider/model = %q/%q, want %q/%q", verdict.Provider, verdict.Model, entry.ProviderName, entry.Model)
+	}
+	if _, cooled := r.cooledUntil(m.Harness, entry); cooled {
+		t.Fatal("idle kill cooled the entry down; it says nothing about the provider (issue #704)")
 	}
 }
 
@@ -1061,7 +1082,7 @@ func TestDelegatedRunWorker_SessionRecordedOnceWhenFirstSeen(t *testing.T) {
 // every executor-axis entry is cooled down there is no "next native
 // entry" to walk to within the same resolve result — the floor is
 // native.RunWorker itself, same as an unusable/empty resolve.
-func TestDelegatedRunWorker_CooldownSkipsToNativeFallback(t *testing.T) {
+func TestDelegatedRunWorker_Cooldown_PausesWithUntil(t *testing.T) {
 	sandbox := newFakeSandbox()
 	sandbox.seedLines = nil
 	sandbox.seedExitCode = 1
@@ -1085,12 +1106,19 @@ func TestDelegatedRunWorker_CooldownSkipsToNativeFallback(t *testing.T) {
 	}
 
 	// Second call: the entry is now cooled down, so the walk finds
-	// nothing usable and falls back to native.RunWorker.
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("second RunWorker: %v", err)
+	// nothing usable and reports the cooldown with its expiry instead
+	// of running a native turn (issue #704).
+	_, _, err = r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	unavailable := wantUnavailable(t, err, "cooling down")
+	exp, cooled := r.cooledUntil(m.Harness, failing)
+	if !cooled || !unavailable.Until.Equal(exp) {
+		t.Fatalf("unavailable until = %v, want the cooldown expiry %v (cooled=%v)", unavailable.Until, exp, cooled)
 	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1 (cooldown should fall back to native)", native.callCount())
+	if !strings.Contains(err.Error(), "retry after ") {
+		t.Fatalf("err = %v, want it to name the retry time", err)
+	}
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if sandbox.launches != 1 {
 		t.Fatalf("sandbox launches = %d, want 1 (second call must not retry the cooled-down entry)", sandbox.launches)
@@ -1115,11 +1143,11 @@ func TestDelegatedRunWorker_CooldownSkipsToNativeFallback(t *testing.T) {
 	}
 }
 
-// TestDelegatedRunWorker_Dispatch_NoUsableEntryFallsBackToNative covers
+// TestDelegatedRunWorker_Dispatch_NoUsableEntryPauses covers
 // the route-had-entries-but-none-Usable case, distinct from cooldown:
 // no entry was ever usable in the first place, so there is nothing to
 // cool down.
-func TestDelegatedRunWorker_Dispatch_NoUsableEntryFallsBackToNative(t *testing.T) {
+func TestDelegatedRunWorker_Dispatch_NoUsableEntryPauses(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	sandbox := newFakeSandbox()
 	events := &fakeEventSink{}
@@ -1132,11 +1160,10 @@ func TestDelegatedRunWorker_Dispatch_NoUsableEntryFallsBackToNative(t *testing.T
 	r := newTestDelegatedRunner(native, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
 	m := testMission("m1", t.TempDir())
 
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
-	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1", native.callCount())
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	wantUnavailable(t, err, "no usable route entry")
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if events.count("executor.skipped") != 1 {
 		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
@@ -1957,7 +1984,7 @@ func TestDelegatedRunWorker_Dispatch_EmptyHarnessSkipsResolve(t *testing.T) {
 	}
 }
 
-func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.T) {
+func TestDelegatedRunWorker_Dispatch_UnknownHarnessPauses(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	sandbox := newFakeSandbox()
 	events := &fakeEventSink{}
@@ -1966,11 +1993,10 @@ func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.
 	m := testMission("m1", t.TempDir())
 	m.Harness = "codex-cli-unregistered"
 
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
-	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1", native.callCount())
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	wantUnavailable(t, err, "unknown harness")
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if events.count("executor.skipped") != 1 {
 		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))
@@ -1987,10 +2013,10 @@ func TestDelegatedRunWorker_Dispatch_UnknownHarnessFallsBackToNative(t *testing.
 }
 
 // D-072: a general mission with Harness set (a row predating
-// ValidateCreate's coding-only rule, or inserted around it) must fall
-// back to native and record why — enforces the coding-only harness
-// rule in-package instead of trusting the caller already checked it.
-func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralFallsBackToNative(t *testing.T) {
+// ValidateCreate's coding-only rule, or inserted around it) must pause
+// and record why: enforces the coding-only harness rule in-package
+// instead of trusting the caller already checked it.
+func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralPauses(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	resolveCalled := false
 	resolve := func(ctx context.Context, name, harness string) (*gwclient.ResolvedRoute, error) {
@@ -2004,11 +2030,10 @@ func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralFallsBackToNative(t *testin
 	m := testMission("m1", t.TempDir())
 	m.Kind = "general"
 
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
-	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1", native.callCount())
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	wantUnavailable(t, err, "harness not allowed for kind")
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if resolveCalled {
 		t.Fatal("resolveRoute called for a harness-not-allowed mission; want it skipped entirely")
@@ -2027,7 +2052,7 @@ func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralFallsBackToNative(t *testin
 	}
 }
 
-func TestDelegatedRunWorker_Dispatch_ResolveErrorFallsBackToNative(t *testing.T) {
+func TestDelegatedRunWorker_Dispatch_ResolveErrorPauses(t *testing.T) {
 	native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
 	sandbox := newFakeSandbox()
 	events := &fakeEventSink{}
@@ -2035,11 +2060,10 @@ func TestDelegatedRunWorker_Dispatch_ResolveErrorFallsBackToNative(t *testing.T)
 	r := newTestDelegatedRunner(native, scriptedResolver(nil, fmt.Errorf("gateway unreachable")), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
 	m := testMission("m1", t.TempDir())
 
-	if _, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
-	}
-	if native.callCount() != 1 {
-		t.Fatalf("native call count = %d, want 1", native.callCount())
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	wantUnavailable(t, err, "route resolve failed")
+	if native.callCount() != 0 {
+		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
 	if events.count("executor.skipped") != 1 {
 		t.Fatalf("executor.skipped count = %d, want 1", events.count("executor.skipped"))

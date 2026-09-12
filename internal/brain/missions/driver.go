@@ -982,6 +982,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	if err != nil {
 		d.log.Error("driver: phase run failed", "mission_id", id, "phase", m.Phase,
 			"route", phaseRoute(m), "agent", d.agentName(ctx, m.AgentID), "error", err)
+		var unavailable *ExecutorUnavailableError
 		switch {
 		case errors.Is(err, ErrModelFloor):
 			// A below-floor fallback model served this turn: it cannot
@@ -993,6 +994,16 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// same entry is futile, so pause immediately as infra instead
 			// of burning iterations (same reasoning as ErrModelFloor above).
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
+		case errors.Is(err, ErrProviderRejected):
+			// The provider refused the request itself (400/404/422): the
+			// same request fails identically on every retry, so pause as
+			// infra with the provider's message (issue #704).
+			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
+		case errors.As(err, &unavailable):
+			// The mission asked for a harness no entry can serve right
+			// now (issue #704). Pause as infra and carry Until so the
+			// sweep waits out a cooldown instead of resuming into it.
+			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error(), Until: unavailable.Until}
 		case errors.Is(err, ErrGatewayUnavailable):
 			// D-101: the delegated runner already retried its route resolve
 			// with bounded backoff before giving up: this is the gateway

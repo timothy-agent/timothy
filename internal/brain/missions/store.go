@@ -1540,6 +1540,9 @@ func (s *Store) ReviewInputTokens(ctx context.Context, missionID string) (int64,
 type BackoffPausedMission struct {
 	ID        string
 	UpdatedAt time.Time
+	// ResumeAfter is the latest mission.paused event's "until" (issue
+	// #704), zero when that pause carried none.
+	ResumeAfter time.Time
 }
 
 // BackoffPaused returns every mission currently paused with
@@ -1556,7 +1559,11 @@ func (s *Store) PausedByReason(ctx context.Context, reason string) ([]BackoffPau
 	if err != nil {
 		return nil, fmt.Errorf("missions paused by reason: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT id, updated_at FROM missions WHERE status = 'paused' AND pause_reason = $1`, reason)
+	rows, err := db.Query(ctx, `SELECT m.id, m.updated_at,
+			(SELECT e.payload->>'until' FROM mission_events e
+			 WHERE e.mission_id = m.id AND e.kind = 'mission.paused'
+			 ORDER BY e.seq DESC LIMIT 1)
+		FROM missions m WHERE m.status = 'paused' AND m.pause_reason = $1`, reason)
 	if err != nil {
 		return nil, fmt.Errorf("missions paused by reason: %w", err)
 	}
@@ -1564,8 +1571,14 @@ func (s *Store) PausedByReason(ctx context.Context, reason string) ([]BackoffPau
 	out := []BackoffPausedMission{}
 	for rows.Next() {
 		var m BackoffPausedMission
-		if err := rows.Scan(&m.ID, &m.UpdatedAt); err != nil {
+		var until *string
+		if err := rows.Scan(&m.ID, &m.UpdatedAt, &until); err != nil {
 			return nil, fmt.Errorf("missions paused by reason: %w", err)
+		}
+		if until != nil {
+			if t, err := time.Parse(time.RFC3339, *until); err == nil {
+				m.ResumeAfter = t
+			}
 		}
 		out = append(out, m)
 	}

@@ -1324,4 +1324,12 @@ func TestStepReviewInfraFailureCarriesRoute(t *testing.T) {
 	if _, ok := got.Events[0].Payload["route"]; ok {
 		t.Fatalf("payload = %+v, want no route key", got.Events[0].Payload)
 	}
+	if _, ok := got.Events[0].Payload["until"]; ok {
+		t.Fatalf("payload = %+v, want no until key", got.Events[0].Payload)
+	}
+	until := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	got = Step(StepState{Phase: PhaseBuild, Status: StatusWorking}, StepInput{Input: InputReviewInfraFailure, Reason: "cooling", Until: until}, DefaultConfig)
+	if u, _ := got.Events[0].Payload["until"].(string); u != "2026-09-12T10:00:00Z" {
+		t.Fatalf("payload = %+v, want until=2026-09-12T10:00:00Z (issue #704)", got.Events[0].Payload)
+	}
 }
