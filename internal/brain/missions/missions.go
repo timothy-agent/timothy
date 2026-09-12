@@ -60,6 +60,10 @@ type Mission struct {
 	ConsecutiveFailures int    `json:"consecutive_failures"`
 	LastGapFingerprint  string `json:"last_gap_fingerprint,omitempty"`
 	StallCount          int    `json:"stall_count"`
+	// HarnessRetries counts the retries the harness attributed to itself
+	// over this mission's life (issue #718): they spend no iteration, so
+	// they have their own cap and nothing resets them.
+	HarnessRetries int `json:"harness_retries"`
 	// ReplanUsed reports whether this mission already spent its one
 	// automatic replan-on-stall attempt (statemachine.go's
 	// stepWorkerRetry).

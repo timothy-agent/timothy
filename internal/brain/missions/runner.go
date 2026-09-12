@@ -1590,7 +1590,7 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 // reuses the body with its own closing instruction, so the native
 // prompt stays byte-identical.
 const (
-	reviewSystemPrompt   = "You are reviewing units of a mission's work. Each unit's acceptance criteria, the harness's own check results, the diff and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: a criterion the work does not satisfy, unsupported claims, missing substance. Do NOT reject for material you were not given (the harness supplies everything there is) and do not re-run checks the harness already reports as passed. Every blocking finding must name a file that appears in the diff or the artifacts and quote the line that shows the gap in evidence; a blocking finding without both is demoted to minor. The changed-files stat spans every unit of the plan: judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone, never against another unit's files. Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings."
+	reviewSystemPrompt   = "You are reviewing units of a mission's work. Each unit's acceptance criteria, the harness's own check results, the diff and the actual artifact contents (read from disk by the harness, not reported by the worker) are all below; judge against THEM. Look for real reasons to reject before approving: a criterion the work does not satisfy, unsupported claims, missing substance. Do NOT reject for material you were not given (the harness supplies everything there is) and do not re-run checks the harness already reports as passed. Every blocking finding must name a file that appears in the diff or the artifacts and quote the line that shows the gap in evidence; a blocking finding without both is demoted to minor. The changed-files stat spans every unit of the plan: judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone, never against another unit's files. Prior rounds' open findings are listed with ids: name each one the work has now closed in resolved, and report only NEW gaps as findings. Answer every numbered criterion listed under every unit exactly once in criteria, as met, not_met or cannot_tell, each citing the file and the line you read it from as evidence."
 	reviewSystemToolCall = " End your turn with exactly one review_verdict tool call."
 )
 
@@ -1714,15 +1714,29 @@ func renderReviewContent(p ReviewPacket) string {
 				b.WriteString("The change set below spans all of these units. Judge a criterion about files a unit must not touch (\"no other files modified\") against the files listed for that unit alone; a file another unit changed is never a gap for this one.\n")
 			}
 		}
+		hasIndex := len(p.UnitIndex) == len(p.Units)
 		for i, u := range p.Units {
-			fmt.Fprintf(&b, "\n### %s [%s]\n", NeutralizeSlot(u.Title), unitStatus(u))
+			if hasIndex {
+				fmt.Fprintf(&b, "\n### Unit %d: %s [%s]\n", p.UnitIndex[i], NeutralizeSlot(u.Title), unitStatus(u))
+			} else {
+				fmt.Fprintf(&b, "\n### %s [%s]\n", NeutralizeSlot(u.Title), unitStatus(u))
+			}
 			if u.Regressed && !u.verified() {
 				b.WriteString("Regressed: this unit passed before and fails now.\n")
 			}
+			// A findings-only round asks no rubric (the packet drops the
+			// criteria), so it never gets the numbering instruction.
 			if len(u.Criteria) > 0 {
-				b.WriteString("Acceptance criteria:\n")
-				for _, c := range u.Criteria {
-					fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(c))
+				if p.FindingsOnly {
+					b.WriteString("Acceptance criteria:\n")
+					for _, c := range u.Criteria {
+						fmt.Fprintf(&b, "- %s\n", NeutralizeSlot(c))
+					}
+				} else {
+					b.WriteString("Acceptance criteria (answer each by its number in criteria):\n")
+					for n, c := range u.Criteria {
+						fmt.Fprintf(&b, "%d. %s\n", n, NeutralizeSlot(c))
+					}
 				}
 			}
 			if unitFiles {

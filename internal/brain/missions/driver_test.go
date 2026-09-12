@@ -122,6 +122,7 @@ func (f *fakeStore) ApplyTransition(ctx context.Context, id string, t Transition
 	m.Iteration, m.MaxIterations = t.Next.Iteration, t.Next.MaxIterations
 	m.ConsecutiveFailures, m.LastGapFingerprint, m.StallCount = t.Next.ConsecutiveFailures, t.Next.LastGapFingerprint, t.Next.StallCount
 	m.ReplanUsed = t.Next.ReplanUsed
+	m.HarnessRetries = t.Next.HarnessRetries
 	m.ReviewFindings, m.ReworkRounds = t.Next.ReviewFindings, t.Next.ReworkRounds
 	if t.Next.ReviewRoute != "" {
 		m.ReviewRoute, m.ReviewRouteModel = t.Next.ReviewRoute, t.Next.ReviewRouteModel
@@ -1307,7 +1308,31 @@ func TestDriverNoProveStillChecksArtifacts(t *testing.T) {
 	}
 }
 
+// TestDriverBackoffPauseAfterThreeFailures pins the backoff brake. A
+// runner error is harness-caused (issue #718), so the harness-retry cap
+// is lowered out of the way here: with both at 3 the cap parks first,
+// which TestDriverHarnessCapBeatsBackoff covers instead.
 func TestDriverBackoffPauseAfterThreeFailures(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{workerErr: fmt.Errorf("gateway unavailable")}
+	d := testDriver(store, runner)
+	d.SetCeilings(func(context.Context) (int, int, int) { return 3, 2, 9 })
+
+	driveN(t, d, "m1", 3)
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseBackoff {
+		t.Fatalf("mission after 3 consecutive runner failures = %+v, want paused/backoff", m)
+	}
+}
+
+// TestDriverHarnessCapBeatsBackoff pins issue #718's precedence: with
+// both ceilings at 3, three runner errors park on the harness cap, not
+// on backoff. Resume clears the pause but not ConsecutiveFailures, so a
+// backoff-first order would re-pause as backoff on every resumed
+// harness failure and the cap would never be reached.
+func TestDriverHarnessCapBeatsBackoff(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8})
 	runner := &scriptedRunner{workerErr: fmt.Errorf("gateway unavailable")}
@@ -1316,8 +1341,29 @@ func TestDriverBackoffPauseAfterThreeFailures(t *testing.T) {
 	driveN(t, d, "m1", 3)
 
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Status != StatusPaused || m.PauseReason != PauseBackoff {
-		t.Fatalf("mission after 3 consecutive runner failures = %+v, want paused/backoff", m)
+	if m.PauseReason != PauseNoProgress {
+		t.Fatalf("pause reason = %q, want no_progress from the harness cap", m.PauseReason)
+	}
+	if m.HarnessRetries != 3 {
+		t.Fatalf("mission.HarnessRetries = %d, want 3", m.HarnessRetries)
+	}
+	var found bool
+	for _, ev := range store.events["m1"] {
+		if ev.Kind != "mission.paused" {
+			continue
+		}
+		var payload struct {
+			Cause string `json:"cause"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal pause payload: %v", err)
+		}
+		if payload.Cause == "harness_retries_exhausted" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected a mission.paused event with cause harness_retries_exhausted")
 	}
 }
 
@@ -4210,5 +4256,313 @@ func TestDriverReviewRouteSkip(t *testing.T) {
 	m.ReviewRoute = ""
 	if route, _, ok := d.reviewRouteSkip(context.Background(), m, noRoute); ok || route != "" {
 		t.Fatalf("unknown route resolve error: got %q, %v; want ok=false", route, ok)
+	}
+}
+
+// TestDriverForcedRetryIsHarnessCaused pins issue #718: a turn with no
+// readable sentinel is the harness's own retry, so it spends no
+// iteration and says so on the mission.retry event.
+func TestDriverForcedRetryIsHarnessCaused(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking,
+		MaxIterations: 8, Iteration: 2, Flow: FlowLight,
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{
+		{Outcome: "retry", Forced: true, Analysis: "no sentinel"},
+	}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Iteration != 2 {
+		t.Fatalf("mission.Iteration = %d, want it unchanged at 2: a forced retry spends none", m.Iteration)
+	}
+}
+
+// TestDriverRunnerErrorIsHarnessCaused pins issue #718: a RunWorker
+// error (executor died, turn failed, idle timeout) counts toward the
+// backoff brake but spends no iteration.
+func TestDriverRunnerErrorIsHarnessCaused(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking,
+		MaxIterations: 8, Iteration: 2, Flow: FlowLight,
+	})
+	runner := &scriptedRunner{workerErr: fmt.Errorf("executor died mid-run")}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Iteration != 2 {
+		t.Fatalf("mission.Iteration = %d, want it unchanged at 2: a runner error spends none", m.Iteration)
+	}
+	if m.ConsecutiveFailures != 1 {
+		t.Fatalf("mission.ConsecutiveFailures = %d, want 1: the backoff brake still counts it", m.ConsecutiveFailures)
+	}
+}
+
+// criteriaReviewMission is the shared fixture for issue #718's rubric
+// tests: one harness-passed unit with two criteria, awaiting approval.
+func criteriaReviewMission(t *testing.T) Mission {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "summary.md"), []byte("RFC 6585 explains 429.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return Mission{
+		ID: "m1", Kind: "general", Phase: PhaseProve, Status: StatusWorking, MaxIterations: 8, Workspace: root,
+		Plan: Plan{Units: []PlanUnit{{
+			Title: "Write summary", Artifacts: []string{"summary.md"},
+			Criteria: []string{"names RFC 6585", "under 200 words"}, HarnessPassed: true,
+		}}},
+	}
+}
+
+// reviewVerdictCriteria returns the criteria recorded on the mission's
+// latest mission.review_verdict event.
+func reviewVerdictCriteria(t *testing.T, store *fakeStore) (string, []CriterionVerdict) {
+	t.Helper()
+	// The driver's own verdict event is the first one of the round; the
+	// state machine appends a second on a rework, carrying no rubric.
+	for i := range store.events["m1"] {
+		if store.events["m1"][i].Kind != "mission.review_verdict" {
+			continue
+		}
+		var payload struct {
+			Decision string             `json:"decision"`
+			Criteria []CriterionVerdict `json:"criteria"`
+		}
+		if err := json.Unmarshal(store.events["m1"][i].Payload, &payload); err != nil {
+			t.Fatalf("unmarshal review verdict payload: %v", err)
+		}
+		return payload.Decision, payload.Criteria
+	}
+	t.Fatal("no mission.review_verdict event recorded")
+	return "", nil
+}
+
+// TestDriverReviewNotMetCriterionOverridesApproval pins issue #718: a
+// reviewer that says approve while answering a criterion not_met is
+// overridden to rework, with the criterion opened as a blocking
+// finding and the rubric on the verdict event.
+func TestDriverReviewNotMetCriterionOverridesApproval(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", criteriaReviewMission(t))
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true, Criteria: []CriterionVerdict{
+		{Unit: 0, Criterion: 0, Status: CriterionMet, Evidence: "summary.md:3 RFC 6585"},
+		{Unit: 0, Criterion: 1, Status: CriterionNotMet, Evidence: "summary.md is 640 words"},
+	}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Phase != PhaseBuild {
+		t.Fatalf("mission phase = %q, want build: a not_met criterion is a rework", m.Phase)
+	}
+	if m.Plan.Units[0].Passes {
+		t.Fatal("unit Passes flipped despite a not_met criterion")
+	}
+	open := OpenFindings(m.ReviewFindings)
+	if len(open) != 1 || open[0].Title != "under 200 words" || !open[0].Blocking() {
+		t.Fatalf("open findings = %+v, want one blocking finding titled with the criterion", open)
+	}
+	decision, criteria := reviewVerdictCriteria(t, store)
+	if decision != "rework" || len(criteria) != 2 {
+		t.Fatalf("verdict event decision=%q criteria=%+v, want rework and both criteria", decision, criteria)
+	}
+}
+
+// TestDriverReviewCannotTellCriterionApprovesWithMinorFinding pins the
+// other half of issue #718's rubric: cannot_tell is visible as a minor
+// finding but never blocks, so approval still flips Passes.
+func TestDriverReviewCannotTellCriterionApprovesWithMinorFinding(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", criteriaReviewMission(t))
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true, Criteria: []CriterionVerdict{
+		{Unit: 0, Criterion: 0, Status: CriterionMet, Evidence: "summary.md:3 RFC 6585"},
+		{Unit: 0, Criterion: 1, Status: CriterionCannotTell, Evidence: "no word count available"},
+	}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if !m.Plan.Units[0].Passes {
+		t.Fatal("unit Passes did not flip: cannot_tell must not block approval")
+	}
+	decision, _ := reviewVerdictCriteria(t, store)
+	if decision != "approved" {
+		t.Fatalf("verdict event decision = %q, want approved", decision)
+	}
+}
+
+// TestDriverReviewAllMetApproves pins the unchanged happy path: every
+// criterion met approves exactly as before the rubric existed.
+func TestDriverReviewAllMetApproves(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", criteriaReviewMission(t))
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true, Criteria: []CriterionVerdict{
+		{Unit: 0, Criterion: 0, Status: CriterionMet, Evidence: "summary.md:3 RFC 6585"},
+		{Unit: 0, Criterion: 1, Status: CriterionMet, Evidence: "summary.md is 140 words"},
+	}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if !m.Plan.Units[0].Passes {
+		t.Fatal("unit Passes did not flip on an all-met rubric")
+	}
+	if len(OpenFindings(m.ReviewFindings)) != 0 {
+		t.Fatalf("open findings = %+v, want none", OpenFindings(m.ReviewFindings))
+	}
+}
+
+// TestDriverReviewNotMetCriterionDoesNotDuplicateFinding pins the
+// dedup: a second round repeating the same not_met criterion reuses the
+// open finding rather than opening a second one.
+func TestDriverReviewNotMetCriterionDoesNotDuplicateFinding(t *testing.T) {
+	store := newFakeStore()
+	m := criteriaReviewMission(t)
+	m.ReviewFindings = []Finding{{
+		ID: "F1", Unit: 0, Title: "under 200 words", File: "summary.md",
+		Detail: "criterion not met", Severity: SeverityBlocking, Status: FindingOpen,
+	}}
+	store.put("m1", m)
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true, Criteria: []CriterionVerdict{
+		{Unit: 0, Criterion: 1, Status: CriterionNotMet, Evidence: "summary.md is 640 words"},
+	}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	got, _ := store.Get(context.Background(), "m1")
+	if open := OpenFindings(got.ReviewFindings); len(open) != 1 || open[0].ID != "F1" {
+		t.Fatalf("open findings = %+v, want only the pre-existing F1", open)
+	}
+}
+
+// TestDriverReviewNotMetWithoutEvidenceApproves pins issue #718: an
+// evidence-less not_met reads as cannot_tell, so it neither forces a
+// rework round with no blocking finding behind it nor blocks approval.
+func TestDriverReviewNotMetWithoutEvidenceApproves(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", criteriaReviewMission(t))
+	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true, Criteria: []CriterionVerdict{
+		{Unit: 0, Criterion: 0, Status: CriterionMet, Evidence: "summary.md:3 RFC 6585"},
+		{Unit: 0, Criterion: 1, Status: CriterionNotMet},
+	}}}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if !m.Plan.Units[0].Passes {
+		t.Fatal("unit Passes did not flip: an evidence-less not_met must not block")
+	}
+	for _, f := range OpenFindings(m.ReviewFindings) {
+		if f.Blocking() {
+			t.Fatalf("open blocking finding %+v, want only minor ones", f)
+		}
+	}
+}
+
+// TestDriverForcedRetriesHitTheHarnessCap covers issue #718: forced
+// no-sentinel retries are harness-caused, so they count into the
+// lifetime cap and the third pauses as no_progress with the cause,
+// even though the stall brake would have replanned instead.
+func TestDriverForcedRetriesHitTheHarnessCap(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking,
+		MaxIterations: 8, Flow: FlowLight,
+	})
+	runner := &scriptedRunner{
+		workerVerdicts: []WorkerVerdict{{Outcome: "retry", Forced: true, Analysis: "no sentinel"}},
+	}
+	d := testDriver(store, runner)
+	// Stall brake out of the way (it would pause on the 2nd identical
+	// no_sentinel fingerprint): this asserts the CAP is what stops a
+	// run of forced retries, and that they never spend an iteration.
+	d.SetCeilings(func(context.Context) (int, int, int) { return 3, 9, 3 })
+
+	for i := 0; i < 12; i++ {
+		more, err := d.Advance(context.Background(), "m1")
+		if err != nil {
+			t.Fatalf("Advance[%d]: %v", i, err)
+		}
+		if !more {
+			break
+		}
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.HarnessRetries != 3 {
+		t.Fatalf("mission.HarnessRetries = %d, want 3", m.HarnessRetries)
+	}
+	if m.Status != StatusPaused || m.PauseReason != PauseNoProgress {
+		t.Fatalf("mission status/pause = %q/%q, want paused/no_progress", m.Status, m.PauseReason)
+	}
+	if m.Iteration != 0 {
+		t.Fatalf("mission.Iteration = %d, want 0: forced retries spend none", m.Iteration)
+	}
+	var found bool
+	for _, ev := range store.events["m1"] {
+		if ev.Kind != "mission.paused" {
+			continue
+		}
+		var payload struct {
+			Cause          string `json:"cause"`
+			HarnessRetries int    `json:"harness_retries"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal pause payload: %v", err)
+		}
+		if payload.Cause == "harness_retries_exhausted" && payload.HarnessRetries == 3 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected a mission.paused event with cause harness_retries_exhausted and count 3")
+	}
+}
+
+// TestDriverCeilingsComeFromSettings covers issue #718: the brakes are
+// operator settings read per turn, so a backoff cap of 2 pauses on the
+// second failure instead of DefaultConfig's third.
+func TestDriverCeilingsComeFromSettings(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking,
+		MaxIterations: 8, Flow: FlowLight,
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{
+		{Outcome: "retry", Analysis: "still working"},
+		{Outcome: "retry", Analysis: "still working"},
+	}}
+	d := testDriver(store, runner)
+	d.SetCeilings(func(context.Context) (int, int, int) { return 2, 2, 9 })
+
+	// A worker's own retry never touches the backoff counter, so drive
+	// the brake with runner errors instead.
+	runner.workerErr = fmt.Errorf("gateway unreachable")
+	for i := range 2 {
+		if _, err := d.Advance(context.Background(), "m1"); err != nil {
+			t.Fatalf("Advance[%d]: %v", i, err)
+		}
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.PauseReason != PauseBackoff {
+		t.Fatalf("pause reason = %q, want backoff on the 2nd failure with a cap of 2", m.PauseReason)
 	}
 }

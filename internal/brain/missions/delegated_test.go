@@ -3003,36 +3003,42 @@ func TestDelegatedRunWorker_SessionPolicyResumeUnchanged(t *testing.T) {
 	}
 }
 
-// TestDelegatedExecutorKnobs covers issue #720: a review spec carries
-// the settings-backed turn cap and thinking budget, a worker spec
-// carries the thinking budget only.
+// TestDelegatedExecutorKnobs covers issue #720 plus the worker turn cap
+// (issue #718): each knob is 0 until wired, then reads its getter.
 func TestDelegatedExecutorKnobs(t *testing.T) {
 	r := &delegatedRunner{}
 	ctx := testCtx(t)
 	if got := r.effectiveReviewMaxTurns(ctx); got != 0 {
 		t.Fatalf("unset reviewMaxTurns = %d, want 0", got)
 	}
+	if got := r.effectiveWorkerMaxTurns(ctx); got != 0 {
+		t.Fatalf("unset workerMaxTurns = %d, want 0", got)
+	}
 	if got := r.effectiveThinkingTokens(ctx); got != 0 {
 		t.Fatalf("unset thinkingTokens = %d, want 0", got)
 	}
-	r.SetExecutorKnobs(func(context.Context) int { return 6 }, func(context.Context) int { return 4000 })
+	r.SetExecutorKnobs(func(context.Context) int { return 6 }, func(context.Context) int { return 40 }, func(context.Context) int { return 4000 })
 	if got := r.effectiveReviewMaxTurns(ctx); got != 6 {
 		t.Fatalf("reviewMaxTurns = %d, want 6", got)
+	}
+	if got := r.effectiveWorkerMaxTurns(ctx); got != 40 {
+		t.Fatalf("workerMaxTurns = %d, want 40", got)
 	}
 	if got := r.effectiveThinkingTokens(ctx); got != 4000 {
 		t.Fatalf("thinkingTokens = %d, want 4000", got)
 	}
 }
 
-// TestDelegatedKnobsReachTheLaunch covers issue #720 end to end: a
-// claude-cli review run's launch carries --max-turns and
-// MAX_THINKING_TOKENS, a worker run carries the thinking budget only.
+// TestDelegatedKnobsReachTheLaunch covers issue #720 end to end plus
+// the worker turn cap (issue #718): a claude-cli review run's launch
+// carries its own --max-turns and MAX_THINKING_TOKENS, and a worker run
+// carries the worker cap and the same thinking budget.
 func TestDelegatedKnobsReachTheLaunch(t *testing.T) {
 	newRunner := func(events *fakeEventSink, sandbox *fakeSandbox) *delegatedRunner {
 		entry := harnessEntry("subscription")
 		route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
 		r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
-		r.SetExecutorKnobs(func(context.Context) int { return 6 }, func(context.Context) int { return 4000 })
+		r.SetExecutorKnobs(func(context.Context) int { return 6 }, func(context.Context) int { return 40 }, func(context.Context) int { return 4000 })
 		return r
 	}
 
@@ -3055,7 +3061,7 @@ func TestDelegatedKnobsReachTheLaunch(t *testing.T) {
 		}
 	})
 
-	t.Run("worker carries the thinking budget only", func(t *testing.T) {
+	t.Run("worker carries its own cap and the thinking budget", func(t *testing.T) {
 		sandbox := newFakeSandbox()
 		sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
 		sandbox.seedExitCode = 0
@@ -3064,8 +3070,8 @@ func TestDelegatedKnobsReachTheLaunch(t *testing.T) {
 			t.Fatalf("RunWorker: %v", err)
 		}
 		cmd := sandbox.lastLaunchCmd()
-		if strings.Contains(cmd, "--max-turns") {
-			t.Fatalf("worker launch must not carry a turn cap: %s", cmd)
+		if !strings.Contains(cmd, "--max-turns") || !strings.Contains(cmd, "40") {
+			t.Fatalf("worker launch missing --max-turns 40: %s", cmd)
 		}
 		if sandbox.lastEnv["MAX_THINKING_TOKENS"] != "4000" {
 			t.Fatalf("worker launch env MAX_THINKING_TOKENS = %q, want 4000", sandbox.lastEnv["MAX_THINKING_TOKENS"])

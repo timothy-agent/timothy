@@ -30,10 +30,40 @@ type Store struct {
 	db  *pgpool.Pool
 	log *slog.Logger
 	hub *Hub
+	// defaultMaxIterations resolves the iteration ceiling a mission
+	// created without one gets (settings.mission_default_max_iterations);
+	// nil, before SetDefaultMaxIterations is called, means the built-in
+	// fallback.
+	defaultMaxIterations func(context.Context) int
 }
 
 func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
 	return &Store{db: db, log: log}
+}
+
+// fallbackMaxIterations is the iteration ceiling used when neither the
+// mission nor the settings getter supplies one.
+const fallbackMaxIterations = 3
+
+// SetDefaultMaxIterations wires the settings-backed iteration ceiling
+// for missions created without one, a setter for the same reason
+// SetHub is: the store must not import settings.
+func (s *Store) SetDefaultMaxIterations(fn func(context.Context) int) {
+	s.defaultMaxIterations = fn
+}
+
+// maxIterationsFor resolves a create's ceiling: the mission's own
+// value, else the configured default, else fallbackMaxIterations.
+func (s *Store) maxIterationsFor(ctx context.Context, want int) int {
+	if want > 0 {
+		return want
+	}
+	if s.defaultMaxIterations != nil {
+		if n := s.defaultMaxIterations(ctx); n > 0 {
+			return n
+		}
+	}
+	return fallbackMaxIterations
 }
 
 // SetHub wires the push-notification hub: a nil hub (the default,
@@ -52,7 +82,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	discover_notes, replan_used, schedule_id, session_id, harness, review_harness, environment,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow,
-	review_findings, rework_rounds, has_plan, executor_session_policy`
+	review_findings, rework_rounds, has_plan, executor_session_policy, harness_retries`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
 // missions table: bundles the five columns the API's flat
@@ -138,7 +168,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
-		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds, &m.HasPlan, &m.ExecutorSessionPolicy,
+		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds, &m.HasPlan, &m.ExecutorSessionPolicy, &m.HarnessRetries,
 		&failureReason); err != nil {
 		return Mission{}, err
 	}
@@ -226,7 +256,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
-		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds, &m.HasPlan, &m.ExecutorSessionPolicy); err != nil {
+		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds, &m.HasPlan, &m.ExecutorSessionPolicy, &m.HarnessRetries); err != nil {
 		return Mission{}, err
 	}
 	m.Flow = parseFlow(flow)
@@ -326,7 +356,7 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	err = db.QueryRow(ctx, `INSERT INTO missions
 			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness, executor_session_policy)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30, $31, $32) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, orDefault(m.MaxIterations, 3), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy,
+		m.Goal, m.Name, m.Kind, m.AgentID, s.maxIterationsFor(ctx, m.MaxIterations), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -339,13 +369,6 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 // escaping).
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
-}
-
-func orDefault(v, def int) int {
-	if v == 0 {
-		return def
-	}
-	return v
 }
 
 // Get returns one mission by id.
@@ -1149,6 +1172,7 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	if _, err := tx.Exec(ctx, `UPDATE missions SET
 			phase = $2, status = $3, pause_reason = $4, pause_message = '', iteration = $5, max_iterations = $6,
 			consecutive_failures = $7, last_gap_fingerprint = $8, stall_count = $9, replan_used = $11, updated_at = now(),
+			harness_retries = $19,
 			pending_permission = CASE WHEN $10 THEN NULL ELSE pending_permission END,
 			review_findings = $12, rework_rounds = $13,
 			plan = (CASE WHEN $14::jsonb IS NULL THEN plan ELSE jsonb_set(plan, '{units}', $14::jsonb) END)
@@ -1161,7 +1185,7 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 		t.Next.Iteration, t.Next.MaxIterations, t.Next.ConsecutiveFailures,
 		t.Next.LastGapFingerprint, t.Next.StallCount, clearPending, t.Next.ReplanUsed,
 		findingsJSON, t.Next.ReworkRounds, unitsJSON, t.Next.LastReviewCommit, lastReviewAt,
-		t.Next.ReviewRoute, t.Next.ReviewRouteModel,
+		t.Next.ReviewRoute, t.Next.ReviewRouteModel, t.Next.HarnessRetries,
 	); err != nil {
 		return fmt.Errorf("missions apply transition update: %w", err)
 	}

@@ -520,7 +520,7 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 	_, err = tx.Exec(ctx, `INSERT INTO missions
 			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, auto_approve_tools, auto_approve_plan, plan, schedule_id, harness, environment, sources, destinations, phase, flow, review_harness)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
-		t.Goal, name, t.Kind, t.AgentID, orDefault(t.MaxIterations, 3), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
+		t.Goal, name, t.Kind, t.AgentID, s.missions.maxIterationsFor(ctx, t.MaxIterations), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
 		promptOverlay, t.AutoApproveTools, true, plan, sc.ID, t.Harness, t.Environment, sourcesJSON, destinationsJSON, phase, flow, t.ReviewHarness)
 	return err
 }

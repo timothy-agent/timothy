@@ -1176,6 +1176,13 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetReviewWindow(missions.GatewayReviewWindow(gwc.ResolveRoute, gwc.ModelWindows))
 	driver.SetRouteResolver(gwc.ResolveRoute)
 	driver.SetReviewTokenCeiling(flags.ReviewTokenCeiling)
+	// issue #718: every retry ceiling is an operator setting, read per
+	// turn so a change lands on the next turn without a restart.
+	driver.SetCeilings(func(ctx context.Context) (int, int, int) {
+		return flags.MissionBackoffFailures(ctx), flags.MissionStallRounds(ctx), flags.MissionHarnessRetryCap(ctx)
+	})
+	driver.SetAutoResumeMax(flags.MissionAutoResumeBackoffMax, flags.MissionAutoResumeInfraMax)
+	store.SetDefaultMaxIterations(flags.MissionDefaultMaxIterations)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
 	driver.SetNameMission(chat.TitleOverGateway(gwc, log))
@@ -1489,9 +1496,9 @@ func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gw
 	}
 	// issue #720: settings-backed CLI turn cap and thinking budget.
 	if withKnobs, ok := runner.(interface {
-		SetExecutorKnobs(func(context.Context) int, func(context.Context) int)
+		SetExecutorKnobs(func(context.Context) int, func(context.Context) int, func(context.Context) int)
 	}); ok {
-		withKnobs.SetExecutorKnobs(flags.ExecutorReviewMaxTurns, flags.ExecutorThinkingTokens)
+		withKnobs.SetExecutorKnobs(flags.ExecutorReviewMaxTurns, flags.ExecutorWorkerMaxTurns, flags.ExecutorThinkingTokens)
 	}
 	return runner
 }

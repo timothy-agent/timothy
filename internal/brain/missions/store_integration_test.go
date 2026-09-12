@@ -1951,3 +1951,76 @@ func TestSweepPermissionTimeoutsAutoDeniesAndResumes(t *testing.T) {
 		t.Fatalf("Drive calls = %v, want exactly [%s] (mission resumed)", drove, id)
 	}
 }
+
+// TestHarnessRetriesRoundTrips confirms issue #718's harness_retries
+// column is real DB state: it starts at 0, ApplyTransition writes it,
+// and both Get and List read it back.
+func TestHarnessRetriesRoundTrips(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "harness retries", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.HarnessRetries != 0 {
+		t.Fatalf("HarnessRetries on a fresh mission = %d, want 0", m.HarnessRetries)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{
+		Next: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 3, HarnessRetries: 2},
+	}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+	if m, err = s.Get(ctx, id); err != nil {
+		t.Fatalf("Get after transition: %v", err)
+	}
+	if m.HarnessRetries != 2 {
+		t.Fatalf("HarnessRetries after transition = %d, want 2", m.HarnessRetries)
+	}
+}
+
+// TestCreateUsesSettingsMaxIterations confirms the iteration ceiling a
+// mission created without one gets comes from the settings-backed
+// getter (issue #718), with the built-in fallback when unwired.
+func TestCreateUsesSettingsMaxIterations(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "default iterations", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.MaxIterations != fallbackMaxIterations {
+		t.Fatalf("MaxIterations unwired = %d, want %d", m.MaxIterations, fallbackMaxIterations)
+	}
+
+	s.SetDefaultMaxIterations(func(context.Context) int { return 7 })
+	if id, err = s.Create(ctx, Mission{Goal: marker + "settings iterations", Kind: "general"}); err != nil {
+		t.Fatalf("Create with setting: %v", err)
+	}
+	if m, err = s.Get(ctx, id); err != nil {
+		t.Fatalf("Get with setting: %v", err)
+	}
+	if m.MaxIterations != 7 {
+		t.Fatalf("MaxIterations = %d, want the configured 7", m.MaxIterations)
+	}
+
+	// An explicit per-mission value always wins over the setting.
+	if id, err = s.Create(ctx, Mission{Goal: marker + "explicit iterations", Kind: "general", MaxIterations: 12}); err != nil {
+		t.Fatalf("Create explicit: %v", err)
+	}
+	if m, err = s.Get(ctx, id); err != nil {
+		t.Fatalf("Get explicit: %v", err)
+	}
+	if m.MaxIterations != 12 {
+		t.Fatalf("MaxIterations = %d, want the explicit 12", m.MaxIterations)
+	}
+}

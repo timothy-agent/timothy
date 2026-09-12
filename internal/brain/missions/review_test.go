@@ -540,3 +540,112 @@ func TestFitReviewPacketShrinkOrder(t *testing.T) {
 		}
 	})
 }
+
+// TestParseReviewVerdictCriteria pins issue #718's rubric decode: the
+// three statuses survive round-trip and anything else reads as
+// cannot_tell, the answer that neither blocks nor claims a criterion met.
+func TestParseReviewVerdictCriteria(t *testing.T) {
+	args := []byte(`{"decision":"approve","criteria":[
+		{"unit":0,"criterion":0,"status":"met","evidence":"base62.go:12 const alphabet"},
+		{"unit":0,"criterion":1,"status":"not_met","evidence":"no test file exists"},
+		{"unit":1,"criterion":0,"status":"cannot_tell"},
+		{"unit":1,"criterion":1,"status":"probably"}
+	]}`)
+	v, err := parseReviewVerdict(args)
+	if err != nil {
+		t.Fatalf("parseReviewVerdict: %v", err)
+	}
+	want := []CriterionVerdict{
+		{Unit: 0, Criterion: 0, Status: CriterionMet, Evidence: "base62.go:12 const alphabet"},
+		{Unit: 0, Criterion: 1, Status: CriterionNotMet, Evidence: "no test file exists"},
+		{Unit: 1, Criterion: 0, Status: CriterionCannotTell},
+		{Unit: 1, Criterion: 1, Status: CriterionCannotTell},
+	}
+	if !reflect.DeepEqual(v.Criteria, want) {
+		t.Fatalf("criteria = %+v, want %+v", v.Criteria, want)
+	}
+}
+
+// TestCriteriaFindingsSynthesis pins issue #718's Go-side rubric rules:
+// not_met opens a blocking finding titled with the criterion,
+// cannot_tell a minor one, met opens nothing, an already-open title
+// opens no second finding, and a criterion the plan lacks is skipped.
+func TestCriteriaFindingsSynthesis(t *testing.T) {
+	plan := Plan{Units: []PlanUnit{{
+		Title:     "Base62",
+		Artifacts: []string{"base62.go"},
+		Criteria:  []string{"round-trips every id", "rejects empty input", "has a table test"},
+	}}}
+	open := []Finding{{ID: "F1", Unit: 0, Title: "rejects empty input", Status: FindingOpen, Severity: SeverityBlocking}}
+	got, notMet := criteriaFindings(plan, []int{0}, []CriterionVerdict{
+		{Unit: 0, Criterion: 0, Status: CriterionMet},
+		{Unit: 0, Criterion: 1, Status: CriterionNotMet, Evidence: "empty_test.go is missing"},
+		{Unit: 0, Criterion: 2, Status: CriterionCannotTell, Evidence: "no test files in the diff"},
+		{Unit: 4, Criterion: 0, Status: CriterionNotMet, Evidence: "out of range"},
+	}, open)
+	if !notMet {
+		t.Fatal("notMet = false, want true: criterion 1 is not_met")
+	}
+	if len(got) != 1 {
+		t.Fatalf("findings = %+v, want exactly the cannot_tell one", got)
+	}
+	want := Finding{
+		Unit: 0, Title: "has a table test", File: "base62.go",
+		Detail: "reviewer could not tell", Evidence: "no test files in the diff", Severity: SeverityMinor,
+	}
+	if !reflect.DeepEqual(got[0], want) {
+		t.Fatalf("finding = %+v, want %+v", got[0], want)
+	}
+}
+
+// TestMissingCriteria counts the reviewed units' unanswered criteria,
+// the number the driver only logs (issue #718).
+func TestMissingCriteria(t *testing.T) {
+	plan := Plan{Units: []PlanUnit{
+		{Criteria: []string{"a", "b"}},
+		{Criteria: []string{"c"}},
+	}}
+	answered := []CriterionVerdict{{Unit: 0, Criterion: 0, Status: CriterionMet}}
+	if got := missingCriteria(plan, []int{0, 1}, answered); got != 2 {
+		t.Fatalf("missingCriteria = %d, want 2", got)
+	}
+	if got := missingCriteria(plan, []int{0}, answered); got != 1 {
+		t.Fatalf("missingCriteria over unit 0 only = %d, want 1", got)
+	}
+}
+
+// TestCriteriaFindingsSkipsUnitsNotUnderReview pins issue #718: the
+// round stamps every finding with the reviewed unit (mergeFindings), so
+// a criterion answered for a unit outside this round opens nothing
+// rather than a blocking finding on the wrong unit.
+func TestCriteriaFindingsSkipsUnitsNotUnderReview(t *testing.T) {
+	plan := Plan{Units: []PlanUnit{
+		{Title: "already done", Criteria: []string{"ships the binary"}, Passes: true},
+		{Title: "under review", Criteria: []string{"has a table test"}},
+	}}
+	got, notMet := criteriaFindings(plan, []int{1}, []CriterionVerdict{
+		{Unit: 0, Criterion: 0, Status: CriterionNotMet, Evidence: "no binary in the diff"},
+	}, nil)
+	if len(got) != 0 || notMet {
+		t.Fatalf("findings = %+v, notMet = %v, want nothing for a unit outside the round", got, notMet)
+	}
+}
+
+// TestCriteriaFindingsNotMetWithoutEvidenceIsCannotTell pins issue
+// #718: a not_met quoting no evidence would be demoted to minor by the
+// D-095 evidence gate, so it reads as cannot_tell and never forces a
+// rework round with no blocking finding behind it.
+func TestCriteriaFindingsNotMetWithoutEvidenceIsCannotTell(t *testing.T) {
+	plan := Plan{Units: []PlanUnit{{
+		Title: "Base62", Artifacts: []string{"base62.go"}, Criteria: []string{"round-trips every id"},
+	}}}
+	got, notMet := criteriaFindings(plan, []int{0}, []CriterionVerdict{
+		{Unit: 0, Criterion: 0, Status: CriterionNotMet},
+	}, nil)
+	if notMet {
+		t.Fatal("notMet = true, want false: an evidence-less not_met cannot force a rework")
+	}
+	if len(got) != 1 || got[0].Severity != SeverityMinor || got[0].Detail != "reviewer could not tell" {
+		t.Fatalf("findings = %+v, want one minor cannot_tell finding", got)
+	}
+}
