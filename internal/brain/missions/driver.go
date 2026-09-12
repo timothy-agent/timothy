@@ -982,6 +982,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	if err != nil {
 		d.log.Error("driver: phase run failed", "mission_id", id, "phase", m.Phase,
 			"route", phaseRoute(m), "agent", d.agentName(ctx, m.AgentID), "error", err)
+		var unavailable *ExecutorUnavailableError
 		switch {
 		case errors.Is(err, ErrModelFloor):
 			// A below-floor fallback model served this turn: it cannot
@@ -993,6 +994,16 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			// same entry is futile, so pause immediately as infra instead
 			// of burning iterations (same reasoning as ErrModelFloor above).
 			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
+		case errors.Is(err, ErrProviderRejected):
+			// The provider refused the request itself (400/404/422): the
+			// same request fails identically on every retry, so pause as
+			// infra with the provider's message (issue #704).
+			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
+		case errors.As(err, &unavailable):
+			// The mission asked for a harness no entry can serve right
+			// now (issue #704). Pause as infra and carry Until so the
+			// sweep waits out a cooldown instead of resuming into it.
+			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error(), Until: unavailable.Until}
 		case errors.Is(err, ErrGatewayUnavailable):
 			// D-101: the delegated runner already retried its route resolve
 			// with bounded backoff before giving up: this is the gateway
@@ -1652,7 +1663,12 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	case "blocked":
 		return StepInput{Input: InputWorkerBlocked, Message: verdict.Question, Provider: verdict.Provider, Model: verdict.Model}, nil
 	default: // "retry" or anything unrecognized
-		if wt := m.WorktreePath(); wt != "" {
+		// Only a RETRY the worker itself declared rolls the tree back
+		// (issue #706): a forced retry comes from transport death, an
+		// idle or run-budget kill, or an unreadable result, none of
+		// which says the edits so far are wrong, and the retry works
+		// on top of them.
+		if wt := m.WorktreePath(); wt != "" && !verdict.Forced {
 			if err := d.workspace.Rollback(ctx, wt, m.Kind); err != nil {
 				d.log.Warn("driver: rollback failed", "mission_id", m.ID, "error", err)
 			}
@@ -2074,7 +2090,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	p := WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Plan: m.Plan, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
-		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext(), ReferencedContext: m.ReferencedContext(), Attachments: m.Attachments(),
+		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext(), ReferencedContext: m.ReferencedContext(), References: m.ReferenceEntries(), Attachments: m.Attachments(),
 		Light: m.RunsPlanless(), Location: loc,
 		Findings: m.ReviewFindings, ReworkRound: m.ReworkRounds, MaxRounds: m.MaxIterations,
 	}

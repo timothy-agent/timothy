@@ -67,6 +67,14 @@ type GitHubAdapter struct {
 	Events       events
 	ResolveToken PushTokenResolver
 	PR           PRSource
+	// Attribution reports whether PR bodies end with the Timothy Agent
+	// line (settings.KeyPRAttribution); nil means on.
+	Attribution func(context.Context) bool
+}
+
+// attribution resolves the Attribution hook with its nil default.
+func (a *GitHubAdapter) attribution(ctx context.Context) bool {
+	return a.Attribution == nil || a.Attribution(ctx)
 }
 
 // NewGitHubAdapter builds a GitHubAdapter. resolveToken/pr may be nil
@@ -104,8 +112,9 @@ func (a *GitHubAdapter) PushBranch(ctx context.Context, m missions.Mission, toke
 }
 
 // PRBody composes the pull request's markdown body: goal, unit list
-// with pass state, and a short harness-verification line.
-func PRBody(m missions.Mission) string {
+// with pass state, and, when attribution is on, a closing line
+// crediting Timothy Agent with a link to its repository.
+func PRBody(m missions.Mission, attribution bool) string {
 	body := m.Goal + "\n\n"
 	if len(m.Plan.Units) > 0 {
 		body += "## Units\n\n"
@@ -118,7 +127,9 @@ func PRBody(m missions.Mission) string {
 		}
 		body += "\n"
 	}
-	body += "_Verified by Timothy's mission harness (declared artifacts + verify_cmd, checked by the harness itself, never claimed by the model)._\n"
+	if attribution {
+		body += "_PR was created by [Timothy Agent](https://github.com/timothy-agent/timothy)._\n"
+	}
 	return body
 }
 
@@ -157,7 +168,7 @@ func (a *GitHubAdapter) openPRFor(ctx context.Context, m missions.Mission, token
 	if base == "" {
 		return "", 0, fmt.Errorf("pr: repo has no default branch")
 	}
-	url, number, err = a.PR.CreatePR(ctx, connectorID, owner, repo, missions.ConventionalPRTitle(m), m.Branch, base, PRBody(m))
+	url, number, err = a.PR.CreatePR(ctx, connectorID, owner, repo, missions.ConventionalPRTitle(m), m.Branch, base, PRBody(m, a.attribution(ctx)))
 	if err != nil {
 		return "", 0, fmt.Errorf("pr: %w", err)
 	}

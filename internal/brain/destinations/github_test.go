@@ -3,6 +3,7 @@ package destinations
 import (
 	"context"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -394,4 +395,34 @@ func TestDeliverMissionModes(t *testing.T) {
 			t.Fatal("DeliverMission with a rejected push: want an error, got nil")
 		}
 	})
+}
+
+func TestPRBody(t *testing.T) {
+	m := missions.Mission{Goal: "Add base62"}
+	m.Plan.Units = []missions.PlanUnit{{Title: "encode", Passes: true}, {Title: "decode"}}
+	got := PRBody(m, true)
+	for _, want := range []string{
+		"Add base62\n\n## Units\n\n",
+		"- [x] encode\n",
+		"- [ ] decode\n",
+		"_PR was created by [Timothy Agent](https://github.com/timothy-agent/timothy)._\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("PRBody missing %q in:\n%s", want, got)
+		}
+	}
+	if off := PRBody(m, false); strings.Contains(off, "Timothy Agent") {
+		t.Errorf("PRBody(attribution=false) still carries the attribution line:\n%s", off)
+	}
+}
+
+func TestGitHubAdapterAttributionDefaultsOn(t *testing.T) {
+	a := &GitHubAdapter{}
+	if !a.attribution(context.Background()) {
+		t.Fatal("nil Attribution hook = false, want true")
+	}
+	a.Attribution = func(context.Context) bool { return false }
+	if a.attribution(context.Background()) {
+		t.Fatal("Attribution hook returning false was ignored")
+	}
 }

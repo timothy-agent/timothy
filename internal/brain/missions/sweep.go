@@ -475,6 +475,9 @@ func autoResumeInfra(ctx context.Context, d signaler, store pausedByReasonStore,
 		if time.Since(m.UpdatedAt) < autoResumeInfraDelays[idx] {
 			continue // not due yet
 		}
+		if time.Now().Before(m.ResumeAfter) {
+			continue // the pause named when a retry can succeed (issue #704); resuming earlier re-pauses at once
+		}
 		log.Info("auto-resume infra sweep: resuming an infra-paused mission", "mission_id", m.ID, "prior_pauses", n)
 		if err := d.Signal(ctx, m.ID, InputResume); err != nil {
 			log.Error("auto-resume infra sweep: signal failed", "mission_id", m.ID, "error", err)

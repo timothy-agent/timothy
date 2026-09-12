@@ -39,6 +39,19 @@ var ErrModelFloor = errors.New("mission turn served by a below-floor model")
 // an ordinary infra failure.
 var ErrPromptTooLong = errors.New("mission turn rejected: prompt exceeds the model context window")
 
+// ErrProviderRejected reports that the provider refused the request
+// itself (gateway noFailoverCodes: http_400/404/413/422,
+// invalid_request), issue #704. The same request fails the same way
+// on every retry, so the driver pauses the mission as infra with the
+// provider's message instead of burning iterations on it.
+var ErrProviderRejected = errors.New("mission turn rejected by the provider")
+
+// providerRejectedCodes mirrors the gateway's noFailoverCodes: a
+// terminal error carrying one of these never gets better on retry.
+var providerRejectedCodes = map[string]bool{
+	"invalid_request": true, "http_400": true, "http_404": true, "http_413": true, "http_422": true,
+}
+
 // ErrAskedUser reports that a turn ended via a successful ask_user
 // call (D-088) rather than the phase's own sentinel: every phase
 // entry point (RunWorker/DiscoverSession/PlanSession/RunReview) returns
@@ -1023,6 +1036,9 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 			}
 			if strings.Contains(msg, "context_length") {
 				return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("%w: %s", ErrPromptTooLong, msg)
+			}
+			if ev.Err != nil && providerRejectedCodes[ev.Err.Code] {
+				return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("%w: %s", ErrProviderRejected, msg)
 			}
 			return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("mission runner: %s", msg)
 		}

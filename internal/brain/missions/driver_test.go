@@ -1446,6 +1446,24 @@ func pausedDetail(t *testing.T, store *fakeStore, id string) string {
 	return detail
 }
 
+// pausedPayloadField returns the named string field of the most recent
+// mission.paused event's payload, "" when absent.
+func pausedPayloadField(t *testing.T, store *fakeStore, id, field string) string {
+	t.Helper()
+	got := ""
+	for _, ev := range store.events[id] {
+		if ev.Kind != "mission.paused" {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal mission.paused payload: %v", err)
+		}
+		got, _ = payload[field].(string)
+	}
+	return got
+}
+
 // TestDriverStallParksOnUntouchedFinding pins the driver's wiring of
 // the id-based stall (D-092): a blocking finding whose file the worker
 // left untouched for StallRounds turns, rejected once more, parks
@@ -1536,6 +1554,55 @@ func TestDriverReworkUntouchedEvent(t *testing.T) {
 			}
 			if saw != tc.wantEvent {
 				t.Fatalf("mission.rework_untouched emitted = %v, want %v", saw, tc.wantEvent)
+			}
+		})
+	}
+}
+
+// TestDriverRetryRollbackOnlyForWorkerDeclaredRetry (issue #706): a
+// forced retry (transport death, idle or run-budget kill, unreadable
+// result) keeps the worktree's edits; only a RETRY the worker declared
+// rolls them back.
+func TestDriverRetryRollbackOnlyForWorkerDeclaredRetry(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		verdict  WorkerVerdict
+		wantKept bool
+	}{
+		{"forced retry keeps the tree", forcedRetryVerdict("executor process was lost"), true},
+		{"worker retry rolls back", WorkerVerdict{Outcome: "retry", Analysis: "wrong approach"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			wt := filepath.Join(root, "wt")
+			if err := os.MkdirAll(wt, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			gitRun(t, wt, "init", "-q", "-b", "main")
+			if err := os.WriteFile(filepath.Join(wt, "base.go"), []byte("package x\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			gitRun(t, wt, "add", "base.go")
+			gitRun(t, wt, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "base")
+			store := newFakeStore()
+			store.put("m1", Mission{
+				ID: "m1", Kind: "coding", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8,
+				Workspace: root, Plan: Plan{Units: []PlanUnit{{Title: "u1"}}},
+			})
+			runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{tc.verdict}}
+			workspace := NewWorkspace(root, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			d := NewDriver(store, runner, workspace, nil, nil, nil, fakeSandboxExec, nil, slog.Default())
+			edited := filepath.Join(wt, "x.go")
+			if err := os.WriteFile(edited, []byte("package x\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := d.Advance(context.Background(), "m1"); err != nil {
+				t.Fatalf("Advance: %v", err)
+			}
+			_, statErr := os.Stat(edited)
+			if kept := statErr == nil; kept != tc.wantKept {
+				t.Fatalf("x.go kept = %v, want %v", kept, tc.wantKept)
 			}
 		})
 	}
@@ -3228,6 +3295,50 @@ func TestDriverModelFloorPausesImmediately(t *testing.T) {
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
 		t.Fatalf("mission after below-floor turn = %s/%s, want paused/infra immediately", m.Status, m.PauseReason)
+	}
+}
+
+// TestDriverExecutorUnavailablePausesWithUntil (issue #704): a
+// requested harness with no entry able to serve it pauses the mission
+// as infra on the first turn, and the pause payload carries the
+// executor's retry time so the sweep waits for it.
+func TestDriverExecutorUnavailablePausesWithUntil(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "coding", Harness: "codex-cli", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8})
+	until := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+	runner := &scriptedRunner{workerErr: &ExecutorUnavailableError{Harness: "codex-cli", Reason: "openai/gpt-5.3-codex is cooling down after a failure", Until: until}}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
+		t.Fatalf("mission = %s/%s, want paused/infra", m.Status, m.PauseReason)
+	}
+	if detail := pausedDetail(t, store, "m1"); !strings.Contains(detail, "codex-cli: openai/gpt-5.3-codex is cooling down") || !strings.Contains(detail, "retry after 2026-09-12T10:00:00Z") {
+		t.Fatalf("mission.paused detail = %q, want harness, reason and retry time", detail)
+	}
+	if got := pausedPayloadField(t, store, "m1", "until"); got != "2026-09-12T10:00:00Z" {
+		t.Fatalf("mission.paused until = %q, want 2026-09-12T10:00:00Z", got)
+	}
+}
+
+// TestDriverProviderRejectedPausesImmediately (issue #704): a provider
+// refusing the request (400/404/422) pauses as infra on the first
+// turn instead of accruing worker_failed rounds.
+func TestDriverProviderRejectedPausesImmediately(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: provider rejected the request (http_404)", ErrProviderRejected)}
+	d := testDriver(store, runner)
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
+		t.Fatalf("mission = %s/%s, want paused/infra immediately", m.Status, m.PauseReason)
 	}
 }
 
