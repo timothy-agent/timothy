@@ -70,6 +70,40 @@ func PRTitle(m Mission) string {
 	return m.Goal[:PRTitleGoalCap] + "…"
 }
 
+// prTitleTypes maps the first word of a mission's name or goal to a
+// Conventional Commits type; anything else is a feat (issue #709).
+var prTitleTypes = map[string]string{
+	"fix": "fix", "fixes": "fix", "bug": "fix", "bugfix": "fix", "hotfix": "fix", "repair": "fix",
+	"docs": "docs", "doc": "docs", "document": "docs", "documentation": "docs", "readme": "docs",
+	"refactor": "refactor", "refactoring": "refactor", "rename": "refactor", "restructure": "refactor",
+	"test": "test", "tests": "test",
+	"chore": "chore", "ci": "chore", "bump": "chore", "upgrade": "chore",
+}
+
+// ConventionalPRTitle renders PRTitle as a Conventional Commits subject
+// line (issue #709): "<type>: <subject>", lowercase, no trailing
+// period, at most PRTitleGoalCap bytes. The type comes from the first
+// word of the name (or goal) via prTitleTypes, feat otherwise; an
+// explicit "type:" prefix already in the name is kept, not doubled.
+func ConventionalPRTitle(m Mission) string {
+	subject := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(PRTitle(m), "…")))
+	subject = strings.TrimRight(subject, ". ")
+	kind := "feat"
+	if fields := strings.Fields(subject); len(fields) > 0 {
+		if t, ok := prTitleTypes[strings.Trim(fields[0], ":,")]; ok {
+			kind = t
+			if len(fields) > 1 && strings.HasSuffix(fields[0], ":") {
+				subject = strings.TrimSpace(strings.TrimPrefix(subject, fields[0]))
+			}
+		}
+	}
+	title := kind + ": " + subject
+	if len(title) > PRTitleGoalCap {
+		title = strings.TrimRight(title[:PRTitleGoalCap], " ")
+	}
+	return title
+}
+
 // pushTimeout bounds one push attempt — long enough for a real repo
 // over the network, short enough that a hung remote doesn't pin the
 // request indefinitely.

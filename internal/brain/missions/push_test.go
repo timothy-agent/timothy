@@ -234,6 +234,34 @@ func TestParseGitHubRepoURL(t *testing.T) {
 	}
 }
 
+// TestConventionalPRTitle covers the Conventional Commits shape the
+// github destination uses for PR titles (issue #709).
+func TestConventionalPRTitle(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		m    Mission
+		want string
+	}{
+		{"feat by default, lowercase", Mission{Name: "Molla-go URL Shortener Design"}, "feat: molla-go url shortener design"},
+		{"fix cue from the name", Mission{Name: "Fix Login Bug"}, "fix: fix login bug"},
+		{"docs cue from the goal", Mission{Goal: "Document the deploy runbook."}, "docs: document the deploy runbook"},
+		{"explicit prefix is not doubled", Mission{Name: "fix: login redirect loop"}, "fix: login redirect loop"},
+		{"long goal is cut at the cap", Mission{Goal: strings.Repeat("a", 100)}, "feat: " + strings.Repeat("a", PRTitleGoalCap-len("feat: "))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ConventionalPRTitle(tc.m)
+			if got != tc.want {
+				t.Fatalf("ConventionalPRTitle = %q, want %q", got, tc.want)
+			}
+			if len(got) > PRTitleGoalCap {
+				t.Fatalf("len = %d, want <= %d", len(got), PRTitleGoalCap)
+			}
+		})
+	}
+}
+
 // TestPRTitleFallsBackToTruncatedGoal covers PRTitle's name-vs-goal
 // precedence and the truncation cap for a long goal with no name yet.
 func TestPRTitleFallsBackToTruncatedGoal(t *testing.T) {
