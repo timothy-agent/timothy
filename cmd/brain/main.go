@@ -341,6 +341,9 @@ func main() {
 			githubPR = connsPRSource{conns}
 		}
 		githubAdapter = destinations.NewGitHubAdapter(missionWorkspace, missionStore, resolveGitHubToken, githubPR)
+		githubAdapter.Attribution = func(ctx context.Context) bool {
+			return flags.Enabled(ctx, settings.KeyPRAttribution)
+		}
 	}
 	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, githubAdapter, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
