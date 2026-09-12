@@ -596,12 +596,12 @@ func TestDelegatedRunWorker_WritesReferenceFiles(t *testing.T) {
 	}
 	rdir, _ := spawnedPayload(t, events)["run_dir"].(string)
 	for rel, want := range map[string]string{"refs/parent-mission.md": "parent digest", "refs/01-design.md": "kb body"} {
-		got, err := os.ReadFile(filepath.Join(rdir, rel))
+		got, err := os.ReadFile(filepath.Join(rdir, rel)) //nolint:gosec // G304: test-owned run dir.
 		if err != nil || string(got) != want {
 			t.Fatalf("%s = %q, %v; want %q", rel, got, err, want)
 		}
 	}
-	prompt, _ := os.ReadFile(filepath.Join(rdir, "prompt.md"))
+	prompt, _ := os.ReadFile(filepath.Join(rdir, "prompt.md")) //nolint:gosec // G304: test-owned run dir.
 	if strings.Contains(string(prompt), "kb body") || !strings.Contains(string(prompt), filepath.Join(rdir, "refs", "01-design.md")) {
 		t.Fatalf("prompt inlines the reference or lacks its path:\n%s", prompt)
 	}
@@ -1383,7 +1383,7 @@ func TestDelegatedRunWorker_Dispatch_NoUsableEntryPauses(t *testing.T) {
 	m := testMission("m1", t.TempDir())
 
 	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
-	wantUnavailable(t, err, "no usable route entry")
+	_ = wantUnavailable(t, err, "no usable route entry")
 	if native.callCount() != 0 {
 		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
@@ -2216,7 +2216,7 @@ func TestDelegatedRunWorker_Dispatch_UnknownHarnessPauses(t *testing.T) {
 	m.Harness = "codex-cli-unregistered"
 
 	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
-	wantUnavailable(t, err, "unknown harness")
+	_ = wantUnavailable(t, err, "unknown harness")
 	if native.callCount() != 0 {
 		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
@@ -2253,7 +2253,7 @@ func TestDelegatedRunWorker_Dispatch_HarnessOnGeneralPauses(t *testing.T) {
 	m.Kind = "general"
 
 	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
-	wantUnavailable(t, err, "harness not allowed for kind")
+	_ = wantUnavailable(t, err, "harness not allowed for kind")
 	if native.callCount() != 0 {
 		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
@@ -2283,7 +2283,7 @@ func TestDelegatedRunWorker_Dispatch_ResolveErrorPauses(t *testing.T) {
 	m := testMission("m1", t.TempDir())
 
 	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
-	wantUnavailable(t, err, "route resolve failed")
+	_ = wantUnavailable(t, err, "route resolve failed")
 	if native.callCount() != 0 {
 		t.Fatalf("native call count = %d, want 0 (an explicit harness never falls back)", native.callCount())
 	}
