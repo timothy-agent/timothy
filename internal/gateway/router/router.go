@@ -490,7 +490,24 @@ func (s *Snapshot) entryGate(row ProviderRow, model string, required []provider.
 			return nil, row.Name + "/" + model, fmt.Sprintf("lacks %s capability", want)
 		}
 	}
+	if s.responsesOnly(row, model) {
+		return nil, row.Name + "/" + model, "responses_only: the model serves /v1/responses only, not chat/completions; use an openai-responses provider row"
+	}
 	return p, "", ""
+}
+
+// responsesOnly reports whether row would send model over
+// chat/completions when the catalog says the model only speaks the
+// Responses API (LiteLLM mode "responses", the gpt-5.x-codex family),
+// issue #708. The chat driver gets a 404 on every call there, so the
+// native walk skips the row instead of failing over into it. A
+// missing catalog match keeps the row usable: the driver decides.
+func (s *Snapshot) responsesOnly(row ProviderRow, model string) bool {
+	if row.Driver != "openaicompat" {
+		return false
+	}
+	m, ok := s.catalogModel(row, model)
+	return ok && m.Mode == "responses"
 }
 
 // Strategy weights: relative importance of each additive factor,
