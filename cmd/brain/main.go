@@ -48,6 +48,7 @@ import (
 	pdfgenclient "github.com/SumonMSelim/timothy/internal/platform/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
+	"github.com/SumonMSelim/timothy/internal/platform/tesseract"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 	"github.com/SumonMSelim/timothy/migrations"
 )
@@ -190,6 +191,10 @@ func main() {
 	if pdfgenURL == "" {
 		app.Log.Warn("PDFGEN_URL not set; PDF generation is unavailable")
 	}
+	ocrURL := os.Getenv("OCR_URL")
+	if ocrURL == "" {
+		app.Log.Warn("OCR_URL not set; KB images fall back to no description when no vision route is bound")
+	}
 
 	toolCalls := app.Metrics.NewCounterVec("tool_calls_total",
 		"Tool executions by tool name and outcome.", "tool", "outcome")
@@ -213,6 +218,22 @@ func main() {
 	// mission/schedule attachment resolution (issue #359) so both draw
 	// on the same vision-route mechanism.
 	captionImage := chat.CaptionImageOverGateway(gwc, app.Log)
+	// recognizeImage reads text off an image with the local ocr sidecar:
+	// the fallback KB enrichment takes when no vision route is bound
+	// (issue #558). Nil when OCR_URL is unset, which leaves enrichment
+	// vision-only. Compose-internal address, so no netguard transport.
+	var recognizeImage kb.Recognizer
+	if ocrURL != "" {
+		ocrClient := &http.Client{}
+		recognizeImage = func(ctx context.Context, mediaType string, data []byte) string {
+			text, err := tesseract.Recognize(ctx, ocrClient, ocrURL, data, mediaType)
+			if err != nil {
+				app.Log.Warn("kb ocr failed", "error", err)
+				return ""
+			}
+			return strings.TrimSpace(text)
+		}
+	}
 	// KB image captioning (issues #349/#350): default-off, gated on
 	// settings.KeyKBImageCaptioning; shared by the manual ingest funnel,
 	// the retry sweep, mission promotion, and every PDF-consuming attachment
@@ -220,6 +241,8 @@ func main() {
 	// on what "captioned" means.
 	kbEnrich := api.NewKBEnricher(captionImage, func(ctx context.Context) bool {
 		return flags.Enabled(ctx, settings.KeyKBImageCaptioning)
+	}, chat.VisionRouteBound(gwc, app.Log), recognizeImage, func(ctx context.Context) bool {
+		return flags.Enabled(ctx, settings.KeyKBLocalOCR)
 	}, app.Log)
 
 	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, flags.Location, mc.Add, app.Log, toolCalls, sensitiveRoute, fxStore, kbEnrich)

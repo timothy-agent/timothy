@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown pdfgen sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible kb-eval sandbox-image
+	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible kb-eval sandbox-image
 
 build:
 	$(GO_RUN) go build ./...
@@ -74,13 +74,13 @@ up: sandbox-image
 	$(COMPOSE) up -d --build
 
 # Per-service rebuild+restart for when only one service changed:
-#   make brain / make gateway / make memoryd / make web / make markitdown / make pdfgen / make whisper / make sandboxd
+#   make brain / make gateway / make memoryd / make web / make markitdown / make pdfgen / make ocr / make whisper / make sandboxd
 # Rolling brain and sandboxd separately: restart sandboxd first — the
 # API between them is additive-only, so an older brain against a newer
 # sandboxd (or vice versa, briefly) stays compatible either order, but
 # sandboxd-first avoids brain's own restart racing against sandboxd's
 # health check on its way up.
-brain gateway memoryd web markitdown pdfgen whisper sandboxd:
+brain gateway memoryd web markitdown pdfgen ocr whisper sandboxd:
 	$(COMPOSE) up -d --build $@
 
 # Vite dev server with hot reload on :3301 (proxies /v1 to brain).

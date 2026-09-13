@@ -26,6 +26,22 @@ func fakeCaptioner(text string, fail bool) Captioner {
 	}
 }
 
+func alwaysDisabled(context.Context) bool { return false }
+
+// fakeRecognizer returns text for any input, or "" when told to fail,
+// recording how many times it ran.
+func fakeRecognizer(text string, fail bool, calls *int) Recognizer {
+	return func(context.Context, string, []byte) string {
+		if calls != nil {
+			*calls++
+		}
+		if fail {
+			return ""
+		}
+		return text
+	}
+}
+
 func TestExtractImageLinksDedupsAndSkipsNonHTTP(t *testing.T) {
 	md := "![a diagram](https://example.com/a.png)\n\n" +
 		"text ![again same](https://example.com/a.png \"title\") more\n" +
@@ -239,6 +255,249 @@ func TestEnrichPDFNoImagesOrScannedPagesIsNoop(t *testing.T) {
 	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
 	if out != "# doc" || stats.Captioned != 0 {
 		t.Fatalf("out=%q stats=%+v, want unchanged with a text-rich page and no images", out, stats)
+	}
+}
+
+// imageServer serves the same sniffable PNG for every request,
+// counting hits so a test can assert a reingest didn't re-fetch.
+func imageServer(t *testing.T, calls *int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls != nil {
+			*calls++
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pngBytes())
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestEnrichMarkdownNoVisionRouteFallsBackToOCR(t *testing.T) {
+	srv := imageServer(t, nil)
+	captionCalls := 0
+	e := &Enricher{
+		Fetch: srv.Client(),
+		Caption: func(context.Context, string, []byte) string {
+			captionCalls++
+			return "a caption"
+		},
+		Enabled:         alwaysEnabled,
+		VisionAvailable: alwaysDisabled,
+		OCR:             fakeRecognizer("INVOICE TOTAL 42", false, nil),
+		OCREnabled:      alwaysEnabled,
+		Log:             discardLog(),
+	}
+	out, stats := e.EnrichMarkdown(context.Background(), "![x]("+srv.URL+"/a.png)")
+	if stats.Captioned != 1 || stats.Failed != 0 {
+		t.Fatalf("stats = %+v, want Captioned=1 Failed=0", stats)
+	}
+	if !strings.Contains(out, "> "+ocrMarker+" INVOICE TOTAL 42") {
+		t.Fatalf("out = %q, want an OCR-marked block", out)
+	}
+	if strings.Contains(out, captionMarker) {
+		t.Fatalf("out = %q, want no caption marker when OCR produced the text", out)
+	}
+	if captionCalls != 0 {
+		t.Fatalf("caption calls = %d, want 0 with no vision route bound", captionCalls)
+	}
+}
+
+func TestEnrichMarkdownOCRFailureKeepsContentUnchanged(t *testing.T) {
+	srv := imageServer(t, nil)
+	e := &Enricher{
+		Fetch:           srv.Client(),
+		Caption:         fakeCaptioner("a caption", false),
+		Enabled:         alwaysEnabled,
+		VisionAvailable: alwaysDisabled,
+		OCR:             fakeRecognizer("", true, nil),
+		OCREnabled:      alwaysEnabled,
+		Log:             discardLog(),
+	}
+	md := "![x](" + srv.URL + "/a.png)"
+	out, stats := e.EnrichMarkdown(context.Background(), md)
+	if out != md {
+		t.Fatalf("out = %q, want unchanged when OCR fails", out)
+	}
+	if stats.Failed != 1 || stats.Captioned != 0 {
+		t.Fatalf("stats = %+v, want Failed=1 Captioned=0", stats)
+	}
+}
+
+func TestEnrichMarkdownOCRDisabledSkipsFallback(t *testing.T) {
+	srv := imageServer(t, nil)
+	ocrCalls := 0
+	e := &Enricher{
+		Fetch:           srv.Client(),
+		Caption:         fakeCaptioner("a caption", false),
+		Enabled:         alwaysEnabled,
+		VisionAvailable: alwaysDisabled,
+		OCR:             fakeRecognizer("text", false, &ocrCalls),
+		OCREnabled:      alwaysDisabled,
+		Log:             discardLog(),
+	}
+	md := "![x](" + srv.URL + "/a.png)"
+	out, stats := e.EnrichMarkdown(context.Background(), md)
+	if out != md || stats.Failed != 1 {
+		t.Fatalf("out=%q stats=%+v, want unchanged with Failed=1 when OCR is off", out, stats)
+	}
+	if ocrCalls != 0 {
+		t.Fatalf("ocr calls = %d, want 0 when the OCR switch is off", ocrCalls)
+	}
+}
+
+func TestEnrichMarkdownVisionAvailableNeverRunsOCR(t *testing.T) {
+	srv := imageServer(t, nil)
+	ocrCalls := 0
+	e := &Enricher{
+		Fetch:           srv.Client(),
+		Caption:         fakeCaptioner("a bar chart", false),
+		Enabled:         alwaysEnabled,
+		VisionAvailable: alwaysEnabled,
+		OCR:             fakeRecognizer("raw text", false, &ocrCalls),
+		OCREnabled:      alwaysEnabled,
+		Log:             discardLog(),
+	}
+	out, stats := e.EnrichMarkdown(context.Background(), "![x]("+srv.URL+"/a.png)")
+	if stats.Captioned != 1 {
+		t.Fatalf("stats = %+v, want Captioned=1", stats)
+	}
+	if !strings.Contains(out, "> "+captionMarker+" a bar chart") {
+		t.Fatalf("out = %q, want the vision caption block", out)
+	}
+	if ocrCalls != 0 {
+		t.Fatalf("ocr calls = %d, want 0 when a vision route is bound", ocrCalls)
+	}
+}
+
+func TestEnrichMarkdownAlreadyOCRdIsIdempotent(t *testing.T) {
+	calls := 0
+	srv := imageServer(t, &calls)
+	e := &Enricher{
+		Fetch:           srv.Client(),
+		Caption:         fakeCaptioner("a caption", false),
+		Enabled:         alwaysEnabled,
+		VisionAvailable: alwaysDisabled,
+		OCR:             fakeRecognizer("PAGE ONE", false, nil),
+		OCREnabled:      alwaysEnabled,
+		Log:             discardLog(),
+	}
+	out1, stats1 := e.EnrichMarkdown(context.Background(), "![x]("+srv.URL+"/a.png)")
+	if stats1.Captioned != 1 || calls != 1 {
+		t.Fatalf("first pass: stats=%+v calls=%d, want Captioned=1 calls=1", stats1, calls)
+	}
+
+	// A later reingest with vision back online must still skip: an
+	// OCR'd image is never re-described for a better caption.
+	e.VisionAvailable = alwaysEnabled
+	out2, stats2 := e.EnrichMarkdown(context.Background(), out1)
+	if stats2.Skipped != 1 || stats2.Captioned != 0 {
+		t.Fatalf("second pass: stats=%+v, want Skipped=1 Captioned=0", stats2)
+	}
+	if calls != 1 {
+		t.Fatalf("fetch calls = %d after reingest, want still 1", calls)
+	}
+	if out2 != out1 {
+		t.Fatalf("second pass changed the markdown, want byte-identical output")
+	}
+}
+
+func TestEnrichPDFNoVisionRouteFallsBackToOCR(t *testing.T) {
+	renderB64 := "QkJC"
+	e := &Enricher{
+		Caption:         fakeCaptioner("a caption", false),
+		Enabled:         alwaysEnabled,
+		VisionAvailable: alwaysDisabled,
+		OCR:             fakeRecognizer("SCANNED LINE", false, nil),
+		OCREnabled:      alwaysEnabled,
+		Log:             discardLog(),
+	}
+	res := markitdown.PDFImagesResult{Pages: []markitdown.PDFPage{
+		{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}},
+		{Page: 2, TextChars: 5, RenderB64: &renderB64},
+	}}
+	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
+	if stats.Found != 2 || stats.Captioned != 2 || stats.Failed != 0 {
+		t.Fatalf("stats = %+v, want Found=2 Captioned=2", stats)
+	}
+	if !strings.Contains(out, "## Page 1 images") || !strings.Contains(out, "## Page 2 (scanned)") {
+		t.Fatalf("out = %q, want both sections", out)
+	}
+	if strings.Count(out, "> "+ocrMarker+" SCANNED LINE") != 2 {
+		t.Fatalf("out = %q, want both blocks OCR-marked", out)
+	}
+	if strings.Contains(out, captionMarker) {
+		t.Fatalf("out = %q, want no caption marker when OCR produced the text", out)
+	}
+}
+
+func TestEnrichPDFOCRFailureKeepsContentUnchanged(t *testing.T) {
+	renderB64 := "QkJC"
+	e := &Enricher{
+		Caption:         fakeCaptioner("a caption", false),
+		Enabled:         alwaysEnabled,
+		VisionAvailable: alwaysDisabled,
+		OCR:             fakeRecognizer("", true, nil),
+		OCREnabled:      alwaysEnabled,
+		Log:             discardLog(),
+	}
+	res := markitdown.PDFImagesResult{Pages: []markitdown.PDFPage{
+		{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}},
+		{Page: 2, TextChars: 5, RenderB64: &renderB64},
+	}}
+	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
+	if out != "# doc" {
+		t.Fatalf("out = %q, want unchanged when OCR fails", out)
+	}
+	if stats.Failed != 2 || stats.Captioned != 0 {
+		t.Fatalf("stats = %+v, want Failed=2 Captioned=0", stats)
+	}
+}
+
+func TestEnrichPDFOCRDisabledSkipsFallback(t *testing.T) {
+	ocrCalls := 0
+	e := &Enricher{
+		Caption:         fakeCaptioner("a caption", false),
+		Enabled:         alwaysEnabled,
+		VisionAvailable: alwaysDisabled,
+		OCR:             fakeRecognizer("text", false, &ocrCalls),
+		OCREnabled:      alwaysDisabled,
+		Log:             discardLog(),
+	}
+	res := markitdown.PDFImagesResult{Pages: []markitdown.PDFPage{
+		{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}},
+	}}
+	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
+	if out != "# doc" || stats.Failed != 1 {
+		t.Fatalf("out=%q stats=%+v, want unchanged with Failed=1 when OCR is off", out, stats)
+	}
+	if ocrCalls != 0 {
+		t.Fatalf("ocr calls = %d, want 0 when the OCR switch is off", ocrCalls)
+	}
+}
+
+func TestEnrichPDFVisionAvailableNeverRunsOCR(t *testing.T) {
+	ocrCalls := 0
+	e := &Enricher{
+		Caption:         fakeCaptioner("a flowchart", false),
+		Enabled:         alwaysEnabled,
+		VisionAvailable: alwaysEnabled,
+		OCR:             fakeRecognizer("raw text", false, &ocrCalls),
+		OCREnabled:      alwaysEnabled,
+		Log:             discardLog(),
+	}
+	res := markitdown.PDFImagesResult{Pages: []markitdown.PDFPage{
+		{Page: 1, Images: []markitdown.PDFImage{{MediaType: "image/png", DataB64: "AAAA"}}},
+	}}
+	out, stats := e.EnrichPDF(context.Background(), "# doc", res)
+	if stats.Captioned != 1 {
+		t.Fatalf("stats = %+v, want Captioned=1", stats)
+	}
+	if !strings.Contains(out, "> "+captionMarker+" a flowchart") {
+		t.Fatalf("out = %q, want the vision caption block", out)
+	}
+	if ocrCalls != 0 {
+		t.Fatalf("ocr calls = %d, want 0 when a vision route is bound", ocrCalls)
 	}
 }
 

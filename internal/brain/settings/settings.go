@@ -30,6 +30,11 @@ const (
 	// switch here it defaults OFF for an absent row (knownKeysOff), since
 	// enabling it means real gateway spend the operator must opt into.
 	KeyKBImageCaptioning = "kb_image_captioning_enabled"
+	// KeyKBLocalOCR gates the local-OCR fallback that runs when no
+	// vision route is bound (issue #558). Default on, unlike
+	// KeyKBImageCaptioning: the ocr sidecar is local and free, so there
+	// is no spend to opt into.
+	KeyKBLocalOCR = "kb_local_ocr_enabled"
 	// KeyPRAttribution gates the closing line on pull requests the
 	// github destination opens, crediting Timothy Agent with a link to
 	// its repository. Default on; off leaves the PR body at goal and
@@ -39,7 +44,7 @@ const (
 
 var knownKeys = map[string]bool{
 	KeyTools: true, KeyMemoryExtraction: true, KeyCompaction: true, KeyScheduler: true,
-	KeyKBImageCaptioning: true, KeyPRAttribution: true,
+	KeyKBImageCaptioning: true, KeyKBLocalOCR: true, KeyPRAttribution: true,
 }
 
 // knownKeysOff lists switches from knownKeys whose absent-row default is

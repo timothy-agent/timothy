@@ -73,6 +73,13 @@ services:
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng/markitdown.
 
+  ocr:
+    <<: *service
+    image: ghcr.io/timothy-agent/timothy-ocr:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
+    # internal-only: no published ports, no auth; brain is the sole
+    # caller, same trust boundary as searxng/markitdown. Always on,
+    # unlike whisper: tesseract loads no model and idles at a few MiB.
+
   whisper:
     <<: *service
     profiles: [whisper]
@@ -128,6 +135,10 @@ services:
       # Renders markdown to PDF (mission export, chat export, PDF
       # tool); compose-internal only.
       PDFGEN_URL: http://pdfgen:8000
+      # Local OCR for KB images when no vision route is bound;
+      # compose-internal only. Empty degrades to no description at all,
+      # never a failed ingest.
+      OCR_URL: http://ocr:8000
       # Local speech-to-text for the web mic button; compose-internal
       # only, audio never leaves the box. Empty by default (feature
       # off) since whisper itself defaults off — see its service

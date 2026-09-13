@@ -41,6 +41,26 @@ func TestOtherSwitchesDefaultOn(t *testing.T) {
 	}
 }
 
+// TestKBLocalOCRDefaultsOn pins the local-OCR fallback as a known key
+// that defaults ON despite sitting next to the default-off captioning
+// switch: the ocr sidecar is local and free, so there is no spend to
+// opt into.
+func TestKBLocalOCRDefaultsOn(t *testing.T) {
+	s := degradedStore(t)
+	if !s.Enabled(context.Background(), KeyKBLocalOCR) {
+		t.Fatal("KeyKBLocalOCR = false, want true by default")
+	}
+	if !s.All(context.Background())[KeyKBLocalOCR] {
+		t.Fatal("All()[KeyKBLocalOCR] = false, want true by default")
+	}
+	if !knownKeys[KeyKBLocalOCR] {
+		t.Fatal("KeyKBLocalOCR missing from knownKeys")
+	}
+	if knownKeysOff[KeyKBLocalOCR] {
+		t.Fatal("KeyKBLocalOCR in knownKeysOff, want default-on")
+	}
+}
+
 // TestUnknownKeyDefaultsOn confirms an unrecognized key still defaults
 // to true, matching Enabled's documented behavior for unknown keys.
 func TestUnknownKeyDefaultsOn(t *testing.T) {

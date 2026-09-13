@@ -462,12 +462,18 @@ var kbFetchTransport http.RoundTripper = &http.Transport{DialContext: netguard.D
 // kbFetchTransport dials user-supplied URLs through: caption is
 // chat.CaptionImageOverGateway(gwc, log) in production, enabled reads
 // settings.Store.Enabled(ctx, settings.KeyKBImageCaptioning).
-func NewKBEnricher(caption kb.Captioner, enabled func(context.Context) bool, log *slog.Logger) *kb.Enricher {
+// visionAvailable, ocr and ocrEnabled wire the local-OCR fallback for
+// when no vision route is bound (issue #558); all three nil keeps the
+// vision-only behavior.
+func NewKBEnricher(caption kb.Captioner, enabled func(context.Context) bool, visionAvailable func(context.Context) bool, ocr kb.Recognizer, ocrEnabled func(context.Context) bool, log *slog.Logger) *kb.Enricher {
 	return &kb.Enricher{
-		Fetch:   &http.Client{Timeout: kbURLFetchTimeout, Transport: kbFetchTransport},
-		Caption: caption,
-		Enabled: enabled,
-		Log:     log,
+		Fetch:           &http.Client{Timeout: kbURLFetchTimeout, Transport: kbFetchTransport},
+		Caption:         caption,
+		Enabled:         enabled,
+		VisionAvailable: visionAvailable,
+		OCR:             ocr,
+		OCREnabled:      ocrEnabled,
+		Log:             log,
 	}
 }
 

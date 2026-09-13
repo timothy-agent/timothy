@@ -836,6 +836,37 @@ const captionTimeout = 30 * time.Second
 // verbatim since diagrams/screenshots often carry the only copy of it.
 const captionSystem = `Describe this image in plain prose, at most 120 words: what it shows, and transcribe any visible text verbatim. No markdown formatting, no preamble like "This image shows". Reply with only the description.`
 
+// visionRoute resolves the route a caption call would use: the
+// "vision" role, falling back to "default". Shared with
+// VisionRouteBound so the availability probe can never disagree with
+// what the captioner actually calls.
+func visionRoute(ctx context.Context, gw Gateway, log *slog.Logger) (string, bool) {
+	route, ok, err := gw.RouteForRole(ctx, "vision")
+	if err == nil && ok {
+		return route, true
+	}
+	route, ok, err = gw.RouteForRole(ctx, "default")
+	if err != nil {
+		log.Warn("caption: route lookup failed", "error", err)
+		return "", false
+	}
+	if !ok {
+		log.Warn("caption: no route bound for vision or default")
+		return "", false
+	}
+	return route, true
+}
+
+// VisionRouteBound reports whether a caption call has a route to run
+// on, so KB enrichment can pick local OCR instead of spending a
+// round-trip on a call that would only fail (issue #558).
+func VisionRouteBound(gw Gateway, log *slog.Logger) func(ctx context.Context) bool {
+	return func(ctx context.Context) bool {
+		_, ok := visionRoute(ctx, gw, log)
+		return ok
+	}
+}
+
 // CaptionImageOverGateway mirrors TitleOverGateway's mechanism (route
 // resolution, Stream-and-drain, never-errors contract) for captioning
 // one image at KB ingest time: routed by the "vision" role, falling
@@ -848,17 +879,9 @@ func CaptionImageOverGateway(gw Gateway, log *slog.Logger) func(ctx context.Cont
 		ctx, cancel := context.WithTimeout(ctx, captionTimeout)
 		defer cancel()
 
-		route, ok, err := gw.RouteForRole(ctx, "vision")
-		if err != nil || !ok {
-			route, ok, err = gw.RouteForRole(ctx, "default")
-			if err != nil {
-				log.Warn("caption: route lookup failed", "error", err)
-				return ""
-			}
-			if !ok {
-				log.Warn("caption: no route bound for vision or default")
-				return ""
-			}
+		route, ok := visionRoute(ctx, gw, log)
+		if !ok {
+			return ""
 		}
 
 		req := gwclient.StreamRequest{

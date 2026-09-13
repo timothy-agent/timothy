@@ -19,6 +19,12 @@ import (
 // chat.CaptionImageOverGateway is the production implementation.
 type Captioner func(ctx context.Context, mediaType string, data []byte) string
 
+// Recognizer reads the text off one image's bytes with local OCR; the
+// empty string means OCR failed or found nothing and the caller must
+// keep the original content unchanged. tesseract.Recognize wrapped
+// against the ocr sidecar is the production implementation.
+type Recognizer func(ctx context.Context, mediaType string, data []byte) string
+
 // captionMarker prefixes every caption block Enricher inserts: it
 // makes a captioned link recognizable so a reingest of an
 // already-enriched document doesn't re-fetch and re-caption the same
@@ -26,11 +32,18 @@ type Captioner func(ctx context.Context, mediaType string, data []byte) string
 // that it re-run for free).
 const captionMarker = "Image description:"
 
+// ocrMarker is captionMarker's counterpart for text a local OCR pass
+// read off an image (issue #558): a reader (and search) can tell a
+// model-written description from raw recognized text.
+const ocrMarker = "OCR text:"
+
 // captionBlock formats one caption as a blockquote directly below the
 // image markdown it describes: the original link stays intact
 // (provenance, and a caption failure degrades to unchanged text).
-func captionBlock(caption string) string {
-	return fmt.Sprintf("\n> %s %s\n", captionMarker, caption)
+// marker is captionMarker or ocrMarker depending on which pass produced
+// the text.
+func captionBlock(marker, caption string) string {
+	return fmt.Sprintf("\n> %s %s\n", marker, caption)
 }
 
 // Enrich bounds (issue #349): a document with more images than this
@@ -85,13 +98,16 @@ func extractImageLinks(md string) []imageRef {
 	return out
 }
 
-// alreadyCaptioned reports whether the text right after an image
-// link's line already carries a caption block, so re-running
+// alreadyProcessed reports whether the text right after an image
+// link's line already carries a caption or OCR block, so re-running
 // EnrichMarkdown (reingest) doesn't re-fetch and re-spend on an image
-// it already captioned.
-func alreadyCaptioned(md string, lineEnd int) bool {
+// it already described. Either marker counts: an OCR'd image is never
+// upgraded to a real caption on a later reingest, matching the
+// existing skip-if-described semantics rather than adding a re-spend
+// path nothing asked for.
+func alreadyProcessed(md string, lineEnd int) bool {
 	rest := strings.TrimLeft(md[lineEnd:], "\n")
-	return strings.HasPrefix(rest, "> "+captionMarker)
+	return strings.HasPrefix(rest, "> "+captionMarker) || strings.HasPrefix(rest, "> "+ocrMarker)
 }
 
 // EnrichStats reports what one EnrichMarkdown call did, for the
@@ -112,7 +128,8 @@ var allowedImageTypes = map[string]bool{
 }
 
 // Enricher captions image links found in a document's markdown at KB
-// ingest time (issue #349). Enabled gates real gateway spend: nil
+// ingest time (issue #349), falling back to local OCR when no vision
+// route is bound (issue #558). Enabled gates real gateway spend: nil
 // Enabled or a false result makes EnrichMarkdown a no-op returning the
 // input unchanged, which callers rely on to skip the UpdateMarkdown
 // write entirely.
@@ -125,7 +142,44 @@ type Enricher struct {
 	// Enabled reports whether captioning may spend gateway tokens right
 	// now (settings.Store.Enabled(ctx, settings.KeyKBImageCaptioning)).
 	Enabled func(ctx context.Context) bool
-	Log     *slog.Logger
+	// VisionAvailable reports whether a route Caption could actually use
+	// is bound right now. False sends images to OCR instead of spending
+	// a round-trip on a call Caption would only fail (issue #558); nil
+	// means "assume available", the pre-OCR behavior.
+	VisionAvailable func(ctx context.Context) bool
+	// OCR reads text off an image locally; nil means the ocr sidecar
+	// isn't configured and an image with no vision route stays
+	// unenriched, exactly as before.
+	OCR Recognizer
+	// OCREnabled gates the local fallback
+	// (settings.Store.Enabled(ctx, settings.KeyKBLocalOCR)). Separate
+	// from Enabled: OCR is local and free, so it defaults on.
+	OCREnabled func(ctx context.Context) bool
+	Log        *slog.Logger
+}
+
+// describe turns one image's bytes into a block of text plus the marker
+// that labels it, routing to the vision captioner when a route is bound
+// and to local OCR otherwise. An empty string means neither pass
+// produced anything and the caller keeps its content unchanged.
+func (e *Enricher) describe(ctx context.Context, mediaType string, data []byte) (string, string) {
+	if e.visionUsable(ctx) {
+		return e.Caption(ctx, mediaType, data), captionMarker
+	}
+	if e.OCR == nil || e.OCREnabled == nil || !e.OCREnabled(ctx) {
+		return "", captionMarker
+	}
+	return e.OCR(ctx, mediaType, data), ocrMarker
+}
+
+// visionUsable reports whether the vision captioner is worth calling: a
+// nil Caption never is, and a nil VisionAvailable keeps the original
+// always-try behavior.
+func (e *Enricher) visionUsable(ctx context.Context) bool {
+	if e.Caption == nil {
+		return false
+	}
+	return e.VisionAvailable == nil || e.VisionAvailable(ctx)
 }
 
 // EnrichMarkdown appends a plain-prose caption block under each
@@ -149,11 +203,12 @@ func (e *Enricher) EnrichMarkdown(ctx context.Context, md string) (string, Enric
 	type result struct {
 		ref     imageRef
 		caption string
+		marker  string
 		ok      bool
 	}
 	toFetch := make([]imageRef, 0, len(refs))
 	for _, ref := range refs {
-		if alreadyCaptioned(md, ref.lineEnd) {
+		if alreadyProcessed(md, ref.lineEnd) {
 			stats.Skipped++
 			continue
 		}
@@ -174,8 +229,8 @@ func (e *Enricher) EnrichMarkdown(ctx context.Context, md string) (string, Enric
 		sem <- struct{}{}
 		go func(i int, ref imageRef) {
 			defer func() { <-sem; done <- i }()
-			caption, ok := e.captionOne(ctx, ref.url)
-			results[i] = result{ref: ref, caption: caption, ok: ok}
+			caption, marker, ok := e.captionOne(ctx, ref.url)
+			results[i] = result{ref: ref, caption: caption, marker: marker, ok: ok}
 		}(i, ref)
 	}
 	for range toFetch {
@@ -191,7 +246,7 @@ func (e *Enricher) EnrichMarkdown(ctx context.Context, md string) (string, Enric
 			stats.Failed++
 			continue
 		}
-		out = out[:r.ref.lineEnd] + captionBlock(r.caption) + out[r.ref.lineEnd:]
+		out = out[:r.ref.lineEnd] + captionBlock(r.marker, r.caption) + out[r.ref.lineEnd:]
 		stats.Captioned++
 	}
 	return out, stats
@@ -238,12 +293,12 @@ func (e *Enricher) EnrichPDF(ctx context.Context, md string, res markitdown.PDFI
 				stats.Failed++
 				continue
 			}
-			caption := e.Caption(ctx, img.MediaType, data)
+			caption, marker := e.describe(ctx, img.MediaType, data)
 			if caption == "" {
 				stats.Failed++
 				continue
 			}
-			fmt.Fprintf(&section, "\n> %s %s\n", captionMarker, caption)
+			section.WriteString(captionBlock(marker, caption))
 			imagesCaptioned++
 			stats.Captioned++
 		}
@@ -262,12 +317,12 @@ func (e *Enricher) EnrichPDF(ctx context.Context, md string, res markitdown.PDFI
 				stats.Failed++
 				continue
 			}
-			caption := e.Caption(ctx, "image/png", data)
+			caption, marker := e.describe(ctx, "image/png", data)
 			if caption == "" {
 				stats.Failed++
 				continue
 			}
-			fmt.Fprintf(&out, "\n\n## Page %d (scanned)\n> %s %s\n", page.Page, captionMarker, caption)
+			fmt.Fprintf(&out, "\n\n## Page %d (scanned)\n> %s %s\n", page.Page, marker, caption)
 			imagesCaptioned++
 			stats.Captioned++
 		}
@@ -278,43 +333,43 @@ func (e *Enricher) EnrichPDF(ctx context.Context, md string, res markitdown.PDFI
 	return out.String(), stats
 }
 
-// captionOne fetches and captions a single image URL, logging (not
-// erroring) any failure: EnrichMarkdown's contract is "never fails the
-// document".
-func (e *Enricher) captionOne(ctx context.Context, url string) (string, bool) {
+// captionOne fetches and describes a single image URL, returning the
+// text and the marker that labels it. Any failure is logged, not
+// errored: EnrichMarkdown's contract is "never fails the document".
+func (e *Enricher) captionOne(ctx context.Context, url string) (string, string, bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		e.Log.Warn("kb caption: bad image url", "url", url, "error", err)
-		return "", false
+		return "", "", false
 	}
 	req.Header.Set("Accept", "image/*")
 	resp, err := e.Fetch.Do(req)
 	if err != nil {
 		e.Log.Warn("kb caption: fetch failed", "url", url, "error", err)
-		return "", false
+		return "", "", false
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		e.Log.Warn("kb caption: fetch non-200", "url", url, "status", resp.StatusCode)
-		return "", false
+		return "", "", false
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageBytes+1))
 	if err != nil {
 		e.Log.Warn("kb caption: read failed", "url", url, "error", err)
-		return "", false
+		return "", "", false
 	}
 	if len(data) > maxImageBytes {
 		e.Log.Warn("kb caption: image too large", "url", url, "limit_bytes", maxImageBytes)
-		return "", false
+		return "", "", false
 	}
 	mediaType := http.DetectContentType(data)
 	if !allowedImageTypes[mediaType] {
 		e.Log.Warn("kb caption: unsupported content type", "url", url, "content_type", mediaType)
-		return "", false
+		return "", "", false
 	}
-	caption := e.Caption(ctx, mediaType, data)
+	caption, marker := e.describe(ctx, mediaType, data)
 	if caption == "" {
-		return "", false
+		return "", "", false
 	}
-	return caption, true
+	return caption, marker, true
 }
