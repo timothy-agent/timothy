@@ -596,6 +596,39 @@ describe('ConnectorEdit rotate token and copy key', () => {
     )
   })
 
+  it("replaces a gcp connector's service account key and edits project/location", async () => {
+    const gcpConnector: AdminConnector = {
+      id: 'gcp1',
+      name: 'analytics',
+      kind: 'gcp',
+      config: { project_id: 'my-project-123456', location: 'EU' },
+      credential_ref: 'ANALYTICS_GCP_KEY',
+      enabled: true,
+      sensitive: false,
+    }
+    const saKey = '{"type":"service_account","client_email":"sa@p.iam.gserviceaccount.com"}'
+    vi.mocked(listConnectors).mockResolvedValue([gcpConnector])
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${gcpConnector.id}`)
+
+    expect(await screen.findByPlaceholderText('my-project-123456')).toHaveValue('my-project-123456')
+    fireEvent.change(screen.getByLabelText('Service account key'), { target: { value: saKey } })
+    fireEvent.click(screen.getByRole('button', { name: 'Replace key' }))
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('ANALYTICS_GCP_KEY', saKey))
+
+    // Clearing the optional location drops the key rather than writing "".
+    fireEvent.change(screen.getByPlaceholderText('EU'), { target: { value: '' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') === 'submit')!)
+    await waitFor(() =>
+      expect(patchConnector).toHaveBeenCalledWith('gcp1', {
+        name: 'analytics',
+        sensitive: false,
+        config: { project_id: 'my-project-123456', sign_commits: false },
+      }),
+    )
+  })
+
   it('shows a toast when rotating the token fails', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(setSecret).mockRejectedValue(new Error('store unavailable'))

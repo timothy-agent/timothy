@@ -151,7 +151,9 @@ function ConnectorCard({
           ? String(connector.config.username ?? '')
           : connector.kind === 'aws'
             ? `${String(connector.config.endpoint ?? '')} (${String(connector.config.region ?? '')})`
-            : 'Identity for mission use, read-only pull request tools'
+            : connector.kind === 'gcp'
+              ? String(connector.config.project_id ?? "the key's own project")
+              : 'Identity for mission use, read-only pull request tools'
 
   return (
     <EntityCard

@@ -271,6 +271,86 @@ describe('ConnectorAdd aws flow', () => {
   })
 })
 
+describe('ConnectorAdd gcp flow', () => {
+  const saKey = '{"type":"service_account","client_email":"sa@p.iam.gserviceaccount.com"}'
+
+  it('renders the optional project and location fields plus the key textarea', async () => {
+    renderPage('gcp')
+
+    expect(await screen.findByPlaceholderText('my-project-123456')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('EU')).toBeInTheDocument()
+    expect(screen.getByLabelText('Service account key')).toBeInTheDocument()
+  })
+
+  it('keeps Test disabled until a key is pasted, with no other field required', async () => {
+    renderPage('gcp')
+
+    const testButton = await screen.findByRole('button', { name: 'Test connection' })
+    expect(testButton).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('Service account key'), { target: { value: saKey } })
+    expect(testButton).toBeEnabled()
+  })
+
+  it('creates a gcp connector with an empty config when only the key is given', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-gcp')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderPage('gcp')
+
+    fireEvent.change(await screen.findByLabelText('Service account key'), { target: { value: saKey } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('GCP_KEY', saKey)
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toEqual({
+      name: 'gcp',
+      kind: 'gcp',
+      config: {},
+      credential_ref: 'GCP_KEY',
+      enabled: false,
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
+    await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-gcp', { enabled: true }))
+  })
+
+  it('includes project_id and location when filled in, under a derived _GCP_KEY ref', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-gcp-2')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('gcp')
+
+    fireEvent.change(await screen.findByPlaceholderText('gcp'), { target: { value: 'analytics' } })
+    fireEvent.change(screen.getByPlaceholderText('my-project-123456'), { target: { value: 'my-project-123456' } })
+    fireEvent.change(screen.getByPlaceholderText('EU'), { target: { value: 'us-central1' } })
+    fireEvent.change(screen.getByLabelText('Service account key'), { target: { value: saKey } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('ANALYTICS_GCP_KEY', saKey)
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
+      config: { project_id: 'my-project-123456', location: 'us-central1' },
+    })
+  })
+
+  it('reuses an existing credential instead of writing a secret', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-gcp-3')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('gcp')
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'Use existing' }))
+    expect(screen.queryByLabelText('Service account key')).not.toBeInTheDocument()
+
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /GITHUB_PAT/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({ credential_ref: 'GITHUB_PAT' })
+  })
+})
+
 describe('ConnectorAdd mcp endpoint field', () => {
   it('edits the pre-filled endpoint and invalidates a prior test', async () => {
     vi.mocked(createConnector).mockResolvedValue('conn-mcp')

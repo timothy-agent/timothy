@@ -17,6 +17,7 @@ import { PageShell } from '../timothy/page-shell'
 import { Field, FieldGroup, Form, FormActions } from '../timothy/field'
 import { BedrockKeyFields, bedrockKeyJSON } from './BedrockKeyFields'
 import { ConnectorLogo } from './ConnectorLogo'
+import { GCPKeyField } from './GCPKeyField'
 import { connectorPresets } from './connectorPresets'
 import { CredentialField, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { settingsArea } from './settingsAreas'
@@ -82,6 +83,9 @@ export function ConnectorAdd() {
   const [awsRegion, setAwsRegion] = useState('')
   const [awsAccessKeyID, setAwsAccessKeyID] = useState('')
   const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('')
+  const [gcpProjectID, setGcpProjectID] = useState('')
+  const [gcpLocation, setGcpLocation] = useState('')
+  const [gcpKey, setGcpKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; error?: string; identity?: GitHubIdentity } | null>(
     null,
@@ -119,6 +123,9 @@ export function ConnectorAdd() {
     setAwsRegion(awsRegionFor(preset.endpoint ?? ''))
     setAwsAccessKeyID('')
     setAwsSecretAccessKey('')
+    setGcpProjectID('')
+    setGcpLocation('')
+    setGcpKey('')
     setBusy(false)
     setTest(null)
     setCreatedID(null)
@@ -137,6 +144,7 @@ export function ConnectorAdd() {
   const isImap = preset.kind === 'imap'
   const isCalDAV = preset.kind === 'caldav'
   const isAWS = preset.kind === 'aws'
+  const isGCP = preset.kind === 'gcp'
   const slug = slugify(name)
   const refBase = slug.toUpperCase().replace(/-/g, '_')
   const tested = test?.ok === true
@@ -149,13 +157,16 @@ export function ConnectorAdd() {
   const usingExistingToken = tokenCredMode === 'existing'
   // No stutter when the connector name already ends in AWS.
   const awsRef = refBase.endsWith('AWS') ? `${refBase}_KEYS` : `${refBase}_AWS_KEYS`
+  // Same no-stutter rule for gcp; the Go side only cares that the ref
+  // resolves to a service-account key JSON, never about its name.
+  const gcpRef = refBase.endsWith('GCP') ? `${refBase}_KEY` : `${refBase}_GCP_KEY`
 
   const runTest = async () => {
     if (!slug) {
       toast.error('Name required', { description: 'Give this connector a unique name before testing.' })
       return
     }
-    if (!isGitHub && !isImap && !isCalDAV && !endpoint.trim()) {
+    if (!isGitHub && !isImap && !isCalDAV && !isGCP && !endpoint.trim()) {
       toast.error('Endpoint required', { description: 'An MCP endpoint is required to test this connector.' })
       return
     }
@@ -166,6 +177,12 @@ export function ConnectorAdd() {
     if (isAWS && !usingExistingToken && (!awsAccessKeyID.trim() || !awsSecretAccessKey.trim())) {
       toast.error('Access keys required', {
         description: 'An access key ID and secret access key are required to test this connector.',
+      })
+      return
+    }
+    if (isGCP && !usingExistingToken && !gcpKey.trim()) {
+      toast.error('Service account key required', {
+        description: 'A service-account key JSON is required to test this connector.',
       })
       return
     }
@@ -216,7 +233,9 @@ export function ConnectorAdd() {
               ? `${refBase}_CALDAV_PASSWORD`
               : isAWS
                 ? awsRef
-                : refBase.endsWith('_MCP')
+                : isGCP
+                  ? gcpRef
+                  : refBase.endsWith('_MCP')
                 ? `${refBase}_TOKEN`
                 : `${refBase}_MCP_TOKEN`
       const secretValue = isImap
@@ -225,7 +244,9 @@ export function ConnectorAdd() {
           ? caldavPassword
           : isAWS
             ? bedrockKeyJSON(awsAccessKeyID, awsSecretAccessKey)
-            : token
+            : isGCP
+              ? gcpKey
+              : token
       if (!usingExistingToken && secretValue) await setSecret(tokenRef, secretValue.trim())
       const id = await createConnector(
         isGitHub
@@ -257,6 +278,17 @@ export function ConnectorAdd() {
                     name: slug,
                     kind: 'aws',
                     config: { endpoint: endpoint.trim(), region: awsRegion.trim() },
+                    credential_ref: tokenRef,
+                    enabled: false,
+                  }
+                : isGCP
+                ? {
+                    name: slug,
+                    kind: 'gcp',
+                    config: {
+                      ...(gcpProjectID.trim() ? { project_id: gcpProjectID.trim() } : {}),
+                      ...(gcpLocation.trim() ? { location: gcpLocation.trim() } : {}),
+                    },
                     credential_ref: tokenRef,
                     enabled: false,
                   }
@@ -348,7 +380,11 @@ export function ConnectorAdd() {
               (usingExistingToken
                 ? existingTokenRef !== ''
                 : awsAccessKeyID.trim() !== '' && awsSecretAccessKey.trim() !== '')
-            : endpoint.trim() !== '')
+            : isGCP
+              ? usingExistingToken
+                ? existingTokenRef !== ''
+                : gcpKey.trim() !== ''
+              : endpoint.trim() !== '')
   const canSubmitOAuth =
     slug !== '' &&
     clientID.trim() !== '' &&
@@ -462,7 +498,39 @@ export function ConnectorAdd() {
                   </Field>
                 </>
               )}
-              {!isGitHub && !isImap && !isCalDAV && !isAWS && (
+              {isGCP && (
+                <>
+                  <Field
+                    label="Project ID"
+                    description="leave blank to use the service account key's own project"
+                    required={false}
+                  >
+                    <Input
+                      value={gcpProjectID}
+                      onChange={(e) => {
+                        setGcpProjectID(e.target.value)
+                        invalidate()
+                      }}
+                      placeholder="my-project-123456"
+                    />
+                  </Field>
+                  <Field
+                    label="Location"
+                    description="BigQuery's job location; leave blank to let BigQuery choose"
+                    required={false}
+                  >
+                    <Input
+                      value={gcpLocation}
+                      onChange={(e) => {
+                        setGcpLocation(e.target.value)
+                        invalidate()
+                      }}
+                      placeholder="EU"
+                    />
+                  </Field>
+                </>
+              )}
+              {!isGitHub && !isImap && !isCalDAV && !isAWS && !isGCP && (
                 <Field
                   label="Endpoint"
                   description={preset.endpointHint}
@@ -606,6 +674,50 @@ export function ConnectorAdd() {
                     </div>
                   )}
                 </div>
+              ) : isGCP ? (
+                // The key is multi-line JSON, so the paste field is a
+                // textarea in place of CredentialField's password input;
+                // the mode toggle and existing picker are the shared ones.
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-foreground">Service account key</span>
+                    <SegmentedControl
+                      value={tokenCredMode}
+                      onChange={(v) => {
+                        setTokenCredMode(v as CredentialMode)
+                        invalidate()
+                      }}
+                      options={[
+                        { value: 'new', label: 'New credential' },
+                        { value: 'existing', label: 'Use existing' },
+                      ]}
+                      size="sm"
+                      aria-label="Credential source"
+                    />
+                  </div>
+                  {usingExistingToken ? (
+                    <Field label="Existing credential">
+                      <ExistingCredentialSelect
+                        value={existingTokenRef}
+                        onChange={(v) => {
+                          setExistingTokenRef(v)
+                          invalidate()
+                        }}
+                      />
+                    </Field>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <GCPKeyField
+                        value={gcpKey}
+                        onChange={(v) => {
+                          setGcpKey(v)
+                          invalidate()
+                        }}
+                      />
+                      <p className="text-sm text-muted-foreground">{secretDestination(defaultBackend, gcpRef)}</p>
+                    </div>
+                  )}
+                </div>
               ) : (
               <CredentialField
                 label={
@@ -639,7 +751,7 @@ export function ConnectorAdd() {
                 refName={isGitHub ? `${refBase}_GITHUB_PAT` : isImap ? `${refBase}_IMAP_PASSWORD` : isCalDAV ? `${refBase}_CALDAV_PASSWORD` : `${refBase}_MCP_TOKEN`}
               />
               )}
-              {!isImap && !isCalDAV && !isAWS && tokenCredMode === 'new' && (
+              {!isImap && !isCalDAV && !isAWS && !isGCP && tokenCredMode === 'new' && (
                 <p className="-mt-2 text-sm text-muted-foreground">
                   {preset.tokenHint}
                   {preset.tokenURL && (

@@ -1215,7 +1215,7 @@ export interface Notification {
 export interface AdminConnector {
   id: string
   name: string
-  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav' | 'aws'
+  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav' | 'aws' | 'gcp'
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean

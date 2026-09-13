@@ -23,6 +23,7 @@ import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { BedrockKeyFields, bedrockKeyJSON } from './BedrockKeyFields'
 import { ConnectorLogo } from './ConnectorLogo'
+import { GCPKeyField } from './GCPKeyField'
 import { presetFor } from './connectorPresets'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
@@ -57,6 +58,8 @@ interface StagedConnector {
   sign_commits: boolean
   aws_endpoint: string
   aws_region: string
+  gcp_project_id: string
+  gcp_location: string
 }
 
 function baselineFrom(connector: AdminConnector): StagedConnector {
@@ -66,25 +69,35 @@ function baselineFrom(connector: AdminConnector): StagedConnector {
     sign_commits: Boolean(connector.config.sign_commits),
     aws_endpoint: String(connector.config.endpoint ?? ''),
     aws_region: String(connector.config.region ?? ''),
+    gcp_project_id: String(connector.config.project_id ?? ''),
+    gcp_location: String(connector.config.location ?? ''),
   }
 }
 
 // buildPatch builds the single PATCH body from the staged values: name
 // (slugified), sensitive, and config.sign_commits merged onto the
 // connector's current config so other config keys survive. An aws
-// connector also carries its editable endpoint and signing region.
+// connector also carries its editable endpoint and signing region; a
+// gcp connector its project and location, both optional, so an emptied
+// field drops the key rather than writing "".
 function buildPatch(connector: AdminConnector, staged: StagedConnector): Partial<AdminConnector> {
-  return {
-    name: slugify(staged.name),
-    sensitive: staged.sensitive,
-    config: {
-      ...connector.config,
-      sign_commits: staged.sign_commits,
-      ...(connector.kind === 'aws'
-        ? { endpoint: staged.aws_endpoint.trim(), region: staged.aws_region.trim() }
-        : {}),
-    },
+  const config: Record<string, unknown> = {
+    ...connector.config,
+    sign_commits: staged.sign_commits,
+    ...(connector.kind === 'aws'
+      ? { endpoint: staged.aws_endpoint.trim(), region: staged.aws_region.trim() }
+      : {}),
   }
+  if (connector.kind === 'gcp') {
+    for (const [key, value] of [
+      ['project_id', staged.gcp_project_id],
+      ['location', staged.gcp_location],
+    ] as const) {
+      if (value.trim()) config[key] = value.trim()
+      else delete config[key]
+    }
+  }
+  return { name: slugify(staged.name), sensitive: staged.sensitive, config }
 }
 
 // ConnectorEdit loads the connector, then hands off to ConnectorEditForm
@@ -135,6 +148,7 @@ function ConnectorEditForm({
   const [token, setToken] = useState('')
   const [awsAccessKeyID, setAwsAccessKeyID] = useState('')
   const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('')
+  const [gcpKey, setGcpKey] = useState('')
   const [savingToken, setSavingToken] = useState(false)
   const [oauthBusy, setOAuthBusy] = useState(false)
 
@@ -190,10 +204,11 @@ function ConnectorEditForm({
   }
 
   const isAWS = connector.kind === 'aws'
+  const isGCP = connector.kind === 'gcp'
   const awsKeysReady = awsAccessKeyID.trim() !== '' && awsSecretAccessKey.trim() !== ''
 
   const rotateToken = async () => {
-    if (isAWS ? !awsKeysReady : !token) return
+    if (isAWS ? !awsKeysReady : isGCP ? !gcpKey.trim() : !token) return
     setSavingToken(true)
     try {
       const base = connector.name.toUpperCase().replace(/-/g, '_')
@@ -208,17 +223,28 @@ function ConnectorEditForm({
                 ? base.endsWith('AWS')
                   ? '_KEYS'
                   : '_AWS_KEYS'
-                : '_MCP_TOKEN'
+                : isGCP
+                  ? base.endsWith('GCP')
+                    ? '_KEY'
+                    : '_GCP_KEY'
+                  : '_MCP_TOKEN'
       const ref = connector.credential_ref || `${base}${suffix}`
-      await setSecret(ref, isAWS ? bedrockKeyJSON(awsAccessKeyID, awsSecretAccessKey) : token.trim())
+      await setSecret(
+        ref,
+        isAWS ? bedrockKeyJSON(awsAccessKeyID, awsSecretAccessKey) : isGCP ? gcpKey.trim() : token.trim(),
+      )
       if (!connector.credential_ref) await patchConnector(connector.id, { credential_ref: ref })
       setToken('')
       setAwsAccessKeyID('')
       setAwsSecretAccessKey('')
-      toast.success(isAWS ? 'Access keys saved' : 'Token saved')
+      setGcpKey('')
+      toast.success(isAWS ? 'Access keys saved' : isGCP ? 'Service account key saved' : 'Token saved')
       void doRefresh()
     } catch (err) {
-      toast.error(isAWS ? 'Could not save access keys' : 'Could not save token', { description: errText(err) })
+      toast.error(
+        isAWS ? 'Could not save access keys' : isGCP ? 'Could not save service account key' : 'Could not save token',
+        { description: errText(err) },
+      )
     } finally {
       setSavingToken(false)
     }
@@ -323,6 +349,33 @@ function ConnectorEditForm({
                   value={staged.values.aws_region}
                   onChange={(e) => staged.setField('aws_region', e.target.value)}
                   placeholder="eu-central-1"
+                />
+              </Field>
+            </>
+          )}
+
+          {isGCP && (
+            <>
+              <Field
+                label="Project ID"
+                description="leave blank to use the service account key's own project"
+                required={false}
+              >
+                <Input
+                  value={staged.values.gcp_project_id}
+                  onChange={(e) => staged.setField('gcp_project_id', e.target.value)}
+                  placeholder="my-project-123456"
+                />
+              </Field>
+              <Field
+                label="Location"
+                description="BigQuery's job location; leave blank to let BigQuery choose"
+                required={false}
+              >
+                <Input
+                  value={staged.values.gcp_location}
+                  onChange={(e) => staged.setField('gcp_location', e.target.value)}
+                  placeholder="EU"
                 />
               </Field>
             </>
@@ -492,6 +545,19 @@ function ConnectorEditForm({
                       Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span> · Region:{' '}
                       <span className="font-mono">{String(connector.config.region ?? '')}</span>
                     </>
+                  ) : isGCP ? (
+                    <>
+                      Project:{' '}
+                      <span className="font-mono">
+                        {String(connector.config.project_id ?? "the key's own project")}
+                      </span>
+                      {typeof connector.config.location === 'string' && connector.config.location && (
+                        <>
+                          {' '}
+                          · Location: <span className="font-mono">{connector.config.location}</span>
+                        </>
+                      )}
+                    </>
                   ) : (
                     <>
                       Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
@@ -514,6 +580,17 @@ function ConnectorEditForm({
                       onClick={() => void rotateToken()}
                     >
                       Replace access keys
+                    </Button>
+                  </div>
+                ) : isGCP ? (
+                  <div className="space-y-3">
+                    <GCPKeyField value={gcpKey} onChange={setGcpKey} />
+                    <Button
+                      variant="outline"
+                      disabled={savingToken || !gcpKey.trim()}
+                      onClick={() => void rotateToken()}
+                    >
+                      Replace key
                     </Button>
                   </div>
                 ) : (
