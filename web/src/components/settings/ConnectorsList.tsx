@@ -149,7 +149,9 @@ function ConnectorCard({
         ? (connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')
         : connector.kind === 'imap' || connector.kind === 'caldav'
           ? String(connector.config.username ?? '')
-          : 'Identity for mission use, read-only pull request tools'
+          : connector.kind === 'aws'
+            ? `${String(connector.config.endpoint ?? '')} (${String(connector.config.region ?? '')})`
+            : 'Identity for mission use, read-only pull request tools'
 
   return (
     <EntityCard

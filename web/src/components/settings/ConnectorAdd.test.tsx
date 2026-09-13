@@ -189,6 +189,88 @@ describe('ConnectorAdd caldav flow', () => {
   })
 })
 
+describe('ConnectorAdd aws flow', () => {
+  it('renders the endpoint select, region, and both key fields', async () => {
+    renderPage('aws')
+
+    expect(await screen.findByLabelText('Endpoint')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('eu-central-1')).toHaveValue('eu-central-1')
+    expect(screen.getByPlaceholderText('AKIA…')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...')).toBeInTheDocument()
+  })
+
+  it('keeps Test disabled until both access keys are filled in', async () => {
+    renderPage('aws')
+
+    const testButton = await screen.findByRole('button', { name: 'Test connection' })
+    expect(testButton).toBeDisabled()
+
+    fireEvent.change(screen.getByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
+    expect(testButton).toBeDisabled()
+
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'sekret' } })
+    expect(testButton).toBeEnabled()
+  })
+
+  it('stores the keys as JSON under the derived ref and creates the connector', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-aws')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderPage('aws')
+
+    fireEvent.change(await screen.findByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'sekret' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith(
+      'AWS_KEYS',
+      JSON.stringify({ access_key_id: 'AKIAEXAMPLE', secret_access_key: 'sekret' }),
+    )
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
+      name: 'aws',
+      kind: 'aws',
+      config: { endpoint: 'https://aws-mcp.eu-central-1.api.aws/mcp', region: 'eu-central-1' },
+      credential_ref: 'AWS_KEYS',
+      enabled: false,
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
+    await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-aws', { enabled: true }))
+  })
+
+  it('derives an _AWS_KEYS ref from a name that does not end in aws', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-aws-2')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('aws')
+
+    fireEvent.change(await screen.findByPlaceholderText('aws'), { target: { value: 'prod-account' } })
+    fireEvent.change(screen.getByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'sekret' } })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('PROD_ACCOUNT_AWS_KEYS', expect.any(String))
+  })
+
+  it('reuses an existing credential instead of writing a secret', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-aws-3')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('aws')
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'Use existing' }))
+    expect(screen.queryByPlaceholderText('AKIA…')).not.toBeInTheDocument()
+
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /GITHUB_PAT/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({ credential_ref: 'GITHUB_PAT' })
+  })
+})
+
 describe('ConnectorAdd mcp endpoint field', () => {
   it('edits the pre-filled endpoint and invalidates a prior test', async () => {
     vi.mocked(createConnector).mockResolvedValue('conn-mcp')

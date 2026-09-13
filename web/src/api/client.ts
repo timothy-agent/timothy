@@ -19,7 +19,7 @@ import type {
   Destination,
   EntityGraphData,
   ExecutionPlanPhase,
-  GitHubIdentity,
+  ConnectorTestResult,
   GitHubRepo,
   GroupTotal,
   KbCollection,
@@ -1072,13 +1072,8 @@ export async function deleteConnector(id: string): Promise<void> {
   await request<void>(`/v1/admin/connectors/${id}`, { method: 'DELETE' })
 }
 
-export async function testConnector(
-  id: string,
-): Promise<{ ok: boolean; error?: string; identity?: GitHubIdentity }> {
-  return request<{ ok: boolean; error?: string; identity?: GitHubIdentity }>(
-    `/v1/admin/connectors/${id}/test`,
-    { method: 'POST' },
-  )
+export async function testConnector(id: string): Promise<ConnectorTestResult> {
+  return request<ConnectorTestResult>(`/v1/admin/connectors/${id}/test`, { method: 'POST' })
 }
 
 // listConnectorRepos lists every repo a github-kind connector's PAT

@@ -10,7 +10,7 @@ import {
   setSecret,
   testConnector,
 } from '../../api/client'
-import type { AdminConnector, GitHubIdentity } from '../../api/types'
+import type { AdminConnector, ConnectorTestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { Alert, AlertDescription } from '../ui/alert'
@@ -20,6 +20,8 @@ import { Panel } from '../timothy/panel'
 import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { Input } from '../ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
+import { BedrockKeyFields, bedrockKeyJSON } from './BedrockKeyFields'
 import { ConnectorLogo } from './ConnectorLogo'
 import { presetFor } from './connectorPresets'
 import { settingsArea } from './settingsAreas'
@@ -37,10 +39,24 @@ function oauthProviderLabel(kind: string): string {
   return kind === 'microsoft' ? 'Microsoft' : 'Google'
 }
 
+// awsEndpoints are the AWS MCP Server's regional endpoints; picking one
+// sets the SigV4 signing region, which stays editable.
+const awsEndpoints = [
+  { endpoint: 'https://aws-mcp.us-east-1.api.aws/mcp', region: 'us-east-1' },
+  { endpoint: 'https://aws-mcp.eu-central-1.api.aws/mcp', region: 'eu-central-1' },
+]
+
+// awsRegionFor maps an AWS MCP endpoint to its signing region.
+function awsRegionFor(endpoint: string): string {
+  return awsEndpoints.find((e) => e.endpoint === endpoint)?.region ?? ''
+}
+
 interface StagedConnector {
   name: string
   sensitive: boolean
   sign_commits: boolean
+  aws_endpoint: string
+  aws_region: string
 }
 
 function baselineFrom(connector: AdminConnector): StagedConnector {
@@ -48,17 +64,26 @@ function baselineFrom(connector: AdminConnector): StagedConnector {
     name: connector.name,
     sensitive: connector.sensitive,
     sign_commits: Boolean(connector.config.sign_commits),
+    aws_endpoint: String(connector.config.endpoint ?? ''),
+    aws_region: String(connector.config.region ?? ''),
   }
 }
 
 // buildPatch builds the single PATCH body from the staged values: name
 // (slugified), sensitive, and config.sign_commits merged onto the
-// connector's current config so other config keys survive.
+// connector's current config so other config keys survive. An aws
+// connector also carries its editable endpoint and signing region.
 function buildPatch(connector: AdminConnector, staged: StagedConnector): Partial<AdminConnector> {
   return {
     name: slugify(staged.name),
     sensitive: staged.sensitive,
-    config: { ...connector.config, sign_commits: staged.sign_commits },
+    config: {
+      ...connector.config,
+      sign_commits: staged.sign_commits,
+      ...(connector.kind === 'aws'
+        ? { endpoint: staged.aws_endpoint.trim(), region: staged.aws_region.trim() }
+        : {}),
+    },
   }
 }
 
@@ -105,11 +130,11 @@ function ConnectorEditForm({
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [test, setTest] = useState<{ ok: boolean; error?: string; identity?: GitHubIdentity } | null>(
-    null,
-  )
+  const [test, setTest] = useState<ConnectorTestResult | null>(null)
   const [testing, setTesting] = useState(false)
   const [token, setToken] = useState('')
+  const [awsAccessKeyID, setAwsAccessKeyID] = useState('')
+  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('')
   const [savingToken, setSavingToken] = useState(false)
   const [oauthBusy, setOAuthBusy] = useState(false)
 
@@ -164,10 +189,14 @@ function ConnectorEditForm({
     }
   }
 
+  const isAWS = connector.kind === 'aws'
+  const awsKeysReady = awsAccessKeyID.trim() !== '' && awsSecretAccessKey.trim() !== ''
+
   const rotateToken = async () => {
-    if (!token) return
+    if (isAWS ? !awsKeysReady : !token) return
     setSavingToken(true)
     try {
+      const base = connector.name.toUpperCase().replace(/-/g, '_')
       const suffix =
         connector.kind === 'github'
           ? '_GITHUB_PAT'
@@ -175,15 +204,21 @@ function ConnectorEditForm({
             ? '_IMAP_PASSWORD'
             : connector.kind === 'caldav'
               ? '_CALDAV_PASSWORD'
-              : '_MCP_TOKEN'
-      const ref = connector.credential_ref || `${connector.name.toUpperCase().replace(/-/g, '_')}${suffix}`
-      await setSecret(ref, token.trim())
+              : isAWS
+                ? base.endsWith('AWS')
+                  ? '_KEYS'
+                  : '_AWS_KEYS'
+                : '_MCP_TOKEN'
+      const ref = connector.credential_ref || `${base}${suffix}`
+      await setSecret(ref, isAWS ? bedrockKeyJSON(awsAccessKeyID, awsSecretAccessKey) : token.trim())
       if (!connector.credential_ref) await patchConnector(connector.id, { credential_ref: ref })
       setToken('')
-      toast.success('Token saved')
+      setAwsAccessKeyID('')
+      setAwsSecretAccessKey('')
+      toast.success(isAWS ? 'Access keys saved' : 'Token saved')
       void doRefresh()
     } catch (err) {
-      toast.error('Could not save token', { description: errText(err) })
+      toast.error(isAWS ? 'Could not save access keys' : 'Could not save token', { description: errText(err) })
     } finally {
       setSavingToken(false)
     }
@@ -254,6 +289,44 @@ function ConnectorEditForm({
               </div>
             )}
           </Field>
+
+          {isAWS && (
+            <>
+              <Field label="Endpoint" description="the regional AWS MCP Server endpoint">
+                {(props) => (
+                  <Select
+                    value={staged.values.aws_endpoint}
+                    // Radix reports an empty value while the item list
+                    // is unmounted; ignore it so the stored endpoint
+                    // survives the first render.
+                    onValueChange={(v) => {
+                      if (!v) return
+                      staged.setField('aws_endpoint', v)
+                      staged.setField('aws_region', awsRegionFor(v))
+                    }}
+                  >
+                    <SelectTrigger id={props.id} className="w-full" aria-label="Endpoint">
+                      <SelectValue placeholder="Choose a regional endpoint" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {awsEndpoints.map((e) => (
+                        <SelectItem key={e.endpoint} value={e.endpoint}>
+                          {e.endpoint}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </Field>
+              <Field label="Region" description="the SigV4 signing region, must match the endpoint">
+                <Input
+                  value={staged.values.aws_region}
+                  onChange={(e) => staged.setField('aws_region', e.target.value)}
+                  placeholder="eu-central-1"
+                />
+              </Field>
+            </>
+          )}
 
           {connector.kind === 'github' && (
             <Field label="Sign commits" required={false}>
@@ -372,6 +445,14 @@ function ConnectorEditForm({
               </div>
             )}
 
+            {test?.ok && connector.kind === 'mcp' && (test.deferred_tools ?? 0) > 0 && (
+              <p className="text-sm text-muted-foreground">
+                This server's {test.deferred_tools} tools are deferred: chat reaches them through{' '}
+                <code className="font-mono">{test.load_tool ?? 'load_tool'}</code>, which an agent gains automatically
+                once one of this connector's tools is in its tools allowlist.
+              </p>
+            )}
+
             {test && !test.ok && connector.kind === 'github' && (
               <p className="text-sm text-muted-foreground">Paste a new personal access token below to replace it.</p>
             )}
@@ -406,38 +487,63 @@ function ConnectorEditForm({
                     <span className="font-mono">
                       {String(connector.config.username ?? '')} @ {String(connector.config.url ?? '')}
                     </span>
+                  ) : isAWS ? (
+                    <>
+                      Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span> · Region:{' '}
+                      <span className="font-mono">{String(connector.config.region ?? '')}</span>
+                    </>
                   ) : (
                     <>
                       Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
                     </>
                   )}
                 </p>
-                <Field
-                  label={
-                    connector.kind === 'github'
-                      ? 'Rotate personal access token'
-                      : connector.kind === 'imap' || connector.kind === 'caldav'
-                        ? 'Rotate password'
-                        : 'Rotate bearer token'
-                  }
-                  required={false}
-                >
-                  {(props) => (
-                    <div className="flex gap-2">
-                      <Input
-                        id={props.id}
-                        type="password"
-                        value={token}
-                        onChange={(e) => setToken(e.target.value)}
-                        placeholder="paste new token"
-                        autoComplete="off"
-                      />
-                      <Button variant="outline" disabled={savingToken || !token} onClick={() => void rotateToken()}>
-                        Save
-                      </Button>
-                    </div>
-                  )}
-                </Field>
+                {isAWS ? (
+                  <div className="space-y-3">
+                    <BedrockKeyFields
+                      accessKeyId={awsAccessKeyID}
+                      secretAccessKey={awsSecretAccessKey}
+                      onChange={(f) => {
+                        setAwsAccessKeyID(f.accessKeyId)
+                        setAwsSecretAccessKey(f.secretAccessKey)
+                      }}
+                    />
+                    <Button
+                      variant="outline"
+                      disabled={savingToken || !awsKeysReady}
+                      onClick={() => void rotateToken()}
+                    >
+                      Replace access keys
+                    </Button>
+                  </div>
+                ) : (
+                  <Field
+                    label={
+                      connector.kind === 'github'
+                        ? 'Rotate personal access token'
+                        : connector.kind === 'imap' || connector.kind === 'caldav'
+                          ? 'Rotate password'
+                          : 'Rotate bearer token'
+                    }
+                    required={false}
+                  >
+                    {(props) => (
+                      <div className="flex gap-2">
+                        <Input
+                          id={props.id}
+                          type="password"
+                          value={token}
+                          onChange={(e) => setToken(e.target.value)}
+                          placeholder="paste new token"
+                          autoComplete="off"
+                        />
+                        <Button variant="outline" disabled={savingToken || !token} onClick={() => void rotateToken()}>
+                          Save
+                        </Button>
+                      </div>
+                    )}
+                  </Field>
+                )}
               </div>
             )}
           </div>

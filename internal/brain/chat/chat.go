@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
@@ -183,6 +184,9 @@ type Service struct {
 	// one step and no correctness.
 	loadedMu    sync.Mutex
 	loadedTools map[string][]*tools.Tool
+	// deferredTools reports each indexed MCP connector's load_tool
+	// and the tools behind it (issue #729); nil: none deferred.
+	deferredTools func() map[string][]string
 
 	// turns is the live-turn broadcaster registry (broadcast.go): a
 	// session ID present here means that session has a turn in flight,
@@ -242,6 +246,19 @@ func (s *Service) SetMemoryExtract(fn MemoryExtract) { s.memory = fn }
 
 // SetMemoryRetrieve wires per-turn memory recall. Optional.
 func (s *Service) SetMemoryRetrieve(fn MemoryRetrieve) { s.recall = fn }
+
+// SetDeferredTools wires the connector manager's deferred-tool map
+// (connectors.Manager.DeferredTools, issue #729), read per turn so a
+// connector reload applies on the next turn. Optional: nil means no
+// connector is deferred.
+func (s *Service) SetDeferredTools(fn func() map[string][]string) { s.deferredTools = fn }
+
+func (s *Service) deferredToolsSnapshot() map[string][]string {
+	if s.deferredTools == nil {
+		return nil
+	}
+	return s.deferredTools()
+}
 
 // SetSensitiveTools wires the sensitive-tool route pin for side-calls
 // (memory extraction): a turn that executed a matching tool sends its
@@ -929,11 +946,20 @@ const (
 //     (an agent with none has nothing load_skill could load, and
 //     omitting it saves its schema's tokens on every skill-less turn).
 //
-// Both exemptions are enforced whether or not the agent authored a
+//   - a deferred MCP connector's load_tool follows the tools it can
+//     load (issue #729): deferred maps each connector's namespaced
+//     load_tool to the namespaced names of its hidden tools, and the
+//     entry point joins the list when the agent's own list matches
+//     any of them (tools.ToolMatches, the loop's own filter rule) or
+//     the entry point itself. An agent allowed nothing from that
+//     connector still sees nothing from it.
+//
+// All exemptions are enforced whether or not the agent authored a
 // tool list: an agent that picks tools in the UI should not silently
-// lose offload retrieval or skill loading by not knowing the infra
-// names. profile.Tools itself is never mutated.
-func resolveToolAllow(profile agents.Agent) []string {
+// lose offload retrieval, skill loading, or a deferred connector's
+// entry point by not knowing the infra names. profile.Tools itself is
+// never mutated.
+func resolveToolAllow(profile agents.Agent, deferred map[string][]string) []string {
 	allow := profile.Tools
 	if !slices.Contains(allow, retrieveOutputTool) {
 		allow = append(slices.Clone(allow), retrieveOutputTool)
@@ -941,7 +967,28 @@ func resolveToolAllow(profile agents.Agent) []string {
 	if len(profile.Skills) > 0 && !slices.Contains(allow, loadSkillTool) {
 		allow = append(slices.Clone(allow), loadSkillTool)
 	}
+	for _, loadTool := range slices.Sorted(maps.Keys(deferred)) {
+		if !allowsAny(profile.Tools, append([]string{loadTool}, deferred[loadTool]...)) {
+			continue
+		}
+		if !allowsAny(allow, []string{loadTool}) {
+			allow = append(slices.Clone(allow), loadTool)
+		}
+	}
 	return allow
+}
+
+// allowsAny reports whether any entry of allow covers any of names
+// under the allowlist's suffix rule (tools.ToolMatches).
+func allowsAny(allow, names []string) bool {
+	for _, entry := range allow {
+		for _, name := range names {
+			if tools.ToolMatches(name, entry) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // AttachmentRef names one already-uploaded attachment to resolve for a
@@ -1501,7 +1548,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	upstream, err := s.gw.Stream(turnCtx, gwclient.StreamRequest{
 		Route:      route,
 		Agent:      profile.ID,
-		ToolAllow:  resolveToolAllow(profile),
+		ToolAllow:  resolveToolAllow(profile, s.deferredToolsSnapshot()),
 		ExtraTools: extraTools,
 		Purpose:    "chat",
 		ModelHint:  modelHint,

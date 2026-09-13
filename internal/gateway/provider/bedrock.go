@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
+	"github.com/SumonMSelim/timothy/internal/platform/awscreds"
 )
 
 // BedrockConfig configures Amazon Bedrock via the Converse API. Chat,
@@ -55,28 +56,19 @@ type BedrockConfig struct {
 }
 
 // StaticCredentials is the secret-store JSON shape for Bedrock static
-// IAM keys: {"access_key_id":"...","secret_access_key":"...","session_token":"(optional)","region":"(optional)"}.
-// Unknown keys are ignored; AccessKeyID/SecretAccessKey are required.
-type StaticCredentials struct {
-	AccessKeyID     string `json:"access_key_id"`
-	SecretAccessKey string `json:"secret_access_key"`
-	SessionToken    string `json:"session_token,omitempty"`
-	Region          string `json:"region,omitempty"`
-}
+// IAM keys, shared with brain's aws connector.
+type StaticCredentials = awscreds.StaticCredentials
 
 // ParseStaticCredentials parses a secret-store value as Bedrock static
 // credentials JSON. A missing access_key_id or secret_access_key is a
 // parse error — a resolved secret that isn't usable credentials must
 // fail loudly, never fall back to profile/SSO silently.
 func ParseStaticCredentials(raw string) (*StaticCredentials, error) {
-	var c StaticCredentials
-	if err := json.Unmarshal([]byte(raw), &c); err != nil {
-		return nil, fmt.Errorf("bedrock: parse static credentials: %w", err)
+	c, err := awscreds.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: %w", err)
 	}
-	if c.AccessKeyID == "" || c.SecretAccessKey == "" {
-		return nil, fmt.Errorf("bedrock: static credentials missing access_key_id or secret_access_key")
-	}
-	return &c, nil
+	return c, nil
 }
 
 // Bedrock is a Provider implementation backed by Amazon Bedrock.

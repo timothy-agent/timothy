@@ -1215,7 +1215,7 @@ export interface Notification {
 export interface AdminConnector {
   id: string
   name: string
-  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav'
+  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav' | 'aws'
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean
@@ -1223,6 +1223,18 @@ export interface AdminConnector {
   // privacy-floor route (session.SensitiveTools), same as gmail_read
   // is pinned today: additive, connector-wide, no code change needed.
   sensitive: boolean
+}
+
+// ConnectorTestResult is POST /v1/admin/connectors/:id/test's body.
+// deferred_tools and load_tool are set for an MCP server over the
+// deferral threshold: how many tools sit behind the entry point, and
+// the entry point's name as chat sees it (issue #729).
+export interface ConnectorTestResult {
+  ok: boolean
+  error?: string
+  identity?: GitHubIdentity
+  deferred_tools?: number
+  load_tool?: string
 }
 
 // GitHubIdentity is what a github-kind connector's test resolves:

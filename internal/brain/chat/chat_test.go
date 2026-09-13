@@ -1324,7 +1324,7 @@ func TestChatNonEmptySkillsAllowlistAdmitsOnlyListedPacks(t *testing.T) {
 // load otherwise).
 func TestResolveToolAllowEmptyGrantsOnlyRetrieveOutput(t *testing.T) {
 	t.Parallel()
-	got := resolveToolAllow(agents.Agent{})
+	got := resolveToolAllow(agents.Agent{}, nil)
 	want := []string{retrieveOutputTool}
 	if len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("resolveToolAllow(empty) = %v, want %v", got, want)
@@ -1333,7 +1333,7 @@ func TestResolveToolAllowEmptyGrantsOnlyRetrieveOutput(t *testing.T) {
 
 func TestResolveToolAllowEmptyToolsWithSkillsAlsoGrantsLoadSkill(t *testing.T) {
 	t.Parallel()
-	got := resolveToolAllow(agents.Agent{Skills: []string{"some-skill"}})
+	got := resolveToolAllow(agents.Agent{Skills: []string{"some-skill"}}, nil)
 	want := map[string]bool{retrieveOutputTool: true, loadSkillTool: true}
 	if len(got) != len(want) {
 		t.Fatalf("resolveToolAllow = %v, want exactly %v", got, want)
@@ -1348,7 +1348,7 @@ func TestResolveToolAllowEmptyToolsWithSkillsAlsoGrantsLoadSkill(t *testing.T) {
 func TestResolveToolAllowNonEmptyToolsGainsInfraExemptions(t *testing.T) {
 	t.Parallel()
 	profile := agents.Agent{Tools: []string{"search_web", "get_current_time"}, Skills: []string{"some-skill"}}
-	got := resolveToolAllow(profile)
+	got := resolveToolAllow(profile, nil)
 	want := []string{"search_web", "get_current_time", "retrieve_output", "load_skill"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("resolveToolAllow(non-empty) = %v, want %v", got, want)
@@ -1361,7 +1361,7 @@ func TestResolveToolAllowNonEmptyToolsGainsInfraExemptions(t *testing.T) {
 func TestResolveToolAllowNeverDuplicatesExemptions(t *testing.T) {
 	t.Parallel()
 	profile := agents.Agent{Tools: []string{"retrieve_output", "load_skill"}, Skills: []string{"some-skill"}}
-	got := resolveToolAllow(profile)
+	got := resolveToolAllow(profile, nil)
 	want := []string{"retrieve_output", "load_skill"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("resolveToolAllow(already listed) = %v, want %v", got, want)
@@ -3483,5 +3483,43 @@ func TestRecordLoadedToolDropsBrokenSchema(t *testing.T) {
 	s.RecordLoadedTool("s1", &tools.Tool{Name: "bad", InputSchema: json.RawMessage(`{"type":`)})
 	if len(s.LoadedTools("s1")) != 0 {
 		t.Fatalf("a broken schema must not reach the session surface")
+	}
+}
+
+// A deferred MCP connector's load_tool follows the tools behind it
+// (issue #729): allowlisting any hidden tool, by raw or namespaced
+// name, or the entry point itself, offers the entry point; an agent
+// with nothing from that connector gets nothing from it, and an
+// empty deferred map changes nothing.
+func TestResolveToolAllowDeferredLoadTool(t *testing.T) {
+	t.Parallel()
+	deferred := map[string][]string{
+		"jira_load_tool":  {"jira_get_issue", "jira_search_issues"},
+		"other_load_tool": {"other_ping"},
+	}
+	cases := []struct {
+		name  string
+		tools []string
+		want  []string
+	}{
+		{"raw hidden name", []string{"get_issue"}, []string{"get_issue", "retrieve_output", "jira_load_tool"}},
+		{"namespaced hidden name", []string{"jira_search_issues"}, []string{"jira_search_issues", "retrieve_output", "jira_load_tool"}},
+		{"entry point by raw name covers every connector", []string{"load_tool"}, []string{"load_tool", "retrieve_output"}},
+		{"entry point already listed", []string{"jira_load_tool"}, []string{"jira_load_tool", "retrieve_output"}},
+		{"unrelated tools", []string{"search_web"}, []string{"search_web", "retrieve_output"}},
+		{"empty allowlist", nil, []string{"retrieve_output"}},
+		{"both connectors", []string{"ping", "get_issue"}, []string{"ping", "get_issue", "retrieve_output", "jira_load_tool", "other_load_tool"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := agents.Agent{Tools: tc.tools}
+			got := resolveToolAllow(profile, deferred)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("resolveToolAllow(%v) = %v, want %v", tc.tools, got, tc.want)
+			}
+			if len(profile.Tools) != len(tc.tools) {
+				t.Fatalf("profile.Tools mutated: %v", profile.Tools)
+			}
+		})
 	}
 }

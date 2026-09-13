@@ -142,7 +142,13 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	a.registerSettings(srv.Handle, flags, whisperURL, pdfService != nil)
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog, msft, secrets)
-	a.registerTools(srv.Handle, toolset)
+	// Same nil-box guard as connLister above, for the deferred-tool
+	// listing the tools picker appends.
+	var deferred deferredToolLister
+	if conns != nil {
+		deferred = conns
+	}
+	a.registerTools(srv.Handle, toolset, deferred)
 	a.registerSkills(srv.Handle, packs)
 	a.registerKB(srv.Handle, kbStore, kbIngest, markitdownURL, kbClassify, kbTitle, kbEnrich)
 	var codingExecutorDefault func(context.Context) string

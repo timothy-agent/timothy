@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -662,6 +663,95 @@ func (m *Manager) WaitReady(ctx context.Context) error {
 	}
 }
 
+// deferredSource is the optional Source capability of a source that
+// hides its tools behind a load_tool index (an indexed mcpSource): the
+// hidden tools, un-namespaced. Type-asserted so eager kinds are
+// untouched.
+type deferredSource interface {
+	DeferredTools() []*tools.Tool
+}
+
+// LoadToolName is the raw name of a deferred source's entry point.
+// Like any connector tool it joins aggregateTools' raw-name merge:
+// every indexed connector serves load_tool with the same schema, so
+// the surface exposes ONE "load_tool" (with an account argument once
+// two connectors contribute), and the namespaced
+// "<connector>_load_tool" form only appears when the name splits.
+const LoadToolName = "load_tool"
+
+// DeferredTools maps each exposed load_tool name to the namespaced
+// names of the tools it can load (issue #729). chat's resolveToolAllow
+// offers the entry point to any agent whose tools allowlist matches
+// one of those names, so an operator picks the tools they mean and
+// never has to know load_tool exists. Keys follow the merge decision
+// the live surface made (groupByRawName): normally the single raw
+// "load_tool", shared by every indexed connector, so allowlisting one
+// connector's hidden tool offers the shared entry point; loading is
+// permission-exempt and grants nothing, the loaded tool still walks
+// the whole chain when called. reserved is nil: no builtin is named
+// load_tool, and the hidden tools are always namespaced on load.
+// Empty when no connector is indexed.
+func (m *Manager) DeferredTools() map[string][]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := map[string][]string{}
+	for _, e := range m.deferredEntries() {
+		out[e.loadTool] = append(out[e.loadTool], e.tools...)
+	}
+	for k := range out {
+		slices.Sort(out[k])
+	}
+	return out
+}
+
+// deferredEntry is one indexed connector: the load_tool name the
+// live surface exposes for it and its hidden tools' namespaced names.
+type deferredEntry struct {
+	connector string
+	loadTool  string
+	tools     []string
+}
+
+// deferredEntries lists every indexed source; caller holds m.mu.
+func (m *Manager) deferredEntries() []deferredEntry {
+	merged, _ := groupByRawName(m.sources, nil)
+	var out []deferredEntry
+	for name, src := range m.sources {
+		ds, ok := src.(deferredSource)
+		if !ok {
+			continue
+		}
+		hidden := ds.DeferredTools()
+		if len(hidden) == 0 {
+			continue
+		}
+		e := deferredEntry{connector: name, loadTool: NamespacedName(name, LoadToolName)}
+		if _, ok := merged[LoadToolName]; ok {
+			e.loadTool = LoadToolName
+		}
+		for _, t := range hidden {
+			e.tools = append(e.tools, NamespacedName(name, t.Name))
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// liveLoadTool is the load_tool name the live surface exposes for
+// connector name, or LoadToolName when the connector isn't built yet
+// (disabled, or tested before its first reload): the merged raw form
+// is what a single indexed connector gets, so it is the right default.
+func (m *Manager) liveLoadTool(name string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, e := range m.deferredEntries() {
+		if e.connector == name {
+			return e.loadTool
+		}
+	}
+	return LoadToolName
+}
+
 // Names returns the currently-built connector names (unordered).
 func (m *Manager) Names() []string {
 	m.mu.RLock()
@@ -721,19 +811,44 @@ type identifier interface {
 // tools require a scope the operator may not have granted, so the
 // identity check is useful there too). identity is nil for kinds with no identity concept.
 func (m *Manager) TestIdentity(ctx context.Context, id string) (*GitHubIdentity, error) {
-	c, err := m.rows.Get(ctx, id)
+	report, err := m.TestReport(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+	return report.Identity, nil
+}
+
+// TestReport is what a connector test proves beyond "it answered":
+// the identity a credential resolves to (nil for kinds without one)
+// and, for an MCP server over the deferral threshold, how many tools
+// sit behind its load_tool entry point (0 when eager). The connector
+// page shows the latter so an operator learns the entry point exists
+// (issue #729).
+type TestReport struct {
+	Identity      *GitHubIdentity
+	DeferredTools int
+	// LoadTool is the entry point's name as chat sees it (see
+	// LoadToolName); empty when DeferredTools is 0.
+	LoadTool string
+}
+
+// TestReport builds the connector fresh, enabled or not, runs its
+// connectivity or identity check, and reports what it found. The
+// ephemeral source is closed either way.
+func (m *Manager) TestReport(ctx context.Context, id string) (TestReport, error) {
+	c, err := m.rows.Get(ctx, id)
+	if err != nil {
+		return TestReport{}, err
+	}
 	b, ok := m.builders[c.Kind]
 	if !ok {
-		return nil, fmt.Errorf("connector kind %s has no builder yet: %w", c.Kind, ErrUnsupported)
+		return TestReport{}, fmt.Errorf("connector kind %s has no builder yet: %w", c.Kind, ErrUnsupported)
 	}
 	tctx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
 	src, err := b(tctx, c, m.resolve)
 	if err != nil {
-		return nil, err
+		return TestReport{}, err
 	}
 	defer func() {
 		if err := src.Close(); err != nil {
@@ -741,15 +856,22 @@ func (m *Manager) TestIdentity(ctx context.Context, id string) (*GitHubIdentity,
 		}
 	}()
 
+	var report TestReport
+	if ds, ok := src.(deferredSource); ok {
+		if report.DeferredTools = len(ds.DeferredTools()); report.DeferredTools > 0 {
+			report.LoadTool = m.liveLoadTool(c.Name)
+		}
+	}
 	idr, ok := src.(identifier)
 	if !ok {
-		return nil, src.Test(tctx)
+		return report, src.Test(tctx)
 	}
 	identity, err := idr.Identity(tctx)
 	if err != nil {
-		return nil, err
+		return TestReport{}, err
 	}
-	return &identity, nil
+	report.Identity = &identity
+	return report, nil
 }
 
 // repoSource is the optional Source capability that lists/creates

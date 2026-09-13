@@ -27,8 +27,9 @@ import (
 // Agent is the API shape of one agents row. Empty Skills or Tools
 // means none of that surface is allowed (both opt-in only, resolved
 // by internal/brain/chat's resolveToolAllow/allowedPacks — retrieve_
-// output and, when Skills is non-empty, load_skill stay available
-// regardless); empty Route means the default route.
+// output, when Skills is non-empty load_skill, and a deferred MCP
+// connector's load_tool once any of its tools is listed, stay
+// available regardless); empty Route means the default route.
 //
 // ReviewRoute is meaningless to a chat-only agent and stays at its
 // zero value for one; a mission-capable agent (internal/brain/missions)

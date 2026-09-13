@@ -155,14 +155,25 @@ func (s *mcpSource) connect(ctx context.Context) error {
 // prefixes connector names when it aggregates. An indexed source
 // returns exactly one synthetic load_tool whose description carries
 // the index, so a large server costs one tool def per turn instead of
-// one per remote tool; the manager namespaces it to
-// "<connector>_load_tool", which is what we want, one entry point per
-// connector.
+// one per remote tool; the manager aggregates it like any connector
+// tool (see LoadToolName), so the surface carries one load_tool that
+// routes to this connector.
 func (s *mcpSource) Tools() []*tools.Tool {
 	if !s.indexed {
 		return s.toolList
 	}
 	return []*tools.Tool{s.loadTool()}
+}
+
+// DeferredTools returns the remote tools an indexed source hides
+// behind load_tool, un-namespaced; nil for an eager source. The
+// manager's DeferredTools reads it to tell chat which allowlist
+// entries imply this connector's entry point (issue #729).
+func (s *mcpSource) DeferredTools() []*tools.Tool {
+	if !s.indexed {
+		return nil
+	}
+	return s.toolList
 }
 
 // IndexText renders the deferred tool index: one line per remote tool,
@@ -208,7 +219,7 @@ func (s *mcpSource) loadTool() *tools.Tool {
 		names = append(names, t.Name)
 	}
 	return &tools.Tool{
-		Name: "load_tool",
+		Name: LoadToolName,
 		Description: `Loads one of this connector's tools so you can call it.
 
 The ` + s.name + ` connector serves too many tools to describe them all

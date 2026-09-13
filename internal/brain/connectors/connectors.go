@@ -25,8 +25,10 @@ import (
 // registers. github is identity/credential-only (D-057): it serves no
 // chat tools in this slice, existing purely so mission flows (clone,
 // push, PR) and Settings can resolve a GitHub identity from a PAT; the
-// MCP-based GitHub connector keeps serving GitHub chat tools.
-var kinds = map[string]bool{"mcp": true, "google": true, "github": true, "microsoft": true, "imap": true, "caldav": true}
+// MCP-based GitHub connector keeps serving GitHub chat tools. aws is
+// the managed AWS MCP Server, reached over the same MCP client with
+// every request signed SigV4 from static IAM keys.
+var kinds = map[string]bool{"mcp": true, "google": true, "github": true, "microsoft": true, "imap": true, "caldav": true, "aws": true}
 
 // credentialRefPattern matches the gateway's: names and paths only,
 // never anything that could be a pasted secret.

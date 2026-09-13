@@ -261,12 +261,16 @@ func (h *connectorAPI) delete(w http.ResponseWriter, r *http.Request) {
 // connector has no tools to prove itself with, so identity is the
 // evidence a working PAT was configured.
 func (h *connectorAPI) test(w http.ResponseWriter, r *http.Request) {
-	identity, err := h.mgr.TestIdentity(r.Context(), r.PathValue("id"))
+	report, err := h.mgr.TestReport(r.Context(), r.PathValue("id"))
 	switch {
 	case err == nil:
 		out := map[string]any{"ok": true}
-		if identity != nil {
-			out["identity"] = identity
+		if report.Identity != nil {
+			out["identity"] = report.Identity
+		}
+		if report.DeferredTools > 0 {
+			out["deferred_tools"] = report.DeferredTools
+			out["load_tool"] = report.LoadTool
 		}
 		writeJSON(w, http.StatusOK, out)
 	case errors.Is(err, connectors.ErrNotFound), errors.Is(err, connectors.ErrUnsupported):

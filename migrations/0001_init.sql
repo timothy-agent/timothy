@@ -397,12 +397,14 @@ ON CONFLICT (backend) DO NOTHING;
 CREATE TABLE IF NOT EXISTS connectors (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name           text UNIQUE NOT NULL,
-    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github', 'microsoft', 'imap', 'caldav')),
+    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github', 'microsoft', 'imap', 'caldav', 'aws')),
     -- kind-specific settings: mcp → {transport, endpoint, headers},
     -- google/microsoft → {client_id, client_secret_ref, scopes},
     -- imap → {host, port, username, account_email, smtp_host,
     -- smtp_port} (port defaults 993/implicit TLS, smtp_port defaults
     -- 587/STARTTLS, smtp_host optional, SMTP send only when set).
+    -- aws → {endpoint, region} (managed AWS MCP Server, SigV4-signed;
+    -- region derived from the endpoint host when omitted).
     -- OAuth tokens NEVER live here; they go to the secrets table under
     -- credential_ref (imap's password goes there too).
     config         jsonb NOT NULL DEFAULT '{}',

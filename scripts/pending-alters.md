@@ -33,3 +33,9 @@ ALTER TABLE missions ADD COLUMN IF NOT EXISTS executor_session_policy text NOT N
 -- spend no iteration, so mission_harness_retry_cap is their ceiling.
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS harness_retries integer NOT NULL DEFAULT 0;
 ```
+
+```sql
+-- issue #730: aws connector kind (AWS MCP Server over SigV4).
+ALTER TABLE connectors DROP CONSTRAINT IF EXISTS connectors_kind_check;
+ALTER TABLE connectors ADD CONSTRAINT connectors_kind_check CHECK (kind IN ('mcp','google','github','microsoft','imap','caldav','aws'));
+```

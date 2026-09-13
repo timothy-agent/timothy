@@ -2,6 +2,7 @@ package connectors
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -335,3 +336,101 @@ func TestWaitReadyReturnsAfterReload(t *testing.T) {
 		t.Fatalf("WaitReady after Reload = %v, want nil", err)
 	}
 }
+
+// TestDeferredToolsFollowsTheMergedName pins issue #729's input to
+// chat: indexed mcp sources contribute their hidden tools under the
+// namespaced name the load path gives them, keyed by the load_tool
+// name the surface actually exposes. Every indexed connector serves
+// load_tool with the same schema, so that is the single raw
+// "load_tool", shared across connectors; eager sources of any kind
+// contribute nothing.
+func TestDeferredToolsFollowsTheMergedName(t *testing.T) {
+	t.Parallel()
+	loadSchema := json.RawMessage(`{"type":"object"}`)
+	indexed := func(name string, hidden ...string) *mcpSource {
+		src := &mcpSource{name: name, indexed: true}
+		for _, h := range hidden {
+			src.toolList = append(src.toolList, &tools.Tool{Name: h, InputSchema: loadSchema})
+		}
+		return src
+	}
+	m := testManager(fakeRows{})
+	m.sources = map[string]Source{
+		"gmail":  &fakeSource{tools: []*tools.Tool{{Name: "search"}}},
+		"eager":  &mcpSource{name: "eager", toolList: []*tools.Tool{{Name: "ping"}}},
+		"jira":   indexed("jira", "search.issues", "get_issue"),
+		"wiki":   indexed("wiki", "get_page"),
+		"hidden": &mcpSource{name: "hidden", indexed: true},
+	}
+
+	got := m.DeferredTools()
+	want := map[string][]string{
+		"load_tool": {"jira_get_issue", "jira_search_issues", "wiki_get_page"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("DeferredTools = %v, want %v", got, want)
+	}
+	for k, names := range want {
+		if !slices.Equal(got[k], names) {
+			t.Fatalf("DeferredTools[%s] = %v, want %v", k, got[k], names)
+		}
+	}
+	if got := m.liveLoadTool("jira"); got != "load_tool" {
+		t.Fatalf("liveLoadTool(jira) = %q, want load_tool", got)
+	}
+	if got := m.liveLoadTool("not-built"); got != "load_tool" {
+		t.Fatalf("liveLoadTool(unbuilt) = %q, want load_tool default", got)
+	}
+}
+
+// A load_tool whose schema disagrees with another connector's (only
+// possible if a remote server ever ships its own tool named load_tool)
+// splits, and the map keys it by the namespaced name the surface uses.
+func TestDeferredToolsSplitsOnSchemaMismatch(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{})
+	m.sources = map[string]Source{
+		"jira":  &mcpSource{name: "jira", indexed: true, toolList: []*tools.Tool{{Name: "get_issue"}}},
+		"other": &mcpSource{name: "other", toolList: []*tools.Tool{{Name: "load_tool", InputSchema: json.RawMessage(`{"type":"object","properties":{"x":{}}}`)}}},
+	}
+	got := m.DeferredTools()
+	if !slices.Equal(got["jira_load_tool"], []string{"jira_get_issue"}) || len(got) != 1 {
+		t.Fatalf("DeferredTools = %v, want jira_load_tool only", got)
+	}
+}
+
+// TestReport counts the tools an indexed mcp source hides so the
+// connector page can name the load_tool entry point (issue #729); an
+// eager source reports zero.
+func TestTestReportCountsDeferredTools(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{rows: []Connector{{ID: "c1", Name: "jira", Kind: "mcp"}, {ID: "c2", Name: "small", Kind: "mcp"}}})
+	m.builders["mcp"] = func(_ context.Context, c Connector, _ Resolve) (Source, error) {
+		if c.Name == "jira" {
+			return &fakeDeferredSource{fakeSource{tools: []*tools.Tool{{Name: "load_tool"}}}, []*tools.Tool{{Name: "a"}, {Name: "b"}, {Name: "c"}}}, nil
+		}
+		return &fakeSource{tools: []*tools.Tool{{Name: "ping"}}}, nil
+	}
+
+	got, err := m.TestReport(t.Context(), "c1")
+	if err != nil {
+		t.Fatalf("TestReport(jira): %v", err)
+	}
+	if got.DeferredTools != 3 || got.Identity != nil || got.LoadTool != "load_tool" {
+		t.Fatalf("TestReport(jira) = %+v, want 3 deferred tools behind load_tool, no identity", got)
+	}
+	got, err = m.TestReport(t.Context(), "c2")
+	if err != nil {
+		t.Fatalf("TestReport(small): %v", err)
+	}
+	if got.DeferredTools != 0 || got.LoadTool != "" {
+		t.Fatalf("TestReport(small) = %+v, want no deferral", got)
+	}
+}
+
+type fakeDeferredSource struct {
+	fakeSource
+	hidden []*tools.Tool
+}
+
+func (f *fakeDeferredSource) DeferredTools() []*tools.Tool { return f.hidden }

@@ -248,14 +248,18 @@ func main() {
 	// schema and nothing sticks.
 	var recordLoadedTool func(sessionID string, t *tools.Tool)
 	if conns != nil {
-		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil, connectors.MCPDeferral{
+		// Shared by every MCP-backed kind, so a settings change to the
+		// index threshold reaches all of them.
+		mcpDeferral := connectors.MCPDeferral{
 			Threshold: flags.MCPToolIndexThreshold,
 			OnLoad: func(sessionID string, t *tools.Tool) {
 				if recordLoadedTool != nil {
 					recordLoadedTool(sessionID, t)
 				}
 			},
-		}))
+		}
+		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil, mcpDeferral))
+		conns.RegisterBuilder("aws", connectors.AWSBuilder(nil, mcpDeferral))
 		conns.RegisterBuilder("github", connectors.GitHubBuilder(nil))
 		if goog != nil {
 			conns.RegisterBuilder("google", goog.Builder())
@@ -527,6 +531,7 @@ func main() {
 	svc.SetAgentResolverByName(agentReg.Resolve)
 	svc.SetAutoDispatch(agentReg.Enabled, chat.ClassifyOverGateway(gwc))
 	svc.SetSensitiveTools(sensitiveTools)
+	svc.SetDeferredTools(conns.DeferredTools)
 	// TURN_TIMEOUT raises the detached-turn ceiling above the compiled
 	// 30m default: needed when a route serves a slow CPU-only backend
 	// whose provider request_timeout (D-041) would otherwise collide

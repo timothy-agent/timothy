@@ -4,7 +4,7 @@
 export interface ConnectorPreset {
   id: string
   name: string
-  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav'
+  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav' | 'aws'
   description: string
   logo?: string
   brandColor: string
@@ -109,6 +109,15 @@ export const connectorPresets: ConnectorPreset[] = [
     description: 'Any calendar via CalDAV, list and create events.',
     brandColor: '#64748B',
   },
+  {
+    id: 'aws',
+    name: 'AWS',
+    kind: 'aws',
+    description: 'Your AWS accounts via the AWS MCP Server: resources, docs, API queries',
+    logo: 'aws',
+    brandColor: '#FF9900',
+    endpoint: 'https://aws-mcp.eu-central-1.api.aws/mcp',
+  },
 ]
 
 // Fallback for connectors that predate a preset removal / don't match
@@ -134,7 +143,7 @@ function matchesPreset(
     const scopes = JSON.stringify(c.config.scopes ?? '')
     return p.scopes?.every((s) => scopes.includes(s)) ?? false
   }
-  if (c.kind === 'github' || c.kind === 'imap' || c.kind === 'caldav') return true
+  if (c.kind === 'github' || c.kind === 'imap' || c.kind === 'caldav' || c.kind === 'aws') return true
   const endpoint = String(c.config.endpoint ?? '')
   return !!p.endpoint && endpoint.startsWith(p.endpoint)
 }

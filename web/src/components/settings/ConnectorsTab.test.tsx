@@ -569,6 +569,33 @@ describe('ConnectorEdit rotate token and copy key', () => {
     await waitFor(() => expect(setSecret).toHaveBeenCalledWith('MY_CAL_CALDAV_PASSWORD', 'new-pass'))
   })
 
+  it('replaces an aws connector\'s access keys as JSON under its credential_ref', async () => {
+    const awsConnector: AdminConnector = {
+      id: 'aws1',
+      name: 'prod-account',
+      kind: 'aws',
+      config: { endpoint: 'https://aws-mcp.eu-central-1.api.aws/mcp', region: 'eu-central-1' },
+      credential_ref: 'PROD_ACCOUNT_AWS_KEYS',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([awsConnector])
+    vi.mocked(setSecret).mockResolvedValue()
+    renderTab(`/settings/connectors/${awsConnector.id}`)
+
+    expect(await screen.findByPlaceholderText('eu-central-1')).toHaveValue('eu-central-1')
+    fireEvent.change(screen.getByPlaceholderText('AKIA…'), { target: { value: 'AKIANEW' } })
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'new-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Replace access keys' }))
+
+    await waitFor(() =>
+      expect(setSecret).toHaveBeenCalledWith(
+        'PROD_ACCOUNT_AWS_KEYS',
+        JSON.stringify({ access_key_id: 'AKIANEW', secret_access_key: 'new-secret' }),
+      ),
+    )
+  })
+
   it('shows a toast when rotating the token fails', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(setSecret).mockRejectedValue(new Error('store unavailable'))
@@ -610,6 +637,38 @@ describe('ConnectorEdit rotate token and copy key', () => {
     expect(await screen.findByText('Endpoint:')).toBeTruthy()
     expect(screen.getByText('https://mcp.example.com')).toBeTruthy()
     expect(screen.getByText('Rotate bearer token')).toBeTruthy()
+  })
+})
+
+describe('ConnectorEdit deferred MCP hint', () => {
+  const mcpConnector: AdminConnector = {
+    id: 'mcp1',
+    name: 'atlassian',
+    kind: 'mcp',
+    config: { endpoint: 'https://mcp.atlassian.com/v1/mcp' },
+    credential_ref: 'ATLASSIAN_MCP_TOKEN',
+    enabled: true,
+    sensitive: false,
+  }
+
+  it('names the load_tool entry point after a passing test on a deferred server', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([mcpConnector])
+    vi.mocked(testConnector).mockResolvedValue({ ok: true, deferred_tools: 42, load_tool: 'load_tool' })
+    renderTab(`/settings/connectors/${mcpConnector.id}`)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText(/42 tools are deferred/)).toBeTruthy()
+    expect(screen.getByText('load_tool')).toBeTruthy()
+  })
+
+  it('shows no deferral note for a server under the threshold', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([mcpConnector])
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderTab(`/settings/connectors/${mcpConnector.id}`)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText(/Connection OK/)).toBeTruthy()
+    expect(screen.queryByText(/deferred/)).toBeNull()
   })
 })
 

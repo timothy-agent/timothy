@@ -11,16 +11,19 @@ import {
 import type { GitHubIdentity } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { Field, FieldGroup, Form, FormActions } from '../timothy/field'
+import { BedrockKeyFields, bedrockKeyJSON } from './BedrockKeyFields'
 import { ConnectorLogo } from './ConnectorLogo'
 import { connectorPresets } from './connectorPresets'
-import { CredentialField, type CredentialMode } from './CredentialRefPicker'
+import { CredentialField, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
-import { connectedAs } from './util'
+import { SegmentedControl } from '../timothy/segmented-control'
+import { connectedAs, secretDestination } from './util'
 import { errText, isTimothyAuthError } from '../../lib/errors'
 import { slugify } from '../../lib/slugify'
 
@@ -37,6 +40,18 @@ function isValidPort(v: string): boolean {
   if (!/^\d+$/.test(trimmed)) return false
   const n = Number(trimmed)
   return n >= 1 && n <= 65535
+}
+
+// awsEndpoints are the AWS MCP Server's regional endpoints; picking one
+// sets the SigV4 signing region, which stays editable below.
+const awsEndpoints = [
+  { endpoint: 'https://aws-mcp.us-east-1.api.aws/mcp', region: 'us-east-1' },
+  { endpoint: 'https://aws-mcp.eu-central-1.api.aws/mcp', region: 'eu-central-1' },
+]
+
+// awsRegionFor maps an AWS MCP endpoint to its signing region.
+function awsRegionFor(endpoint: string): string {
+  return awsEndpoints.find((e) => e.endpoint === endpoint)?.region ?? ''
 }
 
 // ConnectorAdd is preset-aware and its own page: MCP and github presets
@@ -64,6 +79,9 @@ export function ConnectorAdd() {
   const [caldavURL, setCaldavURL] = useState('')
   const [caldavUsername, setCaldavUsername] = useState('')
   const [caldavPassword, setCaldavPassword] = useState('')
+  const [awsRegion, setAwsRegion] = useState('')
+  const [awsAccessKeyID, setAwsAccessKeyID] = useState('')
+  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; error?: string; identity?: GitHubIdentity } | null>(
     null,
@@ -98,6 +116,9 @@ export function ConnectorAdd() {
     setCaldavURL('')
     setCaldavUsername('')
     setCaldavPassword('')
+    setAwsRegion(awsRegionFor(preset.endpoint ?? ''))
+    setAwsAccessKeyID('')
+    setAwsSecretAccessKey('')
     setBusy(false)
     setTest(null)
     setCreatedID(null)
@@ -115,6 +136,7 @@ export function ConnectorAdd() {
   const isGitHub = preset.kind === 'github'
   const isImap = preset.kind === 'imap'
   const isCalDAV = preset.kind === 'caldav'
+  const isAWS = preset.kind === 'aws'
   const slug = slugify(name)
   const refBase = slug.toUpperCase().replace(/-/g, '_')
   const tested = test?.ok === true
@@ -125,6 +147,8 @@ export function ConnectorAdd() {
   }
 
   const usingExistingToken = tokenCredMode === 'existing'
+  // No stutter when the connector name already ends in AWS.
+  const awsRef = refBase.endsWith('AWS') ? `${refBase}_KEYS` : `${refBase}_AWS_KEYS`
 
   const runTest = async () => {
     if (!slug) {
@@ -133,6 +157,16 @@ export function ConnectorAdd() {
     }
     if (!isGitHub && !isImap && !isCalDAV && !endpoint.trim()) {
       toast.error('Endpoint required', { description: 'An MCP endpoint is required to test this connector.' })
+      return
+    }
+    if (isAWS && !awsRegion.trim()) {
+      toast.error('Region required', { description: 'A signing region matching the endpoint is required.' })
+      return
+    }
+    if (isAWS && !usingExistingToken && (!awsAccessKeyID.trim() || !awsSecretAccessKey.trim())) {
+      toast.error('Access keys required', {
+        description: 'An access key ID and secret access key are required to test this connector.',
+      })
       return
     }
     if (isImap && (!imapHost.trim() || !imapUsername.trim())) {
@@ -180,10 +214,18 @@ export function ConnectorAdd() {
             ? `${refBase}_IMAP_PASSWORD`
             : isCalDAV
               ? `${refBase}_CALDAV_PASSWORD`
-              : refBase.endsWith('_MCP')
+              : isAWS
+                ? awsRef
+                : refBase.endsWith('_MCP')
                 ? `${refBase}_TOKEN`
                 : `${refBase}_MCP_TOKEN`
-      const secretValue = isImap ? imapPassword : isCalDAV ? caldavPassword : token
+      const secretValue = isImap
+        ? imapPassword
+        : isCalDAV
+          ? caldavPassword
+          : isAWS
+            ? bedrockKeyJSON(awsAccessKeyID, awsSecretAccessKey)
+            : token
       if (!usingExistingToken && secretValue) await setSecret(tokenRef, secretValue.trim())
       const id = await createConnector(
         isGitHub
@@ -210,7 +252,15 @@ export function ConnectorAdd() {
                   credential_ref: tokenRef,
                   enabled: false,
                 }
-              : {
+              : isAWS
+                ? {
+                    name: slug,
+                    kind: 'aws',
+                    config: { endpoint: endpoint.trim(), region: awsRegion.trim() },
+                    credential_ref: tokenRef,
+                    enabled: false,
+                  }
+                : {
                   name: slug,
                   kind: 'mcp',
                   config: { endpoint: endpoint.trim() },
@@ -292,7 +342,13 @@ export function ConnectorAdd() {
           ? caldavURL.trim() !== '' &&
             caldavUsername.trim() !== '' &&
             (usingExistingToken ? existingTokenRef !== '' : caldavPassword.trim() !== '')
-          : endpoint.trim() !== '')
+          : isAWS
+            ? endpoint.trim() !== '' &&
+              awsRegion.trim() !== '' &&
+              (usingExistingToken
+                ? existingTokenRef !== ''
+                : awsAccessKeyID.trim() !== '' && awsSecretAccessKey.trim() !== '')
+            : endpoint.trim() !== '')
   const canSubmitOAuth =
     slug !== '' &&
     clientID.trim() !== '' &&
@@ -365,7 +421,48 @@ export function ConnectorAdd() {
             </>
           ) : (
             <>
-              {!isGitHub && !isImap && !isCalDAV && (
+              {isAWS && (
+                <>
+                  <Field label="Endpoint" description="the regional AWS MCP Server endpoint">
+                    {(props) => (
+                      <Select
+                        value={endpoint}
+                        // Radix reports an empty value while the item
+                        // list is unmounted; ignore it so the default
+                        // endpoint survives the first render.
+                        onValueChange={(v) => {
+                          if (!v) return
+                          setEndpoint(v)
+                          setAwsRegion(awsRegionFor(v))
+                          invalidate()
+                        }}
+                      >
+                        <SelectTrigger id={props.id} className="w-full" aria-label="Endpoint">
+                          <SelectValue placeholder="Choose a regional endpoint" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {awsEndpoints.map((e) => (
+                            <SelectItem key={e.endpoint} value={e.endpoint}>
+                              {e.endpoint}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </Field>
+                  <Field label="Region" description="the SigV4 signing region, must match the endpoint">
+                    <Input
+                      value={awsRegion}
+                      onChange={(e) => {
+                        setAwsRegion(e.target.value)
+                        invalidate()
+                      }}
+                      placeholder="eu-central-1"
+                    />
+                  </Field>
+                </>
+              )}
+              {!isGitHub && !isImap && !isCalDAV && !isAWS && (
                 <Field
                   label="Endpoint"
                   description={preset.endpointHint}
@@ -463,6 +560,53 @@ export function ConnectorAdd() {
                 </>
               )}
 
+              {isAWS ? (
+                // The two AWS key fields replace CredentialField's single
+                // password input; the mode toggle and existing picker are
+                // the shared ones.
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-foreground">Access keys</span>
+                    <SegmentedControl
+                      value={tokenCredMode}
+                      onChange={(v) => {
+                        setTokenCredMode(v as CredentialMode)
+                        invalidate()
+                      }}
+                      options={[
+                        { value: 'new', label: 'New credential' },
+                        { value: 'existing', label: 'Use existing' },
+                      ]}
+                      size="sm"
+                      aria-label="Credential source"
+                    />
+                  </div>
+                  {usingExistingToken ? (
+                    <Field label="Existing credential">
+                      <ExistingCredentialSelect
+                        value={existingTokenRef}
+                        onChange={(v) => {
+                          setExistingTokenRef(v)
+                          invalidate()
+                        }}
+                      />
+                    </Field>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <BedrockKeyFields
+                        accessKeyId={awsAccessKeyID}
+                        secretAccessKey={awsSecretAccessKey}
+                        onChange={(f) => {
+                          setAwsAccessKeyID(f.accessKeyId)
+                          setAwsSecretAccessKey(f.secretAccessKey)
+                          invalidate()
+                        }}
+                      />
+                      <p className="text-sm text-muted-foreground">{secretDestination(defaultBackend, awsRef)}</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
               <CredentialField
                 label={
                   isGitHub
@@ -494,7 +638,8 @@ export function ConnectorAdd() {
                 defaultBackend={defaultBackend}
                 refName={isGitHub ? `${refBase}_GITHUB_PAT` : isImap ? `${refBase}_IMAP_PASSWORD` : isCalDAV ? `${refBase}_CALDAV_PASSWORD` : `${refBase}_MCP_TOKEN`}
               />
-              {!isImap && !isCalDAV && tokenCredMode === 'new' && (
+              )}
+              {!isImap && !isCalDAV && !isAWS && tokenCredMode === 'new' && (
                 <p className="-mt-2 text-sm text-muted-foreground">
                   {preset.tokenHint}
                   {preset.tokenURL && (
