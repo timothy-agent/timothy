@@ -194,7 +194,7 @@ describe('ConnectorAdd aws flow', () => {
     renderPage('aws')
 
     expect(await screen.findByLabelText('Endpoint')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('eu-central-1')).toHaveValue('eu-central-1')
+    expect(screen.getByRole('combobox', { name: 'Region' })).toHaveTextContent('eu-central-1')
     expect(screen.getByPlaceholderText('AKIA…')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...')).toBeInTheDocument()
   })

@@ -583,7 +583,7 @@ describe('ConnectorEdit rotate token and copy key', () => {
     vi.mocked(setSecret).mockResolvedValue()
     renderTab(`/settings/connectors/${awsConnector.id}`)
 
-    expect(await screen.findByPlaceholderText('eu-central-1')).toHaveValue('eu-central-1')
+    expect(await screen.findByRole('combobox', { name: 'Region' })).toHaveTextContent('eu-central-1')
     fireEvent.change(screen.getByPlaceholderText('AKIA…'), { target: { value: 'AKIANEW' } })
     fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'new-secret' } })
     fireEvent.click(screen.getByRole('button', { name: 'Replace access keys' }))

@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { BedrockKeyFields, bedrockKeyJSON } from './BedrockKeyFields'
 import { ConnectorLogo } from './ConnectorLogo'
 import { presetFor } from './connectorPresets'
+import { awsRegions } from '../../lib/providerPresets'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useStagedForm } from './useStagedForm'
@@ -319,11 +320,26 @@ function ConnectorEditForm({
                 )}
               </Field>
               <Field label="Region" description="the SigV4 signing region, must match the endpoint">
-                <Input
-                  value={staged.values.aws_region}
-                  onChange={(e) => staged.setField('aws_region', e.target.value)}
-                  placeholder="eu-central-1"
-                />
+                {(props) => (
+                  <Select
+                    value={staged.values.aws_region}
+                    onValueChange={(v) => {
+                      if (!v) return
+                      staged.setField('aws_region', v)
+                    }}
+                  >
+                    <SelectTrigger id={props.id} className="w-full" aria-label="Region">
+                      <SelectValue placeholder="Choose a region" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {awsRegions.map((r) => (
+                        <SelectItem key={r.value} value={r.value}>
+                          {r.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </Field>
             </>
           )}
