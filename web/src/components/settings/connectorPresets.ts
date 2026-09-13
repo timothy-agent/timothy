@@ -73,6 +73,23 @@ export const connectorPresets: ConnectorPreset[] = [
     scopes: outlookScopes,
   },
   {
+    id: 'aws',
+    name: 'AWS',
+    kind: 'aws',
+    description: 'Your AWS accounts via the AWS MCP Server: resources, docs, API queries',
+    logo: 'aws',
+    brandColor: '#FF9900',
+    endpoint: 'https://aws-mcp.eu-central-1.api.aws/mcp',
+  },
+  {
+    id: 'gcp',
+    name: 'GCP',
+    kind: 'gcp',
+    description: 'A GCP project via a service-account key: Cloud Storage objects, BigQuery queries',
+    logo: 'gcp',
+    brandColor: '#4285F4',
+  },
+  {
     id: 'github',
     name: 'GitHub MCP',
     kind: 'mcp',
@@ -108,22 +125,6 @@ export const connectorPresets: ConnectorPreset[] = [
     kind: 'caldav',
     description: 'Any calendar via CalDAV, list and create events.',
     brandColor: '#64748B',
-  },
-  {
-    id: 'aws',
-    name: 'AWS',
-    kind: 'aws',
-    description: 'Your AWS accounts via the AWS MCP Server: resources, docs, API queries',
-    logo: 'aws',
-    brandColor: '#FF9900',
-    endpoint: 'https://aws-mcp.eu-central-1.api.aws/mcp',
-  },
-  {
-    id: 'gcp',
-    name: 'GCP',
-    kind: 'gcp',
-    description: 'A GCP project via a service-account key: Cloud Storage objects, BigQuery queries',
-    brandColor: '#4285F4',
   },
 ]
 
