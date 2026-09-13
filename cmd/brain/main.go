@@ -246,16 +246,17 @@ func main() {
 	// the indirection is never read while still nil in practice. Left
 	// nil-safe anyway: a load_tool call with no sink just reports the
 	// schema and nothing sticks.
-	var recordLoadedTool func(sessionID string, t *tools.Tool)
+	var recordLoadedTool func(sessionID string, t *tools.Tool) bool
 	if conns != nil {
 		// Shared by every MCP-backed kind, so a settings change to the
 		// index threshold reaches all of them.
 		mcpDeferral := connectors.MCPDeferral{
 			Threshold: flags.MCPToolIndexThreshold,
-			OnLoad: func(sessionID string, t *tools.Tool) {
+			OnLoad: func(sessionID string, t *tools.Tool) bool {
 				if recordLoadedTool != nil {
-					recordLoadedTool(sessionID, t)
+					return recordLoadedTool(sessionID, t)
 				}
+				return false
 			},
 		}
 		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil, mcpDeferral))
@@ -524,7 +525,18 @@ func main() {
 	// rather than inside buildAgent (which runs before conns is built).
 	agent.SetForceRouteByConnector(sensitiveConnectorNames, sensitiveRoute, sensitiveAccountConnector)
 
-	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags}, store, distill,
+	// loadedTools is set to the chat service's session-loaded-tool
+	// reader once that exists (below); turnRouter is built in the same
+	// statement that constructs svc, so the indirection breaks the
+	// cycle the same way recordLoadedTool does above. Nil-safe: a turn
+	// started before svc exists just gets no mid-turn tool refresh.
+	var loadedTools func(sessionID string) []*tools.Tool
+	svc := chat.New(turnRouter{agent: agent, gw: gwc, flags: flags, loadedTools: func(sessionID string) []*tools.Tool {
+		if loadedTools != nil {
+			return loadedTools(sessionID)
+		}
+		return nil
+	}}, store, distill,
 		gatedCompactor{inner: compactor, flags: flags}, budgetFn, packs, flags.SkillAllowed,
 		flags.Location, agentReg.ResolveByID, app.Log)
 	svc.SetWriting(writingSettings(flags))
@@ -567,6 +579,7 @@ func main() {
 	// deferred MCP tool the model loads mid-session lands in this
 	// session's turn-scoped ExtraTools from the next turn on.
 	recordLoadedTool = svc.RecordLoadedTool
+	loadedTools = svc.LoadedTools
 	compactor.SetSensitiveTools(sensitiveTools)
 	// extractDeny fetches system-owned values a proposed fact must not
 	// restate (currently just the operator's timezone). Read per-call,
@@ -1593,15 +1606,17 @@ func (g gatedCompactor) MaybeCompact(ctx context.Context, sessionID string) erro
 // gateway. With the tools switch off, chat turns bypass the agent
 // loop entirely: plain pass-through completion.
 type turnRouter struct {
-	agent *loop.Agent
-	gw    chat.Gateway
-	flags *settings.Store
+	agent       *loop.Agent
+	gw          chat.Gateway
+	flags       *settings.Store
+	loadedTools func(sessionID string) []*tools.Tool
 }
 
 func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	if req.Purpose != "chat" || !r.flags.Enabled(ctx, settings.KeyTools) {
 		return r.gw.Stream(ctx, req)
 	}
+	sessionID := req.SessionID
 	return r.agent.Start(ctx, loop.Request{
 		SessionID:  req.SessionID,
 		Route:      req.Route,
@@ -1611,6 +1626,9 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 		ModelHint:  req.ModelHint,
 		System:     req.System,
 		Messages:   req.Messages,
+		RefreshTools: func(context.Context) []*tools.Tool {
+			return r.loadedTools(sessionID)
+		},
 	})
 }
 

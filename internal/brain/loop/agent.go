@@ -369,6 +369,16 @@ type Request struct {
 	// itself knows nothing about missions.
 	Steering func(ctx context.Context) []string
 
+	// RefreshTools, when set, is polled once per iteration at the top
+	// of every model round after the first and returns the session's
+	// full current set of dynamically-loaded tools (e.g. an MCP
+	// connector's load_tool sink). A name new to this turn's surface is
+	// added to defs/toolNames/exec before that round's call, so a tool
+	// loaded earlier this same turn becomes callable without waiting
+	// for the next turn (issue #732). nil means the turn's tool surface
+	// never grows past what it started with — every caller but chat.
+	RefreshTools func(ctx context.Context) []*tools.Tool
+
 	// MaxSteps, when > 0, replaces the agent's default step ceiling
 	// (tools.DefaultMaxSteps) for this turn (D-093): a reviewer that
 	// already holds the harness's verify output needs a spot check, not
@@ -528,6 +538,22 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 		if step > 1 && req.Steering != nil {
 			for _, note := range req.Steering(ctx) {
 				msgs = append(msgs, provider.Message{Role: "user", Content: note})
+			}
+		}
+		if step > 1 && req.RefreshTools != nil {
+			var newTools []*tools.Tool
+			for _, t := range req.RefreshTools(ctx) {
+				if !toolNames[t.Name] {
+					newTools = append(newTools, t)
+				}
+			}
+			if len(newTools) > 0 {
+				var newDefs []provider.ToolDef
+				exec, newDefs = withExtraTools(exec, newTools)
+				defs = append(defs, newDefs...)
+				for _, d := range newDefs {
+					toolNames[d.Name] = true
+				}
 			}
 		}
 		directive := tools.CeilingFor(step, maxSteps)

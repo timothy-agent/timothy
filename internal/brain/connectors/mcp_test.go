@@ -335,9 +335,15 @@ func bigToolsJSON(n int) string {
 func indexDeferral(threshold int, loaded *[]*tools.Tool, sessions *[]string) MCPDeferral {
 	return MCPDeferral{
 		Threshold: func(context.Context) int { return threshold },
-		OnLoad: func(sessionID string, t *tools.Tool) {
+		OnLoad: func(sessionID string, t *tools.Tool) bool {
+			for _, existing := range *loaded {
+				if existing.Name == t.Name {
+					return true
+				}
+			}
 			*sessions = append(*sessions, sessionID)
 			*loaded = append(*loaded, t)
+			return false
 		},
 	}
 }
@@ -401,7 +407,7 @@ func TestMCPThresholdZeroDisablesDeferral(t *testing.T) {
 		name     string
 		deferral MCPDeferral
 	}{
-		{"threshold zero", MCPDeferral{Threshold: func(context.Context) int { return 0 }, OnLoad: func(string, *tools.Tool) {}}},
+		{"threshold zero", MCPDeferral{Threshold: func(context.Context) int { return 0 }, OnLoad: func(string, *tools.Tool) bool { return false }}},
 		{"not wired", MCPDeferral{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -454,6 +460,38 @@ func TestMCPLoadToolRoundTrip(t *testing.T) {
 	// The remote sees the RAW name, not the namespaced one.
 	if len(f.gotCalls) != 1 || !strings.HasPrefix(f.gotCalls[0], "tool_3 ") {
 		t.Fatalf("remote calls = %v", f.gotCalls)
+	}
+}
+
+// TestMCPLoadToolAlreadyLoadedSaysSo pins issue #732's second
+// acceptance criterion: loading the same tool twice in a session must
+// say it's already loaded and callable, not repeat the "Loaded" text.
+func TestMCPLoadToolAlreadyLoadedSaysSo(t *testing.T) {
+	t.Parallel()
+	f := &fakeMCP{toolsJSON: bigToolsJSON(9)}
+	var loaded []*tools.Tool
+	var sessions []string
+	src := buildMCPWith(t, f, "", indexDeferral(8, &loaded, &sessions))
+	load := src.Tools()[0]
+	ctx := tools.WithSessionID(t.Context(), "sess-abc")
+
+	first, err := load.Execute(ctx, json.RawMessage(`{"name":"tool_3"}`))
+	if err != nil {
+		t.Fatalf("first load: %v", err)
+	}
+	if !strings.Contains(first, "Loaded") {
+		t.Fatalf("first load = %q, want the Loaded text", first)
+	}
+
+	second, err := load.Execute(ctx, json.RawMessage(`{"name":"tool_3"}`))
+	if err != nil {
+		t.Fatalf("second load: %v", err)
+	}
+	if !strings.Contains(second, "already loaded") || !strings.Contains(second, "callable now") {
+		t.Fatalf("second load = %q, want an already-loaded message", second)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("recorded = %+v, want exactly one entry (dedup by name)", loaded)
 	}
 }
 

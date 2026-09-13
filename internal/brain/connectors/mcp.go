@@ -43,9 +43,12 @@ type MCPDeferral struct {
 	// so a settings change takes effect on the next connector reload.
 	Threshold func(ctx context.Context) int
 	// OnLoad records a tool the model loaded, under its final
-	// namespaced name, for the rest of that session's turns. nil means
-	// nothing records it, so deferral stays off.
-	OnLoad func(sessionID string, t *tools.Tool)
+	// namespaced name, for the rest of that session's turns, and
+	// reports whether the session had already loaded it (issue #732:
+	// lets load_tool tell a repeat call it's already callable instead
+	// of repeating the same "Loaded" text). nil means nothing records
+	// it, so deferral stays off.
+	OnLoad func(sessionID string, t *tools.Tool) (alreadyLoaded bool)
 }
 
 // MCPBuilder returns the Builder for kind='mcp'. The credential ref
@@ -103,7 +106,7 @@ type mcpSource struct {
 	// toolList, whose schemas the model pulls in one at a time. The
 	// zero value is eager, today's behavior.
 	indexed bool
-	onLoad  func(sessionID string, t *tools.Tool)
+	onLoad  func(sessionID string, t *tools.Tool) (alreadyLoaded bool)
 }
 
 // connect runs the MCP handshake and caches the tool list.
@@ -230,7 +233,8 @@ next step.
 Arguments:
 - name (string, required): the tool's name exactly as listed below.
 
-Returns the tool's description and argument schema; the tool stays
+Returns the tool's description and argument schema; the tool is
+callable immediately, including later in this same turn, and stays
 callable for the rest of this conversation. Loading a tool does not
 grant permission to use it: the usual approval still applies when you
 call it.
@@ -265,8 +269,12 @@ Tools available from ` + s.name + `:
 			}
 			loaded := *t
 			loaded.Name = NamespacedName(s.name, t.Name)
-			s.onLoad(sessionID, &loaded)
-			return fmt.Sprintf("Loaded %s. Call it as %q.\n\nDescription: %s\n\nInput schema: %s",
+			alreadyLoaded := s.onLoad(sessionID, &loaded)
+			if alreadyLoaded {
+				return fmt.Sprintf("%s is already loaded and callable now as %q.\n\nDescription: %s\n\nInput schema: %s",
+					t.Name, loaded.Name, t.Description, string(t.InputSchema)), nil
+			}
+			return fmt.Sprintf("Loaded %s. Callable now as %q, including later this turn.\n\nDescription: %s\n\nInput schema: %s",
 				t.Name, loaded.Name, t.Description, string(t.InputSchema)), nil
 		},
 	}

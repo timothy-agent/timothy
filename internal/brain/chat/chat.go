@@ -450,19 +450,21 @@ func (s *Service) seedApprovalGrants(ctx context.Context, sessionID string, prof
 
 // RecordLoadedTool remembers a deferred MCP tool a session loaded
 // through a connector's load_tool (issue #643) so every later turn in
-// that session offers it. The tool arrives already namespaced and is
-// wrapped in schema validation here, matching what the eager path
-// gets from tools.Constrained: turn-scoped ExtraTools skip that check
-// otherwise, and a remote server's schema is not this repo's code.
-// Loading grants no permission: the call still walks the whole chain.
-func (s *Service) RecordLoadedTool(sessionID string, t *tools.Tool) {
+// that session offers it, and reports whether the session had already
+// loaded this tool (issue #732). The tool arrives already namespaced
+// and is wrapped in schema validation here, matching what the eager
+// path gets from tools.Constrained: turn-scoped ExtraTools skip that
+// check otherwise, and a remote server's schema is not this repo's
+// code. Loading grants no permission: the call still walks the whole
+// chain.
+func (s *Service) RecordLoadedTool(sessionID string, t *tools.Tool) (alreadyLoaded bool) {
 	if sessionID == "" || t == nil {
-		return
+		return false
 	}
 	validated, err := tools.Validated(t)
 	if err != nil {
 		s.logger.Warn("chat: loaded tool schema rejected", "session_id", sessionID, "tool", t.Name, "error", err)
-		return
+		return false
 	}
 	s.loadedMu.Lock()
 	defer s.loadedMu.Unlock()
@@ -472,10 +474,11 @@ func (s *Service) RecordLoadedTool(sessionID string, t *tools.Tool) {
 	for i, existing := range s.loadedTools[sessionID] {
 		if existing.Name == validated.Name {
 			s.loadedTools[sessionID][i] = validated
-			return
+			return true
 		}
 	}
 	s.loadedTools[sessionID] = append(s.loadedTools[sessionID], validated)
+	return false
 }
 
 // LoadedTools returns the tools this session has loaded, in load

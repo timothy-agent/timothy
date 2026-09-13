@@ -3455,9 +3455,15 @@ func TestLoadedToolsPersistPerSession(t *testing.T) {
 		}
 	}
 
-	s.RecordLoadedTool("s1", mk("github_create_issue"))
-	s.RecordLoadedTool("s1", mk("github_list_prs"))
-	s.RecordLoadedTool("s1", mk("github_create_issue")) // reload, not a duplicate
+	if already := s.RecordLoadedTool("s1", mk("github_create_issue")); already {
+		t.Fatal("first load of github_create_issue reported already loaded")
+	}
+	if already := s.RecordLoadedTool("s1", mk("github_list_prs")); already {
+		t.Fatal("first load of github_list_prs reported already loaded")
+	}
+	if already := s.RecordLoadedTool("s1", mk("github_create_issue")); !already { // reload, not a duplicate
+		t.Fatal("reload of github_create_issue must report already loaded")
+	}
 	s.RecordLoadedTool("", mk("github_ignored"))
 	s.RecordLoadedTool("s1", nil)
 

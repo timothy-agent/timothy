@@ -1227,6 +1227,87 @@ func TestAgentNilSteeringIsNoop(t *testing.T) {
 	}
 }
 
+// TestAgentRefreshToolsAddsMidTurn pins issue #732: a tool that
+// appears in RefreshTools between steps (e.g. load_tool ran on step 1)
+// must be callable on step 2 of the SAME turn — offered in that
+// step's Tools and actually executable, not rejected as unknown.
+func TestAgentRefreshToolsAddsMidTurn(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"load_tool", `{"name":"newly_loaded"}`}),
+		toolCallStep([2]string{"newly_loaded", `{"text":"hi"}`}),
+		finalStep("done"),
+	}}
+	a, _, _, _ := testAgent(t, gw)
+
+	newTool := &tools.Tool{
+		Name:        "newly_loaded",
+		Description: "loaded mid-turn",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`),
+		Execute: func(_ context.Context, args json.RawMessage) (string, error) {
+			return "ran newly_loaded", nil
+		},
+	}
+	var loaded bool
+	refresh := func(context.Context) []*tools.Tool {
+		if !loaded {
+			return nil
+		}
+		return []*tools.Tool{newTool}
+	}
+
+	ch, err := a.Start(t.Context(), Request{
+		SessionID: "s1", Route: "coding",
+		Messages: []provider.Message{{Role: "user", Content: "go"}},
+		ExtraTools: []*tools.Tool{{
+			Name:        "load_tool",
+			Description: "loads a tool",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}`),
+			Execute: func(_ context.Context, _ json.RawMessage) (string, error) {
+				loaded = true
+				return "Loaded newly_loaded. Callable now.", nil
+			},
+		}},
+		RefreshTools: refresh,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs := collect(t, ch)
+
+	if len(gw.requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(gw.requests))
+	}
+	var sawNewToolOnStep2 bool
+	for _, d := range gw.requests[1].Tools {
+		if d.Name == "newly_loaded" {
+			sawNewToolOnStep2 = true
+		}
+	}
+	if !sawNewToolOnStep2 {
+		t.Fatalf("newly_loaded not offered on step 2: %+v", gw.requests[1].Tools)
+	}
+	var sawUnknownToolError bool
+	var sawNewlyLoadedRan bool
+	for _, ev := range evs {
+		if ev.ToolResult == nil || ev.ToolResult.Name != "newly_loaded" {
+			continue
+		}
+		if ev.ToolResult.Status == "error" && strings.Contains(ev.ToolResult.Content, "unknown tool") {
+			sawUnknownToolError = true
+		}
+		if ev.ToolResult.Status == "ok" {
+			sawNewlyLoadedRan = true
+		}
+	}
+	if sawUnknownToolError {
+		t.Fatal("newly_loaded call rejected as unknown tool")
+	}
+	if !sawNewlyLoadedRan {
+		t.Fatal("newly_loaded call never executed")
+	}
+}
+
 func TestAgentResearchCoercion(t *testing.T) {
 	t.Parallel()
 	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
