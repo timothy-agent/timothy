@@ -20,6 +20,7 @@ import { ConnectorLogo } from './ConnectorLogo'
 import { GCPKeyField } from './GCPKeyField'
 import { connectorPresets } from './connectorPresets'
 import { CredentialField, ExistingCredentialSelect, type CredentialMode } from './CredentialRefPicker'
+import { awsRegions } from '../../lib/providerPresets'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
@@ -487,14 +488,27 @@ export function ConnectorAdd() {
                     )}
                   </Field>
                   <Field label="Region" description="the SigV4 signing region, must match the endpoint">
-                    <Input
-                      value={awsRegion}
-                      onChange={(e) => {
-                        setAwsRegion(e.target.value)
-                        invalidate()
-                      }}
-                      placeholder="eu-central-1"
-                    />
+                    {(props) => (
+                      <Select
+                        value={awsRegion}
+                        onValueChange={(v) => {
+                          if (!v) return
+                          setAwsRegion(v)
+                          invalidate()
+                        }}
+                      >
+                        <SelectTrigger id={props.id} className="w-full" aria-label="Region">
+                          <SelectValue placeholder="Choose a region" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {awsRegions.map((r) => (
+                            <SelectItem key={r.value} value={r.value}>
+                              {r.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </Field>
                 </>
               )}
