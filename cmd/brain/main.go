@@ -284,6 +284,7 @@ func main() {
 		}
 		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil, mcpDeferral))
 		conns.RegisterBuilder("aws", connectors.AWSBuilder(nil, mcpDeferral))
+		conns.RegisterBuilder("gcp", connectors.GCPBuilder(nil))
 		conns.RegisterBuilder("github", connectors.GitHubBuilder(nil))
 		if goog != nil {
 			conns.RegisterBuilder("google", goog.Builder())
