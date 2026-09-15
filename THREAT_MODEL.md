@@ -209,8 +209,14 @@ transcripts, memories, and KB content are plaintext in the volume.
 
 - **Accepted for now:** no database-level encryption at rest. Single-
   operator, single-host; the mitigation is host access control.
-- **Open:** no backup tooling or restore doc in the repo, against an
-  append-only full-transcript store. Tracked in issue #436.
+- **Mitigated:** `scripts/backup-db.sh` writes rotated, gzipped
+  whole-database dumps outside the `pgdata` volume (cron-able, and it
+  refuses a dump missing the `secrets` table); the restore procedure is
+  in README.md under "Restoring onto a fresh host". Issue #436.
+- **Accepted for now:** running the backup on a schedule and keeping a
+  copy off-host is the operator's responsibility; the repo ships the
+  tooling, not the cron entry. `TIMOTHY_MASTER_KEY` must be backed up
+  separately or the dump's secrets stay unreadable.
 
 ### Build and release
 
@@ -232,7 +238,6 @@ compose digest-pins the one third-party image (searxng).
 | Secret-store AES-GCM without AAD | Medium | #433 |
 | Sidecar input limits, Typst timeout, resource caps | Medium | #434 |
 | Release integrity (signing, digest pins, checksums) | Medium | #435 |
-| No DB backup tooling or restore doc | Medium | #436 |
 | Mission sandbox hardening round 2 | Low | #437 |
 | Unauthenticated `/metrics` on the public port | Low | #438 |
 

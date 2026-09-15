@@ -167,13 +167,69 @@ make brain      # or gateway, memoryd, web, markitdown, whisper, pdfgen, sandbox
 
 ### Backups
 
-Postgres has no host port, so back it up through the container:
+Postgres has no host port, so backups go through the container. `scripts/backup-db.sh` does that and writes a gzipped dump outside the `pgdata` volume:
 
 ```sh
-docker compose -f deploy/docker-compose.yml exec postgres pg_dump -U timothy timothy > backup.sql
+scripts/backup-db.sh                 # writes ./backups/timothy-<UTC timestamp>.sql.gz
+scripts/backup-db.sh /mnt/nas/timothy   # or point it somewhere off-host
 ```
 
-A full backup is the `pgdata` volume plus `deploy/.env`: without `TIMOTHY_MASTER_KEY`, the encrypted secrets in that dump are unrecoverable.
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `BACKUP_DIR` | `<repo>/backups` | Output directory; the first positional argument wins over it. |
+| `BACKUP_KEEP` | `14` | How many dumps to keep. Rotation is by count, so a stack that was off for a month still keeps its last good dumps. |
+
+The script takes no input, prints no secret values, and exits non-zero on any failure, so it runs unattended from cron:
+
+```sh
+15 3 * * * /path/to/timothy/scripts/backup-db.sh >> /var/log/timothy-backup.log 2>&1
+```
+
+Each run dumps the **whole database**. Never narrow it to `pg_dump -t <table>` to save space: a table-scoped dump silently drops the `secrets` table, and the restore then comes up with every provider and connector credential missing. The script refuses to write a dump that has no `secrets` table for exactly this reason.
+
+A complete backup is the dump **plus `TIMOTHY_MASTER_KEY` from `deploy/.env`**. The dump holds secrets only as ciphertext; without that key they are unrecoverable. Back the key up separately from the dumps, and never regenerate it: a new key orphans every secret already sealed with the old one.
+
+### Restoring onto a fresh host
+
+1. Put the repo and `deploy/.env` in place. The `.env` must carry the **same** `TIMOTHY_MASTER_KEY` as the instance the dump came from; `POSTGRES_PASSWORD` may be new.
+
+2. Start Postgres alone, so no service writes while the restore is running:
+
+   ```sh
+   docker compose -f deploy/docker-compose.yml up -d postgres
+   ```
+
+3. Load the dump. `ON_ERROR_STOP=1` makes a partial restore fail loudly instead of leaving a half-populated database:
+
+   ```sh
+   gunzip -c backups/timothy-<timestamp>.sql.gz \
+     | docker compose -f deploy/docker-compose.yml exec -T postgres \
+         sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U timothy -d timothy -v ON_ERROR_STOP=1'
+   ```
+
+   The dump recreates the schema, so restore into an empty database. If this Postgres already ran the stack once, drop and recreate first: `docker compose -f deploy/docker-compose.yml exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U timothy -d postgres -c "DROP DATABASE timothy" -c "CREATE DATABASE timothy"'`.
+
+4. Check the data landed, including the secrets table:
+
+   ```sh
+   docker compose -f deploy/docker-compose.yml exec -T postgres \
+     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U timothy -d timothy -c "select count(*) from secrets" -c "select count(*) from session_events"'
+   ```
+
+5. Bring up the rest of the stack:
+
+   ```sh
+   make up
+   ```
+
+6. Verify secrets actually decrypt, which is what proves the master key matches. Ask brain to run a provider connection test; it resolves the stored credential through the secret store:
+
+   ```sh
+   curl -s -H "Authorization: Bearer $TIMOTHY_API_TOKEN" http://localhost:8300/v1/admin/providers
+   curl -s -X POST -H "Authorization: Bearer $TIMOTHY_API_TOKEN" http://localhost:8300/v1/admin/providers/<id>/test
+   ```
+
+   A successful test means the ciphertext decrypted. A decrypt failure in `make logs` (gateway or brain) means the `TIMOTHY_MASTER_KEY` in `deploy/.env` is not the one that sealed these rows; restore the correct key rather than re-entering credentials, or every historical secret stays unreadable.
 
 ### Upgrading a source build
 
