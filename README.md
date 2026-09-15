@@ -69,7 +69,7 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (opt-in, off by default) |
 | `pdfgen`     | Internal Python sidecar: markdown→PDF via Typst, powers mission PDF export                    |
 
-Plus Postgres (18 + pgvector), internal only, no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`.
+Plus Postgres (18 + pgvector), internal only, no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`; brain's `/metrics`, the only one on a published port, requires `Authorization: Bearer $TIMOTHY_METRICS_TOKEN`.
 
 Sessions are an append-only event log: every turn, tool run, and compaction is an immutable event, so conversations survive crashes mid-stream and replay exactly as they happened.
 

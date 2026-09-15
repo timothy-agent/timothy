@@ -108,6 +108,46 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 }
 
+// TestMetricsProtected: a published port's /metrics needs the bearer
+// token, an unset token fails closed, and /health stays open for probes.
+func TestMetricsProtected(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		token  string
+		path   string
+		header string
+		want   int
+	}{
+		{"correct token", "s3cret", "/metrics", "Bearer s3cret", http.StatusOK},
+		{"case-insensitive scheme", "s3cret", "/metrics", "bearer s3cret", http.StatusOK},
+		{"wrong token", "s3cret", "/metrics", "Bearer nope", http.StatusUnauthorized},
+		{"missing header", "s3cret", "/metrics", "", http.StatusUnauthorized},
+		{"non-bearer scheme", "s3cret", "/metrics", "Basic s3cret", http.StatusUnauthorized},
+		{"unconfigured fails closed", "", "/metrics", "Bearer anything", http.StatusServiceUnavailable},
+		{"health open with token set", "s3cret", "/health", "", http.StatusOK},
+		{"health open with token unset", "", "/health", "", http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestServer(func() Health { return Health{Status: "ok"} })
+			s.ProtectMetrics(tc.token)
+
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			if tc.header != "" {
+				req.Header.Set("Authorization", tc.header)
+			}
+			rec := httptest.NewRecorder()
+			s.srv.Handler.ServeHTTP(rec, req)
+
+			if rec.Code != tc.want {
+				t.Fatalf("GET %s status = %d, want %d", tc.path, rec.Code, tc.want)
+			}
+		})
+	}
+}
+
 func TestTraceIDInjected(t *testing.T) {
 	t.Parallel()
 	s := newTestServer(func() Health { return Health{Status: "ok"} })

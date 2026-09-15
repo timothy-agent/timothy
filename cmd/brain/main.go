@@ -134,6 +134,14 @@ func main() {
 		return httpserver.Check{Status: "ok"}
 	})
 
+	// Brain is the only service with a published port, so its /metrics
+	// is the only one reachable from outside the compose network.
+	metricsToken := os.Getenv("TIMOTHY_METRICS_TOKEN")
+	if metricsToken == "" {
+		app.Log.Warn("TIMOTHY_METRICS_TOKEN not set; /metrics scrapes will be rejected")
+	}
+	app.Server.ProtectMetrics(metricsToken)
+
 	gatewayURL := os.Getenv("GATEWAY_URL")
 	if gatewayURL == "" {
 		gatewayURL = "http://gateway:8081"

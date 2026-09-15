@@ -123,6 +123,9 @@ services:
       MEMORYD_URL: http://memoryd:8082
       # Brain-only secret: the public API bearer token.
       TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
+      # Bearer token Prometheus presents to /metrics on the published
+      # port; empty rejects every scrape.
+      TIMOTHY_METRICS_TOKEN: ${TIMOTHY_METRICS_TOKEN:-}
       # Connector credentials resolve through brain's own secret-store
       # handle — same key the gateway uses.
       TIMOTHY_MASTER_KEY: ${TIMOTHY_MASTER_KEY:?set TIMOTHY_MASTER_KEY in deploy/.env}

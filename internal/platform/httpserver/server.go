@@ -6,12 +6,14 @@ package httpserver
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/platform/logging"
@@ -45,6 +47,9 @@ type Server struct {
 	srv *http.Server
 	m   *metrics.Metrics
 	log *slog.Logger
+
+	metricsGuarded bool
+	metricsToken   string
 }
 
 // New builds a server listening on port with /health and /metrics
@@ -58,7 +63,7 @@ func New(port int, log *slog.Logger, m *metrics.Metrics, health HealthFunc) *Ser
 			log.ErrorContext(r.Context(), "encode health", "error", err)
 		}
 	}))
-	s.Handle("GET /metrics", m.Handler())
+	s.Handle("GET /metrics", s.guardMetrics(m.Handler()))
 
 	s.srv = &http.Server{
 		Addr:              fmt.Sprintf(":%d", port),
@@ -71,6 +76,36 @@ func New(port int, log *slog.Logger, m *metrics.Metrics, health HealthFunc) *Ser
 		IdleTimeout: 120 * time.Second,
 	}
 	return s
+}
+
+// ProtectMetrics requires a bearer token on /metrics (D-100). Meant for
+// a service whose port is published beyond the compose network; an
+// empty token fails closed with 503, never open. Call before Run.
+func (s *Server) ProtectMetrics(token string) {
+	s.metricsGuarded = true
+	s.metricsToken = token
+}
+
+func (s *Server) guardMetrics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.metricsGuarded {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.metricsToken == "" {
+			http.Error(w, "metrics auth not configured", http.StatusServiceUnavailable)
+			return
+		}
+		const prefix = "Bearer "
+		h := strings.TrimSpace(r.Header.Get("Authorization"))
+		if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) ||
+			subtle.ConstantTimeCompare([]byte(strings.TrimSpace(h[len(prefix):])), []byte(s.metricsToken)) != 1 {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Handle registers a handler under a method-qualified ServeMux pattern
