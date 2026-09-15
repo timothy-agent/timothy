@@ -31,6 +31,17 @@ describe('MermaidBlock', () => {
     expect(screen.queryByText('View source')).toBeNull()
   })
 
+  it('pins securityLevel to strict on every initialize call', async () => {
+    renderMock.mockResolvedValue({ svg: '<svg data-testid="diagram" />' })
+    render(<MermaidBlock code="graph TD; A-->B;" />)
+    await waitFor(() => expect(screen.getByTestId('diagram')).toBeInTheDocument())
+
+    expect(initializeMock).toHaveBeenCalled()
+    for (const [opts] of initializeMock.mock.calls) {
+      expect(opts).toMatchObject({ securityLevel: 'strict' })
+    }
+  })
+
   it('toggles between diagram and source view', async () => {
     renderMock.mockResolvedValue({ svg: '<svg data-testid="diagram" />' })
     render(<MermaidBlock code="graph TD; A-->B;" />)
