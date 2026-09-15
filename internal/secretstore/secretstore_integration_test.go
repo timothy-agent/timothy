@@ -3,6 +3,7 @@
 package secretstore
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -96,6 +97,59 @@ func TestStoreSetResolveDelete(t *testing.T) {
 	}
 	if _, err := s.Resolve(ctx, ref); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Resolve after Delete: got %v, want ErrNotFound", err)
+	}
+}
+
+// TestResolveResealsLegacyRow covers the D-105 migration path: a row
+// sealed without additional data still resolves, its first read
+// rewrites it in the new format (idempotent on the second read), and a
+// ciphertext moved onto another ref no longer opens.
+func TestResolveResealsLegacyRow(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	ref := "TEST_SECRET_" + t.Name()
+	t.Cleanup(func() { _ = s.Delete(ctx, ref); _ = s.Delete(ctx, ref+"_OTHER") })
+
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	legacyCT, legacyNonce := sealLegacy(t, s.cipher, "sk-legacy")
+	if _, err := db.Exec(ctx,
+		`INSERT INTO secrets (ref_name, backend, ciphertext, nonce) VALUES ($1, 'db', $2, $3)`,
+		ref, legacyCT, legacyNonce); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	for i := range 2 {
+		got, err := s.Resolve(ctx, ref)
+		if err != nil || got != "sk-legacy" {
+			t.Fatalf("Resolve #%d = (%q, %v), want (sk-legacy, nil)", i+1, got, err)
+		}
+	}
+	r, err := s.row(ctx, ref)
+	if err != nil {
+		t.Fatalf("row: %v", err)
+	}
+	if bytes.Equal(r.ciphertext, legacyCT) {
+		t.Fatalf("row still carries the legacy ciphertext after Resolve")
+	}
+	if _, err := s.cipher.open(ref, r.ciphertext, r.nonce); err != nil {
+		t.Fatalf("re-sealed row does not open with ref_name as aad: %v", err)
+	}
+	if _, err := s.cipher.openLegacy(r.ciphertext, r.nonce); err == nil {
+		t.Fatalf("re-sealed row still opens without aad")
+	}
+
+	// Ciphertext swap: the new-format bytes moved onto another row fail
+	// to resolve instead of repointing that ref at this secret.
+	if _, err := db.Exec(ctx,
+		`INSERT INTO secrets (ref_name, backend, ciphertext, nonce) VALUES ($1, 'db', $2, $3)`,
+		ref+"_OTHER", r.ciphertext, r.nonce); err != nil {
+		t.Fatalf("insert swapped row: %v", err)
+	}
+	if got, err := s.Resolve(ctx, ref+"_OTHER"); err == nil {
+		t.Fatalf("swapped ciphertext resolved to %q, want auth failure", got)
 	}
 }
 

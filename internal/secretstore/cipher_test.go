@@ -16,19 +16,30 @@ func testKey(t *testing.T) []byte {
 	return key
 }
 
+// sealLegacy produces a pre-D-105 ciphertext (no additional data), the
+// format existing rows carry before their first read re-seals them.
+func sealLegacy(t *testing.T, c *sealer, plaintext string) (ciphertext, nonce []byte) {
+	t.Helper()
+	nonce = make([]byte, c.gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatalf("rand: %v", err)
+	}
+	return c.gcm.Seal(nil, nonce, []byte(plaintext), nil), nonce
+}
+
 func TestCipherRoundTrip(t *testing.T) {
 	c, err := newCipher(testKey(t))
 	if err != nil {
 		t.Fatalf("newCipher: %v", err)
 	}
-	ciphertext, nonce, err := c.seal("sk-super-secret")
+	ciphertext, nonce, err := c.seal("OPENAI_KEY", "sk-super-secret")
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
 	if bytes.Contains(ciphertext, []byte("sk-super-secret")) {
 		t.Fatalf("ciphertext leaks plaintext")
 	}
-	got, err := c.open(ciphertext, nonce)
+	got, err := c.open("OPENAI_KEY", ciphertext, nonce)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -37,14 +48,80 @@ func TestCipherRoundTrip(t *testing.T) {
 	}
 }
 
+// TestCipherOpenBindsRefName covers D-105: a ciphertext only opens
+// under the ref_name it was sealed for, a legacy row only through
+// openLegacy, and every failure is a plain error, never a panic.
+func TestCipherOpenBindsRefName(t *testing.T) {
+	c, err := newCipher(testKey(t))
+	if err != nil {
+		t.Fatalf("newCipher: %v", err)
+	}
+	cases := []struct {
+		name    string
+		seal    func() ([]byte, []byte)
+		open    func(ct, nonce []byte) (string, error)
+		wantErr bool
+	}{
+		{
+			name: "same ref opens",
+			seal: func() ([]byte, []byte) { ct, n, _ := c.seal("HIGH_VALUE", "v"); return ct, n },
+			open: func(ct, n []byte) (string, error) { return c.open("HIGH_VALUE", ct, n) },
+		},
+		{
+			name:    "swapped onto another ref fails",
+			seal:    func() ([]byte, []byte) { ct, n, _ := c.seal("HIGH_VALUE", "v"); return ct, n },
+			open:    func(ct, n []byte) (string, error) { return c.open("LOW_VALUE", ct, n) },
+			wantErr: true,
+		},
+		{
+			name:    "empty ref is not a wildcard",
+			seal:    func() ([]byte, []byte) { ct, n, _ := c.seal("HIGH_VALUE", "v"); return ct, n },
+			open:    func(ct, n []byte) (string, error) { return c.open("", ct, n) },
+			wantErr: true,
+		},
+		{
+			name:    "aad row does not open as legacy",
+			seal:    func() ([]byte, []byte) { ct, n, _ := c.seal("HIGH_VALUE", "v"); return ct, n },
+			open:    c.openLegacy,
+			wantErr: true,
+		},
+		{
+			name:    "legacy row does not open with aad",
+			seal:    func() ([]byte, []byte) { return sealLegacy(t, c, "v") },
+			open:    func(ct, n []byte) (string, error) { return c.open("HIGH_VALUE", ct, n) },
+			wantErr: true,
+		},
+		{
+			name: "legacy row opens as legacy",
+			seal: func() ([]byte, []byte) { return sealLegacy(t, c, "v") },
+			open: c.openLegacy,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ct, nonce := tc.seal()
+			got, err := tc.open(ct, nonce)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("open succeeded with %q, want auth failure", got)
+				}
+				return
+			}
+			if err != nil || got != "v" {
+				t.Fatalf("open = (%q, %v), want (v, nil)", got, err)
+			}
+		})
+	}
+}
+
 func TestCipherWrongKeyFailsToDecrypt(t *testing.T) {
 	c1, _ := newCipher(testKey(t))
 	c2, _ := newCipher(testKey(t))
-	ciphertext, nonce, err := c1.seal("value")
+	ciphertext, nonce, err := c1.seal("REF", "value")
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	if _, err := c2.open(ciphertext, nonce); err == nil {
+	if _, err := c2.open("REF", ciphertext, nonce); err == nil {
 		t.Fatalf("expected decrypt failure with wrong key")
 	}
 }

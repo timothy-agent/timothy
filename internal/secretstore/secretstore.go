@@ -91,7 +91,7 @@ func (s *Store) Resolve(ctx context.Context, refName string) (string, error) {
 	}
 	switch r.backend {
 	case "db":
-		return s.cipher.open(r.ciphertext, r.nonce)
+		return s.openDB(ctx, refName, r)
 	case "vault":
 		return s.resolveVault(ctx, r.backendRef)
 	case "asm":
@@ -99,6 +99,49 @@ func (s *Store) Resolve(ctx context.Context, refName string) (string, error) {
 	default:
 		return "", fmt.Errorf("secretstore: unknown backend %q for %s", r.backend, refName)
 	}
+}
+
+// openDB decrypts a db-backed row with refName as additional data
+// (D-105). A row sealed before D-105 still opens through the legacy
+// path and is re-sealed in place on the way out, so the format upgrade
+// needs no operator action; the auth failure itself stays generic.
+func (s *Store) openDB(ctx context.Context, refName string, r secretRow) (string, error) {
+	value, err := s.cipher.open(refName, r.ciphertext, r.nonce)
+	if err == nil {
+		return value, nil
+	}
+	value, legacyErr := s.cipher.openLegacy(r.ciphertext, r.nonce)
+	if legacyErr != nil {
+		return "", err
+	}
+	// Best effort: the value is already in hand, and a failed re-seal
+	// simply retries on the next read (the store carries no logger).
+	_ = s.resealDB(ctx, refName, value, r)
+	return value, nil
+}
+
+// resealDB rewrites refName's ciphertext in the D-105 format. The
+// UPDATE is guarded on the old bytes so a concurrent Set, Migrate, or a
+// second reader's re-seal is never overwritten; losing that race is
+// harmless because the row is then already in the new format.
+// updated_at is left alone: the operator's value did not change.
+func (s *Store) resealDB(ctx context.Context, refName, value string, old secretRow) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("secretstore: %w", err)
+	}
+	ciphertext, nonce, err := s.cipher.seal(refName, value)
+	if err != nil {
+		return fmt.Errorf("secretstore: reseal %s: %w", refName, err)
+	}
+	_, err = db.Exec(ctx, `
+		UPDATE secrets SET ciphertext = $2, nonce = $3
+		WHERE ref_name = $1 AND backend = 'db' AND ciphertext = $4 AND nonce = $5`,
+		refName, ciphertext, nonce, old.ciphertext, old.nonce)
+	if err != nil {
+		return fmt.Errorf("secretstore: reseal %s: %w", refName, err)
+	}
+	return nil
 }
 
 // Status reports whether refName is configured and through which
@@ -208,7 +251,7 @@ func (s *Store) SetDB(ctx context.Context, refName, value string) error {
 	if err != nil {
 		return fmt.Errorf("secretstore: %w", err)
 	}
-	ciphertext, nonce, err := s.cipher.seal(value)
+	ciphertext, nonce, err := s.cipher.seal(refName, value)
 	if err != nil {
 		return fmt.Errorf("secretstore: seal %s: %w", refName, err)
 	}
