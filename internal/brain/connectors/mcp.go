@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
+	"github.com/SumonMSelim/timothy/internal/platform/netguard"
 	"github.com/SumonMSelim/timothy/internal/platform/sse"
 )
 
@@ -55,10 +56,13 @@ type MCPDeferral struct {
 // resolves to a bearer token; an empty or unresolvable ref builds
 // without auth and lets the server's 401 surface at initialize.
 // deferral is optional: its zero value keeps every server's schemas
-// eager.
+// eager. A nil client dials through netguard with no allowlist (issue
+// #431): the endpoint is admin config, but brain sits next to
+// unauthenticated services; main.go wires the operator's
+// outbound_host_allowlist.
 func MCPBuilder(client *http.Client, deferral MCPDeferral) Builder {
 	if client == nil {
-		client = &http.Client{}
+		client = &http.Client{Transport: netguard.Guard{}.Transport()}
 	}
 	return func(ctx context.Context, c Connector, resolve Resolve) (Source, error) {
 		var cfg mcpConfig

@@ -9,7 +9,7 @@ import (
 
 func testNotifier(t *testing.T, store *Store) *Notifier {
 	t.Helper()
-	return NewNotifier(store.db, "", store.log)
+	return NewNotifier(store.db, "", nil, store.log)
 }
 
 func TestOnTransitionWritesNotificationOnActionableTransition(t *testing.T) {

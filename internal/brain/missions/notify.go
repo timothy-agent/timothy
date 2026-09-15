@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/platform/netguard"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -27,8 +28,14 @@ type Notifier struct {
 	hub        *Hub
 }
 
-func NewNotifier(db *pgpool.Pool, webhookURL string, log *slog.Logger) *Notifier {
-	return &Notifier{db: db, webhookURL: webhookURL, log: log, http: &http.Client{Timeout: webhookTimeout}}
+// NewNotifier's transport carries the webhook POST; nil dials through
+// netguard with no allowlist (issue #431), main.go wires the operator's
+// outbound_host_allowlist.
+func NewNotifier(db *pgpool.Pool, webhookURL string, transport http.RoundTripper, log *slog.Logger) *Notifier {
+	if transport == nil {
+		transport = netguard.Guard{}.Transport()
+	}
+	return &Notifier{db: db, webhookURL: webhookURL, log: log, http: &http.Client{Timeout: webhookTimeout, Transport: transport}}
 }
 
 // SetHub wires the push-notification hub; nil (the default) makes

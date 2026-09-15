@@ -124,7 +124,7 @@ func TestWebhookAdapterJSONNeverIncludesFiles(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &WebhookAdapter{}
+	a := &WebhookAdapter{HTTP: srv.Client()}
 	payload := Payload{
 		Body:  "digest",
 		Files: []File{{Name: "secret.txt", Data: []byte("should never appear in the webhook body")}},
@@ -148,7 +148,7 @@ func TestWebhookAdapterJSONIncludesArtifactRefs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &WebhookAdapter{}
+	a := &WebhookAdapter{HTTP: srv.Client()}
 	payload := Payload{
 		Body:         "digest",
 		ArtifactRefs: []missions.ArtifactRef{{ID: "att-1", Mime: "text/markdown", Name: "report.md"}},
@@ -174,7 +174,7 @@ func TestWebhookAdapterTextMentionsOversizeByNameOnly(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &WebhookAdapter{}
+	a := &WebhookAdapter{HTTP: srv.Client()}
 	payload := Payload{Body: "digest", OversizeFiles: []string{"huge.zip"}}
 	cfg, _ := json.Marshal(WebhookConfig{URL: srv.URL, Format: "text"})
 	if err := a.Deliver(t.Context(), cfg, "", payload); err != nil {
@@ -195,7 +195,7 @@ func TestWebhookAdapterTextPrependsSubjectWhenSet(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &WebhookAdapter{}
+	a := &WebhookAdapter{HTTP: srv.Client()}
 	payload := Payload{Subject: "Daily digest", Body: "the content"}
 	cfg, _ := json.Marshal(WebhookConfig{URL: srv.URL, Format: "text"})
 	if err := a.Deliver(t.Context(), cfg, "", payload); err != nil {
@@ -216,7 +216,7 @@ func TestWebhookAdapterJSONIncludesSubjectField(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &WebhookAdapter{}
+	a := &WebhookAdapter{HTTP: srv.Client()}
 	payload := Payload{Subject: "Daily digest", Body: "the content"}
 	cfg, _ := json.Marshal(WebhookConfig{URL: srv.URL, Format: "json"})
 	if err := a.Deliver(t.Context(), cfg, "", payload); err != nil {

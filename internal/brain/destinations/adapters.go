@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/platform/netguard"
 )
 
 // webhookTimeout bounds one webhook POST — matches missions/notify.go's
@@ -31,6 +33,9 @@ var errMaybeDelivered = errors.New("delivery status unknown, request may have be
 func classifySendErr(err error) error {
 	var opErr *net.OpError
 	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return err
+	}
+	if errors.Is(err, netguard.ErrBlocked) {
 		return err
 	}
 	var dnsErr *net.DNSError
@@ -112,6 +117,11 @@ func (a *EmailAdapter) Deliver(ctx context.Context, config json.RawMessage, _ st
 // (secretstore.Store.Resolve) is already used directly elsewhere
 // (connectors, telegram below). Revisit if a real need for
 // authenticated webhooks shows up.
+//
+// HTTP dials through netguard (issue #431): the model picks the
+// destination, so its URL must never reach an unauthenticated
+// compose-internal service. nil uses a guard with no allowlist; main.go
+// wires the operator's outbound_host_allowlist.
 type WebhookAdapter struct {
 	HTTP *http.Client
 }
@@ -142,7 +152,7 @@ func (a *WebhookAdapter) Deliver(ctx context.Context, config json.RawMessage, _ 
 	req.Header.Set("Content-Type", contentType)
 	client := a.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: webhookTimeout}
+		client = &http.Client{Timeout: webhookTimeout, Transport: netguard.Guard{}.Transport()}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

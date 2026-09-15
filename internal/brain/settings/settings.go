@@ -179,6 +179,13 @@ const (
 	ValueMissionAutoResumeBackoffMax = "mission_auto_resume_backoff_max"
 	// ValueMissionAutoResumeInfraMax is the same bound for infra pauses.
 	ValueMissionAutoResumeInfraMax = "mission_auto_resume_infra_max"
+	// ValueOutboundHostAllowlist lists the hosts (comma-separated
+	// hostnames or IP literals) that operator-configured outbound URLs
+	// (webhook destinations, MCP endpoints, the mission notify webhook)
+	// may reach inside netguard's blocked ranges (issue #431); "" (the
+	// default) permits none, so an internal receiver is always an
+	// explicit opt-in.
+	ValueOutboundHostAllowlist = "outbound_host_allowlist"
 )
 
 // Mission ceiling defaults, used when the matching setting is unset.
@@ -233,6 +240,7 @@ var knownValueKeys = map[string]bool{
 	ValueMissionDefaultMaxIterations: true, ValueMissionBackoffFailures: true,
 	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
+	ValueOutboundHostAllowlist: true,
 }
 
 // nonNegativeIntKeys are the settings whose value must parse as an
@@ -531,6 +539,19 @@ func (s *Store) SkillAllowed(ctx context.Context, name string) bool {
 		}
 	}
 	return false
+}
+
+// OutboundHosts parses the outbound host allowlist (netguard.Guard's
+// Allowed); nil when unset, so no internal host is ever reachable by
+// default.
+func (s *Store) OutboundHosts(ctx context.Context) []string {
+	var out []string
+	for _, h := range strings.Split(s.Value(ctx, ValueOutboundHostAllowlist), ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // AllValues returns every known value setting; missing rows come back

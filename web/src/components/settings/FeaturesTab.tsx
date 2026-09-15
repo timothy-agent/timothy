@@ -280,6 +280,22 @@ const valueCardDescriptors: ValueCardDescriptor[] = [
     toPatchValue: (v) => v.trim(),
   },
   {
+    key: 'outbound_host_allowlist',
+    title: 'Outbound host allowlist',
+    description:
+      'Webhook destinations, MCP endpoints and the mission notify webhook refuse private, loopback and link-local addresses. List the hosts (comma-separated hostnames or IPs) that may be reached anyway. Empty allows none.',
+    render: (value, setValue) => (
+      <Input
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder="ntfy.lan, 192.168.1.20"
+        className="h-9 w-72"
+        aria-label="Outbound host allowlist"
+      />
+    ),
+    toPatchValue: (v) => v.trim(),
+  },
+  {
     key: 'git_branch_pattern',
     title: 'Default branch pattern',
     description:

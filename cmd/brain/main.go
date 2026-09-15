@@ -45,6 +45,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
+	"github.com/SumonMSelim/timothy/internal/platform/netguard"
 	pdfgenclient "github.com/SumonMSelim/timothy/internal/platform/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/internal/platform/service"
@@ -290,7 +291,8 @@ func main() {
 				return false
 			},
 		}
-		conns.RegisterBuilder("mcp", connectors.MCPBuilder(nil, mcpDeferral))
+		mcpHTTP := &http.Client{Transport: netguard.Guard{Allowed: flags.OutboundHosts}.Transport()}
+		conns.RegisterBuilder("mcp", connectors.MCPBuilder(mcpHTTP, mcpDeferral))
 		conns.RegisterBuilder("aws", connectors.AWSBuilder(nil, mcpDeferral))
 		conns.RegisterBuilder("gcp", connectors.GCPBuilder(nil))
 		conns.RegisterBuilder("github", connectors.GitHubBuilder(nil))
@@ -963,7 +965,8 @@ func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connect
 	if goog != nil {
 		email = &destinations.EmailAdapter{Mail: destinationMailSender{goog}}
 	}
-	webhook := &destinations.WebhookAdapter{}
+	// Deliver bounds each POST with its own context timeout.
+	webhook := &destinations.WebhookAdapter{HTTP: &http.Client{Transport: netguard.Guard{Allowed: flags.OutboundHosts}.Transport()}}
 	var telegram *destinations.TelegramAdapter
 	if secrets != nil {
 		telegram = &destinations.TelegramAdapter{ResolveToken: secrets.Resolve}
@@ -1213,7 +1216,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// alone is otherwise the floor, same as before this feature existed.
 	runner := buildDelegatedRunner(nativeRunner, store, gwc, secrets, sandboxMgr, db, flags, log)
 	webhookURL := os.Getenv("NOTIFY_WEBHOOK_URL")
-	notifier := missions.NewNotifier(db, webhookURL, log)
+	notifier := missions.NewNotifier(db, webhookURL, netguard.Guard{Allowed: flags.OutboundHosts}.Transport(), log)
 	notifier.SetHub(hub)
 	// A second tools.Permissions instance, not the one buildAgent built:
 	// it's stateless besides the shared db/root (Grant/Resolve hit

@@ -20,6 +20,18 @@ func degradedStore(t *testing.T) *Store {
 	return New(pool, discardLog())
 }
 
+// TestOutboundHostsDefaultsToNone pins the fail-closed default of
+// issue #431's allowlist: absent row, no internal host is reachable.
+func TestOutboundHostsDefaultsToNone(t *testing.T) {
+	s := degradedStore(t)
+	if got := s.OutboundHosts(context.Background()); len(got) != 0 {
+		t.Fatalf("OutboundHosts() = %v, want none by default", got)
+	}
+	if !knownValueKeys[ValueOutboundHostAllowlist] {
+		t.Fatal("ValueOutboundHostAllowlist missing from knownValueKeys")
+	}
+}
+
 // TestKBImageCaptioningDefaultsOff confirms the one knownKeysOff
 // switch defaults to false for an absent row / degraded database,
 // unlike every other known switch which defaults to true: enabling
