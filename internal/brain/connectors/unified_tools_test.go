@@ -1,6 +1,7 @@
 package connectors
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,19 @@ func TestSharedToolSchemasMatchAcrossKinds(t *testing.T) {
 	srv := caldavTestServer(t, nil)
 	cSrc := testCalDAVSource(t, srv.URL)
 
+	// github and bitbucket build with no network call and share the four
+	// pull request tool names (issue #656); their schemas and
+	// descriptions are duplicated literals, so this is the drift guard.
+	tokenResolve := func(_ context.Context, _ string) (string, error) { return "tok", nil }
+	ghSrc, err := GitHubBuilder(nil)(t.Context(), Connector{Name: "gh", Kind: "github", CredentialRef: "GH_PAT"}, tokenResolve)
+	if err != nil {
+		t.Fatalf("github build: %v", err)
+	}
+	bbSrc, err := BitbucketBuilder(nil)(t.Context(), Connector{Name: "bb", Kind: "bitbucket", CredentialRef: "BB_TOKEN"}, tokenResolve)
+	if err != nil {
+		t.Fatalf("bitbucket build: %v", err)
+	}
+
 	type toolShape struct {
 		schema string
 		desc   string
@@ -48,8 +62,10 @@ func TestSharedToolSchemasMatchAcrossKinds(t *testing.T) {
 		"microsoft": {},
 		"imap":      {},
 		"caldav":    {},
+		"github":    {},
+		"bitbucket": {},
 	}
-	for name, src := range map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc, "caldav": cSrc} {
+	for name, src := range map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc, "caldav": cSrc, "github": ghSrc, "bitbucket": bbSrc} {
 		for _, tl := range src.Tools() {
 			byKind[name][tl.Name] = toolShape{schema: string(tl.InputSchema), desc: tl.Description}
 		}

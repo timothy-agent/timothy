@@ -72,7 +72,7 @@ describe('Connectors tab', () => {
     expect(screen.getByText('calendar')).toBeTruthy()
     // AddPresetTile's accessible name is the title alone (description
     // reachable via aria-describedby), per contract.
-    for (const name of ['Gmail', 'Google Calendar', 'Google Drive', 'Google Docs', 'GitHub MCP', 'GitHub']) {
+    for (const name of ['Gmail', 'Google Calendar', 'Google Drive', 'Google Docs', 'GitHub MCP', 'GitHub', 'Bitbucket']) {
       expect(screen.getByRole('link', { name })).toBeTruthy()
     }
   })
