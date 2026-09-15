@@ -17,6 +17,9 @@ web/coverage/
 # Local-only development docs
 docs/
 
+# Database dumps from scripts/backup-db.sh (real data, plus secret ciphertext)
+/backups/
+
 # Editor / agent tooling
 .idea/
 .vscode/
