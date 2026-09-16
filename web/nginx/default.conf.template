@@ -8,6 +8,22 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # The API token lives in localStorage, so an injected script would
+    # be enough to take it. connect-src stays 'self' because the browser
+    # only ever talks to this origin (nginx proxies /v1 to brain).
+    # style-src needs 'unsafe-inline': mermaid injects a <style> element
+    # into every diagram SVG (blocked, it renders unstyled), and the app
+    # sets inline style attributes for vendor colours and chart DOM.
+    # img-src data: covers the small SVG assets Vite inlines. blob:
+    # covers attachment previews, which are fetched with the bearer
+    # header and handed to <img>/<video>/<audio>/<iframe> as object URLs.
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; connect-src 'self'; frame-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
+    # frame-ancestors above is the enforcing rule; X-Frame-Options is
+    # the fallback for browsers that ignore it.
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
     # SPA: unknown paths fall back to the app shell.
     location / {
         try_files $uri /index.html;

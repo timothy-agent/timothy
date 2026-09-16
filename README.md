@@ -81,6 +81,8 @@ Sessions are an append-only event log: every turn, tool run, and compaction is a
 | `8300` | Brain (public API)           |
 | `3301` | Vite dev server (`make dev`) |
 
+Both published ports serve plain HTTP and are meant for a trusted LAN. For any exposure beyond that, put a reverse proxy in front that terminates TLS: the API token travels in an `Authorization` header on every request and is stored in the browser's `localStorage`, so over plain HTTP anyone on the path can read it. The web UI ships a Content-Security-Policy, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: strict-origin-when-cross-origin`; a proxy that rewrites response headers should preserve them.
+
 ## Quick start (prebuilt images)
 
 The fastest way to run Timothy: no Go/Node toolchain, no build step, just Docker and the released images.
