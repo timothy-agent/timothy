@@ -229,12 +229,29 @@ transcripts, memories, and KB content are plaintext in the volume.
 ### Build and release
 
 Images publish to GHCR with per-job scoped write permissions. The release
-compose digest-pins the one third-party image (searxng).
+compose digest-pins both third-party images (searxng, postgres). Every
+freshly built image carries a GitHub build provenance attestation pushed
+to the registry alongside it, verifiable with `gh attestation verify
+oci://ghcr.io/timothy-agent/timothy-<service>:<version> --repo
+timothy-agent/timothy`. Release notes carry SHA-256 checksums for the
+published compose and env assets, and `install.sh` downloads them into a
+temp dir, verifies them against the release's `checksums.txt`, and
+refuses to install on a mismatch.
 
-- **Open:** Timothy images and postgres are pinned by mutable tag; there
-  is no image signing, provenance, or SBOM; `install.sh` downloads release
-  assets without checksum verification (secrets it generates locally use a
-  CSPRNG with adequate entropy). Tracked in issue #435.
+- **Mitigated:** third-party image digest pins, build provenance
+  attestations on published images, checksummed release assets verified
+  by the installer before use. Issue #435.
+- **Accepted:** Timothy's own images stay tagged by version in the
+  release compose rather than digest-pinned, because the tag is
+  published by this repo's own workflow and every digest is attested;
+  digest-pinning them would mean rewriting the compose file per release
+  for no added guarantee. `checksums.txt` is served by the same GitHub
+  release as the assets, so it binds an asset to its release, not to a
+  signing key; it stops a truncated or swapped asset, not a compromised
+  GitHub account. `install.sh` itself is unverified at fetch time (it is
+  the verifier).
+- **Open:** no SBOM is generated per image. Future work, scoped out of
+  #435.
 
 ## Open-risk summary
 
@@ -245,7 +262,7 @@ compose digest-pins the one third-party image (searxng).
 | No CSP/frame headers; token in localStorage; mermaid SVG path | Medium | #432 |
 | Secret-store AES-GCM without AAD | Medium | #433 |
 | Sidecar input limits, Typst timeout, resource caps | Medium | #434 |
-| Release integrity (signing, digest pins, checksums) | Medium | #435 |
+| No per-image SBOM (rest of release integrity mitigated) | Low | #435 |
 | Mission sandbox hardening round 2 | Low | #437 |
 | Unauthenticated `/metrics` on the public port | Low | #438 |
 

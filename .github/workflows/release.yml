@@ -21,6 +21,9 @@ jobs:
   # vet/test/lint against the same commit here would only slow the
   # release down for no new signal.
 
+  # SBOM generation per image is future work, deliberately not here yet
+  # (issue #435 scoped it out).
+
   # Decides which of the 8 images actually need a rebuild for this
   # tag. Diffs against the previous release tag (not the previous
   # commit): a service skipped across several no-op releases in a row
@@ -76,6 +79,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       packages: write
+      # Build provenance: id-token mints the OIDC token the attestation
+      # is signed with, attestations writes it to the repo's store.
+      id-token: write
+      attestations: write
     strategy:
       matrix:
         include:
@@ -136,6 +143,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push
+        id: build
         if: fromJSON(needs.diff.outputs[matrix.name])
         uses: docker/build-push-action@v6
         with:
@@ -155,6 +163,16 @@ jobs:
           # repository_owner, not a literal: survives org renames and
           # keeps images under whatever org the repo lives in.
           tags: ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${{ steps.version.outputs.value }}
+      # Only freshly built images are attested. A copy-forward publishes
+      # no new bytes, so the attestation made when that digest was first
+      # built still verifies under the new tag.
+      - name: Attest build provenance
+        if: fromJSON(needs.diff.outputs[matrix.name])
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
       # Unchanged image: no rebuild, just point the new version tag at
       # the previous release's manifest list. Keeps every tag pinned
       # to a real image (no floating tags) without paying for a
@@ -197,6 +215,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v7
       - id: version
@@ -224,6 +244,7 @@ jobs:
               ghcr.io/${{ github.repository_owner }}/timothy-$name:${prev_version}
           done
       - name: Build and push base
+        id: base
         if: fromJSON(needs.diff.outputs.sandbox)
         uses: docker/build-push-action@v6
         with:
@@ -237,6 +258,22 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/timothy-sandbox:${{ steps.version.outputs.value }}
             ghcr.io/${{ github.repository_owner }}/timothy-sandbox-base:${{ steps.version.outputs.value }}
+      # One build, two names, one digest: attest under both so a pull by
+      # either name verifies.
+      - name: Attest base provenance
+        if: fromJSON(needs.diff.outputs.sandbox)
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/timothy-sandbox-base
+          subject-digest: ${{ steps.base.outputs.digest }}
+          push-to-registry: true
+      - name: Attest base alias provenance
+        if: fromJSON(needs.diff.outputs.sandbox)
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/timothy-sandbox
+          subject-digest: ${{ steps.base.outputs.digest }}
+          push-to-registry: true
       - name: Build and push variants
         if: fromJSON(needs.diff.outputs.sandbox)
         run: |
@@ -251,6 +288,41 @@ jobs:
               --tag ghcr.io/${{ github.repository_owner }}/timothy-sandbox-$lang:${{ steps.version.outputs.value }} \
               .
           done
+      # attest-build-provenance takes one subject per call, so the five
+      # variants are attested by a matrix job (sandbox-variant-attest)
+      # rather than five near-identical steps here.
+
+  # Attests the five sandbox variants built by the loop above. Skipped
+  # on a copy-forward release: those digests keep the attestation made
+  # when they were first built.
+  sandbox-variant-attest:
+    needs: [diff, sandbox-images]
+    if: fromJSON(needs.diff.outputs.sandbox)
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      matrix:
+        lang: [go, node, python, java, php]
+    steps:
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: digest
+        run: |
+          ref="ghcr.io/${{ github.repository_owner }}/timothy-sandbox-${{ matrix.lang }}:${{ steps.version.outputs.value }}"
+          echo "value=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/timothy-sandbox-${{ matrix.lang }}
+          subject-digest: ${{ steps.digest.outputs.value }}
+          push-to-registry: true
 
   release:
     needs: [images, sandbox-images]
@@ -270,6 +342,13 @@ jobs:
           cp deploy/release/install.sh /tmp/release-assets/install.sh
           sed -i "s/__TIMOTHY_TAG__/${{ steps.version.outputs.value }}/g" \
             /tmp/release-assets/env.example /tmp/release-assets/install.sh
+      # Checksums over the final, tag-substituted assets, so what
+      # install.sh verifies is byte-identical to what it downloads.
+      # install.sh is excluded: it is the verifier, and a checksum it
+      # carries for itself proves nothing.
+      - name: Generate checksums
+        working-directory: /tmp/release-assets
+        run: sha256sum docker-compose.yml env.example > checksums.txt
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -277,11 +356,26 @@ jobs:
         # a hyphen in the version marks it as such per semver, a bare
         # vX.Y.Z does not.
         run: |
-          args=(--generate-notes --title "$GITHUB_REF_NAME")
+          {
+            echo "## Artifact checksums (SHA-256)"
+            echo
+            echo '```'
+            cat /tmp/release-assets/checksums.txt
+            echo '```'
+            echo
+            echo "Images are published to GHCR with build provenance attestations."
+            echo "Verify one with:"
+            echo
+            echo '```'
+            echo "gh attestation verify oci://ghcr.io/${{ github.repository_owner }}/timothy-brain:${{ steps.version.outputs.value }} --repo ${{ github.repository }}"
+            echo '```'
+          } > /tmp/release-notes.md
+          args=(--generate-notes --notes-file /tmp/release-notes.md --title "$GITHUB_REF_NAME")
           case "${{ steps.version.outputs.value }}" in
             *-*) args+=(--prerelease) ;;
           esac
           gh release create "$GITHUB_REF_NAME" "${args[@]}" \
             /tmp/release-assets/docker-compose.yml \
             /tmp/release-assets/env.example \
-            /tmp/release-assets/install.sh
+            /tmp/release-assets/install.sh \
+            /tmp/release-assets/checksums.txt
