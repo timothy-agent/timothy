@@ -127,9 +127,10 @@ func TestEnsureContainerRunningReusesInPlace(t *testing.T) {
 }
 
 // TestEnsureContainerExitedRestarts confirms an Exited container is
-// restarted in place (not recreated) — this is what preserves any
-// packages a worker installed earlier in the mission and recovers a
-// container left stopped by a host reboot.
+// restarted in place (not recreated) — this is what keeps the mission
+// on one container identity and recovers a container left stopped by a
+// host reboot. Since D-106 the restart empties the HOME and /tmp tmpfs,
+// so only the mounted volumes carry state across it.
 func TestEnsureContainerExitedRestarts(t *testing.T) {
 	started := false
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -638,6 +639,119 @@ func TestCreateContainerHardensResources(t *testing.T) {
 	}
 	if !slices.Contains(gotHostConfig.SecurityOpt, "no-new-privileges") {
 		t.Errorf("SecurityOpt = %v, want to contain no-new-privileges", gotHostConfig.SecurityOpt)
+	}
+}
+
+// TestCreateContainerHardensRootfs covers D-106: the rootfs is read-only
+// with tmpfs standing in for the writable layer at the two paths mission
+// workloads actually write outside their mounts, ulimits are set, and no
+// SecurityOpt entry ever turns seccomp (or anything else) unconfined,
+// since Docker's default seccomp profile applies precisely by NOT being
+// overridden.
+func TestCreateContainerHardensRootfs(t *testing.T) {
+	var gotHostConfig container.HostConfig
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read create body: %v", err)
+			}
+			var cfg struct {
+				HostConfig container.HostConfig
+			}
+			if err := json.Unmarshal(body, &cfg); err != nil {
+				t.Fatalf("unmarshal create body: %v", err)
+			}
+			gotHostConfig = cfg.HostConfig
+			writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+		t.Fatalf("createContainer: %v", err)
+	}
+
+	if !gotHostConfig.ReadonlyRootfs {
+		t.Errorf("ReadonlyRootfs = false, want true")
+	}
+
+	// Each tmpfs must be writable by the sandbox uid and must NOT be
+	// noexec: workers run scripts from /tmp and binaries installed under
+	// HOME by `npm install -g` / `pip install --user`.
+	tmpfsCases := []struct {
+		path      string
+		wantOpts  []string
+		wantSized string
+	}{
+		{path: tmpMountPath, wantOpts: []string{"rw", "nosuid", "nodev"}, wantSized: sandboxTmpfsSize},
+		{path: sandboxHomePath, wantOpts: []string{"rw", "nosuid", "nodev", "uid=65534", "gid=65534"}, wantSized: sandboxHomeTmpfsSize},
+	}
+	for _, tc := range tmpfsCases {
+		opts, ok := gotHostConfig.Tmpfs[tc.path]
+		if !ok {
+			t.Errorf("Tmpfs has no entry for %s, want one (rootfs is read-only)", tc.path)
+			continue
+		}
+		for _, want := range tc.wantOpts {
+			if !slices.Contains(strings.Split(opts, ","), want) {
+				t.Errorf("Tmpfs[%s] = %q, want option %q", tc.path, opts, want)
+			}
+		}
+		if !strings.Contains(opts, tc.wantSized) {
+			t.Errorf("Tmpfs[%s] = %q, want size option %q", tc.path, opts, tc.wantSized)
+		}
+		if slices.Contains(strings.Split(opts, ","), "noexec") {
+			t.Errorf("Tmpfs[%s] = %q, must not be noexec", tc.path, opts)
+		}
+	}
+
+	// The executor state volume mounts under the HOME tmpfs; Docker
+	// layers the volume over it, but only while the paths still nest.
+	if !strings.HasPrefix(executorStateMountPath, sandboxHomePath+"/") {
+		t.Errorf("executorStateMountPath %q no longer nests under %q; the HOME tmpfs would orphan the state volume", executorStateMountPath, sandboxHomePath)
+	}
+	if len(gotHostConfig.Tmpfs) != len(tmpfsCases) {
+		t.Errorf("Tmpfs = %v, want exactly %d entries", gotHostConfig.Tmpfs, len(tmpfsCases))
+	}
+
+	wantUlimits := map[string]int64{
+		"nofile": sandboxNofileLimit,
+		"fsize":  sandboxFsizeLimit,
+	}
+	gotUlimits := map[string]int64{}
+	for _, u := range gotHostConfig.Ulimits {
+		if u.Soft != u.Hard {
+			t.Errorf("Ulimit %s soft %d != hard %d, want both pinned", u.Name, u.Soft, u.Hard)
+		}
+		gotUlimits[u.Name] = u.Soft
+	}
+	for name, want := range wantUlimits {
+		got, ok := gotUlimits[name]
+		if !ok {
+			t.Errorf("Ulimits has no %s entry, want %d", name, want)
+			continue
+		}
+		if got != want {
+			t.Errorf("Ulimit %s = %d, want %d", name, got, want)
+		}
+	}
+
+	// Omitting "seccomp=" IS the pin on Docker's default profile; an
+	// explicit unconfined of any kind would silently undo it.
+	for _, opt := range gotHostConfig.SecurityOpt {
+		if strings.Contains(opt, "unconfined") {
+			t.Errorf("SecurityOpt contains %q; mission containers must never run unconfined", opt)
+		}
+		if strings.HasPrefix(opt, "seccomp=") {
+			t.Errorf("SecurityOpt sets %q; the default seccomp profile is pinned by omission, not by overriding it", opt)
+		}
 	}
 }
 
