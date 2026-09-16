@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +49,13 @@ const (
 	containerNamePrefix = "timothy-sandbox-"
 	missionLabel        = "timothy.mission"
 
+	// missionsDirName is the segment brain's $WORKSPACES adds under
+	// /workspace (deploy/docker-compose.yml) — every mission workspace is
+	// /workspace/missions/<kind>/<mission id>, provisioned by brain
+	// (internal/brain/missions/worktree.go Provision) before any exec for
+	// that mission is ever issued.
+	missionsDirName = "missions"
+
 	// stateVolumeMetaPath is where sandboxd itself mounts the executor
 	// auth-state volume (deploy/docker-compose.yml) purely so it can
 	// self-inspect and learn the volume's real name/spec — D-054,
@@ -55,6 +63,13 @@ const (
 	// against brain's own container. sandboxd never reads/writes
 	// through this mount itself.
 	stateVolumeMetaPath = "/statevols/claude"
+
+	// sandboxHomePath / tmpMountPath are the two paths that lose their
+	// writable backing under ReadonlyRootfs (D-106) and get a tmpfs
+	// instead. sandboxHomePath is the image's HOME
+	// (sandbox-base.Dockerfile); executorStateMountPath nests under it.
+	sandboxHomePath = "/home/sandbox"
+	tmpMountPath    = "/tmp"
 
 	// executorStateMountPath is where the resolved state volume is
 	// mounted, rw, in every mission container — the headless claude
@@ -81,6 +96,25 @@ const (
 	// sacrificing a sandbox container's processes before brain, gateway,
 	// or sshd under host memory pressure.
 	sandboxOomScoreAdj = 500
+
+	// sandboxTmpfsSize / sandboxHomeTmpfsSize (D-106) bound the two
+	// writable tmpfs mounts that replace the container's writable layer
+	// under ReadonlyRootfs. tmpfs pages count against the container's
+	// own memory cgroup, so both stay well under sandboxMemoryBytes.
+	sandboxTmpfsSize     = "size=512m"
+	sandboxHomeTmpfsSize = "size=1g"
+
+	// sandboxNofileLimit (D-106) is the per-process open-file ceiling. A
+	// node/npm dependency install is the fd-hungriest thing a mission
+	// runs; 4096 clears it with room to spare while keeping a fd-exhaustion
+	// loop inside the container.
+	sandboxNofileLimit = 4096
+
+	// sandboxFsizeLimit (D-106) caps any single file a mission writes at
+	// the same 100 MB ceiling attachments.MaxSizeBytes allows, so an
+	// artifact a mission could legitimately hand back is never the thing
+	// the ulimit kills.
+	sandboxFsizeLimit = 100 << 20
 
 	// execGraceKill is how long `timeout` waits after SIGTERM before
 	// SIGKILL — matches shell.go's cmd.WaitDelay intent (give a process a
@@ -199,7 +233,8 @@ type Manager struct {
 	// OWN container for its /workspace mount and replicating that exact
 	// spec — never hardcode a compose-prefixed volume name, since a
 	// wrong name silently auto-creates an empty volume instead of
-	// erroring (see NewManager).
+	// erroring (see NewManager). It is the SOURCE spec only: no mission
+	// container ever receives it unscoped, see missionMount (D-107).
 	workspaceMount mount.Mount
 
 	// stateMount is D-054's executor auth-state volume, resolved the
@@ -287,6 +322,54 @@ func resolveMount(ctx context.Context, cli *client.Client, selfDestination, cont
 	return mount.Mount{}, fmt.Errorf("own container has no mount at %s", selfDestination)
 }
 
+// ErrWorkspaceScope reports a workdir that does not sit under any
+// mission's own workspace directory — never a silent fallback to the
+// whole workspace root, which is exactly the shared view D-107 removes.
+var ErrWorkspaceScope = errors.New("sandbox: workdir is outside the mission's workspace")
+
+// missionWorkspaceDir derives missionID's workspace directory from an
+// exec's workdir: /workspace/missions/<kind>/<mission id>, the shape
+// brain's Workspace.Provision creates. The mission id is matched
+// against the caller-supplied path rather than trusted from it, so a
+// workdir naming another mission's directory resolves to nothing and
+// the exec fails instead of mounting that mission's files.
+func missionWorkspaceDir(workdir, missionID string) (string, error) {
+	prefix := path.Join(workspaceMountPath, missionsDirName) + "/"
+	if !strings.HasPrefix(workdir, prefix) {
+		return "", fmt.Errorf("%w: %q", ErrWorkspaceScope, workdir)
+	}
+	segments := strings.Split(strings.TrimPrefix(workdir, prefix), "/")
+	if len(segments) < 2 || segments[1] != missionID {
+		return "", fmt.Errorf("%w: %q is not under mission %s", ErrWorkspaceScope, workdir, missionID)
+	}
+	return path.Join(prefix, segments[0], segments[1]), nil
+}
+
+// missionMount (D-107) scopes a mission container's workspace mount to
+// that mission's own directory: the same underlying volume brain writes
+// (workspaceMount, so no path translation and no per-mission Docker
+// object churn), narrowed by the volume driver's Subpath to
+// missions/<kind>/<id> and targeted at that same absolute path inside
+// the container. A mission container therefore has no mount at
+// /workspace at all, only its own subtree at the path brain records —
+// one mission's shell can no longer read or clobber another's files.
+// Docker requires the subpath to exist in the volume; brain provisions
+// the directory at mission create, before the first exec.
+func (m *Manager) missionMount(workdir, missionID string) (mount.Mount, error) {
+	dir, err := missionWorkspaceDir(workdir, missionID)
+	if err != nil {
+		return mount.Mount{}, err
+	}
+	subpath := strings.TrimPrefix(dir, workspaceMountPath+"/")
+	scoped := mount.Mount{Type: m.workspaceMount.Type, Source: m.workspaceMount.Source, Target: dir}
+	if m.workspaceMount.Type == mount.TypeBind {
+		scoped.Source = path.Join(m.workspaceMount.Source, subpath)
+		return scoped, nil
+	}
+	scoped.VolumeOptions = &mount.VolumeOptions{Subpath: subpath}
+	return scoped, nil
+}
+
 // Ping reports whether the Docker daemon is reachable — the sandbox
 // health check.
 func (m *Manager) Ping(ctx context.Context) error {
@@ -332,15 +415,20 @@ func (m *Manager) missionLock(missionID string) *sync.Mutex {
 // ensureContainer returns a running container id for missionID,
 // creating (or restarting an exited one) as needed. Three prior states
 // are handled explicitly: absent (create+start), Created/Exited
-// (restart in place — preserves any packages the worker installed
-// earlier in the mission, and recovers a container left stopped by a
-// host reboot or an OOM-killed PID 1), Running (reuse as-is). environment
+// (restart in place — recovers a container left stopped by a host
+// reboot or an OOM-killed PID 1; since D-106 a restart also empties the
+// HOME and /tmp tmpfs, so packages the worker installed outside
+// /workspace do not survive it, only the mounted volumes do), Running
+// (reuse as-is). environment
 // (D-05x) only matters on the absent path — a container's image is
 // fixed for its whole life, so ensureContainer never checks it against
 // an already-running/existing container; the mission row's own
 // Environment field is what's sticky, not anything read back from
 // Docker.
-func (m *Manager) ensureContainer(ctx context.Context, missionID, environment string) (string, error) {
+// workdir scopes the workspace mount to this mission's own directory
+// on the absent path only (D-107), same as environment: a container's
+// mounts are fixed for its whole life.
+func (m *Manager) ensureContainer(ctx context.Context, missionID, environment, workdir string) (string, error) {
 	lock := m.missionLock(missionID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -357,7 +445,7 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID, environment st
 		}
 		return insp.Container.ID, nil
 	case errdefs.IsNotFound(err):
-		id, createErr := m.createContainer(ctx, missionID, name, environment)
+		id, createErr := m.createContainer(ctx, missionID, name, environment, workdir)
 		if createErr == nil {
 			return id, nil
 		}
@@ -383,8 +471,12 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID, environment st
 	}
 }
 
-func (m *Manager) createContainer(ctx context.Context, missionID, name, environment string) (string, error) {
+func (m *Manager) createContainer(ctx context.Context, missionID, name, environment, workdir string) (string, error) {
 	image, err := imageFor(m.baseImage, environment)
+	if err != nil {
+		return "", err
+	}
+	workspaceMount, err := m.missionMount(workdir, missionID)
 	if err != nil {
 		return "", err
 	}
@@ -406,7 +498,7 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		Cmd:    []string{"sleep", "infinity"},
 		Labels: map[string]string{missionLabel: missionID},
 	}
-	mounts := []mount.Mount{m.workspaceMount}
+	mounts := []mount.Mount{workspaceMount}
 	if m.stateMount.Source != "" {
 		mounts = append(mounts, m.stateMount)
 	}
@@ -426,6 +518,13 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 			MemoryReservation: sandboxMemoryReservationBytes,
 			NanoCPUs:          nanoCPUs,
 			PidsLimit:         &pids,
+			// Ulimits (D-106): nofile bounds an fd-exhaustion loop, fsize
+			// stops one runaway write from filling the workspace volume's
+			// backing disk, which no cgroup memory cap covers.
+			Ulimits: []*container.Ulimit{
+				{Name: "nofile", Soft: sandboxNofileLimit, Hard: sandboxNofileLimit},
+				{Name: "fsize", Soft: sandboxFsizeLimit, Hard: sandboxFsizeLimit},
+			},
 		},
 		// OomScoreAdj (D-056): the kernel sacrifices sandboxes before
 		// brain/gateway/sshd when the host itself is under memory
@@ -435,11 +534,43 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		// 65534, but CapDrop closes NET_RAW on the bridge and
 		// no-new-privileges blocks any setuid escalation path; missions
 		// need neither (pip/npm/git run unprivileged).
-		CapDrop:     []string{"ALL"},
+		CapDrop: []string{"ALL"},
+		// SecurityOpt carries no "seccomp=" entry on purpose (D-106):
+		// Docker applies its default seccomp profile to every container
+		// unless an explicit seccomp= option overrides it, so omission IS
+		// the pin. Never add "seccomp=unconfined" here; TestCreateContainer
+		// HardensRootfs asserts no SecurityOpt entry ever says unconfined.
 		SecurityOpt: []string{"no-new-privileges"},
+		// ReadonlyRootfs (D-106): a compromised workload cannot rewrite
+		// the image's own binaries or drop a persistent implant on the
+		// container layer. Everything a mission legitimately writes lives
+		// on a mount instead: the mission's own workspace dir (D-107) and
+		// the .claude state volume above, plus the two tmpfs below.
+		ReadonlyRootfs: true,
+		// Tmpfs (D-106): /tmp is the shell's scratch space, and
+		// /home/sandbox is the sandbox HOME that `npm install -g`
+		// (NPM_CONFIG_PREFIX), `pip install --user`, and the caches under
+		// it all write to (sandbox-base.Dockerfile). Both were the
+		// writable layer before. nosuid,nodev but NOT noexec: workers
+		// legitimately run scripts from /tmp and installed binaries from
+		// HOME. uid/gid pin the mounts to the sandbox user, since a fresh
+		// tmpfs is otherwise root-owned and uid 65534 could not write it.
+		// A container restart now wipes both. That also makes D-103's
+		// $HOME marker probe read a restart as a recreate, which is the
+		// safe direction: never resume into a container whose process
+		// tree is gone. The .claude state volume mounts over this tmpfs
+		// and keeps persisting.
+		Tmpfs: map[string]string{
+			tmpMountPath:    "rw,nosuid,nodev," + sandboxTmpfsSize,
+			sandboxHomePath: "rw,nosuid,nodev,uid=65534,gid=65534," + sandboxHomeTmpfsSize,
+		},
 		// Default bridge: internet access (a coding mission may need
 		// `pip install`/`npm install`), but NOT the compose-internal
 		// "timothy" network — no route to postgres/gateway/memoryd.
+		// Caveat, accepted and documented in THREAT_MODEL.md: the bridge
+		// gateway address (typically 172.17.0.1) is reachable, and through
+		// it every port the host publishes, brain's own included. The API
+		// token never enters a sandbox, so this is defense-in-depth.
 		NetworkMode:   "bridge",
 		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyDisabled},
 	}
@@ -522,7 +653,7 @@ func (m *Manager) Exec(ctx context.Context, missionID, environment, workdir, com
 // ExecCreate. Existing Exec callers are unaffected: they route through
 // here with env == nil.
 func (m *Manager) ExecEnv(ctx context.Context, missionID, environment, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
-	containerID, err := m.ensureContainer(ctx, missionID, environment)
+	containerID, err := m.ensureContainer(ctx, missionID, environment, workdir)
 	if err != nil {
 		return 0, err
 	}

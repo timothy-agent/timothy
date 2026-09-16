@@ -1117,13 +1117,16 @@ func (r *delegatedRunner) launch(ctx context.Context, missionID, environment, wo
 // survives a container being recreated from scratch) and not under
 // executorStateMountPath's .claude subtree (its own separate persistent
 // volume): $HOME itself, outside that subtree, lives on the container's
-// own writable layer, so the marker exists only for as long as THIS
-// container instance does. Gone after a real recreate (removed + created
-// fresh), present after a mere stop/restart in place (sandboxd's
-// ensureContainer reuses the container by name unless it was actually
-// removed). Read via $HOME rather than a hardcoded container path so the
-// same command also runs against a real /bin/sh in the composed-command
-// round-trip test, where $HOME is the test host's own home directory.
+// own ephemeral HOME tmpfs (D-106; the container's writable layer
+// before that), so the marker exists only for as long as THIS container
+// instance keeps running. Gone after a real recreate (removed + created
+// fresh) and, since D-106, also after a stop/restart in place, which
+// empties the tmpfs. That reads a restart as a recreate, the safe
+// direction: a restart lost the run's process tree anyway, so resuming
+// into it was never right. Read via $HOME rather than a hardcoded
+// container path so the same command also runs against a real /bin/sh
+// in the composed-command round-trip test, where $HOME is the test
+// host's own home directory.
 const containerMarkerFile = ".timothy-container-marker"
 
 // buildLaunchCmd composes the full detached-launch command. The inner

@@ -167,11 +167,11 @@ func validMissionID(id string) bool {
 	return missionIDPattern.MatchString(id)
 }
 
-// validWorkdir is hygiene, not a security boundary: the sandbox mounts
-// the whole workspace volume, so the boundary actually being defended
-// is the host/daemon (missionID validation, container naming), not
-// mission-vs-mission file access. Still, an absolute, clean path under
-// /workspace is the only shape a legitimate caller ever sends.
+// validWorkdir accepts only an absolute, clean path under /workspace.
+// Since D-107 the mission-vs-mission boundary is the container's own
+// mount (Manager.missionMount scopes it to the mission's workspace
+// directory and rejects a workdir naming another mission's), so this
+// stays the shape check it always was.
 func validWorkdir(w string) bool {
 	if w != "/workspace" && !strings.HasPrefix(w, "/workspace/") {
 		return false
@@ -283,6 +283,10 @@ func (a *API) handleExec(w http.ResponseWriter, r *http.Request) {
 
 	exitCode, err := a.mgr.ExecEnv(r.Context(), missionID, req.Environment, req.Workdir, req.Command, req.Env, timeout, out)
 	switch {
+	case err != nil && errors.Is(err, ErrWorkspaceScope):
+		writeEvent(w, flusher, "error", map[string]any{
+			"code": "bad_request", "message": err.Error(),
+		})
 	case err != nil && errors.Is(err, ErrTimeout):
 		writeEvent(w, flusher, "error", map[string]any{
 			"code": "timeout", "exit_code": 124, "message": err.Error(),

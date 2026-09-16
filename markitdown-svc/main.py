@@ -15,6 +15,11 @@ from markitdown import MarkItDown, StreamInfo
 app = FastAPI()
 converter = MarkItDown(enable_plugins=False)
 
+# Caps one uploaded document. Matches brain's own KB upload limit
+# (maxKBUploadBytes, internal/brain/api/kb.go), the widest body that
+# legitimately reaches this sidecar.
+MAX_BODY_BYTES = 32 * 1024 * 1024
+
 # Below this many extracted text characters, a page counts as scanned
 # (image-only) and gets a rendered PNG so brain can caption/OCR it via
 # the vision model instead of losing the page silently (issue #350).
@@ -26,6 +31,33 @@ MIN_IMAGE_DIM = 64
 DEFAULT_RENDER_DPI = 110
 DEFAULT_MAX_PAGES = 50
 DEFAULT_MAX_IMAGES_PER_PAGE = 10
+
+
+async def read_capped_body(request: Request) -> bytes:
+    """Reads the request body, refusing anything over MAX_BODY_BYTES.
+
+    Streams rather than awaiting request.body(): a declared
+    Content-Length is rejected before a single chunk is read, and an
+    undeclared (chunked) body stops at the first chunk that crosses the
+    cap instead of buffering the whole upload. Unbounded reads here let
+    one oversized file OOM the sidecar.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > MAX_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="request body too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid content-length") from None
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 @app.get("/healthz")
@@ -44,7 +76,7 @@ async def convert(
     The filename and MIME type ride request headers, not the body —
     the body is the file's bytes verbatim, nothing else to parse out.
     """
-    body = await request.body()
+    body = await read_capped_body(request)
     if not body:
         raise HTTPException(status_code=400, detail="empty request body")
 
@@ -74,7 +106,7 @@ async def pdf_images(
     corrupt image or unparsable page must never fail the whole
     document, only a wholly unparsable PDF returns 422.
     """
-    body = await request.body()
+    body = await read_capped_body(request)
     if not body:
         raise HTTPException(status_code=400, detail="empty request body")
 

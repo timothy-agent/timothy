@@ -58,6 +58,13 @@ services:
       - source: searxng_settings
         target: /usr/local/searxng/settings.yml
     # internal-only: no published ports; brain is the sole caller
+    # Resource caps here and on the other sidecars mirror the mission
+    # sandbox ceilings (D-056): one pathological request must not take
+    # the host down with it. searxng only proxies search results, so it
+    # gets the smallest share.
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
 
   markitdown:
     <<: *service
@@ -65,6 +72,11 @@ services:
       context: ../markitdown-svc
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng.
+    # Headroom for PyMuPDF page renders and markitdown's own parsers on
+    # a 32MiB document, the sidecar's body cap.
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 128
 
   pdfgen:
     <<: *service
@@ -72,6 +84,11 @@ services:
       context: ../pdfgen-svc
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng/markitdown.
+    # typst compiles (mermaid, code highlighting) are the memory floor
+    # here; the pids cap bounds runaway subprocess spawning.
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 128
 
   ocr:
     <<: *service
@@ -102,6 +119,12 @@ services:
     # Off by default: the model holds ~3 GiB RSS at idle. Enable with
     # COMPOSE_PROFILES=whisper and WHISPER_URL=http://whisper:8001 in
     # .env.
+    # Above the other sidecars because large-v3 alone holds ~3 GiB
+    # resident; decode needs room on top of that, so the cap is 6g
+    # rather than the 2g the rest get.
+    mem_limit: 6g
+    cpus: 2.0
+    pids_limit: 128
 
   # Local models: run Ollama natively on the host (Metal/CUDA — a
   # containerized runner gets CPU only and can't serve big models) and

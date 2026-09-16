@@ -37,6 +37,14 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *client.Client {
 	return cli
 }
 
+// testWorkdir is a mission workdir in the shape brain sends: an
+// absolute path under the mission's own workspace directory, which
+// missionMount (D-107) scopes the container's mount to.
+const (
+	testWorkdir    = "/workspace/missions/coding/m1/wt"
+	testMissionDir = "/workspace/missions/coding/m1"
+)
+
 func writeJSON(t *testing.T, w http.ResponseWriter, status int, v any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -117,7 +125,7 @@ func TestEnsureContainerRunningReusesInPlace(t *testing.T) {
 		}
 	})
 	mgr := newTestManager(cli)
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -127,9 +135,10 @@ func TestEnsureContainerRunningReusesInPlace(t *testing.T) {
 }
 
 // TestEnsureContainerExitedRestarts confirms an Exited container is
-// restarted in place (not recreated) — this is what preserves any
-// packages a worker installed earlier in the mission and recovers a
-// container left stopped by a host reboot.
+// restarted in place (not recreated) — this is what keeps the mission
+// on one container identity and recovers a container left stopped by a
+// host reboot. Since D-106 the restart empties the HOME and /tmp tmpfs,
+// so only the mounted volumes carry state across it.
 func TestEnsureContainerExitedRestarts(t *testing.T) {
 	started := false
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +155,7 @@ func TestEnsureContainerExitedRestarts(t *testing.T) {
 		}
 	})
 	mgr := newTestManager(cli)
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -183,8 +192,8 @@ func TestEnsureContainerNotFoundCreates(t *testing.T) {
 			if cfg.User != sandboxUser {
 				t.Errorf("create body: User = %q, want %q", cfg.User, sandboxUser)
 			}
-			if len(cfg.HostConfig.Mounts) != 1 || cfg.HostConfig.Mounts[0].Target != workspaceMountPath {
-				t.Errorf("create body: Mounts = %+v, want one mount at %s", cfg.HostConfig.Mounts, workspaceMountPath)
+			if len(cfg.HostConfig.Mounts) != 1 || cfg.HostConfig.Mounts[0].Target != testMissionDir {
+				t.Errorf("create body: Mounts = %+v, want one mount at %s", cfg.HostConfig.Mounts, testMissionDir)
 			}
 			for _, e := range cfg.Env {
 				if len(e) >= len("DATABASE_URL") && e[:len("DATABASE_URL")] == "DATABASE_URL" {
@@ -200,7 +209,7 @@ func TestEnsureContainerNotFoundCreates(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -236,7 +245,7 @@ func TestEnsureContainerCreateConflictReinspects(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -296,7 +305,7 @@ func TestCreateContainerIncludesStateMountWhenPresent(t *testing.T) {
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	mgr.stateMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_executor-claude-state", Target: executorStateMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if len(gotMounts) != 2 {
@@ -343,11 +352,11 @@ func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	// mgr.stateMount left zero-value: not configured.
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
-	if len(gotMounts) != 1 || gotMounts[0].Target != workspaceMountPath {
-		t.Fatalf("create body: Mounts = %+v, want exactly [workspace]", gotMounts)
+	if len(gotMounts) != 1 || gotMounts[0].Target != testMissionDir {
+		t.Fatalf("create body: Mounts = %+v, want exactly [mission workspace]", gotMounts)
 	}
 }
 
@@ -463,7 +472,7 @@ func TestEnsureContainerPullsMissingImage(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -499,7 +508,7 @@ func TestEnsureContainerPullFailureNamesImage(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	_, err := mgr.ensureContainer(context.Background(), "m1", "")
+	_, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err == nil {
 		t.Fatal("ensureContainer: want error when pull fails, got nil")
 	}
@@ -575,7 +584,7 @@ func TestEnsureContainerConcurrentPullsDoNotOverlap(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "")
+			_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir)
 			errs[i] = err
 		}(i)
 	}
@@ -621,7 +630,7 @@ func TestCreateContainerHardensResources(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if gotHostConfig.MemorySwap != sandboxMemoryBytes {
@@ -638,6 +647,119 @@ func TestCreateContainerHardensResources(t *testing.T) {
 	}
 	if !slices.Contains(gotHostConfig.SecurityOpt, "no-new-privileges") {
 		t.Errorf("SecurityOpt = %v, want to contain no-new-privileges", gotHostConfig.SecurityOpt)
+	}
+}
+
+// TestCreateContainerHardensRootfs covers D-106: the rootfs is read-only
+// with tmpfs standing in for the writable layer at the two paths mission
+// workloads actually write outside their mounts, ulimits are set, and no
+// SecurityOpt entry ever turns seccomp (or anything else) unconfined,
+// since Docker's default seccomp profile applies precisely by NOT being
+// overridden.
+func TestCreateContainerHardensRootfs(t *testing.T) {
+	var gotHostConfig container.HostConfig
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read create body: %v", err)
+			}
+			var cfg struct {
+				HostConfig container.HostConfig
+			}
+			if err := json.Unmarshal(body, &cfg); err != nil {
+				t.Fatalf("unmarshal create body: %v", err)
+			}
+			gotHostConfig = cfg.HostConfig
+			writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+		t.Fatalf("createContainer: %v", err)
+	}
+
+	if !gotHostConfig.ReadonlyRootfs {
+		t.Errorf("ReadonlyRootfs = false, want true")
+	}
+
+	// Each tmpfs must be writable by the sandbox uid and must NOT be
+	// noexec: workers run scripts from /tmp and binaries installed under
+	// HOME by `npm install -g` / `pip install --user`.
+	tmpfsCases := []struct {
+		path      string
+		wantOpts  []string
+		wantSized string
+	}{
+		{path: tmpMountPath, wantOpts: []string{"rw", "nosuid", "nodev"}, wantSized: sandboxTmpfsSize},
+		{path: sandboxHomePath, wantOpts: []string{"rw", "nosuid", "nodev", "uid=65534", "gid=65534"}, wantSized: sandboxHomeTmpfsSize},
+	}
+	for _, tc := range tmpfsCases {
+		opts, ok := gotHostConfig.Tmpfs[tc.path]
+		if !ok {
+			t.Errorf("Tmpfs has no entry for %s, want one (rootfs is read-only)", tc.path)
+			continue
+		}
+		for _, want := range tc.wantOpts {
+			if !slices.Contains(strings.Split(opts, ","), want) {
+				t.Errorf("Tmpfs[%s] = %q, want option %q", tc.path, opts, want)
+			}
+		}
+		if !strings.Contains(opts, tc.wantSized) {
+			t.Errorf("Tmpfs[%s] = %q, want size option %q", tc.path, opts, tc.wantSized)
+		}
+		if slices.Contains(strings.Split(opts, ","), "noexec") {
+			t.Errorf("Tmpfs[%s] = %q, must not be noexec", tc.path, opts)
+		}
+	}
+
+	// The executor state volume mounts under the HOME tmpfs; Docker
+	// layers the volume over it, but only while the paths still nest.
+	if !strings.HasPrefix(executorStateMountPath, sandboxHomePath+"/") {
+		t.Errorf("executorStateMountPath %q no longer nests under %q; the HOME tmpfs would orphan the state volume", executorStateMountPath, sandboxHomePath)
+	}
+	if len(gotHostConfig.Tmpfs) != len(tmpfsCases) {
+		t.Errorf("Tmpfs = %v, want exactly %d entries", gotHostConfig.Tmpfs, len(tmpfsCases))
+	}
+
+	wantUlimits := map[string]int64{
+		"nofile": sandboxNofileLimit,
+		"fsize":  sandboxFsizeLimit,
+	}
+	gotUlimits := map[string]int64{}
+	for _, u := range gotHostConfig.Ulimits {
+		if u.Soft != u.Hard {
+			t.Errorf("Ulimit %s soft %d != hard %d, want both pinned", u.Name, u.Soft, u.Hard)
+		}
+		gotUlimits[u.Name] = u.Soft
+	}
+	for name, want := range wantUlimits {
+		got, ok := gotUlimits[name]
+		if !ok {
+			t.Errorf("Ulimits has no %s entry, want %d", name, want)
+			continue
+		}
+		if got != want {
+			t.Errorf("Ulimit %s = %d, want %d", name, got, want)
+		}
+	}
+
+	// Omitting "seccomp=" IS the pin on Docker's default profile; an
+	// explicit unconfined of any kind would silently undo it.
+	for _, opt := range gotHostConfig.SecurityOpt {
+		if strings.Contains(opt, "unconfined") {
+			t.Errorf("SecurityOpt contains %q; mission containers must never run unconfined", opt)
+		}
+		if strings.HasPrefix(opt, "seccomp=") {
+			t.Errorf("SecurityOpt sets %q; the default seccomp profile is pinned by omission, not by overriding it", opt)
+		}
 	}
 }
 
@@ -671,7 +793,7 @@ func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if !slices.Contains(gotEnv, sandboxPath) {
@@ -812,5 +934,117 @@ func TestParseMemAvailable(t *testing.T) {
 				t.Errorf("parseMemAvailable(%q) = %d, want %d", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestMissionWorkspaceDir covers D-107's derivation: only a workdir
+// under /workspace/missions/<kind>/<mission id> resolves, and the
+// mission id must be the path's own — a workdir naming a different
+// mission is rejected, never widened to the workspace root.
+func TestMissionWorkspaceDir(t *testing.T) {
+	const other = "b2c3d4e5-0000-0000-0000-000000000002"
+	tests := []struct {
+		name      string
+		workdir   string
+		missionID string
+		want      string
+		wantErr   bool
+	}{
+		{name: "worktree under mission dir", workdir: "/workspace/missions/coding/m1/wt", missionID: "m1", want: "/workspace/missions/coding/m1"},
+		{name: "mission dir itself", workdir: "/workspace/missions/general/m1", missionID: "m1", want: "/workspace/missions/general/m1"},
+		{name: "deep run dir", workdir: "/workspace/missions/coding/m1/runs/r1/refs", missionID: "m1", want: "/workspace/missions/coding/m1"},
+		{name: "another mission's dir", workdir: "/workspace/missions/coding/" + other + "/wt", missionID: "m1", wantErr: true},
+		{name: "workspace root", workdir: "/workspace", missionID: "m1", wantErr: true},
+		{name: "missions root", workdir: "/workspace/missions", missionID: "m1", wantErr: true},
+		{name: "kind dir only", workdir: "/workspace/missions/coding", missionID: "m1", wantErr: true},
+		{name: "mission id as the kind segment", workdir: "/workspace/missions/m1", missionID: "m1", wantErr: true},
+		{name: "outside the workspace", workdir: "/etc", missionID: "m1", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := missionWorkspaceDir(tc.workdir, tc.missionID)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("missionWorkspaceDir(%q, %q) = %q, want error", tc.workdir, tc.missionID, got)
+				}
+				if !errors.Is(err, ErrWorkspaceScope) {
+					t.Fatalf("error = %v, want ErrWorkspaceScope", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("missionWorkspaceDir: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMissionMountScopesPerMission is the isolation claim in D-107:
+// two missions sharing one workspace volume get two DIFFERENT mount
+// specs, each narrowed by Subpath to its own directory, so neither
+// container has a mount covering the other's files.
+func TestMissionMountScopesPerMission(t *testing.T) {
+	mgr := &Manager{workspaceMount: mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}}
+
+	a, err := mgr.missionMount("/workspace/missions/coding/m1/wt", "m1")
+	if err != nil {
+		t.Fatalf("missionMount m1: %v", err)
+	}
+	b, err := mgr.missionMount("/workspace/missions/general/m2", "m2")
+	if err != nil {
+		t.Fatalf("missionMount m2: %v", err)
+	}
+	if a.VolumeOptions == nil || b.VolumeOptions == nil {
+		t.Fatalf("mounts carry no VolumeOptions: a=%+v b=%+v", a, b)
+	}
+	if a.VolumeOptions.Subpath != "missions/coding/m1" {
+		t.Errorf("m1 subpath = %q, want missions/coding/m1", a.VolumeOptions.Subpath)
+	}
+	if b.VolumeOptions.Subpath != "missions/general/m2" {
+		t.Errorf("m2 subpath = %q, want missions/general/m2", b.VolumeOptions.Subpath)
+	}
+	if a.VolumeOptions.Subpath == b.VolumeOptions.Subpath {
+		t.Fatal("both missions resolved to the same subpath: no isolation")
+	}
+	if a.Target != "/workspace/missions/coding/m1" || b.Target != "/workspace/missions/general/m2" {
+		t.Fatalf("targets = %q / %q, want each mission's own dir (paths must match what brain records)", a.Target, b.Target)
+	}
+	if a.Target == workspaceMountPath || b.Target == workspaceMountPath {
+		t.Fatal("a mission container still has a mount at the shared workspace root")
+	}
+}
+
+// TestMissionMountBindSource covers the bind-backed deployment (an
+// operator running a host bind instead of a named volume): the scoping
+// moves to the source path, since a bind has no Subpath option.
+func TestMissionMountBindSource(t *testing.T) {
+	mgr := &Manager{workspaceMount: mount.Mount{Type: mount.TypeBind, Source: "/srv/timothy/workspace", Target: workspaceMountPath}}
+	got, err := mgr.missionMount("/workspace/missions/coding/m1/wt", "m1")
+	if err != nil {
+		t.Fatalf("missionMount: %v", err)
+	}
+	if got.Source != "/srv/timothy/workspace/missions/coding/m1" {
+		t.Errorf("source = %q, want the mission's own host subdirectory", got.Source)
+	}
+	if got.VolumeOptions != nil {
+		t.Errorf("bind mount carries VolumeOptions = %+v, want nil", got.VolumeOptions)
+	}
+}
+
+// TestCreateContainerRejectsUnscopedWorkdir confirms a workdir that
+// resolves to no mission directory fails the create outright rather
+// than falling back to the shared workspace root (D-107).
+func TestCreateContainerRejectsUnscopedWorkdir(t *testing.T) {
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected docker call: %s %s", r.Method, r.URL.Path)
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+	_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", workspaceMountPath)
+	if !errors.Is(err, ErrWorkspaceScope) {
+		t.Fatalf("err = %v, want ErrWorkspaceScope", err)
 	}
 }

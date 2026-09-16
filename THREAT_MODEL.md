@@ -148,25 +148,33 @@ no-new-privileges, distroless, network-isolated. Its API never accepts
 container names, images, mounts, or arbitrary env; the mission ID is
 shape-validated before any Docker call. Mission containers run as an
 unprivileged user with capped memory, CPU, PIDs, and OOM sacrifice bias,
-a deny-by-default env allowlist, and value-length limits. Shell commands
-are scored by a classifier that treats anything it cannot parse
+a deny-by-default env allowlist, and value-length limits. Their rootfs is
+read-only (D-106), with writable space only on the workspace volume, the
+executor state volume, and size-bounded tmpfs at `/tmp` and the sandbox
+HOME; nofile and fsize ulimits bound fd and single-file-size exhaustion,
+and Docker's default seccomp profile applies, pinned by never setting a
+`seccomp=` security option. Shell commands are
+scored by a classifier that treats anything it cannot parse
 (substitutions, `eval`, `sh -c`) as destructive and prompts. `write_file`
 resolves symlinks before writing and rejects paths outside the workspace.
 Mission file downloads force octet-stream with nosniff and collapse
 not-found and out-of-bounds into the same 404.
 
 - **Mitigated:** sandboxd hardening, narrow unauthenticated-but-
-  unreachable API, per-mission resource caps, env allowlist, symlink-safe
-  writes, download containment.
+  unreachable API, per-mission resource caps, read-only rootfs with
+  bounded tmpfs, nofile/fsize ulimits, default seccomp profile, env
+  allowlist, symlink-safe writes, download containment.
 - **Accepted:** the shell classifier is a best-effort regex, not a
   boundary; the container is the boundary. Stated in code and here.
-- **Open:** mission containers lack read-only rootfs, pinned seccomp, and
-  ulimits, and share one read-write workspace volume across missions, so
-  missions are not isolated from each other's files. Sandbox containers on
-  the default bridge can reach host-published ports (including brain's
-  `:8300`, whose unauthenticated `/metrics` is then reachable); the token
-  is never given to the sandbox, so this is defense-in-depth. Tracked in
-  issue #437.
+- **Open:** mission containers share one read-write workspace volume
+  across missions, so missions are not isolated from each other's files
+  (issue #749). Sandbox containers on the default bridge reach the bridge
+  gateway address (typically `172.17.0.1`) and through it any port the
+  host publishes, including brain's `:8300`; the API token is never given
+  to the sandbox, so this is defense-in-depth rather than an open door.
+  Replacing bridge networking is not planned; the containment boundary is
+  the container, and outbound internet access is a requirement (a coding
+  mission runs `pip install` / `npm install`). Tracked in issue #437.
 
 ### Sidecars
 
