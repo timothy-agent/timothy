@@ -14,6 +14,10 @@ const keyLen = 32 // AES-256
 // no per-secret key derivation (no DEK layer): the master key IS the
 // encryption key, which is simple and sufficient since rotation means
 // re-sealing every row with a new key, not re-wrapping a DEK.
+//
+// D-105: the row's ref_name is bound as GCM additional data, so a
+// ciphertext copied onto another row (database write access, no master
+// key) fails to open instead of repointing that ref at another secret.
 type sealer struct {
 	gcm cipher.AEAD
 }
@@ -33,16 +37,26 @@ func newCipher(masterKey []byte) (*sealer, error) {
 	return &sealer{gcm: gcm}, nil
 }
 
-func (s *sealer) seal(plaintext string) (ciphertext, nonce []byte, err error) {
+func (s *sealer) seal(refName, plaintext string) (ciphertext, nonce []byte, err error) {
 	nonce = make([]byte, s.gcm.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, nil, fmt.Errorf("generate nonce: %w", err)
 	}
-	ciphertext = s.gcm.Seal(nil, nonce, []byte(plaintext), nil)
+	ciphertext = s.gcm.Seal(nil, nonce, []byte(plaintext), []byte(refName))
 	return ciphertext, nonce, nil
 }
 
-func (s *sealer) open(ciphertext, nonce []byte) (string, error) {
+func (s *sealer) open(refName string, ciphertext, nonce []byte) (string, error) {
+	plaintext, err := s.gcm.Open(nil, nonce, ciphertext, []byte(refName))
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	return string(plaintext), nil
+}
+
+// openLegacy opens a row sealed before D-105, with no additional data.
+// Only the read path's re-seal fallback uses it.
+func (s *sealer) openLegacy(ciphertext, nonce []byte) (string, error) {
 	plaintext, err := s.gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		return "", fmt.Errorf("decrypt: %w", err)

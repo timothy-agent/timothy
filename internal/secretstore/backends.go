@@ -437,7 +437,7 @@ func (s *Store) dbSecret(ctx context.Context, refName, what string) (string, err
 	if r.backend != "db" {
 		return "", fmt.Errorf("secretstore: %s ref %q must be a db-backed secret, got %q", what, refName, r.backend)
 	}
-	return s.cipher.open(r.ciphertext, r.nonce)
+	return s.openDB(ctx, refName, r)
 }
 
 // vaultToken obtains a client token per the configured auth method:
