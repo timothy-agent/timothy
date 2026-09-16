@@ -164,13 +164,13 @@ const signingKeyFileName = "signing_key"
 // separate signing code path.
 //
 // D-058: the signing key file lives inside the mission's workspace dir,
-// which sandboxd mounts WHOLE (not just wt/) into every mission's
-// sandbox container (see internal/sandboxd/api.go's validWorkdir
-// comment) — so this key is readable by model-authored shell commands
-// in this mission's sandbox, and by any other mission's sandbox
-// sharing the same workspace volume. Accepted for the single-operator
-// posture, same class as D-054's executor auth-state volume; revisited
-// together with agentguard provisioning (U5b).
+// which sandboxd mounts WHOLE (not just wt/) into this mission's
+// sandbox container — so this key is readable by model-authored shell
+// commands in this mission's sandbox. Since D-107 that mount is scoped
+// to the mission's own directory, so no other mission's sandbox can
+// reach it. Accepted for the single-operator posture, same class as
+// D-054's executor auth-state volume; revisited together with
+// agentguard provisioning (U5b).
 func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, repoURL, token string, connIdentity *GitIdentity, baseRef string) (baseUsed string, err error) {
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()

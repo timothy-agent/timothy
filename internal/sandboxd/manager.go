@@ -16,6 +16,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +48,13 @@ const (
 	workspaceMountPath  = "/workspace"
 	containerNamePrefix = "timothy-sandbox-"
 	missionLabel        = "timothy.mission"
+
+	// missionsDirName is the segment brain's $WORKSPACES adds under
+	// /workspace (deploy/docker-compose.yml) — every mission workspace is
+	// /workspace/missions/<kind>/<mission id>, provisioned by brain
+	// (internal/brain/missions/worktree.go Provision) before any exec for
+	// that mission is ever issued.
+	missionsDirName = "missions"
 
 	// stateVolumeMetaPath is where sandboxd itself mounts the executor
 	// auth-state volume (deploy/docker-compose.yml) purely so it can
@@ -225,7 +233,8 @@ type Manager struct {
 	// OWN container for its /workspace mount and replicating that exact
 	// spec — never hardcode a compose-prefixed volume name, since a
 	// wrong name silently auto-creates an empty volume instead of
-	// erroring (see NewManager).
+	// erroring (see NewManager). It is the SOURCE spec only: no mission
+	// container ever receives it unscoped, see missionMount (D-107).
 	workspaceMount mount.Mount
 
 	// stateMount is D-054's executor auth-state volume, resolved the
@@ -313,6 +322,54 @@ func resolveMount(ctx context.Context, cli *client.Client, selfDestination, cont
 	return mount.Mount{}, fmt.Errorf("own container has no mount at %s", selfDestination)
 }
 
+// ErrWorkspaceScope reports a workdir that does not sit under any
+// mission's own workspace directory — never a silent fallback to the
+// whole workspace root, which is exactly the shared view D-107 removes.
+var ErrWorkspaceScope = errors.New("sandbox: workdir is outside the mission's workspace")
+
+// missionWorkspaceDir derives missionID's workspace directory from an
+// exec's workdir: /workspace/missions/<kind>/<mission id>, the shape
+// brain's Workspace.Provision creates. The mission id is matched
+// against the caller-supplied path rather than trusted from it, so a
+// workdir naming another mission's directory resolves to nothing and
+// the exec fails instead of mounting that mission's files.
+func missionWorkspaceDir(workdir, missionID string) (string, error) {
+	prefix := path.Join(workspaceMountPath, missionsDirName) + "/"
+	if !strings.HasPrefix(workdir, prefix) {
+		return "", fmt.Errorf("%w: %q", ErrWorkspaceScope, workdir)
+	}
+	segments := strings.Split(strings.TrimPrefix(workdir, prefix), "/")
+	if len(segments) < 2 || segments[1] != missionID {
+		return "", fmt.Errorf("%w: %q is not under mission %s", ErrWorkspaceScope, workdir, missionID)
+	}
+	return path.Join(prefix, segments[0], segments[1]), nil
+}
+
+// missionMount (D-107) scopes a mission container's workspace mount to
+// that mission's own directory: the same underlying volume brain writes
+// (workspaceMount, so no path translation and no per-mission Docker
+// object churn), narrowed by the volume driver's Subpath to
+// missions/<kind>/<id> and targeted at that same absolute path inside
+// the container. A mission container therefore has no mount at
+// /workspace at all, only its own subtree at the path brain records —
+// one mission's shell can no longer read or clobber another's files.
+// Docker requires the subpath to exist in the volume; brain provisions
+// the directory at mission create, before the first exec.
+func (m *Manager) missionMount(workdir, missionID string) (mount.Mount, error) {
+	dir, err := missionWorkspaceDir(workdir, missionID)
+	if err != nil {
+		return mount.Mount{}, err
+	}
+	subpath := strings.TrimPrefix(dir, workspaceMountPath+"/")
+	scoped := mount.Mount{Type: m.workspaceMount.Type, Source: m.workspaceMount.Source, Target: dir}
+	if m.workspaceMount.Type == mount.TypeBind {
+		scoped.Source = path.Join(m.workspaceMount.Source, subpath)
+		return scoped, nil
+	}
+	scoped.VolumeOptions = &mount.VolumeOptions{Subpath: subpath}
+	return scoped, nil
+}
+
 // Ping reports whether the Docker daemon is reachable — the sandbox
 // health check.
 func (m *Manager) Ping(ctx context.Context) error {
@@ -368,7 +425,10 @@ func (m *Manager) missionLock(missionID string) *sync.Mutex {
 // an already-running/existing container; the mission row's own
 // Environment field is what's sticky, not anything read back from
 // Docker.
-func (m *Manager) ensureContainer(ctx context.Context, missionID, environment string) (string, error) {
+// workdir scopes the workspace mount to this mission's own directory
+// on the absent path only (D-107), same as environment: a container's
+// mounts are fixed for its whole life.
+func (m *Manager) ensureContainer(ctx context.Context, missionID, environment, workdir string) (string, error) {
 	lock := m.missionLock(missionID)
 	lock.Lock()
 	defer lock.Unlock()
@@ -385,7 +445,7 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID, environment st
 		}
 		return insp.Container.ID, nil
 	case errdefs.IsNotFound(err):
-		id, createErr := m.createContainer(ctx, missionID, name, environment)
+		id, createErr := m.createContainer(ctx, missionID, name, environment, workdir)
 		if createErr == nil {
 			return id, nil
 		}
@@ -411,8 +471,12 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID, environment st
 	}
 }
 
-func (m *Manager) createContainer(ctx context.Context, missionID, name, environment string) (string, error) {
+func (m *Manager) createContainer(ctx context.Context, missionID, name, environment, workdir string) (string, error) {
 	image, err := imageFor(m.baseImage, environment)
+	if err != nil {
+		return "", err
+	}
+	workspaceMount, err := m.missionMount(workdir, missionID)
 	if err != nil {
 		return "", err
 	}
@@ -434,7 +498,7 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		Cmd:    []string{"sleep", "infinity"},
 		Labels: map[string]string{missionLabel: missionID},
 	}
-	mounts := []mount.Mount{m.workspaceMount}
+	mounts := []mount.Mount{workspaceMount}
 	if m.stateMount.Source != "" {
 		mounts = append(mounts, m.stateMount)
 	}
@@ -480,8 +544,8 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		// ReadonlyRootfs (D-106): a compromised workload cannot rewrite
 		// the image's own binaries or drop a persistent implant on the
 		// container layer. Everything a mission legitimately writes lives
-		// on a mount instead: /workspace and the .claude state volume
-		// above, plus the two tmpfs below.
+		// on a mount instead: the mission's own workspace dir (D-107) and
+		// the .claude state volume above, plus the two tmpfs below.
 		ReadonlyRootfs: true,
 		// Tmpfs (D-106): /tmp is the shell's scratch space, and
 		// /home/sandbox is the sandbox HOME that `npm install -g`
@@ -589,7 +653,7 @@ func (m *Manager) Exec(ctx context.Context, missionID, environment, workdir, com
 // ExecCreate. Existing Exec callers are unaffected: they route through
 // here with env == nil.
 func (m *Manager) ExecEnv(ctx context.Context, missionID, environment, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
-	containerID, err := m.ensureContainer(ctx, missionID, environment)
+	containerID, err := m.ensureContainer(ctx, missionID, environment, workdir)
 	if err != nil {
 		return 0, err
 	}
