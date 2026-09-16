@@ -37,6 +37,14 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *client.Client {
 	return cli
 }
 
+// testWorkdir is a mission workdir in the shape brain sends: an
+// absolute path under the mission's own workspace directory, which
+// missionMount (D-107) scopes the container's mount to.
+const (
+	testWorkdir    = "/workspace/missions/coding/m1/wt"
+	testMissionDir = "/workspace/missions/coding/m1"
+)
+
 func writeJSON(t *testing.T, w http.ResponseWriter, status int, v any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -117,7 +125,7 @@ func TestEnsureContainerRunningReusesInPlace(t *testing.T) {
 		}
 	})
 	mgr := newTestManager(cli)
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -147,7 +155,7 @@ func TestEnsureContainerExitedRestarts(t *testing.T) {
 		}
 	})
 	mgr := newTestManager(cli)
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -184,8 +192,8 @@ func TestEnsureContainerNotFoundCreates(t *testing.T) {
 			if cfg.User != sandboxUser {
 				t.Errorf("create body: User = %q, want %q", cfg.User, sandboxUser)
 			}
-			if len(cfg.HostConfig.Mounts) != 1 || cfg.HostConfig.Mounts[0].Target != workspaceMountPath {
-				t.Errorf("create body: Mounts = %+v, want one mount at %s", cfg.HostConfig.Mounts, workspaceMountPath)
+			if len(cfg.HostConfig.Mounts) != 1 || cfg.HostConfig.Mounts[0].Target != testMissionDir {
+				t.Errorf("create body: Mounts = %+v, want one mount at %s", cfg.HostConfig.Mounts, testMissionDir)
 			}
 			for _, e := range cfg.Env {
 				if len(e) >= len("DATABASE_URL") && e[:len("DATABASE_URL")] == "DATABASE_URL" {
@@ -201,7 +209,7 @@ func TestEnsureContainerNotFoundCreates(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -237,7 +245,7 @@ func TestEnsureContainerCreateConflictReinspects(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -297,7 +305,7 @@ func TestCreateContainerIncludesStateMountWhenPresent(t *testing.T) {
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	mgr.stateMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_executor-claude-state", Target: executorStateMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if len(gotMounts) != 2 {
@@ -344,11 +352,11 @@ func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	// mgr.stateMount left zero-value: not configured.
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
-	if len(gotMounts) != 1 || gotMounts[0].Target != workspaceMountPath {
-		t.Fatalf("create body: Mounts = %+v, want exactly [workspace]", gotMounts)
+	if len(gotMounts) != 1 || gotMounts[0].Target != testMissionDir {
+		t.Fatalf("create body: Mounts = %+v, want exactly [mission workspace]", gotMounts)
 	}
 }
 
@@ -464,7 +472,7 @@ func TestEnsureContainerPullsMissingImage(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	id, err := mgr.ensureContainer(context.Background(), "m1", "")
+	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -500,7 +508,7 @@ func TestEnsureContainerPullFailureNamesImage(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	_, err := mgr.ensureContainer(context.Background(), "m1", "")
+	_, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
 	if err == nil {
 		t.Fatal("ensureContainer: want error when pull fails, got nil")
 	}
@@ -576,7 +584,7 @@ func TestEnsureContainerConcurrentPullsDoNotOverlap(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "")
+			_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir)
 			errs[i] = err
 		}(i)
 	}
@@ -622,7 +630,7 @@ func TestCreateContainerHardensResources(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if gotHostConfig.MemorySwap != sandboxMemoryBytes {
@@ -674,7 +682,7 @@ func TestCreateContainerHardensRootfs(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 
@@ -785,7 +793,7 @@ func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", ""); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if !slices.Contains(gotEnv, sandboxPath) {
@@ -926,5 +934,117 @@ func TestParseMemAvailable(t *testing.T) {
 				t.Errorf("parseMemAvailable(%q) = %d, want %d", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestMissionWorkspaceDir covers D-107's derivation: only a workdir
+// under /workspace/missions/<kind>/<mission id> resolves, and the
+// mission id must be the path's own — a workdir naming a different
+// mission is rejected, never widened to the workspace root.
+func TestMissionWorkspaceDir(t *testing.T) {
+	const other = "b2c3d4e5-0000-0000-0000-000000000002"
+	tests := []struct {
+		name      string
+		workdir   string
+		missionID string
+		want      string
+		wantErr   bool
+	}{
+		{name: "worktree under mission dir", workdir: "/workspace/missions/coding/m1/wt", missionID: "m1", want: "/workspace/missions/coding/m1"},
+		{name: "mission dir itself", workdir: "/workspace/missions/general/m1", missionID: "m1", want: "/workspace/missions/general/m1"},
+		{name: "deep run dir", workdir: "/workspace/missions/coding/m1/runs/r1/refs", missionID: "m1", want: "/workspace/missions/coding/m1"},
+		{name: "another mission's dir", workdir: "/workspace/missions/coding/" + other + "/wt", missionID: "m1", wantErr: true},
+		{name: "workspace root", workdir: "/workspace", missionID: "m1", wantErr: true},
+		{name: "missions root", workdir: "/workspace/missions", missionID: "m1", wantErr: true},
+		{name: "kind dir only", workdir: "/workspace/missions/coding", missionID: "m1", wantErr: true},
+		{name: "mission id as the kind segment", workdir: "/workspace/missions/m1", missionID: "m1", wantErr: true},
+		{name: "outside the workspace", workdir: "/etc", missionID: "m1", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := missionWorkspaceDir(tc.workdir, tc.missionID)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("missionWorkspaceDir(%q, %q) = %q, want error", tc.workdir, tc.missionID, got)
+				}
+				if !errors.Is(err, ErrWorkspaceScope) {
+					t.Fatalf("error = %v, want ErrWorkspaceScope", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("missionWorkspaceDir: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMissionMountScopesPerMission is the isolation claim in D-107:
+// two missions sharing one workspace volume get two DIFFERENT mount
+// specs, each narrowed by Subpath to its own directory, so neither
+// container has a mount covering the other's files.
+func TestMissionMountScopesPerMission(t *testing.T) {
+	mgr := &Manager{workspaceMount: mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}}
+
+	a, err := mgr.missionMount("/workspace/missions/coding/m1/wt", "m1")
+	if err != nil {
+		t.Fatalf("missionMount m1: %v", err)
+	}
+	b, err := mgr.missionMount("/workspace/missions/general/m2", "m2")
+	if err != nil {
+		t.Fatalf("missionMount m2: %v", err)
+	}
+	if a.VolumeOptions == nil || b.VolumeOptions == nil {
+		t.Fatalf("mounts carry no VolumeOptions: a=%+v b=%+v", a, b)
+	}
+	if a.VolumeOptions.Subpath != "missions/coding/m1" {
+		t.Errorf("m1 subpath = %q, want missions/coding/m1", a.VolumeOptions.Subpath)
+	}
+	if b.VolumeOptions.Subpath != "missions/general/m2" {
+		t.Errorf("m2 subpath = %q, want missions/general/m2", b.VolumeOptions.Subpath)
+	}
+	if a.VolumeOptions.Subpath == b.VolumeOptions.Subpath {
+		t.Fatal("both missions resolved to the same subpath: no isolation")
+	}
+	if a.Target != "/workspace/missions/coding/m1" || b.Target != "/workspace/missions/general/m2" {
+		t.Fatalf("targets = %q / %q, want each mission's own dir (paths must match what brain records)", a.Target, b.Target)
+	}
+	if a.Target == workspaceMountPath || b.Target == workspaceMountPath {
+		t.Fatal("a mission container still has a mount at the shared workspace root")
+	}
+}
+
+// TestMissionMountBindSource covers the bind-backed deployment (an
+// operator running a host bind instead of a named volume): the scoping
+// moves to the source path, since a bind has no Subpath option.
+func TestMissionMountBindSource(t *testing.T) {
+	mgr := &Manager{workspaceMount: mount.Mount{Type: mount.TypeBind, Source: "/srv/timothy/workspace", Target: workspaceMountPath}}
+	got, err := mgr.missionMount("/workspace/missions/coding/m1/wt", "m1")
+	if err != nil {
+		t.Fatalf("missionMount: %v", err)
+	}
+	if got.Source != "/srv/timothy/workspace/missions/coding/m1" {
+		t.Errorf("source = %q, want the mission's own host subdirectory", got.Source)
+	}
+	if got.VolumeOptions != nil {
+		t.Errorf("bind mount carries VolumeOptions = %+v, want nil", got.VolumeOptions)
+	}
+}
+
+// TestCreateContainerRejectsUnscopedWorkdir confirms a workdir that
+// resolves to no mission directory fails the create outright rather
+// than falling back to the shared workspace root (D-107).
+func TestCreateContainerRejectsUnscopedWorkdir(t *testing.T) {
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected docker call: %s %s", r.Method, r.URL.Path)
+	})
+	mgr := newTestManager(cli)
+	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+	_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", workspaceMountPath)
+	if !errors.Is(err, ErrWorkspaceScope) {
+		t.Fatalf("err = %v, want ErrWorkspaceScope", err)
 	}
 }

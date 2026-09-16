@@ -14,6 +14,38 @@ from fastapi.responses import JSONResponse
 app = FastAPI()
 model = WhisperModel(os.environ.get("WHISPER_MODEL", "small"), device="cpu", compute_type="int8")
 
+# Caps one uploaded clip. Matches brain's own transcribe route limit
+# (transcribeBodyLimit, internal/brain/api/transcribe.go) and the audio
+# attachment cap: dictation for one turn, not bulk transcription.
+MAX_BODY_BYTES = 25 * 1024 * 1024
+
+
+async def read_capped_body(request: Request) -> bytes:
+    """Reads the request body, refusing anything over MAX_BODY_BYTES.
+
+    Streams rather than awaiting request.body(): a declared
+    Content-Length is rejected before a single chunk is read, and an
+    undeclared (chunked) body stops at the first chunk that crosses the
+    cap instead of buffering the whole upload. Unbounded reads here let
+    one oversized clip OOM the sidecar.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > MAX_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="request body too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid content-length") from None
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 @app.get("/health")
 def health():
@@ -34,7 +66,7 @@ async def transcribe(request: Request, language: str | None = None):
     can mis-guess on short clips or languages the model handles less
     reliably.
     """
-    body = await request.body()
+    body = await read_capped_body(request)
     if not body:
         raise HTTPException(status_code=400, detail="empty request body")
 
