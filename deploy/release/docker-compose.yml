@@ -29,7 +29,11 @@ x-db-env: &db-env
 services:
   postgres:
     <<: *service
-    image: pgvector/pgvector:0.8.4-pg18-trixie
+    # Digest-pinned like searxng: the tag is mutable upstream, and this
+    # file is what operators deploy. Re-resolve with
+    # `docker buildx imagetools inspect <tag> --format '{{.Manifest.Digest}}'`
+    # when bumping the version.
+    image: pgvector/pgvector:0.8.4-pg18-trixie@sha256:dc8631aeee036a59d054c28d29ddb15536caa0c89a96f548fa944774a50af973
     environment:
       POSTGRES_USER: timothy
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}

@@ -55,6 +55,15 @@ command -v openssl >/dev/null 2>&1 || fail "openssl not found on PATH. Install i
 if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
   fail "neither curl nor wget found on PATH."
 fi
+# sha256sum on Linux, shasum -a 256 on macOS. Both print
+# "<hash>  <file>", so one verify path covers them.
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256() { sha256sum "$1"; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256() { shasum -a 256 "$1"; }
+else
+  fail "neither sha256sum nor shasum found on PATH; cannot verify release assets."
+fi
 
 # --- Install directory ---
 # Operate in the current directory when it already holds a Timothy
@@ -70,9 +79,26 @@ else
 fi
 
 # --- Download assets ---
+# Everything lands in a temp dir first and only moves into place once
+# it matches checksums.txt, so a tampered or truncated download can
+# never overwrite a working install.
 echo "Downloading release assets..."
-fetch "${BASE_URL}/docker-compose.yml" docker-compose.yml
-fetch "${BASE_URL}/env.example" env.example
+staging=$(mktemp -d)
+trap 'rm -rf "$staging"' EXIT
+
+fetch "${BASE_URL}/checksums.txt" "${staging}/checksums.txt"
+for asset in docker-compose.yml env.example; do
+  fetch "${BASE_URL}/${asset}" "${staging}/${asset}"
+  expected=$(awk -v f="$asset" '$2 == f { print $1 }' "${staging}/checksums.txt")
+  [ -n "$expected" ] || fail "${asset} is not listed in the release checksums."
+  actual=$(sha256 "${staging}/${asset}" | cut -d' ' -f1)
+  [ "$actual" = "$expected" ] \
+    || fail "checksum mismatch for ${asset} (expected ${expected}, got ${actual}). Refusing to install."
+done
+echo "Checksums verified."
+
+mv "${staging}/docker-compose.yml" docker-compose.yml
+mv "${staging}/env.example" env.example
 # searxng's settings are inlined in the compose file we just fetched, so
 # the ./searxng bind from older installs is dead: nothing reads it, but an
 # operator editing it would expect otherwise. Drop it on upgrade.
