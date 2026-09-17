@@ -56,6 +56,26 @@ function awsRegionFor(endpoint: string): string {
   return awsEndpoints.find((e) => e.endpoint === endpoint)?.region ?? ''
 }
 
+// tokenRefFor derives the token credential's ref name from the
+// connector name. Shared by the preview and the submit path so the name
+// shown is the name saved. Suffix without stuttering: a name already
+// ending in the flavor word ("github", "github-mcp") gets the bare
+// _PAT/_TOKEN suffix.
+function tokenRefFor(kind: string, refBase: string): string {
+  switch (kind) {
+    case 'github':
+      return refBase.endsWith('GITHUB') ? `${refBase}_PAT` : `${refBase}_GITHUB_PAT`
+    case 'bitbucket':
+      return refBase.endsWith('BITBUCKET') ? `${refBase}_TOKEN` : `${refBase}_BITBUCKET_TOKEN`
+    case 'imap':
+      return `${refBase}_IMAP_PASSWORD`
+    case 'caldav':
+      return `${refBase}_CALDAV_PASSWORD`
+    default:
+      return refBase.endsWith('_MCP') ? `${refBase}_TOKEN` : `${refBase}_MCP_TOKEN`
+  }
+}
+
 // ConnectorAdd is preset-aware and its own page: MCP and github presets
 // are created, tested, and enabled in one go with Add gated on a
 // passing test (same contract as adding a provider); Google presets
@@ -142,6 +162,7 @@ export function ConnectorAdd() {
   const isMicrosoft = preset.kind === 'microsoft'
   const isOAuth = isGoogle || isMicrosoft
   const isGitHub = preset.kind === 'github'
+  const isBitbucket = preset.kind === 'bitbucket'
   const isImap = preset.kind === 'imap'
   const isCalDAV = preset.kind === 'caldav'
   const isAWS = preset.kind === 'aws'
@@ -167,7 +188,7 @@ export function ConnectorAdd() {
       toast.error('Name required', { description: 'Give this connector a unique name before testing.' })
       return
     }
-    if (!isGitHub && !isImap && !isCalDAV && !isGCP && !endpoint.trim()) {
+    if (!isGitHub && !isBitbucket && !isImap && !isCalDAV && !isGCP && !endpoint.trim()) {
       toast.error('Endpoint required', { description: 'An MCP endpoint is required to test this connector.' })
       return
     }
@@ -205,6 +226,10 @@ export function ConnectorAdd() {
       toast.error('Token required', { description: 'A personal access token is required to test this connector.' })
       return
     }
+    if (isBitbucket && !usingExistingToken && !token.trim()) {
+      toast.error('Token required', { description: 'An access token is required to test this connector.' })
+      return
+    }
     if (isImap && !usingExistingToken && !imapPassword.trim()) {
       toast.error('Password required', { description: 'A password is required to test this connector.' })
       return
@@ -220,25 +245,13 @@ export function ConnectorAdd() {
     setBusy(true)
     setTest(null)
     try {
-      // Suffix without stuttering: a name already ending in the flavor
-      // word ("github", "github-mcp") gets the bare _PAT/_TOKEN suffix.
       const tokenRef = usingExistingToken
         ? existingTokenRef
-        : isGitHub
-          ? refBase.endsWith('GITHUB')
-            ? `${refBase}_PAT`
-            : `${refBase}_GITHUB_PAT`
-          : isImap
-            ? `${refBase}_IMAP_PASSWORD`
-            : isCalDAV
-              ? `${refBase}_CALDAV_PASSWORD`
-              : isAWS
-                ? awsRef
-                : isGCP
-                  ? gcpRef
-                  : refBase.endsWith('_MCP')
-                ? `${refBase}_TOKEN`
-                : `${refBase}_MCP_TOKEN`
+        : isAWS
+          ? awsRef
+          : isGCP
+            ? gcpRef
+            : tokenRefFor(preset.kind, refBase)
       const secretValue = isImap
         ? imapPassword
         : isCalDAV
@@ -250,8 +263,8 @@ export function ConnectorAdd() {
               : token
       if (!usingExistingToken && secretValue) await setSecret(tokenRef, secretValue.trim())
       const id = await createConnector(
-        isGitHub
-          ? { name: slug, kind: 'github', config: {}, credential_ref: tokenRef, enabled: false }
+        isGitHub || isBitbucket
+          ? { name: slug, kind: preset.kind, config: {}, credential_ref: tokenRef, enabled: false }
           : isImap
             ? {
                 name: slug,
@@ -320,7 +333,7 @@ export function ConnectorAdd() {
     try {
       await patchConnector(createdID, { enabled: true })
       toast.success('Connector added', {
-        description: isGitHub
+        description: isGitHub || isBitbucket
           ? `${slug} is connected; its identity is ready for mission use.`
           : `${slug} is connected and tools are servable.`,
       })
@@ -363,7 +376,7 @@ export function ConnectorAdd() {
 
   const canTest =
     slug !== '' &&
-    (isGitHub
+    (isGitHub || isBitbucket
       ? usingExistingToken
         ? existingTokenRef !== ''
         : token.trim() !== ''
@@ -544,7 +557,7 @@ export function ConnectorAdd() {
                   </Field>
                 </>
               )}
-              {!isGitHub && !isImap && !isCalDAV && !isAWS && !isGCP && (
+              {!isGitHub && !isBitbucket && !isImap && !isCalDAV && !isAWS && !isGCP && (
                 <Field
                   label="Endpoint"
                   description={preset.endpointHint}
@@ -737,11 +750,13 @@ export function ConnectorAdd() {
                 label={
                   isGitHub
                     ? 'Personal access token'
-                    : isImap || isCalDAV
-                      ? 'Password'
-                      : preset.id === 'custom-mcp'
-                        ? 'Bearer token (optional)'
-                        : 'Bearer token'
+                    : isBitbucket
+                      ? 'Access token'
+                      : isImap || isCalDAV
+                        ? 'Password'
+                        : preset.id === 'custom-mcp'
+                          ? 'Bearer token (optional)'
+                          : 'Bearer token'
                 }
                 mode={tokenCredMode}
                 onModeChange={(m) => {
@@ -762,7 +777,7 @@ export function ConnectorAdd() {
                 }}
                 secretPlaceholder={isImap || isCalDAV ? 'password' : (preset.tokenPlaceholder ?? 'token')}
                 defaultBackend={defaultBackend}
-                refName={isGitHub ? `${refBase}_GITHUB_PAT` : isImap ? `${refBase}_IMAP_PASSWORD` : isCalDAV ? `${refBase}_CALDAV_PASSWORD` : `${refBase}_MCP_TOKEN`}
+                refName={tokenRefFor(preset.kind, refBase)}
               />
               )}
               {!isImap && !isCalDAV && !isAWS && !isGCP && tokenCredMode === 'new' && (

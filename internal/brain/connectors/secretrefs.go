@@ -25,6 +25,7 @@ var baseCredentialRole = map[string]string{
 	"caldav":    "credential",
 	"aws":       "credential",
 	"gcp":       "credential",
+	"bitbucket": "credential",
 }
 
 // extraSecretRefs maps a kind to the secret refs it resolves beyond its
