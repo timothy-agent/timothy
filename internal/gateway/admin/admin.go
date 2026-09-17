@@ -405,7 +405,7 @@ func (a *Admin) PatchBudget(ctx context.Context, patch map[string]*ledger.Budget
 // Provider is the API shape of one providers row. credential_ref is a
 // NAME (env var / Vault path / AWS profile) — secret values are never
 // stored or returned anywhere in this system. Headers is the one
-// exception on the storage side (D-108): header-authenticated
+// exception on the storage side (D-111): header-authenticated
 // providers keep their Authorization/x-api-key values there, so List
 // blanks every header value to redactedHeaderValue before it leaves
 // this package, and Patch treats that placeholder as "keep the stored
@@ -617,7 +617,7 @@ func validateOpenAIResponses(opts map[string]string) error {
 }
 
 // List returns every provider row, config order by name. Header values
-// come back redacted (D-108): List only feeds the admin API, and the
+// come back redacted (D-111): List only feeds the admin API, and the
 // UI never edits headers, so nothing downstream needs the real value.
 func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 	db, err := a.db.Get()
@@ -1674,7 +1674,7 @@ func redactAuditValue(v any) any {
 }
 
 // redactedHeaderValue stands in for every header value on the API
-// read path (D-108). Patch recognises it as "keep what is stored".
+// read path (D-111). Patch recognises it as "keep what is stored".
 const redactedHeaderValue = "[redacted]"
 
 // redactHeaders returns p with every header value replaced by
