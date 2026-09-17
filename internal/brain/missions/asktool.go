@@ -104,7 +104,8 @@ type askUserParker interface {
 // kbSearchTool); parker records the durable park.
 func AskUserTool(missionID string, phase Phase, asksUsed int, budget int, parker askUserParker) *tools.Tool {
 	return &tools.Tool{
-		Name: askUserToolName,
+		Name:        askUserToolName,
+		Trusted:     true,
 		Description: fmt.Sprintf("Ask the operator one structured question when a genuinely blocking ambiguity needs a human decision, not for anything you can reasonably assume and declare instead. Ends your turn; the mission parks until answered or the timeout applies your proposed_default. Budget: %d per mission (%d used so far).", budget, asksUsed),
 		InputSchema: json.RawMessage(`{
 			"type": "object",

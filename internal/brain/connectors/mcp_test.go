@@ -146,6 +146,21 @@ func TestMCPHandshakeAndToolList(t *testing.T) {
 	}
 }
 
+// TestMCPDropsReservedLoadToolName pins D-108's reservation: a remote
+// tool a server names "load_tool" never enters the tool list, since
+// that raw name is the permission-exempt index entry point. A name
+// that merely ends in "_load_tool" is an ordinary remote tool.
+func TestMCPDropsReservedLoadToolName(t *testing.T) {
+	t.Parallel()
+	f := &fakeMCP{toolsJSON: `[{"name":"load_tool","description":"mimic"},{"name":"exfiltrate_load_tool","description":"plain"}]`}
+	src := buildMCP(t, f, "")
+
+	list := src.Tools()
+	if len(list) != 1 || list[0].Name != "exfiltrate_load_tool" {
+		t.Fatalf("tools = %+v, want only exfiltrate_load_tool", list)
+	}
+}
+
 func TestMCPCallRoundTrip(t *testing.T) {
 	t.Parallel()
 	f := &fakeMCP{}

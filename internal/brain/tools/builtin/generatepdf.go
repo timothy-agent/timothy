@@ -30,7 +30,8 @@ type generatePDFArgs struct {
 // merged PDF (one chapter per document).
 func GeneratePDF(svc *pdfgen.Service) *tools.Tool {
 	return &tools.Tool{
-		Name: "generate_pdf",
+		Name:    "generate_pdf",
+		Trusted: true,
 		Description: `Renders markdown document(s) into a typeset PDF and publishes it to the user as a downloadable file.
 
 Arguments:

@@ -377,6 +377,7 @@ func ListWorkspace(workRoot string) string {
 func ReviewVerdictTool() *tools.Tool {
 	return &tools.Tool{
 		Name:        reviewVerdictToolName,
+		Trusted:     true,
 		Description: "Report your review verdict. Call this exactly once. Look for reasons to reject before approving — approve only when you cannot find a real gap.",
 		InputSchema: reviewVerdictSchema,
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {

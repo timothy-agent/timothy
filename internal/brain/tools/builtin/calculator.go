@@ -17,7 +17,8 @@ type calculateArgs struct {
 
 func Calculator() *tools.Tool {
 	return &tools.Tool{
-		Name: "calculate",
+		Name:    "calculate",
+		Trusted: true,
 		Description: `Evaluates an arithmetic expression exactly.
 
 Use for any arithmetic the answer depends on — never compute numbers
