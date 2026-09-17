@@ -324,6 +324,128 @@ func redactAuditValue(v any) any {
 	return c
 }
 
+// RedactedHeaderValue is what a config.headers value reads back as
+// through the API, and what a write carrying it means: "keep whatever
+// is stored". Same placeholder redactStrings uses, so an operator sees
+// one convention.
+const RedactedHeaderValue = "[redacted]"
+
+// RedactConfigHeaders blanks every config.headers value in c and
+// returns the result. D-115: mcp (and the aws kind built on it) puts
+// Authorization and x-api-key values in config.headers, which is a
+// plaintext jsonb column, so the admin list endpoint was handing them
+// back to any API client. Only header VALUES go: header names, and the
+// rest of the config (endpoint, scopes, ...), are what the settings
+// form needs to render. Never mutates c's stored Config.
+//
+// The placeholder round-trips: RestoreConfigHeaders puts the stored
+// value back on the way in, so an operator who edits an unrelated field
+// and saves the form does not overwrite a header with the literal
+// placeholder string.
+func RedactConfigHeaders(c Connector) Connector {
+	headers, rest, ok := splitConfigHeaders(c.Config)
+	if !ok {
+		return c
+	}
+	for k := range headers {
+		headers[k] = RedactedHeaderValue
+	}
+	c.Config = joinConfigHeaders(rest, headers, c.Config)
+	return c
+}
+
+// HasRedactedHeader reports whether raw carries the placeholder as a
+// config.headers value. Callers with nothing stored to restore from (a
+// create, or a patch adding a header that did not exist) reject such a
+// write rather than store the placeholder as a real header.
+func HasRedactedHeader(raw json.RawMessage) bool {
+	headers, _, ok := splitConfigHeaders(raw)
+	if !ok {
+		return false
+	}
+	for _, v := range headers {
+		if v == RedactedHeaderValue {
+			return true
+		}
+	}
+	return false
+}
+
+// RestoreConfigHeaders replaces every placeholder header value in next
+// with the one already stored in current, and returns the result. A
+// header the write gives a real value to is taken as written, and one
+// the write drops entirely stays dropped: the placeholder only ever
+// means "unchanged", never "undeletable". A placeholder on a header
+// current does not have is left in place for the caller to reject via
+// HasRedactedHeader: there is nothing it could mean.
+func RestoreConfigHeaders(next json.RawMessage, current Connector) json.RawMessage {
+	headers, rest, ok := splitConfigHeaders(next)
+	if !ok {
+		return next
+	}
+	stored, _, ok := splitConfigHeaders(current.Config)
+	if !ok {
+		return next
+	}
+	changed := false
+	for k, v := range headers {
+		if v != RedactedHeaderValue {
+			continue
+		}
+		if old, exists := stored[k]; exists {
+			headers[k] = old
+			changed = true
+		}
+	}
+	if !changed {
+		return next
+	}
+	return joinConfigHeaders(rest, headers, next)
+}
+
+// splitConfigHeaders decodes raw into its headers map (string values
+// only) and everything else. ok is false when raw is not a JSON object
+// or carries no headers object, which is every kind but mcp/aws and
+// leaves the config untouched either way.
+func splitConfigHeaders(raw json.RawMessage) (headers map[string]string, rest map[string]any, ok bool) {
+	if len(raw) == 0 {
+		return nil, nil, false
+	}
+	if err := json.Unmarshal(raw, &rest); err != nil {
+		return nil, nil, false
+	}
+	if _, present := rest["headers"]; !present {
+		return nil, nil, false
+	}
+	// Re-decode just headers as string values: a non-string leaf in
+	// there is not a header Timothy would ever send, and re-encoding it
+	// through a map[string]string would silently drop it.
+	var typed struct {
+		Headers map[string]string `json:"headers"`
+	}
+	if err := json.Unmarshal(raw, &typed); err != nil || typed.Headers == nil {
+		return nil, nil, false
+	}
+	delete(rest, "headers")
+	return typed.Headers, rest, true
+}
+
+// joinConfigHeaders re-encodes rest plus headers. A marshal failure
+// falls back to fallback, which is always the caller's original config:
+// failing closed here would mean serving or storing a config that lost
+// fields.
+func joinConfigHeaders(rest map[string]any, headers map[string]string, fallback json.RawMessage) json.RawMessage {
+	if rest == nil {
+		rest = map[string]any{}
+	}
+	rest["headers"] = headers
+	out, err := json.Marshal(rest)
+	if err != nil {
+		return fallback
+	}
+	return out
+}
+
 // redactStrings walks a decoded JSON value, replacing every string leaf
 // with "[redacted]" and recursing into objects/arrays unchanged.
 func redactStrings(v any) any {

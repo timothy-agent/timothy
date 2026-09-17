@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"sync"
@@ -142,6 +143,76 @@ func (s *Store) resealDB(ctx context.Context, refName, value string, old secretR
 		return fmt.Errorf("secretstore: reseal %s: %w", refName, err)
 	}
 	return nil
+}
+
+// ResealLegacy walks every db-backed row and forces the ones still in
+// the pre-D-105 format through openDB, whose re-seal rewrites them with
+// ref_name bound as additional data. Returns how many rows it resealed.
+//
+// D-114: openDB's re-seal is read-triggered, so a rarely-resolved
+// secret can sit in the legacy format indefinitely. That format is the
+// exploitable one: a nil-AAD ciphertext opens under ANY ref_name, so
+// someone with database write access could copy a forgotten row's
+// ciphertext and nonce onto a higher-value ref and have it resolve. One
+// sweep at startup closes the window instead of waiting for a read that
+// may never come. openLegacy stays for now: removing it needs
+// confidence this sweep has run everywhere first.
+//
+// A row that opens in neither format is logged by name and skipped, not
+// returned as an error: it is unresolvable already (wrong master key,
+// corruption), and one such row must not stop the rest from migrating.
+func (s *Store) ResealLegacy(ctx context.Context, log *slog.Logger) (int, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return 0, fmt.Errorf("secretstore: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT ref_name, ciphertext, nonce FROM secrets WHERE backend = 'db' ORDER BY ref_name`)
+	if err != nil {
+		return 0, fmt.Errorf("secretstore: reseal sweep: %w", err)
+	}
+	type candidate struct {
+		refName string
+		row     secretRow
+	}
+	var legacy []candidate
+	for rows.Next() {
+		var c candidate
+		c.row.backend = "db"
+		if err := rows.Scan(&c.refName, &c.row.ciphertext, &c.row.nonce); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("secretstore: reseal sweep: %w", err)
+		}
+		// Already in the D-105 format: nothing to do, and no plaintext
+		// is held past this check.
+		if _, err := s.cipher.open(c.refName, c.row.ciphertext, c.row.nonce); err == nil {
+			continue
+		}
+		legacy = append(legacy, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("secretstore: reseal sweep: %w", err)
+	}
+
+	resealed := 0
+	for _, c := range legacy {
+		value, err := s.cipher.openLegacy(c.row.ciphertext, c.row.nonce)
+		if err != nil {
+			// Never the error, which carries decrypt detail, and never
+			// the value.
+			log.Warn("secret could not be resealed; it does not decrypt in either format", "ref_name", c.refName)
+			continue
+		}
+		// Same guarded UPDATE the read path uses: a concurrent Set,
+		// Migrate, or reader re-seal wins, which is harmless because the
+		// row is then already in the new format.
+		if err := s.resealDB(ctx, c.refName, value, c.row); err != nil {
+			log.Warn("secret reseal failed; the read path will retry", "ref_name", c.refName, "error", err)
+			continue
+		}
+		resealed++
+	}
+	return resealed, nil
 }
 
 // Status reports whether refName is configured and through which
