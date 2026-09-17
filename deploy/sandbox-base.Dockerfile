@@ -50,15 +50,31 @@ RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @openai/codex@0.147.0
 RUN NPM_CONFIG_PREFIX=/usr/local npm install -g opencode-ai@1.18.18
 
 # Headless Cursor CLI, same rationale as claude/pi/codex/opencode
-# above. No npm package exists; the official installer is the only
-# distribution channel, so the version floats with whatever it ships
-# (fixtures recorded at 2026.08.11, see
-# internal/brain/missions/executor/testdata/cursor-2026.08.11). It
-# installs under $HOME, so give it a world-readable home and link the
-# launcher onto PATH for uid 65534.
-RUN mkdir -p /opt/cursor \
-    && HOME=/opt/cursor bash -c 'curl -fsSL https://cursor.com/install | bash' \
-    && ln -s /opt/cursor/.local/bin/cursor-agent /usr/local/bin/cursor-agent \
+# above. No npm package exists; the official installer
+# (https://cursor.com/install) downloads this same per-arch tarball
+# from a version-keyed URL, so pin that URL and checksum it here
+# instead of piping the installer to bash. The 2026.08.11 build the
+# fixtures in internal/brain/missions/executor/testdata/cursor-2026.08.11
+# were recorded against is not fetchable (the URL needs a commit suffix
+# the fixtures never captured), so this pins the current stable. To
+# bump: read the version off the installer script, refresh both
+# checksums, re-record fixtures if the wire format moved.
+ARG TARGETARCH
+ARG CURSOR_VERSION=2026.09.15-d2fe57e
+# Per-arch tarball checksums (release builds are multi-arch).
+ARG CURSOR_SHA256_AMD64=4b7b026dd104e935b216cc52f905a560d741fc80a4a4d62ef655735b96a15c97
+ARG CURSOR_SHA256_ARM64=2d741c12c3ee7a505584579efb28a0ee31ff13fefc1f347e2d3b43688c04620d
+RUN case "${TARGETARCH}" in \
+      arm64) arch=arm64; sha="${CURSOR_SHA256_ARM64}" ;; \
+      *) arch=x64; sha="${CURSOR_SHA256_AMD64}" ;; \
+    esac \
+    && curl -sSL -o /tmp/cursor-agent.tar.gz \
+      "https://downloads.cursor.com/lab/${CURSOR_VERSION}/linux/${arch}/agent-cli-package.tar.gz" \
+    && echo "${sha}  /tmp/cursor-agent.tar.gz" | sha256sum -c - \
+    && mkdir -p /opt/cursor \
+    && tar --strip-components=1 -xzf /tmp/cursor-agent.tar.gz -C /opt/cursor \
+    && rm /tmp/cursor-agent.tar.gz \
+    && ln -s /opt/cursor/cursor-agent /usr/local/bin/cursor-agent \
     && chmod -R a+rX /opt/cursor \
     && cursor-agent --version
 
