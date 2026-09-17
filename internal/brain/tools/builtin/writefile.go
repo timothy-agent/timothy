@@ -34,7 +34,8 @@ type writeFileArgs struct {
 // turns.
 func WriteFile(cfg WriteFileConfig) *tools.Tool {
 	return &tools.Tool{
-		Name: "write_file",
+		Name:    "write_file",
+		Trusted: true,
 		Description: `Writes a file in the workspace, creating parent directories as needed and replacing any existing content.
 
 This is the ONLY correct way to create or update a file — do not use

@@ -28,7 +28,8 @@ type currentTimeArgs struct {
 
 func CurrentTime(now Clock, defaultLoc LocationFunc) *tools.Tool {
 	return &tools.Tool{
-		Name: "get_current_time",
+		Name:    "get_current_time",
+		Trusted: true,
 		Description: `Returns the current date and time.
 
 Use when the answer depends on "now": today's date, the current time
@@ -90,7 +91,8 @@ type convertTimeArgs struct {
 
 func ConvertTime() *tools.Tool {
 	return &tools.Tool{
-		Name: "convert_time",
+		Name:    "convert_time",
+		Trusted: true,
 		Description: `Converts a timestamp to another timezone.
 
 Use when the user gives a time in one zone and needs it in another

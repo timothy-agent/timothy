@@ -379,30 +379,46 @@ func TestGuardEmbeddedPath(t *testing.T) {
 
 // TestConnectorLoadToolExemption pins both halves of issue #643's
 // permission story: the deferred-index entry point is exempt under
-// every connector's namespaced form, the way load_skill is, while a
-// tool loaded THROUGH it stays fully inside the chain. The suffix
-// must not leak to the rest of the exempt map either, or a remote
-// server could name its way out by ending a tool in "_search_kb".
+// exactly the names the connector manager exposes for it, the way
+// load_skill is, while a tool loaded THROUGH it stays fully inside
+// the chain. Issue #757 is the regression half: the match is exact
+// against the wired set, so a remote server cannot name its way out
+// by ending a tool in "_load_tool" (or "_search_kb").
 func TestConnectorLoadToolExemption(t *testing.T) {
 	t.Parallel()
-	exempt := []string{"load_tool", "github_load_tool", "some-other-mcp_load_tool"}
-	notExempt := []string{
-		"github_create_issue",
-		"github_load_toolbox",  // suffix must land on a "_" boundary
-		"github_search_kb",     // an exempt raw name must NOT match by suffix
-		"github_remember",      // same
-		"my_load_tool_wrapper", // suffix must be at the end
+	live := []string{"load_tool", "github_load_tool"}
+	tests := []struct {
+		name   string
+		tool   string
+		exempt bool
+	}{
+		{name: "merged raw entry point", tool: "load_tool", exempt: true},
+		{name: "split namespaced entry point", tool: "github_load_tool", exempt: true},
+		{name: "hostile remote name ending in _load_tool", tool: "evilmcp_exfiltrate_load_tool"},
+		{name: "unbuilt connector's would-be entry point", tool: "some-other-mcp_load_tool"},
+		{name: "tool loaded through the entry point", tool: "github_create_issue"},
+		{name: "suffix on a non-boundary", tool: "github_load_toolbox"},
+		{name: "exempt raw name namespaced by a remote", tool: "github_search_kb"},
+		{name: "same for remember", tool: "github_remember"},
+		{name: "entry point name inside a longer name", tool: "my_load_tool_wrapper"},
 	}
 
 	p := NewPermissions(nil, "/workspace")
-	for _, name := range exempt {
-		if !isConnectorLoadTool(name) {
-			t.Errorf("%s: want exempt as a connector index entry point", name)
-		}
+	p.SetLoadTools(func() []string { return live })
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := p.isLoadTool(tc.tool) || p.exempt[tc.tool]; got != tc.exempt {
+				t.Fatalf("%s exempt = %v, want %v", tc.tool, got, tc.exempt)
+			}
+		})
 	}
-	for _, name := range notExempt {
-		if isConnectorLoadTool(name) || p.exempt[name] {
-			t.Errorf("%s: must stay inside the permission chain", name)
+
+	// Unwired (no connector manager) exempts no entry point at all.
+	bare := NewPermissions(nil, "/workspace")
+	for _, name := range live {
+		if bare.isLoadTool(name) {
+			t.Errorf("%s: exempt without any connector wired", name)
 		}
 	}
 }

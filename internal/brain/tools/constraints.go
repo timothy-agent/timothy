@@ -118,6 +118,13 @@ func (c *Constrained) Execute(ctx context.Context, name string, args json.RawMes
 	return tool.Execute(ctx, args)
 }
 
+// Trusted reports the registered tool's Trusted mark; an unknown name
+// is untrusted.
+func (c *Constrained) Trusted(name string) bool {
+	tool, ok := c.reg.Get(name)
+	return ok && tool.Trusted
+}
+
 // outcomeFor labels a tool call's result for the tool_calls_total
 // counter: "ok" on success, "violation" for model-correctable feedback
 // (bad arguments, unknown tool), "error" for everything else — an
