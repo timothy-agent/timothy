@@ -34,8 +34,8 @@ jobs:
       sandbox: ${{ steps.filter.outputs.sandbox }}
       deploy: ${{ steps.filter.outputs.deploy }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         id: filter
         with:
           filters: |
@@ -66,8 +66,8 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: Build
@@ -77,7 +77,7 @@ jobs:
       - name: Test
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
       - name: Upload coverage
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out
@@ -109,8 +109,8 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: Integration test
@@ -126,11 +126,11 @@ jobs:
     if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.12.2
 
@@ -142,8 +142,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24.18.0
           cache: npm
@@ -163,7 +163,7 @@ jobs:
         continue-on-error: true
         run: npx vitest run --coverage.enabled --coverage.reporter=lcov --testTimeout=20000
       - name: Upload coverage
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: web/coverage/lcov.info
@@ -184,7 +184,7 @@ jobs:
       matrix:
         service: [brain, gateway, memoryd, sandboxd, web]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
       - name: Build image
         if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
@@ -198,7 +198,7 @@ jobs:
           fi
       - name: Scan image
         if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: timothy-${{ matrix.service }}:ci
           severity: CRITICAL,HIGH
@@ -222,7 +222,7 @@ jobs:
     if: needs.changes.outputs.sandbox == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build base image
         run: docker build -f deploy/sandbox-base.Dockerfile -t timothy-sandbox-base:ci .
       - name: Build variant images
@@ -233,7 +233,7 @@ jobs:
               -t timothy-sandbox-$lang:ci .
           done
       - name: Scan base image (informational only)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: timothy-sandbox-base:ci
           severity: CRITICAL,HIGH
@@ -254,7 +254,7 @@ jobs:
       POSTGRES_PASSWORD: x
       TIMOTHY_VERSION: x
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Validate compose files
         run: |
           for f in deploy/docker-compose.yml deploy/release/docker-compose.yml; do
