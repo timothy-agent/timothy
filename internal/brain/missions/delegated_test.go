@@ -1023,10 +1023,10 @@ func TestDelegatedRunWorker_AuthFailure_ReturnsErrExecutorAuth(t *testing.T) {
 }
 
 // testSecret is a resolved credential a scrub test plants in CLI output;
-// it must never reach a persisted event or a returned error (D-108).
+// it must never reach a persisted event or a returned error (D-110).
 const testSecret = "sk-ant-api03-TESTSECRET-do-not-persist" //nolint:gosec // G101: planted test value, not a credential.
 
-// TestDelegatedRunWorker_StderrTail_ScrubsSecret (D-108, issue #761):
+// TestDelegatedRunWorker_StderrTail_ScrubsSecret (D-110, issue #761):
 // every transport-death branch persists the stderr tail into
 // executor.died, and the auth branch also returns it in the error. A
 // key the CLI echoed must be "***" in both, and classification must
@@ -1089,7 +1089,7 @@ func TestDelegatedRunWorker_StderrTail_ScrubsSecret(t *testing.T) {
 	}
 }
 
-// TestDelegatedRunWorker_ResultError_ScrubsSecret (D-108): a result
+// TestDelegatedRunWorker_ResultError_ScrubsSecret (D-110): a result
 // event whose error text echoes the key reaches finishCommon's
 // ErrExecutorAuth without it.
 func TestDelegatedRunWorker_ResultError_ScrubsSecret(t *testing.T) {
@@ -1123,7 +1123,7 @@ func TestDelegatedRunWorker_ResultError_ScrubsSecret(t *testing.T) {
 	}
 }
 
-// TestScrubSecret pins the helper (D-108): the key goes, the phrases
+// TestScrubSecret pins the helper (D-110): the key goes, the phrases
 // the classifiers key on stay, and an empty secret is a no-op rather
 // than a "***" between every byte.
 func TestScrubSecret(t *testing.T) {

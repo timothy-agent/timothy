@@ -841,7 +841,7 @@ type cliRun struct {
 	steer bool
 	// secret is the resolved credential the CLI got in its env, kept
 	// only so scrubSecret can strip it from persisted diagnostics
-	// (D-108). Empty in subscription mode.
+	// (D-110). Empty in subscription mode.
 	secret string
 }
 
@@ -1029,7 +1029,7 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 
 	// The resumed CLI still holds the credential the prior lifetime
 	// resolved from this same ref; it is resolved again only so its
-	// diagnostics can be scrubbed (D-108). A failure here leaves
+	// diagnostics can be scrubbed (D-110). A failure here leaves
 	// nothing to scrub and is not an auth verdict: the run in flight
 	// reports that itself.
 	_, secret, _ := r.resolveCredential(ctx, entry.CredentialRef, adapter.Capabilities())
@@ -1575,7 +1575,7 @@ func parseWorktreeLine(fields string) (*WorktreeSummary, bool) {
 // st.carry until the next chunk completes them — mid-line chunk splits
 // must never be fed to the parser as a partial line. secret is the
 // run's credential, scrubbed from the result event's error text
-// (D-108) before finish/finishCommon persist or return it.
+// (D-110) before finish/finishCommon persist or return it.
 func (r *delegatedRunner) feedLines(ctx context.Context, parser executor.StreamParser, chunk []byte, st *pollState, missionID, phase, runID, secret string) {
 	data := append(st.carry, chunk...)
 	st.carry = nil
@@ -1731,7 +1731,7 @@ func (r *delegatedRunner) finishCommon(ctx context.Context, m Mission, run cliRu
 // tail only on this path (exit != 0, no result) to check for
 // auth-failure signatures.
 func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, run cliRun, workRoot, rdir string, st *pollState, start time.Time, exitCode int) (string, error) {
-	// Scrubbed before classification (D-108): every branch below
+	// Scrubbed before classification (D-110): every branch below
 	// persists the tail, and the signatures are phrases, never the key.
 	stderrTail := scrubSecret(r.readStderrTail(ctx, m.ID, m.Environment, workRoot, rdir), run.secret)
 	reason := fmt.Sprintf("executor exited (code %d) without a result event", exitCode)
@@ -1790,7 +1790,7 @@ func (r *delegatedRunner) readStderrTail(ctx context.Context, missionID, environ
 }
 
 // scrubSecret replaces every occurrence of secret in text with "***"
-// (D-108, issue #761), the same idiom push.go and worktree.go apply to
+// (D-110, issue #761), the same idiom push.go and worktree.go apply to
 // the git token. The CLI holds the credential in its environment, and
 // the run most likely to echo it in a diagnostic is the one whose key
 // was just rejected; stderr tails and result errors then land in
