@@ -216,19 +216,21 @@ function ConnectorEditForm({
       const suffix =
         connector.kind === 'github'
           ? '_GITHUB_PAT'
-          : connector.kind === 'imap'
-            ? '_IMAP_PASSWORD'
-            : connector.kind === 'caldav'
-              ? '_CALDAV_PASSWORD'
-              : isAWS
-                ? base.endsWith('AWS')
-                  ? '_KEYS'
-                  : '_AWS_KEYS'
-                : isGCP
-                  ? base.endsWith('GCP')
-                    ? '_KEY'
-                    : '_GCP_KEY'
-                  : '_MCP_TOKEN'
+          : connector.kind === 'bitbucket'
+            ? '_BITBUCKET_TOKEN'
+            : connector.kind === 'imap'
+              ? '_IMAP_PASSWORD'
+              : connector.kind === 'caldav'
+                ? '_CALDAV_PASSWORD'
+                : isAWS
+                  ? base.endsWith('AWS')
+                    ? '_KEYS'
+                    : '_AWS_KEYS'
+                  : isGCP
+                    ? base.endsWith('GCP')
+                      ? '_KEY'
+                      : '_GCP_KEY'
+                    : '_MCP_TOKEN'
       const ref = connector.credential_ref || `${base}${suffix}`
       await setSecret(
         ref,
@@ -525,6 +527,9 @@ function ConnectorEditForm({
             {test && !test.ok && connector.kind === 'github' && (
               <p className="text-sm text-muted-foreground">Paste a new personal access token below to replace it.</p>
             )}
+            {test && !test.ok && connector.kind === 'bitbucket' && (
+              <p className="text-sm text-muted-foreground">Paste a new access token below to replace it.</p>
+            )}
 
             {isOAuth ? (
               <div className="space-y-3">
@@ -538,7 +543,7 @@ function ConnectorEditForm({
             ) : (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  {connector.kind === 'github' ? (
+                  {connector.kind === 'github' || connector.kind === 'bitbucket' ? (
                     'Identity for mission clone/push/PR use, plus read-only pull request tools.'
                   ) : connector.kind === 'imap' ? (
                     <>
@@ -614,9 +619,11 @@ function ConnectorEditForm({
                     label={
                       connector.kind === 'github'
                         ? 'Rotate personal access token'
-                        : connector.kind === 'imap' || connector.kind === 'caldav'
-                          ? 'Rotate password'
-                          : 'Rotate bearer token'
+                        : connector.kind === 'bitbucket'
+                          ? 'Rotate access token'
+                          : connector.kind === 'imap' || connector.kind === 'caldav'
+                            ? 'Rotate password'
+                            : 'Rotate bearer token'
                     }
                     required={false}
                   >

@@ -72,7 +72,7 @@ describe('Connectors tab', () => {
     expect(screen.getByText('calendar')).toBeTruthy()
     // AddPresetTile's accessible name is the title alone (description
     // reachable via aria-describedby), per contract.
-    for (const name of ['Gmail', 'Google Calendar', 'Google Drive', 'Google Docs', 'GitHub MCP', 'GitHub']) {
+    for (const name of ['Gmail', 'Google Calendar', 'Google Drive', 'Google Docs', 'GitHub MCP', 'GitHub', 'Bitbucket']) {
       expect(screen.getByRole('link', { name })).toBeTruthy()
     }
   })
@@ -567,6 +567,72 @@ describe('ConnectorEdit rotate token and copy key', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') !== 'submit')!)
 
     await waitFor(() => expect(setSecret).toHaveBeenCalledWith('MY_CAL_CALDAV_PASSWORD', 'new-pass'))
+  })
+
+  it('rotates a bitbucket access token via the existing credential_ref, under its own label', async () => {
+    const bitbucketConnector: AdminConnector = {
+      id: 'bb1',
+      name: 'work-bb',
+      kind: 'bitbucket',
+      config: {},
+      credential_ref: 'WORK_BB_BITBUCKET_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([bitbucketConnector])
+    vi.mocked(setSecret).mockResolvedValue()
+    renderTab(`/settings/connectors/${bitbucketConnector.id}`)
+
+    expect(await screen.findByText('Rotate access token')).toBeTruthy()
+    expect(screen.getByText(/Identity for mission clone\/push\/PR use, plus read-only pull request tools/)).toBeTruthy()
+    expect(screen.queryByText('Sign commits')).toBeNull()
+    fireEvent.change(screen.getByPlaceholderText('paste new token'), { target: { value: 'bb-new' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') !== 'submit')!)
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('WORK_BB_BITBUCKET_TOKEN', 'bb-new'))
+    expect(patchConnector).not.toHaveBeenCalled()
+  })
+
+  it('mints a _BITBUCKET_TOKEN credential_ref for a bitbucket connector that has none', async () => {
+    const bitbucketConnector: AdminConnector = {
+      id: 'bb2',
+      name: 'work-bb',
+      kind: 'bitbucket',
+      config: {},
+      credential_ref: '',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([bitbucketConnector])
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${bitbucketConnector.id}`)
+
+    fireEvent.change(await screen.findByPlaceholderText('paste new token'), { target: { value: 'bb-new' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') !== 'submit')!)
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('WORK_BB_BITBUCKET_TOKEN', 'bb-new'))
+    expect(patchConnector).toHaveBeenCalledWith('bb2', { credential_ref: 'WORK_BB_BITBUCKET_TOKEN' })
+  })
+
+  it('offers an access-token replacement hint after a failed bitbucket test', async () => {
+    const bitbucketConnector: AdminConnector = {
+      id: 'bb3',
+      name: 'work-bb',
+      kind: 'bitbucket',
+      config: {},
+      credential_ref: 'WORK_BB_BITBUCKET_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([bitbucketConnector])
+    vi.mocked(testConnector).mockResolvedValue({ ok: false, error: 'bitbucket: token invalid or expired — replace the access token' })
+    renderTab(`/settings/connectors/${bitbucketConnector.id}`)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText(/Failed: bitbucket: token invalid or expired/)).toBeTruthy()
+    expect(screen.getByText(/Paste a new access token below/)).toBeTruthy()
+    expect(screen.queryByText(/Paste a new personal access token below/)).toBeNull()
   })
 
   it('replaces an aws connector\'s access keys as JSON under its credential_ref', async () => {

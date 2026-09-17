@@ -4,7 +4,7 @@
 export interface ConnectorPreset {
   id: string
   name: string
-  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav' | 'aws' | 'gcp'
+  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav' | 'aws' | 'gcp' | 'bitbucket'
   description: string
   logo?: string
   brandColor: string
@@ -14,7 +14,7 @@ export interface ConnectorPreset {
   // mcp, github: PAT/bearer token input copy
   tokenPlaceholder?: string
   tokenHint?: string
-  // github: link rendered after tokenHint (e.g. "Create one on GitHub")
+  // github, bitbucket: link rendered after tokenHint (e.g. "Create one on GitHub")
   tokenURL?: string
   // google, microsoft: OAuth scopes this preset requests
   scopes?: string[]
@@ -113,6 +113,18 @@ export const connectorPresets: ConnectorPreset[] = [
     tokenURL: 'https://github.com/settings/personal-access-tokens/new',
   },
   {
+    id: 'bitbucket-account',
+    name: 'Bitbucket',
+    kind: 'bitbucket',
+    description: 'Identity for mission clone/push/PR, read-only pull request tools',
+    logo: 'bitbucket',
+    brandColor: '#0052CC',
+    tokenPlaceholder: 'workspace or repository access token',
+    tokenHint:
+      'Bitbucket Cloud workspace or repository access token — grant Repositories: Read and Pull requests: Read on the repositories Timothy may work with.',
+    tokenURL: 'https://support.atlassian.com/bitbucket-cloud/docs/access-tokens/',
+  },
+  {
     id: 'imap',
     name: 'IMAP mailbox',
     kind: 'imap',
@@ -151,7 +163,14 @@ function matchesPreset(
     const scopes = JSON.stringify(c.config.scopes ?? '')
     return p.scopes?.every((s) => scopes.includes(s)) ?? false
   }
-  if (c.kind === 'github' || c.kind === 'imap' || c.kind === 'caldav' || c.kind === 'aws' || c.kind === 'gcp') {
+  if (
+    c.kind === 'github' ||
+    c.kind === 'imap' ||
+    c.kind === 'caldav' ||
+    c.kind === 'aws' ||
+    c.kind === 'gcp' ||
+    c.kind === 'bitbucket'
+  ) {
     return true
   }
   const endpoint = String(c.config.endpoint ?? '')

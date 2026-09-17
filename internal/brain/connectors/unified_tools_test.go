@@ -1,6 +1,7 @@
 package connectors
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -39,19 +40,42 @@ func TestSharedToolSchemasMatchAcrossKinds(t *testing.T) {
 	srv := caldavTestServer(t, nil)
 	cSrc := testCalDAVSource(t, srv.URL)
 
+	// github and bitbucket build with no network call and share the four
+	// pull request tool names (issue #656); their schemas and
+	// descriptions are duplicated literals, so this is the drift guard.
+	tokenResolve := func(_ context.Context, _ string) (string, error) { return "tok", nil }
+	ghSrc, err := GitHubBuilder(nil)(t.Context(), Connector{Name: "gh", Kind: "github", CredentialRef: "GH_PAT"}, tokenResolve)
+	if err != nil {
+		t.Fatalf("github build: %v", err)
+	}
+	bbSrc, err := BitbucketBuilder(nil)(t.Context(), Connector{Name: "bb", Kind: "bitbucket", CredentialRef: "BB_TOKEN"}, tokenResolve)
+	if err != nil {
+		t.Fatalf("bitbucket build: %v", err)
+	}
+
 	type toolShape struct {
 		schema string
 		desc   string
 	}
-	byKind := map[string]map[string]toolShape{
-		"google":    {},
-		"microsoft": {},
-		"imap":      {},
-		"caldav":    {},
-	}
-	for name, src := range map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc, "caldav": cSrc} {
+	// Driven by the kinds registry, not a literal list: a new kind must
+	// either be built here or be named below, so one reusing a shared tool
+	// name cannot slip past this guard unnoticed.
+	sources := map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc, "caldav": cSrc, "github": ghSrc, "bitbucket": bbSrc}
+	// mcp wraps an external server whose schemas are its own; aws is an mcp
+	// bridge; gcp serves only its own storage/bigquery tools.
+	noSharedTools := map[string]bool{"mcp": true, "aws": true, "gcp": true}
+	byKind := map[string]map[string]toolShape{}
+	for kind := range kinds {
+		src, ok := sources[kind]
+		if !ok {
+			if !noSharedTools[kind] {
+				t.Errorf("kind %q is in the kinds registry but not built here: add a source or name it in noSharedTools", kind)
+			}
+			continue
+		}
+		byKind[kind] = map[string]toolShape{}
 		for _, tl := range src.Tools() {
-			byKind[name][tl.Name] = toolShape{schema: string(tl.InputSchema), desc: tl.Description}
+			byKind[kind][tl.Name] = toolShape{schema: string(tl.InputSchema), desc: tl.Description}
 		}
 	}
 

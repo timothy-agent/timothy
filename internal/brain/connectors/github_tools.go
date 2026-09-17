@@ -96,9 +96,9 @@ func (s *githubSource) listPullRequests() *tools.Tool {
 	return &tools.Tool{
 		Name:        "list_pull_requests",
 		ReadOnly:    true,
-		Description: "List pull requests in a GitHub repository, most recently updated first, with number, state, author, title, and head/base branches. Use this to find a PR by title or branch before reading it with get_pull_request. Do not use shell, git, or curl to reach the GitHub API; this tool carries the connected account's credentials.",
+		Description: "List pull requests in a repository, most recently updated first, with number, state, author, title, and head/base branches. Use this to find a PR by title or branch before reading it with get_pull_request. Do not use shell, git, or curl to reach the repository host's API; this tool carries the connected account's credentials.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"repo":{"type":"string","description":"owner/name"},
+			"repo":{"type":"string","description":"owner/name on GitHub, workspace/slug on Bitbucket"},
 			"state":{"type":"string","enum":["open","closed","all"],"description":"defaults to open"},
 			"max_results":{"type":"integer","minimum":1,"maximum":50}
 		},"required":["repo"],"additionalProperties":false}`),
@@ -149,9 +149,9 @@ func (s *githubSource) getPullRequest() *tools.Tool {
 	return &tools.Tool{
 		Name:        "get_pull_request",
 		ReadOnly:    true,
-		Description: "Read one pull request's metadata: title, author, state, head/base branches and head commit, mergeable state, commit and changed-file counts, and the full description. Use get_pull_request_diff for the code changes and list_pull_request_comments for the discussion; this tool returns neither.",
+		Description: "Read one pull request's metadata: title, author, state, head/base branches and head commit, changed-file and line counts, and the full description. Use get_pull_request_diff for the code changes and list_pull_request_comments for the discussion; this tool returns neither.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"repo":{"type":"string","description":"owner/name"},
+			"repo":{"type":"string","description":"owner/name on GitHub, workspace/slug on Bitbucket"},
 			"number":{"type":"integer","minimum":1}
 		},"required":["repo","number"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
@@ -193,7 +193,7 @@ func (s *githubSource) getPullRequestDiff() *tools.Tool {
 		ReadOnly:    true,
 		Description: "Read a pull request's unified diff, the same text git diff base...head would print. Use this to review the actual code changes. Large diffs are cut at a fixed size with a marker saying how much was omitted; review what is returned rather than retrying.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"repo":{"type":"string","description":"owner/name"},
+			"repo":{"type":"string","description":"owner/name on GitHub, workspace/slug on Bitbucket"},
 			"number":{"type":"integer","minimum":1}
 		},"required":["repo","number"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
@@ -238,7 +238,7 @@ func (s *githubSource) listPullRequestComments() *tools.Tool {
 		ReadOnly:    true,
 		Description: "List the discussion on a pull request in chronological order: conversation comments and inline review comments (marked with their file and line). Use this to see reviewer feedback and whether it was addressed. This tool is read-only; it cannot post a comment.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{
-			"repo":{"type":"string","description":"owner/name"},
+			"repo":{"type":"string","description":"owner/name on GitHub, workspace/slug on Bitbucket"},
 			"number":{"type":"integer","minimum":1}
 		},"required":["repo","number"],"additionalProperties":false}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
