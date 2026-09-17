@@ -21,7 +21,7 @@ import { Alert, AlertTitle } from './ui/alert'
 import { IconButton } from './timothy/icon-button'
 import { Spinner } from './timothy/spinner'
 import { TooltipProvider } from './ui/tooltip'
-import { collapseRepeatedTail, splitSources } from '../lib/citations'
+import { collapseRepeatedTail, safeHref, splitSources } from '../lib/citations'
 import { attachmentURLCache } from '../lib/attachmentCache'
 import type { AssistantState } from '../lib/chat'
 import { compact, formatDuration, money } from '../lib/format'
@@ -217,19 +217,26 @@ function SourcesPanel({ citations }: { citations: { title: string; url: string }
         Sources
       </div>
       <ol className="space-y-1.5 text-sm">
-        {citations.map((c, i) => (
-          <li key={i} className="flex min-w-0 gap-2">
-            <span className="text-muted-foreground">{i + 1}.</span>
-            <a
-              href={c.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="min-w-0 break-all text-foreground underline-offset-2 hover:underline"
-            >
-              {c.title}
-            </a>
-          </li>
-        ))}
+        {citations.map((c, i) => {
+          const href = safeHref(c.url)
+          return (
+            <li key={i} className="flex min-w-0 gap-2">
+              <span className="text-muted-foreground">{i + 1}.</span>
+              {href ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="min-w-0 break-all text-foreground underline-offset-2 hover:underline"
+                >
+                  {c.title}
+                </a>
+              ) : (
+                <span className="min-w-0 break-all text-muted-foreground">{c.title}</span>
+              )}
+            </li>
+          )
+        })}
       </ol>
     </div>
   )

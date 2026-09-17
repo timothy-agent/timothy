@@ -53,3 +53,16 @@ export function splitSources(text: string): SplitAnswer {
 
   return { body, citations }
 }
+
+// safeHref gates a model-supplied citation URL before it reaches a raw
+// href. Citations bypass the rehype-sanitize pipeline that guards the
+// markdown body, so a javascript: URL smuggled in by prompt injection
+// would otherwise run in the app's origin on a click.
+export function safeHref(u: string): string | undefined {
+  try {
+    const p = new URL(u).protocol
+    return p === 'http:' || p === 'https:' ? u : undefined
+  } catch {
+    return undefined
+  }
+}
