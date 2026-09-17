@@ -374,7 +374,7 @@ func (r *delegatedRunner) runDelegatedReview(ctx context.Context, m Mission, pac
 	}
 	run := cliRun{
 		phase: string(PhaseProve), harness: m.ReviewHarness, entry: entry, adapter: adapter,
-		authMode: authMode, route: reviewRoute(m), agent: reviewerAgent,
+		authMode: authMode, route: reviewRoute(m), agent: reviewerAgent, secret: apiKey,
 	}
 	runID, err := newRunID()
 	if err != nil {
@@ -839,13 +839,17 @@ type cliRun struct {
 	route, agent string
 	// steer allows mid-run operator note delivery (worker runs only).
 	steer bool
+	// secret is the resolved credential the CLI got in its env, kept
+	// only so scrubSecret can strip it from persisted diagnostics
+	// (D-108). Empty in subscription mode.
+	secret string
 }
 
 // workerRun builds the cliRun for a worker turn.
-func workerRun(m Mission, entry gwclient.ResolvedRouteEntry, adapter executor.Adapter, authMode executor.AuthMode) cliRun {
+func workerRun(m Mission, entry gwclient.ResolvedRouteEntry, adapter executor.Adapter, authMode executor.AuthMode, secret string) cliRun {
 	return cliRun{
 		phase: string(PhaseBuild), harness: m.Harness, entry: entry, adapter: adapter,
-		authMode: authMode, route: workerRoute(m), agent: "mission-worker", steer: true,
+		authMode: authMode, route: workerRoute(m), agent: "mission-worker", steer: true, secret: secret,
 	}
 }
 
@@ -866,7 +870,7 @@ func (r *delegatedRunner) runDelegated(ctx context.Context, m Mission, packet Wo
 		r.recordAuthFailed(ctx, m.ID, string(PhaseBuild), m.Harness)
 		return WorkerVerdict{}, "", err
 	}
-	run := workerRun(m, entry, adapter, authMode)
+	run := workerRun(m, entry, adapter, authMode, apiKey)
 
 	decision := r.planSessionResume(ctx, m, workRoot, adapter)
 	for attempt := 0; ; attempt++ {
@@ -1023,7 +1027,13 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 		return true, forcedRetryVerdict("the executor's run was lost across a restart"), "", nil
 	}
 
-	v, t, rerr := r.pollToVerdict(ctx, m, workerRun(m, entry, adapter, state.AuthMode), workRoot, state.RunDir, state.RunID, state.ByteOffset)
+	// The resumed CLI still holds the credential the prior lifetime
+	// resolved from this same ref; it is resolved again only so its
+	// diagnostics can be scrubbed (D-108). A failure here leaves
+	// nothing to scrub and is not an auth verdict: the run in flight
+	// reports that itself.
+	_, secret, _ := r.resolveCredential(ctx, entry.CredentialRef, adapter.Capabilities())
+	v, t, rerr := r.pollToVerdict(ctx, m, workerRun(m, entry, adapter, state.AuthMode, secret), workRoot, state.RunDir, state.RunID, state.ByteOffset)
 	return true, v, t, rerr
 }
 
@@ -1366,7 +1376,7 @@ func (r *delegatedRunner) pollRun(ctx context.Context, m Mission, run cliRun, wo
 		if len(chunk) > 0 {
 			st.offset += int64(len(chunk))
 			st.lastByteMove = time.Now()
-			r.feedLines(ctx, parser, chunk, st, m.ID, run.phase, runID)
+			r.feedLines(ctx, parser, chunk, st, m.ID, run.phase, runID, run.secret)
 			r.recordProgressThrottled(ctx, m.ID, run.phase, runID, st)
 		}
 
@@ -1563,8 +1573,10 @@ func parseWorktreeLine(fields string) (*WorktreeSummary, bool) {
 // complete line to parser, accumulating text/tool/result state.
 // Incomplete trailing bytes (no terminating newline yet) are held in
 // st.carry until the next chunk completes them — mid-line chunk splits
-// must never be fed to the parser as a partial line.
-func (r *delegatedRunner) feedLines(ctx context.Context, parser executor.StreamParser, chunk []byte, st *pollState, missionID, phase, runID string) {
+// must never be fed to the parser as a partial line. secret is the
+// run's credential, scrubbed from the result event's error text
+// (D-108) before finish/finishCommon persist or return it.
+func (r *delegatedRunner) feedLines(ctx context.Context, parser executor.StreamParser, chunk []byte, st *pollState, missionID, phase, runID, secret string) {
 	data := append(st.carry, chunk...)
 	st.carry = nil
 	for {
@@ -1595,6 +1607,7 @@ func (r *delegatedRunner) feedLines(ctx context.Context, parser executor.StreamP
 			st.toolCalls++
 		case executor.KindResult:
 			st.sawResult = true
+			ev.Err = scrubSecret(ev.Err, secret)
 			st.resultEvent = ev
 		}
 	}
@@ -1718,7 +1731,9 @@ func (r *delegatedRunner) finishCommon(ctx context.Context, m Mission, run cliRu
 // tail only on this path (exit != 0, no result) to check for
 // auth-failure signatures.
 func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, run cliRun, workRoot, rdir string, st *pollState, start time.Time, exitCode int) (string, error) {
-	stderrTail := r.readStderrTail(ctx, m.ID, m.Environment, workRoot, rdir)
+	// Scrubbed before classification (D-108): every branch below
+	// persists the tail, and the signatures are phrases, never the key.
+	stderrTail := scrubSecret(r.readStderrTail(ctx, m.ID, m.Environment, workRoot, rdir), run.secret)
 	reason := fmt.Sprintf("executor exited (code %d) without a result event", exitCode)
 	if exitCode == -1 {
 		reason = "executor process was lost (no exit code, no result event)"
@@ -1772,6 +1787,22 @@ func (r *delegatedRunner) readStderrTail(ctx context.Context, missionID, environ
 		return ""
 	}
 	return out.String()
+}
+
+// scrubSecret replaces every occurrence of secret in text with "***"
+// (D-108, issue #761), the same idiom push.go and worktree.go apply to
+// the git token. The CLI holds the credential in its environment, and
+// the run most likely to echo it in a diagnostic is the one whose key
+// was just rejected; stderr tails and result errors then land in
+// append-only mission_events, where a leaked value can never be
+// deleted. Only the credential is scrubbed, not every inv.Env value:
+// base URLs and numeric knobs are legitimate diagnostic content. An
+// empty secret (subscription mode) scrubs nothing.
+func scrubSecret(text, secret string) string {
+	if secret == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, secret, "***")
 }
 
 // authFailureSignatures are the known stderr/result phrasings a CLI

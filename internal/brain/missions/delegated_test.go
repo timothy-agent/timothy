@@ -1022,6 +1022,141 @@ func TestDelegatedRunWorker_AuthFailure_ReturnsErrExecutorAuth(t *testing.T) {
 	}
 }
 
+// testSecret is a resolved credential a scrub test plants in CLI output;
+// it must never reach a persisted event or a returned error (D-108).
+const testSecret = "sk-ant-api03-TESTSECRET-do-not-persist" //nolint:gosec // G101: planted test value, not a credential.
+
+// TestDelegatedRunWorker_StderrTail_ScrubsSecret (D-108, issue #761):
+// every transport-death branch persists the stderr tail into
+// executor.died, and the auth branch also returns it in the error. A
+// key the CLI echoed must be "***" in both, and classification must
+// still read the scrubbed text.
+func TestDelegatedRunWorker_StderrTail_ScrubsSecret(t *testing.T) {
+	tests := []struct {
+		name       string
+		stderr     string
+		exitCode   int
+		wantReason string
+		wantErr    bool
+	}{
+		{"auth_failed", "Error: invalid API key " + testSecret + " rejected by provider", 1, "auth_failed", true},
+		{"session_lost", "Error: no rollout found (key " + testSecret + ")", 1, "session_lost", false},
+		{"transport_death", "panic: request failed with " + testSecret, 2, "transport_death", false},
+		{"run_budget", "still working with " + testSecret, runBudgetExitCode, "run_budget", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sandbox := newFakeSandbox()
+			sandbox.seedLines = nil
+			sandbox.seedExitCode = tc.exitCode
+			sandbox.stderrText = tc.stderr
+			events := &fakeEventSink{}
+			entry := harnessEntry("anthropic-key")
+			route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+			r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred(testSecret, nil), sandbox, events, nil, &fakeLedger{})
+			m := testMission("m1", t.TempDir())
+
+			_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+			if tc.wantErr {
+				if !errors.Is(err, ErrExecutorAuth) {
+					t.Fatalf("err = %v, want ErrExecutorAuth", err)
+				}
+				if strings.Contains(err.Error(), testSecret) {
+					t.Fatalf("error string carries the secret: %q", err.Error())
+				}
+				if !strings.Contains(err.Error(), "***") {
+					t.Fatalf("error string = %q, want the scrub marker", err.Error())
+				}
+			} else if err != nil {
+				t.Fatalf("RunWorker: %v", err)
+			}
+			died, ok := events.last("executor.died")
+			if !ok {
+				t.Fatal("no executor.died event")
+			}
+			if strings.Contains(string(died.Payload), testSecret) {
+				t.Fatalf("executor.died payload carries the secret: %s", died.Payload)
+			}
+			var payload map[string]any
+			_ = json.Unmarshal(died.Payload, &payload)
+			if payload["reason"] != tc.wantReason {
+				t.Fatalf("executor.died reason = %v, want %s", payload["reason"], tc.wantReason)
+			}
+			if tail, _ := payload["stderr_tail"].(string); !strings.Contains(tail, "***") {
+				t.Fatalf("stderr_tail = %q, want the scrub marker", tail)
+			}
+		})
+	}
+}
+
+// TestDelegatedRunWorker_ResultError_ScrubsSecret (D-108): a result
+// event whose error text echoes the key reaches finishCommon's
+// ErrExecutorAuth without it.
+func TestDelegatedRunWorker_ResultError_ScrubsSecret(t *testing.T) {
+	lines := noToolFixture(t)
+	for i, l := range lines {
+		if bytes.Contains(l, []byte(`"type":"result"`)) {
+			l = bytes.Replace(l, []byte(`"is_error":false`), []byte(`"is_error":true`), 1)
+			l = bytes.Replace(l, []byte(`"structured_output":{"status":"DONE","note":"Ready for task input."},`), nil, 1)
+			l = bytes.Replace(l, []byte(`"result":"{\"status\":\"DONE\",\"note\":\"Ready for task input.\"}"`),
+				[]byte(`"result":"API Error: 401 authentication_error: invalid x-api-key `+testSecret+`"`), 1)
+			lines[i] = l
+		}
+	}
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = lines
+	events := &fakeEventSink{}
+	entry := harnessEntry("anthropic-key")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred(testSecret, nil), sandbox, events, nil, &fakeLedger{})
+	m := testMission("m1", t.TempDir())
+
+	_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+	if !errors.Is(err, ErrExecutorAuth) {
+		t.Fatalf("err = %v, want ErrExecutorAuth", err)
+	}
+	if strings.Contains(err.Error(), testSecret) {
+		t.Fatalf("error string carries the secret: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "***") {
+		t.Fatalf("error string = %q, want the scrub marker", err.Error())
+	}
+}
+
+// TestScrubSecret pins the helper (D-108): the key goes, the phrases
+// the classifiers key on stay, and an empty secret is a no-op rather
+// than a "***" between every byte.
+func TestScrubSecret(t *testing.T) {
+	tests := []struct {
+		name        string
+		text        string
+		secret      string
+		want        string
+		authFailure bool
+		sessionLost bool
+	}{
+		{"auth phrase survives", "invalid api key " + testSecret, testSecret, "invalid api key ***", true, false},
+		{"session phrase survives", testSecret + ": no rollout found", testSecret, "***: no rollout found", false, true},
+		{"every occurrence", testSecret + " and again " + testSecret, testSecret, "*** and again ***", false, false},
+		{"empty secret is a no-op", "please run /login", "", "please run /login", true, false},
+		{"absent secret leaves text alone", "authentication_error", testSecret, "authentication_error", true, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := scrubSecret(tc.text, tc.secret)
+			if got != tc.want {
+				t.Fatalf("scrubSecret = %q, want %q", got, tc.want)
+			}
+			if isAuthFailure(got) != tc.authFailure {
+				t.Fatalf("isAuthFailure(%q) = %v, want %v", got, !tc.authFailure, tc.authFailure)
+			}
+			if isSessionLost(got) != tc.sessionLost {
+				t.Fatalf("isSessionLost(%q) = %v, want %v", got, !tc.sessionLost, tc.sessionLost)
+			}
+		})
+	}
+}
+
 // TestDriverErrExecutorAuthPausesImmediately mirrors
 // TestDriverModelFloorPausesImmediately: ErrExecutorAuth from the
 // runner must pause the mission as infra on the FIRST turn.
@@ -1114,7 +1249,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rdir, "prompt.md"), []byte("prompt"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	r.recordSpawned(context.Background(), m.ID, workerRun(m, entry, adapter, authMode), runID, rdir, resumeDecision{reason: resumeReasonNoPriorRun})
+	r.recordSpawned(context.Background(), m.ID, workerRun(m, entry, adapter, authMode, ""), runID, rdir, resumeDecision{reason: resumeReasonNoPriorRun})
 	if err := r.launch(context.Background(), m.ID, m.Environment, m.WorkRoot(), rdir, inv, time.Minute, false); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
