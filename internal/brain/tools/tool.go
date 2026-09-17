@@ -43,6 +43,15 @@ type Tool struct {
 	// deliberate, per-tool decision, never inferred from a naming
 	// convention or a connector's kind.
 	ReadOnly bool
+	// Trusted marks a tool whose successful result the harness itself
+	// authored: a computed value, a confirmation, a protocol sentinel,
+	// the operator's own stored data. The loop hands a trusted result
+	// to the model as is and fences every other result as untrusted
+	// data (D-109), so the zero value is the safe default: a tool that
+	// returns anything an outside party wrote (web pages, mail,
+	// documents, remote MCP output) leaves it unset. Set per tool in
+	// its constructor, never inferred from a name.
+	Trusted bool
 }
 
 // sessionIDKey carries the turn's session id to a tool's Execute. Set

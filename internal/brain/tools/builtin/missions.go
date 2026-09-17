@@ -197,6 +197,9 @@ func findMission(ctx context.Context, store missionLister, id, query string) (Mi
 func ListMissions(store missionLister) *tools.Tool {
 	return &tools.Tool{
 		Name: "list_missions",
+		// Trusted: harness records (operator goals, phase, status), not
+		// worker output.
+		Trusted: true,
 		Description: `Lists recent missions from the harness's own records — never the worker/reviewer's claims.
 
 Arguments (optional):
@@ -251,6 +254,8 @@ Example: {} → the 10 most recently updated missions.`,
 func GetMission(store missionLister, events missionEventReader) *tools.Tool {
 	return &tools.Tool{
 		Name: "get_mission",
+		// Trusted: same harness snapshot list_missions reads from.
+		Trusted: true,
 		Description: `Reads one mission's status: answers "is mission X done?", "what's the status of my last mission?", and similar questions from the harness's own records — never the worker/reviewer's claims.
 
 Arguments (exactly one required):
@@ -334,7 +339,8 @@ type missionPushArgs struct {
 // this slice.
 func PushMissionBranch(store missionLister, completer missionCompleter, resolveToken missionTokenResolver) *tools.Tool {
 	return &tools.Tool{
-		Name: "push_mission_branch",
+		Name:    "push_mission_branch",
+		Trusted: true,
 		Description: `Pushes a mission's branch to GitHub, optionally opening a pull request. Requires explicit human approval every time — this tool is never auto-approved.
 
 Only a github-connection coding mission with a completed worktree can
@@ -451,7 +457,8 @@ type missionFollowupArgs struct {
 // against a finished one always parks on an explicit human approval.
 func FollowupMission(store missionLister, creator missionFollowUpCreator) *tools.Tool {
 	return &tools.Tool{
-		Name: "followup_mission",
+		Name:    "followup_mission",
+		Trusted: true,
 		Description: `Spawns a NEW mission continuing a finished one. Requires explicit human approval every time — this tool is never auto-approved.
 
 The parent mission must already be finished (phase done or failed). The
