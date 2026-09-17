@@ -6,7 +6,7 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.47.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.4
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.4
-	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.61.0
+	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.62.0
 	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.46.1
 	github.com/containerd/errdefs v1.0.0
 	github.com/emersion/go-ical v0.0.0-20250609112844-439c63cef608
