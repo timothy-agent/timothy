@@ -50,6 +50,7 @@ type writingSamplesArgs struct {
 func WritingSamples(collection WritingSamplesCollectionFunc, fetch WritingSamplesFetchFunc) *tools.Tool {
 	return &tools.Tool{
 		Name: "writing_samples",
+		// Trusted stays unset: KB documents, same store read_kb fences.
 		Description: `Returns pieces the owner wrote themselves, selected by language.
 
 Use before drafting or rewriting any prose the owner will send or

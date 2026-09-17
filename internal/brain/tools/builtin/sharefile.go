@@ -30,7 +30,8 @@ type shareFileArgs struct {
 // dropped.
 func ShareFile(cfg ShareFileConfig) *tools.Tool {
 	return &tools.Tool{
-		Name: "share_file",
+		Name:    "share_file",
+		Trusted: true,
 		Description: `Publishes a file from the workspace to the user as generated media (an image, document, or other file the turn produced).
 
 Arguments:
