@@ -86,7 +86,7 @@ func Shell(cfg ShellConfig) *tools.Tool {
 	return &tools.Tool{
 		Name: "shell",
 		// Trusted: command output is the workspace the model itself
-		// works in; fencing it would wrap every build log (D-111 keeps
+		// works in; fencing it would wrap every build log (D-109 keeps
 		// the line D-107 drew).
 		Trusted: true,
 		Description: `Runs a shell command in the workspace directory.

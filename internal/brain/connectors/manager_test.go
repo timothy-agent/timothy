@@ -400,7 +400,7 @@ func TestDeferredToolsSplitsOnSchemaMismatch(t *testing.T) {
 }
 
 // TestLoadToolNames pins the exact set the permission chain exempts
-// (D-110): the entry-point names the live surface exposes, merged or
+// (D-108): the entry-point names the live surface exposes, merged or
 // split, and nothing for an eager source, however its tools are named.
 func TestLoadToolNames(t *testing.T) {
 	t.Parallel()

@@ -47,7 +47,7 @@ type Tool struct {
 	// authored: a computed value, a confirmation, a protocol sentinel,
 	// the operator's own stored data. The loop hands a trusted result
 	// to the model as is and fences every other result as untrusted
-	// data (D-111), so the zero value is the safe default: a tool that
+	// data (D-109), so the zero value is the safe default: a tool that
 	// returns anything an outside party wrote (web pages, mail,
 	// documents, remote MCP output) leaves it unset. Set per tool in
 	// its constructor, never inferred from a name.

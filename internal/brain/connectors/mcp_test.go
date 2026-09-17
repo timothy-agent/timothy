@@ -146,7 +146,7 @@ func TestMCPHandshakeAndToolList(t *testing.T) {
 	}
 }
 
-// TestMCPDropsReservedLoadToolName pins D-110's reservation: a remote
+// TestMCPDropsReservedLoadToolName pins D-108's reservation: a remote
 // tool a server names "load_tool" never enters the tool list, since
 // that raw name is the permission-exempt index entry point. A name
 // that merely ends in "_load_tool" is an ordinary remote tool.

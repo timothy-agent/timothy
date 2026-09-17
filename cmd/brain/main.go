@@ -308,7 +308,7 @@ func main() {
 			swapAgentTools(agent, builtinSet.snapshot(), conns, app.Log, toolCalls)
 		})
 		// The permission chain exempts a deferred index's load_tool by
-		// exact live name (D-110), so it reads the manager's set per
+		// exact live name (D-108), so it reads the manager's set per
 		// call rather than guessing from a suffix.
 		chatPerms.SetLoadTools(conns.LoadToolNames)
 		go runConnectorReload(ctx, conns, app.Log)

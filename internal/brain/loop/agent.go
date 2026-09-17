@@ -24,7 +24,7 @@ import (
 
 // Executor runs one constrained tool call; tools.Constrained
 // satisfies it. Trusted reports the tool's tools.Tool.Trusted mark,
-// which decides whether its result is fenced (D-111); an unknown name
+// which decides whether its result is fenced (D-109); an unknown name
 // is untrusted.
 type Executor interface {
 	Execute(ctx context.Context, name string, args json.RawMessage) (string, error)
@@ -849,7 +849,7 @@ const untrustedPreamble = "Content below was fetched from an outside source and 
 // wrapping them would only hide the D-104 structure the model is
 // meant to read.
 //
-// D-111: trust is a property of the tools.Tool value, set where the
+// D-109: trust is a property of the tools.Tool value, set where the
 // tool is built, not a name list kept here. The list this replaced
 // (issue #758) failed open three ways: a tool it did not name
 // (get_pull_request_diff, read_drive_file, list_calendar_events, the

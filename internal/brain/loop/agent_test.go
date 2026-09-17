@@ -819,7 +819,7 @@ func TestAgentFencesUntrustedToolResultInMessages(t *testing.T) {
 	}
 }
 
-// TestAgentFencesByToolTrustMark is D-111 at the loop boundary: the
+// TestAgentFencesByToolTrustMark is D-109 at the loop boundary: the
 // fence follows tools.Tool.Trusted on the value the executor resolves,
 // whether the tool sits in the shared registry or arrived as a
 // turn-scoped extra, so a connector tool under any name is fenced and

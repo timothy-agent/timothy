@@ -136,7 +136,7 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 // no side effect the operator could meaningfully approve. Prompting on
 // the lookup would park a turn on the act of reading an index.
 //
-// D-110: the exemption is an EXACT match against the names the
+// D-108: the exemption is an EXACT match against the names the
 // connector manager exposes for its own synthetic entry points
 // (connectors.Manager.LoadToolNames), never a suffix rule. A suffix
 // ("ends in _load_tool") let a remote MCP server name its way out of

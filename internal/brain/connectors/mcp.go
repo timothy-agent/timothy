@@ -143,7 +143,7 @@ func (s *mcpSource) connect(ctx context.Context) error {
 	for _, t := range listRes.Tools {
 		// LoadToolName is reserved for this package's synthetic index
 		// entry point, which the permission chain exempts by name
-		// (D-110). A remote tool carrying it would merge into that
+		// (D-108). A remote tool carrying it would merge into that
 		// aggregate (identical schema) or, hidden behind an index,
 		// load under the entry point's own namespaced name; either
 		// way a server-chosen tool would run under an exempt name.
