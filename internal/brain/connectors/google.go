@@ -93,6 +93,9 @@ type Google struct {
 
 	mu     sync.Mutex
 	states map[string]oauthState
+	// refreshes serializes token(), which is a read-modify-write on the
+	// stored bundle; mu guards only states.
+	refreshes refreshLocks
 }
 
 type oauthState struct {
@@ -326,8 +329,11 @@ func (g *Google) storeBundle(ctx context.Context, ref string, b tokenBundle) err
 }
 
 // token returns a live access token for the connector, refreshing and
-// re-storing the bundle when it is about to expire.
+// re-storing the bundle when it is about to expire. Held under ref's
+// refresh lock end to end (D-112) so concurrent callers never exchange
+// the same refresh token twice.
 func (g *Google) token(ctx context.Context, cfg GoogleConfig, ref string) (string, error) {
+	defer g.refreshes.lock(ref).Unlock()
 	raw, err := g.Secrets.Resolve(ctx, ref)
 	if err != nil {
 		return "", fmt.Errorf("connector is not connected yet (no tokens at %q): %w", ref, err)
@@ -625,4 +631,38 @@ func googleConfig(c Connector) (GoogleConfig, error) {
 		return cfg, fmt.Errorf("google %s: config.scopes is required", c.Name)
 	}
 	return cfg, nil
+}
+
+// refreshLocks serializes token refreshes per credential_ref. D-112:
+// the check-refresh-store sequence in Google.token/Microsoft.token is a
+// read-modify-write on one secret-store ref, and two goroutines racing
+// it (parallel tool calls in one turn, concurrent missions) both
+// exchange the same refresh token. Microsoft rotates the refresh token
+// on every refresh and invalidates the old one, so the loser's write
+// persists a token the IdP has already rotated away and the connector
+// needs a manual reconnect. Same shape as gcpSource.accessToken's mu,
+// but keyed per ref since one Google/Microsoft instance serves every
+// connector of that kind: unrelated accounts must not queue behind
+// each other.
+type refreshLocks struct {
+	mu sync.Mutex
+	m  map[string]*sync.Mutex
+}
+
+// lock returns ref's mutex, already held. The caller unlocks it. The
+// map only grows with the number of connected accounts, so entries are
+// never evicted.
+func (l *refreshLocks) lock(ref string) *sync.Mutex {
+	l.mu.Lock()
+	if l.m == nil {
+		l.m = map[string]*sync.Mutex{}
+	}
+	m, ok := l.m[ref]
+	if !ok {
+		m = &sync.Mutex{}
+		l.m[ref] = m
+	}
+	l.mu.Unlock()
+	m.Lock()
+	return m
 }
