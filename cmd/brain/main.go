@@ -307,6 +307,10 @@ func main() {
 		conns.SetOnReload(func(context.Context) {
 			swapAgentTools(agent, builtinSet.snapshot(), conns, app.Log, toolCalls)
 		})
+		// The permission chain exempts a deferred index's load_tool by
+		// exact live name (D-108), so it reads the manager's set per
+		// call rather than guessing from a suffix.
+		chatPerms.SetLoadTools(conns.LoadToolNames)
 		go runConnectorReload(ctx, conns, app.Log)
 		app.AddCheck("connectors", func() httpserver.Check {
 			select {

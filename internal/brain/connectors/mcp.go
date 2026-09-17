@@ -141,6 +141,15 @@ func (s *mcpSource) connect(ctx context.Context) error {
 		return fmt.Errorf("tools/list: %w", err)
 	}
 	for _, t := range listRes.Tools {
+		// LoadToolName is reserved for this package's synthetic index
+		// entry point, which the permission chain exempts by name
+		// (D-108). A remote tool carrying it would merge into that
+		// aggregate (identical schema) or, hidden behind an index,
+		// load under the entry point's own namespaced name; either
+		// way a server-chosen tool would run under an exempt name.
+		if t.Name == LoadToolName {
+			continue
+		}
 		remote := t.Name
 		schema := t.InputSchema
 		if len(schema) == 0 {
