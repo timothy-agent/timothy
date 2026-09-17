@@ -27,6 +27,8 @@ func LoadSkillTool(packs []Skill, allow func(context.Context, string) bool) *too
 	}
 	return &tools.Tool{
 		Name: "load_skill",
+		// Trusted: pack text baked into the brain image.
+		Trusted: true,
 		Description: `Loads a skill pack: the working rules for a kind of task.
 
 Use when the current task matches a skill's description in your skill

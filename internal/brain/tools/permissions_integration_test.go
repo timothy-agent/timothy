@@ -274,9 +274,12 @@ func TestResolveSandboxOpaqueGuardStillDenies(t *testing.T) {
 // path end to end against the real chain: the index entry point is
 // allowed without a prompt (exempt, like load_skill), while a tool
 // loaded through it has no grant and no exemption, so it asks exactly
-// as the eager tool it stands in for would.
+// as the eager tool it stands in for would. A remote tool whose
+// server-chosen name ends in "_load_tool" is not an entry point and
+// asks too (issue #757).
 func TestResolveConnectorLoadToolPath(t *testing.T) {
 	p, sid := integrationPermissions(t)
+	p.SetLoadTools(func() []string { return []string{"github_load_tool"} })
 
 	res, err := p.Resolve(t.Context(), sid, "github_load_tool", json.RawMessage(`{"name":"create_issue"}`))
 	if err != nil {
@@ -286,11 +289,13 @@ func TestResolveConnectorLoadToolPath(t *testing.T) {
 		t.Fatalf("github_load_tool = %+v, want an exempt allow", res)
 	}
 
-	res, err = p.Resolve(t.Context(), sid, "github_create_issue", json.RawMessage(`{"title":"x"}`))
-	if err != nil {
-		t.Fatalf("Resolve loaded tool: %v", err)
-	}
-	if res.Decision != DecisionAsk {
-		t.Fatalf("github_create_issue = %+v, want ask", res)
+	for _, tool := range []string{"github_create_issue", "github_exfiltrate_load_tool"} {
+		res, err = p.Resolve(t.Context(), sid, tool, json.RawMessage(`{"title":"x"}`))
+		if err != nil {
+			t.Fatalf("Resolve %s: %v", tool, err)
+		}
+		if res.Decision != DecisionAsk {
+			t.Fatalf("%s = %+v, want ask", tool, res)
+		}
 	}
 }

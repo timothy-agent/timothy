@@ -25,6 +25,7 @@ const missionStatusToolName = "mission_status"
 func MissionStatusTool() *tools.Tool {
 	return &tools.Tool{
 		Name:        missionStatusToolName,
+		Trusted:     true,
 		Description: "Report this turn's outcome. Call this exactly once, as your final action. DONE means you believe the current unit is complete and ready for the harness to verify and review — it is a request for verification, not a claim that the work is accepted. RETRY means you hit a problem and are explaining what you learned before the next attempt. BLOCKED means you need a specific answer from the user before you can continue.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
@@ -76,6 +77,7 @@ const planToolName = "submit_plan"
 func PlanTool() *tools.Tool {
 	return &tools.Tool{
 		Name:        planToolName,
+		Trusted:     true,
 		Description: "Submit the mission plan. Call this exactly once, as your final action.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",
@@ -151,6 +153,7 @@ const discoverNotesToolName = "discover_notes"
 func DiscoverNotesTool() *tools.Tool {
 	return &tools.Tool{
 		Name:        discoverNotesToolName,
+		Trusted:     true,
 		Description: "Report your discovery findings. Call this exactly once, as your final action.",
 		InputSchema: json.RawMessage(`{
 			"type": "object",

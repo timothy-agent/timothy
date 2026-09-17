@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -58,6 +59,10 @@ type Permissions struct {
 	// tools that never need permission: pure reads with their own
 	// guards (webfetch's SSRF blocklist) or no side effects at all.
 	exempt map[string]bool
+	// loadTools returns the connector deferred-tool index entry points
+	// the live surface exposes right now (see SetLoadTools); nil until
+	// wired, which exempts nothing.
+	loadTools func() []string
 }
 
 func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
@@ -118,37 +123,45 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// nothing it returns reaches a side effect.
 			"search_memory": true,
 			// A connector's deferred-tool index entry point is exempt
-			// too, but by suffix rather than by name: see
-			// isConnectorLoadTool.
+			// too, but its name is only known once a connector is
+			// built: see SetLoadTools.
 		},
 	}
 }
 
-// loadToolName is the raw name a connector gives its deferred-tool
-// index entry point; the manager serves it namespaced as
-// "<connector>_load_tool" (connectors.NamespacedName).
-const loadToolName = "load_tool"
-
-// isConnectorLoadTool reports whether tool is a connector's
-// deferred-tool index entry point (issue #643), which is exempt for
-// the same reason load_skill is: its Execute resolves a name against
-// an in-process list and returns that tool's description and schema
-// as text, with no remote call and no side effect the operator could
-// meaningfully approve. Prompting on the lookup would park a turn on
-// the act of reading an index.
+// SetLoadTools wires the live set of connector deferred-tool index
+// entry points (issue #643), exempt for the same reason load_skill is:
+// their Execute resolves a name against an in-process list and returns
+// that tool's description and schema as text, with no remote call and
+// no side effect the operator could meaningfully approve. Prompting on
+// the lookup would park a turn on the act of reading an index.
 //
-// A suffix check rather than an exempt-map entry because the map is
-// exact-name and the manager namespaces the raw "load_tool" per
-// connector, so the exempt name is not known until a connector is
-// configured. The suffix is deliberately NOT applied to the rest of
-// the exempt map: reusing ToolMatches there would exempt any remote
-// tool that happened to end in "_search_kb" or "_remember", handing a
-// third-party MCP server a way to name its way out of the permission
-// chain. Loading a tool still grants nothing: the loaded tool keeps
-// its own namespaced name, is absent from the exempt map, and walks
-// the whole chain when the model actually calls it.
-func isConnectorLoadTool(tool string) bool {
-	return tool == loadToolName || strings.HasSuffix(tool, "_"+loadToolName)
+// D-108: the exemption is an EXACT match against the names the
+// connector manager exposes for its own synthetic entry points
+// (connectors.Manager.LoadToolNames), never a suffix rule. A suffix
+// ("ends in _load_tool") let a remote MCP server name its way out of
+// the whole chain (issue #757): server-chosen tool names pass through
+// the manager's namespacing verbatim, so "exfiltrate_load_tool" on
+// connector "evilmcp" surfaced as "evilmcp_exfiltrate_load_tool" and
+// resolved to an exempt allow before any grant check. Connector names
+// are operator config; remote tool names are not. The manager owns
+// the namespacing, so it hands over finished names rather than this
+// package re-deriving them (and importing connectors would be a
+// cycle). Read per Resolve so a connector reload applies at once.
+// Loading a tool still grants nothing: the loaded tool keeps its own
+// namespaced name, is absent from the exempt map, and walks the whole
+// chain when the model actually calls it.
+func (p *Permissions) SetLoadTools(live func() []string) {
+	p.loadTools = live
+}
+
+// isLoadTool reports whether tool is one of the live index entry
+// points SetLoadTools wired.
+func (p *Permissions) isLoadTool(tool string) bool {
+	if p.loadTools == nil {
+		return false
+	}
+	return slices.Contains(p.loadTools(), tool)
 }
 
 // Resolve runs the chain for one call.
@@ -163,7 +176,7 @@ func (p *Permissions) Resolve(ctx context.Context, sessionID, tool string, args 
 		}, nil
 	}
 
-	if p.exempt[tool] || isConnectorLoadTool(tool) {
+	if p.exempt[tool] || p.isLoadTool(tool) {
 		return Resolution{Decision: DecisionAllow, Subject: subject, Rationale: "exempt tool"}, nil
 	}
 
