@@ -74,6 +74,9 @@ func ConvertCurrency(lookup CurrencyLookup) *tools.Tool {
 func newCurrencyConverter(lookup CurrencyLookup, client *http.Client, baseURL string) *tools.Tool {
 	return &tools.Tool{
 		Name: "convert_currency",
+		// Trusted: the result is numbers this tool formats from parsed
+		// rates, never text the rate service wrote.
+		Trusted: true,
 		Description: `Converts an amount from one currency to another using
 daily USD-base reference exchange rates (open.er-api.com, updated
 daily; falls back to a live lookup when no stored rate is available).

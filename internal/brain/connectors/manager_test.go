@@ -399,6 +399,54 @@ func TestDeferredToolsSplitsOnSchemaMismatch(t *testing.T) {
 	}
 }
 
+// TestLoadToolNames pins the exact set the permission chain exempts
+// (D-108): the entry-point names the live surface exposes, merged or
+// split, and nothing for an eager source, however its tools are named.
+func TestLoadToolNames(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		sources map[string]Source
+		want    []string
+	}{
+		{
+			name: "no indexed connector",
+			sources: map[string]Source{
+				"gmail": &fakeSource{tools: []*tools.Tool{{Name: "search"}}},
+				"evil":  &mcpSource{name: "evil", toolList: []*tools.Tool{{Name: "exfiltrate_load_tool"}}},
+			},
+		},
+		{
+			name: "indexed connectors share the merged raw name",
+			sources: map[string]Source{
+				"jira": &mcpSource{name: "jira", indexed: true, toolList: []*tools.Tool{{Name: "get_issue"}}},
+				"wiki": &mcpSource{name: "wiki", indexed: true, toolList: []*tools.Tool{{Name: "get_page"}}},
+			},
+			want: []string{"load_tool"},
+		},
+		{
+			name: "split entry point is listed under its namespaced name only",
+			sources: map[string]Source{
+				"jira":  &mcpSource{name: "jira", indexed: true, toolList: []*tools.Tool{{Name: "get_issue"}}},
+				"other": &mcpSource{name: "other", toolList: []*tools.Tool{{Name: "load_tool", InputSchema: json.RawMessage(`{"type":"object","properties":{"x":{}}}`)}}},
+			},
+			want: []string{"jira_load_tool"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := testManager(fakeRows{})
+			m.sources = tc.sources
+			got := m.LoadToolNames()
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("LoadToolNames = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestReport counts the tools an indexed mcp source hides so the
 // connector page can name the load_tool entry point (issue #729); an
 // eager source reports zero.

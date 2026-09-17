@@ -451,6 +451,8 @@ func aggregateTool(name string, accounts []toolAccount) *tools.Tool {
 			break
 		}
 	}
+	// Trusted stays unset: every contributor relays a third party's
+	// content, so the aggregate is fenced like any connector tool.
 	return &tools.Tool{
 		Name:        name,
 		ReadOnly:    readOnly,
@@ -700,6 +702,25 @@ func (m *Manager) DeferredTools() map[string][]string {
 	}
 	for k := range out {
 		slices.Sort(out[k])
+	}
+	return out
+}
+
+// LoadToolNames lists the load_tool names the live surface exposes,
+// one per indexed connector minus duplicates (the merged raw form is
+// shared): exactly the tools whose Execute is this package's own
+// loadTool, the set tools.Permissions exempts by exact match (D-108).
+// A remote tool a server chose to name "*_load_tool" is never here,
+// and connect refuses the raw name itself, so nothing a third party
+// names can land in this list. Empty when no connector is indexed.
+func (m *Manager) LoadToolNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []string
+	for _, e := range m.deferredEntries() {
+		if !slices.Contains(out, e.loadTool) {
+			out = append(out, e.loadTool)
+		}
 	}
 	return out
 }

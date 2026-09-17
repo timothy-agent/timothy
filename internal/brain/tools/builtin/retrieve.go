@@ -22,6 +22,10 @@ type retrieveArgs struct {
 func RetrieveOutput(store OutputStore) *tools.Tool {
 	return &tools.Tool{
 		Name: "retrieve_output",
+		// Trusted stays unset: the stored output may be a fetch_url page
+		// or a mail body offloaded before the loop fenced it, so retrieval
+		// is the one path an untrusted result could re-enter unfenced
+		// (D-109).
 		Description: `Retrieves the full content of an offloaded tool result.
 
 When a tool result is too large for the conversation, you receive a

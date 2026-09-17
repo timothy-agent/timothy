@@ -57,7 +57,8 @@ type deliverArgs struct {
 // call.
 func Deliver(list DeliverLister, deliver DeliverFunc) *tools.Tool {
 	return &tools.Tool{
-		Name: "deliver",
+		Name:    "deliver",
+		Trusted: true,
 		Description: `Sends a message to one operator-configured destination
 (email, webhook, or Telegram) set up in Settings → Destinations.
 
