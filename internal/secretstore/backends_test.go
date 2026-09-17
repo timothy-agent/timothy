@@ -328,3 +328,41 @@ func TestVaultRequestDoesNotFollowRedirects(t *testing.T) {
 		t.Error("redirect was followed; token would have been re-sent")
 	}
 }
+
+// TestVaultDoDropsBodySnippetOnWrites pins D-113: an error from a call
+// that submitted a secret must not carry the response snippet, since a
+// vault that echoes the request back would put the plaintext into an
+// error that reaches an admin API response.
+func TestVaultDoDropsBodySnippetOnWrites(t *testing.T) {
+	const echoed = "sk-super-secret-value"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"errors":["rejected: ` + echoed + `"]}`))
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct {
+		name        string
+		method      string
+		body        []byte
+		wantSnippet bool
+	}{
+		{name: "kv write", method: http.MethodPost, body: []byte(`{"data":{"value":"` + echoed + `"}}`), wantSnippet: false},
+		{name: "approle login", method: http.MethodPost, body: []byte(`{"secret_id":"` + echoed + `"}`), wantSnippet: false},
+		{name: "read", method: http.MethodGet, wantSnippet: true},
+		{name: "delete", method: http.MethodDelete, wantSnippet: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := vaultDo(context.Background(), tc.method, srv.URL, "/v1/secret/data/x", "tok", tc.body, nil)
+			if err == nil {
+				t.Fatal("want an error for a 400 response")
+			}
+			if !strings.Contains(err.Error(), "400") {
+				t.Errorf("error = %v, want the status kept", err)
+			}
+			if got := strings.Contains(err.Error(), echoed); got != tc.wantSnippet {
+				t.Errorf("error carries the response snippet = %v, want %v: %v", got, tc.wantSnippet, err)
+			}
+		})
+	}
+}

@@ -558,6 +558,16 @@ func vaultDo(ctx context.Context, method, address, endpoint, token string, body 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		// D-113: the response snippet is dropped whenever the REQUEST
+		// carried a body, because every such call sends a secret
+		// (writeVault the value being stored, the approle login its
+		// secret_id) and a vault that echoes the submitted payload back
+		// in its error would put it in the error string, which reaches
+		// an admin API response verbatim. Reads keep the detail: their
+		// request body is empty, so there is nothing to echo.
+		if body != nil {
+			return fmt.Errorf("secretstore: vault %s: status %d", endpoint, resp.StatusCode)
+		}
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
 		return fmt.Errorf("secretstore: vault %s: status %d: %s", endpoint, resp.StatusCode, snippet)
 	}
