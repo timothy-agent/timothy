@@ -39,3 +39,9 @@ ALTER TABLE missions ADD COLUMN IF NOT EXISTS harness_retries integer NOT NULL D
 ALTER TABLE connectors DROP CONSTRAINT IF EXISTS connectors_kind_check;
 ALTER TABLE connectors ADD CONSTRAINT connectors_kind_check CHECK (kind IN ('mcp','google','github','microsoft','imap','caldav','aws'));
 ```
+
+```sql
+-- issue #656: bitbucket connector kind (Bitbucket Cloud REST 2.0).
+ALTER TABLE connectors DROP CONSTRAINT IF EXISTS connectors_kind_check;
+ALTER TABLE connectors ADD CONSTRAINT connectors_kind_check CHECK (kind IN ('mcp','google','github','microsoft','imap','caldav','aws','gcp','bitbucket'));
+```
