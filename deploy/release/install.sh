@@ -112,6 +112,10 @@ if [ -f .env ]; then
 else
   echo "Generating .env with fresh secrets..."
   cp env.example .env
+  # Before any secret is written into it: .env holds POSTGRES_PASSWORD,
+  # TIMOTHY_MASTER_KEY and TIMOTHY_API_TOKEN, and cp inherits the
+  # process umask, which on a default-022 host leaves it world-readable.
+  chmod 600 .env
 
   postgres_password=$(openssl rand -hex 24)
   master_key=$(openssl rand -base64 32)
@@ -135,7 +139,11 @@ else
   sed_inplace "s#^TIMOTHY_VERSION=.*#TIMOTHY_VERSION=${TAG}#"
   sed_inplace "s#__TIMOTHY_TAG__#${TAG}#"
 
-  echo ".env generated. Secrets were not printed to the terminal."
+  # Deliberately specific: the sign-in link printed at the end carries
+  # the API token, so a blanket "no secrets were printed" would be
+  # untrue. The database password and master key are the ones that
+  # never leave the file.
+  echo ".env generated (mode 600). The database password and master key were not printed."
 fi
 
 # --- Start ---
