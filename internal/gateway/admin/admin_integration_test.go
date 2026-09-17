@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -344,6 +345,83 @@ func TestValidationRefusesSecretsAndUnknowns(t *testing.T) {
 		if _, err := adm.Create(ctx, p); err == nil {
 			t.Fatalf("Create(%+v) succeeded, want validation error", p)
 		}
+	}
+}
+
+// TestHeadersRedactedOnListKeptOnPatch runs issue #759 end to end
+// against the real column: List hands out the placeholder, a Patch
+// echoing that placeholder leaves the stored value alone, and a Patch
+// with a fresh value replaces it.
+func TestHeadersRedactedOnListKeptOnPatch(t *testing.T) {
+	adm, _, pool := testAdmin(t)
+	ctx := t.Context()
+	db, _ := pool.Get()
+
+	const secret = "Bearer itest-header-secret" //nolint:gosec // fake fixture value, not a credential
+	id, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "hdr", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://example.invalid/v1", DefaultModel: "m1",
+		Headers: map[string]string{"Authorization": secret, "X-Title": "timothy"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	storedHeaders := func() map[string]string {
+		var raw []byte
+		if err := db.QueryRow(ctx, `SELECT headers FROM providers WHERE id = $1`, id).Scan(&raw); err != nil {
+			t.Fatalf("read headers: %v", err)
+		}
+		var got map[string]string
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("decode headers: %v", err)
+		}
+		return got
+	}
+	if got := storedHeaders(); got["Authorization"] != secret {
+		t.Fatalf("stored headers after Create = %v, want the real value", got)
+	}
+
+	list, err := adm.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var listed *Provider
+	for i := range list {
+		if list[i].ID == id {
+			listed = &list[i]
+		}
+	}
+	if listed == nil {
+		t.Fatal("created provider missing from List")
+	}
+	if listed.Headers["Authorization"] != redactedHeaderValue || listed.Headers["X-Title"] != redactedHeaderValue {
+		t.Fatalf("List headers = %v, want every value redacted", listed.Headers)
+	}
+
+	// Round trip: echo the listed row's headers back through Patch.
+	echo := listed.Headers
+	if err := adm.Patch(ctx, id, ProviderPatch{Headers: &echo}); err != nil {
+		t.Fatalf("Patch echo: %v", err)
+	}
+	if got := storedHeaders(); got["Authorization"] != secret || got["X-Title"] != "timothy" {
+		t.Fatalf("stored headers after echo Patch = %v, want unchanged", got)
+	}
+
+	rotated := map[string]string{"Authorization": "Bearer itest-rotated"} //nolint:gosec // fake fixture value, not a credential
+	if err := adm.Patch(ctx, id, ProviderPatch{Headers: &rotated}); err != nil {
+		t.Fatalf("Patch rotate: %v", err)
+	}
+	if got := storedHeaders(); !reflect.DeepEqual(got, rotated) {
+		t.Fatalf("stored headers after rotate Patch = %v, want %v", got, rotated)
+	}
+
+	// The placeholder is refused where there is no stored value to keep.
+	if _, err := adm.Create(ctx, Provider{
+		Name: adminMarker + "hdr2", Kind: "api", Driver: "openaicompat",
+		BaseURL: "https://example.invalid/v1",
+		Headers: map[string]string{"x-api-key": redactedHeaderValue},
+	}); err == nil {
+		t.Fatal("Create with the redaction placeholder succeeded, want validation error")
 	}
 }
 
