@@ -227,34 +227,47 @@ func TestConverseSystem(t *testing.T) {
 	}
 }
 
+// TestConverseSystemCacheTTL pins the Nova downgrade from #755: Bedrock
+// rejects an explicit Ttl outside Anthropic models. Anthropic on Bedrock
+// deliberately gets no cache point at all, see converseSystem.
 func TestConverseSystemCacheTTL(t *testing.T) {
 	t.Parallel()
 
-	// No hint: the cache point keeps the provider's default lifetime.
-	blocks := converseSystem("persona", "us.amazon.nova-pro-v1:0", "")
-	cp, ok := blocks[1].(*types.SystemContentBlockMemberCachePoint)
-	if !ok {
-		t.Fatalf("block 1 = %#v", blocks[1])
+	cases := []struct {
+		name      string
+		model     string
+		ttl       string
+		wantPoint bool
+	}{
+		{"nova default", "us.amazon.nova-pro-v1:0", "", true},
+		{"nova 1h downgrades to default", "us.amazon.nova-2-lite-v1:0", "1h", true},
+		{"anthropic default", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "", false},
+		{"anthropic 1h", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", "1h", false},
+		{"titan default", "amazon.titan-text-premier-v1:0", "", false},
+		{"titan 1h", "amazon.titan-text-premier-v1:0", "1h", false},
 	}
-	if cp.Value.Ttl != "" {
-		t.Fatalf("default ttl = %q, want empty", cp.Value.Ttl)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Hinted and eligible: the cache point carries the one-hour tier.
-	blocks = converseSystem("persona", "us.amazon.nova-pro-v1:0", "1h")
-	cp, ok = blocks[1].(*types.SystemContentBlockMemberCachePoint)
-	if !ok {
-		t.Fatalf("block 1 = %#v", blocks[1])
-	}
-	if cp.Value.Ttl != types.CacheTTLOneHour {
-		t.Fatalf("ttl = %q, want %q", cp.Value.Ttl, types.CacheTTLOneHour)
-	}
-
-	// Hinted but not cache-eligible: the request goes out unchanged,
-	// no cache point at all (the miss is a debug log, not an error).
-	blocks = converseSystem("persona", "amazon.titan-text-premier-v1:0", "1h")
-	if len(blocks) != 1 {
-		t.Fatalf("titan blocks = %d, want 1 (no cache point)", len(blocks))
+			blocks := converseSystem("persona", tc.model, tc.ttl)
+			if !tc.wantPoint {
+				if len(blocks) != 1 {
+					t.Fatalf("blocks = %d, want 1 (no cache point)", len(blocks))
+				}
+				return
+			}
+			if len(blocks) != 2 {
+				t.Fatalf("blocks = %d, want 2", len(blocks))
+			}
+			cp, ok := blocks[1].(*types.SystemContentBlockMemberCachePoint)
+			if !ok {
+				t.Fatalf("block 1 = %#v", blocks[1])
+			}
+			if cp.Value.Ttl != "" {
+				t.Fatalf("ttl = %q, want empty", cp.Value.Ttl)
+			}
+		})
 	}
 }
 

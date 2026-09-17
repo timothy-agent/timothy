@@ -564,9 +564,10 @@ func isToolResultTurn(msg types.Message) bool {
 // shorter than Nova's caching minimum are ignored server-side, not
 // errors.
 //
-// cacheTTL "1h" asks the cache point for the extended tier. Only the
-// cache-eligible family can carry it; for anything else the request
-// goes out unchanged and the miss is logged at debug.
+// cacheTTL is a hint only. Nova supports cache points but not an
+// explicit Ttl, which Bedrock rejects outside Anthropic models, so the
+// point goes out with the default lifetime and the downgrade is logged
+// at debug; models without a cache point log the miss the same way.
 func converseSystem(system, model, cacheTTL string) []types.SystemContentBlock {
 	if system == "" {
 		return nil
@@ -580,11 +581,12 @@ func converseSystem(system, model, cacheTTL string) []types.SystemContentBlock {
 		}
 		return blocks
 	}
-	point := types.CachePointBlock{Type: types.CachePointTypeDefault}
-	if cacheTTL == "1h" {
-		point.Ttl = types.CacheTTLOneHour
+	if cacheTTL != "" {
+		slog.Default().Debug("cache ttl downgraded to default", "model", model, "cache_ttl", cacheTTL)
 	}
-	blocks = append(blocks, &types.SystemContentBlockMemberCachePoint{Value: point})
+	blocks = append(blocks, &types.SystemContentBlockMemberCachePoint{
+		Value: types.CachePointBlock{Type: types.CachePointTypeDefault},
+	})
 	return blocks
 }
 
