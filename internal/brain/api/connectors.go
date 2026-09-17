@@ -123,6 +123,13 @@ func (h *connectorAPI) list(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "connectors_failed", err.Error())
 		return
 	}
+	// D-115: config.headers carries Authorization/x-api-key values for
+	// the mcp and aws kinds. The manager reads the store directly, so
+	// only this client-facing copy is blanked; patch puts the stored
+	// value back when the placeholder comes home.
+	for i, c := range rows {
+		rows[i] = connectors.RedactConfigHeaders(c)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"connectors": rows})
 }
 
@@ -130,6 +137,14 @@ func (h *connectorAPI) create(w http.ResponseWriter, r *http.Request) {
 	var c connectors.Connector
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	// A create has no stored value for the placeholder to mean, so
+	// accepting it would store the literal string as a header and send
+	// it upstream (D-115).
+	if connectors.HasRedactedHeader(c.Config) {
+		jsonError(w, http.StatusBadRequest, "bad_request",
+			"config.headers carries the "+connectors.RedactedHeaderValue+" placeholder; a new connector needs the real header value")
 		return
 	}
 	if c.Kind == "github" {
@@ -160,6 +175,20 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 			failConnector(w, err)
 			return
 		}
+		// The form read its config back from list, where header values
+		// were blanked (D-115); put the stored ones back so saving an
+		// unrelated field does not overwrite a header with the
+		// placeholder. Before the github branch: that branch re-encodes
+		// the config, and a restored header must survive it.
+		restored := connectors.RestoreConfigHeaders(*patch.Config, existing)
+		// A placeholder left over after the restore names a header the
+		// stored config does not have, so it means nothing.
+		if connectors.HasRedactedHeader(restored) {
+			jsonError(w, http.StatusBadRequest, "bad_request",
+				"config.headers carries the "+connectors.RedactedHeaderValue+" placeholder for a header that is not stored; send its real value")
+			return
+		}
+		patch.Config = &restored
 		if existing.Kind == "github" {
 			credentialRef := existing.CredentialRef
 			if patch.CredentialRef != nil {
