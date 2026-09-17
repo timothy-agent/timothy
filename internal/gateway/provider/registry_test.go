@@ -1,8 +1,12 @@
 package provider
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestBuildRegistry(t *testing.T) {
@@ -241,5 +245,53 @@ func TestNewBedrock(t *testing.T) {
 	caps := p.Capabilities()
 	if len(caps) != 5 || caps[0] != CapChat || caps[2] != CapTools || caps[4] != CapVision {
 		t.Fatalf("caps = %v", caps)
+	}
+}
+
+// TestBuildForwardsHeadersToRequests pins the other half of issue
+// #759: the admin API redacts header values on read, but the driver
+// built from the stored row must still send the real value upstream.
+func TestBuildForwardsHeadersToRequests(t *testing.T) {
+	t.Parallel()
+	const secret = "Bearer sk-real-header-value" //nolint:gosec // fake fixture value, not a credential
+	cases := []struct {
+		driver string
+	}{
+		{driver: "anthropic"},
+		{driver: "openaicompat"},
+		{driver: "openai-responses"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.driver, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var gotAuth string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				gotAuth = r.Header.Get("Authorization")
+				mu.Unlock()
+				w.WriteHeader(http.StatusBadRequest)
+			}))
+			t.Cleanup(srv.Close)
+
+			r, err := Build([]Config{{
+				Name: "p", Kind: KindAPI, Driver: tc.driver, BaseURL: srv.URL,
+				Headers: map[string]string{"Authorization": secret},
+				Timeout: 10 * time.Second,
+			}}, func(string) string { return "" })
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			p, _ := r.Get("p")
+			ch, err := p.Stream(t.Context(), CompletionRequest{Model: "m", Messages: []Message{{Role: "user", Content: "hi"}}})
+			if err == nil {
+				collect(t, ch)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if gotAuth != secret {
+				t.Fatalf("upstream Authorization = %q, want the configured value", gotAuth)
+			}
+		})
 	}
 }
