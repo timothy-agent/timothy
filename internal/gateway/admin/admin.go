@@ -404,7 +404,13 @@ func (a *Admin) PatchBudget(ctx context.Context, patch map[string]*ledger.Budget
 
 // Provider is the API shape of one providers row. credential_ref is a
 // NAME (env var / Vault path / AWS profile) — secret values are never
-// stored or returned anywhere in this system.
+// stored or returned anywhere in this system. Headers is the one
+// exception on the storage side (D-111): header-authenticated
+// providers keep their Authorization/x-api-key values there, so List
+// blanks every header value to redactedHeaderValue before it leaves
+// this package, and Patch treats that placeholder as "keep the stored
+// value" so a client echoing a listed row back never overwrites the
+// real header with the placeholder.
 type Provider struct {
 	ID            string            `json:"id"`
 	Name          string            `json:"name"`
@@ -454,6 +460,11 @@ func validateProvider(p Provider) error {
 	}
 	if !credentialRefPattern.MatchString(p.CredentialRef) {
 		return fmt.Errorf("credential_ref must be a name or path (env var, Vault path, AWS profile), never a secret value")
+	}
+	for k, v := range p.Headers {
+		if v == redactedHeaderValue {
+			return fmt.Errorf("header %q: %s is the redaction placeholder, not a value", k, redactedHeaderValue)
+		}
 	}
 	if _, err := parseRequestTimeout(p.Options); err != nil {
 		return err
@@ -605,7 +616,9 @@ func validateOpenAIResponses(opts map[string]string) error {
 	return nil
 }
 
-// List returns every provider row, config order by name.
+// List returns every provider row, config order by name. Header values
+// come back redacted (D-111): List only feeds the admin API, and the
+// UI never edits headers, so nothing downstream needs the real value.
 func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 	db, err := a.db.Get()
 	if err != nil {
@@ -635,7 +648,7 @@ func (a *Admin) List(ctx context.Context) ([]Provider, error) {
 			return nil, fmt.Errorf("admin providers: options: %w", err)
 		}
 		normalizeProvider(&p)
-		out = append(out, p)
+		out = append(out, redactHeaders(p))
 	}
 	return out, rows.Err()
 }
@@ -824,7 +837,10 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 		after.CredentialRef = *patch.CredentialRef
 	}
 	if patch.Headers != nil {
-		after.Headers = *patch.Headers
+		after.Headers, err = mergeRedactedHeaders(before.Headers, *patch.Headers)
+		if err != nil {
+			return err
+		}
 	}
 	if patch.Enabled != nil {
 		after.Enabled = *patch.Enabled
@@ -1648,22 +1664,53 @@ func (a *Admin) audit(ctx context.Context, action, entity, entityID string, befo
 // redactAuditValue blanks Provider.Headers values before a payload is
 // written to admin_audit: header-authenticated providers put
 // Authorization/x-api-key values there, and admin_audit is a plain
-// table with no dedicated secret handling. Copies the map so the live
-// struct (and whatever the caller does with it afterward) is untouched.
+// table with no dedicated secret handling.
 func redactAuditValue(v any) any {
 	p, ok := v.(Provider)
 	if !ok {
 		return v
 	}
+	return redactHeaders(p)
+}
+
+// redactedHeaderValue stands in for every header value on the API
+// read path (D-111). Patch recognises it as "keep what is stored".
+const redactedHeaderValue = "[redacted]"
+
+// redactHeaders returns p with every header value replaced by
+// redactedHeaderValue. Copies the map so the live struct (and whatever
+// the caller does with it afterward) is untouched.
+func redactHeaders(p Provider) Provider {
 	if len(p.Headers) == 0 {
 		return p
 	}
 	redacted := make(map[string]string, len(p.Headers))
 	for k := range p.Headers {
-		redacted[k] = "[redacted]"
+		redacted[k] = redactedHeaderValue
 	}
 	p.Headers = redacted
 	return p
+}
+
+// mergeRedactedHeaders resolves a patched header map against the
+// stored one: a value equal to redactedHeaderValue is a client echoing
+// what List returned, so the stored value stays; any other value wins
+// and keys absent from patch are dropped. A placeholder for a key that
+// has no stored value is an error, since there is nothing to keep.
+func mergeRedactedHeaders(stored, patch map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(patch))
+	for k, v := range patch {
+		if v != redactedHeaderValue {
+			out[k] = v
+			continue
+		}
+		kept, ok := stored[k]
+		if !ok {
+			return nil, fmt.Errorf("header %q: %s is the redaction placeholder, not a value", k, redactedHeaderValue)
+		}
+		out[k] = kept
+	}
+	return out, nil
 }
 
 // reload swaps the serving snapshot; a failure keeps the last good one
