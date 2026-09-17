@@ -47,6 +47,31 @@ describe('AssistantMessage', () => {
     expect(screen.getByRole('link', { name: 'Other' })).toHaveAttribute('href', 'https://other.com')
   })
 
+  it('renders a citation with a non-http scheme as plain text, not a link', () => {
+    const msg = play([
+      {
+        type: 'chunk',
+        text: [
+          'The answer.',
+          '',
+          '## Sources',
+          '1. [Script](javascript:alert1)',
+          '2. [Data](data:text/html;base64,PHNjcmlwdD4=)',
+          '3. [Legacy](vbscript:msgbox)',
+          '4. [Real](https://example.com)',
+        ].join('\n'),
+      },
+      { type: 'meta', session_id: 's' },
+    ])
+    render(<AssistantMessage msg={msg} />)
+
+    for (const name of ['Script', 'Data', 'Legacy']) {
+      expect(screen.queryByRole('link', { name })).not.toBeInTheDocument()
+      expect(screen.getByText(name)).toBeInTheDocument()
+    }
+    expect(screen.getByRole('link', { name: 'Real' })).toHaveAttribute('href', 'https://example.com')
+  })
+
   it('shows an Activity button that opens the detail panel', () => {
     const msg = play([
       { type: 'reasoning_chunk', text: 'thinking…' },

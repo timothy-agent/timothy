@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { collapseRepeatedTail, splitSources } from './citations'
+import { collapseRepeatedTail, safeHref, splitSources } from './citations'
 
 describe('splitSources', () => {
   it('splits a trailing Sources section into structured citations', () => {
@@ -89,5 +89,24 @@ describe('collapseRepeatedTail', () => {
     const { citations, body } = splitSources(collapseRepeatedTail(answer + '\n' + answer))
     expect(citations).toHaveLength(1)
     expect(body).toBe('The monthly bill would be $29.85 based on 30 million requests.')
+  })
+})
+
+describe('safeHref', () => {
+  it('passes http and https URLs through unchanged', () => {
+    expect(safeHref('https://example.com/docs')).toBe('https://example.com/docs')
+    expect(safeHref('http://example.com')).toBe('http://example.com')
+  })
+
+  it('rejects script-bearing schemes', () => {
+    expect(safeHref('javascript:alert(1)')).toBeUndefined()
+    expect(safeHref('JavaScript:alert(1)')).toBeUndefined()
+    expect(safeHref('data:text/html;base64,PHNjcmlwdD4=')).toBeUndefined()
+    expect(safeHref('vbscript:msgbox')).toBeUndefined()
+  })
+
+  it('rejects a URL that does not parse', () => {
+    expect(safeHref('example.com/docs')).toBeUndefined()
+    expect(safeHref('')).toBeUndefined()
   })
 })
