@@ -57,17 +57,25 @@ func TestSharedToolSchemasMatchAcrossKinds(t *testing.T) {
 		schema string
 		desc   string
 	}
-	byKind := map[string]map[string]toolShape{
-		"google":    {},
-		"microsoft": {},
-		"imap":      {},
-		"caldav":    {},
-		"github":    {},
-		"bitbucket": {},
-	}
-	for name, src := range map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc, "caldav": cSrc, "github": ghSrc, "bitbucket": bbSrc} {
+	// Driven by the kinds registry, not a literal list: a new kind must
+	// either be built here or be named below, so one reusing a shared tool
+	// name cannot slip past this guard unnoticed.
+	sources := map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc, "caldav": cSrc, "github": ghSrc, "bitbucket": bbSrc}
+	// mcp wraps an external server whose schemas are its own; aws is an mcp
+	// bridge; gcp serves only its own storage/bigquery tools.
+	noSharedTools := map[string]bool{"mcp": true, "aws": true, "gcp": true}
+	byKind := map[string]map[string]toolShape{}
+	for kind := range kinds {
+		src, ok := sources[kind]
+		if !ok {
+			if !noSharedTools[kind] {
+				t.Errorf("kind %q is in the kinds registry but not built here: add a source or name it in noSharedTools", kind)
+			}
+			continue
+		}
+		byKind[kind] = map[string]toolShape{}
 		for _, tl := range src.Tools() {
-			byKind[name][tl.Name] = toolShape{schema: string(tl.InputSchema), desc: tl.Description}
+			byKind[kind][tl.Name] = toolShape{schema: string(tl.InputSchema), desc: tl.Description}
 		}
 	}
 

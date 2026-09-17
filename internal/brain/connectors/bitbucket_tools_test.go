@@ -177,7 +177,7 @@ func TestBitbucketGetPullRequest(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		args     string
-		diffstat func(w http.ResponseWriter)
+		diffstat func(w http.ResponseWriter, r *http.Request)
 		prStatus int
 		want     []string
 		wantErr  string
@@ -185,7 +185,7 @@ func TestBitbucketGetPullRequest(t *testing.T) {
 		{
 			name: "renders metadata with diffstat totals",
 			args: `{"repo":"ws/repo","number":7}`,
-			diffstat: func(w http.ResponseWriter) {
+			diffstat: func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write([]byte(`{"values":[{"lines_added":4,"lines_removed":6,"status":"modified"},{"lines_added":10,"lines_removed":0,"status":"added"}],"size":2}`))
 			},
 			want: []string{
@@ -199,9 +199,46 @@ func TestBitbucketGetPullRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "diffstat follows next across pages",
+			args: `{"repo":"ws/repo","number":7}`,
+			diffstat: func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("page") == "2" {
+					_, _ = w.Write([]byte(`{"values":[{"lines_added":1,"lines_removed":2}]}`))
+					return
+				}
+				_, _ = fmt.Fprintf(w, `{"values":[{"lines_added":4,"lines_removed":6},{"lines_added":10,"lines_removed":0}],"next":"%s/repositories/ws/repo/pullrequests/7/diffstat?page=2"}`, bitbucketAPIBase)
+			},
+			want: []string{
+				"#7 Add thing",
+				"author: alice", "state: open",
+				"head: feat/x (abc123)", "base: main",
+				"files changed: 3, +15/-8",
+				"created: 2026-09-01T00:00:00+00:00, updated: 2026-09-02T00:00:00+00:00",
+				"url: https://bitbucket.org/ws/repo/pull-requests/7",
+				"", "Does the thing.",
+			},
+		},
+		{
+			name: "diffstat past the page ceiling is marked truncated",
+			args: `{"repo":"ws/repo","number":7}`,
+			diffstat: func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `{"values":[{"lines_added":1,"lines_removed":1}],"next":"%s/repositories/ws/repo/pullrequests/7/diffstat"}`, bitbucketAPIBase)
+			},
+			want: []string{
+				"#7 Add thing",
+				"author: alice", "state: open",
+				"head: feat/x (abc123)", "base: main",
+				fmt.Sprintf("files changed: %d, +%d/-%d [diffstat truncated at %d pages; more files omitted]",
+					bitbucketDiffstatMaxPages, bitbucketDiffstatMaxPages, bitbucketDiffstatMaxPages, bitbucketDiffstatMaxPages),
+				"created: 2026-09-01T00:00:00+00:00, updated: 2026-09-02T00:00:00+00:00",
+				"url: https://bitbucket.org/ws/repo/pull-requests/7",
+				"", "Does the thing.",
+			},
+		},
+		{
 			name: "diffstat failure degrades to a note",
 			args: `{"repo":"ws/repo","number":7}`,
-			diffstat: func(w http.ResponseWriter) {
+			diffstat: func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte(`{"type":"error","error":{"message":"boom"}}`))
 			},
@@ -233,7 +270,7 @@ func TestBitbucketGetPullRequest(t *testing.T) {
 				case "/repositories/ws/repo/pullrequests/7":
 					_, _ = w.Write([]byte(pr))
 				case "/repositories/ws/repo/pullrequests/7/diffstat":
-					tc.diffstat(w)
+					tc.diffstat(w, r)
 				case "/repositories/ws/repo/pullrequests/999":
 					w.WriteHeader(tc.prStatus)
 					_, _ = w.Write([]byte("Not Found"))

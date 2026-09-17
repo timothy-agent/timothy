@@ -23,6 +23,9 @@ const (
 	bitbucketDiffMaxBytes = 200 << 10
 	// comments page size; one extra page is followed
 	bitbucketCommentsPageLen = 100
+	// diffstat page size and page ceiling; counts past it are marked truncated
+	bitbucketDiffstatPageLen  = 100
+	bitbucketDiffstatMaxPages = 10
 )
 
 // bitbucketRepoArg matches the "workspace/slug" form every PR tool takes.
@@ -193,16 +196,34 @@ func (s *bitbucketSource) getPullRequest() *tools.Tool {
 			fmt.Fprintf(&b, "author: %s\nstate: %s\n", bitbucketAuthor(pr.Author.Nickname, pr.Author.DisplayName), bitbucketPRState(pr))
 			fmt.Fprintf(&b, "head: %s (%s)\nbase: %s\n", pr.Source.Branch.Name, pr.Source.Commit.Hash, pr.Destination.Branch.Name)
 			// counts come from diffstat; its failure degrades to a note
-			var stat bitbucketPage[bitbucketDiffstat]
-			if err := s.getJSON(ctx, base+"/diffstat", "get pull request diffstat", &stat); err != nil {
-				fmt.Fprintf(&b, "(diffstat unavailable: %v)\n", err)
-			} else {
-				var added, removed int
+			var files, added, removed int
+			var truncated bool
+			var statErr error
+			next := fmt.Sprintf("%s%s/diffstat?pagelen=%d", bitbucketAPIBase, base, bitbucketDiffstatPageLen)
+			for pages := 0; next != ""; pages++ {
+				if pages >= bitbucketDiffstatMaxPages {
+					truncated = true
+					break
+				}
+				var stat bitbucketPage[bitbucketDiffstat]
+				if statErr = s.getJSONURL(ctx, next, "get pull request diffstat", &stat); statErr != nil {
+					break
+				}
+				files += len(stat.Values)
 				for _, f := range stat.Values {
 					added += f.LinesAdded
 					removed += f.LinesRemoved
 				}
-				fmt.Fprintf(&b, "files changed: %d, +%d/-%d\n", len(stat.Values), added, removed)
+				next = stat.Next
+			}
+			switch {
+			case statErr != nil:
+				fmt.Fprintf(&b, "(diffstat unavailable: %v)\n", statErr)
+			case truncated:
+				fmt.Fprintf(&b, "files changed: %d, +%d/-%d [diffstat truncated at %d pages; more files omitted]\n",
+					files, added, removed, bitbucketDiffstatMaxPages)
+			default:
+				fmt.Fprintf(&b, "files changed: %d, +%d/-%d\n", files, added, removed)
 			}
 			fmt.Fprintf(&b, "created: %s, updated: %s\nurl: %s\n", pr.CreatedOn, pr.UpdatedOn, pr.Links.HTML.Href)
 			if strings.TrimSpace(pr.Description) != "" {

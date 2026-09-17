@@ -409,6 +409,33 @@ describe('ConnectorAdd bitbucket flow', () => {
     expect(setSecret).toHaveBeenCalledWith('BITBUCKET_TOKEN', 'bb-token')
   })
 
+  // The preview caption and the submit path must derive the ref from the
+  // same helper; they drifted on the anti-stutter guard (issue #783).
+  it.each([
+    { preset: 'github-account', placeholder: 'ghp_… or github_pat_…', name: 'acme-github', ref: 'ACME_GITHUB_PAT' },
+    {
+      preset: 'bitbucket-account',
+      placeholder: 'workspace or repository access token',
+      name: 'myorg-bitbucket',
+      ref: 'MYORG_BITBUCKET_TOKEN',
+    },
+  ])('previews the same ref name it saves for $name', async ({ preset, placeholder, name, ref }) => {
+    vi.mocked(listSecretBackends).mockResolvedValue([{ backend: 'vault', configured: true, default: true }])
+    vi.mocked(createConnector).mockResolvedValue('conn-preview')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage(preset)
+
+    fireEvent.change(await screen.findByPlaceholderText(placeholder), { target: { value: 'tok' } })
+    fireEvent.change(screen.getByPlaceholderText(preset === 'github-account' ? 'github' : 'bitbucket'), {
+      target: { value: name },
+    })
+    expect(await screen.findByText(`Timothy stores the key in Vault (path timothy/${ref}).`)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith(ref, 'tok'))
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({ credential_ref: ref })
+  })
+
   it('reuses an existing credential instead of writing a secret', async () => {
     vi.mocked(createConnector).mockResolvedValue('conn-bb-3')
     vi.mocked(testConnector).mockResolvedValue({ ok: true })
