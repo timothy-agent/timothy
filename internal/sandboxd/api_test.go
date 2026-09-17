@@ -30,7 +30,7 @@ const validUUID = "a1b2c3d4-e5f6-4789-a012-b34c56d78e9f"
 
 // validWorkdirFor is validUUID's own workspace directory, the shape
 // brain actually sends. Tests whose exec must reach the daemon use it
-// rather than the bare workspace root: since D-112 the scope check runs
+// rather than the bare workspace root: since D-116 the scope check runs
 // on every ensureContainer path, so an unscoped workdir stops before
 // ExecCreate instead of only failing at container create.
 const validWorkdirFor = "/workspace/missions/coding/" + validUUID

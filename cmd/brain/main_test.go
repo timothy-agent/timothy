@@ -49,7 +49,7 @@ func TestIntersectReadOnlyConnectorToolsMatchesAllowlist(t *testing.T) {
 	}
 }
 
-// TestAdminProxyRewritesUsagePathFromWildcard pins D-112: the upstream
+// TestAdminProxyRewritesUsagePathFromWildcard pins D-116: the upstream
 // path for the usage sub-tree is built from the matched {rest...}
 // wildcard, never from a trim of the raw inbound path. ServeMux decodes
 // percent-encoded segments into the wildcard, so "..%2f" reaches the

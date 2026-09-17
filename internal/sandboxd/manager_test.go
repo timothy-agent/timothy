@@ -960,7 +960,7 @@ func TestMissionWorkspaceDir(t *testing.T) {
 		{name: "mission id as the kind segment", workdir: "/workspace/missions/m1", missionID: "m1", wantErr: true},
 		{name: "outside the workspace", workdir: "/etc", missionID: "m1", wantErr: true},
 		// Traversal must fail in THIS function, not only in api.go's
-		// validWorkdir: the mount gate has to hold standalone (D-112).
+		// validWorkdir: the mount gate has to hold standalone (D-116).
 		{name: "traversal out of the mission dir", workdir: "/workspace/missions/coding/m1/../" + other, missionID: "m1", wantErr: true},
 		{name: "traversal to the workspace root", workdir: "/workspace/missions/coding/m1/../..", missionID: "m1", wantErr: true},
 		{name: "traversal back into the same mission", workdir: "/workspace/missions/coding/m1/wt/../wt", missionID: "m1", wantErr: true},
@@ -1054,7 +1054,7 @@ func TestCreateContainerRejectsUnscopedWorkdir(t *testing.T) {
 	}
 }
 
-// TestEnsureContainerRejectsUnscopedWorkdirOnEveryPath pins D-112: the
+// TestEnsureContainerRejectsUnscopedWorkdirOnEveryPath pins D-116: the
 // scope check gates reuse and restart-in-place too, not just create.
 // Both branches hand workdir straight to Docker's WorkingDir, and they
 // carry every exec after a mission's first, so a create-only check

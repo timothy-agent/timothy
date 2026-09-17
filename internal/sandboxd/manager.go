@@ -440,7 +440,7 @@ func (m *Manager) missionLock(missionID string) *sync.Mutex {
 // workdir scopes the workspace mount to this mission's own directory
 // on the absent path only (D-107), same as environment: a container's
 // mounts are fixed for its whole life. The scope CHECK, though, runs on
-// every path (D-112): reuse and restart-in-place hand workdir straight
+// every path (D-116): reuse and restart-in-place hand workdir straight
 // to Docker's WorkingDir, and those branches carry the vast majority of
 // execs, so gating only the create path would leave the invariant
 // unenforced for all but a mission's first command.

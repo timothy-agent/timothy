@@ -1603,7 +1603,7 @@ func adminProxy(gatewayURL string, usageDecorate func(*http.Response) error, log
 	return &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
-			// D-112: the usage sub-tree is the one pattern with a
+			// D-116: the usage sub-tree is the one pattern with a
 			// wildcard, so its tail comes from the matched {rest...}
 			// PathValue rather than a trim of the raw inbound path.
 			// ServeMux percent-DECODES the wildcard, so "..%2f" arrives
