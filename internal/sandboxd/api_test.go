@@ -28,6 +28,13 @@ func testAPI(mgr *Manager) *API {
 // malformed fixture.
 const validUUID = "a1b2c3d4-e5f6-4789-a012-b34c56d78e9f"
 
+// validWorkdirFor is validUUID's own workspace directory, the shape
+// brain actually sends. Tests whose exec must reach the daemon use it
+// rather than the bare workspace root: since D-116 the scope check runs
+// on every ensureContainer path, so an unscoped workdir stops before
+// ExecCreate instead of only failing at container create.
+const validWorkdirFor = "/workspace/missions/coding/" + validUUID
+
 func execReq(missionID, body string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/sandboxes/"+missionID+"/exec", strings.NewReader(body))
 	req.SetPathValue("missionID", missionID)
@@ -281,7 +288,7 @@ func TestHandleExecTimeoutClampVisibleInArgv(t *testing.T) {
 
 	// 999999 seconds is far past execMaxTimeout (15m); the handler must
 	// clamp it before it ever reaches the daemon.
-	body := `{"workdir":"/workspace","command":"true","timeout_seconds":999999}`
+	body := `{"workdir":"` + validWorkdirFor + `","command":"true","timeout_seconds":999999}`
 	rec := httptest.NewRecorder()
 	testAPI(mgr).handleExec(rec, execReq(validUUID, body))
 
@@ -335,7 +342,7 @@ func TestHandleExecEnvReachesExecCreate(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 
-	body := `{"workdir":"/workspace","command":"true","timeout_seconds":5,"env":{"ANTHROPIC_API_KEY":"sk-test"}}`
+	body := `{"workdir":"` + validWorkdirFor + `","command":"true","timeout_seconds":5,"env":{"ANTHROPIC_API_KEY":"sk-test"}}`
 	rec := httptest.NewRecorder()
 	testAPI(mgr).handleExec(rec, execReq(validUUID, body))
 
@@ -390,7 +397,7 @@ func TestHandleExecNoEnvOmitsExecEnv(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 
-	body := `{"workdir":"/workspace","command":"true","timeout_seconds":5}`
+	body := `{"workdir":"` + validWorkdirFor + `","command":"true","timeout_seconds":5}`
 	rec := httptest.NewRecorder()
 	testAPI(mgr).handleExec(rec, execReq(validUUID, body))
 

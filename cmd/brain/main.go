@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"strings"
 	"sync"
 	"syscall"
@@ -1632,7 +1633,31 @@ func adminProxy(gatewayURL string, usageDecorate func(*http.Response) error, log
 	return &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
+			// D-116: the usage sub-tree is the one pattern with a
+			// wildcard, so its tail comes from the matched {rest...}
+			// PathValue rather than a trim of the raw inbound path.
+			// ServeMux percent-DECODES the wildcard, so "..%2f" arrives
+			// here as a literal "..". Joining the tail onto the prefix
+			// directly would resolve those segments upward and out of it:
+			// path.Join normalizes, it does not confine. Anchoring the
+			// tail at "/" first is what confines it, since ".." can never
+			// climb above the root, so whatever remains joins inside the
+			// usage sub-tree. Every other admin pattern is literal (or
+			// {id}-shaped) and matched exactly by the mux, so its
+			// rewritten path is fixed by the pattern, not by anything the
+			// caller sends.
+			//
+			// RawPath is cleared alongside Path on both branches: it
+			// still holds the inbound encoding, and URL.EscapedPath
+			// prefers it over Path whenever the two agree, so leaving it
+			// set would send the original untouched upstream.
+			if rest := r.In.PathValue("rest"); rest != "" {
+				r.Out.URL.Path = path.Join("/internal/admin/usage", path.Join("/", rest))
+				r.Out.URL.RawPath = ""
+				return
+			}
 			r.Out.URL.Path = "/internal/admin/" + strings.TrimPrefix(r.In.URL.Path, "/v1/admin/")
+			r.Out.URL.RawPath = ""
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			// resp.Request is the OUTBOUND request: Rewrite above has

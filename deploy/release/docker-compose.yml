@@ -100,6 +100,11 @@ services:
     # internal-only: no published ports, no auth; brain is the sole
     # caller, same trust boundary as searxng/markitdown. Always on,
     # unlike whisper: tesseract loads no model and idles at a few MiB.
+    # Headroom for a Pillow decode plus the tesseract pass on a 32MiB
+    # image, the sidecar's body cap.
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 128
 
   whisper:
     <<: *service

@@ -959,6 +959,11 @@ func TestMissionWorkspaceDir(t *testing.T) {
 		{name: "kind dir only", workdir: "/workspace/missions/coding", missionID: "m1", wantErr: true},
 		{name: "mission id as the kind segment", workdir: "/workspace/missions/m1", missionID: "m1", wantErr: true},
 		{name: "outside the workspace", workdir: "/etc", missionID: "m1", wantErr: true},
+		// Traversal must fail in THIS function, not only in api.go's
+		// validWorkdir: the mount gate has to hold standalone (D-116).
+		{name: "traversal out of the mission dir", workdir: "/workspace/missions/coding/m1/../" + other, missionID: "m1", wantErr: true},
+		{name: "traversal to the workspace root", workdir: "/workspace/missions/coding/m1/../..", missionID: "m1", wantErr: true},
+		{name: "traversal back into the same mission", workdir: "/workspace/missions/coding/m1/wt/../wt", missionID: "m1", wantErr: true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1046,5 +1051,37 @@ func TestCreateContainerRejectsUnscopedWorkdir(t *testing.T) {
 	_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", workspaceMountPath)
 	if !errors.Is(err, ErrWorkspaceScope) {
 		t.Fatalf("err = %v, want ErrWorkspaceScope", err)
+	}
+}
+
+// TestEnsureContainerRejectsUnscopedWorkdirOnEveryPath pins D-116: the
+// scope check gates reuse and restart-in-place too, not just create.
+// Both branches hand workdir straight to Docker's WorkingDir, and they
+// carry every exec after a mission's first, so a create-only check
+// would leave the invariant unenforced where it matters most. Each
+// case fails before any daemon call: an unscoped workdir must never
+// reach Docker at all.
+func TestEnsureContainerRejectsUnscopedWorkdirOnEveryPath(t *testing.T) {
+	const other = "b2c3d4e5-0000-0000-0000-000000000002"
+	tests := []struct {
+		name    string
+		workdir string
+	}{
+		{name: "workspace root", workdir: workspaceMountPath},
+		{name: "missions root", workdir: "/workspace/missions"},
+		{name: "another mission's workdir", workdir: "/workspace/missions/coding/" + other + "/wt"},
+		{name: "traversal workdir", workdir: "/workspace/missions/coding/m1/../" + other},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				t.Fatalf("unexpected docker call for a workdir that must be rejected before inspect: %s %s", r.Method, r.URL.Path)
+			})
+			mgr := newTestManager(cli)
+			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+			if _, err := mgr.ensureContainer(context.Background(), "m1", "", tc.workdir); !errors.Is(err, ErrWorkspaceScope) {
+				t.Fatalf("err = %v, want ErrWorkspaceScope", err)
+			}
+		})
 	}
 }

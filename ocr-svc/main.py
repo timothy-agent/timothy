@@ -21,6 +21,39 @@ app = FastAPI()
 # renders).
 Image.MAX_IMAGE_PIXELS = 64_000_000
 
+# Caps one uploaded image. Well above anything brain sends (embedded PDF
+# images and 110-DPI page renders) while keeping a single request from
+# buffering unbounded bytes; MAX_IMAGE_PIXELS above bounds the decode,
+# this bounds the read that precedes it.
+MAX_BODY_BYTES = 32 * 1024 * 1024
+
+
+async def read_capped_body(request: Request) -> bytes:
+    """Reads the request body, refusing anything over MAX_BODY_BYTES.
+
+    Streams rather than awaiting request.body(): a declared
+    Content-Length is rejected before a single chunk is read, and an
+    undeclared (chunked) body stops at the first chunk that crosses the
+    cap instead of buffering the whole upload. Unbounded reads here let
+    one oversized image OOM the sidecar.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > MAX_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="request body too large")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid content-length") from None
+
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
 
 @app.get("/healthz")
 def healthz():
@@ -36,7 +69,7 @@ async def recognize(request: Request):
     the set brain's captioning path allows) works without a per-type
     branch here.
     """
-    body = await request.body()
+    body = await read_capped_body(request)
     if not body:
         raise HTTPException(status_code=400, detail="empty request body")
 

@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -333,7 +334,15 @@ var ErrWorkspaceScope = errors.New("sandbox: workdir is outside the mission's wo
 // against the caller-supplied path rather than trusted from it, so a
 // workdir naming another mission's directory resolves to nothing and
 // the exec fails instead of mounting that mission's files.
+//
+// Traversal is rejected here rather than assumed away: api.go's
+// validWorkdir already requires path.Clean(w) == w at the HTTP layer,
+// but this function is the mount's own gate and must hold on its own
+// merits for every caller, HTTP or not.
 func missionWorkspaceDir(workdir, missionID string) (string, error) {
+	if workdir != path.Clean(workdir) {
+		return "", fmt.Errorf("%w: %q is not a clean path", ErrWorkspaceScope, workdir)
+	}
 	prefix := path.Join(workspaceMountPath, missionsDirName) + "/"
 	if !strings.HasPrefix(workdir, prefix) {
 		return "", fmt.Errorf("%w: %q", ErrWorkspaceScope, workdir)
@@ -341,6 +350,9 @@ func missionWorkspaceDir(workdir, missionID string) (string, error) {
 	segments := strings.Split(strings.TrimPrefix(workdir, prefix), "/")
 	if len(segments) < 2 || segments[1] != missionID {
 		return "", fmt.Errorf("%w: %q is not under mission %s", ErrWorkspaceScope, workdir, missionID)
+	}
+	if slices.Contains(segments, "..") {
+		return "", fmt.Errorf("%w: %q contains a traversal segment", ErrWorkspaceScope, workdir)
 	}
 	return path.Join(prefix, segments[0], segments[1]), nil
 }
@@ -427,8 +439,15 @@ func (m *Manager) missionLock(missionID string) *sync.Mutex {
 // Docker.
 // workdir scopes the workspace mount to this mission's own directory
 // on the absent path only (D-107), same as environment: a container's
-// mounts are fixed for its whole life.
+// mounts are fixed for its whole life. The scope CHECK, though, runs on
+// every path (D-116): reuse and restart-in-place hand workdir straight
+// to Docker's WorkingDir, and those branches carry the vast majority of
+// execs, so gating only the create path would leave the invariant
+// unenforced for all but a mission's first command.
 func (m *Manager) ensureContainer(ctx context.Context, missionID, environment, workdir string) (string, error) {
+	if _, err := missionWorkspaceDir(workdir, missionID); err != nil {
+		return "", err
+	}
 	lock := m.missionLock(missionID)
 	lock.Lock()
 	defer lock.Unlock()
