@@ -23,7 +23,8 @@ type rememberArgs struct {
 // immediately — no confirmation queue (D-011).
 func Remember(save RememberFunc) *tools.Tool {
 	return &tools.Tool{
-		Name: "remember",
+		Name:    "remember",
+		Trusted: true,
 		Description: `Stores one fact in long-term memory, permanently.
 
 Use ONLY when the user explicitly asks to remember something ("remember

@@ -40,6 +40,9 @@ type searchMemoryArgs struct {
 func SearchMemory(recall SearchMemoryFunc) *tools.Tool {
 	return &tools.Tool{
 		Name: "search_memory",
+		// Trusted: long-term memory is operator data memoryd already
+		// gates at extraction (D-011).
+		Trusted: true,
 		Description: `Searches long-term memory for what is known about the operator and returns matching memories.
 
 Use when the answer depends on the operator rather than on general
