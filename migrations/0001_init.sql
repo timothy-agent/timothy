@@ -397,7 +397,7 @@ ON CONFLICT (backend) DO NOTHING;
 CREATE TABLE IF NOT EXISTS connectors (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name           text UNIQUE NOT NULL,
-    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github', 'microsoft', 'imap', 'caldav', 'aws', 'gcp')),
+    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github', 'microsoft', 'imap', 'caldav', 'aws', 'gcp', 'bitbucket')),
     -- kind-specific settings: mcp → {transport, endpoint, headers},
     -- google/microsoft → {client_id, client_secret_ref, scopes},
     -- imap → {host, port, username, account_email, smtp_host,

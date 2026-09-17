@@ -351,6 +351,109 @@ describe('ConnectorAdd gcp flow', () => {
   })
 })
 
+describe('ConnectorAdd bitbucket flow', () => {
+  it('renders a token-only form: no endpoint field, access-token copy', async () => {
+    renderPage('bitbucket-account')
+
+    expect(await screen.findByPlaceholderText('workspace or repository access token')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('bitbucket')).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('https://…/mcp')).not.toBeInTheDocument()
+    expect(screen.getByText('Access token')).toBeInTheDocument()
+  })
+
+  it('keeps Test disabled until a token is pasted', async () => {
+    renderPage('bitbucket-account')
+
+    const testButton = await screen.findByRole('button', { name: 'Test connection' })
+    expect(testButton).toBeDisabled()
+
+    fireEvent.change(screen.getByPlaceholderText('workspace or repository access token'), { target: { value: 'bb-token' } })
+    expect(testButton).toBeEnabled()
+  })
+
+  it('creates a bitbucket-kind connector under a derived _BITBUCKET_TOKEN ref', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-bb')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderPage('bitbucket-account')
+
+    fireEvent.change(await screen.findByPlaceholderText('bitbucket'), { target: { value: 'work' } })
+    fireEvent.change(screen.getByPlaceholderText('workspace or repository access token'), { target: { value: 'bb-token' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('WORK_BITBUCKET_TOKEN', 'bb-token')
+    // kind must follow the preset, not the github literal the token-only
+    // branch used to hardcode.
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toEqual({
+      name: 'work',
+      kind: 'bitbucket',
+      config: {},
+      credential_ref: 'WORK_BITBUCKET_TOKEN',
+      enabled: false,
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
+    await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-bb', { enabled: true }))
+  })
+
+  it('does not stutter the ref when the name already ends in bitbucket', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-bb-2')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('bitbucket-account')
+
+    fireEvent.change(await screen.findByPlaceholderText('workspace or repository access token'), { target: { value: 'bb-token' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('BITBUCKET_TOKEN', 'bb-token')
+  })
+
+  // The preview caption and the submit path must derive the ref from the
+  // same helper; they drifted on the anti-stutter guard (issue #783).
+  it.each([
+    { preset: 'github-account', placeholder: 'ghp_… or github_pat_…', name: 'acme-github', ref: 'ACME_GITHUB_PAT' },
+    {
+      preset: 'bitbucket-account',
+      placeholder: 'workspace or repository access token',
+      name: 'myorg-bitbucket',
+      ref: 'MYORG_BITBUCKET_TOKEN',
+    },
+  ])('previews the same ref name it saves for $name', async ({ preset, placeholder, name, ref }) => {
+    vi.mocked(listSecretBackends).mockResolvedValue([{ backend: 'vault', configured: true, default: true }])
+    vi.mocked(createConnector).mockResolvedValue('conn-preview')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage(preset)
+
+    fireEvent.change(await screen.findByPlaceholderText(placeholder), { target: { value: 'tok' } })
+    fireEvent.change(screen.getByPlaceholderText(preset === 'github-account' ? 'github' : 'bitbucket'), {
+      target: { value: name },
+    })
+    expect(await screen.findByText(`Timothy stores the key in Vault (path timothy/${ref}).`)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith(ref, 'tok'))
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({ credential_ref: ref })
+  })
+
+  it('reuses an existing credential instead of writing a secret', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-bb-3')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('bitbucket-account')
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'Use existing' }))
+    expect(screen.queryByPlaceholderText('workspace or repository access token')).not.toBeInTheDocument()
+
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /GITHUB_PAT/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({ kind: 'bitbucket', credential_ref: 'GITHUB_PAT' })
+  })
+})
+
 describe('ConnectorAdd mcp endpoint field', () => {
   it('edits the pre-filled endpoint and invalidates a prior test', async () => {
     vi.mocked(createConnector).mockResolvedValue('conn-mcp')
