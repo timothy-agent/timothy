@@ -67,6 +67,9 @@ type Microsoft struct {
 
 	mu     sync.Mutex
 	states map[string]oauthState
+	// refreshes serializes token(), which is a read-modify-write on the
+	// stored bundle; mu guards only states.
+	refreshes refreshLocks
 }
 
 // NewMicrosoft wires the microsoft kind. publicURL is required for the
@@ -291,8 +294,12 @@ func (m *Microsoft) storeBundle(ctx context.Context, ref string, b tokenBundle) 
 // token returns a live access token for the connector, refreshing and
 // re-storing the bundle when it is about to expire. Microsoft rotates
 // the refresh token on every refresh — the new one always replaces the
-// old, falling back to the old only when the response omits it.
+// old, falling back to the old only when the response omits it. Held
+// under ref's refresh lock end to end (D-112): Microsoft invalidates
+// the old refresh token, so two concurrent exchanges of the same one
+// cost a manual reconnect.
 func (m *Microsoft) token(ctx context.Context, cfg MicrosoftConfig, ref string) (string, error) {
+	defer m.refreshes.lock(ref).Unlock()
 	raw, err := m.Secrets.Resolve(ctx, ref)
 	if err != nil {
 		return "", fmt.Errorf("connector is not connected yet (no tokens at %q): %w", ref, err)

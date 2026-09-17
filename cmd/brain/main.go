@@ -269,6 +269,7 @@ func main() {
 	var resolveSecret func(context.Context, string) (string, error)
 	if secrets != nil {
 		resolveSecret = secrets.Resolve
+		go runSecretResealSweep(ctx, app.DB, secrets, app.Log)
 	}
 
 	conns, goog, msft, markItDownURL := buildConnectors(app.DB, secrets, app.Log)
@@ -888,6 +889,31 @@ func buildSecretStore(db *pgpool.Pool, log *slog.Logger) (*secretstore.Store, er
 		return nil, fmt.Errorf("secret store init failed: %w", err)
 	}
 	return secrets, nil
+}
+
+// runSecretResealSweep upgrades every db-backed secret still in the
+// pre-D-105 format once at boot (D-114). The read path already reseals,
+// but only when something reads, so a rarely-resolved secret keeps its
+// nil-AAD ciphertext, which opens under any ref_name and is therefore
+// the copyable one. Its own goroutine behind WaitHealthy, same as the
+// kb stale-ingest sweep: at this point in boot the pool is still
+// connecting. Failures log and are left to the next start; nothing here
+// blocks serving.
+func runSecretResealSweep(ctx context.Context, db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logger) {
+	wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := db.WaitHealthy(wctx); err != nil {
+		log.Warn("secret reseal sweep skipped: database not ready", "error", err)
+		return
+	}
+	n, err := secrets.ResealLegacy(wctx, log)
+	if err != nil {
+		log.Warn("secret reseal sweep failed", "error", err)
+		return
+	}
+	if n > 0 {
+		log.Info("secret reseal sweep", "secrets_resealed", n)
+	}
 }
 
 // buildAttachments wires the image-attachment store (D-045).

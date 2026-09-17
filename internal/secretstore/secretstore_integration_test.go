@@ -18,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/migrations"
@@ -150,6 +152,109 @@ func TestResolveResealsLegacyRow(t *testing.T) {
 	}
 	if got, err := s.Resolve(ctx, ref+"_OTHER"); err == nil {
 		t.Fatalf("swapped ciphertext resolved to %q, want auth failure", got)
+	}
+}
+
+// TestResealLegacySweep covers D-114: the boot sweep upgrades a legacy
+// row without anyone reading it, leaves an already-upgraded row alone,
+// and skips an undecryptable one instead of failing the whole run.
+func TestResealLegacySweep(t *testing.T) {
+	s := integrationStore(t)
+	ctx := t.Context()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	junkCT, junkNonce := sealLegacy(t, s.cipher, "sk-junk")
+	junkCT[0] ^= 0xff
+
+	for _, tc := range []struct {
+		name string
+		// seed writes the row and returns its ciphertext before the
+		// sweep, for the untouched/rewritten comparison.
+		seed         func(t *testing.T, ref string) []byte
+		wantResealed bool
+		wantValue    string
+	}{
+		{
+			name: "legacy row is upgraded unread",
+			seed: func(t *testing.T, ref string) []byte {
+				t.Helper()
+				ct, nonce := sealLegacy(t, s.cipher, "sk-legacy")
+				insertSecret(ctx, t, db, ref, ct, nonce)
+				return ct
+			},
+			wantResealed: true,
+			wantValue:    "sk-legacy",
+		},
+		{
+			name: "aad row is left alone",
+			seed: func(t *testing.T, ref string) []byte {
+				t.Helper()
+				if err := s.Set(ctx, ref, "sk-modern"); err != nil {
+					t.Fatalf("Set: %v", err)
+				}
+				r, err := s.row(ctx, ref)
+				if err != nil {
+					t.Fatalf("row: %v", err)
+				}
+				return r.ciphertext
+			},
+			wantResealed: false,
+			wantValue:    "sk-modern",
+		},
+		{
+			name: "undecryptable row is skipped",
+			seed: func(t *testing.T, ref string) []byte {
+				t.Helper()
+				insertSecret(ctx, t, db, ref, junkCT, junkNonce)
+				return junkCT
+			},
+			wantResealed: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := "TEST_SWEEP_" + strings.ReplaceAll(t.Name(), "/", "_")
+			t.Cleanup(func() { _ = s.Delete(ctx, ref) })
+			before := tc.seed(t, ref)
+
+			if _, err := s.ResealLegacy(ctx, log); err != nil {
+				t.Fatalf("ResealLegacy: %v", err)
+			}
+			after, err := s.row(ctx, ref)
+			if err != nil {
+				t.Fatalf("row: %v", err)
+			}
+			if rewritten := !bytes.Equal(after.ciphertext, before); rewritten != tc.wantResealed {
+				t.Fatalf("row rewritten = %v, want %v", rewritten, tc.wantResealed)
+			}
+			if tc.wantValue == "" {
+				// Still unresolvable, and still not something the sweep
+				// silently blessed into the new format.
+				if _, err := s.Resolve(ctx, ref); err == nil {
+					t.Fatal("an undecryptable row resolved after the sweep")
+				}
+				return
+			}
+			got, err := s.Resolve(ctx, ref)
+			if err != nil || got != tc.wantValue {
+				t.Fatalf("Resolve = (%q, %v), want (%q, nil)", got, err, tc.wantValue)
+			}
+			if _, err := s.cipher.openLegacy(after.ciphertext, after.nonce); err == nil {
+				t.Fatal("row still opens without aad after the sweep")
+			}
+		})
+	}
+}
+
+func insertSecret(ctx context.Context, t *testing.T, db *pgxpool.Pool, ref string, ciphertext, nonce []byte) {
+	t.Helper()
+	if _, err := db.Exec(ctx,
+		`INSERT INTO secrets (ref_name, backend, ciphertext, nonce) VALUES ($1, 'db', $2, $3)`,
+		ref, ciphertext, nonce); err != nil {
+		t.Fatalf("insert secret %s: %v", ref, err)
 	}
 }
 
