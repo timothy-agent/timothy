@@ -291,8 +291,10 @@ func (s *Store) KindByID(ctx context.Context, id string) (kind string, enabled b
 
 // GitHubPolicy resolves id's saved branch pattern / commit style for
 // missions.GitHubPolicyResolver: ok is false when id does not name a
-// github-kind row (missions has no compile-time dependency on this
-// package, see missions.GitHubPolicy's doc comment).
+// repo-kind row (missions has no compile-time dependency on this
+// package, see missions.GitHubPolicy's doc comment). Both repo kinds
+// share GitHubConfig and validate these fields the same way, so both
+// resolve here; the name is historical (issue #787).
 func (s *Store) GitHubPolicy(ctx context.Context, id string) (missions.GitHubPolicy, bool, error) {
 	d, err := s.Get(ctx, id)
 	if err != nil {
@@ -301,12 +303,12 @@ func (s *Store) GitHubPolicy(ctx context.Context, id string) (missions.GitHubPol
 		}
 		return missions.GitHubPolicy{}, false, err
 	}
-	if d.Kind != "github" {
+	if d.Kind != "github" && d.Kind != "bitbucket" {
 		return missions.GitHubPolicy{}, false, nil
 	}
 	var cfg GitHubConfig
 	if err := json.Unmarshal(d.Config, &cfg); err != nil {
-		return missions.GitHubPolicy{}, false, fmt.Errorf("github config: %w", err)
+		return missions.GitHubPolicy{}, false, fmt.Errorf("%s config: %w", d.Kind, err)
 	}
 	return missions.GitHubPolicy{BranchPattern: cfg.BranchPattern, CommitStyle: cfg.CommitStyle}, true, nil
 }
