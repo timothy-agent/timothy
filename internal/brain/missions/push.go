@@ -43,6 +43,18 @@ var (
 // ParseGitHubRepoURL extracts from mission.RepoURL.
 var githubRepoPattern = regexp.MustCompile(`^https://[^/]+/([^/]+)/([^/]+?)(?:\.git)?/?$`)
 
+// isGitHubHost reports whether repoURL points at github.com, the only
+// host the github connector talks to (githubAPIBase is fixed, there is
+// no Enterprise support). githubRepoPattern itself is host-agnostic
+// because it also parses origins the mission was cloned from.
+func isGitHubHost(repoURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(repoURL))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), "github.com")
+}
+
 // ParseGitHubRepoURL extracts owner/repo from repoURL (always an https
 // clone URL per validateRemote's own gate at push time); ok is false
 // for anything that doesn't match the expected shape.

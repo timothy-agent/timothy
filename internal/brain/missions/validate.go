@@ -173,6 +173,12 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 					return fmt.Errorf("%w: repo_url is not a recognizable bitbucket https clone URL", ErrInvalidMission)
 				}
 			}
+			// ParseGitHubRepoURL accepts any host, so a bitbucket URL
+			// would otherwise be resolved against github.com, which is
+			// the only host the github connector talks to (issue #787).
+			if kind == "github" && e.RepoURL != "" && !isGitHubHost(e.RepoURL) {
+				return fmt.Errorf("%w: repo_url is not a github.com https clone URL", ErrInvalidMission)
+			}
 		}
 		if len(invalid) > 0 {
 			return fmt.Errorf("%w: unknown or disabled destination id(s): %s", ErrInvalidMission, strings.Join(invalid, ", "))

@@ -101,9 +101,13 @@ func (a *BitbucketAdapter) ensureRepo(ctx context.Context, m missions.Mission, c
 		if !createIfMissing {
 			return repoURL, false, fmt.Errorf("ensure repo: repo %s/%s does not exist and create_if_missing is not set", workspace, slug)
 		}
-		cloneURL, err := a.PR.CreateRepo(ctx, connectorID, workspace+"/"+slug, true)
+		created, err := a.PR.CreateRepo(ctx, connectorID, workspace+"/"+slug, true)
 		if err != nil {
 			return repoURL, false, fmt.Errorf("ensure repo: create %s/%s: %w", workspace, slug, err)
+		}
+		cloneURL, ok := missions.BitbucketCloneURL(created)
+		if !ok {
+			return repoURL, false, fmt.Errorf("ensure repo: created repo has an unusable clone URL")
 		}
 		if err := a.Pusher.SetOrigin(ctx, m.WorktreePath(), cloneURL); err != nil {
 			return repoURL, false, fmt.Errorf("ensure repo: point worktree at new repo: %w", err)
@@ -112,9 +116,15 @@ func (a *BitbucketAdapter) ensureRepo(ctx context.Context, m missions.Mission, c
 	}
 
 	name := missions.Slug(m.Goal, m.ID)
-	cloneURL, err := a.PR.CreateRepo(ctx, connectorID, name, true)
+	created, err := a.PR.CreateRepo(ctx, connectorID, name, true)
 	if err != nil {
 		return repoURL, false, fmt.Errorf("ensure repo: create %s: %w", name, err)
+	}
+	// Bitbucket returns the user@ form for a user principal, which
+	// validateRemote rejects (issue #787).
+	cloneURL, ok := missions.BitbucketCloneURL(created)
+	if !ok {
+		return repoURL, false, fmt.Errorf("ensure repo: created repo has an unusable clone URL")
 	}
 	if err := a.Pusher.SetOrigin(ctx, m.WorktreePath(), cloneURL); err != nil {
 		return repoURL, false, fmt.Errorf("ensure repo: point worktree at new repo: %w", err)

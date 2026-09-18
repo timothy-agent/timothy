@@ -123,6 +123,15 @@ func TestBitbucketEnsureRepo(t *testing.T) {
 		{name: "missing, no create", repoURL: "https://bitbucket.org/acme/widgets.git", pr: &fakePRSource{}, wantErr: "does not exist and create_if_missing is not set"},
 		{name: "no url, create from goal", createIfMissing: true, pr: &fakePRSource{newCloneURL: "https://bitbucket.org/acme/fix-widgets.git"},
 			wantURL: "https://bitbucket.org/acme/fix-widgets.git", wantUpdated: true, wantCreateCalls: 1},
+		// Bitbucket hands back the user@ form for a user principal, which
+		// validateRemote rejects, so it must be canonicalised before it
+		// reaches SetOrigin (issue #787).
+		{name: "created repo returns the user@ clone form", createIfMissing: true,
+			pr:      &fakePRSource{newCloneURL: "https://sumon@bitbucket.org/acme/fix-widgets.git"},
+			wantURL: "https://bitbucket.org/acme/fix-widgets.git", wantUpdated: true, wantCreateCalls: 1, wantOrigin: 1},
+		{name: "existing target, created repo returns the user@ clone form", repoURL: "https://bitbucket.org/acme/widgets.git", createIfMissing: true,
+			pr:      &fakePRSource{newCloneURL: "https://sumon@bitbucket.org/acme/widgets-2.git"},
+			wantURL: "https://bitbucket.org/acme/widgets-2.git", wantUpdated: true, wantCreateCalls: 1, wantOrigin: 1},
 		{name: "no url, no create", pr: &fakePRSource{}, wantURL: ""},
 		{name: "github url", repoURL: "https://github.com/acme/widgets.git", pr: &fakePRSource{}, wantErr: "bitbucket https clone URL"},
 		{name: "existence check fails hard", repoURL: "https://bitbucket.org/acme/widgets.git", pr: &fakePRSource{existsErr: errors.New("boom")}, wantErr: "check existence: boom"},

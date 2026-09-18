@@ -127,6 +127,15 @@ func TestValidateCreate(t *testing.T) {
 		}, ValidateDeps{DestinationKind: func(ctx context.Context, id string) (string, bool, error) {
 			return "webhook", true, nil
 		}}, true},
+		// ParseGitHubRepoURL matches any host, so a bitbucket target on a
+		// github destination would resolve against github.com (issue #787).
+		{"bitbucket repo_url on a github destination is rejected", func(m Mission) Mission {
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{DestinationID: "gh-1", RepoURL: "https://bitbucket.org/acme/widgets.git"}}
+			return m
+		}, ValidateDeps{DestinationKind: func(ctx context.Context, id string) (string, bool, error) {
+			return "github", true, nil
+		}}, true},
 		{"repo_url on a github destination is accepted", func(m Mission) Mission {
 			m.Kind = "coding"
 			m.Destinations = []DestinationEntry{{DestinationID: "gh-1", RepoURL: "https://github.com/o/r"}}

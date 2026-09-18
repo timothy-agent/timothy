@@ -571,7 +571,14 @@ type createMissionRequest struct {
 func (r createMissionRequest) destinationEntries() []missions.DestinationEntry {
 	var entries []missions.DestinationEntry
 	for _, id := range r.DestinationIDs {
-		entries = append(entries, missions.DestinationEntry{DestinationID: id, RepoURL: r.DestinationRepoURLs[id]})
+		// A pasted browser or user@ URL is canonicalised here so it is
+		// never stored with credentials in it (issue #787); a github
+		// target does not match and passes through.
+		repoURL := r.DestinationRepoURLs[id]
+		if clone, ok := missions.BitbucketCloneURL(repoURL); ok {
+			repoURL = clone
+		}
+		entries = append(entries, missions.DestinationEntry{DestinationID: id, RepoURL: repoURL})
 	}
 	if r.PromoteKBCollectionID != "" {
 		entries = append(entries, missions.DestinationEntry{Destination: missions.DestinationKindKB, CollectionID: r.PromoteKBCollectionID})
@@ -2442,7 +2449,7 @@ func (h *missionAPI) pr(w http.ResponseWriter, r *http.Request) {
 	}
 	repoURL := m.RepoURL()
 	if m.ConnectorID() == "" || repoURL == "" {
-		jsonError(w, http.StatusBadRequest, "not_pr_able", "only github-connection missions can open a pull request")
+		jsonError(w, http.StatusBadRequest, "not_pr_able", "only github or bitbucket connection missions can open a pull request")
 		return
 	}
 	if reason := missions.NotPushable(m); reason != "" {

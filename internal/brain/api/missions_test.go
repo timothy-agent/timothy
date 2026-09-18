@@ -2157,3 +2157,39 @@ func TestMissionsRoutingValidation(t *testing.T) {
 		}
 	}
 }
+
+// A pasted browser or user@ target must be stored as the plain clone
+// URL: it would otherwise reach the mission row, and the API response,
+// with credentials in it (issue #787).
+func TestDestinationEntriesNormalizesBitbucketTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "browser url", in: "https://bitbucket.org/acme/widgets/src/main/", want: "https://bitbucket.org/acme/widgets.git"},
+		{name: "user@ clone form", in: "https://sumon@bitbucket.org/acme/widgets.git", want: "https://bitbucket.org/acme/widgets.git"},
+		//nolint:gosec // G101: a fake credential in the URL is the thing being stripped
+		{name: "embedded credentials", in: "https://x-token-auth:s3cr3t@bitbucket.org/acme/widgets.git", want: "https://bitbucket.org/acme/widgets.git"},
+		{name: "already canonical", in: "https://bitbucket.org/acme/widgets.git", want: "https://bitbucket.org/acme/widgets.git"},
+		{name: "github target is untouched", in: "https://github.com/acme/widgets.git", want: "https://github.com/acme/widgets.git"},
+		{name: "empty stays empty", in: "", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := createMissionRequest{
+				DestinationIDs:      []string{"d1"},
+				DestinationRepoURLs: map[string]string{"d1": tc.in},
+			}
+			entries := r.destinationEntries()
+			if len(entries) != 1 {
+				t.Fatalf("got %d entries, want 1", len(entries))
+			}
+			if entries[0].RepoURL != tc.want {
+				t.Fatalf("RepoURL = %q, want %q", entries[0].RepoURL, tc.want)
+			}
+			if strings.Contains(entries[0].RepoURL, "@") {
+				t.Fatalf("stored target still carries userinfo: %q", entries[0].RepoURL)
+			}
+		})
+	}
+}
