@@ -2,6 +2,7 @@ package destinations
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -48,6 +49,12 @@ type fakePRSource struct {
 	newCloneURL     string
 	createRepoErr   error
 	createRepoCalls int
+	lastCreateRepo  string
+	// bitbucketNames models bitbucketSource's name contract so a
+	// permissive fake can't hide issue #786: a bare slug resolves
+	// only when the connector has a workspace configured.
+	bitbucketNames bool
+	workspace      string
 }
 
 func (f *fakePRSource) DefaultBranch(_ context.Context, _, _, _ string) (string, error) {
@@ -71,8 +78,12 @@ func (f *fakePRSource) RepoExists(_ context.Context, _, _, _ string) (bool, erro
 	return f.repoExists, nil
 }
 
-func (f *fakePRSource) CreateRepo(_ context.Context, _, _ string, _ bool) (string, error) {
+func (f *fakePRSource) CreateRepo(_ context.Context, _, name string, _ bool) (string, error) {
 	f.createRepoCalls++
+	f.lastCreateRepo = name
+	if f.bitbucketNames && !strings.Contains(name, "/") && f.workspace == "" {
+		return "", fmt.Errorf("create repo: bitbucket needs a workspace/slug name, got %q", name)
+	}
 	if f.createRepoErr != nil {
 		return "", f.createRepoErr
 	}

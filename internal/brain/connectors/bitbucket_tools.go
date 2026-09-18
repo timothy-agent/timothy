@@ -31,6 +31,9 @@ const (
 // bitbucketRepoArg matches the "workspace/slug" form every PR tool takes.
 var bitbucketRepoArg = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$`)
 
+// same component class as bitbucketRepoArg, for a bare slug
+var bitbucketSlug = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
 func splitBitbucketRepoArg(repo string) (workspace, slug string, err error) {
 	m := bitbucketRepoArg.FindStringSubmatch(strings.TrimSpace(repo))
 	if m == nil {

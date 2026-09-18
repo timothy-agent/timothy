@@ -375,12 +375,29 @@ func (s *bitbucketSource) GetRepo(ctx context.Context, workspace, slug string) (
 	return r.toGitHubRepo(), nil
 }
 
-// CreateRepo takes name as workspace/slug: Bitbucket repos live in a
+// resolveRepoName splits name as workspace/slug, falling back to the
+// connector's configured workspace for a bare slug.
+func (s *bitbucketSource) resolveRepoName(name string) (workspace, slug string, err error) {
+	if workspace, slug, err = splitBitbucketRepoArg(name); err == nil {
+		return workspace, slug, nil
+	}
+	slug = strings.TrimSpace(name)
+	if s.workspace == "" {
+		return "", "", fmt.Errorf("create repo: bitbucket needs a workspace/slug name (or a workspace on connector %q), got %q", s.name, name)
+	}
+	if !bitbucketSlug.MatchString(slug) {
+		return "", "", fmt.Errorf("create repo: bitbucket needs a workspace/slug name, got %q", name)
+	}
+	return s.workspace, slug, nil
+}
+
+// CreateRepo takes name as workspace/slug, or a bare slug when the
+// connector has a workspace configured: Bitbucket repos live in a
 // workspace and the token does not say which one.
 func (s *bitbucketSource) CreateRepo(ctx context.Context, name string, private bool) (GitHubRepo, error) {
-	workspace, slug, err := splitBitbucketRepoArg(name)
+	workspace, slug, err := s.resolveRepoName(name)
 	if err != nil {
-		return GitHubRepo{}, fmt.Errorf("create repo: bitbucket needs a workspace/slug name, got %q", name)
+		return GitHubRepo{}, err
 	}
 	token, err := s.resolve(ctx, s.credentialRef)
 	if err != nil {

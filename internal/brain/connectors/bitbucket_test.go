@@ -900,3 +900,56 @@ func TestFetchBitbucketReposScopedToWorkspace(t *testing.T) {
 		t.Fatalf("repos = %+v, err %v", repos, err)
 	}
 }
+
+// resolveRepoName is what stands between a bare mission slug and the
+// workspace/slug the API needs (issue #786).
+func TestBitbucketResolveRepoName(t *testing.T) {
+	tests := []struct {
+		name          string
+		workspace     string
+		arg           string
+		wantWorkspace string
+		wantSlug      string
+		wantErr       bool
+	}{
+		{name: "explicit workspace/slug wins", workspace: "cfgws", arg: "argws/repo", wantWorkspace: "argws", wantSlug: "repo"},
+		{name: "explicit workspace/slug with no config", arg: "argws/repo", wantWorkspace: "argws", wantSlug: "repo"},
+		{name: "bare slug falls back to config", workspace: "cfgws", arg: "fix-widgets-abc", wantWorkspace: "cfgws", wantSlug: "fix-widgets-abc"},
+		{name: "bare slug with blank workspace errors", arg: "fix-widgets-abc", wantErr: true},
+		{name: "bare slug is trimmed", workspace: "cfgws", arg: "  repo  ", wantWorkspace: "cfgws", wantSlug: "repo"},
+		{name: "nested path is not a slug", workspace: "cfgws", arg: "a/b/c", wantErr: true},
+		{name: "slug with a space is rejected", workspace: "cfgws", arg: "not a slug", wantErr: true},
+		{name: "empty name is rejected", workspace: "cfgws", arg: "", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &bitbucketSource{name: "bb", workspace: tc.workspace}
+			ws, slug, err := s.resolveRepoName(tc.arg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("resolveRepoName(%q) = %q/%q, want error", tc.arg, ws, slug)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveRepoName(%q): %v", tc.arg, err)
+			}
+			if ws != tc.wantWorkspace || slug != tc.wantSlug {
+				t.Fatalf("resolveRepoName(%q) = %q/%q, want %q/%q", tc.arg, ws, slug, tc.wantWorkspace, tc.wantSlug)
+			}
+		})
+	}
+}
+
+// A blank workspace must say so: the operator has to know which knob
+// to turn, not just that the slug looked wrong.
+func TestBitbucketResolveRepoNameBlankWorkspaceError(t *testing.T) {
+	s := &bitbucketSource{name: "my-bb", workspace: ""}
+	_, _, err := s.resolveRepoName("fix-widgets-abc")
+	if err == nil {
+		t.Fatal("want error for bare slug with no configured workspace")
+	}
+	if !strings.Contains(err.Error(), "workspace") || !strings.Contains(err.Error(), "my-bb") {
+		t.Fatalf("error %q should name the workspace and the connector", err)
+	}
+}
