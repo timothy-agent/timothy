@@ -354,6 +354,10 @@ func TestGitCredentialHelperRoundTrip(t *testing.T) {
 		{"", "x-access-token"},
 		{SourceKindGitHub, "x-access-token"},
 		{SourceKindBitbucket, "x-token-auth"},
+		// what Push feeds it: the kind of the remote it validated,
+		// not the mission's source (issue #787)
+		{hostKindFor("bitbucket.org"), "x-token-auth"},
+		{hostKindFor("github.com"), "x-access-token"},
 	} {
 		t.Run("kind="+tc.kind, func(t *testing.T) {
 			t.Parallel()
@@ -426,6 +430,29 @@ func TestIsGitHubHost(t *testing.T) {
 		t.Run(tc.url, func(t *testing.T) {
 			if got := isGitHubHost(tc.url); got != tc.want {
 				t.Fatalf("isGitHubHost(%q) = %v, want %v", tc.url, got, tc.want)
+			}
+		})
+	}
+}
+
+// The credential username follows the remote being pushed to, not the
+// mission's source: a scratch mission or a cross-kind destination makes
+// the two disagree (issue #787).
+func TestHostKindFor(t *testing.T) {
+	tests := []struct {
+		host string
+		want string
+	}{
+		{host: "bitbucket.org", want: SourceKindBitbucket},
+		{host: "BitBucket.org", want: SourceKindBitbucket},
+		{host: "github.com", want: SourceKindGitHub},
+		{host: "ghe.example.com", want: SourceKindGitHub},
+		{host: "", want: SourceKindGitHub},
+	}
+	for _, tc := range tests {
+		t.Run(tc.host, func(t *testing.T) {
+			if got := hostKindFor(tc.host); got != tc.want {
+				t.Fatalf("hostKindFor(%q) = %q, want %q", tc.host, got, tc.want)
 			}
 		})
 	}

@@ -121,7 +121,11 @@ func TestBitbucketEnsureRepo(t *testing.T) {
 		{name: "missing, create", repoURL: "https://bitbucket.org/acme/widgets.git", createIfMissing: true,
 			pr: &fakePRSource{newCloneURL: "https://bitbucket.org/acme/widgets-2.git"}, wantURL: "https://bitbucket.org/acme/widgets-2.git", wantUpdated: true, wantCreateCalls: 1},
 		{name: "missing, no create", repoURL: "https://bitbucket.org/acme/widgets.git", pr: &fakePRSource{}, wantErr: "does not exist and create_if_missing is not set"},
-		{name: "no url, create from goal", createIfMissing: true, pr: &fakePRSource{newCloneURL: "https://bitbucket.org/acme/fix-widgets.git"},
+		// bitbucketNames holds the adapter to bitbucketSource's real name
+		// contract: a bare mission slug resolves against the connector's
+		// configured workspace, and fails loudly without one (issue #786).
+		{name: "no url, create from goal", createIfMissing: true,
+			pr:      &fakePRSource{bitbucketNames: true, workspace: "acme", newCloneURL: "https://bitbucket.org/acme/fix-widgets.git"},
 			wantURL: "https://bitbucket.org/acme/fix-widgets.git", wantUpdated: true, wantCreateCalls: 1},
 		// Bitbucket hands back the user@ form for a user principal, which
 		// validateRemote rejects, so it must be canonicalised before it
@@ -132,6 +136,9 @@ func TestBitbucketEnsureRepo(t *testing.T) {
 		{name: "existing target, created repo returns the user@ clone form", repoURL: "https://bitbucket.org/acme/widgets.git", createIfMissing: true,
 			pr:      &fakePRSource{newCloneURL: "https://sumon@bitbucket.org/acme/widgets-2.git"},
 			wantURL: "https://bitbucket.org/acme/widgets-2.git", wantUpdated: true, wantCreateCalls: 1, wantOrigin: 1},
+		{name: "no url, create from goal, connector has no workspace", createIfMissing: true,
+			pr:      &fakePRSource{bitbucketNames: true, newCloneURL: "https://bitbucket.org/acme/fix-widgets.git"},
+			wantErr: "needs a workspace/slug name", wantCreateCalls: 1},
 		{name: "no url, no create", pr: &fakePRSource{}, wantURL: ""},
 		{name: "github url", repoURL: "https://github.com/acme/widgets.git", pr: &fakePRSource{}, wantErr: "bitbucket https clone URL"},
 		{name: "existence check fails hard", repoURL: "https://bitbucket.org/acme/widgets.git", pr: &fakePRSource{existsErr: errors.New("boom")}, wantErr: "check existence: boom"},

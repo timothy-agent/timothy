@@ -126,3 +126,49 @@ func TestStoreCreateRejectsUnknownConnector(t *testing.T) {
 		t.Fatal("expected error creating an email destination with no connectors configured")
 	}
 }
+
+// Both repo kinds carry branch_pattern/commit_style and validate them
+// the same way, so both must resolve a policy: bitbucket rows were
+// accepted and then ignored (issue #787). Rows are inserted directly
+// because validate's connector checks are not what this exercises.
+func TestStoreGitHubPolicyCoversBothRepoKinds(t *testing.T) {
+	store := testStore(t)
+	ctx := t.Context()
+	db, err := store.db.Get()
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+
+	insert := func(kind, cfg string) string {
+		t.Helper()
+		var id string
+		if err := db.QueryRow(ctx, `INSERT INTO destinations (name, kind, config, enabled)
+			VALUES ($1, $2, $3, true) RETURNING id`, marker+kind+"-policy", kind, cfg).Scan(&id); err != nil {
+			t.Fatalf("insert %s: %v", kind, err)
+		}
+		return id
+	}
+
+	for _, kind := range []string{"github", "bitbucket"} {
+		t.Run(kind, func(t *testing.T) {
+			id := insert(kind, `{"branch_pattern":"bb/{slug}","commit_style":"plain"}`)
+			policy, ok, err := store.GitHubPolicy(ctx, id)
+			if err != nil {
+				t.Fatalf("GitHubPolicy: %v", err)
+			}
+			if !ok {
+				t.Fatalf("GitHubPolicy(%s) ok = false, want true: the row's git policy is ignored", kind)
+			}
+			if policy.BranchPattern != "bb/{slug}" || policy.CommitStyle != "plain" {
+				t.Fatalf("GitHubPolicy(%s) = %+v, want branch bb/{slug} and style plain", kind, policy)
+			}
+		})
+	}
+
+	t.Run("non-repo kind still reports not ok", func(t *testing.T) {
+		id := insert("webhook", `{"url":"https://example.com/hook","format":"json"}`)
+		if _, ok, err := store.GitHubPolicy(ctx, id); err != nil || ok {
+			t.Fatalf("GitHubPolicy(webhook) = ok %v, err %v; want false, nil", ok, err)
+		}
+	})
+}

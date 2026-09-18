@@ -160,6 +160,17 @@ const pushTimeout = 120 * time.Second
 // accept them; must be checked before handing raw to url.Parse.
 var scpLikePattern = regexp.MustCompile(`^[\w.-]+@[\w.-]+:`)
 
+// hostKindFor maps a remote host to the source kind whose credential
+// username it expects. Push derives the kind from the remote it is
+// actually pushing to, not from where the mission was cloned: the two
+// differ for a scratch mission or a cross-kind destination.
+func hostKindFor(host string) string {
+	if strings.EqualFold(host, "bitbucket.org") {
+		return SourceKindBitbucket
+	}
+	return SourceKindGitHub
+}
+
 // gitCredentialHelper is the ephemeral helper git runs for token auth: the
 // username is per host (GitHub x-access-token, Bitbucket Cloud x-token-auth)
 // and the token comes from envVar, never argv.
@@ -195,7 +206,7 @@ func validateRemote(raw string) (host string, err error) {
 // Push validates the worktree's origin remote, then pushes branch to
 // it authenticating via token — never written to argv, DB, logs, or
 // events. Returns the remote's host for event/response use.
-func (w *Workspace) Push(ctx context.Context, worktree, branch, token, hostKind string) (string, error) {
+func (w *Workspace) Push(ctx context.Context, worktree, branch, token string) (string, error) {
 	out, err := runGit(ctx, worktree, "remote", "get-url", "origin")
 	if err != nil {
 		return "", fmt.Errorf("push: read origin: %w: %s", err, out)
@@ -205,7 +216,7 @@ func (w *Workspace) Push(ctx context.Context, worktree, branch, token, hostKind 
 	if err != nil {
 		return "", err
 	}
-	return host, rawPush(ctx, worktree, branch, token, hostKind)
+	return host, rawPush(ctx, worktree, branch, token, hostKindFor(host))
 }
 
 // SetOrigin points worktree's origin remote at remoteURL, adding it if
