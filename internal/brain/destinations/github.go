@@ -45,7 +45,7 @@ type PRSource interface {
 // path (issue #483): pointing the worktree's origin at a repo the
 // mission was never cloned from before Push/OpenPR use it.
 type pusher interface {
-	Push(ctx context.Context, worktree, branch, token, hostKind string) (string, error)
+	Push(ctx context.Context, worktree, branch, token string) (string, error)
 	SetOrigin(ctx context.Context, worktree, remoteURL string) error
 }
 
@@ -95,10 +95,10 @@ func (a *GitHubAdapter) PushBranch(ctx context.Context, m missions.Mission, toke
 }
 
 // pushBranch is the push-and-record step both repo adapters share; the
-// credential username follows the mission's own source kind.
+// credential username follows the remote Push validates, so a
+// cross-kind destination authenticates as that host expects.
 func pushBranch(ctx context.Context, p pusher, ev events, m missions.Mission, token string) (host string, err error) {
-	src, _ := m.RepoSource()
-	host, pushErr := p.Push(ctx, m.WorktreePath(), m.Branch, token, src.Source)
+	host, pushErr := p.Push(ctx, m.WorktreePath(), m.Branch, token)
 	if pushErr != nil {
 		reason := "push failed"
 		switch {

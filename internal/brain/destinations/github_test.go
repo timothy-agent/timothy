@@ -94,7 +94,7 @@ type fakePusher struct {
 	lastOriginURL  string
 }
 
-func (f *fakePusher) Push(_ context.Context, _, _, _, _ string) (string, error) {
+func (f *fakePusher) Push(_ context.Context, _, _, _ string) (string, error) {
 	f.pushCalls++
 	if f.err != nil {
 		return "", f.err
