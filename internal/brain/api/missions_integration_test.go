@@ -21,6 +21,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	pdfgenservice "github.com/SumonMSelim/timothy/internal/brain/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -1172,38 +1173,55 @@ func seedBareRepoWithMissionBranch(t *testing.T) (repoURL, worktree, branch stri
 	return repoURL, worktree, branch
 }
 
-// fakeGitHubSource is a connectors.Source implementing the repoSource
-// capability (GetRepo/CreatePR, ListRepos/CreateRepo unused here) by
-// hand — used instead of connectors.GitHubBuilder + a real HTTP fake
-// server, since githubAPIBase (the base URL GitHubBuilder's requests
-// hit) is unexported to the connectors package and this test lives in
-// api. GetRepo/CreatePR themselves are already covered against the
-// real wire format in internal/brain/connectors/github_test.go; this
-// fake only needs to prove the API layer calls through to them
-// correctly.
+// fakeGitHubSource is a connectors.Source implementing gitprovider.Client
+// (GetRepo/CreatePR, everything else unused here) by hand — used instead
+// of connectors.GitHubBuilder + a real HTTP fake server, since
+// githubAPIBase (the base URL GitHubBuilder's requests hit) is
+// unexported to the connectors package and this test lives in api.
+// GetRepo/CreatePR themselves are already covered against the real wire
+// format in internal/brain/connectors/github_test.go; this fake only
+// needs to prove the API layer calls through to them correctly.
 type fakeGitHubSource struct {
-	getRepoFn  func(ctx context.Context, owner, repo string) (connectors.GitHubRepo, error)
-	createPRFn func(ctx context.Context, owner, repo, title, head, base, body string) (connectors.GitHubPR, error)
+	gitprovider.GitHub // Descriptor: URL parsing, clone URLs, kind, capabilities
+	getRepoFn          func(ctx context.Context, ref gitprovider.RepoRef) (gitprovider.Repo, error)
+	createPRFn         func(ctx context.Context, spec gitprovider.PRSpec) (gitprovider.PullRequest, error)
 }
 
 func (f *fakeGitHubSource) Tools() []*tools.Tool       { return nil }
 func (f *fakeGitHubSource) Test(context.Context) error { return nil }
 func (f *fakeGitHubSource) Close() error               { return nil }
-func (f *fakeGitHubSource) ListRepos(context.Context) ([]connectors.GitHubRepo, error) {
+func (f *fakeGitHubSource) Identity(context.Context) (gitprovider.Identity, error) {
+	return gitprovider.Identity{}, errors.New("not implemented in fakeGitHubSource")
+}
+func (f *fakeGitHubSource) ListRepos(context.Context) ([]gitprovider.Repo, error) {
 	return nil, errors.New("not implemented in fakeGitHubSource")
 }
-func (f *fakeGitHubSource) CreateRepo(context.Context, string, bool) (connectors.GitHubRepo, error) {
-	return connectors.GitHubRepo{}, errors.New("not implemented in fakeGitHubSource")
+func (f *fakeGitHubSource) CreateRepo(context.Context, string, bool) (gitprovider.Repo, error) {
+	return gitprovider.Repo{}, errors.New("not implemented in fakeGitHubSource")
 }
-func (f *fakeGitHubSource) GetRepo(ctx context.Context, owner, repo string) (connectors.GitHubRepo, error) {
-	return f.getRepoFn(ctx, owner, repo)
+func (f *fakeGitHubSource) GetRepo(ctx context.Context, ref gitprovider.RepoRef) (gitprovider.Repo, error) {
+	return f.getRepoFn(ctx, ref)
 }
-func (f *fakeGitHubSource) CreatePR(ctx context.Context, owner, repo, title, head, base, body string) (connectors.GitHubPR, error) {
-	return f.createPRFn(ctx, owner, repo, title, head, base, body)
+func (f *fakeGitHubSource) CreatePR(ctx context.Context, spec gitprovider.PRSpec) (gitprovider.PullRequest, error) {
+	return f.createPRFn(ctx, spec)
 }
-func (f *fakeGitHubSource) PRMerged(context.Context, string, string, int) (bool, error) {
-	return false, errors.New("not implemented in fakeGitHubSource")
+func (f *fakeGitHubSource) GetPR(context.Context, gitprovider.RepoRef, int) (gitprovider.PullRequest, error) {
+	return gitprovider.PullRequest{}, errors.New("not implemented in fakeGitHubSource")
 }
+func (f *fakeGitHubSource) ListPRs(context.Context, gitprovider.RepoRef, string, int) (string, error) {
+	return "", errors.New("not implemented in fakeGitHubSource")
+}
+func (f *fakeGitHubSource) PRDescription(context.Context, gitprovider.RepoRef, int) (string, error) {
+	return "", errors.New("not implemented in fakeGitHubSource")
+}
+func (f *fakeGitHubSource) PRDiff(context.Context, gitprovider.RepoRef, int) (string, error) {
+	return "", errors.New("not implemented in fakeGitHubSource")
+}
+func (f *fakeGitHubSource) PRComments(context.Context, gitprovider.RepoRef, int) (string, error) {
+	return "", errors.New("not implemented in fakeGitHubSource")
+}
+
+var _ gitprovider.Client = (*fakeGitHubSource)(nil)
 
 // testConnectorsManager builds a real *connectors.Manager backed by the
 // same test Postgres pool, with the github builder returning src for
@@ -1436,18 +1454,18 @@ func TestMissionsPRHappyPath(t *testing.T) {
 	store := testMissionStore(t)
 	var sawPRCreate bool
 	mgr := testConnectorsManager(t, &fakeGitHubSource{
-		getRepoFn: func(_ context.Context, owner, repo string) (connectors.GitHubRepo, error) {
-			if owner != "octocat" || repo != "hello-world" {
-				t.Fatalf("GetRepo(%q, %q), want octocat/hello-world", owner, repo)
+		getRepoFn: func(_ context.Context, ref gitprovider.RepoRef) (gitprovider.Repo, error) {
+			if ref.Owner != "octocat" || ref.Name != "hello-world" {
+				t.Fatalf("GetRepo(%+v), want octocat/hello-world", ref)
 			}
-			return connectors.GitHubRepo{FullName: "octocat/hello-world", DefaultBranch: "main"}, nil
+			return gitprovider.Repo{FullName: "octocat/hello-world", DefaultBranch: "main"}, nil
 		},
-		createPRFn: func(_ context.Context, owner, repo, title, head, base, body string) (connectors.GitHubPR, error) {
+		createPRFn: func(_ context.Context, spec gitprovider.PRSpec) (gitprovider.PullRequest, error) {
 			sawPRCreate = true
-			if base != "main" {
-				t.Fatalf("CreatePR base = %q, want main (the repo's default branch)", base)
+			if spec.Base != "main" {
+				t.Fatalf("CreatePR base = %q, want main (the repo's default branch)", spec.Base)
 			}
-			return connectors.GitHubPR{Number: 9, HTMLURL: "https://github.com/octocat/hello-world/pull/9", State: "open"}, nil
+			return gitprovider.PullRequest{Number: 9, HTMLURL: "https://github.com/octocat/hello-world/pull/9", State: "open"}, nil
 		},
 	})
 	connID := createGitHubConnectorRow(t, mgr)
@@ -1524,13 +1542,13 @@ func TestMissionsPRAlreadyExistsReturnsExisting(t *testing.T) {
 	requireGitForAPI(t)
 	store := testMissionStore(t)
 	mgr := testConnectorsManager(t, &fakeGitHubSource{
-		getRepoFn: func(context.Context, string, string) (connectors.GitHubRepo, error) {
-			return connectors.GitHubRepo{FullName: "octocat/hello-world", DefaultBranch: "main"}, nil
+		getRepoFn: func(context.Context, gitprovider.RepoRef) (gitprovider.Repo, error) {
+			return gitprovider.Repo{FullName: "octocat/hello-world", DefaultBranch: "main"}, nil
 		},
-		createPRFn: func(context.Context, string, string, string, string, string, string) (connectors.GitHubPR, error) {
+		createPRFn: func(context.Context, gitprovider.PRSpec) (gitprovider.PullRequest, error) {
 			// Simulates CreatePR having already resolved a 422
 			// already-exists conflict to the existing open PR.
-			return connectors.GitHubPR{Number: 55, HTMLURL: "https://github.com/octocat/hello-world/pull/55", State: "open"}, nil
+			return gitprovider.PullRequest{Number: 55, HTMLURL: "https://github.com/octocat/hello-world/pull/55", State: "open"}, nil
 		},
 	})
 	connID := createGitHubConnectorRow(t, mgr)
