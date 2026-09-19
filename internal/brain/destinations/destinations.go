@@ -12,8 +12,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -70,7 +72,26 @@ type GitHubConfig struct {
 	CreateIfMissing bool `json:"create_if_missing,omitempty"`
 }
 
-var namePattern = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`)
+// validateName trims name and checks it against the plain-text rule
+// (same as agents.validateName and connectors.validateName): 1..64
+// runes, any printable character, no control characters. Destination
+// name is a UI/DB label only, never a tool-facing identifier, so it
+// has no slug constraint. Returns the trimmed name.
+func validateName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if utf8.RuneCountInString(name) > 64 {
+		return "", fmt.Errorf("name must be at most 64 characters")
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", fmt.Errorf("name must not contain control characters")
+		}
+	}
+	return name, nil
+}
 
 // connectorLookup is the narrow slice of *connectors.Store a
 // destination's email config validates against — an interface so this
@@ -96,10 +117,12 @@ var (
 	ErrReferenced = fmt.Errorf("destination is referenced by an active mission")
 )
 
-func validate(ctx context.Context, conns connectorLookup, d Destination) error {
-	if !namePattern.MatchString(d.Name) {
-		return fmt.Errorf("name must be a lowercase slug (a-z, 0-9, - or _)")
+func validate(ctx context.Context, conns connectorLookup, d *Destination) error {
+	name, err := validateName(d.Name)
+	if err != nil {
+		return err
 	}
+	d.Name = name
 	switch d.Kind {
 	case "email":
 		var cfg EmailConfig
@@ -315,7 +338,7 @@ func (s *Store) GitHubPolicy(ctx context.Context, id string) (missions.GitHubPol
 
 // Create validates and inserts a destination row.
 func (s *Store) Create(ctx context.Context, d Destination) (string, error) {
-	if err := validate(ctx, s.conns, d); err != nil {
+	if err := validate(ctx, s.conns, &d); err != nil {
 		return "", err
 	}
 	db, err := s.db.Get()
@@ -370,7 +393,7 @@ func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
 	if patch.Enabled != nil {
 		after.Enabled = *patch.Enabled
 	}
-	if err := validate(ctx, s.conns, after); err != nil {
+	if err := validate(ctx, s.conns, &after); err != nil {
 		return err
 	}
 

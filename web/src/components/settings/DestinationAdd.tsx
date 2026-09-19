@@ -93,7 +93,7 @@ export function DestinationAdd() {
           : { url: values.url.trim(), format: values.format }
 
   const canTest =
-    slug !== '' &&
+    name.trim() !== '' &&
     (kind === 'email'
       ? values.connectorID !== '' && values.to.trim() !== ''
       : kind === 'telegram'
@@ -108,7 +108,7 @@ export function DestinationAdd() {
     try {
       if (kind === 'telegram' && !usingExistingBotToken) await setSecret(botTokenRef, botToken.trim())
       const id = await createDestination({
-        name: slug,
+        name: name.trim(),
         kind,
         config,
         credential_ref: kind === 'telegram' ? botTokenRef : undefined,
@@ -129,7 +129,7 @@ export function DestinationAdd() {
     if (!canTest) return
     setBusy(true)
     try {
-      await createDestination({ name: slug, kind, config, enabled: true })
+      await createDestination({ name: name.trim(), kind, config, enabled: true })
       toast.success('Destination added')
       navigate('/settings/destinations')
     } catch (err) {
@@ -181,7 +181,7 @@ export function DestinationAdd() {
 
       <Form onSubmit={(e) => e.preventDefault()}>
         <FieldGroup>
-          <Field label="Name" description="lowercase slug">
+          <Field label="Name" description="unique">
             <Input
               value={name}
               onChange={(e) => {

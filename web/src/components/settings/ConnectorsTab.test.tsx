@@ -110,7 +110,7 @@ describe('Connectors tab', () => {
     )
   })
 
-  it('edits the name field and Save sends a PATCH with the slugified name; header shows the old name until success', async () => {
+  it('edits the name field and Save sends a PATCH with the trimmed name; header shows the old name until success', async () => {
     vi.mocked(patchConnector).mockResolvedValue()
     renderTab(`/settings/connectors/${calendarConnector.id}`)
     await screen.findByRole('heading', { name: 'google-calendar' })
@@ -123,7 +123,7 @@ describe('Connectors tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
       expect(patchConnector).toHaveBeenCalledWith(calendarConnector.id, {
-        name: 'new-calendar',
+        name: 'New Calendar',
         sensitive: false,
         config: { scopes: ['https://www.googleapis.com/auth/calendar'], sign_commits: false },
       }),

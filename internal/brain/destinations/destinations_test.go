@@ -142,16 +142,11 @@ func TestValidate(t *testing.T) {
 			d:       Destination{Name: "whatsapp", Kind: "whatsapp", Config: json.RawMessage(`{}`)},
 			wantErr: true,
 		},
-		{
-			name:    "bad name slug",
-			d:       Destination{Name: "Ops Inbox", Kind: "webhook", Config: json.RawMessage(`{"url":"https://example.com","format":"json"}`)},
-			wantErr: true,
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validate(t.Context(), conns, tt.d)
+			err := validate(t.Context(), conns, &tt.d)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -162,7 +157,7 @@ func TestValidate(t *testing.T) {
 func TestValidateEmailNoConnectors(t *testing.T) {
 	d := Destination{Name: "ops-inbox", Kind: "email",
 		Config: json.RawMessage(`{"connector_id":"gmail-ok","to":"ops@example.com"}`)}
-	if err := validate(t.Context(), nil, d); err == nil {
+	if err := validate(t.Context(), nil, &d); err == nil {
 		t.Fatal("expected error when connectors are disabled")
 	}
 }

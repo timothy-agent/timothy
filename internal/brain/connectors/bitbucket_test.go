@@ -195,7 +195,7 @@ func TestBitbucketBuilderRequiresCredentialRef(t *testing.T) {
 func TestValidateAcceptsBitbucketKind(t *testing.T) {
 	t.Parallel()
 	c := Connector{Name: "work-bb", Kind: "bitbucket", CredentialRef: "BB_TOKEN", Config: json.RawMessage(`{}`)}
-	if err := validate(c); err != nil {
+	if err := validate(&c); err != nil {
 		t.Fatalf("valid bitbucket connector rejected: %v", err)
 	}
 }

@@ -222,7 +222,7 @@ func TestGitHubSourceServesReadOnlyPRTools(t *testing.T) {
 func TestValidateAcceptsGitHubKind(t *testing.T) {
 	t.Parallel()
 	c := Connector{Name: "personal-gh", Kind: "github", CredentialRef: "GH_PAT", Config: json.RawMessage(`{}`)}
-	if err := validate(c); err != nil {
+	if err := validate(&c); err != nil {
 		t.Fatalf("valid github connector rejected: %v", err)
 	}
 }

@@ -77,12 +77,12 @@ function baselineFrom(connector: AdminConnector): StagedConnector {
   }
 }
 
-// buildPatch builds the single PATCH body from the staged values: name
-// (slugified), sensitive, and config.sign_commits merged onto the
-// connector's current config so other config keys survive. An aws
-// connector also carries its editable endpoint and signing region; a
-// gcp connector its project and location, both optional, so an emptied
-// field drops the key rather than writing "".
+// buildPatch builds the single PATCH body from the staged values: name,
+// sensitive, and config.sign_commits merged onto the connector's
+// current config so other config keys survive. An aws connector also
+// carries its editable endpoint and signing region; a gcp connector its
+// project and location, both optional, so an emptied field drops the
+// key rather than writing "".
 function buildPatch(connector: AdminConnector, staged: StagedConnector): Partial<AdminConnector> {
   const config: Record<string, unknown> = {
     ...connector.config,
@@ -104,7 +104,7 @@ function buildPatch(connector: AdminConnector, staged: StagedConnector): Partial
     if (staged.bitbucket_workspace.trim()) config.workspace = staged.bitbucket_workspace.trim()
     else delete config.workspace
   }
-  return { name: slugify(staged.name), sensitive: staged.sensitive, config }
+  return { name: staged.name.trim(), sensitive: staged.sensitive, config }
 }
 
 // ConnectorEdit loads the connector, then hands off to ConnectorEditForm
@@ -218,7 +218,7 @@ function ConnectorEditForm({
     if (isAWS ? !awsKeysReady : isGCP ? !gcpKey.trim() : !token) return
     setSavingToken(true)
     try {
-      const base = connector.name.toUpperCase().replace(/-/g, '_')
+      const base = slugify(connector.name).toUpperCase().replace(/-/g, '_')
       const suffix =
         connector.kind === 'github'
           ? '_GITHUB_PAT'

@@ -185,7 +185,7 @@ export function ConnectorAdd() {
   const gcpRef = refBase.endsWith('GCP') ? `${refBase}_KEY` : `${refBase}_GCP_KEY`
 
   const runTest = async () => {
-    if (!slug) {
+    if (!name.trim()) {
       toast.error('Name required', { description: 'Give this connector a unique name before testing.' })
       return
     }
@@ -265,10 +265,10 @@ export function ConnectorAdd() {
       if (!usingExistingToken && secretValue) await setSecret(tokenRef, secretValue.trim())
       const id = await createConnector(
         isGitHub
-          ? { name: slug, kind: 'github', config: {}, credential_ref: tokenRef, enabled: false }
+          ? { name: name.trim(), kind: 'github', config: {}, credential_ref: tokenRef, enabled: false }
           : isBitbucket
             ? {
-                name: slug,
+                name: name.trim(),
                 kind: 'bitbucket',
                 config: bitbucketWorkspace.trim() ? { workspace: bitbucketWorkspace.trim() } : {},
                 credential_ref: tokenRef,
@@ -276,7 +276,7 @@ export function ConnectorAdd() {
               }
           : isImap
             ? {
-                name: slug,
+                name: name.trim(),
                 kind: 'imap',
                 config: {
                   host: imapHost.trim(),
@@ -290,7 +290,7 @@ export function ConnectorAdd() {
               }
             : isCalDAV
               ? {
-                  name: slug,
+                  name: name.trim(),
                   kind: 'caldav',
                   config: { url: caldavURL.trim(), username: caldavUsername.trim() },
                   credential_ref: tokenRef,
@@ -298,7 +298,7 @@ export function ConnectorAdd() {
                 }
               : isAWS
                 ? {
-                    name: slug,
+                    name: name.trim(),
                     kind: 'aws',
                     config: { endpoint: endpoint.trim(), region: awsRegion.trim() },
                     credential_ref: tokenRef,
@@ -306,7 +306,7 @@ export function ConnectorAdd() {
                   }
                 : isGCP
                 ? {
-                    name: slug,
+                    name: name.trim(),
                     kind: 'gcp',
                     config: {
                       ...(gcpProjectID.trim() ? { project_id: gcpProjectID.trim() } : {}),
@@ -316,7 +316,7 @@ export function ConnectorAdd() {
                     enabled: false,
                   }
                 : {
-                  name: slug,
+                  name: name.trim(),
                   kind: 'mcp',
                   config: { endpoint: endpoint.trim() },
                   credential_ref: usingExistingToken || token ? tokenRef : '',
@@ -343,8 +343,8 @@ export function ConnectorAdd() {
       await patchConnector(createdID, { enabled: true })
       toast.success('Connector added', {
         description: isGitHub || isBitbucket
-          ? `${slug} is connected; its identity is ready for mission use.`
-          : `${slug} is connected and tools are servable.`,
+          ? `${name.trim()} is connected; its identity is ready for mission use.`
+          : `${name.trim()} is connected and tools are servable.`,
       })
       navigate('/settings/connectors')
     } catch (err) {
@@ -366,7 +366,7 @@ export function ConnectorAdd() {
       const secretRef = usingExistingClientSecret ? existingClientSecretRef : `${refBase}${oauthSecretSuffix}`
       if (!usingExistingClientSecret) await setSecret(secretRef, clientSecret)
       const id = await createConnector({
-        name: slug,
+        name: name.trim(),
         kind: isMicrosoft ? 'microsoft' : 'google',
         config: {
           client_id: clientID.trim(),
@@ -384,7 +384,7 @@ export function ConnectorAdd() {
   }
 
   const canTest =
-    slug !== '' &&
+    name.trim() !== '' &&
     (isGitHub || isBitbucket
       ? usingExistingToken
         ? existingTokenRef !== ''
@@ -409,7 +409,7 @@ export function ConnectorAdd() {
                 : gcpKey.trim() !== ''
               : endpoint.trim() !== '')
   const canSubmitOAuth =
-    slug !== '' &&
+    name.trim() !== '' &&
     clientID.trim() !== '' &&
     (usingExistingClientSecret ? existingClientSecretRef !== '' : clientSecret !== '')
 
@@ -436,7 +436,7 @@ export function ConnectorAdd() {
 
       <Form onSubmit={(e) => e.preventDefault()}>
         <FieldGroup>
-          <Field label="Name" description="lowercase slug, prefixes this connector's tool names">
+          <Field label="Name" description="unique, identifies this connector as an account option">
             <Input
               value={name}
               onChange={(e) => {

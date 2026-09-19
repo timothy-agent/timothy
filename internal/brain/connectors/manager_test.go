@@ -224,16 +224,14 @@ func TestValidateRejectsBadInput(t *testing.T) {
 		name   string
 		mutate func(*Connector)
 	}{
-		{"uppercase name", func(c *Connector) { c.Name = "GitHub" }},
 		{"empty name", func(c *Connector) { c.Name = "" }},
-		{"space in name", func(c *Connector) { c.Name = "git hub" }},
 		{"unknown kind", func(c *Connector) { c.Kind = "smtp" }},
 		{"secret-looking ref", func(c *Connector) { c.CredentialRef = "sk-abc def" }},
 		{"invalid config", func(c *Connector) { c.Config = []byte("{not json") }},
 	} {
 		c := base
 		tc.mutate(&c)
-		if err := validate(c); err == nil {
+		if err := validate(&c); err == nil {
 			t.Errorf("%s: accepted", tc.name)
 		}
 	}
@@ -241,7 +239,7 @@ func TestValidateRejectsBadInput(t *testing.T) {
 	ok := base
 	ok.Config = []byte(`{"endpoint":"https://api.example/mcp"}`)
 	ok.CredentialRef = "GITHUB_MCP_TOKEN"
-	if err := validate(ok); err != nil {
+	if err := validate(&ok); err != nil {
 		t.Fatalf("valid connector rejected: %v", err)
 	}
 }

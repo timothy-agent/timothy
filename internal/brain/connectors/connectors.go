@@ -13,6 +13,9 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -57,16 +60,34 @@ type Connector struct {
 	Sensitive bool `json:"sensitive"`
 }
 
-// namePattern keeps connector names usable both as a namespaced tool's
-// prefix ("<name>_<tool>", for whatever fails to unify — see
-// Manager.groupByRawName) and as a unified aggregate tool's "account"
-// argument value: lowercase slug, no spaces.
-var namePattern = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`)
-
-func validate(c Connector) error {
-	if !namePattern.MatchString(c.Name) {
-		return fmt.Errorf("name must be a lowercase slug (a-z, 0-9, - or _), it prefixes MCP tool names and is used as an account argument")
+// validateName trims c.Name and checks it against the plain-text rule
+// (same as agents.validateName): 1..64 runes, any printable character,
+// no control characters. NamespacedName sanitizes and caps whatever
+// this allows before using it as a tool-name prefix, and the "account"
+// argument matches it by exact case-insensitive string comparison, so
+// free-form text is safe on both paths. Returns the trimmed name.
+func validateName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("name is required")
 	}
+	if utf8.RuneCountInString(name) > 64 {
+		return "", fmt.Errorf("name must be at most 64 characters")
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", fmt.Errorf("name must not contain control characters")
+		}
+	}
+	return name, nil
+}
+
+func validate(c *Connector) error {
+	name, err := validateName(c.Name)
+	if err != nil {
+		return err
+	}
+	c.Name = name
 	if !kinds[c.Kind] {
 		return fmt.Errorf("unknown kind %q", c.Kind)
 	}
@@ -140,7 +161,7 @@ func (s *Store) Get(ctx context.Context, id string) (Connector, error) {
 
 // Create inserts a connector, audits, and fires the change hook.
 func (s *Store) Create(ctx context.Context, c Connector) (string, error) {
-	if err := validate(c); err != nil {
+	if err := validate(&c); err != nil {
 		return "", err
 	}
 	db, err := s.db.Get()
@@ -181,8 +202,10 @@ type Patch struct {
 var ErrNameConflict = fmt.Errorf("a connector with this name already exists")
 
 func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
-	if patch.Name != nil && !namePattern.MatchString(*patch.Name) {
-		return fmt.Errorf("name must be a lowercase slug (a-z, 0-9, - or _), it prefixes MCP tool names and is used as an account argument")
+	if patch.Name != nil {
+		if _, err := validateName(*patch.Name); err != nil {
+			return err
+		}
 	}
 	if patch.CredentialRef != nil && !credentialRefPattern.MatchString(*patch.CredentialRef) {
 		return fmt.Errorf("credential_ref must be a name or path, never a secret value")
