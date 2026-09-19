@@ -10,7 +10,7 @@ import (
 
 // slugMarker adapts the package's own marker (which has a trailing
 // space — fine for a mission goal's LIKE-prefix sweep, not fine for a
-// schedule name's namePattern slug) into something CreateSchedule's
+// schedule name's shape rule) into something CreateSchedule's
 // validation actually accepts.
 var slugMarker = strings.TrimSpace(marker)
 

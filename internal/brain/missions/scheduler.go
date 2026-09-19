@@ -56,10 +56,9 @@ type MissionTemplate struct {
 	Goal string `json:"goal"`
 	// Name, when set, becomes the created mission's display name
 	// (Mission.Name — the UI/destination-delivery title) instead of the
-	// schedule's own slug identifier. The schedule name stays a strict
-	// lowercase slug for consistency with connectors/destinations/agents;
-	// this lets a schedule read "Today's Meetings" in Telegram without
-	// relaxing that.
+	// schedule's own name, which is free text but may still be a plain
+	// identifier like "inbox-digest-8h"; this lets a schedule read
+	// "Today's Meetings" in Telegram regardless.
 	Name        string `json:"name,omitempty"`
 	Kind        string `json:"kind"`
 	AgentID     string `json:"agent_id"`

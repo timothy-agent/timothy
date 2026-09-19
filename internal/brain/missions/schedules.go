@@ -5,20 +5,36 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/robfig/cron/v3"
 )
 
-// scheduleNamePattern mirrors agents.namePattern: a lowercase slug that
-// survives in URLs, ledger rows, and event payloads. Kept as its own
-// copy rather than an exported symbol from the agents package — the
-// two name spaces (agent names, schedule names) are independent and
-// have no reason to import each other over one regexp.
-var scheduleNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:[-_][a-z0-9]+)*$`)
+// validateScheduleName trims name and checks it against the plain-text
+// rule (same as agents.validateName): 1..64 runes, any printable
+// character, no control characters. A schedule's name is a display
+// label (mission-title fallback, UNIQUE constraint) with no URL/tool
+// facing shape requirement. Returns the trimmed name.
+func validateScheduleName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+	if utf8.RuneCountInString(name) > 64 {
+		return "", fmt.Errorf("name must be at most 64 characters")
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", fmt.Errorf("name must not contain control characters")
+		}
+	}
+	return name, nil
+}
 
 // ErrBadCron and ErrScheduleNameConflict are the sentinel errors the
 // HTTP layer maps onto 400/409, mirroring ErrNotFound.
@@ -105,9 +121,11 @@ func (s *Store) GetSchedule(ctx context.Context, id string) (Schedule, error) {
 // (schedules.name is UNIQUE) reports ErrScheduleNameConflict rather
 // than a raw pg error.
 func (s *Store) CreateSchedule(ctx context.Context, sc Schedule) (string, error) {
-	if !scheduleNamePattern.MatchString(sc.Name) {
-		return "", fmt.Errorf("name must be a lowercase slug (a-z, 0-9, - or _)")
+	name, err := validateScheduleName(sc.Name)
+	if err != nil {
+		return "", err
 	}
+	sc.Name = name
 	if err := ValidateCron(sc.Cron); err != nil {
 		return "", err
 	}
@@ -163,10 +181,11 @@ func (s *Store) PatchSchedule(ctx context.Context, id string, p SchedulePatch) e
 	}
 	after := before
 	if p.Name != nil {
-		if !scheduleNamePattern.MatchString(*p.Name) {
-			return fmt.Errorf("name must be a lowercase slug (a-z, 0-9, - or _)")
+		name, err := validateScheduleName(*p.Name)
+		if err != nil {
+			return err
 		}
-		after.Name = *p.Name
+		after.Name = name
 	}
 	if p.Cron != nil {
 		if err := ValidateCron(*p.Cron); err != nil {

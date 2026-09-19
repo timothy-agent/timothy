@@ -190,7 +190,7 @@ describe('Knowledge page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create collection' }))
 
     await waitFor(() =>
-      expect(createKbCollection).toHaveBeenCalledWith({ name: 'runbooks', description: '' }),
+      expect(createKbCollection).toHaveBeenCalledWith({ name: 'Runbooks', description: '' }),
     )
     expect(await screen.findByRole('heading', { name: 'runbooks' })).toBeTruthy()
   })

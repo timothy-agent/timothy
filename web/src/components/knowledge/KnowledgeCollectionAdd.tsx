@@ -7,7 +7,6 @@ import { PageHeader } from '../timothy/page-header'
 import { Input } from '../ui/input'
 import { Button } from '../ui/button'
 import { errText } from '../../lib/errors'
-import { slugify } from '../../lib/slugify'
 
 export function KnowledgeCollectionAdd() {
   const navigate = useNavigate()
@@ -18,8 +17,8 @@ export function KnowledgeCollectionAdd() {
   const submit = async () => {
     setBusy(true)
     try {
-      const id = await createKbCollection({ name: slugify(name), description: description.trim() })
-      toast.success('Collection created', { description: `${slugify(name)} is ready for documents.` })
+      const id = await createKbCollection({ name: name.trim(), description: description.trim() })
+      toast.success('Collection created', { description: `${name.trim()} is ready for documents.` })
       navigate(`/knowledge/${id}`)
     } catch (err) {
       toast.error('Could not create collection', { description: errText(err) })
@@ -38,7 +37,7 @@ export function KnowledgeCollectionAdd() {
 
       <div className="max-w-3xl">
         <div className="grid gap-5">
-          <Field label="Name" description="unique slug, immutable after creation">
+          <Field label="Name" description="unique">
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -60,7 +59,7 @@ export function KnowledgeCollectionAdd() {
           <Button variant="outline" disabled={busy} onClick={() => navigate('/knowledge')}>
             Cancel
           </Button>
-          <Button disabled={slugify(name) === '' || busy} onClick={() => void submit()}>
+          <Button disabled={name.trim() === '' || busy} onClick={() => void submit()}>
             Create collection
           </Button>
         </div>

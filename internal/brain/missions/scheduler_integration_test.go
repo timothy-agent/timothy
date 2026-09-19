@@ -167,11 +167,10 @@ func TestSchedulerFireCopiesReviewHarness(t *testing.T) {
 }
 
 // TestSchedulerFireUsesTemplateNameOverSlug guards the fix for a real
-// UI gap: schedule names are strict lowercase slugs (shared validation
-// with connectors/destinations/agents), so a scheduled mission's
-// display title showed the raw slug (e.g. "inbox-digest-8h") instead
-// of something presentable. mission_template.name, when set, must win
-// over the schedule's own slug.
+// UI gap: a scheduled mission's display title used to show the raw
+// schedule name (e.g. "inbox-digest-8h") instead of something
+// presentable. mission_template.name, when set, must win over the
+// schedule's own name.
 func TestSchedulerFireUsesTemplateNameOverSlug(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
