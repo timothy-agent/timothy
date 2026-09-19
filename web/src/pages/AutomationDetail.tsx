@@ -7,7 +7,6 @@ import type { Destination, Mission, Schedule } from '../api/types'
 import { MissionCard } from '../components/missions/MissionCard'
 import { DestinationKindIcon } from '../components/destinations/DestinationKindIcon'
 import { errText } from '../lib/errors'
-import { slugify } from '../lib/slugify'
 import { EmptyState } from '../components/timothy/empty-state'
 import { IconButton } from '../components/timothy/icon-button'
 import { PageHeader } from '../components/timothy/page-header'
@@ -62,11 +61,11 @@ export function AutomationDetail() {
   }
 
   const commitRename = async () => {
-    const slug = slugify(name)
+    const trimmed = name.trim()
     setRenaming(false)
-    if (!schedule || slug === '' || slug === schedule.name) return
+    if (!schedule || trimmed === '' || trimmed === schedule.name) return
     try {
-      await patchSchedule(schedule.id, { name: slug })
+      await patchSchedule(schedule.id, { name: trimmed })
       toast.success('Automation renamed')
       refresh()
     } catch (err) {

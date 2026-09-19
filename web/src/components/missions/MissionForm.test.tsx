@@ -1400,7 +1400,7 @@ describe('MissionForm: destinations (github, issue #561)', () => {
 })
 
 describe('MissionForm: create mode, repeat on schedule', () => {
-  it('submits a schedule with the slugified default name, preset cron, and general kind', async () => {
+  it('submits a schedule with the goal as the default name, preset cron, and general kind', async () => {
     vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })
     const onDone = vi.fn()
     renderForm(<MissionForm mode="create" onDone={onDone} onCancel={vi.fn()} />)
@@ -1414,7 +1414,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     await waitFor(() =>
       expect(createSchedule).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'check-the-news-every-morning',
+          name: 'Check the news every morning',
           cron: '0 7 * * *',
           mission_template: expect.objectContaining({
             goal: 'Check the news every morning',

@@ -929,7 +929,7 @@ export function MissionForm({
 
   const submitSchedule = async () => {
     const { id } = await createSchedule({
-      name: slugify(scheduleName || goal),
+      name: (scheduleName || goal).trim(),
       cron,
       mission_template: {
         goal: goal.trim(),
@@ -961,7 +961,7 @@ export function MissionForm({
   const submitEdit = async () => {
     if (!schedule) return
     const sc = await patchSchedule(schedule.id, {
-      name: slugify(scheduleName),
+      name: scheduleName.trim(),
       cron,
       mission_template: {
         goal: goal.trim(),

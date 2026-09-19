@@ -160,9 +160,9 @@ describe('AutomationDetail', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/automations/s1/edit'))
   })
 
-  it('renames the automation: pencil click, edit, Enter saves the slugified name', async () => {
+  it('renames the automation: pencil click, edit, Enter saves the trimmed name', async () => {
     vi.mocked(listSchedules).mockResolvedValue([schedule])
-    vi.mocked(patchSchedule).mockResolvedValue({ ...schedule, name: 'new-name' })
+    vi.mocked(patchSchedule).mockResolvedValue({ ...schedule, name: 'New Name' })
     renderAt('s1')
     await screen.findByRole('heading', { name: 'weekly-digest' })
 
@@ -171,7 +171,7 @@ describe('AutomationDetail', () => {
     fireEvent.change(input, { target: { value: 'New Name' } })
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    await waitFor(() => expect(patchSchedule).toHaveBeenCalledWith('s1', { name: 'new-name' }))
+    await waitFor(() => expect(patchSchedule).toHaveBeenCalledWith('s1', { name: 'New Name' }))
   })
 
   it('cancels the rename on Escape without calling patchSchedule', async () => {
