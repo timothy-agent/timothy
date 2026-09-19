@@ -19,6 +19,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -123,6 +124,11 @@ func validate(ctx context.Context, conns connectorLookup, d *Destination) error 
 		return err
 	}
 	d.Name = name
+	// Repo kinds are the registry's, not a case list: a new git provider
+	// becomes a valid destination kind by registering a Descriptor.
+	if gitprovider.IsKind(d.Kind) {
+		return validateRepoKind(ctx, conns, d)
+	}
 	switch d.Kind {
 	case "email":
 		var cfg EmailConfig
@@ -172,45 +178,50 @@ func validate(ctx context.Context, conns connectorLookup, d *Destination) error 
 		if d.CredentialRef == "" {
 			return fmt.Errorf("telegram destination requires credential_ref (bot token)")
 		}
-	case "github", "bitbucket":
-		var cfg GitHubConfig
-		if err := json.Unmarshal(d.Config, &cfg); err != nil {
-			return fmt.Errorf("%s config: %w", d.Kind, err)
-		}
-		if cfg.ConnectorID == "" {
-			return fmt.Errorf("%s destination requires config.connector_id", d.Kind)
-		}
-		if conns == nil {
-			return fmt.Errorf("%s destination requires connectors to be enabled", d.Kind)
-		}
-		c, err := conns.Get(ctx, cfg.ConnectorID)
-		if err != nil {
-			return fmt.Errorf("config.connector_id: %w", err)
-		}
-		if c.Kind != d.Kind {
-			return fmt.Errorf("config.connector_id must name a %s-kind connector", d.Kind)
-		}
-		if !c.Enabled {
-			return fmt.Errorf("config.connector_id names a disabled connector")
-		}
-		switch cfg.Mode {
-		case "push", "push_pr":
-		default:
-			return fmt.Errorf(`%s destination requires config.mode to be "push" or "push_pr"`, d.Kind)
-		}
-		if cfg.BranchPattern != "" {
-			if err := missions.ValidateBranchPattern(cfg.BranchPattern); err != nil {
-				return fmt.Errorf("config.branch_pattern: %w", err)
-			}
-		}
-		if err := missions.ValidateCommitStyle(cfg.CommitStyle); err != nil {
-			return fmt.Errorf("config.commit_style: %w", err)
-		}
-		if d.CredentialRef != "" {
-			return fmt.Errorf("%s destination must not set credential_ref (token comes from the connector)", d.Kind)
-		}
 	default:
 		return fmt.Errorf("unsupported kind %q (only email, webhook, telegram, github, bitbucket in this release)", d.Kind)
+	}
+	return nil
+}
+
+// validateRepoKind validates a destination whose kind is a registered
+// git provider: push/PR delivery through a connector of the same kind.
+func validateRepoKind(ctx context.Context, conns connectorLookup, d *Destination) error {
+	var cfg GitHubConfig
+	if err := json.Unmarshal(d.Config, &cfg); err != nil {
+		return fmt.Errorf("%s config: %w", d.Kind, err)
+	}
+	if cfg.ConnectorID == "" {
+		return fmt.Errorf("%s destination requires config.connector_id", d.Kind)
+	}
+	if conns == nil {
+		return fmt.Errorf("%s destination requires connectors to be enabled", d.Kind)
+	}
+	c, err := conns.Get(ctx, cfg.ConnectorID)
+	if err != nil {
+		return fmt.Errorf("config.connector_id: %w", err)
+	}
+	if c.Kind != d.Kind {
+		return fmt.Errorf("config.connector_id must name a %s-kind connector", d.Kind)
+	}
+	if !c.Enabled {
+		return fmt.Errorf("config.connector_id names a disabled connector")
+	}
+	switch cfg.Mode {
+	case "push", "push_pr":
+	default:
+		return fmt.Errorf(`%s destination requires config.mode to be "push" or "push_pr"`, d.Kind)
+	}
+	if cfg.BranchPattern != "" {
+		if err := missions.ValidateBranchPattern(cfg.BranchPattern); err != nil {
+			return fmt.Errorf("config.branch_pattern: %w", err)
+		}
+	}
+	if err := missions.ValidateCommitStyle(cfg.CommitStyle); err != nil {
+		return fmt.Errorf("config.commit_style: %w", err)
+	}
+	if d.CredentialRef != "" {
+		return fmt.Errorf("%s destination must not set credential_ref (token comes from the connector)", d.Kind)
 	}
 	return nil
 }
@@ -326,7 +337,7 @@ func (s *Store) GitHubPolicy(ctx context.Context, id string) (missions.GitHubPol
 		}
 		return missions.GitHubPolicy{}, false, err
 	}
-	if d.Kind != "github" && d.Kind != "bitbucket" {
+	if !gitprovider.IsKind(d.Kind) {
 		return missions.GitHubPolicy{}, false, nil
 	}
 	var cfg GitHubConfig

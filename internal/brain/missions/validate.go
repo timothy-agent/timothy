@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 )
 
@@ -161,14 +162,14 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 				invalid = append(invalid, e.DestinationID)
 				continue
 			}
-			repoKind := kind == "github" || kind == "bitbucket"
+			repoKind := gitprovider.IsKind(kind)
 			if repoKind && !missionPolicyFor(m).canDelegate {
 				return fmt.Errorf("%w: a %s destination is only valid for kind=coding missions", ErrInvalidMission, kind)
 			}
 			if !repoKind && e.RepoURL != "" {
 				return fmt.Errorf("%w: repo_url is only valid for a github or bitbucket destination entry", ErrInvalidMission)
 			}
-			if kind == "bitbucket" && e.RepoURL != "" {
+			if kind == string(gitprovider.KindBitbucket) && e.RepoURL != "" {
 				if _, _, ok := ParseBitbucketRepoURL(e.RepoURL); !ok {
 					return fmt.Errorf("%w: repo_url is not a recognizable bitbucket https clone URL", ErrInvalidMission)
 				}
@@ -176,7 +177,7 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			// ParseGitHubRepoURL accepts any host, so a bitbucket URL
 			// would otherwise be resolved against github.com, which is
 			// the only host the github connector talks to (issue #787).
-			if kind == "github" && e.RepoURL != "" && !isGitHubHost(e.RepoURL) {
+			if kind == string(gitprovider.KindGitHub) && e.RepoURL != "" && !isGitHubHost(e.RepoURL) {
 				return fmt.Errorf("%w: repo_url is not a github.com https clone URL", ErrInvalidMission)
 			}
 		}

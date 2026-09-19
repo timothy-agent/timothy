@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
@@ -31,25 +32,15 @@ const (
 )
 
 // GitHubIdentity is what Test resolves and reports: enough to confirm
-// which account a PAT authenticates as and what it can commit as.
-type GitHubIdentity struct {
-	Login  string `json:"login"`
-	Name   string `json:"name"`
-	Email  string `json:"email"`  // resolved commit email, see resolveEmail
-	Scopes string `json:"scopes"` // "fine-grained token" when the classic scopes header is absent
-}
+// which account a PAT authenticates as and what it can commit as. The
+// shape is provider-agnostic and lives in gitprovider; the github-named
+// aliases stay until every caller is renamed.
+type GitHubIdentity = gitprovider.Identity
 
-// GitHubRepo is the wire shape of one repo a connector's PAT can see or
-// create — the fields mission creation's repo picker/create-new flow
-// needs, nothing more.
-type GitHubRepo struct {
-	FullName      string `json:"full_name"`
-	Private       bool   `json:"private"`
-	DefaultBranch string `json:"default_branch"`
-	HTMLURL       string `json:"html_url"`
-	CloneURL      string `json:"clone_url"`
-	PushedAt      string `json:"pushed_at"`
-}
+// GitHubRepo is the wire shape of one repo a connector's credential can
+// see or create — the fields mission creation's repo picker/create-new
+// flow needs, nothing more.
+type GitHubRepo = gitprovider.Repo
 
 // githubRepoPerPage is the max GitHub allows per page; githubRepoMaxRepos
 // bounds how many pages ListRepos follows so a PAT with an enormous
@@ -207,11 +198,7 @@ func createGitHubRepo(ctx context.Context, client *http.Client, token, name stri
 // GitHubPR is the wire shape of one pull request the PR-create flow
 // needs: enough for POST /v1/missions/{id}/pr's {url, number} response
 // and to detect/return an already-open PR for the same head.
-type GitHubPR struct {
-	Number  int    `json:"number"`
-	HTMLURL string `json:"html_url"`
-	State   string `json:"state"`
-}
+type GitHubPR = gitprovider.PullRequest
 
 // githubPRAlreadyExistsMarker is the distinctive substring GitHub's 422
 // response carries when a PR for the given head/base already exists —

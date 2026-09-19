@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
@@ -338,4 +339,4 @@ func (d *Deliverer) DeliverNow(ctx context.Context, id, subject, body string) (n
 
 // IsRepoKind names the destination kinds that push a branch or open a
 // PR instead of sending a rendered payload.
-func IsRepoKind(kind string) bool { return kind == "github" || kind == "bitbucket" }
+func IsRepoKind(kind string) bool { return gitprovider.IsKind(kind) }

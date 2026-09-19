@@ -19,6 +19,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -677,8 +678,8 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch c.Kind {
-		case "github":
-		case "bitbucket":
+		case string(gitprovider.KindGitHub):
+		case string(gitprovider.KindBitbucket):
 			sourceKind = missions.SourceKindBitbucket
 		default:
 			jsonError(w, http.StatusBadRequest, "bad_request", "connector_id must name a github- or bitbucket-kind connector")
@@ -2280,7 +2281,7 @@ func (h *missionAPI) resolvePushToken(ctx context.Context, m missions.Mission, c
 	if err != nil {
 		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "unknown connector_id"}
 	}
-	if c.Kind != "github" && c.Kind != "bitbucket" {
+	if !gitprovider.IsKind(c.Kind) {
 		return "", &pushTokenError{http.StatusBadRequest, "bad_request", "connector_id must name a github- or bitbucket-kind connector"}
 	}
 	if !c.Enabled {

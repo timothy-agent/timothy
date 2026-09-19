@@ -25,6 +25,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -297,8 +298,8 @@ func main() {
 		conns.RegisterBuilder("mcp", connectors.MCPBuilder(mcpHTTP, mcpDeferral))
 		conns.RegisterBuilder("aws", connectors.AWSBuilder(nil, mcpDeferral))
 		conns.RegisterBuilder("gcp", connectors.GCPBuilder(nil))
-		conns.RegisterBuilder("github", connectors.GitHubBuilder(nil))
-		conns.RegisterBuilder("bitbucket", connectors.BitbucketBuilder(nil))
+		conns.RegisterBuilder(string(gitprovider.KindGitHub), connectors.GitHubBuilder(nil))
+		conns.RegisterBuilder(string(gitprovider.KindBitbucket), connectors.BitbucketBuilder(nil))
 		if goog != nil {
 			conns.RegisterBuilder("google", goog.Builder())
 		}
