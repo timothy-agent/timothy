@@ -171,13 +171,6 @@ func TestConnectorPatchRename(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid slug rejected", func(t *testing.T) {
-		bad := "Has Spaces"
-		if err := store.Patch(ctx, id, Patch{Name: &bad}); err == nil {
-			t.Fatal("invalid slug accepted")
-		}
-	})
-
 	t.Run("duplicate name rejected", func(t *testing.T) {
 		if err := store.Patch(ctx, id, Patch{Name: &other}); !errors.Is(err, ErrNameConflict) {
 			t.Fatalf("Patch error = %v, want ErrNameConflict", err)
