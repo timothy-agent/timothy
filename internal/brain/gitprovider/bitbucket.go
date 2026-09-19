@@ -28,12 +28,21 @@ func (Bitbucket) SSHCloneURL(r RepoRef) string {
 
 func (Bitbucket) HTTPUsername() string { return "x-token-auth" }
 
-// SSHKnownHosts: see GitHub.SSHKnownHosts.
-func (Bitbucket) SSHKnownHosts() []string { return nil }
+// bitbucketKnownHosts pins bitbucket.org's ed25519 host key, verbatim
+// from Atlassian's own published set (https://bitbucket.org/site/ssh,
+// fingerprint SHA256:ybgmFkzwOSotHTHLJgHO0QN8L0xErw6vd0VhFA9m3SM in
+// the "Configure SSH and two-step verification" doc). See
+// githubKnownHosts for why this is pinned rather than fetched, and why
+// only ed25519 is listed.
+var bitbucketKnownHosts = []string{
+	"bitbucket.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIazEu89wgQZ4bqs3d63QSMzYVa0MuJ2e2gKTKqu+UUO",
+}
+
+func (Bitbucket) SSHKnownHosts() []string { return bitbucketKnownHosts }
 
 func (Bitbucket) Supports(c Capability) bool {
 	switch c {
-	case CapCreateRepo:
+	case CapCreateRepo, CapSSHTransport:
 		return true
 	default:
 		return false

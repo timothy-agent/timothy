@@ -235,3 +235,120 @@ func TestGitConfigsCarrySigningFields(t *testing.T) {
 		}
 	})
 }
+
+// TestEnsureSSHKeyGeneratesOnFirstEnable proves enabling ssh_transport
+// with no existing key generates one, stores the private half under
+// the SSH ref (never the signing ref), and returns the public half.
+func TestEnsureSSHKeyGeneratesOnFirstEnable(t *testing.T) {
+	store := newFakeSigningStore()
+	got, err := EnsureSSHKey(context.Background(), store, "MYCONN_PAT", GitKeyConfig{SSHTransport: true})
+	if err != nil {
+		t.Fatalf("EnsureSSHKey: %v", err)
+	}
+	if got.SSHPublicKey == "" {
+		t.Fatal("EnsureSSHKey returned no public key")
+	}
+	stored, ok := store.values[SSHKeyRefSuffix("MYCONN_PAT")]
+	if !ok || stored == "" {
+		t.Fatalf("no private key stored under %q", SSHKeyRefSuffix("MYCONN_PAT"))
+	}
+	if _, err := ssh.ParsePrivateKey([]byte(stored)); err != nil {
+		t.Fatalf("stored key is not a parseable OpenSSH PEM: %v", err)
+	}
+	if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(got.SSHPublicKey)); err != nil {
+		t.Fatalf("public key is not an authorized_keys line: %v", err)
+	}
+}
+
+// The two keys must never share a ref: revoking transport access has to
+// leave historic signatures verifiable.
+func TestSSHAndSigningKeysAreSeparate(t *testing.T) {
+	store := newFakeSigningStore()
+	cfg := GitKeyConfig{SignCommits: true, SSHTransport: true}
+	cfg, err := EnsureSigningKey(context.Background(), store, "MYCONN_PAT", cfg)
+	if err != nil {
+		t.Fatalf("EnsureSigningKey: %v", err)
+	}
+	cfg, err = EnsureSSHKey(context.Background(), store, "MYCONN_PAT", cfg)
+	if err != nil {
+		t.Fatalf("EnsureSSHKey: %v", err)
+	}
+	signingRef, sshRef := SigningKeyRefSuffix("MYCONN_PAT"), SSHKeyRefSuffix("MYCONN_PAT")
+	if signingRef == sshRef {
+		t.Fatalf("the two refs collide: %q", signingRef)
+	}
+	if store.values[signingRef] == store.values[sshRef] {
+		t.Fatal("the signing and transport keys are the same key")
+	}
+	if cfg.SigningPublicKey == cfg.SSHPublicKey {
+		t.Fatal("the two public keys are identical")
+	}
+}
+
+func TestEnsureSSHKeyIdempotent(t *testing.T) {
+	store := newFakeSigningStore()
+	first, err := EnsureSSHKey(context.Background(), store, "MYCONN_PAT", GitKeyConfig{SSHTransport: true})
+	if err != nil {
+		t.Fatalf("first EnsureSSHKey: %v", err)
+	}
+	second, err := EnsureSSHKey(context.Background(), store, "MYCONN_PAT", first)
+	if err != nil {
+		t.Fatalf("second EnsureSSHKey: %v", err)
+	}
+	if second.SSHPublicKey != first.SSHPublicKey {
+		t.Fatal("a second call regenerated the key, invalidating the one already registered with the host")
+	}
+}
+
+func TestEnsureSSHKeyNoopWhenDisabled(t *testing.T) {
+	store := newFakeSigningStore()
+	got, err := EnsureSSHKey(context.Background(), store, "MYCONN_PAT", GitKeyConfig{SSHTransport: false})
+	if err != nil {
+		t.Fatalf("EnsureSSHKey: %v", err)
+	}
+	if got.SSHPublicKey != "" || len(store.values) != 0 {
+		t.Fatalf("a disabled connector got a key: cfg=%+v store=%v", got, store.values)
+	}
+}
+
+// A store key with no public key in config must never be regenerated
+// over, same contract as the signing key's (see EnsureSigningKey).
+func TestEnsureSSHKeyErrorsOnOrphanedKey(t *testing.T) {
+	store := newFakeSigningStore()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.values[SSHKeyRefSuffix("MYCONN_PAT")] = string(block.Bytes)
+	if _, err := EnsureSSHKey(context.Background(), store, "MYCONN_PAT", GitKeyConfig{SSHTransport: true}); err == nil {
+		t.Fatal("EnsureSSHKey: want an error when a store key exists but config has no public key")
+	}
+}
+
+// MergePublicKey must leave every other config key intact, the reason
+// it merges into raw JSON instead of re-marshaling a decoded struct.
+func TestMergePublicKeyPreservesOtherKeys(t *testing.T) {
+	raw := json.RawMessage(`{"workspace":"acme-team","sign_commits":true,"signing_public_key":"ssh-ed25519 SIGN"}`)
+	merged, err := MergePublicKey(raw, "ssh_public_key", "ssh-ed25519 TRANSPORT")
+	if err != nil {
+		t.Fatalf("MergePublicKey: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(merged, &out); err != nil {
+		t.Fatalf("unmarshal merged: %v", err)
+	}
+	for key, want := range map[string]any{
+		"workspace":          "acme-team",
+		"sign_commits":       true,
+		"signing_public_key": "ssh-ed25519 SIGN",
+		"ssh_public_key":     "ssh-ed25519 TRANSPORT",
+	} {
+		if !reflect.DeepEqual(out[key], want) {
+			t.Fatalf("merged[%q] = %v, want %v", key, out[key], want)
+		}
+	}
+}

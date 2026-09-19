@@ -19,16 +19,46 @@ type fakeEvents struct {
 	mu     sync.Mutex
 	events []missions.Event
 	err    error
+	// payloads parallels events: mission.transport_fallback's own
+	// {from, to, reason} is the assertion (issue #796), and
+	// missions.Event carries the payload as raw JSON.
+	payloads []map[string]any
 }
 
-func (f *fakeEvents) AppendEvent(_ context.Context, id, kind string, _ map[string]any) error {
+func (f *fakeEvents) AppendEvent(_ context.Context, id, kind string, payload map[string]any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
 		return f.err
 	}
 	f.events = append(f.events, missions.Event{MissionID: id, Kind: kind})
+	f.payloads = append(f.payloads, payload)
 	return nil
+}
+
+// countOf reports how many events of kind were recorded.
+func (f *fakeEvents) countOf(kind string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, e := range f.events {
+		if e.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// find returns the first payload recorded for kind.
+func (f *fakeEvents) find(kind string) (map[string]any, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i, e := range f.events {
+		if e.Kind == kind {
+			return f.payloads[i], true
+		}
+	}
+	return nil, false
 }
 
 // fakeGitClient scripts gitprovider.Client for the adapter tests
@@ -162,10 +192,14 @@ type fakePusher struct {
 	setOriginCalls int
 	setOriginErr   error
 	lastOriginURL  string
+	// lastAuth records what transport the adapter resolved for the push
+	// (issue #796).
+	lastAuth missions.RemoteAuth
 }
 
-func (f *fakePusher) Push(_ context.Context, _, _, _ string) (string, error) {
+func (f *fakePusher) Push(_ context.Context, _, _ string, auth missions.RemoteAuth) (string, error) {
 	f.pushCalls++
+	f.lastAuth = auth
 	if f.err != nil {
 		return "", f.err
 	}
@@ -774,5 +808,115 @@ func TestRepoAdapterAttributionDefaultsOn(t *testing.T) {
 	a.Attribution = func(context.Context) bool { return false }
 	if a.attribution(context.Background()) {
 		t.Fatal("Attribution hook returning false was ignored")
+	}
+}
+
+// sshTransport builds the resolver that always picks ssh, with the
+// probe faked out: no host to reach in a test.
+func sshTransport(ev events) *TransportResolver {
+	return &TransportResolver{ResolveSSH: sshEnabled, Events: ev, probe: okProbe, hasSSH: yesSSH}
+}
+
+// TestPushBranchUsesSSHWhenResolved proves the transport decision
+// reaches the pusher AND that origin is repointed at the ssh clone
+// URL first: Push rejects an auth whose transport disagrees with the
+// origin's scheme, so skipping the repoint would fail every ssh push
+// (issue #796).
+func TestPushBranchUsesSSHWhenResolved(t *testing.T) {
+	t.Parallel()
+	m := pushableMission(t)
+	p := &fakePusher{host: "github.com"}
+	c := githubClient(&fakeGitClient{})
+	ev := &fakeEvents{}
+	a := &RepoAdapter{Pusher: p, Events: ev, Clients: clients(c), Transport: sshTransport(ev)}
+
+	if _, err := a.PushBranch(t.Context(), m, "tok"); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+	if !p.lastAuth.IsSSH() {
+		t.Fatalf("push ran over %+v, want ssh", p.lastAuth)
+	}
+	if p.lastOriginURL != "ssh://git@github.com/octo/repo.git" {
+		t.Fatalf("origin = %q, want the ssh clone URL", p.lastOriginURL)
+	}
+}
+
+// The same push with no transport resolver stays https and never
+// touches origin: the pre-#796 behavior, unchanged.
+func TestPushBranchStaysHTTPSWithoutTransport(t *testing.T) {
+	t.Parallel()
+	m := pushableMission(t)
+	p := &fakePusher{host: "github.com"}
+	c := githubClient(&fakeGitClient{})
+	a := &RepoAdapter{Pusher: p, Events: &fakeEvents{}, Clients: clients(c)}
+
+	if _, err := a.PushBranch(t.Context(), m, "tok"); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+	if p.lastAuth.IsSSH() {
+		t.Fatal("push ran over ssh with no transport resolver wired")
+	}
+	if p.lastAuth.Token != "tok" || p.lastAuth.HTTPUsername != "x-access-token" {
+		t.Fatalf("https auth = %+v", p.lastAuth)
+	}
+	if p.setOriginCalls != 0 {
+		t.Fatalf("an https push repointed origin %d times, want 0", p.setOriginCalls)
+	}
+}
+
+// A bitbucket mission's https push must still carry bitbucket's own
+// credential username (issue #787's fix, preserved through #796).
+func TestPushBranchCarriesBitbucketUsername(t *testing.T) {
+	t.Parallel()
+	m := bitbucketMission(t)
+	p := &fakePusher{host: "bitbucket.org"}
+	c := bitbucketClient(&fakeGitClient{})
+	a := &RepoAdapter{Pusher: p, Events: &fakeEvents{}, Clients: clients(c)}
+
+	if _, err := a.PushBranch(t.Context(), m, "tok"); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+	if p.lastAuth.HTTPUsername != "x-token-auth" {
+		t.Fatalf("credential username = %q, want x-token-auth", p.lastAuth.HTTPUsername)
+	}
+}
+
+// A mission with no connector at all (no Clients wired) still pushes,
+// over https: PushBranch must never fail just because the transport
+// could not be resolved.
+func TestPushBranchWithoutClientsStillPushes(t *testing.T) {
+	t.Parallel()
+	m := pushableMission(t)
+	p := &fakePusher{host: "github.com"}
+	a := &RepoAdapter{Pusher: p, Events: &fakeEvents{}}
+
+	if _, err := a.PushBranch(t.Context(), m, "tok"); err != nil {
+		t.Fatalf("PushBranch: %v", err)
+	}
+	if p.pushCalls != 1 || p.lastAuth.IsSSH() {
+		t.Fatalf("pushCalls=%d auth=%+v", p.pushCalls, p.lastAuth)
+	}
+}
+
+// An SSH-only connector whose probe fails must fail the delivery, not
+// push silently over a transport it was told not to use.
+func TestDeliverMissionFailsWhenSSHOnlyAndUnreachable(t *testing.T) {
+	t.Parallel()
+	m := pushableMission(t)
+	p := &fakePusher{host: "github.com"}
+	c := githubClient(&fakeGitClient{repoExists: true})
+	ev := &fakeEvents{}
+	a := &RepoAdapter{
+		Pusher: p, Events: ev, Clients: clients(c),
+		ResolveToken: func(context.Context, string) (string, error) { return "", nil },
+		Transport:    &TransportResolver{ResolveSSH: sshEnabled, Events: ev, probe: failProbe, hasSSH: yesSSH},
+	}
+	err := a.DeliverMission(t.Context(), RepoDestinationConfig{ConnectorID: "conn1", Mode: "push"}, m, &missions.DestinationEntry{})
+	var unavailable *SSHUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("DeliverMission = %v, want an SSHUnavailableError", err)
+	}
+	if p.pushCalls != 0 {
+		t.Fatalf("a failed ssh-only delivery still pushed %d times", p.pushCalls)
 	}
 }

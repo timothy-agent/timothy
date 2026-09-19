@@ -11,17 +11,24 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// GitKeyConfig is the commit-signing slice of a git-hosting
-// connector's config, embedded by every kind in GitKinds. SignCommits
-// opts the connector into SSH commit signing (D-058): mission commits
-// cloned through it are signed with the connector's own ed25519 key.
-// SigningPublicKey is the authorized_keys line for that key — public,
-// so it lives in the config row (not the secret store) for the UI to
-// re-display; the private half is stored in the secret store under a
-// ref derived from CredentialRef.
+// GitKeyConfig is the SSH-key slice of a git-hosting connector's
+// config, embedded by every kind in GitKinds. SignCommits opts the
+// connector into SSH commit signing (D-058): mission commits cloned
+// through it are signed with the connector's own ed25519 key.
+// SSHTransport opts its clones and pushes onto the git-over-ssh wire
+// protocol (D-102, issue #796), with its own separate ed25519 key.
+// SigningPublicKey/SSHPublicKey are the authorized_keys lines for
+// those keys — public, so they live in the config row (not the secret
+// store) for the UI to re-display; the private halves are stored in
+// the secret store under refs derived from CredentialRef.
+//
+// The two keys stay separate on purpose: revoking transport access
+// must not invalidate the signatures on commits already pushed.
 type GitKeyConfig struct {
 	SignCommits      bool   `json:"sign_commits,omitempty"`
 	SigningPublicKey string `json:"signing_public_key,omitempty"`
+	SSHTransport     bool   `json:"ssh_transport,omitempty"`
+	SSHPublicKey     string `json:"ssh_public_key,omitempty"`
 }
 
 // GitKinds are the connector kinds that clone, commit and push repos,
@@ -39,6 +46,14 @@ func IsGitKind(kind string) bool { return GitKinds[kind] }
 // never the token's own ref (that would overwrite it on Set).
 func SigningKeyRefSuffix(credentialRef string) string {
 	return credentialRef + "_SIGNING_KEY"
+}
+
+// SSHKeyRefSuffix derives the secret-store ref a git-kind connector's
+// SSH TRANSPORT private key is stored under: a sibling of
+// SigningKeyRefSuffix, never the same ref, so revoking one key on the
+// host leaves the other working (see GitKeyConfig).
+func SSHKeyRefSuffix(credentialRef string) string {
+	return credentialRef + "_SSH_KEY"
 }
 
 // signingKeyStore is the narrow secret-store slice EnsureSigningKey
@@ -62,26 +77,51 @@ type signingKeyStore interface {
 // function's return path as anything but the ref name it was stored
 // under; only the public half is ever written back to cfg.
 func EnsureSigningKey(ctx context.Context, store signingKeyStore, credentialRef string, cfg GitKeyConfig) (GitKeyConfig, error) {
-	if !cfg.SignCommits || cfg.SigningPublicKey != "" {
-		return cfg, nil
+	publicLine, err := ensureKey(ctx, store, credentialRef, "signing", SigningKeyRefSuffix(credentialRef), cfg.SignCommits, cfg.SigningPublicKey)
+	if err != nil {
+		return cfg, err
 	}
-	ref := SigningKeyRefSuffix(credentialRef)
+	cfg.SigningPublicKey = publicLine
+	return cfg, nil
+}
+
+// EnsureSSHKey is EnsureSigningKey's transport twin (issue #796):
+// generates and persists the connector's SSH TRANSPORT keypair the
+// first time SSHTransport is enabled, idempotent on every call after
+// for exactly the same reason — regenerating would silently invalidate
+// the public key the operator already registered with the host.
+func EnsureSSHKey(ctx context.Context, store signingKeyStore, credentialRef string, cfg GitKeyConfig) (GitKeyConfig, error) {
+	publicLine, err := ensureKey(ctx, store, credentialRef, "ssh transport", SSHKeyRefSuffix(credentialRef), cfg.SSHTransport, cfg.SSHPublicKey)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.SSHPublicKey = publicLine
+	return cfg, nil
+}
+
+// ensureKey is the generate-once body both Ensure* functions share:
+// returns publicKey unchanged when the feature is off or a key already
+// exists, otherwise generates a keypair, stores the private half under
+// ref and returns the public line to write back.
+func ensureKey(ctx context.Context, store signingKeyStore, credentialRef, label, ref string, enabled bool, publicKey string) (string, error) {
+	if !enabled || publicKey != "" {
+		return publicKey, nil
+	}
 	if _, err := store.Resolve(ctx, ref); err == nil {
 		// A key already exists in the store but cfg lost its public half
 		// somehow; never regenerate over it, but there is also no way to
 		// re-derive the public key from here without the private key in
 		// hand, so surface this as an error rather than guess.
-		return cfg, fmt.Errorf("signing: connector %s already has a signing key in the store but no public key in config; refusing to regenerate over it", credentialRef)
+		return publicKey, fmt.Errorf("%s: connector %s already has a %s key in the store but no public key in config; refusing to regenerate over it", label, credentialRef, label)
 	}
 	privatePEM, publicLine, err := generateSigningKeypair()
 	if err != nil {
-		return cfg, fmt.Errorf("signing: generate keypair: %w", err)
+		return publicKey, fmt.Errorf("%s: generate keypair: %w", label, err)
 	}
 	if err := store.Set(ctx, ref, privatePEM); err != nil {
-		return cfg, fmt.Errorf("signing: store private key: %w", err)
+		return publicKey, fmt.Errorf("%s: store private key: %w", label, err)
 	}
-	cfg.SigningPublicKey = publicLine
-	return cfg, nil
+	return publicLine, nil
 }
 
 // MergeSigningPublicKey writes publicKey into raw's signing_public_key
@@ -89,6 +129,14 @@ func EnsureSigningKey(ctx context.Context, store signingKeyStore, credentialRef 
 // other key the row carries (bitbucket's workspace, say) survives the
 // round-trip, which re-marshaling a decoded struct would silently drop.
 func MergeSigningPublicKey(raw json.RawMessage, publicKey string) (json.RawMessage, error) {
+	return MergePublicKey(raw, "signing_public_key", publicKey)
+}
+
+// MergePublicKey writes publicKey into raw under key without decoding
+// raw through any one kind's config struct: every other key the row
+// carries (bitbucket's workspace, the sibling ssh key) survives the
+// round-trip, which re-marshaling a decoded struct would silently drop.
+func MergePublicKey(raw json.RawMessage, key, publicKey string) (json.RawMessage, error) {
 	merged := map[string]json.RawMessage{}
 	if err := json.Unmarshal(raw, &merged); err != nil {
 		return nil, err
@@ -97,7 +145,7 @@ func MergeSigningPublicKey(raw json.RawMessage, publicKey string) (json.RawMessa
 	if err != nil {
 		return nil, err
 	}
-	merged["signing_public_key"] = encoded
+	merged[key] = encoded
 	return json.Marshal(merged)
 }
 

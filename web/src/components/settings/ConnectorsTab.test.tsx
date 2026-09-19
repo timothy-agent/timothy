@@ -105,7 +105,7 @@ describe('Connectors tab', () => {
       expect(patchConnector).toHaveBeenCalledWith(calendarConnector.id, {
         name: 'google-calendar',
         sensitive: true,
-        config: { scopes: ['https://www.googleapis.com/auth/calendar'], sign_commits: false },
+        config: { scopes: ['https://www.googleapis.com/auth/calendar'], sign_commits: false, ssh_transport: false },
       }),
     )
   })
@@ -125,7 +125,7 @@ describe('Connectors tab', () => {
       expect(patchConnector).toHaveBeenCalledWith(calendarConnector.id, {
         name: 'New Calendar',
         sensitive: false,
-        config: { scopes: ['https://www.googleapis.com/auth/calendar'], sign_commits: false },
+        config: { scopes: ['https://www.googleapis.com/auth/calendar'], sign_commits: false, ssh_transport: false },
       }),
     )
   })
@@ -220,7 +220,7 @@ describe('Connectors tab', () => {
       expect(patchConnector).toHaveBeenCalledWith('gh1', {
         name: 'personal-gh',
         sensitive: false,
-        config: { sign_commits: true },
+        config: { sign_commits: true, ssh_transport: false },
       }),
     )
     expect(await screen.findByDisplayValue('ssh-ed25519 AAAAC3Nz… timothy')).toBeTruthy()
@@ -244,6 +244,130 @@ describe('Connectors tab', () => {
 
     await screen.findByRole('switch', { name: 'personal-gh sign commits' })
     expect(screen.queryByRole('link', { name: /new SSH key/ })).toBeNull()
+  })
+
+  it('stages ssh transport: switch flips with no PATCH, Save patches the config; key block absent until the refetch returns it', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: {},
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(patchConnector).mockResolvedValue()
+
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    const toggle = await screen.findByRole('switch', { name: 'personal-gh ssh transport' })
+    fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('data-state', 'checked')
+    expect(patchConnector).not.toHaveBeenCalled()
+    expect(screen.getByText('An SSH transport key is generated when you save.')).toBeTruthy()
+
+    vi.mocked(listConnectors).mockResolvedValue([
+      { ...githubConnector, config: { ssh_transport: true, ssh_public_key: 'ssh-ed25519 AAAATRANSPORT timothy' } },
+    ])
+    const saveButtons = screen.getAllByRole('button', { name: 'Save' })
+    fireEvent.click(saveButtons.find((b) => b.getAttribute('type') === 'submit')!)
+
+    await waitFor(() =>
+      expect(patchConnector).toHaveBeenCalledWith('gh1', {
+        name: 'personal-gh',
+        sensitive: false,
+        config: { sign_commits: false, ssh_transport: true },
+      }),
+    )
+    expect(await screen.findByDisplayValue('ssh-ed25519 AAAATRANSPORT timothy')).toBeTruthy()
+  })
+
+  it('shows the ssh transport public key with an Authentication Key hint when already on', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: { ssh_transport: true, ssh_public_key: 'ssh-ed25519 AAAATRANSPORT timothy' },
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    expect(await screen.findByDisplayValue('ssh-ed25519 AAAATRANSPORT timothy')).toBeTruthy()
+    const link = screen.getByRole('link', { name: /new SSH key/ })
+    expect(link.getAttribute('href')).toBe('https://github.com/settings/ssh/new')
+    expect(screen.getByText(/Authentication Key/)).toBeTruthy()
+    // A token is still required even with ssh transport on: PR create
+    // and repo lookups are REST (issue #796).
+    expect(screen.getByText(/pull requests and repository lookups always use the API/)).toBeTruthy()
+  })
+
+  it('does not show the ssh key block when ssh_transport is off', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: {},
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    await screen.findByRole('switch', { name: 'personal-gh ssh transport' })
+    expect(screen.queryByText('An SSH transport key is generated when you save.')).toBeNull()
+    expect(screen.queryByDisplayValue(/AAAATRANSPORT/)).toBeNull()
+  })
+
+  it('offers the bitbucket ssh key page for a bitbucket connector', async () => {
+    const bitbucketConnector: AdminConnector = {
+      id: 'bb1',
+      name: 'acme-bb',
+      kind: 'bitbucket',
+      config: { ssh_transport: true, ssh_public_key: 'ssh-ed25519 AAAATRANSPORT timothy' },
+      credential_ref: 'ACME_BB_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([bitbucketConnector])
+
+    renderTab(`/settings/connectors/${bitbucketConnector.id}`)
+
+    expect(await screen.findByDisplayValue('ssh-ed25519 AAAATRANSPORT timothy')).toBeTruthy()
+    const link = screen.getByRole('link', { name: /new SSH key/ })
+    expect(link.getAttribute('href')).toBe('https://bitbucket.org/account/settings/ssh-keys/')
+  })
+
+  it('shows both key blocks when signing and ssh transport are on together', async () => {
+    const githubConnector: AdminConnector = {
+      id: 'gh1',
+      name: 'personal-gh',
+      kind: 'github',
+      config: {
+        sign_commits: true,
+        signing_public_key: 'ssh-ed25519 AAAASIGNING timothy',
+        ssh_transport: true,
+        ssh_public_key: 'ssh-ed25519 AAAATRANSPORT timothy',
+      },
+      credential_ref: 'PERSONAL_GH_GITHUB_PAT',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+
+    renderTab(`/settings/connectors/${githubConnector.id}`)
+
+    // Two distinct keys: the transport key must never be the signing key.
+    expect(await screen.findByDisplayValue('ssh-ed25519 AAAASIGNING timothy')).toBeTruthy()
+    expect(screen.getByDisplayValue('ssh-ed25519 AAAATRANSPORT timothy')).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: /new SSH key/ })).toHaveLength(2)
   })
 
   it('shows the signing public key with a GitHub link when already on (loaded with the key present)', async () => {
@@ -644,7 +768,7 @@ describe('ConnectorEdit rotate token and copy key', () => {
       expect(patchConnector).toHaveBeenCalledWith('bb5', {
         name: 'work-bb',
         sensitive: false,
-        config: { workspace: 'acme-team', sign_commits: true },
+        config: { workspace: 'acme-team', sign_commits: true, ssh_transport: false },
       }),
     )
   })
@@ -764,7 +888,7 @@ describe('ConnectorEdit rotate token and copy key', () => {
       expect(patchConnector).toHaveBeenCalledWith('gcp1', {
         name: 'analytics',
         sensitive: false,
-        config: { project_id: 'my-project-123456', sign_commits: false },
+        config: { project_id: 'my-project-123456', sign_commits: false, ssh_transport: false },
       }),
     )
   })

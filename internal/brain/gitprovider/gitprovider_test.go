@@ -305,10 +305,10 @@ func TestSupportsAndKnownHosts(t *testing.T) {
 	}{
 		{"github creates repos", gh, CapCreateRepo, true},
 		{"github verifies ssh signatures", gh, CapSSHSigningVerify, true},
-		{"github ssh transport not wired yet", gh, CapSSHTransport, false},
+		{"github clones over ssh", gh, CapSSHTransport, true},
 		{"bitbucket creates repos", bb, CapCreateRepo, true},
 		{"bitbucket ssh signing unknown, defaults false", bb, CapSSHSigningVerify, false},
-		{"bitbucket ssh transport not wired yet", bb, CapSSHTransport, false},
+		{"bitbucket clones over ssh", bb, CapSSHTransport, true},
 		{"unknown capability is false", gh, Capability(99), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -319,9 +319,6 @@ func TestSupportsAndKnownHosts(t *testing.T) {
 		})
 	}
 	for _, d := range []Descriptor{gh, bb} {
-		if len(d.SSHKnownHosts()) != 0 {
-			t.Fatalf("%s: known hosts are not pinned until the ssh transport lands", d.Kind())
-		}
 		for _, h := range d.Hosts() {
 			if h != strings.ToLower(h) {
 				t.Fatalf("%s: host %q must be lowercase for the ForHost index", d.Kind(), h)

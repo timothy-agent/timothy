@@ -393,6 +393,20 @@ func main() {
 		repoAdapter.Attribution = func(ctx context.Context) bool {
 			return flags.Enabled(ctx, settings.KeyPRAttribution)
 		}
+		// D-102 (issue #796): one transport resolver serves both the
+		// push/PR paths and the clone path, so a mission's clone and its
+		// later push agree on which wire protocol its connector uses.
+		if conns != nil && secrets != nil {
+			transport := &destinations.TransportResolver{
+				ResolveSSH: connectorSSHMaterial(conns, secrets, app.Log),
+				Events:     missionStore,
+				Log:        app.Log,
+			}
+			repoAdapter.Transport = transport
+			missionDriver.SetCloneAuthResolver(func(ctx context.Context, connectorID, missionID, workspaceDir, repoURL, token string) (missions.RemoteAuth, string, error) {
+				return transport.ResolveClone(ctx, gitClients, connectorID, missionID, workspaceDir, repoURL, token)
+			})
+		}
 	}
 	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, repoAdapter, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
@@ -1392,6 +1406,35 @@ type connsGitClients struct {
 
 func (c connsGitClients) ClientFor(ctx context.Context, connectorID string) (gitprovider.Client, func(), error) {
 	return c.conns.GitClient(ctx, connectorID)
+}
+
+// connectorSSHMaterial resolves a git-kind connector's SSH transport
+// key for destinations.TransportResolver (issue #796): enabled only
+// when the connector has both ssh_transport and a registered public
+// key, since either alone is not a usable transport. A missing or
+// unreadable secret resolves as disabled, never an error — the
+// resolver falls back to https, the same degrade the signing key's
+// own resolution takes.
+func connectorSSHMaterial(conns *connectors.Manager, secrets *secretstore.Store, log *slog.Logger) destinations.SSHResolver {
+	return func(ctx context.Context, connectorID string) (destinations.SSHMaterial, error) {
+		c, err := conns.Store().Get(ctx, connectorID)
+		if err != nil {
+			return destinations.SSHMaterial{}, err
+		}
+		var cfg connectors.GitKeyConfig
+		if err := json.Unmarshal(c.Config, &cfg); err != nil {
+			return destinations.SSHMaterial{}, err
+		}
+		if !cfg.SSHTransport || cfg.SSHPublicKey == "" {
+			return destinations.SSHMaterial{}, nil
+		}
+		key, err := secrets.Resolve(ctx, connectors.SSHKeyRefSuffix(c.CredentialRef))
+		if err != nil {
+			log.Warn("transport: ssh key resolve failed; git runs over https", "connector_id", connectorID, "error", err)
+			return destinations.SSHMaterial{}, nil
+		}
+		return destinations.SSHMaterial{Enabled: true, PrivateKey: key}, nil
+	}
 }
 
 // toMissionRecord adapts a missions.Mission into the builtin package's

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -160,64 +161,88 @@ const pushTimeout = 120 * time.Second
 // accept them; must be checked before handing raw to url.Parse.
 var scpLikePattern = regexp.MustCompile(`^[\w.-]+@[\w.-]+:`)
 
-// hostKindFor maps a remote host to the source kind whose credential
-// username it expects. Push derives the kind from the remote it is
-// actually pushing to, not from where the mission was cloned: the two
-// differ for a scratch mission or a cross-kind destination.
-func hostKindFor(host string) string {
-	if strings.EqualFold(host, "bitbucket.org") {
-		return SourceKindBitbucket
-	}
-	return SourceKindGitHub
-}
-
-// gitCredentialHelper is the ephemeral helper git runs for token auth: the
-// username is per host (GitHub x-access-token, Bitbucket Cloud x-token-auth)
-// and the token comes from envVar, never argv.
-func gitCredentialHelper(hostKind, envVar string) string {
-	user := "x-access-token"
-	if hostKind == SourceKindBitbucket {
-		user = "x-token-auth"
-	}
+// gitCredentialHelper is the ephemeral helper git runs for token auth:
+// user is the credential username the host expects (GitHub
+// x-access-token, Bitbucket Cloud x-token-auth, from
+// gitprovider.Descriptor.HTTPUsername) and the token comes from envVar,
+// never argv.
+func gitCredentialHelper(user, envVar string) string {
 	return `!f() { echo "username=` + user + `"; echo "password=$` + envVar + `"; }; f`
 }
 
-// validateRemote allows only plain https:// origins with no embedded
-// credentials — v1 deliberately has no ssh/scp support and no
-// force-push option.
-func validateRemote(raw string) (host string, err error) {
+// validateRemote allows plain https:// origins with no embedded
+// credentials, and, since issue #796, ssh:// origins. scp-form
+// (git@host:owner/repo.git) is still rejected here: it is normalized
+// to canonical ssh:// by gitprovider.NormalizeSCP before storage, so
+// anything still in that shape reached here unvalidated. Returns the
+// remote's host and the transport its scheme implies.
+func validateRemote(raw string) (host string, transport Transport, err error) {
 	raw = strings.TrimSpace(raw)
 	if scpLikePattern.MatchString(raw) {
-		return "", fmt.Errorf("%w: scp-style git remotes are not supported, use an https:// origin", ErrRemoteUnsupported)
+		return "", "", fmt.Errorf("%w: scp-style git remotes are not stored raw; use the canonical ssh:// form", ErrRemoteUnsupported)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrRemoteUnsupported, err)
+		return "", "", fmt.Errorf("%w: %v", ErrRemoteUnsupported, err)
 	}
-	if u.Scheme != "https" {
-		return "", fmt.Errorf("%w: only https:// remotes are supported (got %q)", ErrRemoteUnsupported, u.Scheme)
+	transport, ok := transportForURL(raw)
+	if !ok {
+		return "", "", fmt.Errorf("%w: only https:// and ssh:// remotes are supported (got %q)", ErrRemoteUnsupported, u.Scheme)
 	}
-	if u.User != nil {
-		return "", fmt.Errorf("%w: origin URL embeds credentials; remove them and use credential_ref", ErrRemoteUnsupported)
+	// An ssh remote's user info is the protocol's own "git@", not a
+	// credential; anything else embedded in an https URL is.
+	if u.User != nil && transport != TransportSSH {
+		return "", "", fmt.Errorf("%w: origin URL embeds credentials; remove them and use credential_ref", ErrRemoteUnsupported)
 	}
-	return u.Hostname(), nil
+	if transport == TransportSSH && u.User != nil && u.User.Username() != "git" {
+		return "", "", fmt.Errorf("%w: ssh origin must connect as git@, got %q", ErrRemoteUnsupported, u.User.Username())
+	}
+	return u.Hostname(), transport, nil
 }
 
 // Push validates the worktree's origin remote, then pushes branch to
-// it authenticating via token — never written to argv, DB, logs, or
-// events. Returns the remote's host for event/response use.
-func (w *Workspace) Push(ctx context.Context, worktree, branch, token string) (string, error) {
+// it authenticating via auth — whose secrets are never written to
+// argv, DB, logs, or events. Returns the remote's host for
+// event/response use.
+//
+// auth.Transport must match the origin's own scheme: a mismatch means
+// the adapter that resolved the auth and the worktree that holds the
+// origin disagree about which remote is being pushed to, so it is a
+// hard error rather than a silent fallback to whichever the URL says
+// (issue #796). The mission's workspace dir (the worktree's parent)
+// holds the ssh key and known_hosts files an ssh auth needs.
+func (w *Workspace) Push(ctx context.Context, worktree, branch string, auth RemoteAuth) (string, error) {
 	out, err := runGit(ctx, worktree, "remote", "get-url", "origin")
 	if err != nil {
 		return "", fmt.Errorf("push: read origin: %w: %s", err, out)
 	}
 	origin := strings.TrimSpace(out)
-	host, err := validateRemote(origin)
+	host, transport, err := validateRemote(origin)
 	if err != nil {
 		return "", err
 	}
-	return host, rawPush(ctx, worktree, branch, token, hostKindFor(host))
+	if err := auth.Validate(); err != nil {
+		return "", err
+	}
+	if originTransport(auth) != transport {
+		return "", fmt.Errorf("%w: origin %s is a %s remote but %s credentials were resolved for it", ErrRemoteUnsupported, origin, transport, originTransport(auth))
+	}
+	return host, rawPush(ctx, workspaceDirOf(worktree), worktree, branch, auth)
 }
+
+// originTransport reads auth's transport with the zero value's https
+// default applied, so a comparison never trips on "" vs "https".
+func originTransport(auth RemoteAuth) Transport {
+	if auth.Transport == "" {
+		return TransportHTTPS
+	}
+	return auth.Transport
+}
+
+// workspaceDirOf is the mission workspace dir holding a worktree:
+// Provision always creates the worktree as <workspace>/wt, and the ssh
+// key/known_hosts are siblings of it (see sshKeyFileName).
+func workspaceDirOf(worktree string) string { return filepath.Dir(worktree) }
 
 // SetOrigin points worktree's origin remote at remoteURL, adding it if
 // the worktree has none (a self-init'd scratch mission's clone never
@@ -227,7 +252,7 @@ func (w *Workspace) Push(ctx context.Context, worktree, branch, token string) (s
 // validated the same way Push's own read-back is (validateRemote),
 // so a bad origin can never slip through unnoticed here either.
 func (w *Workspace) SetOrigin(ctx context.Context, worktree, remoteURL string) error {
-	if _, err := validateRemote(remoteURL); err != nil {
+	if _, _, err := validateRemote(remoteURL); err != nil {
 		return err
 	}
 	gctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
@@ -247,20 +272,22 @@ func (w *Workspace) SetOrigin(ctx context.Context, worktree, remoteURL string) e
 // rawPush execs the authenticated git push, independent of remote
 // validation — split out so tests can exercise the exec/env/dir
 // plumbing against a local bare repo (which validateRemote's
-// https-only gate would otherwise block) without touching a real
-// https origin.
-func rawPush(ctx context.Context, worktree, branch, token, hostKind string) error {
+// scheme gate would otherwise block) without touching a real
+// https origin. workspaceDir holds the ssh key/known_hosts an ssh
+// auth writes.
+func rawPush(ctx context.Context, workspaceDir, worktree, branch string, auth RemoteAuth) error {
 	cctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
-	helper := gitCredentialHelper(hostKind, "GIT_PUSH_TOKEN")
-	cmd := exec.CommandContext(cctx, "git", //nolint:gosec // worktree/branch are harness-controlled; token travels via env, never argv
-		"-c", "credential.helper=",
-		"-c", "credential.helper="+helper,
-		"push", "origin", branch)
+	env, err := gitEnv(workspaceDir, "GIT_PUSH_TOKEN", auth)
+	if err != nil {
+		return fmt.Errorf("push: %w", err)
+	}
+	args := append(gitAuthArgs("GIT_PUSH_TOKEN", auth), "push", "origin", branch)
+	cmd := exec.CommandContext(cctx, "git", args...) //nolint:gosec // worktree/branch are harness-controlled; the token travels via env and the ssh key via a 0600 file, never argv
 	cmd.Dir = worktree
-	cmd.Env = append(os.Environ(), "GIT_PUSH_TOKEN="+token, "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
-	scrubbed := strings.ReplaceAll(string(out), token, "***")
+	scrubbed := scrubAuth(string(out), auth)
 	if err != nil {
 		if strings.Contains(scrubbed, "rejected") || strings.Contains(scrubbed, "non-fast-forward") {
 			return fmt.Errorf("%w: %s", ErrPushRejected, scrubbed)

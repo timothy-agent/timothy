@@ -31,7 +31,7 @@ type Clients interface {
 // https origin. SetOrigin points the worktree's origin at the delivery
 // target before Push/OpenPR use it.
 type pusher interface {
-	Push(ctx context.Context, worktree, branch, token string) (string, error)
+	Push(ctx context.Context, worktree, branch string, auth missions.RemoteAuth) (string, error)
 	SetOrigin(ctx context.Context, worktree, remoteURL string) error
 }
 
@@ -62,6 +62,9 @@ type RepoAdapter struct {
 	// Attribution reports whether PR bodies end with the Timothy Agent
 	// line (settings.KeyPRAttribution); nil means on.
 	Attribution func(context.Context) bool
+	// Transport decides https vs ssh per push (D-102, issue #796); nil
+	// means every push is https+token, the pre-#796 behavior.
+	Transport *TransportResolver
 }
 
 // NewRepoAdapter builds a RepoAdapter. resolveToken/clients may be nil
@@ -94,7 +97,56 @@ func (a *RepoAdapter) client(ctx context.Context, connectorID string) (gitprovid
 // remote Push validates, so a cross-kind destination authenticates as
 // that host expects.
 func (a *RepoAdapter) PushBranch(ctx context.Context, m missions.Mission, token string) (host string, err error) {
-	host, pushErr := a.Pusher.Push(ctx, m.WorktreePath(), m.Branch, token)
+	c, release, err := a.client(ctx, m.ConnectorID())
+	if err != nil {
+		// No connectors wired, or a mission with no connector at all: the
+		// push still runs, just always over https, exactly as it did
+		// before transports existed.
+		return a.pushWith(ctx, m, missions.HTTPSAuth(token, ""))
+	}
+	defer release()
+	return a.pushTo(ctx, c, m, token, m.RepoURL())
+}
+
+// pushTo pushes with the transport resolved against repoURL's repo.
+// An unparseable (or empty) repoURL leaves the ssh probe no URL to
+// try, so the push stays on https — the pre-#796 behavior, never a
+// new failure mode.
+func (a *RepoAdapter) pushTo(ctx context.Context, c gitprovider.Client, m missions.Mission, token, repoURL string) (string, error) {
+	ref, ok := c.ParseRepoURL(repoURL)
+	if !ok {
+		return a.pushWith(ctx, m, missions.HTTPSAuth(token, c.HTTPUsername()))
+	}
+	return a.pushWithClient(ctx, c, m, token, ref)
+}
+
+// pushWithClient resolves the transport for a push whose provider
+// Client is already in hand (every delivery path holds one), then
+// pushes. ref is the repo actually being pushed to, which for a
+// create-if-missing or cross-repo delivery is not the mission's own
+// clone source, so the ssh probe must use it rather than m.RepoURL().
+func (a *RepoAdapter) pushWithClient(ctx context.Context, c gitprovider.Client, m missions.Mission, token string, ref gitprovider.RepoRef) (string, error) {
+	auth, err := a.Transport.Resolve(ctx, m.ConnectorID(), m.ID, m.Workspace, c, ref, token)
+	if err != nil {
+		return "", err
+	}
+	// Push requires the origin's scheme to match the resolved auth
+	// (issue #796), so an ssh auth repoints origin at the ssh clone URL
+	// for the repo the transport was probed against. Idempotent, and a
+	// no-op for the https case, which every earlier step already
+	// pointed at the https clone URL.
+	if auth.IsSSH() {
+		if err := a.Pusher.SetOrigin(ctx, m.WorktreePath(), c.SSHCloneURL(ref)); err != nil {
+			return "", fmt.Errorf("push: point worktree at the ssh remote: %w", err)
+		}
+	}
+	return a.pushWith(ctx, m, auth)
+}
+
+// pushWith is PushBranch's actual push-and-record-event body, given an
+// already-resolved auth.
+func (a *RepoAdapter) pushWith(ctx context.Context, m missions.Mission, auth missions.RemoteAuth) (host string, err error) {
+	host, pushErr := a.Pusher.Push(ctx, m.WorktreePath(), m.Branch, auth)
 	if pushErr != nil {
 		reason := "push failed"
 		switch {
@@ -163,7 +215,7 @@ func (a *RepoAdapter) OpenPR(ctx context.Context, m missions.Mission, token stri
 // (or name a repo when the mission was never cloned from one at all, a
 // scratch mission).
 func (a *RepoAdapter) openPRFor(ctx context.Context, c gitprovider.Client, m missions.Mission, token string, ref gitprovider.RepoRef) (url string, number int, err error) {
-	if _, err := a.PushBranch(ctx, m, token); err != nil {
+	if _, err := a.pushWithClient(ctx, c, m, token, ref); err != nil {
 		return "", 0, err
 	}
 	repo, err := c.GetRepo(ctx, ref)
@@ -345,7 +397,11 @@ func (a *RepoAdapter) DeliverMission(ctx context.Context, cfg RepoDestinationCon
 
 	switch cfg.Mode {
 	case "push":
-		host, err := a.PushBranch(ctx, m, token)
+		// An unparseable (or empty, for a delivery against whatever
+		// origin the worktree already has) repo URL leaves the ssh probe
+		// no URL to try, so the push stays on https — same as before
+		// transports existed, never a new failure mode.
+		host, err := a.pushTo(ctx, c, m, token, e.RepoURL)
 		if err != nil {
 			return fmt.Errorf("deliver: %w", err)
 		}

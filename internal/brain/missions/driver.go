@@ -449,6 +449,31 @@ func (d *Driver) SetCloneTokenResolver(resolve CloneTokenResolver) {
 	d.provision.resolveCloneToken = resolve
 }
 
+// CloneAuthResolver upgrades an already-resolved https token into the
+// RemoteAuth a clone actually runs with (D-102, issue #796): it is the
+// transport decision, which lives outside this package, so the
+// concrete implementation is a closure cmd/brain/main.go wires over
+// destinations.TransportResolver. repoURL is the mission's own clone
+// source, missionID the timeline a fallback is recorded against, and
+// workspaceDir where the ssh key/known_hosts go.
+//
+// It returns the auth AND the clone URL to use with it, because an
+// ssh auth must clone the ssh:// URL: Push's own scheme/transport
+// match check would otherwise reject the resulting origin.
+//
+// nil-safe: unset means every clone runs https+token, exactly as it
+// did before transports existed. An error is fatal to provisioning
+// (an SSH-only connector whose host is unreachable has no second way
+// in); the resolver itself degrades to https for every recoverable
+// case rather than returning one.
+type CloneAuthResolver func(ctx context.Context, connectorID, missionID, workspaceDir, repoURL, token string) (RemoteAuth, string, error)
+
+// SetCloneAuthResolver wires the transport decision for a repo_url
+// mission's clone — a setter for the same reason SetAgentResolver is.
+func (d *Driver) SetCloneAuthResolver(resolve CloneAuthResolver) {
+	d.provision.resolveCloneAuth = resolve
+}
+
 // ResolvedIdentity is what CloneIdentityResolver resolves for a
 // mission's connector_id: the commit identity ensureProvisioned's clone
 // is authored as, plus (when the connector has SSH commit signing

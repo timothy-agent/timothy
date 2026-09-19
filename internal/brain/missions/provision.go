@@ -59,6 +59,12 @@ type provisioner struct {
 	// identity), never fails provisioning.
 	resolveCloneIdentity CloneIdentityResolver
 
+	// resolveCloneAuth upgrades the resolved clone token into the
+	// RemoteAuth the clone runs with, deciding https vs ssh (see
+	// SetCloneAuthResolver) — nil-safe: unset means every clone is
+	// https+token, exactly as it was before transports existed.
+	resolveCloneAuth CloneAuthResolver
+
 	// gitBranchPattern resolves the settings-configured default branch
 	// pattern (see SetGitBranchPattern) — consulted by ensureProvisioned
 	// only when no github destination entry's own policy sets one
@@ -206,8 +212,7 @@ func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (M
 		branchPattern := p.githubBranchPattern(ctx, m)
 		baseRef := p.followUpBaseRef(ctx, m)
 		m = p.nameBeforeBranch(ctx, m)
-		src, _ := m.repoSource()
-		workspace, worktree, branch, baseCommit, baseUsed, err := p.workspace.Provision(ctx, m.ID, m.Goal, m.Name, m.Kind, repoURL, token, connIdentity, branchPattern, baseRef, src.Source)
+		workspace, worktree, branch, baseCommit, baseUsed, err := p.workspace.Provision(ctx, m.ID, m.Goal, m.Name, m.Kind, repoURL, p.cloneAuth(m, repoURL, token), connIdentity, branchPattern, baseRef)
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)
 		}
@@ -263,6 +268,22 @@ func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (M
 		}
 	}
 	return m, nil
+}
+
+// cloneAuth builds the CloneAuth Provision calls once the workspace
+// dir exists: the transport decision when a resolver is wired,
+// plain https+token otherwise. nil for a mission with no repoURL,
+// which never clones.
+func (p *provisioner) cloneAuth(m Mission, repoURL, token string) CloneAuth {
+	if repoURL == "" {
+		return nil
+	}
+	return func(ctx context.Context, workspaceDir string) (RemoteAuth, string, error) {
+		if p.resolveCloneAuth == nil {
+			return HTTPSAuth(token, ""), "", nil
+		}
+		return p.resolveCloneAuth(ctx, m.ConnectorID(), m.ID, workspaceDir, repoURL, token)
+	}
 }
 
 // copyParentArtifacts materializes every attachment carried from

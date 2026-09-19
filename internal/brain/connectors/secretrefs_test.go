@@ -1,6 +1,10 @@
 package connectors
 
-import "testing"
+import (
+	"encoding/json"
+	"reflect"
+	"testing"
+)
 
 // TestBaseCredentialRoleRegisteredForEveryKind guards the exact gap
 // that let "microsoft" ship mislabeled: every whitelisted kind must
@@ -111,5 +115,63 @@ func TestConnectorSecretRefsSigningKey(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestConnectorSecretRefsSSHKey covers the transport key's own role
+// (issue #796): listed once ssh_transport is on or a public key was
+// ever written back, so admin/secrets never reports it orphaned.
+func TestConnectorSecretRefsSSHKey(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		config    string
+		wantRoles []string
+	}{
+		{"neither feature on", `{}`, nil},
+		{"ssh transport on", `{"ssh_transport":true}`, []string{"ssh_key"}},
+		{"public key written back", `{"ssh_public_key":"ssh-ed25519 AAAA"}`, []string{"ssh_key"}},
+		{"both features on", `{"sign_commits":true,"ssh_transport":true}`, []string{"signing_key", "ssh_key"}},
+		{"signing only", `{"sign_commits":true}`, []string{"signing_key"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Connector{Kind: "github", CredentialRef: "MYCONN_PAT", Config: json.RawMessage(tt.config)}
+			var got []string
+			for _, ref := range c.SecretRefs() {
+				if ref.Role == "credential" {
+					continue
+				}
+				got = append(got, ref.Role)
+				switch ref.Role {
+				case "signing_key":
+					if ref.RefName != SigningKeyRefSuffix("MYCONN_PAT") {
+						t.Fatalf("signing ref = %q", ref.RefName)
+					}
+				case "ssh_key":
+					if ref.RefName != SSHKeyRefSuffix("MYCONN_PAT") {
+						t.Fatalf("ssh ref = %q", ref.RefName)
+					}
+				}
+			}
+			if !reflect.DeepEqual(got, tt.wantRoles) {
+				t.Fatalf("roles = %v, want %v", got, tt.wantRoles)
+			}
+		})
+	}
+}
+
+// Every git kind must resolve the transport ref, the same gap guard
+// TestExtraSecretRefsSigningKeyForEveryGitKind applies to signing.
+func TestExtraSecretRefsSSHKeyForEveryGitKind(t *testing.T) {
+	for kind := range GitKinds {
+		c := Connector{Kind: kind, CredentialRef: "MYCONN_TOKEN", Config: json.RawMessage(`{"ssh_transport":true}`)}
+		found := false
+		for _, ref := range c.SecretRefs() {
+			if ref.Role == "ssh_key" && ref.RefName == SSHKeyRefSuffix("MYCONN_TOKEN") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("git kind %q resolves no ssh_key secret ref", kind)
+		}
 	}
 }

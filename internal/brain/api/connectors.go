@@ -209,15 +209,16 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ensureRepoSigningKey decodes the signing slice of a git-kind
-// connector's config, generates and persists an SSH signing keypair
-// when sign_commits is newly true and no key exists yet
-// (connectors.EnsureSigningKey is idempotent), and writes the public
-// key back by merging into the raw config object rather than
+// ensureRepoSigningKey decodes the SSH-key slice of a git-kind
+// connector's config and generates each keypair that is newly enabled
+// and does not exist yet (connectors.EnsureSigningKey/EnsureSSHKey are
+// both idempotent): the commit-signing key for sign_commits, the
+// transport key for ssh_transport (issue #796). Each public key is
+// written back by merging into the raw config object rather than
 // re-marshaling the decoded struct — every other key the kind carries
-// (bitbucket's workspace, say) survives the round-trip that way.
-// secrets nil (no master key configured) leaves sign_commits set but
-// never generates a key — same degrade as any other
+// (bitbucket's workspace, the sibling key) survives the round-trip
+// that way. secrets nil (no master key configured) leaves the flags
+// set but never generates a key — same degrade as any other
 // secret-store-gated feature.
 func (h *connectorAPI) ensureRepoSigningKey(ctx context.Context, credentialRef string, raw json.RawMessage) (json.RawMessage, error) {
 	if h.secrets == nil || len(raw) == 0 {
@@ -227,18 +228,26 @@ func (h *connectorAPI) ensureRepoSigningKey(ctx context.Context, credentialRef s
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
-	if !cfg.SignCommits || cfg.SigningPublicKey != "" {
-		return raw, nil
+	if cfg.SignCommits && cfg.SigningPublicKey == "" {
+		next, err := connectors.EnsureSigningKey(ctx, h.secrets, credentialRef, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if raw, err = connectors.MergePublicKey(raw, "signing_public_key", next.SigningPublicKey); err != nil {
+			return nil, fmt.Errorf("config: %w", err)
+		}
+		cfg = next
 	}
-	next, err := connectors.EnsureSigningKey(ctx, h.secrets, credentialRef, cfg)
-	if err != nil {
-		return nil, err
+	if cfg.SSHTransport && cfg.SSHPublicKey == "" {
+		next, err := connectors.EnsureSSHKey(ctx, h.secrets, credentialRef, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if raw, err = connectors.MergePublicKey(raw, "ssh_public_key", next.SSHPublicKey); err != nil {
+			return nil, fmt.Errorf("config: %w", err)
+		}
 	}
-	merged, err := connectors.MergeSigningPublicKey(raw, next.SigningPublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("config: %w", err)
-	}
-	return merged, nil
+	return raw, nil
 }
 
 // listRepos serves GET /v1/admin/connectors/{id}/repos: every repo the

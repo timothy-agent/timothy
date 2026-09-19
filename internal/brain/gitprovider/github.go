@@ -29,14 +29,22 @@ func (GitHub) SSHCloneURL(r RepoRef) string {
 
 func (GitHub) HTTPUsername() string { return "x-access-token" }
 
-// SSHKnownHosts is empty until the ssh transport lands: pinning a host
-// key we cannot verify here would be worse than pinning none, and no
-// caller reads it yet.
-func (GitHub) SSHKnownHosts() []string { return nil }
+// githubKnownHosts pins github.com's ed25519 host key, verbatim from
+// GitHub's own published set (https://api.github.com/meta's ssh_keys,
+// fingerprint SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU in
+// the SSH key fingerprints doc). Pinned at build time, never fetched
+// at runtime: a key fetched over the same network the connection uses
+// verifies nothing. Only ed25519 is pinned — offering the RSA and
+// ECDSA keys too would let a downgrade pick the weakest of the three.
+var githubKnownHosts = []string{
+	"github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl",
+}
+
+func (GitHub) SSHKnownHosts() []string { return githubKnownHosts }
 
 func (GitHub) Supports(c Capability) bool {
 	switch c {
-	case CapCreateRepo, CapSSHSigningVerify:
+	case CapCreateRepo, CapSSHSigningVerify, CapSSHTransport:
 		return true
 	default:
 		return false

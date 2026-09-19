@@ -1304,10 +1304,13 @@ func createGitHubConnectionMission(t *testing.T, store *missions.Store, connecto
 func TestMissionsPushResolvesConnectorToken(t *testing.T) {
 	requireGitForAPI(t)
 	store := testMissionStore(t)
-	// push never builds a repoSource (only Store().Get for the
-	// credential_ref) — an empty fakeGitHubSource is a safe stand-in;
-	// getRepoFn/createPRFn would only be invoked if the endpoint
-	// unexpectedly tried to build one.
+	// Since issue #796 push DOES build a source, to ask its Descriptor
+	// which transport the connector can use; it never makes a
+	// credentialed call, so an empty fakeGitHubSource is still a safe
+	// stand-in (getRepoFn/createPRFn stay unused). The endpoint's own
+	// RepoAdapter wires no TransportResolver, so this push is https
+	// regardless, and the test's 127.0.0.1 origin is not a github.com
+	// URL anyway.
 	mgr := testConnectorsManager(t, &fakeGitHubSource{})
 	connID := createGitHubConnectorRow(t, mgr)
 	repoURL, worktree, branch := seedBareRepoWithMissionBranch(t)

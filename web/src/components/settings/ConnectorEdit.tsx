@@ -57,6 +57,7 @@ interface StagedConnector {
   name: string
   sensitive: boolean
   sign_commits: boolean
+  ssh_transport: boolean
   aws_endpoint: string
   aws_region: string
   gcp_project_id: string
@@ -69,6 +70,7 @@ function baselineFrom(connector: AdminConnector): StagedConnector {
     name: connector.name,
     sensitive: connector.sensitive,
     sign_commits: Boolean(connector.config.sign_commits),
+    ssh_transport: Boolean(connector.config.ssh_transport),
     aws_endpoint: String(connector.config.endpoint ?? ''),
     aws_region: String(connector.config.region ?? ''),
     gcp_project_id: String(connector.config.project_id ?? ''),
@@ -78,8 +80,8 @@ function baselineFrom(connector: AdminConnector): StagedConnector {
 }
 
 // buildPatch builds the single PATCH body from the staged values: name,
-// sensitive, and config.sign_commits merged onto the connector's
-// current config so other config keys survive. An aws connector also
+// sensitive, and config.sign_commits/ssh_transport merged onto the
+// connector's current config so other config keys survive. An aws connector also
 // carries its editable endpoint and signing region; a gcp connector its
 // project and location, both optional, so an emptied field drops the
 // key rather than writing "".
@@ -87,6 +89,7 @@ function buildPatch(connector: AdminConnector, staged: StagedConnector): Partial
   const config: Record<string, unknown> = {
     ...connector.config,
     sign_commits: staged.sign_commits,
+    ssh_transport: staged.ssh_transport,
     ...(connector.kind === 'aws'
       ? { endpoint: staged.aws_endpoint.trim(), region: staged.aws_region.trim() }
       : {}),
@@ -269,6 +272,13 @@ function ConnectorEditForm({
     toast.success('Public key copied')
   }
 
+  const copySSHPublicKey = async () => {
+    const key = connector.config.ssh_public_key
+    if (typeof key !== 'string') return
+    await navigator.clipboard.writeText(key)
+    toast.success('SSH public key copied')
+  }
+
   const reconnectOAuth = async () => {
     setOAuthBusy(true)
     try {
@@ -438,6 +448,25 @@ function ConnectorEditForm({
               )}
             </Field>
           )}
+
+          {isRepoKind && (
+            <Field label="Clone and push over SSH" required={false}>
+              {() => (
+                <div className="flex items-center gap-3 text-sm">
+                  <Switch
+                    checked={staged.values.ssh_transport}
+                    onCheckedChange={(v) => staged.setField('ssh_transport', v)}
+                    aria-label={`${connector.name} ssh transport`}
+                  />
+                  <span className="text-muted-foreground">
+                    Run mission clones and pushes over SSH with a separate key Timothy generates,
+                    falling back to the token if the host is unreachable. A token is still required:
+                    pull requests and repository lookups always use the API.
+                  </span>
+                </div>
+              )}
+            </Field>
+          )}
         </FieldGroup>
 
         {isRepoKind && staged.values.sign_commits && (
@@ -486,6 +515,57 @@ function ConnectorEditForm({
               </>
             ) : (
               <p className="text-sm text-muted-foreground">A signing key is generated when you save.</p>
+            )}
+          </div>
+        )}
+
+        {isRepoKind && staged.values.ssh_transport && (
+          <div className="space-y-2">
+            {typeof connector.config.ssh_public_key === 'string' && connector.config.ssh_public_key ? (
+              <>
+                <Field label="SSH transport public key">
+                  {(props) => (
+                    <div className="flex gap-2">
+                      <textarea
+                        id={props.id}
+                        readOnly
+                        value={connector.config.ssh_public_key as string}
+                        rows={3}
+                        className="h-auto flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
+                      />
+                      <Button type="button" variant="outline" onClick={() => void copySSHPublicKey()}>
+                        Copy
+                      </Button>
+                    </div>
+                  )}
+                </Field>
+                <p className="text-sm text-muted-foreground">
+                  Paste this into {connector.kind === 'bitbucket' ? 'Bitbucket' : 'GitHub'} as a{' '}
+                  <a
+                    href={
+                      connector.kind === 'bitbucket'
+                        ? 'https://bitbucket.org/account/settings/ssh-keys/'
+                        : 'https://github.com/settings/ssh/new'
+                    }
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-medium text-primary underline underline-offset-2 hover:no-underline"
+                  >
+                    new SSH key →
+                  </a>
+                  {connector.kind === 'bitbucket' ? (
+                    '.'
+                  ) : (
+                    <>
+                      {' '}
+                      with key type <span className="font-medium">Authentication Key</span>.
+                    </>
+                  )}{' '}
+                  Until it is registered, pushes fall back to the token.
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">An SSH transport key is generated when you save.</p>
             )}
           </div>
         )}

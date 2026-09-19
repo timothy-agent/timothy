@@ -23,20 +23,27 @@ func requireGitForPush(t *testing.T) {
 
 func TestValidateRemote(t *testing.T) {
 	cases := []struct {
-		name    string
-		raw     string
-		wantErr error
-		host    string
+		name      string
+		raw       string
+		wantErr   error
+		host      string
+		transport Transport
 	}{
-		{"https with .git suffix", "https://github.com/u/r.git", nil, "github.com"},
-		{"https without .git suffix", "https://github.com/u/r", nil, "github.com"},
-		{"ssh scheme rejected", "ssh://git@github.com/u/r.git", ErrRemoteUnsupported, ""},
-		{"scp-form rejected", "git@github.com:u/r.git", ErrRemoteUnsupported, ""},
-		{"embedded credentials rejected", "https://user:tok@github.com/u/r.git", ErrRemoteUnsupported, ""},
+		{"https with .git suffix", "https://github.com/u/r.git", nil, "github.com", TransportHTTPS},
+		{"https without .git suffix", "https://github.com/u/r", nil, "github.com", TransportHTTPS},
+		{"ssh accepted since #796", "ssh://git@github.com/u/r.git", nil, "github.com", TransportSSH},
+		{"ssh bitbucket accepted", "ssh://git@bitbucket.org/acme/widgets.git", nil, "bitbucket.org", TransportSSH},
+		{"ssh without user accepted", "ssh://github.com/u/r.git", nil, "github.com", TransportSSH},
+		{"ssh as another user rejected", "ssh://root@github.com/u/r.git", ErrRemoteUnsupported, "", ""},
+		{"scp-form rejected, normalize first", "git@github.com:u/r.git", ErrRemoteUnsupported, "", ""},
+		{"http rejected", "http://github.com/u/r.git", ErrRemoteUnsupported, "", ""},
+		{"git protocol rejected", "git://github.com/u/r.git", ErrRemoteUnsupported, "", ""},
+		{"file protocol rejected", "file:///tmp/repo", ErrRemoteUnsupported, "", ""},
+		{"embedded credentials rejected", "https://user:tok@github.com/u/r.git", ErrRemoteUnsupported, "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			host, err := validateRemote(tc.raw)
+			host, transport, err := validateRemote(tc.raw)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("validateRemote(%q) err = %v, want %v", tc.raw, err, tc.wantErr)
@@ -49,19 +56,22 @@ func TestValidateRemote(t *testing.T) {
 			if host != tc.host {
 				t.Fatalf("validateRemote(%q) host = %q, want %q", tc.raw, host, tc.host)
 			}
+			if transport != tc.transport {
+				t.Fatalf("validateRemote(%q) transport = %q, want %q", tc.raw, transport, tc.transport)
+			}
 		})
 	}
 }
 
 func TestValidateRemoteEmbeddedCredsMessage(t *testing.T) {
-	_, err := validateRemote("https://user:tok@github.com/u/r.git")
+	_, _, err := validateRemote("https://user:tok@github.com/u/r.git")
 	if err == nil || !strings.Contains(err.Error(), "credential_ref") {
 		t.Fatalf("expected error mentioning credential_ref, got: %v", err)
 	}
 }
 
 func TestValidateRemoteMalformedURL(t *testing.T) {
-	_, err := validateRemote("://not a url")
+	_, _, err := validateRemote("://not a url")
 	if !errors.Is(err, ErrRemoteUnsupported) {
 		t.Fatalf("malformed URL should surface as ErrRemoteUnsupported, got: %v", err)
 	}
@@ -75,7 +85,7 @@ func TestRawPushScrubsTokenFromError(t *testing.T) {
 	root := t.TempDir()
 	missing := filepath.Join(root, "does-not-exist")
 	const token = "super-secret-token-value"
-	err := rawPush(context.Background(), missing, "main", token, "")
+	err := rawPush(context.Background(), root, missing, "main", HTTPSAuth(token, ""))
 	if err == nil {
 		t.Fatal("rawPush against a nonexistent directory should fail")
 	}
@@ -110,7 +120,7 @@ func TestRawPushHappyPath(t *testing.T) {
 	gitRun(t, workdir, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "add file")
 	branch := strings.TrimSpace(gitRun(t, workdir, "rev-parse", "--abbrev-ref", "HEAD"))
 
-	if err := rawPush(context.Background(), workdir, branch, "dummy-token", ""); err != nil {
+	if err := rawPush(context.Background(), workdir, workdir, branch, HTTPSAuth("dummy-token", "")); err != nil {
 		t.Fatalf("rawPush: %v", err)
 	}
 
@@ -350,18 +360,16 @@ func TestPRTitleFallsBackToTruncatedGoal(t *testing.T) {
 // the environment.
 func TestGitCredentialHelperRoundTrip(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct{ kind, wantUser string }{
-		{"", "x-access-token"},
-		{SourceKindGitHub, "x-access-token"},
-		{SourceKindBitbucket, "x-token-auth"},
-		// what Push feeds it: the kind of the remote it validated,
-		// not the mission's source (issue #787)
-		{hostKindFor("bitbucket.org"), "x-token-auth"},
-		{hostKindFor("github.com"), "x-access-token"},
+	for _, tc := range []struct{ name, user, wantUser string }{
+		// The username is the Descriptor's own HTTPUsername, carried on
+		// RemoteAuth (issue #796), with github's as the empty fallback.
+		{"empty falls back to github", "", "x-access-token"},
+		{"github", "x-access-token", "x-access-token"},
+		{"bitbucket", "x-token-auth", "x-token-auth"},
 	} {
-		t.Run("kind="+tc.kind, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			helper := gitCredentialHelper(tc.kind, "GIT_TEST_TOKEN")
+			helper := gitCredentialHelper(RemoteAuth{HTTPUsername: tc.user}.credentialUsername(), "GIT_TEST_TOKEN")
 			if strings.Contains(helper, "tok-value") {
 				t.Fatalf("token leaked into the helper string: %s", helper)
 			}
@@ -404,7 +412,7 @@ func TestRawPushBitbucketKind(t *testing.T) {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	if err := rawPush(ctx, wt, "feat/x", "unused-token", SourceKindBitbucket); err != nil {
+	if err := rawPush(ctx, wt, wt, "feat/x", HTTPSAuth("unused-token", "x-token-auth")); err != nil {
 		t.Fatalf("rawPush: %v", err)
 	}
 	out, err := exec.Command("git", "-C", bare, "branch", "--list", "feat/x").CombinedOutput() //nolint:gosec // test-only temp dir
@@ -435,25 +443,3 @@ func TestIsGitHubHost(t *testing.T) {
 	}
 }
 
-// The credential username follows the remote being pushed to, not the
-// mission's source: a scratch mission or a cross-kind destination makes
-// the two disagree (issue #787).
-func TestHostKindFor(t *testing.T) {
-	tests := []struct {
-		host string
-		want string
-	}{
-		{host: "bitbucket.org", want: SourceKindBitbucket},
-		{host: "BitBucket.org", want: SourceKindBitbucket},
-		{host: "github.com", want: SourceKindGitHub},
-		{host: "ghe.example.com", want: SourceKindGitHub},
-		{host: "", want: SourceKindGitHub},
-	}
-	for _, tc := range tests {
-		t.Run(tc.host, func(t *testing.T) {
-			if got := hostKindFor(tc.host); got != tc.want {
-				t.Fatalf("hostKindFor(%q) = %q, want %q", tc.host, got, tc.want)
-			}
-		})
-	}
-}

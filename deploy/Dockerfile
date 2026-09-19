@@ -30,11 +30,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # and a missing binary fails a check_cmd with a misleading exit code
 # instead of a clear "not found". git is required by coding missions:
 # the missions engine execs `git worktree add`, `git diff`, rollback,
-# and teardown inside this container. openssh-keygen provides
-# ssh-keygen, which git invokes for SSH commit signing/verification
-# (`git commit -S`/`git verify-commit` with gpg.format=ssh).
+# and teardown inside this container. openssh-client provides both the
+# ssh binary git runs for ssh:// clone/push (issue #796, via
+# GIT_SSH_COMMAND) and ssh-keygen, which git invokes for SSH commit
+# signing/verification (`git commit -S`/`git verify-commit` with
+# gpg.format=ssh); it supersedes the openssh-keygen subpackage, which
+# ships ssh-keygen alone and makes ssh transport impossible.
 FROM alpine:3.22.2 AS runtime-shell
-RUN apk add --no-cache curl git openssh-keygen
+RUN apk add --no-cache curl git openssh-client
 COPY --from=build /out/app /app
 # Skill packs ship inside the brain image; release.yml's change filter
 # lists skills/ so a pack edit rebuilds it instead of copying forward.

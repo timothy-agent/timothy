@@ -32,6 +32,11 @@ const (
 	commitEmail = "timothy@localhost"
 )
 
+// CloneAuth resolves, once the mission's workspace dir exists, the
+// auth a clone runs with and the clone URL matching it (see
+// Provision's auth parameter, issue #796).
+type CloneAuth func(ctx context.Context, workspaceDir string) (RemoteAuth, string, error)
+
 // Workspace provisions and tears down mission working directories. Its
 // root is also the tool path-allowlist root for mission workers — a
 // mission's shell/file tools can never escape it.
@@ -78,7 +83,15 @@ func NewWorkspace(root string, identity func(context.Context) (name, email strin
 // generated: the branch {slug} comes from it (issue #494), falling back
 // to the goal when empty; {type} always derives from the goal, whose
 // wording ("fix", "docs") carries the intent a six-word title drops.
-func (w *Workspace) Provision(ctx context.Context, missionID, goal, name, kind, repoURL, token string, connIdentity *GitIdentity, branchPattern, baseRef, hostKind string) (workspace, worktree, branch, baseCommit, baseUsed string, err error) {
+// auth authenticates the clone over whichever transport the caller
+// resolved (issue #796), and may rewrite repoURL into the matching
+// clone URL (ssh:// for an ssh auth). It is a func, not a value,
+// because resolving an ssh transport probes the remote using files
+// inside the workspace dir this call creates: the caller cannot
+// resolve before the directory exists. nil means an https clone with
+// no token, which only a mission with no repoURL can get away with. A
+// resolve error fails provisioning.
+func (w *Workspace) Provision(ctx context.Context, missionID, goal, name, kind, repoURL string, auth CloneAuth, connIdentity *GitIdentity, branchPattern, baseRef string) (workspace, worktree, branch, baseCommit, baseUsed string, err error) {
 	workspace = filepath.Join(w.root, kind, missionID)
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		return "", "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
@@ -103,7 +116,18 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, name, kind, 
 	worktree = filepath.Join(workspace, "wt")
 
 	if repoURL != "" {
-		used, err := w.cloneRepo(ctx, workspace, worktree, branch, repoURL, token, connIdentity, baseRef, hostKind)
+		resolved := RemoteAuth{}
+		if auth != nil {
+			a, cloneURL, err := auth(ctx, workspace)
+			if err != nil {
+				return "", "", "", "", "", fmt.Errorf("worktree: provision: resolve clone auth: %w", err)
+			}
+			resolved = a
+			if cloneURL != "" {
+				repoURL = cloneURL
+			}
+		}
+		used, err := w.cloneRepo(ctx, workspace, worktree, branch, repoURL, resolved, connIdentity, baseRef)
 		if err != nil {
 			return "", "", "", "", "", err
 		}
@@ -142,9 +166,10 @@ func branchDate() string {
 const signingKeyFileName = "signing_key"
 
 // cloneRepo clones repoURL's default branch into dir, authenticated
-// via the same ephemeral credential-helper pattern push.go's rawPush
-// uses (username x-access-token, password from an env var, never
-// argv/disk), then creates and checks out the mission's own branch on
+// via auth the same way push.go's rawPush authenticates its push: an
+// ephemeral credential helper reading the token from an env var for
+// https, or GIT_SSH_COMMAND over a 0600 key file for ssh, never
+// argv. It then creates and checks out the mission's own branch on
 // top of the cloned default branch — mission commits land on
 // "<type>/<slug>" (see CommitType), the same branch shape a self-init'd mission uses,
 // never directly on the repo's default branch. baseRef, when
@@ -171,29 +196,32 @@ const signingKeyFileName = "signing_key"
 // reach it. Accepted for the single-operator posture, same class as
 // D-054's executor auth-state volume; revisited together with
 // agentguard provisioning (U5b).
-func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, repoURL, token string, connIdentity *GitIdentity, baseRef, hostKind string) (baseUsed string, err error) {
+func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, repoURL string, auth RemoteAuth, connIdentity *GitIdentity, baseRef string) (baseUsed string, err error) {
 	cctx, cancel := context.WithTimeout(ctx, cloneTimeout)
 	defer cancel()
-	helper := gitCredentialHelper(hostKind, "GIT_CLONE_TOKEN")
-	cmd := exec.CommandContext(cctx, "git", //nolint:gosec // repoURL/dir are validated https origins/harness-controlled paths; token travels via env, never argv
-		"-c", "credential.helper=",
-		"-c", "credential.helper="+helper,
-		"clone", "-q", "--single-branch", repoURL, dir)
-	cmd.Env = append(os.Environ(), "GIT_CLONE_TOKEN="+token, "GIT_TERMINAL_PROMPT=0")
+	if err := auth.Validate(); err != nil {
+		return "", fmt.Errorf("worktree: clone: %w", err)
+	}
+	env, err := gitEnv(workspaceDir, "GIT_CLONE_TOKEN", auth)
+	if err != nil {
+		return "", fmt.Errorf("worktree: clone: %w", err)
+	}
+	authArgs := gitAuthArgs("GIT_CLONE_TOKEN", auth)
+	cmd := exec.CommandContext(cctx, "git", //nolint:gosec // repoURL/dir are validated origins/harness-controlled paths; the token travels via env and the ssh key via a 0600 file, never argv
+		append(append([]string{}, authArgs...), "clone", "-q", "--single-branch", repoURL, dir)...)
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
-	scrubbed := strings.ReplaceAll(string(out), token, "***")
+	scrubbed := scrubAuth(string(out), auth)
 	if err != nil {
 		return "", fmt.Errorf("worktree: clone: %w: %s", err, scrubbed)
 	}
 	if baseRef != "" {
-		fetchCmd := exec.CommandContext(cctx, "git", //nolint:gosec // repoURL/dir/token same as the clone above; baseRef is a mission's own recorded branch name, not free user input
-			"-c", "credential.helper=",
-			"-c", "credential.helper="+helper,
-			"fetch", "-q", "origin", baseRef)
+		fetchCmd := exec.CommandContext(cctx, "git", //nolint:gosec // repoURL/dir/auth same as the clone above; baseRef is a mission's own recorded branch name, not free user input
+			append(append([]string{}, authArgs...), "fetch", "-q", "origin", baseRef)...)
 		fetchCmd.Dir = dir
-		fetchCmd.Env = append(os.Environ(), "GIT_CLONE_TOKEN="+token, "GIT_TERMINAL_PROMPT=0")
+		fetchCmd.Env = env
 		if fout, err := fetchCmd.CombinedOutput(); err != nil {
-			w.log.Warn("worktree: clone: base ref fetch failed; falling back to default branch", "dir", dir, "base_ref", baseRef, "error", err, "output", strings.ReplaceAll(string(fout), token, "***"))
+			w.log.Warn("worktree: clone: base ref fetch failed; falling back to default branch", "dir", dir, "base_ref", baseRef, "error", err, "output", scrubAuth(string(fout), auth))
 		} else if out, err := runGit(cctx, dir, "checkout", "-q", "-b", branch, "FETCH_HEAD"); err != nil {
 			w.log.Warn("worktree: clone: base ref checkout failed; falling back to default branch", "dir", dir, "base_ref", baseRef, "error", err, "output", out)
 		} else {
@@ -227,6 +255,15 @@ func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, re
 // setLocalSigning writes connIdentity's SSH signing private key to
 // workspaceDir/signing_key (0600, outside the worktree) and points
 // dir's LOCAL git config at it so every subsequent commit is SSH-signed.
+//
+// Gap, deliberately not closed here (issue #796): user.signingkey is a
+// brain-absolute path and deploy/sandbox-base.Dockerfile installs
+// neither openssh-client nor ssh-keygen, so a delegated CLI that
+// commits INSIDE the sandbox on a signing-enabled clone would fail to
+// sign. The harness itself commits in the brain container, where both
+// exist, so no current path hits this. Closing it means adding
+// openssh-client to sandbox-base or passing -c commit.gpgsign=false
+// for delegated runs; both belong to their own issue.
 func setLocalSigning(ctx context.Context, workspaceDir, dir, privateKeyPEM string) error {
 	keyPath := filepath.Join(workspaceDir, signingKeyFileName)
 	if err := os.WriteFile(keyPath, []byte(privateKeyPEM), 0o600); err != nil {
