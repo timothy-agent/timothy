@@ -55,12 +55,13 @@ type TelegramConfig struct {
 	ChatID string `json:"chat_id"`
 }
 
-// GitHubConfig is the config shape for kind='github': push (or push+PR)
-// a mission's branch through an existing github connector, replacing
-// the mission-create-time on_complete/branch_pattern/commit_style
-// fields with a reusable saved destination. The token comes from the
-// connector's own credential, never CredentialRef.
-type GitHubConfig struct {
+// RepoDestinationConfig is the config shape every git provider kind
+// shares: push (or push+PR) a mission's branch through an existing
+// connector of that kind, replacing the mission-create-time
+// on_complete/branch_pattern/commit_style fields with a reusable saved
+// destination. The token comes from the connector's own credential,
+// never CredentialRef.
+type RepoDestinationConfig struct {
 	ConnectorID string `json:"connector_id"`
 	Mode        string `json:"mode"` // push | push_pr
 	// BranchPattern/CommitStyle empty means "use the settings default,"
@@ -72,6 +73,10 @@ type GitHubConfig struct {
 	// failing the push/PR.
 	CreateIfMissing bool `json:"create_if_missing,omitempty"`
 }
+
+// GitHubConfig is RepoDestinationConfig's former name, kept as an
+// alias for one release so an out-of-tree caller still compiles.
+type GitHubConfig = RepoDestinationConfig
 
 // validateName trims name and checks it against the plain-text rule
 // (same as agents.validateName and connectors.validateName): 1..64
@@ -187,7 +192,7 @@ func validate(ctx context.Context, conns connectorLookup, d *Destination) error 
 // validateRepoKind validates a destination whose kind is a registered
 // git provider: push/PR delivery through a connector of the same kind.
 func validateRepoKind(ctx context.Context, conns connectorLookup, d *Destination) error {
-	var cfg GitHubConfig
+	var cfg RepoDestinationConfig
 	if err := json.Unmarshal(d.Config, &cfg); err != nil {
 		return fmt.Errorf("%s config: %w", d.Kind, err)
 	}
@@ -323,13 +328,13 @@ func (s *Store) KindByID(ctx context.Context, id string) (kind string, enabled b
 	return d.Kind, d.Enabled, nil
 }
 
-// GitHubPolicy resolves id's saved branch pattern / commit style for
+// RepoPolicy resolves id's saved branch pattern / commit style for
 // missions.GitHubPolicyResolver: ok is false when id does not name a
 // repo-kind row (missions has no compile-time dependency on this
-// package, see missions.GitHubPolicy's doc comment). Both repo kinds
-// share GitHubConfig and validate these fields the same way, so both
-// resolve here; the name is historical (issue #787).
-func (s *Store) GitHubPolicy(ctx context.Context, id string) (missions.GitHubPolicy, bool, error) {
+// package, see missions.GitHubPolicy's doc comment). Every repo kind
+// shares RepoDestinationConfig and validates these fields the same
+// way, so all of them resolve here.
+func (s *Store) RepoPolicy(ctx context.Context, id string) (missions.GitHubPolicy, bool, error) {
 	d, err := s.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -340,7 +345,7 @@ func (s *Store) GitHubPolicy(ctx context.Context, id string) (missions.GitHubPol
 	if !gitprovider.IsKind(d.Kind) {
 		return missions.GitHubPolicy{}, false, nil
 	}
-	var cfg GitHubConfig
+	var cfg RepoDestinationConfig
 	if err := json.Unmarshal(d.Config, &cfg); err != nil {
 		return missions.GitHubPolicy{}, false, fmt.Errorf("%s config: %w", d.Kind, err)
 	}

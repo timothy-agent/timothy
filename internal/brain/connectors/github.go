@@ -68,16 +68,25 @@ func GitHubBuilder(client *http.Client) Builder {
 
 // githubSource is a built github-kind connector: read-only PR tools,
 // and a Test that resolves the PAT and confirms it authenticates
-// against the GitHub API.
+// against the GitHub API. The embedded Descriptor supplies the static
+// half of gitprovider.Client (hosts, URL parsing, credential
+// username); the methods below supply the credentialed half.
 type githubSource struct {
+	gitprovider.GitHub
+
 	name          string
 	credentialRef string
 	resolve       Resolve
 	client        *http.Client
 }
 
-// Tools is the read-only pull request surface (github_tools.go).
-func (s *githubSource) Tools() []*tools.Tool { return s.prTools() }
+// githubSource serves every git provider call through one interface
+// (D-101, issue #795); the compile-time assertion is the guard.
+var _ gitprovider.Client = (*githubSource)(nil)
+
+// Tools is the read-only pull request surface, built by the shared
+// builder both git kinds use (gittools.go).
+func (s *githubSource) Tools() []*tools.Tool { return gitPRTools(s) }
 
 // AccountInfo reports the kind and, since the PAT's login is only
 // known after a network call, no email: the aggregated description
@@ -206,21 +215,18 @@ type GitHubPR = gitprovider.PullRequest
 // of erroring.
 const githubPRAlreadyExistsMarker = "A pull request already exists for"
 
-// ErrRepoNotFound marks GetRepo's 404: the repo doesn't exist (or the
-// PAT can't see it), the create-if-missing delivery path's signal to
-// create it rather than treat the lookup as a hard failure (issue
-// #483). Distinct from connectors.ErrNotFound, which names a missing
-// connectors table row, not a missing GitHub repo.
-var ErrRepoNotFound = fmt.Errorf("github: repo not found")
+// ErrRepoNotFound is gitprovider's sentinel, re-exported so existing
+// callers keep the name they already check.
+var ErrRepoNotFound = gitprovider.ErrRepoNotFound
 
-// GetRepo resolves the connector's PAT and returns owner/repo's
-// metadata (default_branch is all the PR flow needs from it).
-func (s *githubSource) GetRepo(ctx context.Context, owner, repo string) (GitHubRepo, error) {
+// GetRepo resolves the connector's PAT and returns ref's metadata
+// (default_branch is all the PR flow needs from it).
+func (s *githubSource) GetRepo(ctx context.Context, ref gitprovider.RepoRef) (GitHubRepo, error) {
 	token, err := s.resolve(ctx, s.credentialRef)
 	if err != nil {
 		return GitHubRepo{}, fmt.Errorf("resolve credential_ref %q: %w", s.credentialRef, err)
 	}
-	return fetchGitHubRepo(ctx, s.client, token, owner, repo)
+	return fetchGitHubRepo(ctx, s.client, token, ref.Owner, ref.Name)
 }
 
 // CreatePR opens a pull request head -> base with title/body. If GitHub
@@ -228,56 +234,59 @@ func (s *githubSource) GetRepo(ctx context.Context, owner, repo string) (GitHubR
 // githubPRAlreadyExistsMarker), the existing open PR is fetched and
 // returned instead of erroring — idempotent re-calls (e.g. a re-push
 // through the same endpoint) never fail on this.
-func (s *githubSource) CreatePR(ctx context.Context, owner, repo, title, head, base, body string) (GitHubPR, error) {
+func (s *githubSource) CreatePR(ctx context.Context, spec gitprovider.PRSpec) (GitHubPR, error) {
 	token, err := s.resolve(ctx, s.credentialRef)
 	if err != nil {
 		return GitHubPR{}, fmt.Errorf("resolve credential_ref %q: %w", s.credentialRef, err)
 	}
-	pr, err := createGitHubPR(ctx, s.client, token, owner, repo, title, head, base, body)
+	owner, repo := spec.Repo.Owner, spec.Repo.Name
+	pr, err := createGitHubPR(ctx, s.client, token, owner, repo, spec.Title, spec.Head, spec.Base, spec.Body)
 	if err == nil {
 		return pr, nil
 	}
 	if !strings.Contains(err.Error(), githubPRAlreadyExistsMarker) {
 		return GitHubPR{}, err
 	}
-	existing, findErr := findOpenGitHubPR(ctx, s.client, token, owner, repo, head)
+	existing, findErr := findOpenGitHubPR(ctx, s.client, token, owner, repo, spec.Head)
 	if findErr != nil {
 		return GitHubPR{}, fmt.Errorf("create pr: %w (and could not fetch existing: %v)", err, findErr)
 	}
 	if existing == nil {
-		return GitHubPR{}, fmt.Errorf("create pr: %w (github reported one exists, but none was found open for head %s)", err, head)
+		return GitHubPR{}, fmt.Errorf("create pr: %w (github reported one exists, but none was found open for head %s)", err, spec.Head)
 	}
 	return *existing, nil
 }
 
-// PRMerged resolves the connector's PAT and reports whether owner/repo
-// pull request number has been merged.
-func (s *githubSource) PRMerged(ctx context.Context, owner, repo string, number int) (bool, error) {
+// GetPR resolves the connector's PAT and reports ref's pull request
+// number in the provider-agnostic shape. State is "merged" for a merged
+// PR, which GitHub reports as closed plus a separate merged flag.
+func (s *githubSource) GetPR(ctx context.Context, ref gitprovider.RepoRef, number int) (GitHubPR, error) {
 	token, err := s.resolve(ctx, s.credentialRef)
 	if err != nil {
-		return false, fmt.Errorf("resolve credential_ref %q: %w", s.credentialRef, err)
+		return GitHubPR{}, fmt.Errorf("resolve credential_ref %q: %w", s.credentialRef, err)
 	}
-	return fetchGitHubPRMerged(ctx, s.client, token, owner, repo, number)
-}
-
-// fetchGitHubPRMerged calls GET /repos/{owner}/{repo}/pulls/{number} and
-// returns its merged field.
-func fetchGitHubPRMerged(ctx context.Context, client *http.Client, token, owner, repo string, number int) (bool, error) {
-	resp, err := githubRequest(ctx, client, token, fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, number))
+	resp, err := githubRequest(ctx, s.client, token, fmt.Sprintf("/repos/%s/%s/pulls/%d", ref.Owner, ref.Name, number))
 	if err != nil {
-		return false, err
+		return GitHubPR{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("get pull request: %w", githubStatusError(resp))
+		return GitHubPR{}, fmt.Errorf("get pull request: %w", githubStatusError(resp))
 	}
 	var pr struct {
-		Merged bool `json:"merged"`
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+		State   string `json:"state"`
+		Merged  bool   `json:"merged"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		return false, fmt.Errorf("get pull request: decode response: %w", err)
+		return GitHubPR{}, fmt.Errorf("get pull request: decode response: %w", err)
 	}
-	return pr.Merged, nil
+	state := pr.State
+	if pr.Merged {
+		state = "merged"
+	}
+	return GitHubPR{Number: pr.Number, HTMLURL: pr.HTMLURL, State: state}, nil
 }
 
 // fetchGitHubRepo calls GET /repos/{owner}/{repo}.

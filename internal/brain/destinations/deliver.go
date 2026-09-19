@@ -41,37 +41,36 @@ type Deliverer struct {
 	store    destinationStore
 	events   eventRecorder
 	adapters map[string]Adapter
-	// github, unlike the rest of adapters, delivers through
-	// GitHubAdapter.DeliverMission (push/PR, no Payload rendering, no
-	// retry) rather than the Adapter interface, so deliverOne special-cases
-	// kind == "github" instead of a map lookup.
-	github    *GitHubAdapter
-	bitbucket *BitbucketAdapter
-	webURL    func(ctx context.Context) string
-	location  func(ctx context.Context) *time.Location
-	log       *slog.Logger
+	// repo, unlike the rest of adapters, delivers through
+	// RepoAdapter.DeliverMission (push/PR, no Payload rendering, no
+	// retry) rather than the Adapter interface, so deliverOne
+	// special-cases IsRepoKind instead of a map lookup. One adapter
+	// serves every git provider kind (issue #795).
+	repo     *RepoAdapter
+	webURL   func(ctx context.Context) string
+	location func(ctx context.Context) *time.Location
+	log      *slog.Logger
 }
 
 // NewDeliverer builds a Deliverer. webURL resolves the web_base_url
 // setting fresh at delivery time (never cached on the struct) so an
 // operator's later change applies without a restart. email/telegram/
-// github nil (no google connectors / no secret store / no connectors
+// repo nil (no google connectors / no secret store / no connectors
 // wired, respectively) leaves that kind unregistered in adapters, so
 // deliverOne's map lookup then reports "no adapter for kind" rather
 // than boxing a nil adapter as a non-nil Adapter (which would panic on
 // first field access inside Deliver). location follows the same
 // fresh-read pattern as webURL; nil (or a nil *time.Location it
 // returns) defaults to UTC.
-func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, telegram *TelegramAdapter, github *GitHubAdapter, bitbucket *BitbucketAdapter, webURL func(ctx context.Context) string, location func(ctx context.Context) *time.Location, log *slog.Logger) *Deliverer {
+func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, telegram *TelegramAdapter, repo *RepoAdapter, webURL func(ctx context.Context) string, location func(ctx context.Context) *time.Location, log *slog.Logger) *Deliverer {
 	d := &Deliverer{
-		store:     store,
-		events:    events,
-		adapters:  map[string]Adapter{"webhook": webhook},
-		github:    github,
-		bitbucket: bitbucket,
-		webURL:    webURL,
-		location:  location,
-		log:       log,
+		store:    store,
+		events:   events,
+		adapters: map[string]Adapter{"webhook": webhook},
+		repo:     repo,
+		webURL:   webURL,
+		location: location,
+		log:      log,
 	}
 	if email != nil {
 		d.adapters["email"] = email
@@ -198,24 +197,18 @@ func (d *Deliverer) deliverOne(ctx context.Context, m missions.Mission, e *missi
 		// single attempt, no deliverBackoff retries (a push retry against
 		// a half-pushed branch is a different risk profile than re-POSTing
 		// a webhook).
-		var cfg GitHubConfig
+		var cfg RepoDestinationConfig
 		if err := json.Unmarshal(dest.Config, &cfg); err != nil {
 			reason := dest.Kind + " config: " + err.Error()
 			d.recordOutcome(ctx, missionID, e, dest.Name, reason)
 			return errors.New(reason)
 		}
-		var err error
-		switch {
-		case dest.Kind == "github" && d.github != nil:
-			err = d.github.DeliverMission(ctx, cfg, m, e)
-		case dest.Kind == "bitbucket" && d.bitbucket != nil:
-			err = d.bitbucket.DeliverMission(ctx, cfg, m, e)
-		default:
+		if d.repo == nil {
 			reason := "no adapter for kind " + dest.Kind
 			d.recordOutcome(ctx, missionID, e, dest.Name, reason)
 			return errors.New(reason)
 		}
-		if err != nil {
+		if err := d.repo.DeliverMission(ctx, cfg, m, e); err != nil {
 			d.recordOutcome(ctx, missionID, e, dest.Name, err.Error())
 			return err
 		}

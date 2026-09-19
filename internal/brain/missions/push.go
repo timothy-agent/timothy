@@ -16,7 +16,7 @@ import (
 // pr both require, Go code, never a prompt: only a coding mission
 // with a live worktree is ever pushable. Shared by the manual push/pr
 // API handlers and the driver's auto-fire-on-done hook, and by
-// destinations.GitHubAdapter's delivery, so none of them can diverge on
+// destinations.RepoAdapter's delivery, so none of them can diverge on
 // what counts as pushable.
 func NotPushable(m Mission) string {
 	switch {

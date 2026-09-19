@@ -2299,7 +2299,7 @@ func (h *missionAPI) resolvePushToken(ctx context.Context, m missions.Mission, c
 
 // pushMissionBranch pushes m's branch to its worktree's origin remote
 // with token, recording mission.pushed/mission.push_failed either way —
-// destinations.GitHubAdapter.PushBranch does the actual push and event
+// destinations.RepoAdapter.PushBranch does the actual push and event
 // recording, the SAME code the driver's auto-fire-on-done hook calls,
 // so a manual push and an auto-fired push can never diverge in what
 // they do or which events land on the Timeline. Event-record failures
@@ -2313,67 +2313,33 @@ func (h *missionAPI) pushMissionBranch(ctx context.Context, m missions.Mission, 
 	return host, err
 }
 
-// completer builds a destinations.GitHubAdapter wired to this handler's
+// completer builds a destinations.RepoAdapter wired to this handler's
 // own workspace/store, cheap and stateless besides those two pointers,
 // so a fresh one per call is simplest; the driver holds its own
-// long-lived GitHubAdapter for the auto-fire path.
-func (h *missionAPI) completer() *destinations.GitHubAdapter {
-	return destinations.NewGitHubAdapter(h.workspace, h.store, nil, h.prSource())
+// long-lived RepoAdapter for the auto-fire path. One adapter serves
+// every git provider kind (issue #795), so the push and pr endpoints
+// no longer pick one per kind.
+func (h *missionAPI) completer() *destinations.RepoAdapter {
+	return destinations.NewRepoAdapter(h.workspace, h.store, nil, h.gitClients())
 }
 
-// prSource adapts h.conns (nil-safe) to destinations.PRSource.
-func (h *missionAPI) prSource() destinations.PRSource {
+// gitClients adapts h.conns (nil-safe) to destinations.Clients.
+func (h *missionAPI) gitClients() destinations.Clients {
 	if h.conns == nil {
 		return nil
 	}
-	return connsPRSource{h.conns}
+	return connsGitClients{h.conns}
 }
 
-// connsPRSource adapts *connectors.Manager to destinations.PRSource,
-// the PR endpoint's own adapter; the driver's SetPRSource wiring in
-// cmd/brain/main.go builds an equivalent one.
-type connsPRSource struct {
+// connsGitClients adapts *connectors.Manager to destinations.Clients,
+// the PR endpoint's own adapter; cmd/brain/main.go builds an
+// equivalent one for the driver.
+type connsGitClients struct {
 	conns *connectors.Manager
 }
 
-func (c connsPRSource) DefaultBranch(ctx context.Context, connectorID, owner, repo string) (string, error) {
-	repoInfo, err := c.conns.GetRepo(ctx, connectorID, owner, repo)
-	if err != nil {
-		return "", err
-	}
-	return repoInfo.DefaultBranch, nil
-}
-
-func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, title, head, base, body string) (string, int, error) {
-	created, err := c.conns.CreatePR(ctx, connectorID, owner, repo, title, head, base, body)
-	if err != nil {
-		return "", 0, err
-	}
-	return created.HTMLURL, created.Number, nil
-}
-
-// RepoExists/CreateRepo satisfy destinations.PRSource's create-if-missing
-// methods (issue #483); see cmd/brain/main.go's connsPRSource for the
-// full doc comments, identical adapter logic duplicated here since
-// this handler builds its own short-lived Completer per call (see
-// completer() above) rather than sharing the driver's.
-func (c connsPRSource) RepoExists(ctx context.Context, connectorID, owner, repo string) (bool, error) {
-	_, err := c.conns.GetRepo(ctx, connectorID, owner, repo)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, connectors.ErrRepoNotFound) {
-		return false, nil
-	}
-	return false, err
-}
-
-func (c connsPRSource) CreateRepo(ctx context.Context, connectorID, name string, private bool) (string, error) {
-	repo, err := c.conns.CreateRepo(ctx, connectorID, name, private)
-	if err != nil {
-		return "", err
-	}
-	return repo.CloneURL, nil
+func (c connsGitClients) ClientFor(ctx context.Context, connectorID string) (gitprovider.Client, func(), error) {
+	return c.conns.GitClient(ctx, connectorID)
 }
 
 // pushStatusCode maps a Push error to the HTTP status/code pair the
@@ -2433,7 +2399,7 @@ func (h *missionAPI) push(w http.ResponseWriter, r *http.Request) {
 }
 
 // pr handles POST /v1/missions/{id}/pr: github-connection missions
-// only (400 otherwise). destinations.GitHubAdapter.OpenPR does the
+// only (400 otherwise). destinations.RepoAdapter.OpenPR does the
 // actual push, default-branch lookup, PR create, and mission.pr_opened
 // event recording, the SAME code the driver's auto-fire-on-done hook
 // calls for on_complete="push_pr", so a manual PR and an auto-fired one
@@ -2461,6 +2427,11 @@ func (h *missionAPI) pr(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "connectors are not enabled")
 		return
 	}
+	// The mission's source kind decides which provider's URL shape the
+	// repo_url must match. Kept on the missions parsers rather than the
+	// Descriptor's: ParseGitHubRepoURL deliberately accepts any host
+	// (it also parses origins a mission was cloned from), and tightening
+	// that is not this issue's change.
 	src, _ := m.RepoSource()
 	isBitbucket := src.Source == missions.SourceKindBitbucket
 	if isBitbucket {
@@ -2483,13 +2454,7 @@ func (h *missionAPI) pr(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, "push_failed", err.Error())
 		return
 	}
-	var url string
-	var number int
-	if isBitbucket {
-		url, number, err = destinations.NewBitbucketAdapter(h.workspace, h.store, nil, h.prSource()).OpenPR(r.Context(), m, token)
-	} else {
-		url, number, err = h.completer().OpenPR(r.Context(), m, token)
-	}
+	url, number, err := h.completer().OpenPR(r.Context(), m, token)
 	if err != nil {
 		if errors.Is(err, missions.ErrRemoteUnsupported) || errors.Is(err, missions.ErrPushRejected) {
 			status, code := pushStatusCode(err)

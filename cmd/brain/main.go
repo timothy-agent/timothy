@@ -375,11 +375,10 @@ func main() {
 	// (saved github destination kind) always has the same push/PR code
 	// the manual push/pr API endpoints use. nil workspace/store (missions
 	// disabled) still builds one; ResolveToken/PR nil-gate its actual use.
-	var githubAdapter *destinations.GitHubAdapter
-	var bitbucketAdapter *destinations.BitbucketAdapter
+	var repoAdapter *destinations.RepoAdapter
 	if missionDriver != nil {
 		var resolveGitHubToken destinations.PushTokenResolver
-		var githubPR destinations.PRSource
+		var gitClients destinations.Clients
 		if conns != nil && secrets != nil {
 			resolveGitHubToken = func(ctx context.Context, connectorID string) (string, error) {
 				c, err := conns.Store().Get(ctx, connectorID)
@@ -388,16 +387,14 @@ func main() {
 				}
 				return secrets.Resolve(ctx, c.CredentialRef)
 			}
-			githubPR = connsPRSource{conns}
+			gitClients = connsGitClients{conns}
 		}
-		githubAdapter = destinations.NewGitHubAdapter(missionWorkspace, missionStore, resolveGitHubToken, githubPR)
-		githubAdapter.Attribution = func(ctx context.Context) bool {
+		repoAdapter = destinations.NewRepoAdapter(missionWorkspace, missionStore, resolveGitHubToken, gitClients)
+		repoAdapter.Attribution = func(ctx context.Context) bool {
 			return flags.Enabled(ctx, settings.KeyPRAttribution)
 		}
-		bitbucketAdapter = destinations.NewBitbucketAdapter(missionWorkspace, missionStore, resolveGitHubToken, githubPR)
-		bitbucketAdapter.Attribution = githubAdapter.Attribution
 	}
-	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, githubAdapter, bitbucketAdapter, app.Log)
+	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, repoAdapter, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
 		missionDriver.SetDestinationDeliver(destinationDeliverer.Deliver)
 	}
@@ -405,7 +402,7 @@ func main() {
 		missionScheduler.SetDestinationEnabled(destinationStore.EnabledByID)
 	}
 	if missionDriver != nil && destinationStore != nil {
-		missionDriver.SetGitHubPolicyResolver(destinationStore.GitHubPolicy)
+		missionDriver.SetGitHubPolicyResolver(destinationStore.RepoPolicy)
 	}
 	if missionDriver != nil {
 		// D-071: close the unvalidated Driver.Create path (the workflows
@@ -493,7 +490,7 @@ func main() {
 				}
 				return secrets.Resolve(ctx, c.CredentialRef)
 			}
-			completer := missionCompleterAdapter{missionStore, githubAdapter}
+			completer := missionCompleterAdapter{missionStore, repoAdapter}
 			newTools = append(newTools, builtin.PushMissionBranch(missionAdapter, completer, resolvePushToken))
 		}
 		current := builtinSet.add(newTools...)
@@ -984,7 +981,7 @@ func writingSettings(flags *settings.Store) func(context.Context) (string, strin
 // validation with a clear error, same nil-gated shape as
 // api/missions.go's own repo_url-needs-connectors check. secrets nil
 // (no valid master key) leaves telegram unregistered the same way.
-func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, flags *settings.Store, missionStore *missions.Store, github *destinations.GitHubAdapter, bitbucket *destinations.BitbucketAdapter, log *slog.Logger) (*destinations.Store, *destinations.Deliverer) {
+func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, flags *settings.Store, missionStore *missions.Store, repo *destinations.RepoAdapter, log *slog.Logger) (*destinations.Store, *destinations.Deliverer) {
 	if missionStore == nil {
 		return nil, nil
 	}
@@ -1007,7 +1004,7 @@ func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connect
 	if secrets != nil {
 		telegram = &destinations.TelegramAdapter{ResolveToken: secrets.Resolve}
 	}
-	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, telegram, github, bitbucket, flags.WebBaseURL, flags.Location, log)
+	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, telegram, repo, flags.WebBaseURL, flags.Location, log)
 	return store, deliverer
 }
 
@@ -1041,7 +1038,7 @@ func (d destinationMailSender) SendMailHTML(ctx context.Context, connectorID, to
 // destinationConnectorLookup adapts *connectors.Manager to
 // destinations' own narrow Connector/connectorLookup shape: missions
 // has no compile-time dependency on the connectors package's own
-// Connector type, same reasoning as connsPRSource above. A zero value
+// Connector type, same reasoning as connsGitClients above. A zero value
 // (conns == nil) is never boxed here; buildDestinations only
 // constructs one when conns is non-nil.
 type destinationConnectorLookup struct {
@@ -1385,54 +1382,16 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	return store, driver, notifier, workspace, hub, scheduler
 }
 
-// connsPRSource adapts *connectors.Manager to destinations.PRSource for
-// the shared GitHubAdapter: destinations has no compile-time dependency
-// on the connectors package, same reasoning as CloneTokenResolver's
-// closure-based wiring above.
-type connsPRSource struct {
+// connsGitClients adapts *connectors.Manager to destinations.Clients
+// for the shared RepoAdapter: destinations has no compile-time
+// dependency on the connectors package, same reasoning as
+// CloneTokenResolver's closure-based wiring above.
+type connsGitClients struct {
 	conns *connectors.Manager
 }
 
-func (c connsPRSource) DefaultBranch(ctx context.Context, connectorID, owner, repo string) (string, error) {
-	repoInfo, err := c.conns.GetRepo(ctx, connectorID, owner, repo)
-	if err != nil {
-		return "", err
-	}
-	return repoInfo.DefaultBranch, nil
-}
-
-func (c connsPRSource) CreatePR(ctx context.Context, connectorID, owner, repo, title, head, base, body string) (string, int, error) {
-	created, err := c.conns.CreatePR(ctx, connectorID, owner, repo, title, head, base, body)
-	if err != nil {
-		return "", 0, err
-	}
-	return created.HTMLURL, created.Number, nil
-}
-
-// RepoExists backs destinations.GitHubAdapter's ensureRepo create-if-missing
-// existence check (issue #483): connectors.ErrRepoNotFound (GetRepo's
-// 404) is the only "safe to create" signal, distinguished from every
-// other lookup failure (network, auth), which propagates as a hard
-// error instead.
-func (c connsPRSource) RepoExists(ctx context.Context, connectorID, owner, repo string) (bool, error) {
-	_, err := c.conns.GetRepo(ctx, connectorID, owner, repo)
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, connectors.ErrRepoNotFound) {
-		return false, nil
-	}
-	return false, err
-}
-
-// CreateRepo backs ensureRepo's create path, returning the new repo's
-// https clone URL.
-func (c connsPRSource) CreateRepo(ctx context.Context, connectorID, name string, private bool) (string, error) {
-	repo, err := c.conns.CreateRepo(ctx, connectorID, name, private)
-	if err != nil {
-		return "", err
-	}
-	return repo.CloneURL, nil
+func (c connsGitClients) ClientFor(ctx context.Context, connectorID string) (gitprovider.Client, func(), error) {
+	return c.conns.GitClient(ctx, connectorID)
 }
 
 // toMissionRecord adapts a missions.Mission into the builtin package's
@@ -1499,16 +1458,16 @@ func (a missionToolStore) MissionEvents(ctx context.Context, id string) ([]built
 	return out, nil
 }
 
-// missionCompleterAdapter adapts *destinations.GitHubAdapter to the
+// missionCompleterAdapter adapts *destinations.RepoAdapter to the
 // builtin package's missionCompleter interface: push_mission_branch's
-// push/PR calls go through the exact same GitHubAdapter the button/
+// push/PR calls go through the exact same RepoAdapter the button/
 // auto-fire paths use. It re-Gets the mission by id from the real
 // store before calling it, so it always acts on the authoritative
 // missions.Mission (worktree, full plan for PRBody, ...) rather than a
 // partial copy shuttled through builtin.MissionRecord.
 type missionCompleterAdapter struct {
 	store     *missions.Store
-	completer *destinations.GitHubAdapter
+	completer *destinations.RepoAdapter
 }
 
 func (a missionCompleterAdapter) PushMissionBranch(ctx context.Context, id, token string) (string, error) {

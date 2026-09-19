@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
@@ -895,22 +896,13 @@ func (m *Manager) TestReport(ctx context.Context, id string) (TestReport, error)
 	return report, nil
 }
 
-// repoSource is the optional Source capability that lists/creates
-// GitHub repos and opens pull requests (github-kind today).
-// Type-asserted so kinds without a repo concept (mcp, google) are
-// untouched, mirroring identifier.
-type repoSource interface {
-	ListRepos(ctx context.Context) ([]GitHubRepo, error)
-	CreateRepo(ctx context.Context, name string, private bool) (GitHubRepo, error)
-	GetRepo(ctx context.Context, owner, repo string) (GitHubRepo, error)
-	CreatePR(ctx context.Context, owner, repo, title, head, base, body string) (GitHubPR, error)
-	PRMerged(ctx context.Context, owner, repo string, number int) (bool, error)
-}
-
-// buildRepoSource resolves connector id, builds it fresh (same shape as
-// TestIdentity), and returns it asserted to repoSource — ErrUnsupported
-// for an unknown kind or a kind with no repo concept.
-func (m *Manager) buildRepoSource(ctx context.Context, id string) (repoSource, func(), error) {
+// GitClient resolves connector id, builds it fresh (same shape as
+// TestIdentity), and returns it as a gitprovider.Client —
+// ErrUnsupported for an unknown kind or a kind that is not a git
+// provider (mcp, google). The returned func closes the ephemeral
+// source and must always be called (D-101, issue #795: one accessor in
+// place of the old per-call repoSource pass-throughs).
+func (m *Manager) GitClient(ctx context.Context, id string) (gitprovider.Client, func(), error) {
 	c, err := m.rows.Get(ctx, id)
 	if err != nil {
 		return nil, nil, err
@@ -931,62 +923,72 @@ func (m *Manager) buildRepoSource(ctx context.Context, id string) (repoSource, f
 			m.log.Warn("connector close failed", "connector", c.Name, "error", err)
 		}
 	}
-	rs, ok := src.(repoSource)
+	gc, ok := src.(gitprovider.Client)
 	if !ok {
 		closeFn()
 		return nil, nil, fmt.Errorf("connector kind %s has no repos to list: %w", c.Kind, ErrUnsupported)
 	}
-	return rs, closeFn, nil
+	return gc, closeFn, nil
 }
+
+// The five methods below are thin wrappers over GitClient, kept for the
+// callers that still name one repo operation at a time (the connectors
+// repo-list endpoint, the mission PR endpoint's own adapter).
 
 // ListRepos lists every repo the connector's credential can see.
 func (m *Manager) ListRepos(ctx context.Context, id string) ([]GitHubRepo, error) {
-	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	gc, closeFn, err := m.GitClient(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 	defer closeFn()
-	return rs.ListRepos(ctx)
+	return gc.ListRepos(ctx)
 }
 
 // CreateRepo creates a new repo through the connector's credential.
 func (m *Manager) CreateRepo(ctx context.Context, id, name string, private bool) (GitHubRepo, error) {
-	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	gc, closeFn, err := m.GitClient(ctx, id)
 	if err != nil {
 		return GitHubRepo{}, err
 	}
 	defer closeFn()
-	return rs.CreateRepo(ctx, name, private)
+	return gc.CreateRepo(ctx, name, private)
 }
 
 // GetRepo resolves owner/repo's metadata through the connector's
 // credential — the PR flow's default_branch lookup.
 func (m *Manager) GetRepo(ctx context.Context, id, owner, repo string) (GitHubRepo, error) {
-	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	gc, closeFn, err := m.GitClient(ctx, id)
 	if err != nil {
 		return GitHubRepo{}, err
 	}
 	defer closeFn()
-	return rs.GetRepo(ctx, owner, repo)
+	return gc.GetRepo(ctx, gitprovider.RepoRef{Owner: owner, Name: repo})
 }
 
 // CreatePR opens a pull request through the connector's credential.
 func (m *Manager) CreatePR(ctx context.Context, id, owner, repo, title, head, base, body string) (GitHubPR, error) {
-	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	gc, closeFn, err := m.GitClient(ctx, id)
 	if err != nil {
 		return GitHubPR{}, err
 	}
 	defer closeFn()
-	return rs.CreatePR(ctx, owner, repo, title, head, base, body)
+	return gc.CreatePR(ctx, gitprovider.PRSpec{
+		Repo: gitprovider.RepoRef{Owner: owner, Name: repo}, Title: title, Head: head, Base: base, Body: body,
+	})
 }
 
 // PRMerged reports whether owner/repo pull request number has been
 // merged, through the connector's credential.
 func (m *Manager) PRMerged(ctx context.Context, id, owner, repo string, number int) (bool, error) {
-	rs, closeFn, err := m.buildRepoSource(ctx, id)
+	gc, closeFn, err := m.GitClient(ctx, id)
 	if err != nil {
 		return false, err
 	}
 	defer closeFn()
-	return rs.PRMerged(ctx, owner, repo, number)
+	pr, err := gc.GetPR(ctx, gitprovider.RepoRef{Owner: owner, Name: repo}, number)
+	if err != nil {
+		return false, err
+	}
+	return pr.State == "merged", nil
 }

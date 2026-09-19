@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
@@ -58,7 +59,11 @@ func BitbucketBuilder(client *http.Client) Builder {
 	}
 }
 
+// The embedded Descriptor supplies the static half of
+// gitprovider.Client, exactly as githubSource does.
 type bitbucketSource struct {
+	gitprovider.Bitbucket
+
 	name          string
 	credentialRef string
 	workspace     string
@@ -66,8 +71,10 @@ type bitbucketSource struct {
 	client        *http.Client
 }
 
-// Tools is the read-only pull request surface (bitbucket_tools.go).
-func (s *bitbucketSource) Tools() []*tools.Tool { return s.prTools() }
+var _ gitprovider.Client = (*bitbucketSource)(nil)
+
+// Tools is the read-only pull request surface, from the shared builder.
+func (s *bitbucketSource) Tools() []*tools.Tool { return gitPRTools(s) }
 
 func (s *bitbucketSource) AccountInfo() (kind, email string) { return "bitbucket", "" }
 
@@ -351,14 +358,14 @@ func bitbucketStatusError(resp *http.Response) error {
 	return fmt.Errorf("bitbucket: status %d", resp.StatusCode)
 }
 
-// GetRepo resolves workspace/slug; a 404 is ErrRepoNotFound so the
-// destination's existence check can tell "absent" from "failed".
-func (s *bitbucketSource) GetRepo(ctx context.Context, workspace, slug string) (GitHubRepo, error) {
+// GetRepo resolves ref (workspace/slug); a 404 is ErrRepoNotFound so
+// the destination's existence check can tell "absent" from "failed".
+func (s *bitbucketSource) GetRepo(ctx context.Context, ref gitprovider.RepoRef) (GitHubRepo, error) {
 	token, err := s.resolve(ctx, s.credentialRef)
 	if err != nil {
 		return GitHubRepo{}, fmt.Errorf("resolve credential_ref %q: %w", s.credentialRef, err)
 	}
-	resp, err := bitbucketRequest(ctx, s.client, token, fmt.Sprintf("/repositories/%s/%s", workspace, slug))
+	resp, err := bitbucketRequest(ctx, s.client, token, fmt.Sprintf("/repositories/%s/%s", ref.Owner, ref.Name))
 	if err != nil {
 		return GitHubRepo{}, err
 	}
@@ -437,16 +444,17 @@ func (p bitbucketPRRef) toGitHubPR() GitHubPR {
 
 // CreatePR opens a pull request from head to base, or returns the open
 // one for head when Bitbucket refuses a duplicate.
-func (s *bitbucketSource) CreatePR(ctx context.Context, workspace, slug, title, head, base, body string) (GitHubPR, error) {
+func (s *bitbucketSource) CreatePR(ctx context.Context, spec gitprovider.PRSpec) (GitHubPR, error) {
 	token, err := s.resolve(ctx, s.credentialRef)
 	if err != nil {
 		return GitHubPR{}, fmt.Errorf("resolve credential_ref %q: %w", s.credentialRef, err)
 	}
+	workspace, slug, head := spec.Repo.Owner, spec.Repo.Name, spec.Head
 	resp, err := bitbucketPost(ctx, s.client, token, fmt.Sprintf("/repositories/%s/%s/pullrequests", workspace, slug), map[string]any{
-		"title":       title,
-		"description": body,
+		"title":       spec.Title,
+		"description": spec.Body,
 		"source":      map[string]any{"branch": map[string]any{"name": head}},
-		"destination": map[string]any{"branch": map[string]any{"name": base}},
+		"destination": map[string]any{"branch": map[string]any{"name": spec.Base}},
 	})
 	if err != nil {
 		return GitHubPR{}, err
@@ -494,24 +502,26 @@ func findOpenBitbucketPR(ctx context.Context, client *http.Client, token, worksp
 	return &pr, nil
 }
 
-func (s *bitbucketSource) PRMerged(ctx context.Context, workspace, slug string, number int) (bool, error) {
+// GetPR reads ref's pull request number. Bitbucket's own state string
+// (MERGED, OPEN, DECLINED) lowercases straight into the shared shape.
+func (s *bitbucketSource) GetPR(ctx context.Context, ref gitprovider.RepoRef, number int) (GitHubPR, error) {
 	token, err := s.resolve(ctx, s.credentialRef)
 	if err != nil {
-		return false, fmt.Errorf("resolve credential_ref %q: %w", s.credentialRef, err)
+		return GitHubPR{}, fmt.Errorf("resolve credential_ref %q: %w", s.credentialRef, err)
 	}
-	resp, err := bitbucketRequest(ctx, s.client, token, fmt.Sprintf("/repositories/%s/%s/pullrequests/%d", workspace, slug, number))
+	resp, err := bitbucketRequest(ctx, s.client, token, fmt.Sprintf("/repositories/%s/%s/pullrequests/%d", ref.Owner, ref.Name, number))
 	if err != nil {
-		return false, err
+		return GitHubPR{}, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("get pr: %w", bitbucketStatusError(resp))
+		return GitHubPR{}, fmt.Errorf("get pr: %w", bitbucketStatusError(resp))
 	}
 	var pr bitbucketPRRef
 	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
-		return false, fmt.Errorf("get pr: decode response: %w", err)
+		return GitHubPR{}, fmt.Errorf("get pr: decode response: %w", err)
 	}
-	return pr.State == "MERGED", nil
+	return pr.toGitHubPR(), nil
 }
 
 func bitbucketPost(ctx context.Context, client *http.Client, token, path string, body any) (*http.Response, error) {

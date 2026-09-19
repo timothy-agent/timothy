@@ -9,7 +9,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 )
+
+// acmeWidgets is the repo every bitbucket source test addresses.
+var acmeWidgets = gitprovider.RepoRef{Owner: "acme", Name: "widgets"}
 
 // bitbucketFakeServer swaps bitbucketAPIBase for the test's lifetime; callers must not run in parallel.
 func bitbucketFakeServer(t *testing.T, handler http.HandlerFunc) *httptest.Server {
@@ -515,7 +520,7 @@ func TestBitbucketGetRepo(t *testing.T) {
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
 			})
-			repo, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).GetRepo(t.Context(), "acme", "widgets")
+			repo, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).GetRepo(t.Context(), acmeWidgets)
 			if tc.wantErr != nil {
 				if !errors.Is(err, tc.wantErr) {
 					t.Fatalf("err = %v, want %v", err, tc.wantErr)
@@ -581,7 +586,7 @@ func TestBitbucketCreatePR(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(created))
 		})
-		pr, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), "acme", "widgets", "feat: thing", "feat/x", "main", "body")
+		pr, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), gitprovider.PRSpec{Repo: acmeWidgets, Title: "feat: thing", Head: "feat/x", Base: "main", Body: "body"})
 		if err != nil || pr.Number != 12 || pr.HTMLURL != "https://bitbucket.org/acme/widgets/pull-requests/12" || pr.State != "open" {
 			t.Fatalf("pr = %+v, err %v", pr, err)
 		}
@@ -599,7 +604,7 @@ func TestBitbucketCreatePR(t *testing.T) {
 				_, _ = w.Write([]byte(`{"values":[` + created + `]}`))
 			}
 		})
-		pr, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), "acme", "widgets", "t", "feat/x", "main", "")
+		pr, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), gitprovider.PRSpec{Repo: acmeWidgets, Title: "t", Head: "feat/x", Base: "main"})
 		if err != nil || pr.Number != 12 {
 			t.Fatalf("pr = %+v, err %v", pr, err)
 		}
@@ -613,7 +618,7 @@ func TestBitbucketCreatePR(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"values":[]}`))
 		})
-		_, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), "acme", "widgets", "t", "feat/x", "main", "")
+		_, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), gitprovider.PRSpec{Repo: acmeWidgets, Title: "t", Head: "feat/x", Base: "main"})
 		if err == nil || !strings.Contains(err.Error(), "create pr: bitbucket: status 400: destination branch missing") {
 			t.Fatalf("err = %v", err)
 		}
@@ -627,7 +632,7 @@ func TestBitbucketCreatePR(t *testing.T) {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`{"type":"error","error":{"message":"no"}}`))
 		})
-		_, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), "acme", "widgets", "t", "feat/x", "main", "")
+		_, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), gitprovider.PRSpec{Repo: acmeWidgets, Title: "t", Head: "feat/x", Base: "main"})
 		if err == nil || gets != 0 {
 			t.Fatalf("err = %v, gets = %d", err, gets)
 		}
@@ -646,15 +651,15 @@ func TestBitbucketPRMerged(t *testing.T) {
 				}
 				_, _ = w.Write([]byte(`{"id":12,"state":"` + tc.state + `"}`))
 			})
-			merged, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).PRMerged(t.Context(), "acme", "widgets", 12)
-			if err != nil || merged != tc.want {
-				t.Fatalf("merged = %v, err %v", merged, err)
+			pr, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).GetPR(t.Context(), acmeWidgets, 12)
+			if err != nil || (pr.State == "merged") != tc.want {
+				t.Fatalf("pr = %+v, err %v", pr, err)
 			}
 		})
 	}
 }
 
-// With all five methods present the manager's repoSource assertion admits
+// With every Client method present the manager's gitprovider.Client assertion admits
 // the kind: this is what the mission repo picker and the PR flow go through.
 func TestManagerRepoSourceAdmitsBitbucket(t *testing.T) {
 	srv := bitbucketFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -685,10 +690,13 @@ func TestManagerRepoSourceAdmitsBitbucket(t *testing.T) {
 func TestBitbucketRepoMethodErrors(t *testing.T) {
 	calls := func(s *bitbucketSource) map[string]func() error {
 		return map[string]func() error{
-			"GetRepo":    func() error { _, err := s.GetRepo(t.Context(), "acme", "widgets"); return err },
+			"GetRepo":    func() error { _, err := s.GetRepo(t.Context(), acmeWidgets); return err },
 			"CreateRepo": func() error { _, err := s.CreateRepo(t.Context(), "acme/widgets", true); return err },
-			"CreatePR":   func() error { _, err := s.CreatePR(t.Context(), "acme", "widgets", "t", "h", "b", ""); return err },
-			"PRMerged":   func() error { _, err := s.PRMerged(t.Context(), "acme", "widgets", 1); return err },
+			"CreatePR": func() error {
+				_, err := s.CreatePR(t.Context(), gitprovider.PRSpec{Repo: acmeWidgets, Title: "t", Head: "h", Base: "b"})
+				return err
+			},
+			"GetPR": func() error { _, err := s.GetPR(t.Context(), acmeWidgets, 1); return err },
 		}
 	}
 
@@ -747,7 +755,7 @@ func TestBitbucketRepoMethodErrors(t *testing.T) {
 					w.WriteHeader(lookup.status)
 					_, _ = w.Write([]byte(lookup.body))
 				})
-				_, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), "acme", "widgets", "t", "h", "b", "")
+				_, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), gitprovider.PRSpec{Repo: acmeWidgets, Title: "t", Head: "h", Base: "b"})
 				if err == nil || !strings.Contains(err.Error(), "status 409: exists") || !strings.Contains(err.Error(), "could not fetch existing") {
 					t.Fatalf("err = %v", err)
 				}
@@ -759,7 +767,7 @@ func TestBitbucketRepoMethodErrors(t *testing.T) {
 func TestBitbucketPostConnectionRefused(t *testing.T) {
 	srv := bitbucketFakeServer(t, func(http.ResponseWriter, *http.Request) {})
 	srv.Close()
-	_, err := bitbucketSourceWith(t, &http.Client{}, "secret-token", nil).CreatePR(t.Context(), "acme", "widgets", "t", "h", "b", "")
+	_, err := bitbucketSourceWith(t, &http.Client{}, "secret-token", nil).CreatePR(t.Context(), gitprovider.PRSpec{Repo: acmeWidgets, Title: "t", Head: "h", Base: "b"})
 	if err == nil || strings.Contains(err.Error(), "secret-token") {
 		t.Fatalf("err = %v", err)
 	}
@@ -778,7 +786,7 @@ func TestBitbucketFindExistingPRConnectionDrops(t *testing.T) {
 		}
 		_ = conn.Close()
 	})
-	_, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), "acme", "widgets", "t", "h", "b", "")
+	_, err := bitbucketSourceWith(t, srv.Client(), "tok", nil).CreatePR(t.Context(), gitprovider.PRSpec{Repo: acmeWidgets, Title: "t", Head: "h", Base: "b"})
 	if err == nil || !strings.Contains(err.Error(), "could not fetch existing") {
 		t.Fatalf("err = %v", err)
 	}

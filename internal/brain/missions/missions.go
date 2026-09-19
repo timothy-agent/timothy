@@ -281,9 +281,9 @@ type DestinationEntry struct {
 	// RepoURL, on a github-kind destination's entry, sets the target
 	// repository for that delivery: "" falls back to the mission's own
 	// clone source, or (when the destination's config allows it) a
-	// repo created at delivery time (see destinations.GitHubAdapter).
+	// repo created at delivery time (see destinations.RepoAdapter).
 	RepoURL string `json:"repo_url,omitempty"`
-	// Branch/RemoteHost/PRURL/PRNumber are set by destinations.GitHubAdapter
+	// Branch/RemoteHost/PRURL/PRNumber are set by destinations.RepoAdapter
 	// on a successful delivery (issue #560, saved github destination
 	// kind): the final pushed branch/host, and the opened PR's url/number
 	// when the destination's mode is push_pr.

@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 )
 
 // githubFakeServer serves /user and /user/emails with configurable
@@ -432,36 +434,46 @@ func TestFetchGitHubRepo(t *testing.T) {
 	}
 }
 
-// TestFetchGitHubPRMerged proves GET /repos/{owner}/{repo}/pulls/{number}
-// decodes the merged field, and a non-200 response surfaces as an
+// TestGitHubGetPR proves GET /repos/{owner}/{repo}/pulls/{number}
+// decodes into the shared PullRequest shape, that GitHub's
+// closed+merged pair collapses to the "merged" state every provider
+// reports (issue #795), and that a non-200 response surfaces as an
 // error.
-func TestFetchGitHubPRMerged(t *testing.T) {
+func TestGitHubGetPR(t *testing.T) {
+	octoHello := gitprovider.RepoRef{Owner: "octocat", Name: "hello-world"}
 	for _, tc := range []struct {
-		name    string
-		handler http.HandlerFunc
-		want    bool
-		wantErr string
+		name      string
+		handler   http.HandlerFunc
+		wantState string
+		wantErr   string
 	}{
 		{
-			name: "merged",
+			name: "merged collapses closed+merged into one state",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/repos/octocat/hello-world/pulls/42" {
 					t.Fatalf("unexpected path %q", r.URL.Path)
 				}
-				_ = json.NewEncoder(w).Encode(map[string]any{"merged": true})
+				_ = json.NewEncoder(w).Encode(map[string]any{"number": 42, "state": "closed", "merged": true})
 			},
-			want: true,
+			wantState: "merged",
 		},
 		{
-			name: "not merged",
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				_ = json.NewEncoder(w).Encode(map[string]any{"merged": false})
+			name: "open",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"number": 42, "state": "open", "merged": false})
 			},
-			want: false,
+			wantState: "open",
+		},
+		{
+			name: "closed without merge stays closed",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"number": 42, "state": "closed", "merged": false})
+			},
+			wantState: "closed",
 		},
 		{
 			name: "error status",
-			handler: func(w http.ResponseWriter, r *http.Request) {
+			handler: func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNotFound)
 				_ = json.NewEncoder(w).Encode(map[string]any{"message": "Not Found"})
 			},
@@ -470,7 +482,9 @@ func TestFetchGitHubPRMerged(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := githubFakeServer(t, tc.handler)
-			got, err := fetchGitHubPRMerged(t.Context(), srv.Client(), "test-token", "octocat", "hello-world", 42)
+			s := &githubSource{name: "gh", credentialRef: "GH_PAT", client: srv.Client(),
+				resolve: func(context.Context, string) (string, error) { return "test-token", nil }}
+			pr, err := s.GetPR(t.Context(), octoHello, 42)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
@@ -478,13 +492,47 @@ func TestFetchGitHubPRMerged(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("fetchGitHubPRMerged: %v", err)
+				t.Fatalf("GetPR: %v", err)
 			}
-			if got != tc.want {
-				t.Fatalf("merged = %v, want %v", got, tc.want)
+			if pr.State != tc.wantState || pr.Number != 42 {
+				t.Fatalf("pr = %+v, want state %q", pr, tc.wantState)
 			}
 		})
 	}
+}
+
+// TestManagerPRMergedMapsState pins the wrapper that turns GetPR's
+// state back into the bool the follow-up provisioner reads.
+func TestManagerPRMergedMapsState(t *testing.T) {
+	for _, tc := range []struct {
+		state string
+		want  bool
+	}{{"closed", false}, {"open", false}} {
+		t.Run(tc.state, func(t *testing.T) {
+			srv := githubFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{"number": 1, "state": tc.state, "merged": false})
+			})
+			m := testManager(fakeRows{rows: []Connector{{ID: "1", Name: "gh", Kind: "github", CredentialRef: "GH_PAT"}}})
+			m.resolve = func(context.Context, string) (string, error) { return "tok", nil }
+			m.RegisterBuilder("github", GitHubBuilder(srv.Client()))
+			merged, err := m.PRMerged(t.Context(), "1", "octocat", "hello-world", 1)
+			if err != nil || merged != tc.want {
+				t.Fatalf("PRMerged = %v, %v", merged, err)
+			}
+		})
+	}
+	t.Run("merged", func(t *testing.T) {
+		srv := githubFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"number": 1, "state": "closed", "merged": true})
+		})
+		m := testManager(fakeRows{rows: []Connector{{ID: "1", Name: "gh", Kind: "github", CredentialRef: "GH_PAT"}}})
+		m.resolve = func(context.Context, string) (string, error) { return "tok", nil }
+		m.RegisterBuilder("github", GitHubBuilder(srv.Client()))
+		merged, err := m.PRMerged(t.Context(), "1", "octocat", "hello-world", 1)
+		if err != nil || !merged {
+			t.Fatalf("PRMerged = %v, %v", merged, err)
+		}
+	})
 }
 
 // TestCreateGitHubPR proves POST /repos/{owner}/{repo}/pulls sends the
@@ -562,7 +610,7 @@ func TestManagerCreatePRAlreadyExists(t *testing.T) {
 }
 
 // TestManagerGetRepoNonGitHubKind pins that GetRepo also gates on the
-// repoSource capability, mirroring TestManagerListReposNonGitHubKind.
+// gitprovider.Client capability, mirroring TestManagerListReposNonGitHubKind.
 func TestManagerGetRepoNonGitHubKind(t *testing.T) {
 	m := testManager(fakeRows{rows: []Connector{
 		{ID: "1", Name: "grafana", Kind: "mcp"},

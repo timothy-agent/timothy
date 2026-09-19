@@ -115,7 +115,7 @@ func entries(ids ...string) []missions.DestinationEntry {
 func TestDeliverZeroDestinationsNoop(t *testing.T) {
 	destStore := &fakeDestStore{rows: map[string]Destination{}}
 	eventStore := &fakeEventStore{}
-	d := NewDeliverer(destStore, eventStore, nil, &WebhookAdapter{}, nil, nil, nil, nil, nil, discardLog())
+	d := NewDeliverer(destStore, eventStore, nil, &WebhookAdapter{}, nil, nil, nil, nil, discardLog())
 
 	if _, err := d.Deliver(t.Context(), missions.Mission{ID: "m1"}, nil); err != nil {
 		t.Fatalf("Deliver with zero destinations: %v", err)
@@ -360,7 +360,7 @@ func TestDeliverNowNeverRetries(t *testing.T) {
 }
 
 // TestDeliverGitHubRoutesToAdapter proves a "github" kind destination
-// row routes to the wired GitHubAdapter (not the Adapter map) and
+// row routes to the wired RepoAdapter (not the Adapter map) and
 // records the delivered pr_url/pr_number/branch/remote_host on the
 // entry, same as any other successful delivery.
 func TestDeliverGitHubRoutesToAdapter(t *testing.T) {
@@ -370,10 +370,10 @@ func TestDeliverGitHubRoutesToAdapter(t *testing.T) {
 	}}
 	eventStore := &fakeEventStore{}
 	p := &fakePusher{host: "github.com"}
-	pr := &fakePRSource{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/1", prNumber: 1}
+	c := githubClient(&fakeGitClient{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/1", prNumber: 1})
 	resolveToken := func(context.Context, string) (string, error) { return "tok", nil }
-	github := &GitHubAdapter{Pusher: p, Events: eventStore, ResolveToken: resolveToken, PR: pr}
-	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{}, github: github, log: discardLog()}
+	repo := &RepoAdapter{Pusher: p, Events: eventStore, ResolveToken: resolveToken, Clients: clients(c)}
+	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{}, repo: repo, log: discardLog()}
 
 	updated, err := d.Deliver(t.Context(), m, entries("d1"))
 	if err != nil {
@@ -391,7 +391,7 @@ func TestDeliverGitHubRoutesToAdapter(t *testing.T) {
 }
 
 // TestDeliverGitHubNoAdapterFails proves a "github" row with no
-// GitHubAdapter wired fails cleanly (connectors disabled), same as any
+// RepoAdapter wired fails cleanly (connectors disabled), same as any
 // other kind's nil-adapter case.
 func TestDeliverGitHubNoAdapterFails(t *testing.T) {
 	m := pushableMission(t)
@@ -431,11 +431,11 @@ func TestDeliverGitHubDeliversBeforeMessageKinds(t *testing.T) {
 	}}
 	eventStore := &fakeEventStore{}
 	p := &fakePusher{host: "github.com"}
-	pr := &fakePRSource{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/7", prNumber: 7}
+	c := githubClient(&fakeGitClient{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/7", prNumber: 7})
 	resolveToken := func(context.Context, string) (string, error) { return "tok", nil }
-	github := &GitHubAdapter{Pusher: p, Events: eventStore, ResolveToken: resolveToken, PR: pr}
+	repo := &RepoAdapter{Pusher: p, Events: eventStore, ResolveToken: resolveToken, Clients: clients(c)}
 	telegram := &capturingAdapter{}
-	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{"telegram": telegram}, github: github, log: discardLog()}
+	d := &Deliverer{store: destStore, events: eventStore, adapters: map[string]Adapter{"telegram": telegram}, repo: repo, log: discardLog()}
 
 	// telegram entry listed BEFORE the github entry.
 	updated, err := d.Deliver(t.Context(), m, entries("tg1", "gh1"))

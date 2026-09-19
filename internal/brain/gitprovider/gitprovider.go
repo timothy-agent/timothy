@@ -7,6 +7,8 @@
 package gitprovider
 
 import (
+	"context"
+	"errors"
 	"sort"
 	"strings"
 	"sync"
@@ -104,6 +106,58 @@ type Descriptor interface {
 	// SSHKnownHosts returns the known_hosts lines for the cloud hosts.
 	SSHKnownHosts() []string
 	Supports(Capability) bool
+}
+
+// ErrRepoNotFound marks GetRepo's 404: the repo does not exist, or the
+// credential cannot see it. The create-if-missing delivery path's
+// signal to create it rather than treat the lookup as a hard failure
+// (issue #483). Distinct from connectors.ErrNotFound, which names a
+// missing connectors table row, not a missing repository.
+var ErrRepoNotFound = errors.New("gitprovider: repo not found")
+
+// Client is one connector's credentialed view of its provider: the
+// Descriptor's static knowledge plus every call that needs a token.
+// One interface for both kinds (D-101, issue #795), so destinations and
+// the chat tool builder hold a Client instead of a per-kind adapter and
+// a new provider arrives as one implementation.
+//
+// The three PR read methods return rendered text, not structs: what
+// each provider can report differs (GitHub carries merged/
+// mergeable_state and line counts on the pull request object,
+// Bitbucket computes counts from a paged diffstat), so a common struct
+// would either lose detail or carry fields half the providers leave
+// empty. The chat tools are text tools, so rendering is the contract.
+type Client interface {
+	Descriptor
+
+	// Identity reports who the credential authenticates as.
+	Identity(ctx context.Context) (Identity, error)
+	// ListRepos lists every repo the credential can see, most recently
+	// pushed first, bounded by the implementation.
+	ListRepos(ctx context.Context) ([]Repo, error)
+	// GetRepo resolves one repo's metadata. A confirmed 404 wraps
+	// ErrRepoNotFound; any other failure is a plain error.
+	GetRepo(ctx context.Context, ref RepoRef) (Repo, error)
+	// CreateRepo creates a repo. name is provider-shaped: a bare name on
+	// GitHub, owner/name (or a bare slug against a configured
+	// workspace) on Bitbucket.
+	CreateRepo(ctx context.Context, name string, private bool) (Repo, error)
+	// CreatePR opens a pull request, or returns the open one already
+	// serving spec.Head when the provider refuses a duplicate.
+	CreatePR(ctx context.Context, spec PRSpec) (PullRequest, error)
+	// GetPR reads one pull request's provider-agnostic state.
+	GetPR(ctx context.Context, ref RepoRef, number int) (PullRequest, error)
+
+	// ListPRs renders the repo's pull requests, most recently updated
+	// first. state is open, closed or all; max bounds the result.
+	ListPRs(ctx context.Context, ref RepoRef, state string, max int) (string, error)
+	// PRDescription renders one pull request's metadata and body.
+	PRDescription(ctx context.Context, ref RepoRef, number int) (string, error)
+	// PRDiff renders the pull request's unified diff, truncated with an
+	// explicit marker rather than silently.
+	PRDiff(ctx context.Context, ref RepoRef, number int) (string, error)
+	// PRComments renders the discussion in chronological order.
+	PRComments(ctx context.Context, ref RepoRef, number int) (string, error)
 }
 
 var (
