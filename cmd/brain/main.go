@@ -1070,10 +1070,10 @@ func (d destinationLister) List(ctx context.Context) ([]builtin.DestinationInfo,
 	}
 	var out []builtin.DestinationInfo
 	for _, r := range rows {
-		// github destinations are not usable by the deliver tool
+		// repo destinations are not usable by the deliver tool
 		// (push/PR, not a message send): excluded from the tool's own
 		// list, same as Deliverer.DeliverNow's own rejection.
-		if r.Kind == "github" {
+		if destinations.IsRepoKind(r.Kind) {
 			continue
 		}
 		out = append(out, builtin.DestinationInfo{ID: r.ID, Name: r.Name, Enabled: r.Enabled})
@@ -1348,7 +1348,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 			// provisioning, just fall back to unsigned commits (same as
 			// SetCloneIdentityResolver's own resolve-error contract).
 			if c, err := conns.Store().Get(ctx, connectorID); err == nil {
-				var cfg connectors.GitHubConfig
+				var cfg connectors.GitKeyConfig
 				if json.Unmarshal(c.Config, &cfg) == nil && cfg.SignCommits {
 					key, err := secrets.Resolve(ctx, connectors.SigningKeyRefSuffix(c.CredentialRef))
 					if err != nil {

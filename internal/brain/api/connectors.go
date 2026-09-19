@@ -147,8 +147,8 @@ func (h *connectorAPI) create(w http.ResponseWriter, r *http.Request) {
 			"config.headers carries the "+connectors.RedactedHeaderValue+" placeholder; a new connector needs the real header value")
 		return
 	}
-	if c.Kind == "github" {
-		cfg, err := h.ensureGitHubSigningKey(r.Context(), c.CredentialRef, c.Config)
+	if connectors.IsGitKind(c.Kind) {
+		cfg, err := h.ensureRepoSigningKey(r.Context(), c.CredentialRef, c.Config)
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
@@ -178,7 +178,7 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 		// The form read its config back from list, where header values
 		// were blanked (D-115); put the stored ones back so saving an
 		// unrelated field does not overwrite a header with the
-		// placeholder. Before the github branch: that branch re-encodes
+		// placeholder. Before the git-kind branch: that branch re-encodes
 		// the config, and a restored header must survive it.
 		restored := connectors.RestoreConfigHeaders(*patch.Config, existing)
 		// A placeholder left over after the restore names a header the
@@ -189,12 +189,12 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		patch.Config = &restored
-		if existing.Kind == "github" {
+		if connectors.IsGitKind(existing.Kind) {
 			credentialRef := existing.CredentialRef
 			if patch.CredentialRef != nil {
 				credentialRef = *patch.CredentialRef
 			}
-			cfg, err := h.ensureGitHubSigningKey(r.Context(), credentialRef, *patch.Config)
+			cfg, err := h.ensureRepoSigningKey(r.Context(), credentialRef, *patch.Config)
 			if err != nil {
 				jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 				return
@@ -209,17 +209,21 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ensureGitHubSigningKey decodes raw as a GitHubConfig, generates and
-// persists an SSH signing keypair when sign_commits is newly true and
-// no key exists yet (connectors.EnsureSigningKey is idempotent), and
-// re-encodes the result. secrets nil (no master key configured) leaves
-// sign_commits set but never generates a key — same degrade as any
-// other secret-store-gated feature.
-func (h *connectorAPI) ensureGitHubSigningKey(ctx context.Context, credentialRef string, raw json.RawMessage) (json.RawMessage, error) {
+// ensureRepoSigningKey decodes the signing slice of a git-kind
+// connector's config, generates and persists an SSH signing keypair
+// when sign_commits is newly true and no key exists yet
+// (connectors.EnsureSigningKey is idempotent), and writes the public
+// key back by merging into the raw config object rather than
+// re-marshaling the decoded struct — every other key the kind carries
+// (bitbucket's workspace, say) survives the round-trip that way.
+// secrets nil (no master key configured) leaves sign_commits set but
+// never generates a key — same degrade as any other
+// secret-store-gated feature.
+func (h *connectorAPI) ensureRepoSigningKey(ctx context.Context, credentialRef string, raw json.RawMessage) (json.RawMessage, error) {
 	if h.secrets == nil || len(raw) == 0 {
 		return raw, nil
 	}
-	var cfg connectors.GitHubConfig
+	var cfg connectors.GitKeyConfig
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
@@ -230,7 +234,11 @@ func (h *connectorAPI) ensureGitHubSigningKey(ctx context.Context, credentialRef
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(next)
+	merged, err := connectors.MergeSigningPublicKey(raw, next.SigningPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	return merged, nil
 }
 
 // listRepos serves GET /v1/admin/connectors/{id}/repos: every repo the

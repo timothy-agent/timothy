@@ -46,13 +46,19 @@ var extraSecretRefs = map[string]func(c Connector) []SecretRefRole{
 		}
 		return nil
 	},
-	"github": func(c Connector) []SecretRefRole {
-		var cfg GitHubConfig
-		if json.Unmarshal(c.Config, &cfg) == nil && (cfg.SignCommits || cfg.SigningPublicKey != "") {
-			return []SecretRefRole{{RefName: SigningKeyRefSuffix(c.CredentialRef), Role: "signing_key"}}
-		}
-		return nil
-	},
+	"github":    signingKeyRefs,
+	"bitbucket": signingKeyRefs,
+}
+
+// signingKeyRefs is the extraSecretRefs entry every git kind shares:
+// the derived SSH signing key ref, present once signing is on (or a
+// public key was ever written back).
+func signingKeyRefs(c Connector) []SecretRefRole {
+	var cfg GitKeyConfig
+	if json.Unmarshal(c.Config, &cfg) == nil && (cfg.SignCommits || cfg.SigningPublicKey != "") {
+		return []SecretRefRole{{RefName: SigningKeyRefSuffix(c.CredentialRef), Role: "signing_key"}}
+	}
+	return nil
 }
 
 // SecretRefs reports every secret-store ref this connector resolves,

@@ -46,17 +46,70 @@ func TestConnectorSecretRefsMicrosoftClientSecret(t *testing.T) {
 	}
 }
 
-func TestConnectorSecretRefsGitHubSigningKey(t *testing.T) {
-	c := Connector{
-		Kind: "github", CredentialRef: "MYCONN_PAT",
-		Config: []byte(`{"sign_commits":true}`),
+// TestExtraSecretRefsSigningKeyForEveryGitKind guards the gap that let
+// a bitbucket signing key look orphaned to admin/secrets: every git
+// kind must resolve its derived signing-key ref, so a new one added to
+// GitKinds without an extraSecretRefs entry fails a test.
+func TestExtraSecretRefsSigningKeyForEveryGitKind(t *testing.T) {
+	for kind := range GitKinds {
+		c := Connector{Kind: kind, CredentialRef: "MYCONN_TOKEN", Config: []byte(`{"sign_commits":true}`)}
+		var found bool
+		for _, ref := range c.SecretRefs() {
+			if ref.Role == "signing_key" && ref.RefName == SigningKeyRefSuffix("MYCONN_TOKEN") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("git kind %q resolves no signing_key secret ref", kind)
+		}
 	}
-	got := c.SecretRefs()
-	want := []SecretRefRole{
-		{RefName: "MYCONN_PAT", Role: "credential"},
-		{RefName: SigningKeyRefSuffix("MYCONN_PAT"), Role: "signing_key"},
+}
+
+func TestConnectorSecretRefsSigningKey(t *testing.T) {
+	tests := []struct {
+		name   string
+		kind   string
+		config string
+		want   []SecretRefRole
+	}{
+		{
+			name: "github signing on", kind: "github", config: `{"sign_commits":true}`,
+			want: []SecretRefRole{
+				{RefName: "MYCONN_PAT", Role: "credential"},
+				{RefName: SigningKeyRefSuffix("MYCONN_PAT"), Role: "signing_key"},
+			},
+		},
+		{
+			name: "bitbucket signing on beside its workspace", kind: "bitbucket", config: `{"workspace":"acme","sign_commits":true}`,
+			want: []SecretRefRole{
+				{RefName: "MYCONN_PAT", Role: "credential"},
+				{RefName: SigningKeyRefSuffix("MYCONN_PAT"), Role: "signing_key"},
+			},
+		},
+		{
+			name: "bitbucket public key without the flag still holds the ref", kind: "bitbucket", config: `{"signing_public_key":"ssh-ed25519 AAAA"}`,
+			want: []SecretRefRole{
+				{RefName: "MYCONN_PAT", Role: "credential"},
+				{RefName: SigningKeyRefSuffix("MYCONN_PAT"), Role: "signing_key"},
+			},
+		},
+		{
+			name: "bitbucket signing off", kind: "bitbucket", config: `{"workspace":"acme"}`,
+			want: []SecretRefRole{{RefName: "MYCONN_PAT", Role: "credential"}},
+		},
 	}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("SecretRefs() = %+v, want %+v", got, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Connector{Kind: tt.kind, CredentialRef: "MYCONN_PAT", Config: []byte(tt.config)}
+			got := c.SecretRefs()
+			if len(got) != len(tt.want) {
+				t.Fatalf("SecretRefs() = %+v, want %+v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("SecretRefs() = %+v, want %+v", got, tt.want)
+				}
+			}
+		})
 	}
 }

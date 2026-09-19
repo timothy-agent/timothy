@@ -24,6 +24,7 @@ import (
 // account-wide, so the slug names where to look. A personal API token can
 // leave it empty.
 type BitbucketConfig struct {
+	GitKeyConfig
 	Workspace string `json:"workspace,omitempty"`
 }
 

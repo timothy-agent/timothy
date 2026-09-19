@@ -15,15 +15,9 @@ import (
 
 // GitHubConfig is the connectors.config shape for kind='github'. Auth
 // is entirely the connector's credential_ref (a PAT in the secret
-// store). SignCommits opts this connector into SSH commit signing
-// (D-058): mission commits cloned through it are signed with the
-// connector's own ed25519 key. SigningPublicKey is the authorized_keys
-// line for that key — public, so it lives here (not the secret store)
-// for the UI to re-display; the private half is stored in the secret
-// store under a ref derived from CredentialRef (see signing.go).
+// store).
 type GitHubConfig struct {
-	SignCommits      bool   `json:"sign_commits,omitempty"`
-	SigningPublicKey string `json:"signing_public_key,omitempty"`
+	GitKeyConfig
 }
 
 // githubAPIBase is a var, not a const, so tests can point it at a fake

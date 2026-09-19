@@ -4,16 +4,39 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 
 	"golang.org/x/crypto/ssh"
 )
 
-// SigningKeyRefSuffix derives the secret-store ref a github-kind
+// GitKeyConfig is the commit-signing slice of a git-hosting
+// connector's config, embedded by every kind in GitKinds. SignCommits
+// opts the connector into SSH commit signing (D-058): mission commits
+// cloned through it are signed with the connector's own ed25519 key.
+// SigningPublicKey is the authorized_keys line for that key — public,
+// so it lives in the config row (not the secret store) for the UI to
+// re-display; the private half is stored in the secret store under a
+// ref derived from CredentialRef.
+type GitKeyConfig struct {
+	SignCommits      bool   `json:"sign_commits,omitempty"`
+	SigningPublicKey string `json:"signing_public_key,omitempty"`
+}
+
+// GitKinds are the connector kinds that clone, commit and push repos,
+// and so carry a GitKeyConfig. Registered here so a new git kind that
+// skips a signing call site fails the consistency test in
+// secretrefs_test.go rather than silently losing signing.
+var GitKinds = map[string]bool{"github": true, "bitbucket": true}
+
+// IsGitKind reports whether kind is a git-hosting connector kind.
+func IsGitKind(kind string) bool { return GitKinds[kind] }
+
+// SigningKeyRefSuffix derives the secret-store ref a git-kind
 // connector's SSH signing private key is stored under, from its own
-// credential_ref — colocated with the PAT it signs commits alongside,
-// never the PAT's own ref (that would overwrite the token on Set).
+// credential_ref — colocated with the token it signs commits alongside,
+// never the token's own ref (that would overwrite it on Set).
 func SigningKeyRefSuffix(credentialRef string) string {
 	return credentialRef + "_SIGNING_KEY"
 }
@@ -28,7 +51,7 @@ type signingKeyStore interface {
 }
 
 // EnsureSigningKey generates and persists an ed25519 SSH signing
-// keypair for a github-kind connector the first time SignCommits is
+// keypair for a git-kind connector the first time SignCommits is
 // enabled, and is a no-op on every call after: idempotent, because
 // regenerating would silently invalidate the public key the operator
 // already pasted into GitHub. Returns cfg unchanged when SignCommits
@@ -38,7 +61,7 @@ type signingKeyStore interface {
 // the stored private key). The private key never leaves this
 // function's return path as anything but the ref name it was stored
 // under; only the public half is ever written back to cfg.
-func EnsureSigningKey(ctx context.Context, store signingKeyStore, credentialRef string, cfg GitHubConfig) (GitHubConfig, error) {
+func EnsureSigningKey(ctx context.Context, store signingKeyStore, credentialRef string, cfg GitKeyConfig) (GitKeyConfig, error) {
 	if !cfg.SignCommits || cfg.SigningPublicKey != "" {
 		return cfg, nil
 	}
@@ -59,6 +82,23 @@ func EnsureSigningKey(ctx context.Context, store signingKeyStore, credentialRef 
 	}
 	cfg.SigningPublicKey = publicLine
 	return cfg, nil
+}
+
+// MergeSigningPublicKey writes publicKey into raw's signing_public_key
+// without decoding raw through any one kind's config struct: every
+// other key the row carries (bitbucket's workspace, say) survives the
+// round-trip, which re-marshaling a decoded struct would silently drop.
+func MergeSigningPublicKey(raw json.RawMessage, publicKey string) (json.RawMessage, error) {
+	merged := map[string]json.RawMessage{}
+	if err := json.Unmarshal(raw, &merged); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(publicKey)
+	if err != nil {
+		return nil, err
+	}
+	merged["signing_public_key"] = encoded
+	return json.Marshal(merged)
 }
 
 // generateSigningKeypair creates a fresh ed25519 keypair and returns

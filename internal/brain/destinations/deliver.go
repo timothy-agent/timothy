@@ -117,7 +117,7 @@ func (d *Deliverer) Deliver(ctx context.Context, m missions.Mission, entries []m
 	var githubIdx, otherIdx []int
 	for i, e := range entries {
 		dest, err := d.store.Get(ctx, e.DestinationID)
-		if err == nil && isRepoKind(dest.Kind) {
+		if err == nil && IsRepoKind(dest.Kind) {
 			githubIdx = append(githubIdx, i)
 		} else {
 			otherIdx = append(otherIdx, i)
@@ -192,7 +192,7 @@ func (d *Deliverer) deliverOne(ctx context.Context, m missions.Mission, e *missi
 		return errors.New(reason)
 	}
 
-	if isRepoKind(dest.Kind) {
+	if IsRepoKind(dest.Kind) {
 		// repo delivery is push/PR, not a rendered Payload send: a
 		// single attempt, no deliverBackoff retries (a push retry against
 		// a half-pushed branch is a different risk profile than re-POSTing
@@ -297,7 +297,7 @@ func (d *Deliverer) Test(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if isRepoKind(dest.Kind) {
+	if IsRepoKind(dest.Kind) {
 		return fmt.Errorf("%s destinations have no test send: use the mission's push/pr actions instead", dest.Kind)
 	}
 	adapter := d.adapters[dest.Kind]
@@ -322,7 +322,7 @@ func (d *Deliverer) DeliverNow(ctx context.Context, id, subject, body string) (n
 	if !dest.Enabled {
 		return "", "", fmt.Errorf("destination %q is disabled", dest.Name)
 	}
-	if isRepoKind(dest.Kind) {
+	if IsRepoKind(dest.Kind) {
 		return "", "", fmt.Errorf("%s destinations are not usable by the deliver tool", dest.Kind)
 	}
 	adapter := d.adapters[dest.Kind]
@@ -336,6 +336,6 @@ func (d *Deliverer) DeliverNow(ctx context.Context, id, subject, body string) (n
 	return dest.Name, dest.Kind, nil
 }
 
-// isRepoKind names the destination kinds that push a branch or open a
+// IsRepoKind names the destination kinds that push a branch or open a
 // PR instead of sending a rendered payload.
-func isRepoKind(kind string) bool { return kind == "github" || kind == "bitbucket" }
+func IsRepoKind(kind string) bool { return kind == "github" || kind == "bitbucket" }

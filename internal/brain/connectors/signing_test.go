@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"golang.org/x/crypto/ssh"
@@ -68,7 +70,7 @@ func TestGenerateSigningKeypairRoundTrip(t *testing.T) {
 // half under the derived ref, and returns the public half in cfg.
 func TestEnsureSigningKeyGeneratesOnFirstEnable(t *testing.T) {
 	store := newFakeSigningStore()
-	cfg := GitHubConfig{SignCommits: true}
+	cfg := GitKeyConfig{SignCommits: true}
 
 	got, err := EnsureSigningKey(context.Background(), store, "MYCONN_PAT", cfg)
 	if err != nil {
@@ -91,7 +93,7 @@ func TestEnsureSigningKeyGeneratesOnFirstEnable(t *testing.T) {
 // into GitHub, so a silent regeneration would break verification.
 func TestEnsureSigningKeyIdempotent(t *testing.T) {
 	store := newFakeSigningStore()
-	cfg := GitHubConfig{SignCommits: true}
+	cfg := GitKeyConfig{SignCommits: true}
 
 	first, err := EnsureSigningKey(context.Background(), store, "MYCONN_PAT", cfg)
 	if err != nil {
@@ -114,7 +116,7 @@ func TestEnsureSigningKeyIdempotent(t *testing.T) {
 // untouched.
 func TestEnsureSigningKeyNoopWhenDisabled(t *testing.T) {
 	store := newFakeSigningStore()
-	cfg := GitHubConfig{SignCommits: false}
+	cfg := GitKeyConfig{SignCommits: false}
 
 	got, err := EnsureSigningKey(context.Background(), store, "MYCONN_PAT", cfg)
 	if err != nil {
@@ -145,8 +147,91 @@ func TestEnsureSigningKeyErrorsOnOrphanedKey(t *testing.T) {
 	}
 	_ = store.Set(context.Background(), ref, string(block.Bytes))
 
-	cfg := GitHubConfig{SignCommits: true}
+	cfg := GitKeyConfig{SignCommits: true}
 	if _, err := EnsureSigningKey(context.Background(), store, "MYCONN_PAT", cfg); err == nil {
 		t.Fatal("EnsureSigningKey: want error when a store key exists but config has no public key, got nil")
 	}
+}
+
+// TestMergeSigningPublicKey proves the write-back keeps every other
+// config key — the bug that would have dropped a bitbucket connector's
+// workspace the first time signing was enabled on it.
+func TestMergeSigningPublicKey(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want map[string]any
+	}{
+		{
+			name: "github config with only the signing flag",
+			raw:  `{"sign_commits":true}`,
+			want: map[string]any{"sign_commits": true, "signing_public_key": "ssh-ed25519 AAAA"},
+		},
+		{
+			name: "bitbucket workspace survives the write-back",
+			raw:  `{"sign_commits":true,"workspace":"acme"}`,
+			want: map[string]any{"sign_commits": true, "workspace": "acme", "signing_public_key": "ssh-ed25519 AAAA"},
+		},
+		{
+			name: "unknown keys survive too",
+			raw:  `{"sign_commits":true,"future_field":"keep"}`,
+			want: map[string]any{"sign_commits": true, "future_field": "keep", "signing_public_key": "ssh-ed25519 AAAA"},
+		},
+		{
+			name: "an existing public key is overwritten",
+			raw:  `{"sign_commits":true,"signing_public_key":"ssh-ed25519 OLD"}`,
+			want: map[string]any{"sign_commits": true, "signing_public_key": "ssh-ed25519 AAAA"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merged, err := MergeSigningPublicKey(json.RawMessage(tt.raw), "ssh-ed25519 AAAA")
+			if err != nil {
+				t.Fatalf("MergeSigningPublicKey: %v", err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(merged, &got); err != nil {
+				t.Fatalf("unmarshal merged config: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("merged config = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestMergeSigningPublicKeyRejectsNonObject proves a config that is not
+// a JSON object surfaces as an error rather than being replaced.
+func TestMergeSigningPublicKeyRejectsNonObject(t *testing.T) {
+	if _, err := MergeSigningPublicKey(json.RawMessage(`["not","an","object"]`), "ssh-ed25519 AAAA"); err == nil {
+		t.Fatal("MergeSigningPublicKey: want error for a non-object config, got nil")
+	}
+}
+
+// TestGitConfigsCarrySigningFields proves every git kind's own config
+// struct round-trips the signing fields, so a kind that forgets to
+// embed GitKeyConfig fails here instead of silently losing signing.
+func TestGitConfigsCarrySigningFields(t *testing.T) {
+	raw := []byte(`{"sign_commits":true,"signing_public_key":"ssh-ed25519 AAAA","workspace":"acme"}`)
+	t.Run("github", func(t *testing.T) {
+		var cfg GitHubConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if !cfg.SignCommits || cfg.SigningPublicKey != "ssh-ed25519 AAAA" {
+			t.Fatalf("GitHubConfig = %+v, want the signing fields decoded", cfg)
+		}
+	})
+	t.Run("bitbucket", func(t *testing.T) {
+		var cfg BitbucketConfig
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if !cfg.SignCommits || cfg.SigningPublicKey != "ssh-ed25519 AAAA" {
+			t.Fatalf("BitbucketConfig = %+v, want the signing fields decoded", cfg)
+		}
+		if cfg.Workspace != "acme" {
+			t.Fatalf("BitbucketConfig.Workspace = %q, want %q", cfg.Workspace, "acme")
+		}
+	})
 }

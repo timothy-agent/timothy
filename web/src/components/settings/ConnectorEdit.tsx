@@ -212,6 +212,9 @@ function ConnectorEditForm({
 
   const isAWS = connector.kind === 'aws'
   const isGCP = connector.kind === 'gcp'
+  // The git-hosting kinds: both clone, commit and push, so both carry
+  // the commit-signing toggle and its generated public key.
+  const isRepoKind = connector.kind === 'github' || connector.kind === 'bitbucket'
   const awsKeysReady = awsAccessKeyID.trim() !== '' && awsSecretAccessKey.trim() !== ''
 
   const rotateToken = async () => {
@@ -418,7 +421,7 @@ function ConnectorEditForm({
             </>
           )}
 
-          {connector.kind === 'github' && (
+          {isRepoKind && (
             <Field label="Sign commits" required={false}>
               {() => (
                 <div className="flex items-center gap-3 text-sm">
@@ -429,7 +432,7 @@ function ConnectorEditForm({
                   />
                   <span className="text-muted-foreground">
                     SSH-sign every mission commit made through this connector with a key Timothy
-                    generates, so they show "Verified" on GitHub.
+                    generates, so they show as verified on the host.
                   </span>
                 </div>
               )}
@@ -437,7 +440,7 @@ function ConnectorEditForm({
           )}
         </FieldGroup>
 
-        {connector.kind === 'github' && staged.values.sign_commits && (
+        {isRepoKind && staged.values.sign_commits && (
           <div className="space-y-2">
             {typeof connector.config.signing_public_key === 'string' && connector.config.signing_public_key ? (
               <>
@@ -458,16 +461,27 @@ function ConnectorEditForm({
                   )}
                 </Field>
                 <p className="text-sm text-muted-foreground">
-                  Paste this into GitHub as a{' '}
+                  Paste this into {connector.kind === 'bitbucket' ? 'Bitbucket' : 'GitHub'} as a{' '}
                   <a
-                    href="https://github.com/settings/ssh/new"
+                    href={
+                      connector.kind === 'bitbucket'
+                        ? 'https://bitbucket.org/account/settings/ssh-keys/'
+                        : 'https://github.com/settings/ssh/new'
+                    }
                     target="_blank"
                     rel="noreferrer"
                     className="font-medium text-primary underline underline-offset-2 hover:no-underline"
                   >
                     new SSH key →
-                  </a>{' '}
-                  with key type <span className="font-medium">Signing Key</span>.
+                  </a>
+                  {connector.kind === 'bitbucket' ? (
+                    '.'
+                  ) : (
+                    <>
+                      {' '}
+                      with key type <span className="font-medium">Signing Key</span>.
+                    </>
+                  )}
                 </p>
               </>
             ) : (

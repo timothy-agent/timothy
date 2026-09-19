@@ -585,7 +585,7 @@ describe('ConnectorEdit rotate token and copy key', () => {
 
     expect(await screen.findByText('Rotate access token')).toBeTruthy()
     expect(screen.getByText(/Identity for mission clone\/push\/PR use, plus read-only pull request tools/)).toBeTruthy()
-    expect(screen.queryByText('Sign commits')).toBeNull()
+    expect(screen.getByText('Sign commits')).toBeTruthy()
     fireEvent.change(screen.getByPlaceholderText('paste new token'), { target: { value: 'bb-new' } })
     fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') !== 'submit')!)
 
@@ -616,6 +616,55 @@ describe('ConnectorEdit rotate token and copy key', () => {
     const patch = vi.mocked(patchConnector).mock.calls[0][1] as { config?: Record<string, unknown> }
     expect(patch.config).toBeDefined()
     expect('workspace' in patch.config!).toBe(false)
+  })
+
+  it('offers sign commits on a bitbucket connector and keeps its workspace in the patch', async () => {
+    const bitbucketConnector: AdminConnector = {
+      id: 'bb5',
+      name: 'work-bb',
+      kind: 'bitbucket',
+      config: { workspace: 'acme-team' },
+      credential_ref: 'WORK_BB_BITBUCKET_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([bitbucketConnector])
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${bitbucketConnector.id}`)
+
+    const toggle = await screen.findByRole('switch', { name: 'work-bb sign commits' })
+    fireEvent.click(toggle)
+
+    expect(toggle).toHaveAttribute('data-state', 'checked')
+    expect(screen.getByText('A signing key is generated when you save.')).toBeTruthy()
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') === 'submit')!)
+
+    await waitFor(() =>
+      expect(patchConnector).toHaveBeenCalledWith('bb5', {
+        name: 'work-bb',
+        sensitive: false,
+        config: { workspace: 'acme-team', sign_commits: true },
+      }),
+    )
+  })
+
+  it('shows the signing public key with a Bitbucket link when already on', async () => {
+    const bitbucketConnector: AdminConnector = {
+      id: 'bb6',
+      name: 'work-bb',
+      kind: 'bitbucket',
+      config: { workspace: 'acme-team', sign_commits: true, signing_public_key: 'ssh-ed25519 AAAAC3Nz… timothy' },
+      credential_ref: 'WORK_BB_BITBUCKET_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([bitbucketConnector])
+    renderTab(`/settings/connectors/${bitbucketConnector.id}`)
+
+    expect(await screen.findByDisplayValue('ssh-ed25519 AAAAC3Nz… timothy')).toBeTruthy()
+    const link = screen.getByRole('link', { name: /new SSH key/ })
+    expect(link.getAttribute('href')).toBe('https://bitbucket.org/account/settings/ssh-keys/')
   })
 
   it('mints a _BITBUCKET_TOKEN credential_ref for a bitbucket connector that has none', async () => {

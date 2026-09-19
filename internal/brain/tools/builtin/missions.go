@@ -341,12 +341,12 @@ func PushMissionBranch(store missionLister, completer missionCompleter, resolveT
 	return &tools.Tool{
 		Name:    "push_mission_branch",
 		Trusted: true,
-		Description: `Pushes a mission's branch to GitHub, optionally opening a pull request. Requires explicit human approval every time — this tool is never auto-approved.
+		Description: `Pushes a mission's branch to its remote, optionally opening a pull request. Requires explicit human approval every time — this tool is never auto-approved.
 
-Only a github-connection coding mission with a completed worktree can
-be pushed (same guard the push/PR buttons in the UI use). The approval
-prompt shows the mission's goal and target repo so the human sees
-exactly what is about to be pushed where.
+Only a github- or bitbucket-connection coding mission with a completed
+worktree can be pushed (same guard the push/PR buttons in the UI
+use). The approval prompt shows the mission's goal and target repo so
+the human sees exactly what is about to be pushed where.
 
 Arguments:
 - id (string, required): the mission id to push.

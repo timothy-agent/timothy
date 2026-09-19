@@ -490,3 +490,43 @@ func TestDeliverTestGitHubUnsupported(t *testing.T) {
 		t.Fatal("expected github destinations to reject DeliverNow")
 	}
 }
+
+// TestIsRepoKind pins the predicate that decides, in one place, which
+// destination kinds push a branch instead of sending a payload: the
+// deliver tool's own listing reads it too (cmd/brain's
+// destinationLister), so a kind missing here would be listed as
+// deliverable and then rejected.
+func TestIsRepoKind(t *testing.T) {
+	tests := []struct {
+		kind string
+		want bool
+	}{
+		{kind: "github", want: true},
+		{kind: "bitbucket", want: true},
+		{kind: "email", want: false},
+		{kind: "webhook", want: false},
+		{kind: "telegram", want: false},
+		{kind: "", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			if got := IsRepoKind(tt.kind); got != tt.want {
+				t.Fatalf("IsRepoKind(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeliverTestBitbucketUnsupported(t *testing.T) {
+	destStore := &fakeDestStore{rows: map[string]Destination{
+		"d1": {ID: "d1", Name: "bb-1", Kind: "bitbucket", Enabled: true, Config: json.RawMessage(`{"connector_id":"conn1","mode":"push"}`)},
+	}}
+	d := &Deliverer{store: destStore, adapters: map[string]Adapter{}, log: discardLog()}
+
+	if err := d.Test(t.Context(), "d1"); err == nil {
+		t.Fatal("expected bitbucket destinations to reject Test")
+	}
+	if _, _, err := d.DeliverNow(t.Context(), "d1", "s", "b"); err == nil {
+		t.Fatal("expected bitbucket destinations to reject DeliverNow")
+	}
+}
