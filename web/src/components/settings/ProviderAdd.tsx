@@ -2,7 +2,14 @@ import { CircleAlert } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { createProvider, searchCatalog, setSecret, validateProvider } from '../../api/client'
+import {
+  createProvider,
+  listSecretRefs,
+  searchCatalog,
+  setSecret,
+  validateProvider,
+  type SecretRefEntry,
+} from '../../api/client'
 import type { TestResult } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -24,11 +31,19 @@ import { errText, isTimothyAuthDetail, isTimothyAuthError } from '../../lib/erro
 const area = settingsArea('providers')
 
 // refFor derives a credential ref for a named provider instance: the
-// preset's conventional storage-key name, or one from the user's name.
-function refFor(preset: ProviderPreset, name: string): string {
-  if (preset.defaultRef) return preset.defaultRef
+// preset's conventional storage-key name while nothing references it
+// yet, otherwise one from the user's name, so a second Cursor or
+// OpenAI account never lands on the first one's ref.
+function refFor(preset: ProviderPreset, name: string, taken: ReadonlySet<string>): string {
+  if (preset.defaultRef && !taken.has(preset.defaultRef)) return preset.defaultRef
   const slug = name.trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_')
   return slug ? `${slug}_API_KEY` : ''
+}
+
+// referentsOf lists what already reads the ref, the things a fresh
+// secret write under that name would break.
+function referentsOf(refs: SecretRefEntry[], ref: string): string[] {
+  return (refs.find((r) => r.name === ref)?.referenced_by ?? []).map((r) => r.name)
 }
 
 // presetLitellmProvider maps a preset id to the litellm_provider value
@@ -85,6 +100,26 @@ export function ProviderAdd() {
   // non-CLI) API key flow, the common reuse case (e.g. the same
   // OpenAI-compatible key across two provider rows).
   const [credMode, setCredMode] = useState<CredentialMode>('new')
+  // secretRefs: the stored-ref directory, for steering the derived
+  // ref away from names other providers use and refusing to overwrite
+  // one on submit.
+  const [secretRefs, setSecretRefs] = useState<SecretRefEntry[]>([])
+  useEffect(() => {
+    let cancelled = false
+    listSecretRefs().then(
+      (refs) => {
+        if (!cancelled) setSecretRefs(refs)
+      },
+      () => {},
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const takenRefs = useMemo(
+    () => new Set(secretRefs.filter((r) => r.referenced_by.length > 0).map((r) => r.name)),
+    [secretRefs],
+  )
 
   // Live type-ahead over this preset's catalog rows, keyed on the
   // typed model id, presetLitellmProvider mirrors the gateway's
@@ -105,7 +140,6 @@ export function ProviderAdd() {
     setKey('')
     setAccessKeyId('')
     setSecretAccessKey('')
-    setRef(preset.id === 'custom' ? '' : refFor(preset, preset.name))
     setRefEdited(false)
     setModel(preset.validateModel)
     setCliModel(preset.id === 'cursor' ? 'composer-2.5' : 'claude-sonnet-4-6')
@@ -117,6 +151,13 @@ export function ProviderAdd() {
     setCredMode('new')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.id])
+
+  // The derived ref follows the name (and the stored-ref directory as
+  // it loads) until the user edits the ref field by hand.
+  useEffect(() => {
+    if (!preset || refEdited) return
+    setRef(refFor(preset, name, takenRefs))
+  }, [preset, name, refEdited, takenRefs])
 
   // Model suggestions: the preset's own validated default, plus the
   // live synced catalog for this preset (ids only, the catalog
@@ -178,6 +219,16 @@ export function ProviderAdd() {
     setKeyError(null)
   }
 
+  // refConflict refuses a new secret write under a ref something else
+  // already reads: the store is an upsert, so the write would silently
+  // replace that provider's key.
+  const refConflict = (): boolean => {
+    const users = referentsOf(secretRefs, ref.trim())
+    if (users.length === 0) return false
+    setKeyError(`${ref.trim()} already holds the key for ${users.join(', ')}. Pick another reference name.`)
+    return true
+  }
+
   // submitCli validates the pasted subscription token, stores it, and
   // creates the kind='cli' row. No probe: no chat driver exists for
   // these rows (D-051), so there is nothing to test against. Anthropic
@@ -201,6 +252,7 @@ export function ProviderAdd() {
       setKeyError('a credential reference name is required to store it')
       return
     }
+    if (refConflict()) return
     setKeyError(null)
     setBusy(true)
     try {
@@ -245,6 +297,7 @@ export function ProviderAdd() {
       toast.error('Name required', { description: 'Give this provider a unique name before testing.' })
       return
     }
+    if (wantsKey && hasKey && !usingExistingCred && refConflict()) return
     setBusy(true)
     setTest(null)
     try {
@@ -352,7 +405,6 @@ export function ProviderAdd() {
               value={name}
               onChange={(e) => {
                 setName(e.target.value)
-                if (!refEdited && !preset.defaultRef) setRef(refFor(preset, e.target.value))
                 invalidate()
               }}
               placeholder={preset.id === 'custom' ? 'my-gateway' : preset.name}
