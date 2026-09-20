@@ -189,6 +189,28 @@ describe('ProviderAdd credential reference placement', () => {
     expect(screen.getByText('Advanced: base URL')).toBeInTheDocument()
   })
 
+  it('blocks the connection test when the ref is already read by another provider', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      {
+        name: 'OPENAI_API_KEY',
+        backend: 'db',
+        referenced_by: [{ kind: 'provider', name: 'OpenAI', role: 'credential' }],
+      },
+    ])
+    renderPage('openai')
+
+    const refInput = await screen.findByPlaceholderText('name (e.g. OPENAI_API_KEY)')
+    fireEvent.change(refInput, { target: { value: 'OPENAI_API_KEY' } })
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-second' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    expect(
+      await screen.findByText('OPENAI_API_KEY already holds the key for OpenAI. Pick another reference name.'),
+    ).toBeInTheDocument()
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(validateProvider).not.toHaveBeenCalled()
+  })
+
   it('hides the credential reference field when using an existing credential', async () => {
     vi.mocked(listSecretRefs).mockResolvedValue([
       { name: 'ZAI_API_KEY', backend: 'db', referenced_by: [] },
@@ -534,6 +556,51 @@ describe('ProviderAdd cursor preset', () => {
       credential_ref: 'CURSOR_API_KEY',
       default_model: 'composer-2.5',
     })
+  })
+
+  it('derives the ref from the name once another provider holds the preset default', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      {
+        name: 'CURSOR_API_KEY',
+        backend: 'db',
+        referenced_by: [{ kind: 'provider', name: 'Cursor - sumonmselim', role: 'credential' }],
+      },
+    ])
+    renderPage('cursor')
+
+    const refInput = await screen.findByPlaceholderText('name (e.g. CURSOR_API_KEY)')
+    await waitFor(() => expect(refInput).toHaveValue('CURSOR_API_KEY'))
+    fireEvent.change(screen.getByPlaceholderText('Cursor'), { target: { value: 'Cursor - smseleem' } })
+    expect(refInput).toHaveValue('CURSOR_SMSELEEM_API_KEY')
+
+    fireEvent.change(screen.getByPlaceholderText('paste key'), { target: { value: 'second-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('CURSOR_SMSELEEM_API_KEY', 'second-key')
+    expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({ credential_ref: 'CURSOR_SMSELEEM_API_KEY' })
+  })
+
+  it('refuses to overwrite a ref another provider already reads', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      {
+        name: 'CURSOR_API_KEY',
+        backend: 'db',
+        referenced_by: [{ kind: 'provider', name: 'Cursor - sumonmselim', role: 'credential' }],
+      },
+    ])
+    renderPage('cursor')
+
+    const refInput = await screen.findByPlaceholderText('name (e.g. CURSOR_API_KEY)')
+    fireEvent.change(refInput, { target: { value: 'CURSOR_API_KEY' } })
+    fireEvent.change(screen.getByPlaceholderText('paste key'), { target: { value: 'second-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+
+    expect(
+      await screen.findByText('CURSOR_API_KEY already holds the key for Cursor - sumonmselim. Pick another reference name.'),
+    ).toBeInTheDocument()
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(createProvider).not.toHaveBeenCalled()
   })
 
   it('editing the credential reference field for a CLI preset stages the custom ref name', async () => {
