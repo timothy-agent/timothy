@@ -530,6 +530,29 @@ describe('ProviderEdit credential panel clear/save', () => {
     await waitFor(() => expect(deleteSecret).toHaveBeenCalledWith('OLLAMA_API_KEY'))
   })
 
+  it('shows the key panel for a kind=cli provider and writes under its credential_ref', async () => {
+    vi.mocked(listProviders).mockResolvedValue([cursorProvider])
+    vi.mocked(secretStatus).mockResolvedValue({ configured: false, backend: '' })
+    vi.mocked(setSecret).mockResolvedValue()
+    renderPage('p4')
+
+    expect(await screen.findByText('API key')).toBeInTheDocument()
+    expect(await screen.findByText('not set')).toBeInTheDocument()
+    const input = screen.getByPlaceholderText('paste key')
+    fireEvent.change(input, { target: { value: 'cursor-key' } })
+    const saveButtons = screen.getAllByRole('button', { name: 'Save' })
+    fireEvent.click(saveButtons[saveButtons.length - 1])
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('cursor-subscription', 'cursor-key'))
+  })
+
+  it('titles the panel Subscription token for a claude-cli provider', async () => {
+    vi.mocked(listProviders).mockResolvedValue([cliProvider])
+    renderPage('p3')
+
+    expect(await screen.findByText('Subscription token')).toBeInTheDocument()
+  })
+
   it('typing a key and Save rotates the stored secret for a non-bedrock provider', async () => {
     vi.mocked(listProviders).mockResolvedValue([withRef])
     vi.mocked(setSecret).mockResolvedValue()

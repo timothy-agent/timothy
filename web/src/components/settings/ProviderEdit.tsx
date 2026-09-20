@@ -332,22 +332,20 @@ function ProviderEditForm({
         </FormActions>
       </Form>
 
-      {!isCli && (
-        <div className="mt-10">
-          <Panel title={isBedrock ? 'AWS credentials' : 'API key'}>
-            <CredentialPanel
-              provider={provider}
-              defaultBackend={defaultBackend}
-              bedrock={isBedrock}
-              onChanged={() => {
-                void doRefresh().then((refetched) => {
-                  if (refetched) staged.rebase(baselineFrom(refetched))
-                })
-              }}
-            />
-          </Panel>
-        </div>
-      )}
+      <div className="mt-10">
+        <Panel title={isBedrock ? 'AWS credentials' : isCli && provider.driver === 'claude-cli' ? 'Subscription token' : 'API key'}>
+          <CredentialPanel
+            provider={provider}
+            defaultBackend={defaultBackend}
+            bedrock={isBedrock}
+            onChanged={() => {
+              void doRefresh().then((refetched) => {
+                if (refetched) staged.rebase(baselineFrom(refetched))
+              })
+            }}
+          />
+        </Panel>
+      </div>
 
       <div className="mt-10 space-y-4">
         {isCli ? (
