@@ -79,6 +79,7 @@ type fakeGitClient struct {
 	createErr     error
 	createCalls   int
 	lastTitle     string
+	lastPRRepo    gitprovider.RepoRef
 
 	repoExists      bool
 	existsErr       error
@@ -103,6 +104,11 @@ func githubClient(f *fakeGitClient) *fakeGitClient {
 
 func bitbucketClient(f *fakeGitClient) *fakeGitClient {
 	f.Descriptor = gitprovider.Bitbucket{}
+	return f
+}
+
+func gitlabClient(f *fakeGitClient) *fakeGitClient {
+	f.Descriptor = gitprovider.GitLab{}
 	return f
 }
 
@@ -138,6 +144,7 @@ func (f *fakeGitClient) CreateRepo(_ context.Context, name string, _ bool) (gitp
 func (f *fakeGitClient) CreatePR(_ context.Context, spec gitprovider.PRSpec) (gitprovider.PullRequest, error) {
 	f.createCalls++
 	f.lastTitle = spec.Title
+	f.lastPRRepo = spec.Repo
 	if f.createErr != nil {
 		return gitprovider.PullRequest{}, f.createErr
 	}
@@ -237,6 +244,71 @@ func bitbucketMission(t *testing.T) missions.Mission {
 	return missions.Mission{
 		ID: "m1", Kind: "coding", Workspace: dir, Branch: "mission/x",
 		Sources: []missions.SourceEntry{{Source: missions.SourceKindBitbucket, RepoURL: "https://bitbucket.org/acme/widgets.git", ConnectorID: "bb1"}},
+	}
+}
+
+// gitlabMission is a mission on a NESTED GitLab group path, the shape
+// the two-segment assumptions inherited from github/bitbucket collapse.
+func gitlabMission(t *testing.T, repoURL string) missions.Mission {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/wt", 0o750); err != nil {
+		t.Fatal(err)
+	}
+	return missions.Mission{
+		ID: "m1", Kind: "coding", Workspace: dir, Branch: "mission/x",
+		Sources: []missions.SourceEntry{{Source: missions.SourceKindGitLab, RepoURL: repoURL, ConnectorID: "gl1"}},
+	}
+}
+
+// TestGitLabNestedGroupRoundTrip is issue #797's regression gate: a
+// nested group path must survive the whole delivery path (clone URL ->
+// push remote -> merge request) with its full depth intact. A parser
+// that kept only the first two segments would push and open the merge
+// request against "acme/platform" instead of the real project, which is
+// a wrong-repo write, not a visible failure.
+func TestGitLabNestedGroupRoundTrip(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, repoURL, owner, repo string
+	}{
+		{"flat group", "https://gitlab.com/acme/widgets.git", "acme", "widgets"},
+		{"one subgroup", "https://gitlab.com/acme/platform/widgets.git", "acme/platform", "widgets"},
+		{"two subgroups", "https://gitlab.com/acme/platform/backend/widgets.git", "acme/platform/backend", "widgets"},
+		{"four subgroups", "https://gitlab.com/a/b/c/d/widgets.git", "a/b/c/d", "widgets"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := gitlabMission(t, tc.repoURL)
+			p := &fakePusher{host: "gitlab.com"}
+			c := gitlabClient(&fakeGitClient{
+				repoExists: true, defaultBranch: "main",
+				prURL: "https://gitlab.com/" + tc.owner + "/" + tc.repo + "/-/merge_requests/7", prNumber: 7,
+			})
+			a := &RepoAdapter{Pusher: p, Events: &fakeEvents{}, Clients: clients(c)}
+
+			if _, err := a.PushBranch(t.Context(), m, "tok"); err != nil {
+				t.Fatalf("PushBranch: %v", err)
+			}
+			// GitLab's own credential username, not github's or bitbucket's.
+			if p.lastAuth.HTTPUsername != "oauth2" {
+				t.Fatalf("credential username = %q, want oauth2", p.lastAuth.HTTPUsername)
+			}
+
+			url, number, err := a.OpenPR(t.Context(), m, "tok")
+			if err != nil {
+				t.Fatalf("OpenPR: %v", err)
+			}
+			if number != 7 || url == "" {
+				t.Fatalf("OpenPR = (%q, %d)", url, number)
+			}
+			if got := c.lastPRRepo; got.Owner != tc.owner || got.Name != tc.repo {
+				t.Fatalf("merge request opened against %q/%q, want %q/%q", got.Owner, got.Name, tc.owner, tc.repo)
+			}
+			if got := c.lastPRRepo.FullName(); got != tc.owner+"/"+tc.repo {
+				t.Fatalf("FullName() = %q", got)
+			}
+		})
 	}
 }
 

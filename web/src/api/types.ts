@@ -967,7 +967,7 @@ interface DestinationEntry {
 export interface Destination {
   id: string
   name: string
-  kind: 'email' | 'webhook' | 'telegram' | 'github' | 'bitbucket'
+  kind: 'email' | 'webhook' | 'telegram' | 'github' | 'bitbucket' | 'gitlab'
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean
@@ -1215,7 +1215,7 @@ export interface Notification {
 export interface AdminConnector {
   id: string
   name: string
-  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav' | 'aws' | 'gcp' | 'bitbucket'
+  kind: 'mcp' | 'google' | 'github' | 'microsoft' | 'imap' | 'caldav' | 'aws' | 'gcp' | 'bitbucket' | 'gitlab'
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean

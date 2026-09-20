@@ -467,7 +467,7 @@ func TestBitbucketPRToolsResolveFailure(t *testing.T) {
 func TestBitbucketPRArgsRepoShape(t *testing.T) {
 	t.Parallel()
 	for _, args := range []string{`{"repo":"nope","number":7}`, `{"repo":"a/b/c","number":7}`} {
-		if _, _, err := gitPRArgs(json.RawMessage(args)); err == nil || !strings.Contains(err.Error(), `repo must be "owner/name"`) {
+		if _, _, err := gitPRArgs(json.RawMessage(args), parseRepoArg); err == nil || !strings.Contains(err.Error(), `repo must be "owner/name"`) {
 			t.Errorf("%s: err = %v", args, err)
 		}
 	}

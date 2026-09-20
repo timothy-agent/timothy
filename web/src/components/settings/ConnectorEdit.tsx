@@ -31,6 +31,7 @@ import { TestStatus } from './TestStatus'
 import { useStagedForm } from './useStagedForm'
 import { connectedAs } from './util'
 import { errText, isTimothyAuthError } from '../../lib/errors'
+import { gitKindMeta, isGitKind } from '../../lib/gitKinds'
 import { slugify } from '../../lib/slugify'
 
 const area = settingsArea('connectors')
@@ -63,6 +64,9 @@ interface StagedConnector {
   gcp_project_id: string
   gcp_location: string
   bitbucket_workspace: string
+  gitlab_namespace: string
+  gitlab_base_url: string
+  gitlab_ssh_known_hosts: string
 }
 
 function baselineFrom(connector: AdminConnector): StagedConnector {
@@ -76,6 +80,9 @@ function baselineFrom(connector: AdminConnector): StagedConnector {
     gcp_project_id: String(connector.config.project_id ?? ''),
     gcp_location: String(connector.config.location ?? ''),
     bitbucket_workspace: String(connector.config.workspace ?? ''),
+    gitlab_namespace: String(connector.config.namespace ?? ''),
+    gitlab_base_url: String(connector.config.base_url ?? ''),
+    gitlab_ssh_known_hosts: String(connector.config.ssh_known_hosts ?? ''),
   }
 }
 
@@ -106,6 +113,16 @@ function buildPatch(connector: AdminConnector, staged: StagedConnector): Partial
   if (connector.kind === 'bitbucket') {
     if (staged.bitbucket_workspace.trim()) config.workspace = staged.bitbucket_workspace.trim()
     else delete config.workspace
+  }
+  if (connector.kind === 'gitlab') {
+    for (const [key, value] of [
+      ['namespace', staged.gitlab_namespace],
+      ['base_url', staged.gitlab_base_url],
+      ['ssh_known_hosts', staged.gitlab_ssh_known_hosts],
+    ] as const) {
+      if (value.trim()) config[key] = value.trim()
+      else delete config[key]
+    }
   }
   return { name: staged.name.trim(), sensitive: staged.sensitive, config }
 }
@@ -215,9 +232,10 @@ function ConnectorEditForm({
 
   const isAWS = connector.kind === 'aws'
   const isGCP = connector.kind === 'gcp'
-  // The git-hosting kinds: both clone, commit and push, so both carry
-  // the commit-signing toggle and its generated public key.
-  const isRepoKind = connector.kind === 'github' || connector.kind === 'bitbucket'
+  // The git-hosting kinds: they all clone, commit and push, so they all
+  // carry the commit-signing toggle and its generated public key.
+  const isRepoKind = isGitKind(connector.kind)
+  const repoMeta = gitKindMeta(connector.kind)
   const awsKeysReady = awsAccessKeyID.trim() !== '' && awsSecretAccessKey.trim() !== ''
 
   const rotateToken = async () => {
@@ -230,19 +248,21 @@ function ConnectorEditForm({
           ? '_GITHUB_PAT'
           : connector.kind === 'bitbucket'
             ? '_BITBUCKET_TOKEN'
-            : connector.kind === 'imap'
-              ? '_IMAP_PASSWORD'
-              : connector.kind === 'caldav'
-                ? '_CALDAV_PASSWORD'
-                : isAWS
-                  ? base.endsWith('AWS')
-                    ? '_KEYS'
-                    : '_AWS_KEYS'
-                  : isGCP
-                    ? base.endsWith('GCP')
-                      ? '_KEY'
-                      : '_GCP_KEY'
-                    : '_MCP_TOKEN'
+            : connector.kind === 'gitlab'
+              ? '_GITLAB_TOKEN'
+              : connector.kind === 'imap'
+                ? '_IMAP_PASSWORD'
+                : connector.kind === 'caldav'
+                  ? '_CALDAV_PASSWORD'
+                  : isAWS
+                    ? base.endsWith('AWS')
+                      ? '_KEYS'
+                      : '_AWS_KEYS'
+                    : isGCP
+                      ? base.endsWith('GCP')
+                        ? '_KEY'
+                        : '_GCP_KEY'
+                      : '_MCP_TOKEN'
       const ref = connector.credential_ref || `${base}${suffix}`
       await setSecret(
         ref,
@@ -404,6 +424,50 @@ function ConnectorEditForm({
               />
             </Field>
           )}
+          {connector.kind === 'gitlab' && (
+            <>
+              <Field
+                label="Instance URL"
+                description="leave blank for gitlab.com; set it for a self-managed instance"
+                required={false}
+              >
+                <Input
+                  value={staged.values.gitlab_base_url}
+                  onChange={(e) => staged.setField('gitlab_base_url', e.target.value)}
+                  placeholder="https://gitlab.com"
+                />
+              </Field>
+              <Field
+                label="Namespace"
+                description="the group path new projects are created under; leave blank for the token owner's namespace"
+                required={false}
+              >
+                <Input
+                  value={staged.values.gitlab_namespace}
+                  onChange={(e) => staged.setField('gitlab_namespace', e.target.value)}
+                  placeholder="acme/platform"
+                />
+              </Field>
+              {staged.values.gitlab_base_url.trim() !== '' && (
+                <Field
+                  label="Known hosts"
+                  description="one known_hosts line per row; only a self-managed instance needs these, gitlab.com's host key is built in"
+                  required={false}
+                >
+                  {(props) => (
+                    <textarea
+                      id={props.id}
+                      value={staged.values.gitlab_ssh_known_hosts}
+                      onChange={(e) => staged.setField('gitlab_ssh_known_hosts', e.target.value)}
+                      rows={3}
+                      placeholder="gitlab.example.com ssh-ed25519 AAAAC3Nz…"
+                      className="h-auto w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-xs"
+                    />
+                  )}
+                </Field>
+              )}
+            </>
+          )}
           {isGCP && (
             <>
               <Field
@@ -490,26 +554,27 @@ function ConnectorEditForm({
                   )}
                 </Field>
                 <p className="text-sm text-muted-foreground">
-                  Paste this into {connector.kind === 'bitbucket' ? 'Bitbucket' : 'GitHub'} as a{' '}
+                  Paste this into {repoMeta.label} as a{' '}
                   <a
-                    href={
-                      connector.kind === 'bitbucket'
-                        ? 'https://bitbucket.org/account/settings/ssh-keys/'
-                        : 'https://github.com/settings/ssh/new'
-                    }
+                    href={repoMeta.sshKeysURL}
                     target="_blank"
                     rel="noreferrer"
                     className="font-medium text-primary underline underline-offset-2 hover:no-underline"
                   >
                     new SSH key →
                   </a>
-                  {connector.kind === 'bitbucket' ? (
-                    '.'
-                  ) : (
+                  {connector.kind === 'github' ? (
                     <>
                       {' '}
                       with key type <span className="font-medium">Signing Key</span>.
                     </>
+                  ) : connector.kind === 'gitlab' ? (
+                    <>
+                      {' '}
+                      with usage type <span className="font-medium">Signing</span>.
+                    </>
+                  ) : (
+                    '.'
                   )}
                 </p>
               </>
@@ -540,26 +605,27 @@ function ConnectorEditForm({
                   )}
                 </Field>
                 <p className="text-sm text-muted-foreground">
-                  Paste this into {connector.kind === 'bitbucket' ? 'Bitbucket' : 'GitHub'} as a{' '}
+                  Paste this into {repoMeta.label} as a{' '}
                   <a
-                    href={
-                      connector.kind === 'bitbucket'
-                        ? 'https://bitbucket.org/account/settings/ssh-keys/'
-                        : 'https://github.com/settings/ssh/new'
-                    }
+                    href={repoMeta.sshKeysURL}
                     target="_blank"
                     rel="noreferrer"
                     className="font-medium text-primary underline underline-offset-2 hover:no-underline"
                   >
                     new SSH key →
                   </a>
-                  {connector.kind === 'bitbucket' ? (
-                    '.'
-                  ) : (
+                  {connector.kind === 'github' ? (
                     <>
                       {' '}
                       with key type <span className="font-medium">Authentication Key</span>.
                     </>
+                  ) : connector.kind === 'gitlab' ? (
+                    <>
+                      {' '}
+                      with usage type <span className="font-medium">Authentication</span>.
+                    </>
+                  ) : (
+                    '.'
                   )}{' '}
                   Until it is registered, pushes fall back to the token.
                 </p>
@@ -640,7 +706,7 @@ function ConnectorEditForm({
             {test && !test.ok && connector.kind === 'github' && (
               <p className="text-sm text-muted-foreground">Paste a new personal access token below to replace it.</p>
             )}
-            {test && !test.ok && connector.kind === 'bitbucket' && (
+            {test && !test.ok && (connector.kind === 'bitbucket' || connector.kind === 'gitlab') && (
               <p className="text-sm text-muted-foreground">Paste a new access token below to replace it.</p>
             )}
 
@@ -656,7 +722,7 @@ function ConnectorEditForm({
             ) : (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  {connector.kind === 'github' || connector.kind === 'bitbucket' ? (
+                  {isRepoKind ? (
                     'Identity for mission clone/push/PR use, plus read-only pull request tools.'
                   ) : connector.kind === 'imap' ? (
                     <>
@@ -732,7 +798,7 @@ function ConnectorEditForm({
                     label={
                       connector.kind === 'github'
                         ? 'Rotate personal access token'
-                        : connector.kind === 'bitbucket'
+                        : connector.kind === 'bitbucket' || connector.kind === 'gitlab'
                           ? 'Rotate access token'
                           : connector.kind === 'imap' || connector.kind === 'caldav'
                             ? 'Rotate password'

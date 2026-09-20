@@ -14,6 +14,7 @@ import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { errText } from '../../lib/errors'
+import { gitKindMeta, isGitKind, type GitKind } from '../../lib/gitKinds'
 import { slugify } from '../../lib/slugify'
 
 const area = settingsArea('destinations')
@@ -24,8 +25,8 @@ const area = settingsArea('destinations')
 // it. GitHub has no test-send affordance, so it creates enabled
 // directly.
 export function DestinationAdd() {
-  const { kind } = useParams<{ kind: 'email' | 'webhook' | 'telegram' | 'github' | 'bitbucket' }>()
-  const isRepoKind = kind === 'github' || kind === 'bitbucket'
+  const { kind } = useParams<{ kind: 'email' | 'webhook' | 'telegram' | GitKind }>()
+  const isRepoKind = !!kind && isGitKind(kind)
   const navigate = useNavigate()
   const defaultBackend = useDefaultSecretBackend()
 
@@ -57,7 +58,7 @@ export function DestinationAdd() {
   const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
 
   useEffect(() => {
-    if (kind !== 'email' && kind !== 'github' && kind !== 'bitbucket') return
+    if (kind !== 'email' && !(kind && isGitKind(kind))) return
     const wantKind = kind === 'email' ? 'google' : kind
     listConnectors()
       .then((rows) => setConnectors(rows.filter((c) => c.kind === wantKind && c.enabled)))
@@ -165,7 +166,7 @@ export function DestinationAdd() {
         ? 'failed'
         : 'gate'
 
-  const destinationTitle = `Add ${kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : kind === 'github' ? 'GitHub' : kind === 'bitbucket' ? 'Bitbucket' : 'Webhook'} destination`
+  const destinationTitle = `Add ${kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : isRepoKind ? gitKindMeta(kind ?? '').label : 'Webhook'} destination`
 
   return (
     <PageShell width="form">
@@ -200,7 +201,7 @@ export function DestinationAdd() {
           )}
           {isRepoKind && connectors && connectors.length === 0 && (
             <p className="-mt-2 text-sm text-muted-foreground">
-              No enabled {kind === 'github' ? 'GitHub' : 'Bitbucket'} connectors yet, add one under Connectors first.
+              No enabled {gitKindMeta(kind ?? '').label} connectors yet, add one under Connectors first.
             </p>
           )}
 

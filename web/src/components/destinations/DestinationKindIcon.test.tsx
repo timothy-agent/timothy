@@ -28,6 +28,16 @@ describe('DestinationKindIcon', () => {
     expect(container.querySelector('use')).toHaveAttribute('href', '#clogo-github')
   })
 
+  it('references the bitbucket sprite symbol for a bitbucket destination', () => {
+    const { container } = render(<DestinationKindIcon kind="bitbucket" />)
+    expect(container.querySelector('use')).toHaveAttribute('href', '#clogo-bitbucket')
+  })
+
+  it('references the gitlab sprite symbol for a gitlab destination', () => {
+    const { container } = render(<DestinationKindIcon kind="gitlab" />)
+    expect(container.querySelector('use')).toHaveAttribute('href', '#clogo-gitlab')
+  })
+
   it('passes the size class through to the rendered glyph', () => {
     const { container } = render(<DestinationKindIcon kind="email" className="size-8" />)
     expect(container.querySelector('.lucide-mail')).toHaveClass('size-8')

@@ -306,6 +306,140 @@ func TestParseRepoURLForKind(t *testing.T) {
 	if w, s, ok := parseRepoURLForKind(SourceKindBitbucket, "https://bitbucket.org/w/s.git"); !ok || w != "w" || s != "s" {
 		t.Fatalf("bitbucket kind: (%q, %q, %v)", w, s, ok)
 	}
+	if _, _, ok := parseRepoURLForKind(SourceKindGitLab, "https://bitbucket.org/w/s.git"); ok {
+		t.Fatal("gitlab kind accepted a bitbucket URL")
+	}
+}
+
+// A gitlab source entry must keep its whole group path: the two-segment
+// github pattern this used to fall through to would report the owner as
+// "acme" and the repo as "platform", pushing to the wrong project.
+func TestParseRepoURLForKindGitLabNestedGroups(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ url, owner, repo string }{
+		{"https://gitlab.com/acme/widgets.git", "acme", "widgets"},
+		{"https://gitlab.com/acme/platform/widgets.git", "acme/platform", "widgets"},
+		{"https://gitlab.com/acme/platform/backend/widgets.git", "acme/platform/backend", "widgets"},
+		{"https://gitlab.com/a/b/c/d/widgets", "a/b/c/d", "widgets"},
+	} {
+		t.Run(tc.url, func(t *testing.T) {
+			t.Parallel()
+			owner, repo, ok := parseRepoURLForKind(SourceKindGitLab, tc.url)
+			if !ok || owner != tc.owner || repo != tc.repo {
+				t.Fatalf("= (%q, %q, %v), want (%q, %q, true)", owner, repo, ok, tc.owner, tc.repo)
+			}
+		})
+	}
+}
+
+// repoSource must see every registered provider kind, or a gitlab
+// mission is invisible to push, pr and provisioning alike.
+func TestRepoSourceCoversEveryGitKind(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{SourceKindGitHub, SourceKindBitbucket, SourceKindGitLab} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			m := Mission{Sources: []SourceEntry{
+				{Source: SourceKindPDF, Name: "doc"},
+				{Source: kind, RepoURL: "https://example.test/o/r.git", ConnectorID: "c1"},
+			}}
+			e, ok := m.RepoSource()
+			if !ok || e.Source != kind || e.ConnectorID != "c1" {
+				t.Fatalf("RepoSource() = (%+v, %v)", e, ok)
+			}
+		})
+	}
+	if _, ok := (Mission{Sources: []SourceEntry{{Source: SourceKindPDF}}}).RepoSource(); ok {
+		t.Fatal("a non-repo source reported as a repo source")
+	}
+}
+
+func TestCanonicalCloneURL(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		kind, in, want string
+		ok             bool
+	}{
+		// A browser URL canonicalizes to the plain clone URL, nested
+		// group intact.
+		{SourceKindGitLab, "https://gitlab.com/acme/platform/widgets/-/merge_requests/3", "https://gitlab.com/acme/platform/widgets.git", true},
+		{SourceKindGitLab, "https://gitlab.com/acme/widgets", "https://gitlab.com/acme/widgets.git", true},
+		{SourceKindBitbucket, "https://bitbucket.org/ws/repo/src/main/", "https://bitbucket.org/ws/repo.git", true},
+		{SourceKindGitLab, "https://github.com/o/r.git", "", false},
+		{"nosuchkind", "https://gitlab.com/a/b", "", false},
+	} {
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			got, ok := CanonicalCloneURL(tc.kind, tc.in)
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("CanonicalCloneURL(%q, %q) = (%q, %v), want (%q, %v)", tc.kind, tc.in, got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestCanonicalizeCloneURL(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ in, want string }{
+		{"https://gitlab.com/acme/platform/widgets/-/tree/main", "https://gitlab.com/acme/platform/widgets.git"},
+		{"https://bitbucket.org/ws/repo/src/main/", "https://bitbucket.org/ws/repo.git"},
+		// github's own URLs are already canonical and pass through.
+		{"https://github.com/octo/hello.git", "https://github.com/octo/hello.git"},
+		// A URL no descriptor claims is left exactly as it arrived.
+		{"https://git.example.com/o/r.git", "https://git.example.com/o/r.git"},
+		{"", ""},
+	} {
+		t.Run(tc.in, func(t *testing.T) {
+			t.Parallel()
+			if got := CanonicalizeCloneURL(tc.in); got != tc.want {
+				t.Fatalf("CanonicalizeCloneURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRepoURLMatchesKind(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		kind, url string
+		want      bool
+	}{
+		{SourceKindGitLab, "https://gitlab.com/acme/platform/widgets.git", true},
+		{SourceKindGitLab, "https://github.com/o/r.git", false},
+		{SourceKindBitbucket, "https://bitbucket.org/ws/repo.git", true},
+		{SourceKindGitHub, "https://github.com/o/r.git", true},
+		// An empty kind keeps github's host-agnostic shape, which is
+		// what a mission with no repo source was always checked against.
+		{"", "https://anything.test/o/r.git", true},
+	} {
+		t.Run(tc.kind+" "+tc.url, func(t *testing.T) {
+			t.Parallel()
+			if got := RepoURLMatchesKind(tc.kind, tc.url); got != tc.want {
+				t.Fatalf("RepoURLMatchesKind(%q, %q) = %v, want %v", tc.kind, tc.url, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRecognizableRepoURL(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		url  string
+		want bool
+	}{
+		{"https://gitlab.com/acme/platform/widgets.git", true},
+		{"https://bitbucket.org/ws/repo.git", true},
+		{"https://github.com/o/r.git", true},
+		{"not-a-url", false},
+		{"", false},
+	} {
+		t.Run(tc.url, func(t *testing.T) {
+			t.Parallel()
+			if got := recognizableRepoURL(tc.url); got != tc.want {
+				t.Fatalf("recognizableRepoURL(%q) = %v, want %v", tc.url, got, tc.want)
+			}
+		})
+	}
 }
 
 // TestConventionalPRTitle covers the Conventional Commits shape the

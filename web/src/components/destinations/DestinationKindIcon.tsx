@@ -1,6 +1,7 @@
 import { Globe, Mail } from 'lucide-react'
 import { TelegramIcon } from '@/components/icons/TelegramIcon'
 import type { Destination } from '../../api/types'
+import { isGitKind } from '../../lib/gitKinds'
 
 const destinationKindIcon = { email: Mail, webhook: Globe } as const
 
@@ -15,7 +16,7 @@ export function DestinationKindIcon({
   className?: string
 }) {
   if (kind === 'telegram') return <TelegramIcon className={className} />
-  if (kind === 'github' || kind === 'bitbucket') {
+  if (isGitKind(kind)) {
     return (
       <svg className={`${className} fill-current`} aria-hidden="true">
         <use href={`#clogo-${kind}`} />

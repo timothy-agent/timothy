@@ -67,6 +67,8 @@ function tokenRefFor(kind: string, refBase: string): string {
       return refBase.endsWith('GITHUB') ? `${refBase}_PAT` : `${refBase}_GITHUB_PAT`
     case 'bitbucket':
       return refBase.endsWith('BITBUCKET') ? `${refBase}_TOKEN` : `${refBase}_BITBUCKET_TOKEN`
+    case 'gitlab':
+      return refBase.endsWith('GITLAB') ? `${refBase}_TOKEN` : `${refBase}_GITLAB_TOKEN`
     case 'imap':
       return `${refBase}_IMAP_PASSWORD`
     case 'caldav':
@@ -103,6 +105,8 @@ export function ConnectorAdd() {
   const [caldavPassword, setCaldavPassword] = useState('')
   const [awsRegion, setAwsRegion] = useState('')
   const [bitbucketWorkspace, setBitbucketWorkspace] = useState('')
+  const [gitlabNamespace, setGitlabNamespace] = useState('')
+  const [gitlabBaseURL, setGitlabBaseURL] = useState('')
   const [awsAccessKeyID, setAwsAccessKeyID] = useState('')
   const [awsSecretAccessKey, setAwsSecretAccessKey] = useState('')
   const [gcpProjectID, setGcpProjectID] = useState('')
@@ -164,6 +168,10 @@ export function ConnectorAdd() {
   const isOAuth = isGoogle || isMicrosoft
   const isGitHub = preset.kind === 'github'
   const isBitbucket = preset.kind === 'bitbucket'
+  const isGitLab = preset.kind === 'gitlab'
+  // The token-only git hosts share every form branch below except the
+  // per-host config fields.
+  const isTokenRepo = isGitHub || isBitbucket || isGitLab
   const isImap = preset.kind === 'imap'
   const isCalDAV = preset.kind === 'caldav'
   const isAWS = preset.kind === 'aws'
@@ -189,7 +197,7 @@ export function ConnectorAdd() {
       toast.error('Name required', { description: 'Give this connector a unique name before testing.' })
       return
     }
-    if (!isGitHub && !isBitbucket && !isImap && !isCalDAV && !isGCP && !endpoint.trim()) {
+    if (!isTokenRepo && !isImap && !isCalDAV && !isGCP && !endpoint.trim()) {
       toast.error('Endpoint required', { description: 'An MCP endpoint is required to test this connector.' })
       return
     }
@@ -227,7 +235,7 @@ export function ConnectorAdd() {
       toast.error('Token required', { description: 'A personal access token is required to test this connector.' })
       return
     }
-    if (isBitbucket && !usingExistingToken && !token.trim()) {
+    if ((isBitbucket || isGitLab) && !usingExistingToken && !token.trim()) {
       toast.error('Token required', { description: 'An access token is required to test this connector.' })
       return
     }
@@ -271,6 +279,17 @@ export function ConnectorAdd() {
                 name: name.trim(),
                 kind: 'bitbucket',
                 config: bitbucketWorkspace.trim() ? { workspace: bitbucketWorkspace.trim() } : {},
+                credential_ref: tokenRef,
+                enabled: false,
+              }
+          : isGitLab
+            ? {
+                name: name.trim(),
+                kind: 'gitlab',
+                config: {
+                  ...(gitlabNamespace.trim() ? { namespace: gitlabNamespace.trim() } : {}),
+                  ...(gitlabBaseURL.trim() ? { base_url: gitlabBaseURL.trim() } : {}),
+                },
                 credential_ref: tokenRef,
                 enabled: false,
               }
@@ -342,7 +361,7 @@ export function ConnectorAdd() {
     try {
       await patchConnector(createdID, { enabled: true })
       toast.success('Connector added', {
-        description: isGitHub || isBitbucket
+        description: isTokenRepo
           ? `${name.trim()} is connected; its identity is ready for mission use.`
           : `${name.trim()} is connected and tools are servable.`,
       })
@@ -385,7 +404,7 @@ export function ConnectorAdd() {
 
   const canTest =
     name.trim() !== '' &&
-    (isGitHub || isBitbucket
+    (isTokenRepo
       ? usingExistingToken
         ? existingTokenRef !== ''
         : token.trim() !== ''
@@ -550,6 +569,38 @@ export function ConnectorAdd() {
                   />
                 </Field>
               )}
+              {isGitLab && (
+                <>
+                  <Field
+                    label="Instance URL"
+                    description="leave blank for gitlab.com; set it for a self-managed instance"
+                    required={false}
+                  >
+                    <Input
+                      value={gitlabBaseURL}
+                      onChange={(e) => {
+                        setGitlabBaseURL(e.target.value)
+                        invalidate()
+                      }}
+                      placeholder="https://gitlab.com"
+                    />
+                  </Field>
+                  <Field
+                    label="Namespace"
+                    description="the group path new projects are created under; leave blank for the token owner's namespace"
+                    required={false}
+                  >
+                    <Input
+                      value={gitlabNamespace}
+                      onChange={(e) => {
+                        setGitlabNamespace(e.target.value)
+                        invalidate()
+                      }}
+                      placeholder="acme/platform"
+                    />
+                  </Field>
+                </>
+              )}
               {isGCP && (
                 <>
                   <Field
@@ -582,7 +633,7 @@ export function ConnectorAdd() {
                   </Field>
                 </>
               )}
-              {!isGitHub && !isBitbucket && !isImap && !isCalDAV && !isAWS && !isGCP && (
+              {!isTokenRepo && !isImap && !isCalDAV && !isAWS && !isGCP && (
                 <Field
                   label="Endpoint"
                   description={preset.endpointHint}
@@ -775,7 +826,7 @@ export function ConnectorAdd() {
                 label={
                   isGitHub
                     ? 'Personal access token'
-                    : isBitbucket
+                    : isBitbucket || isGitLab
                       ? 'Access token'
                       : isImap || isCalDAV
                         ? 'Password'
@@ -817,7 +868,7 @@ export function ConnectorAdd() {
                         rel="noreferrer"
                         className="font-medium text-primary underline underline-offset-2 hover:no-underline"
                       >
-                        {isBitbucket ? 'How to create one →' : 'Create one on GitHub →'}
+                        {isGitHub ? 'Create one on GitHub →' : 'How to create one →'}
                       </a>
                     </>
                   )}

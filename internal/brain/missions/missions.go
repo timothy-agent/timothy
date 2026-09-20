@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 )
 
 // Mission is the API/DB shape of one missions row.
@@ -328,6 +330,7 @@ func (m Mission) DestinationIDs() []string {
 const (
 	SourceKindGitHub    = "github"
 	SourceKindBitbucket = "bitbucket"
+	SourceKindGitLab    = "gitlab"
 	SourceKindPDF       = "pdf"
 	SourceKindMission   = "mission"
 	SourceKindChat      = "chat"
@@ -378,11 +381,13 @@ type SourceEntry struct {
 	Digest      string `json:"digest,omitempty"`
 }
 
-// repoSource returns the mission's repo source entry, github or
-// bitbucket; there is at most one per mission.
+// repoSource returns the mission's repo source entry, whatever git
+// provider kind it names; there is at most one per mission. The
+// registry decides, so a new kind is visible to the mission pipeline
+// without another literal here.
 func (m Mission) repoSource() (SourceEntry, bool) {
 	for _, e := range m.Sources {
-		if e.Source == SourceKindGitHub || e.Source == SourceKindBitbucket {
+		if gitprovider.IsKind(e.Source) {
 			return e, true
 		}
 	}

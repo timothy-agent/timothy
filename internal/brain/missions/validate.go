@@ -122,9 +122,11 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	case repoURL == "" && connectorID != "":
 		return fmt.Errorf("%w: connector_id is only valid alongside repo_url", ErrInvalidMission)
 	}
-	if e, ok := m.repoSource(); ok && e.Source == SourceKindBitbucket {
-		if _, _, ok := ParseBitbucketRepoURL(e.RepoURL); !ok {
-			return fmt.Errorf("%w: repo_url is not a recognizable bitbucket https clone URL", ErrInvalidMission)
+	// github's parser accepts any host, so only the host-pinned kinds
+	// can be checked here; each validates against its own descriptor.
+	if e, ok := m.repoSource(); ok && e.Source != SourceKindGitHub {
+		if _, _, ok := parseRepoURLForKind(e.Source, e.RepoURL); !ok {
+			return fmt.Errorf("%w: repo_url is not a recognizable %s https clone URL", ErrInvalidMission, e.Source)
 		}
 	}
 	if m.Route == "" {
@@ -142,10 +144,8 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 		if e.DestinationID == "" || e.RepoURL == "" {
 			continue
 		}
-		if _, _, gh := ParseGitHubRepoURL(e.RepoURL); !gh {
-			if _, _, bb := ParseBitbucketRepoURL(e.RepoURL); !bb {
-				return fmt.Errorf("%w: repo_url is not a recognizable https clone URL", ErrInvalidMission)
-			}
+		if !recognizableRepoURL(e.RepoURL) {
+			return fmt.Errorf("%w: repo_url is not a recognizable https clone URL", ErrInvalidMission)
 		}
 	}
 	if deps.DestinationKind != nil {
@@ -167,14 +167,14 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 				return fmt.Errorf("%w: a %s destination is only valid for kind=coding missions", ErrInvalidMission, kind)
 			}
 			if !repoKind && e.RepoURL != "" {
-				return fmt.Errorf("%w: repo_url is only valid for a github or bitbucket destination entry", ErrInvalidMission)
+				return fmt.Errorf("%w: repo_url is only valid for a git provider destination entry", ErrInvalidMission)
 			}
-			if kind == string(gitprovider.KindBitbucket) && e.RepoURL != "" {
-				if _, _, ok := ParseBitbucketRepoURL(e.RepoURL); !ok {
-					return fmt.Errorf("%w: repo_url is not a recognizable bitbucket https clone URL", ErrInvalidMission)
+			if kind != string(gitprovider.KindGitHub) && repoKind && e.RepoURL != "" {
+				if _, _, ok := parseRepoURLForKind(kind, e.RepoURL); !ok {
+					return fmt.Errorf("%w: repo_url is not a recognizable %s https clone URL", ErrInvalidMission, kind)
 				}
 			}
-			// ParseGitHubRepoURL accepts any host, so a bitbucket URL
+			// ParseGitHubRepoURL accepts any host, so another kind's URL
 			// would otherwise be resolved against github.com, which is
 			// the only host the github connector talks to (issue #787).
 			if kind == string(gitprovider.KindGitHub) && e.RepoURL != "" && !isGitHubHost(e.RepoURL) {

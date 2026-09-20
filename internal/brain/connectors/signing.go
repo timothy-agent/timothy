@@ -35,7 +35,7 @@ type GitKeyConfig struct {
 // and so carry a GitKeyConfig. Registered here so a new git kind that
 // skips a signing call site fails the consistency test in
 // secretrefs_test.go rather than silently losing signing.
-var GitKinds = map[string]bool{"github": true, "bitbucket": true}
+var GitKinds = map[string]bool{"github": true, "bitbucket": true, "gitlab": true}
 
 // IsGitKind reports whether kind is a git-hosting connector kind.
 func IsGitKind(kind string) bool { return GitKinds[kind] }

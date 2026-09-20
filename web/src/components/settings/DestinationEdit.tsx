@@ -26,6 +26,7 @@ import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { useStagedForm } from './useStagedForm'
 import { errText } from '../../lib/errors'
+import { isGitKind } from '../../lib/gitKinds'
 
 const area = settingsArea('destinations')
 
@@ -48,7 +49,7 @@ function valuesFrom(destination: Destination): DestinationKindValues {
 function buildConfig(destination: Destination, values: DestinationKindValues): Record<string, unknown> {
   if (destination.kind === 'email') return { connector_id: values.connectorID, to: values.to.trim() }
   if (destination.kind === 'telegram') return { chat_id: values.chatID.trim() }
-  if (destination.kind === 'github' || destination.kind === 'bitbucket') {
+  if (isGitKind(destination.kind)) {
     return {
       connector_id: values.connectorID,
       mode: values.mode,
@@ -87,7 +88,7 @@ export function DestinationEdit() {
 
   useEffect(() => {
     listConnectors()
-      .then((rows) => setConnectors(rows.filter((c) => (c.kind === 'google' || c.kind === 'github' || c.kind === 'bitbucket') && c.enabled)))
+      .then((rows) => setConnectors(rows.filter((c) => (c.kind === 'google' || isGitKind(c.kind)) && c.enabled)))
       .catch(() => {
         // Non-fatal: the connector select just shows the currently
         // stored id with no friendly name if this fails.
@@ -266,7 +267,7 @@ function DestinationEditForm({
       </Form>
 
       <div className="mt-10 space-y-4">
-        {destination.kind !== 'github' && destination.kind !== 'bitbucket' && (
+        {!isGitKind(destination.kind) && (
           <Panel title="Test send">
             {test || testing ? (
               <TestStatus

@@ -575,10 +575,7 @@ func (r createMissionRequest) destinationEntries() []missions.DestinationEntry {
 		// A pasted browser or user@ URL is canonicalised here so it is
 		// never stored with credentials in it (issue #787); a github
 		// target does not match and passes through.
-		repoURL := r.DestinationRepoURLs[id]
-		if clone, ok := missions.BitbucketCloneURL(repoURL); ok {
-			repoURL = clone
-		}
+		repoURL := missions.CanonicalizeCloneURL(r.DestinationRepoURLs[id])
 		entries = append(entries, missions.DestinationEntry{DestinationID: id, RepoURL: repoURL})
 	}
 	if r.PromoteKBCollectionID != "" {
@@ -677,14 +674,11 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "bad_request", "unknown connector_id")
 			return
 		}
-		switch c.Kind {
-		case string(gitprovider.KindGitHub):
-		case string(gitprovider.KindBitbucket):
-			sourceKind = missions.SourceKindBitbucket
-		default:
-			jsonError(w, http.StatusBadRequest, "bad_request", "connector_id must name a github- or bitbucket-kind connector")
+		if !gitprovider.IsKind(c.Kind) {
+			jsonError(w, http.StatusBadRequest, "bad_request", "connector_id must name a git provider connector")
 			return
 		}
+		sourceKind = c.Kind
 	}
 	var parentMissionID string
 	var parentSource *missions.SourceEntry
@@ -820,8 +814,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	sources = append(sources, pdfSources...)
 	if req.RepoURL != "" {
 		repoURL := req.RepoURL
-		if sourceKind == missions.SourceKindBitbucket {
-			if clone, ok := missions.BitbucketCloneURL(repoURL); ok {
+		// github keeps the URL verbatim: its parser accepts any host, so
+		// canonicalizing would rewrite a cloned origin's own URL.
+		if sourceKind != missions.SourceKindGitHub {
+			if clone, ok := missions.CanonicalCloneURL(sourceKind, repoURL); ok {
 				repoURL = clone
 			}
 		}
@@ -2433,14 +2429,12 @@ func (h *missionAPI) pr(w http.ResponseWriter, r *http.Request) {
 	// (it also parses origins a mission was cloned from), and tightening
 	// that is not this issue's change.
 	src, _ := m.RepoSource()
-	isBitbucket := src.Source == missions.SourceKindBitbucket
-	if isBitbucket {
-		if _, _, ok := missions.ParseBitbucketRepoURL(repoURL); !ok {
-			jsonError(w, http.StatusBadRequest, "bad_request", "mission repo_url is not a recognizable bitbucket https clone URL")
-			return
+	if !missions.RepoURLMatchesKind(src.Source, repoURL) {
+		kind := src.Source
+		if kind == "" {
+			kind = missions.SourceKindGitHub
 		}
-	} else if _, _, ok := missions.ParseGitHubRepoURL(repoURL); !ok {
-		jsonError(w, http.StatusBadRequest, "bad_request", "mission repo_url is not a recognizable github https clone URL")
+		jsonError(w, http.StatusBadRequest, "bad_request", "mission repo_url is not a recognizable "+kind+" https clone URL")
 		return
 	}
 

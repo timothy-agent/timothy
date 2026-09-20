@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 )
 
 // NotPushable reports the shared kind/branch/worktree guards push and
@@ -93,12 +95,84 @@ func BitbucketCloneURL(repoURL string) (string, bool) {
 	return "https://bitbucket.org/" + workspace + "/" + slug + ".git", true
 }
 
-// parseRepoURLForKind picks the parser for a source or destination kind.
+// parseRepoURLForKind picks the parser for a source or destination
+// kind. Every kind but github parses through its own registered
+// Descriptor, so a nested GitLab group path is read at full depth
+// rather than truncated by the two-segment github pattern. github keeps
+// the host-agnostic pattern above, which also parses the arbitrary
+// origins a mission was cloned from.
+//
+// The registry holds each kind's CLOUD descriptor, so a self-managed
+// instance's URL does not parse here; the one caller (the follow-up
+// PR-merged check) then reports "not merged" rather than a wrong repo.
 func parseRepoURLForKind(kind, repoURL string) (owner, repo string, ok bool) {
-	if kind == SourceKindBitbucket {
-		return ParseBitbucketRepoURL(repoURL)
+	if kind == SourceKindGitHub {
+		return ParseGitHubRepoURL(repoURL)
 	}
-	return ParseGitHubRepoURL(repoURL)
+	d, found := gitprovider.Lookup(gitprovider.Kind(kind))
+	if !found {
+		return ParseGitHubRepoURL(repoURL)
+	}
+	ref, ok := d.ParseRepoURL(repoURL)
+	if !ok {
+		return "", "", false
+	}
+	return ref.Owner, ref.Name, true
+}
+
+// RepoURLMatchesKind reports whether repoURL has the clone-URL shape
+// kind expects. An empty or unregistered kind falls back to github's
+// host-agnostic shape, which is what a mission with no repo source has
+// always been checked against.
+func RepoURLMatchesKind(kind, repoURL string) bool {
+	_, _, ok := parseRepoURLForKind(kind, repoURL)
+	return ok
+}
+
+// CanonicalCloneURL rewrites an accepted browser or user@ URL into the
+// plain https clone URL kind's descriptor produces. Without it those
+// forms would be stored as-is and fail validateRemote at push time.
+func CanonicalCloneURL(kind, repoURL string) (string, bool) {
+	d, ok := gitprovider.Lookup(gitprovider.Kind(kind))
+	if !ok {
+		return "", false
+	}
+	ref, ok := d.ParseRepoURL(repoURL)
+	if !ok {
+		return "", false
+	}
+	return d.HTTPSCloneURL(ref), true
+}
+
+// CanonicalizeCloneURL is CanonicalCloneURL where the kind is not
+// known yet (a destination id alone): the first host-pinned descriptor
+// that recognizes repoURL canonicalizes it, and a URL none of them
+// claim passes through unchanged. github never claims one, since its
+// descriptor is host-pinned to github.com while its own clone URLs are
+// already canonical.
+func CanonicalizeCloneURL(repoURL string) string {
+	for _, kind := range gitprovider.Kinds() {
+		if clone, ok := CanonicalCloneURL(string(kind), repoURL); ok {
+			return clone
+		}
+	}
+	return repoURL
+}
+
+// recognizableRepoURL reports whether repoURL parses as some git
+// provider's clone URL: any registered kind's, or the host-agnostic
+// github shape a mission's own origin takes.
+func recognizableRepoURL(repoURL string) bool {
+	if _, _, ok := ParseGitHubRepoURL(repoURL); ok {
+		return true
+	}
+	for _, kind := range gitprovider.Kinds() {
+		d, _ := gitprovider.Lookup(kind)
+		if _, ok := d.ParseRepoURL(repoURL); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // PRTitleGoalCap bounds a fallback title built from the goal when the

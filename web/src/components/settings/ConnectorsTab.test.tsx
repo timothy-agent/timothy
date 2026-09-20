@@ -345,6 +345,27 @@ describe('Connectors tab', () => {
     expect(link.getAttribute('href')).toBe('https://bitbucket.org/account/settings/ssh-keys/')
   })
 
+  it('offers the gitlab ssh key page for a gitlab connector, never the github one', async () => {
+    const gitlabConnector: AdminConnector = {
+      id: 'gl1',
+      name: 'acme-gl',
+      kind: 'gitlab',
+      config: { ssh_transport: true, ssh_public_key: 'ssh-ed25519 AAAATRANSPORT timothy' },
+      credential_ref: 'ACME_GL_GITLAB_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([gitlabConnector])
+
+    renderTab(`/settings/connectors/${gitlabConnector.id}`)
+
+    expect(await screen.findByDisplayValue('ssh-ed25519 AAAATRANSPORT timothy')).toBeTruthy()
+    const link = screen.getByRole('link', { name: /new SSH key/ })
+    expect(link.getAttribute('href')).toBe('https://gitlab.com/-/user_settings/ssh_keys')
+    expect(link.parentElement?.textContent).toContain('Paste this into GitLab')
+    expect(link.parentElement?.textContent).not.toContain('GitHub')
+  })
+
   it('shows both key blocks when signing and ssh transport are on together', async () => {
     const githubConnector: AdminConnector = {
       id: 'gh1',
@@ -831,6 +852,88 @@ describe('ConnectorEdit rotate token and copy key', () => {
     expect(await screen.findByText(/Failed: bitbucket: token invalid or expired/)).toBeTruthy()
     expect(screen.getByText(/Paste a new access token below/)).toBeTruthy()
     expect(screen.queryByText(/Paste a new personal access token below/)).toBeNull()
+  })
+
+  it('rotates a gitlab access token and shows the repo-identity summary', async () => {
+    const gitlabConnector: AdminConnector = {
+      id: 'gl2',
+      name: 'work-gl',
+      kind: 'gitlab',
+      config: {},
+      credential_ref: 'WORK_GL_GITLAB_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([gitlabConnector])
+    vi.mocked(setSecret).mockResolvedValue()
+    renderTab(`/settings/connectors/${gitlabConnector.id}`)
+
+    expect(await screen.findByText('Rotate access token')).toBeTruthy()
+    expect(screen.getByText(/Identity for mission clone\/push\/PR use, plus read-only pull request tools/)).toBeTruthy()
+    expect(screen.getByText('Sign commits')).toBeTruthy()
+    fireEvent.change(screen.getByPlaceholderText('paste new token'), { target: { value: 'glpat-new' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') !== 'submit')!)
+
+    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('WORK_GL_GITLAB_TOKEN', 'glpat-new'))
+  })
+
+  it("edits a gitlab connector's namespace and drops the key when cleared", async () => {
+    const gitlabConnector: AdminConnector = {
+      id: 'gl3',
+      name: 'work-gl',
+      kind: 'gitlab',
+      config: { namespace: 'acme/platform' },
+      credential_ref: 'WORK_GL_GITLAB_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([gitlabConnector])
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${gitlabConnector.id}`)
+
+    const field = await screen.findByPlaceholderText('acme/platform')
+    expect(field).toHaveValue('acme/platform')
+    fireEvent.change(field, { target: { value: '' } })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') === 'submit')!)
+
+    await waitFor(() => expect(patchConnector).toHaveBeenCalled())
+    const patch = vi.mocked(patchConnector).mock.calls[0][1] as { config?: Record<string, unknown> }
+    expect('namespace' in patch.config!).toBe(false)
+  })
+
+  // The known_hosts textarea is meaningless on gitlab.com, whose host
+  // key is pinned server-side, so it only appears once an instance URL
+  // marks the connector as self-managed.
+  it('reveals the known-hosts field only for a self-managed gitlab instance', async () => {
+    const gitlabConnector: AdminConnector = {
+      id: 'gl4',
+      name: 'self-gl',
+      kind: 'gitlab',
+      config: {},
+      credential_ref: 'SELF_GL_GITLAB_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([gitlabConnector])
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderTab(`/settings/connectors/${gitlabConnector.id}`)
+
+    const baseURL = await screen.findByPlaceholderText('https://gitlab.com')
+    expect(screen.queryByLabelText('Known hosts')).toBeNull()
+
+    fireEvent.change(baseURL, { target: { value: 'https://gitlab.example.com' } })
+    fireEvent.change(await screen.findByLabelText('Known hosts'), {
+      target: { value: 'gitlab.example.com ssh-ed25519 AAAAC3Nz' },
+    })
+    fireEvent.click(screen.getAllByRole('button', { name: 'Save' }).find((b) => b.getAttribute('type') === 'submit')!)
+
+    await waitFor(() => expect(patchConnector).toHaveBeenCalled())
+    expect(vi.mocked(patchConnector).mock.calls[0][1]).toMatchObject({
+      config: {
+        base_url: 'https://gitlab.example.com',
+        ssh_known_hosts: 'gitlab.example.com ssh-ed25519 AAAAC3Nz',
+      },
+    })
   })
 
   it('replaces an aws connector\'s access keys as JSON under its credential_ref', async () => {

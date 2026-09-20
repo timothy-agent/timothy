@@ -21,6 +21,7 @@ type Kind string
 const (
 	KindGitHub    Kind = "github"
 	KindBitbucket Kind = "bitbucket"
+	KindGitLab    Kind = "gitlab"
 )
 
 // RepoRef identifies one repository on a provider. Owner is GitHub's
@@ -85,6 +86,9 @@ const (
 	CapSSHSigningVerify
 	// CapSSHTransport: clone and push over ssh:// are supported.
 	CapSSHTransport
+	// CapNestedOwner: RepoRef.Owner may be a multi-segment path (a
+	// GitLab group/subgroup), not a single owner or workspace segment.
+	CapNestedOwner
 )
 
 // Descriptor is everything static and credential-free about one provider

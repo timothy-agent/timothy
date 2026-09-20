@@ -26,6 +26,7 @@ var baseCredentialRole = map[string]string{
 	"aws":       "credential",
 	"gcp":       "credential",
 	"bitbucket": "credential",
+	"gitlab":    "credential",
 }
 
 // extraSecretRefs maps a kind to the secret refs it resolves beyond its
@@ -48,6 +49,7 @@ var extraSecretRefs = map[string]func(c Connector) []SecretRefRole{
 	},
 	"github":    gitKeyRefs,
 	"bitbucket": gitKeyRefs,
+	"gitlab":    gitKeyRefs,
 }
 
 // gitKeyRefs is the extraSecretRefs entry every git kind shares: the

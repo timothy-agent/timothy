@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 )
 
 // TestBaseCredentialRoleRegisteredForEveryKind guards the exact gap
@@ -14,6 +16,26 @@ func TestBaseCredentialRoleRegisteredForEveryKind(t *testing.T) {
 	for kind := range kinds {
 		if _, ok := baseCredentialRole[kind]; !ok {
 			t.Errorf("kind %q has no baseCredentialRole entry", kind)
+		}
+	}
+}
+
+// GitKinds and the gitprovider registry are two hand-maintained lists
+// of the same thing: a kind in one and not the other is a connector
+// that either loses signing and SSH keys or is refused at CRUD. Nothing
+// but this test keeps them in step.
+func TestGitKindsMatchTheProviderRegistry(t *testing.T) {
+	for _, k := range gitprovider.Kinds() {
+		if !GitKinds[string(k)] {
+			t.Errorf("gitprovider registers %q but GitKinds does not", k)
+		}
+		if !kinds[string(k)] {
+			t.Errorf("gitprovider registers %q but the connector kinds whitelist does not", k)
+		}
+	}
+	for kind := range GitKinds {
+		if !gitprovider.IsKind(kind) {
+			t.Errorf("GitKinds carries %q, which no gitprovider Descriptor registers", kind)
 		}
 	}
 }

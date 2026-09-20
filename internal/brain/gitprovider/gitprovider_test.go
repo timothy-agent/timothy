@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-func TestRegistryHoldsBothCloudKinds(t *testing.T) {
+func TestRegistryHoldsEveryCloudKind(t *testing.T) {
 	t.Parallel()
-	for _, k := range []Kind{KindGitHub, KindBitbucket} {
+	for _, k := range []Kind{KindGitHub, KindBitbucket, KindGitLab} {
 		d, ok := Lookup(k)
 		if !ok {
 			t.Fatalf("Lookup(%q): not registered", k)
@@ -16,8 +16,15 @@ func TestRegistryHoldsBothCloudKinds(t *testing.T) {
 			t.Fatalf("Lookup(%q).Kind() = %q", k, d.Kind())
 		}
 	}
-	if got := Kinds(); len(got) != 2 || got[0] != KindBitbucket || got[1] != KindGitHub {
-		t.Fatalf("Kinds() = %v, want [bitbucket github]", got)
+	got := Kinds()
+	want := []Kind{KindBitbucket, KindGitHub, KindGitLab}
+	if len(got) != len(want) {
+		t.Fatalf("Kinds() = %v, want %v", got, want)
+	}
+	for i, k := range want {
+		if got[i] != k {
+			t.Fatalf("Kinds() = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -29,7 +36,8 @@ func TestIsKind(t *testing.T) {
 	}{
 		{"github", true},
 		{"bitbucket", true},
-		{"gitlab", false},
+		{"gitlab", true},
+		{"gitea", false},
 		{"email", false},
 		{"GitHub", false}, // kinds are stored lowercase
 		{"", false},
@@ -53,6 +61,10 @@ func TestForHost(t *testing.T) {
 		{"github.com", KindGitHub, true},
 		{"GitHub.com", KindGitHub, true},
 		{" bitbucket.org ", KindBitbucket, true},
+		{"gitlab.com", KindGitLab, true},
+		// A self-managed instance is unrecognizable by host, which is
+		// exactly why ForHost must never decide a push or clone path.
+		{"gitlab.example.com", "", false},
 		{"ghe.example.com", "", false},
 		{"github.com.evil.test", "", false},
 		{"", "", false},
@@ -279,6 +291,7 @@ func TestHTTPUsername(t *testing.T) {
 	for _, tc := range []struct{ kind, want string }{
 		{"github", "x-access-token"},
 		{"bitbucket", "x-token-auth"},
+		{"gitlab", "oauth2"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			t.Parallel()
@@ -297,6 +310,7 @@ func TestSupportsAndKnownHosts(t *testing.T) {
 	t.Parallel()
 	gh, _ := Lookup(KindGitHub)
 	bb, _ := Lookup(KindBitbucket)
+	gl, _ := Lookup(KindGitLab)
 	for _, tc := range []struct {
 		name string
 		d    Descriptor
@@ -309,7 +323,11 @@ func TestSupportsAndKnownHosts(t *testing.T) {
 		{"bitbucket creates repos", bb, CapCreateRepo, true},
 		{"bitbucket ssh signing unknown, defaults false", bb, CapSSHSigningVerify, false},
 		{"bitbucket clones over ssh", bb, CapSSHTransport, true},
+		{"gitlab creates repos", gl, CapCreateRepo, true},
+		{"gitlab verifies ssh signatures", gl, CapSSHSigningVerify, true},
+		{"gitlab clones over ssh", gl, CapSSHTransport, true},
 		{"unknown capability is false", gh, Capability(99), false},
+		{"unknown capability is false on gitlab", gl, Capability(99), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -318,7 +336,7 @@ func TestSupportsAndKnownHosts(t *testing.T) {
 			}
 		})
 	}
-	for _, d := range []Descriptor{gh, bb} {
+	for _, d := range []Descriptor{gh, bb, gl} {
 		for _, h := range d.Hosts() {
 			if h != strings.ToLower(h) {
 				t.Fatalf("%s: host %q must be lowercase for the ForHost index", d.Kind(), h)

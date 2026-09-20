@@ -21,6 +21,7 @@ import { destinationPresets } from './destinationPresets'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { errText } from '../../lib/errors'
+import { isGitKind } from '../../lib/gitKinds'
 
 const area = settingsArea('destinations')
 
@@ -146,7 +147,7 @@ function DestinationCard({
       ? String(destination.config.to ?? '')
       : destination.kind === 'telegram'
         ? `chat ${String(destination.config.chat_id ?? '')}`
-        : destination.kind === 'github' || destination.kind === 'bitbucket'
+        : isGitKind(destination.kind)
           ? githubSummary(destination, connectors)
           : String(destination.config.url ?? '')
 
@@ -168,7 +169,7 @@ function DestinationCard({
         footer={
           <>
             <Switch checked={destination.enabled} onCheckedChange={toggle} aria-label={`${destination.name} enabled`} />
-            {destination.kind !== 'github' && (
+            {!isGitKind(destination.kind) && (
               <Button size="sm" variant="test" disabled={testing} onClick={() => void runTest()} className="flex-1">
                 {testing ? 'Sending…' : 'Test send'}
               </Button>

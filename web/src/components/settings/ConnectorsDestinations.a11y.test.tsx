@@ -40,6 +40,16 @@ const githubConnector: AdminConnector = {
   sensitive: false,
 }
 
+const gitlabConnector: AdminConnector = {
+  id: 'gl1',
+  name: 'acme-gl',
+  kind: 'gitlab',
+  config: { base_url: 'https://gitlab.example.com', namespace: 'acme/platform', ssh_transport: true },
+  credential_ref: 'ACME_GL_GITLAB_TOKEN',
+  enabled: true,
+  sensitive: false,
+}
+
 const webhookDestination: Destination = {
   id: 'd1',
   name: 'ops-hook',
@@ -96,6 +106,19 @@ describe('Connectors and destinations accessibility', () => {
       </MemoryRouter>,
     )
     await screen.findByLabelText('IMAP host')
+    expect((await axe.run(container, axeOptions)).violations).toEqual([])
+  })
+
+  it('has no axe violations on a self-managed gitlab ConnectorEdit', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([gitlabConnector])
+    const { container } = render(
+      <MemoryRouter initialEntries={['/settings/connectors/gl1']}>
+        <Routes>
+          <Route path="/settings/connectors/*" element={<ConnectorsTab />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByLabelText('Known hosts')
     expect((await axe.run(container, axeOptions)).violations).toEqual([])
   })
 

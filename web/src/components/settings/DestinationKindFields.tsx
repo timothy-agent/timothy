@@ -5,6 +5,7 @@ import {
   commitStyleChoices,
   onCompleteChoices,
 } from '../../lib/githubDestination'
+import { gitKindMeta, type GitKind } from '../../lib/gitKinds'
 import { Checkbox } from '../ui/checkbox'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
@@ -33,7 +34,7 @@ export function DestinationKindFields({
   setField,
   connectors,
 }: {
-  kind: 'email' | 'webhook' | 'telegram' | 'github' | 'bitbucket'
+  kind: 'email' | 'webhook' | 'telegram' | GitKind
   values: DestinationKindValues
   setField: <K extends keyof DestinationKindValues>(key: K, value: DestinationKindValues[K]) => void
   connectors: AdminConnector[]
@@ -97,13 +98,15 @@ export function DestinationKindFields({
     )
   }
 
+  const connectorLabel = `${gitKindMeta(kind).label} connector`
+
   return (
     <>
-      <Field label={kind === 'bitbucket' ? 'Bitbucket connector' : 'GitHub connector'}>
+      <Field label={connectorLabel}>
         {(props) => (
           <Select value={values.connectorID} onValueChange={(v) => setField('connectorID', v)}>
-            <SelectTrigger id={props.id} className="w-full" aria-label={kind === 'bitbucket' ? 'Bitbucket connector' : 'GitHub connector'}>
-              <SelectValue placeholder={kind === 'bitbucket' ? 'Choose a connected Bitbucket account' : 'Choose a connected GitHub account'} />
+            <SelectTrigger id={props.id} className="w-full" aria-label={connectorLabel}>
+              <SelectValue placeholder={`Choose a connected ${gitKindMeta(kind).label} account`} />
             </SelectTrigger>
             <SelectContent>
               {connectors

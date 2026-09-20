@@ -84,6 +84,16 @@ const bitbucketConnector: AdminConnector = {
   sensitive: false,
 }
 
+const gitlabConnector: AdminConnector = {
+  id: 'c4',
+  name: 'my-gitlab',
+  kind: 'gitlab',
+  config: { namespace: 'acme/platform' },
+  credential_ref: 'MY_GITLAB_TOKEN',
+  enabled: true,
+  sensitive: false,
+}
+
 const githubDestination: Destination = {
   id: 'd5',
   name: 'ops-repo',
@@ -681,6 +691,41 @@ describe('Destinations tab', () => {
         expect.objectContaining({ name: 'ops-bb', kind: 'bitbucket', config: expect.objectContaining({ connector_id: 'c3', mode: 'push' }) }),
       ),
     )
+  })
+
+  it('adds a gitlab destination through a gitlab connector, no test-send', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector, bitbucketConnector, gitlabConnector])
+    vi.mocked(createDestination).mockResolvedValue('d7')
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('link', { name: /^GitLab/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-gl' } })
+    fireEvent.click(await screen.findByLabelText('GitLab connector'))
+    expect(screen.queryByRole('option', { name: 'my-github' })).toBeNull()
+    fireEvent.click(await screen.findByRole('option', { name: 'my-gitlab' }))
+    expect(screen.queryByRole('button', { name: 'Test send' })).toBeNull()
+
+    const addButton = await screen.findByRole('button', { name: 'Add destination' })
+    await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(addButton)
+
+    await waitFor(() =>
+      expect(createDestination).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'ops-gl',
+          kind: 'gitlab',
+          config: expect.objectContaining({ connector_id: 'c4', mode: 'push' }),
+        }),
+      ),
+    )
+  })
+
+  it('points at Connectors when no gitlab connector is enabled', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    renderTab()
+
+    fireEvent.click(await screen.findByRole('link', { name: /^GitLab/ }))
+    expect(await screen.findByText(/No enabled GitLab connectors yet/)).toBeTruthy()
   })
 
   it('adds a github destination: no test-send, creates enabled directly', async () => {

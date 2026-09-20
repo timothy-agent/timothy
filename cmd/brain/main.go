@@ -300,6 +300,7 @@ func main() {
 		conns.RegisterBuilder("gcp", connectors.GCPBuilder(nil))
 		conns.RegisterBuilder(string(gitprovider.KindGitHub), connectors.GitHubBuilder(nil))
 		conns.RegisterBuilder(string(gitprovider.KindBitbucket), connectors.BitbucketBuilder(nil))
+		conns.RegisterBuilder(string(gitprovider.KindGitLab), connectors.GitLabBuilder(nil))
 		if goog != nil {
 			conns.RegisterBuilder("google", goog.Builder())
 		}

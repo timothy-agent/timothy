@@ -1135,6 +1135,16 @@ const bitbucketConnector: AdminConnector = {
   sensitive: false,
 }
 
+const gitlabConnector: AdminConnector = {
+  id: 'c3',
+  name: 'work-gl',
+  kind: 'gitlab',
+  config: {},
+  credential_ref: 'GL_TOKEN',
+  enabled: true,
+  sensitive: false,
+}
+
 const repos: GitHubRepo[] = [
   {
     full_name: 'octocat/hello-world',
@@ -1193,7 +1203,7 @@ describe('MissionForm: repository source', () => {
     await toCodingMission()
     fireEvent.click(screen.getByRole('radio', { name: 'Repository' }))
 
-    expect(await screen.findByText(/No GitHub or Bitbucket connectors configured yet/)).toBeInTheDocument()
+    expect(await screen.findByText(/No GitHub, Bitbucket, or GitLab connectors configured yet/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Add one in Settings/ })).toHaveAttribute(
       'href',
       '/settings/connectors',
@@ -1231,6 +1241,41 @@ describe('MissionForm: repository source', () => {
         expect.objectContaining({
           repo_url: 'https://bitbucket.org/acme-team/widget-service.git',
           connector_id: 'c2',
+        }),
+      ),
+    )
+  })
+
+  it('lists a gitlab connector and submits a nested-group repo URL', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector, gitlabConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue([
+      {
+        full_name: 'acme/platform/widgets',
+        private: true,
+        default_branch: 'main',
+        html_url: 'https://gitlab.com/acme/platform/widgets',
+        clone_url: 'https://gitlab.com/acme/platform/widgets.git',
+        pushed_at: '2026-09-18T00:00:00Z',
+      },
+    ])
+    vi.mocked(createMission).mockResolvedValue({ id: 'm11' } as Mission)
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMission()
+    fireEvent.click(screen.getByRole('radio', { name: 'Repository' }))
+    fireEvent.click(await screen.findByLabelText('Connector'))
+    fireEvent.click(await screen.findByText('work-gl'))
+
+    await waitFor(() => expect(listConnectorRepos).toHaveBeenCalledWith('c3'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose a repository' }))
+    fireEvent.click(await screen.findByText('acme/platform/widgets'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repo_url: 'https://gitlab.com/acme/platform/widgets.git',
+          connector_id: 'c3',
         }),
       ),
     )
@@ -1342,6 +1387,29 @@ describe('MissionForm: destinations (github, issue #561)', () => {
     fireEvent.click(screen.getByLabelText(/^origin repo/))
     expect(await screen.findByLabelText('Target repository')).toHaveValue(
       'https://github.com/octocat/hello-world.git',
+    )
+  })
+
+  // GitLab allows nested group paths, so its placeholder carries a
+  // subgroup rather than github's flat owner/repo.
+  it('uses the per-host repo URL placeholder for a gitlab destination', async () => {
+    const gitlabDestination: Destination = {
+      ...githubDestination,
+      id: 'dest-gl',
+      name: 'gitlab repo',
+      kind: 'gitlab',
+      config: { connector_id: 'c3', mode: 'push' },
+    }
+    vi.mocked(listConnectors).mockResolvedValue([githubConnector])
+    vi.mocked(listConnectorRepos).mockResolvedValue(repos)
+    vi.mocked(listDestinations).mockResolvedValue([gitlabDestination])
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await toCodingMission()
+    fireEvent.click(await screen.findByLabelText(/^gitlab repo/))
+    expect(await screen.findByLabelText('Target repository')).toHaveAttribute(
+      'placeholder',
+      'https://gitlab.com/group/subgroup/repo',
     )
   })
 

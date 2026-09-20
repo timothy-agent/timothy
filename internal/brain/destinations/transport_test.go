@@ -125,6 +125,75 @@ func TestTransportResolvePicksSSHOnProbeSuccess(t *testing.T) {
 	}
 }
 
+// A self-managed GitLab whose operator pasted no known_hosts has no
+// host key to pin, so RemoteAuth.Validate refuses the ssh auth and the
+// resolver degrades to https instead of trusting an unknown host
+// (issue #797). The operator-paste UX #796 deferred is what turns this
+// into a working ssh transport; until then it must degrade, not fail.
+func TestTransportResolveSelfManagedGitLabWithoutKnownHosts(t *testing.T) {
+	t.Parallel()
+	ev := &fakeEvents{}
+	probed := false
+	r := &TransportResolver{
+		ResolveSSH: sshEnabled, Events: ev, hasSSH: yesSSH,
+		probe: func(context.Context, string, string, missions.RemoteAuth) error {
+			probed = true
+			return nil
+		},
+	}
+	d := gitprovider.NewGitLab("https://git.example.com", nil)
+	auth, err := r.Resolve(context.Background(), "conn1", "m1", t.TempDir(), d, testRef(), "tok")
+	if err != nil {
+		t.Fatalf("a degrade is not an error: %v", err)
+	}
+	if auth.IsSSH() {
+		t.Fatalf("want the https fallback, got %+v", auth)
+	}
+	// GitLab's own credential username survives the degrade.
+	if auth.HTTPUsername != "oauth2" {
+		t.Fatalf("HTTPUsername = %q, want oauth2", auth.HTTPUsername)
+	}
+	if probed {
+		t.Fatal("an auth that cannot validate must never reach the probe")
+	}
+	if n := ev.countOf("mission.transport_fallback"); n != 1 {
+		t.Fatalf("recorded %d fallback events, want 1", n)
+	}
+}
+
+// With the operator's known_hosts pasted, the same instance resolves a
+// real ssh auth: no GitLab-specific code in this package, only the
+// Descriptor's own data.
+func TestTransportResolveSelfManagedGitLabWithKnownHosts(t *testing.T) {
+	t.Parallel()
+	line := "git.example.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn/nOeHHE5UOzRdf"
+	r := &TransportResolver{ResolveSSH: sshEnabled, Events: &fakeEvents{}, probe: okProbe, hasSSH: yesSSH}
+	d := gitprovider.NewGitLab("https://git.example.com", []string{line})
+	auth, err := r.Resolve(context.Background(), "conn1", "m1", t.TempDir(), d, testRef(), "tok")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !auth.IsSSH() {
+		t.Fatalf("want an ssh auth, got %+v", auth)
+	}
+	if len(auth.KnownHosts) != 1 || auth.KnownHosts[0] != line {
+		t.Fatalf("KnownHosts = %v", auth.KnownHosts)
+	}
+}
+
+// gitlab.com ships a pinned key, so the cloud instance needs no paste.
+func TestTransportResolveGitLabCloudUsesPinnedKey(t *testing.T) {
+	t.Parallel()
+	r := &TransportResolver{ResolveSSH: sshEnabled, Events: &fakeEvents{}, probe: okProbe, hasSSH: yesSSH}
+	auth, err := r.Resolve(context.Background(), "conn1", "m1", t.TempDir(), gitprovider.GitLab{}, testRef(), "tok")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !auth.IsSSH() || len(auth.KnownHosts) == 0 {
+		t.Fatalf("auth = %+v", auth)
+	}
+}
+
 func TestTransportResolveFallsBackOnProbeFailure(t *testing.T) {
 	t.Parallel()
 	ev := &fakeEvents{}

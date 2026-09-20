@@ -60,7 +60,11 @@ func TestSharedToolSchemasMatchAcrossKinds(t *testing.T) {
 	// Driven by the kinds registry, not a literal list: a new kind must
 	// either be built here or be named below, so one reusing a shared tool
 	// name cannot slip past this guard unnoticed.
-	sources := map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc, "caldav": cSrc, "github": ghSrc, "bitbucket": bbSrc}
+	glSrc, err := GitLabBuilder(nil)(t.Context(), Connector{Name: "gl", Kind: "gitlab", CredentialRef: "GL_TOKEN"}, tokenResolve)
+	if err != nil {
+		t.Fatalf("gitlab build: %v", err)
+	}
+	sources := map[string]Source{"google": gSrc, "microsoft": mSrc, "imap": iSrc, "caldav": cSrc, "github": ghSrc, "bitbucket": bbSrc, "gitlab": glSrc}
 	// mcp wraps an external server whose schemas are its own; aws is an mcp
 	// bridge; gcp serves only its own storage/bigquery tools.
 	noSharedTools := map[string]bool{"mcp": true, "aws": true, "gcp": true}

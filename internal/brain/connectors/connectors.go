@@ -34,7 +34,7 @@ import (
 // gcp has no equivalent managed MCP server, so it calls Cloud Storage
 // and BigQuery's REST APIs natively with a token minted from a
 // service-account key.
-var kinds = map[string]bool{"mcp": true, "google": true, "github": true, "microsoft": true, "imap": true, "caldav": true, "aws": true, "gcp": true, "bitbucket": true}
+var kinds = map[string]bool{"mcp": true, "google": true, "github": true, "microsoft": true, "imap": true, "caldav": true, "aws": true, "gcp": true, "bitbucket": true, "gitlab": true}
 
 // credentialRefPattern matches the gateway's: names and paths only,
 // never anything that could be a pasted secret.

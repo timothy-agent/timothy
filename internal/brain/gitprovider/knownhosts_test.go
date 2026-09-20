@@ -58,6 +58,8 @@ func TestSSHKnownHostsFingerprints(t *testing.T) {
 		KindGitHub: "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU",
 		// https://support.atlassian.com/bitbucket-cloud/docs/configure-ssh-and-two-step-verification/
 		KindBitbucket: "SHA256:ybgmFkzwOSotHTHLJgHO0QN8L0xErw6vd0VhFA9m3SM",
+		// https://docs.gitlab.com/user/gitlab_com/#ssh-host-keys-fingerprints
+		KindGitLab: "SHA256:eUXGGm1YGsMAS7vkcx6JOJdOGHPem5gQp4taiCfCLB8",
 	}
 	for kind, fingerprint := range want {
 		d, ok := Lookup(kind)

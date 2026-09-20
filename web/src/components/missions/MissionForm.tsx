@@ -44,6 +44,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from '../ui/textarea'
 import { SegmentedControl } from '../timothy/segmented-control'
 import { errText } from '../../lib/errors'
+import { gitKindMeta, isGitKind } from '../../lib/gitKinds'
 import { envIcon } from '../icons/EnvIcons'
 import { type PendingAttachment } from '../Composer'
 import { MissionAttachments } from './MissionAttachments'
@@ -488,7 +489,7 @@ export function MissionForm({
   useEffect(() => {
     if ((repoSource !== 'github' && kind !== 'coding') || githubConnectors !== null) return
     listConnectors()
-      .then((all) => setGithubConnectors(all.filter((c) => (c.kind === 'github' || c.kind === 'bitbucket') && c.enabled)))
+      .then((all) => setGithubConnectors(all.filter((c) => isGitKind(c.kind) && c.enabled)))
       .catch(() => setGithubConnectors([]))
   }, [repoSource, kind, githubConnectors])
 
@@ -856,7 +857,7 @@ export function MissionForm({
   // A checked github destination only makes sense on a coding mission
   // (issue #561): the server rejects that combination with 400.
   const checkedGithubDestinations = (destinations ?? []).filter(
-    (d) => destinationIDs.includes(d.id) && (d.kind === 'github' || d.kind === 'bitbucket'),
+    (d) => destinationIDs.includes(d.id) && isGitKind(d.kind),
   )
   const githubDestinationKindOk = kind === 'coding' || checkedGithubDestinations.length === 0
 
@@ -864,7 +865,7 @@ export function MissionForm({
   // proposed, exactly one enabled github destination exists and isn't
   // already checked, and the goal mentions pushing/opening a PR, hint
   // at adding it. Never checks it automatically.
-  const enabledGithubDestinations = (destinations ?? []).filter((d) => (d.kind === 'github' || d.kind === 'bitbucket') && d.enabled)
+  const enabledGithubDestinations = (destinations ?? []).filter((d) => isGitKind(d.kind) && d.enabled)
   const suggestedGithubDestination =
     (repoAttached || sourceProposed) &&
     enabledGithubDestinations.length === 1 &&
@@ -1173,7 +1174,7 @@ export function MissionForm({
                 <p className="text-sm text-muted-foreground">Loading connectors…</p>
               ) : githubConnectors.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  No GitHub or Bitbucket connectors configured yet.{' '}
+                  No GitHub, Bitbucket, or GitLab connectors configured yet.{' '}
                   <Link to="/settings/connectors" className="underline underline-offset-2">
                     Add one in Settings → Connectors
                   </Link>
@@ -1545,7 +1546,7 @@ export function MissionForm({
                       <span className="text-xs text-muted-foreground uppercase">{d.kind}</span>
                     </label>
 
-                    {(d.kind === 'github' || d.kind === 'bitbucket') && destinationIDs.includes(d.id) && (
+                    {isGitKind(d.kind) && destinationIDs.includes(d.id) && (
                       <div className="mt-1.5 ml-6 space-y-1.5">
                         <Label htmlFor={`mission-destination-repo-${d.id}`}>Target repository</Label>
                         <Input
@@ -1556,11 +1557,7 @@ export function MissionForm({
                           onChange={(e) =>
                             setDestinationRepoURLs((prev) => ({ ...prev, [d.id]: e.target.value }))
                           }
-                          placeholder={
-                            d.kind === 'bitbucket'
-                              ? 'https://bitbucket.org/workspace/repo'
-                              : 'https://github.com/owner/repo'
-                          }
+                          placeholder={gitKindMeta(d.kind).repoPlaceholder}
                         />
                         <p className="text-xs text-muted-foreground">
                           Leave empty to push back to the source repository, or to create one when

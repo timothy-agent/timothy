@@ -437,6 +437,7 @@ describe('ConnectorAdd bitbucket flow', () => {
       name: 'myorg-bitbucket',
       ref: 'MYORG_BITBUCKET_TOKEN',
     },
+    { preset: 'gitlab-account', placeholder: 'glpat-…', name: 'myorg-gitlab', ref: 'MYORG_GITLAB_TOKEN' },
   ])('previews the same ref name it saves for $name', async ({ preset, placeholder, name, ref }) => {
     vi.mocked(listSecretBackends).mockResolvedValue([{ backend: 'vault', configured: true, default: true }])
     vi.mocked(createConnector).mockResolvedValue('conn-preview')
@@ -444,7 +445,7 @@ describe('ConnectorAdd bitbucket flow', () => {
     renderPage(preset)
 
     fireEvent.change(await screen.findByPlaceholderText(placeholder), { target: { value: 'tok' } })
-    fireEvent.change(screen.getByPlaceholderText(preset === 'github-account' ? 'github' : 'bitbucket'), {
+    fireEvent.change(screen.getByPlaceholderText(preset.replace('-account', '')), {
       target: { value: name },
     })
     expect(await screen.findByText(`Timothy stores the key in Vault (path timothy/${ref}).`)).toBeInTheDocument()
@@ -469,6 +470,105 @@ describe('ConnectorAdd bitbucket flow', () => {
     await waitFor(() => expect(createConnector).toHaveBeenCalled())
     expect(setSecret).not.toHaveBeenCalled()
     expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({ kind: 'bitbucket', credential_ref: 'GITHUB_PAT' })
+  })
+})
+
+describe('ConnectorAdd gitlab flow', () => {
+  it('renders a token-only form with the gitlab token copy', async () => {
+    renderPage('gitlab-account')
+
+    expect(await screen.findByPlaceholderText('glpat-…')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('gitlab')).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('https://…/mcp')).not.toBeInTheDocument()
+    expect(screen.getByText('Access token')).toBeInTheDocument()
+    expect(screen.getByText(/api and write_repository scopes/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'How to create one →' })).toHaveAttribute(
+      'href',
+      'https://gitlab.com/-/user_settings/personal_access_tokens',
+    )
+    expect(screen.queryByText('Create one on GitHub →')).toBeNull()
+  })
+
+  it('keeps Test disabled until a token is pasted', async () => {
+    renderPage('gitlab-account')
+
+    const testButton = await screen.findByRole('button', { name: 'Test connection' })
+    expect(testButton).toBeDisabled()
+
+    fireEvent.change(screen.getByPlaceholderText('glpat-…'), { target: { value: 'glpat-x' } })
+    expect(testButton).toBeEnabled()
+  })
+
+  it('creates a gitlab-kind connector under a derived _GITLAB_TOKEN ref', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-gl')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    vi.mocked(patchConnector).mockResolvedValue()
+    renderPage('gitlab-account')
+
+    fireEvent.change(await screen.findByPlaceholderText('gitlab'), { target: { value: 'work' } })
+    fireEvent.change(screen.getByPlaceholderText('glpat-…'), { target: { value: 'glpat-x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('WORK_GITLAB_TOKEN', 'glpat-x')
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toEqual({
+      name: 'work',
+      kind: 'gitlab',
+      config: {},
+      credential_ref: 'WORK_GITLAB_TOKEN',
+      enabled: false,
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
+    await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-gl', { enabled: true }))
+  })
+
+  it('saves the namespace and a self-managed base_url into config', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-gl-sm')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('gitlab-account')
+
+    fireEvent.change(await screen.findByPlaceholderText('acme/platform'), { target: { value: ' acme/platform ' } })
+    fireEvent.change(screen.getByPlaceholderText('https://gitlab.com'), {
+      target: { value: 'https://gitlab.example.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('glpat-…'), { target: { value: 'glpat-x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
+      kind: 'gitlab',
+      config: { namespace: 'acme/platform', base_url: 'https://gitlab.example.com' },
+    })
+  })
+
+  it('does not stutter the ref when the name already ends in gitlab', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-gl-2')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('gitlab-account')
+
+    fireEvent.change(await screen.findByPlaceholderText('glpat-…'), { target: { value: 'glpat-x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('GITLAB_TOKEN', 'glpat-x')
+  })
+
+  it('reuses an existing credential instead of writing a secret', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-gl-3')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('gitlab-account')
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'Use existing' }))
+    expect(screen.queryByPlaceholderText('glpat-…')).not.toBeInTheDocument()
+
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    fireEvent.click(await screen.findByRole('option', { name: /GITHUB_PAT/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({ kind: 'gitlab', credential_ref: 'GITHUB_PAT' })
   })
 })
 
