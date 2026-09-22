@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
@@ -125,6 +128,70 @@ func TestAdminProxyRewritesNonWildcardRoutes(t *testing.T) {
 
 			if got != tc.want {
 				t.Fatalf("upstream path = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// fakePRClient implements gitprovider.Client's GetPR only; any other
+// method panics through the nil embedded interface.
+type fakePRClient struct {
+	gitprovider.Client
+	pr  gitprovider.PullRequest
+	err error
+	ref gitprovider.RepoRef
+	num int
+}
+
+func (f *fakePRClient) GetPR(_ context.Context, ref gitprovider.RepoRef, number int) (gitprovider.PullRequest, error) {
+	f.ref, f.num = ref, number
+	return f.pr, f.err
+}
+
+// TestPRStateResolver pins the GetPR state to merged-bool mapping the
+// follow-up provisioner reads, and that errors pass through with the
+// ephemeral source closed.
+func TestPRStateResolver(t *testing.T) {
+	errBuild := errors.New("build failed")
+	errGet := errors.New("get failed")
+	for _, tc := range []struct {
+		name      string
+		state     string
+		buildErr  error
+		getErr    error
+		want      bool
+		wantErr   error
+		wantClose bool
+	}{
+		{name: "merged", state: "merged", want: true, wantClose: true},
+		{name: "open", state: "open", wantClose: true},
+		{name: "closed", state: "closed", wantClose: true},
+		{name: "get error", getErr: errGet, wantErr: errGet, wantClose: true},
+		{name: "build error", buildErr: errBuild, wantErr: errBuild},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &fakePRClient{pr: gitprovider.PullRequest{State: tc.state}, err: tc.getErr}
+			closed := false
+			var gotID string
+			resolve := prStateResolver(func(_ context.Context, id string) (gitprovider.Client, func(), error) {
+				gotID = id
+				if tc.buildErr != nil {
+					return nil, nil, tc.buildErr
+				}
+				return client, func() { closed = true }, nil
+			})
+			merged, err := resolve(t.Context(), "conn-1", "octocat", "hello-world", 7)
+			if !errors.Is(err, tc.wantErr) || merged != tc.want {
+				t.Fatalf("resolve = %v, %v; want %v, %v", merged, err, tc.want, tc.wantErr)
+			}
+			if gotID != "conn-1" {
+				t.Fatalf("connector id = %q", gotID)
+			}
+			if closed != tc.wantClose {
+				t.Fatalf("closed = %v, want %v", closed, tc.wantClose)
+			}
+			if tc.buildErr == nil && (client.ref != gitprovider.RepoRef{Owner: "octocat", Name: "hello-world"} || client.num != 7) {
+				t.Fatalf("GetPR called with %+v #%d", client.ref, client.num)
 			}
 		})
 	}

@@ -1141,6 +1141,24 @@ func missionConnectorReadsResolver(agentReg *agents.Store, conns *connectors.Man
 	}
 }
 
+// prStateResolver adapts a connector's gitprovider.Client to
+// missions.PRStateResolver: a pull request counts as merged only when
+// GetPR reports the provider-agnostic "merged" state.
+func prStateResolver(gitClient func(ctx context.Context, id string) (gitprovider.Client, func(), error)) missions.PRStateResolver {
+	return func(ctx context.Context, connectorID, owner, repo string, number int) (bool, error) {
+		gc, closeFn, err := gitClient(ctx, connectorID)
+		if err != nil {
+			return false, err
+		}
+		defer closeFn()
+		pr, err := gc.GetPR(ctx, gitprovider.RepoRef{Owner: owner, Name: repo}, number)
+		if err != nil {
+			return false, err
+		}
+		return pr.State == "merged", nil
+	}
+}
+
 // intersectReadOnlyConnectorTools is missionConnectorReadsResolver's
 // pure matching step, split out so it's unit-testable without a real
 // agents.Store/connectors.Manager (both need a live Postgres pool):
@@ -1378,18 +1396,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		// A follow-up mission's worktree base: detect whether the parent's
 		// PR (if any) was already merged, so the base doesn't point at a
 		// branch GitHub may since have deleted (see followUpBaseRef).
-		driver.SetPRStateResolver(func(ctx context.Context, connectorID, owner, repo string, number int) (bool, error) {
-			gc, closeFn, err := conns.GitClient(ctx, connectorID)
-			if err != nil {
-				return false, err
-			}
-			defer closeFn()
-			pr, err := gc.GetPR(ctx, gitprovider.RepoRef{Owner: owner, Name: repo}, number)
-			if err != nil {
-				return false, err
-			}
-			return pr.State == "merged", nil
-		})
+		driver.SetPRStateResolver(prStateResolver(conns.GitClient))
 	}
 	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
 	// routeExists backs DefaultCodingRoute's preference check for a

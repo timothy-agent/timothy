@@ -1174,7 +1174,8 @@ func seedBareRepoWithMissionBranch(t *testing.T) (repoURL, worktree, branch stri
 }
 
 // fakeGitHubSource is a connectors.Source implementing gitprovider.Client
-// (GetRepo/CreatePR, everything else unused here) by hand — used instead
+// (GetRepo/CreatePR, plus ListRepos/CreateRepo for the connectors repo
+// endpoints; everything else unused here) by hand — used instead
 // of connectors.GitHubBuilder + a real HTTP fake server, since
 // githubAPIBase (the base URL GitHubBuilder's requests hit) is
 // unexported to the connectors package and this test lives in api.
@@ -1185,6 +1186,8 @@ type fakeGitHubSource struct {
 	gitprovider.GitHub // Descriptor: URL parsing, clone URLs, kind, capabilities
 	getRepoFn          func(ctx context.Context, ref gitprovider.RepoRef) (gitprovider.Repo, error)
 	createPRFn         func(ctx context.Context, spec gitprovider.PRSpec) (gitprovider.PullRequest, error)
+	listReposFn        func(ctx context.Context) ([]gitprovider.Repo, error)
+	createRepoFn       func(ctx context.Context, name string, private bool) (gitprovider.Repo, error)
 }
 
 func (f *fakeGitHubSource) Tools() []*tools.Tool       { return nil }
@@ -1193,11 +1196,17 @@ func (f *fakeGitHubSource) Close() error               { return nil }
 func (f *fakeGitHubSource) Identity(context.Context) (gitprovider.Identity, error) {
 	return gitprovider.Identity{}, errors.New("not implemented in fakeGitHubSource")
 }
-func (f *fakeGitHubSource) ListRepos(context.Context) ([]gitprovider.Repo, error) {
-	return nil, errors.New("not implemented in fakeGitHubSource")
+func (f *fakeGitHubSource) ListRepos(ctx context.Context) ([]gitprovider.Repo, error) {
+	if f.listReposFn == nil {
+		return nil, errors.New("not implemented in fakeGitHubSource")
+	}
+	return f.listReposFn(ctx)
 }
-func (f *fakeGitHubSource) CreateRepo(context.Context, string, bool) (gitprovider.Repo, error) {
-	return gitprovider.Repo{}, errors.New("not implemented in fakeGitHubSource")
+func (f *fakeGitHubSource) CreateRepo(ctx context.Context, name string, private bool) (gitprovider.Repo, error) {
+	if f.createRepoFn == nil {
+		return gitprovider.Repo{}, errors.New("not implemented in fakeGitHubSource")
+	}
+	return f.createRepoFn(ctx, name, private)
 }
 func (f *fakeGitHubSource) GetRepo(ctx context.Context, ref gitprovider.RepoRef) (gitprovider.Repo, error) {
 	return f.getRepoFn(ctx, ref)
