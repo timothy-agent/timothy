@@ -1379,7 +1379,16 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		// PR (if any) was already merged, so the base doesn't point at a
 		// branch GitHub may since have deleted (see followUpBaseRef).
 		driver.SetPRStateResolver(func(ctx context.Context, connectorID, owner, repo string, number int) (bool, error) {
-			return conns.PRMerged(ctx, connectorID, owner, repo, number)
+			gc, closeFn, err := conns.GitClient(ctx, connectorID)
+			if err != nil {
+				return false, err
+			}
+			defer closeFn()
+			pr, err := gc.GetPR(ctx, gitprovider.RepoRef{Owner: owner, Name: repo}, number)
+			if err != nil {
+				return false, err
+			}
+			return pr.State == "merged", nil
 		})
 	}
 	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }

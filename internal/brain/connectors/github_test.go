@@ -363,9 +363,10 @@ func TestCreateGitHubRepo(t *testing.T) {
 	}
 }
 
-// TestManagerListReposNonGitHubKind pins that the ListRepos capability
-// gate rejects a kind with no repo concept (mcp) with ErrUnsupported.
-func TestManagerListReposNonGitHubKind(t *testing.T) {
+// TestManagerGitClientNonGitKind pins that the gitprovider.Client
+// capability gate rejects a kind with no repo concept (mcp) with
+// ErrUnsupported.
+func TestManagerGitClientNonGitKind(t *testing.T) {
 	m := testManager(fakeRows{rows: []Connector{
 		{ID: "1", Name: "grafana", Kind: "mcp"},
 	}})
@@ -373,15 +374,15 @@ func TestManagerListReposNonGitHubKind(t *testing.T) {
 		return &fakeSource{}, nil
 	})
 
-	if _, err := m.ListRepos(t.Context(), "1"); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("ListRepos on mcp connector = %v, want ErrUnsupported", err)
+	if _, _, err := m.GitClient(t.Context(), "1"); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("GitClient on mcp connector = %v, want ErrUnsupported", err)
 	}
 }
 
-// TestManagerListReposAndCreateRepo exercises the full seam the API's
-// repo endpoints use: a github-kind connector's ListRepos/CreateRepo
-// both build fresh and close the ephemeral source.
-func TestManagerListReposAndCreateRepo(t *testing.T) {
+// TestManagerGitClientListAndCreateRepo exercises the full seam the
+// API's repo endpoints use: GitClient builds a github-kind connector's
+// source, then ListRepos/CreateRepo run through it.
+func TestManagerGitClientListAndCreateRepo(t *testing.T) {
 	srv := githubFakeServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/user/repos" && r.Method == http.MethodGet:
@@ -398,7 +399,13 @@ func TestManagerListReposAndCreateRepo(t *testing.T) {
 	m.resolve = func(context.Context, string) (string, error) { return "tok", nil }
 	m.RegisterBuilder("github", GitHubBuilder(srv.Client()))
 
-	repos, err := m.ListRepos(t.Context(), "1")
+	gc, closeFn, err := m.GitClient(t.Context(), "1")
+	if err != nil {
+		t.Fatalf("GitClient: %v", err)
+	}
+	defer closeFn()
+
+	repos, err := gc.ListRepos(t.Context())
 	if err != nil {
 		t.Fatalf("ListRepos: %v", err)
 	}
@@ -406,7 +413,7 @@ func TestManagerListReposAndCreateRepo(t *testing.T) {
 		t.Fatalf("repos = %+v", repos)
 	}
 
-	repo, err := m.CreateRepo(t.Context(), "1", "brand-new", false)
+	repo, err := gc.CreateRepo(t.Context(), "brand-new", false)
 	if err != nil {
 		t.Fatalf("CreateRepo: %v", err)
 	}
@@ -501,40 +508,6 @@ func TestGitHubGetPR(t *testing.T) {
 	}
 }
 
-// TestManagerPRMergedMapsState pins the wrapper that turns GetPR's
-// state back into the bool the follow-up provisioner reads.
-func TestManagerPRMergedMapsState(t *testing.T) {
-	for _, tc := range []struct {
-		state string
-		want  bool
-	}{{"closed", false}, {"open", false}} {
-		t.Run(tc.state, func(t *testing.T) {
-			srv := githubFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
-				_ = json.NewEncoder(w).Encode(map[string]any{"number": 1, "state": tc.state, "merged": false})
-			})
-			m := testManager(fakeRows{rows: []Connector{{ID: "1", Name: "gh", Kind: "github", CredentialRef: "GH_PAT"}}})
-			m.resolve = func(context.Context, string) (string, error) { return "tok", nil }
-			m.RegisterBuilder("github", GitHubBuilder(srv.Client()))
-			merged, err := m.PRMerged(t.Context(), "1", "octocat", "hello-world", 1)
-			if err != nil || merged != tc.want {
-				t.Fatalf("PRMerged = %v, %v", merged, err)
-			}
-		})
-	}
-	t.Run("merged", func(t *testing.T) {
-		srv := githubFakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
-			_ = json.NewEncoder(w).Encode(map[string]any{"number": 1, "state": "closed", "merged": true})
-		})
-		m := testManager(fakeRows{rows: []Connector{{ID: "1", Name: "gh", Kind: "github", CredentialRef: "GH_PAT"}}})
-		m.resolve = func(context.Context, string) (string, error) { return "tok", nil }
-		m.RegisterBuilder("github", GitHubBuilder(srv.Client()))
-		merged, err := m.PRMerged(t.Context(), "1", "octocat", "hello-world", 1)
-		if err != nil || !merged {
-			t.Fatalf("PRMerged = %v, %v", merged, err)
-		}
-	})
-}
-
 // TestCreateGitHubPR proves POST /repos/{owner}/{repo}/pulls sends the
 // expected body and decodes the created PR.
 func TestCreateGitHubPR(t *testing.T) {
@@ -600,26 +573,20 @@ func TestManagerCreatePRAlreadyExists(t *testing.T) {
 	m.resolve = func(context.Context, string) (string, error) { return "tok", nil }
 	m.RegisterBuilder("github", GitHubBuilder(srv.Client()))
 
-	pr, err := m.CreatePR(t.Context(), "1", "octocat", "hello-world", "Fix bug", "mission/fix-bug", "main", "body")
+	gc, closeFn, err := m.GitClient(t.Context(), "1")
+	if err != nil {
+		t.Fatalf("GitClient: %v", err)
+	}
+	defer closeFn()
+
+	pr, err := gc.CreatePR(t.Context(), gitprovider.PRSpec{
+		Repo:  gitprovider.RepoRef{Owner: "octocat", Name: "hello-world"},
+		Title: "Fix bug", Head: "mission/fix-bug", Base: "main", Body: "body",
+	})
 	if err != nil {
 		t.Fatalf("CreatePR: %v", err)
 	}
 	if pr.Number != 7 {
 		t.Fatalf("pr = %+v, want the existing open PR #7", pr)
-	}
-}
-
-// TestManagerGetRepoNonGitHubKind pins that GetRepo also gates on the
-// gitprovider.Client capability, mirroring TestManagerListReposNonGitHubKind.
-func TestManagerGetRepoNonGitHubKind(t *testing.T) {
-	m := testManager(fakeRows{rows: []Connector{
-		{ID: "1", Name: "grafana", Kind: "mcp"},
-	}})
-	m.RegisterBuilder("mcp", func(context.Context, Connector, Resolve) (Source, error) {
-		return &fakeSource{}, nil
-	})
-
-	if _, err := m.GetRepo(t.Context(), "1", "o", "r"); !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("GetRepo on mcp connector = %v, want ErrUnsupported", err)
 	}
 }

@@ -69,32 +69,6 @@ func ParseGitHubRepoURL(repoURL string) (owner, repo string, ok bool) {
 	return m[1], m[2], true
 }
 
-// bitbucketRepoPattern pins the host, unlike githubRepoPattern: a
-// bitbucket connector paired with another host's URL is a misconfiguration.
-// A browser URL (…/src/main/, …/pull-requests/) and the user@ form Bitbucket's
-// Clone button shows are accepted too; ssh is not, missions are https-only.
-var bitbucketRepoPattern = regexp.MustCompile(`^https://(?:[^@/]+@)?bitbucket\.org/([^/]+)/([^/]+?)(?:\.git)?(?:/(?:src|branch|pull-requests|commits)(?:/.*)?)?/?$`)
-
-// ParseBitbucketRepoURL extracts workspace/slug from a bitbucket.org https URL.
-func ParseBitbucketRepoURL(repoURL string) (workspace, slug string, ok bool) {
-	m := bitbucketRepoPattern.FindStringSubmatch(repoURL)
-	if m == nil {
-		return "", "", false
-	}
-	return m[1], m[2], true
-}
-
-// BitbucketCloneURL turns any accepted bitbucket URL into the plain https
-// clone URL: the browser and user@ forms would otherwise be stored as-is
-// and fail validateRemote at push time.
-func BitbucketCloneURL(repoURL string) (string, bool) {
-	workspace, slug, ok := ParseBitbucketRepoURL(repoURL)
-	if !ok {
-		return "", false
-	}
-	return "https://bitbucket.org/" + workspace + "/" + slug + ".git", true
-}
-
 // parseRepoURLForKind picks the parser for a source or destination
 // kind. Every kind but github parses through its own registered
 // Descriptor, so a nested GitLab group path is read at full depth

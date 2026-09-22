@@ -244,57 +244,6 @@ func TestParseGitHubRepoURL(t *testing.T) {
 	}
 }
 
-func TestParseBitbucketRepoURL(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name      string
-		url       string
-		workspace string
-		slug      string
-		wantOK    bool
-	}{
-		{"with .git suffix", "https://bitbucket.org/acme-team/widget-service.git", "acme-team", "widget-service", true},
-		{"without .git suffix", "https://bitbucket.org/ws/repo", "ws", "repo", true},
-		{"trailing slash", "https://bitbucket.org/ws/repo/", "ws", "repo", true},
-		{"clone button form with a username", "https://someone@bitbucket.org/ws/repo.git", "ws", "repo", true},
-		{"browser url with a branch path", "https://bitbucket.org/ws/repo/src/master/", "ws", "repo", true},
-		{"browser url deep in the tree", "https://bitbucket.org/ws/repo/src/main/app/Http/", "ws", "repo", true},
-		{"pull request page", "https://bitbucket.org/ws/repo/pull-requests/12", "ws", "repo", true},
-		{"unknown page kind is rejected", "https://bitbucket.org/ws/repo/settings", "", "", false},
-		{"github host is rejected", "https://github.com/octocat/hello-world.git", "", "", false},
-		{"ssh form is rejected", "git@bitbucket.org:ws/repo.git", "", "", false},
-		{"no slug", "https://bitbucket.org/ws", "", "", false},
-		{"empty", "", "", "", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			workspace, slug, ok := ParseBitbucketRepoURL(tc.url)
-			if ok != tc.wantOK || workspace != tc.workspace || slug != tc.slug {
-				t.Fatalf("ParseBitbucketRepoURL(%q) = (%q, %q, %v), want (%q, %q, %v)", tc.url, workspace, slug, ok, tc.workspace, tc.slug, tc.wantOK)
-			}
-		})
-	}
-}
-
-func TestBitbucketCloneURL(t *testing.T) {
-	t.Parallel()
-	want := "https://bitbucket.org/acme-team/widget-service.git"
-	for _, in := range []string{
-		"https://bitbucket.org/acme-team/widget-service.git",
-		"https://someone@bitbucket.org/acme-team/widget-service.git",
-		"https://bitbucket.org/acme-team/widget-service/src/master/",
-		"https://bitbucket.org/acme-team/widget-service",
-	} {
-		got, ok := BitbucketCloneURL(in)
-		if !ok || got != want {
-			t.Fatalf("BitbucketCloneURL(%q) = (%q, %v), want %q", in, got, ok, want)
-		}
-	}
-	if _, ok := BitbucketCloneURL("git@bitbucket.org:acme-team/widget-service.git"); ok {
-		t.Fatal("ssh form accepted")
-	}
-}
-
 func TestParseRepoURLForKind(t *testing.T) {
 	t.Parallel()
 	if _, _, ok := parseRepoURLForKind(SourceKindBitbucket, "https://github.com/o/r"); ok {

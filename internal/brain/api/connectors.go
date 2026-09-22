@@ -257,7 +257,13 @@ func (h *connectorAPI) ensureRepoSigningKey(ctx context.Context, credentialRef s
 // asking a non-github connector for repos is caller error, not an
 // infra condition).
 func (h *connectorAPI) listRepos(w http.ResponseWriter, r *http.Request) {
-	repos, err := h.mgr.ListRepos(r.Context(), r.PathValue("id"))
+	gc, closeFn, err := h.mgr.GitClient(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failConnector(w, err)
+		return
+	}
+	defer closeFn()
+	repos, err := gc.ListRepos(r.Context())
 	if err != nil {
 		failConnector(w, err)
 		return
@@ -284,7 +290,13 @@ func (h *connectorAPI) createRepo(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "name is required")
 		return
 	}
-	repo, err := h.mgr.CreateRepo(r.Context(), r.PathValue("id"), req.Name, req.Private)
+	gc, closeFn, err := h.mgr.GitClient(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failConnector(w, err)
+		return
+	}
+	defer closeFn()
+	repo, err := gc.CreateRepo(r.Context(), req.Name, req.Private)
 	if err != nil {
 		failConnector(w, err)
 		return

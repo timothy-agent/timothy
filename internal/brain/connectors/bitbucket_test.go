@@ -675,13 +675,18 @@ func TestManagerRepoSourceAdmitsBitbucket(t *testing.T) {
 	m := testManager(fakeRows{rows: []Connector{{ID: "1", Name: "work-bb", Kind: "bitbucket", CredentialRef: "BB_TOKEN"}}})
 	m.RegisterBuilder("bitbucket", BitbucketBuilder(srv.Client()))
 
-	repos, err := m.ListRepos(t.Context(), "1")
+	gc, closeFn, err := m.GitClient(t.Context(), "1")
+	if err != nil {
+		t.Fatalf("GitClient: %v", err)
+	}
+	defer closeFn()
+	repos, err := gc.ListRepos(t.Context())
 	if err != nil || len(repos) != 1 || repos[0].FullName != "acme/widgets" {
 		t.Fatalf("ListRepos = %+v, %v", repos, err)
 	}
-	merged, err := m.PRMerged(t.Context(), "1", "acme", "widgets", 3)
-	if err != nil || !merged {
-		t.Fatalf("PRMerged = %v, %v", merged, err)
+	pr, err := gc.GetPR(t.Context(), acmeWidgets, 3)
+	if err != nil || pr.State != "merged" {
+		t.Fatalf("GetPR = %+v, %v", pr, err)
 	}
 }
 

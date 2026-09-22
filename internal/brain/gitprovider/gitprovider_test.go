@@ -137,8 +137,8 @@ func TestParseRepoURLGitHub(t *testing.T) {
 	}
 }
 
-// TestParseRepoURLBitbucket ports missions.TestParseBitbucketRepoURL
-// case for case, plus the scp form the old parser rejected outright.
+// TestParseRepoURLBitbucket covers the https, user@ and browser forms,
+// plus the scp form normalized to ssh://.
 func TestParseRepoURLBitbucket(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -232,9 +232,8 @@ func TestNormalizeSCP(t *testing.T) {
 	}
 }
 
-// TestCloneURLsRoundTrip: the https form is exactly what
-// missions.BitbucketCloneURL produced, and every accepted input shape
-// collapses to the same canonical clone URL.
+// TestCloneURLsRoundTrip: every accepted input shape collapses to the
+// same canonical clone URL.
 func TestCloneURLsRoundTrip(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
