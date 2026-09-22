@@ -143,6 +143,34 @@ func TestValidateCreate(t *testing.T) {
 		}, ValidateDeps{DestinationKind: func(ctx context.Context, id string) (string, bool, error) {
 			return "github", true, nil
 		}}, false},
+		{"github.com repo_url with no repo segment on a github destination is rejected", func(m Mission) Mission {
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{DestinationID: "gh-1", RepoURL: "https://github.com/foo"}}
+			return m
+		}, ValidateDeps{DestinationKind: func(ctx context.Context, id string) (string, bool, error) {
+			return "github", true, nil
+		}}, true},
+		{"github browser url on a github destination is accepted", func(m Mission) Mission {
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{DestinationID: "gh-1", RepoURL: "https://github.com/o/r/tree/main"}}
+			return m
+		}, ValidateDeps{DestinationKind: func(ctx context.Context, id string) (string, bool, error) {
+			return "github", true, nil
+		}}, false},
+		{"scp ssh url on a github destination is accepted like bitbucket's", func(m Mission) Mission {
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{DestinationID: "gh-1", RepoURL: "git@github.com:o/r.git"}}
+			return m
+		}, ValidateDeps{DestinationKind: func(ctx context.Context, id string) (string, bool, error) {
+			return "github", true, nil
+		}}, false},
+		{"lookalike host on a github destination is rejected", func(m Mission) Mission {
+			m.Kind = "coding"
+			m.Destinations = []DestinationEntry{{DestinationID: "gh-1", RepoURL: "https://github.com.evil.test/o/r.git"}}
+			return m
+		}, ValidateDeps{DestinationKind: func(ctx context.Context, id string) (string, bool, error) {
+			return "github", true, nil
+		}}, true},
 		{"repo_url not a recognizable github https clone URL is rejected", func(m Mission) Mission {
 			m.Kind = "coding"
 			m.Destinations = []DestinationEntry{{DestinationID: "gh-1", RepoURL: "not-a-url"}}

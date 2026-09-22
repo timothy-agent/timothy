@@ -96,9 +96,8 @@ func TestRegisterReplacesAndIndexesHosts(t *testing.T) {
 	}
 }
 
-// TestParseRepoURLGitHub ports missions.TestParseGitHubRepoURL and adds
-// the host gate isGitHubHost used to carry separately (issue #787), plus
-// the browser and scp-ssh forms.
+// TestParseRepoURLGitHub covers the github.com host gate (issue #787)
+// and the https, user@, browser and scp-ssh forms.
 func TestParseRepoURLGitHub(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

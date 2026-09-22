@@ -573,8 +573,7 @@ func (r createMissionRequest) destinationEntries() []missions.DestinationEntry {
 	var entries []missions.DestinationEntry
 	for _, id := range r.DestinationIDs {
 		// A pasted browser or user@ URL is canonicalised here so it is
-		// never stored with credentials in it (issue #787); a github
-		// target does not match and passes through.
+		// never stored with credentials in it (issue #787).
 		repoURL := missions.CanonicalizeCloneURL(r.DestinationRepoURLs[id])
 		entries = append(entries, missions.DestinationEntry{DestinationID: id, RepoURL: repoURL})
 	}

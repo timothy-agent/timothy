@@ -46,18 +46,6 @@ var (
 // ParseGitHubRepoURL extracts from mission.RepoURL.
 var githubRepoPattern = regexp.MustCompile(`^https://[^/]+/([^/]+)/([^/]+?)(?:\.git)?/?$`)
 
-// isGitHubHost reports whether repoURL points at github.com, the only
-// host the github connector talks to (githubAPIBase is fixed, there is
-// no Enterprise support). githubRepoPattern itself is host-agnostic
-// because it also parses origins the mission was cloned from.
-func isGitHubHost(repoURL string) bool {
-	u, err := url.Parse(strings.TrimSpace(repoURL))
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(u.Hostname(), "github.com")
-}
-
 // ParseGitHubRepoURL extracts owner/repo from repoURL (always an https
 // clone URL per validateRemote's own gate at push time); ok is false
 // for anything that doesn't match the expected shape.
@@ -121,9 +109,7 @@ func CanonicalCloneURL(kind, repoURL string) (string, bool) {
 // CanonicalizeCloneURL is CanonicalCloneURL where the kind is not
 // known yet (a destination id alone): the first host-pinned descriptor
 // that recognizes repoURL canonicalizes it, and a URL none of them
-// claim passes through unchanged. github never claims one, since its
-// descriptor is host-pinned to github.com while its own clone URLs are
-// already canonical.
+// claim passes through unchanged.
 func CanonicalizeCloneURL(repoURL string) string {
 	for _, kind := range gitprovider.Kinds() {
 		if clone, ok := CanonicalCloneURL(string(kind), repoURL); ok {

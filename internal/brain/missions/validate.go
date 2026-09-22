@@ -169,16 +169,13 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 			if !repoKind && e.RepoURL != "" {
 				return fmt.Errorf("%w: repo_url is only valid for a git provider destination entry", ErrInvalidMission)
 			}
-			if kind != string(gitprovider.KindGitHub) && repoKind && e.RepoURL != "" {
-				if _, _, ok := parseRepoURLForKind(kind, e.RepoURL); !ok {
+			// Each kind's descriptor is host-pinned, so another host's URL
+			// never resolves against this connector's API (issue #787).
+			if repoKind && e.RepoURL != "" {
+				d, _ := gitprovider.Lookup(gitprovider.Kind(kind))
+				if _, ok := d.ParseRepoURL(e.RepoURL); !ok {
 					return fmt.Errorf("%w: repo_url is not a recognizable %s https clone URL", ErrInvalidMission, kind)
 				}
-			}
-			// ParseGitHubRepoURL accepts any host, so another kind's URL
-			// would otherwise be resolved against github.com, which is
-			// the only host the github connector talks to (issue #787).
-			if kind == string(gitprovider.KindGitHub) && e.RepoURL != "" && !isGitHubHost(e.RepoURL) {
-				return fmt.Errorf("%w: repo_url is not a github.com https clone URL", ErrInvalidMission)
 			}
 		}
 		if len(invalid) > 0 {
