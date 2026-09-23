@@ -1,8 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter } from 'react-router'
+import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminAgent, AdminConnector, AdminRoute, Automation, GitHubRepo, Mission, MissionTemplate } from '../../api/types'
-import { toast } from 'sonner'
+import type { AdminAgent, AdminConnector, AdminRoute, GitHubRepo, Mission } from '../../api/types'
 import { defaultRouteLabel, MissionForm } from './MissionForm'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
@@ -10,8 +9,6 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 vi.mock('../../api/client', () => ({
   classifyMission: vi.fn(),
   createMission: vi.fn(),
-  createAutomation: vi.fn(),
-  patchAutomation: vi.fn(),
   listAgents: vi.fn(),
   listRoutes: vi.fn(),
   listConnectors: vi.fn(),
@@ -30,7 +27,6 @@ vi.mock('../../api/client', () => ({
 import {
   classifyMission,
   createMission,
-  createAutomation,
   getMissionExecutionPlan,
   getMissionExecutorOptions,
   getSettings,
@@ -41,7 +37,6 @@ import {
   listMissions,
   listRoutes,
   listSessions,
-  patchAutomation,
   searchKbDocuments,
   uploadAttachment,
 } from '../../api/client'
@@ -60,51 +55,7 @@ const routes: AdminRoute[] = [
   { name: 'disabled-route', strategy: 'ordered', enabled: false, chain: [] },
 ]
 
-const automation: Automation = {
-  id: 's1',
-  name: 'weekly-digest',
-  description: '',
-  agent_id: 'a1',
-  action: {
-    kind: 'mission',
-    mission: {
-      goal: 'Summarize the week',
-      kind: 'general',
-      auto_approve_tools: true,
-      review_route: 'default',
-    },
-  },
-  concurrency: 'skip',
-  max_concurrent: 1,
-  max_runs_per_hour: 6,
-  continuity: true,
-  notes_enabled: true,
-  consecutive_failures: 0,
-  enabled: true,
-  expires_at: '2026-08-01T12:30:00Z',
-  created_at: '2026-07-01T00:00:00Z',
-  updated_at: '2026-07-01T00:00:00Z',
-  triggers: [
-    {
-      id: 't1',
-      automation_id: 's1',
-      kind: 'cron',
-      config: { expr: '0 8 * * 1-5' },
-      state: { last_fired_at: '2026-07-20T08:00:00Z' },
-      enabled: true,
-      created_at: '2026-07-01T00:00:00Z',
-      updated_at: '2026-07-01T00:00:00Z',
-    },
-  ],
-  stats: { runs_total: 3, succeeded_7d: 3, failed_7d: 0, next_run_at: '2026-07-27T08:00:00Z' },
-}
-
-// withMission returns the fixture automation with its mission template patched.
-function withMission(patch: Partial<MissionTemplate>): Automation {
-  return { ...automation, action: { kind: 'mission', mission: { ...automation.action.mission, ...patch } } }
-}
-
-// defaultAgent is the agent an automation falls back to when none is picked.
+// defaultAgent is the enabled default agent the agent list returns.
 const defaultAgent: AdminAgent = {
   id: 'agent-default',
   name: 'general',
@@ -190,7 +141,7 @@ describe('MissionForm: create mode, one-off mission', () => {
   it('submits a general mission with the entered goal', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
     const onDone = vi.fn()
-    renderForm(<MissionForm mode="create" onDone={onDone} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={onDone} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
@@ -204,12 +155,12 @@ describe('MissionForm: create mode, one-off mission', () => {
         }),
       ),
     )
-    expect(onDone).toHaveBeenCalledWith({ kind: 'mission', id: 'm2' })
+    expect(onDone).toHaveBeenCalledWith('m2')
   })
 
   it('preserves multi-line markdown in the goal on submit, trimming only leading/trailing whitespace', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     const markdownGoal = '## Plan\n\n- step one\n- step two\n\nDo it **carefully**.'
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: `  ${markdownGoal}  ` } })
@@ -222,7 +173,7 @@ describe('MissionForm: create mode, one-off mission', () => {
 
   it('sends auto_approve_tools: false when the toggle is unchecked', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
     fireEvent.click(screen.getByLabelText(/Auto-approve safe tool calls/))
@@ -237,7 +188,7 @@ describe('MissionForm: create mode, one-off mission', () => {
 
   it('sends auto_approve_plan: true by default', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
@@ -249,7 +200,7 @@ describe('MissionForm: create mode, one-off mission', () => {
 
   it('sends auto_approve_plan: false when the toggle is unchecked', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
     fireEvent.click(screen.getByLabelText(/Auto-approve the plan/))
@@ -261,7 +212,7 @@ describe('MissionForm: create mode, one-off mission', () => {
   })
 
   it('disables submit until a goal is entered', () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     const createButton = screen.getByRole('button', { name: 'Create mission' }) as HTMLButtonElement
     expect(createButton.disabled).toBe(true)
@@ -272,7 +223,7 @@ describe('MissionForm: create mode, one-off mission', () => {
 
   it('calls onCancel when Cancel is clicked', () => {
     const onCancel = vi.fn()
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={onCancel} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={onCancel} />)
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onCancel).toHaveBeenCalled()
   })
@@ -280,7 +231,7 @@ describe('MissionForm: create mode, one-off mission', () => {
   it('attaching a PDF renders a chip and submits it on the payload', async () => {
     vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att1', mime: 'application/pdf', size_bytes: 100 })
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Summarize the attached spec' } })
     const file = new File(['%PDF-1.4'], 'spec.pdf', { type: 'application/pdf' })
@@ -300,7 +251,7 @@ describe('MissionForm: create mode, one-off mission', () => {
   it('attaching a .txt file renders a chip and submits it on the payload', async () => {
     vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att2', mime: 'text/plain', size_bytes: 20 })
     vi.mocked(createMission).mockResolvedValue({ id: 'm3' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Summarize the attached notes' } })
     const file = new File(['some notes'], 'notes.txt', { type: 'text/plain' })
@@ -320,7 +271,7 @@ describe('MissionForm: create mode, one-off mission', () => {
   it('accepts an image attachment and submits it on the payload', async () => {
     vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att3', mime: 'image/png', size_bytes: 100 })
     vi.mocked(createMission).mockResolvedValue({ id: 'm4' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Describe the attached photo' } })
     const file = new File(['fake'], 'photo.png', { type: 'image/png' })
@@ -340,7 +291,7 @@ describe('MissionForm: create mode, one-off mission', () => {
   it('accepts an audio attachment and submits it on the payload', async () => {
     vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att4', mime: 'audio/mpeg', size_bytes: 100 })
     vi.mocked(createMission).mockResolvedValue({ id: 'm5' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Transcribe the attached note' } })
     const file = new File(['fake'], 'note.mp3', { type: 'audio/mpeg' })
@@ -358,7 +309,7 @@ describe('MissionForm: create mode, one-off mission', () => {
   })
 
   it('rejects a video attachment on the mission form', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     const file = new File(['fake'], 'clip.mp4', { type: 'video/mp4' })
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
@@ -374,7 +325,7 @@ describe('MissionForm: create mode, one-off mission', () => {
         resolveUpload = resolve
       }),
     )
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Summarize the attached spec' } })
     const file = new File(['%PDF-1.4'], 'spec.pdf', { type: 'application/pdf' })
@@ -395,7 +346,7 @@ describe('MissionForm: # references', () => {
     vi.mocked(listMissions).mockResolvedValue([
       { id: 'mi1', name: 'Fix the flaky test', goal: 'Fix the flaky test' } as Mission,
     ])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     const goal = screen.getByLabelText('Goal') as HTMLTextAreaElement
     fireEvent.change(goal, { target: { value: 'See #fix' } })
@@ -414,7 +365,7 @@ describe('MissionForm: # references', () => {
       { id: 'mi1', name: 'Fix the flaky test', goal: 'Fix the flaky test' } as Mission,
     ])
     vi.mocked(createMission).mockResolvedValue({ id: 'm9' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     const goal = screen.getByLabelText('Goal') as HTMLTextAreaElement
     fireEvent.change(goal, { target: { value: 'See #fix' } })
@@ -434,7 +385,7 @@ describe('MissionForm: # references', () => {
     vi.mocked(listMissions).mockResolvedValue([
       { id: 'mi1', name: 'Fix the flaky test', goal: 'Fix the flaky test' } as Mission,
     ])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     const goal = screen.getByLabelText('Goal') as HTMLTextAreaElement
     fireEvent.change(goal, { target: { value: '#fix' } })
@@ -465,7 +416,7 @@ describe('MissionForm: # references', () => {
         created_at: '',
       },
     ])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: '#a' } })
 
@@ -486,7 +437,7 @@ describe('MissionForm: # references', () => {
     vi.mocked(listMissions).mockImplementation((opts) =>
       Promise.resolve(missions.filter((m) => !opts?.query || m.name?.includes(opts.query))),
     )
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     const countChips = () =>
       screen.getAllByRole('button', { name: /^Remove mission\d reference$/ }).length
@@ -532,7 +483,7 @@ const destinations: Destination[] = [
 describe('MissionForm: destinations multi-select', () => {
   it('hides the section when there are no destinations', async () => {
     vi.mocked(listDestinations).mockResolvedValue([])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await waitFor(() => expect(listDestinations).toHaveBeenCalled())
     expect(screen.queryByText('Destinations')).toBeNull()
@@ -541,7 +492,7 @@ describe('MissionForm: destinations multi-select', () => {
   it('renders a checkbox per destination, unchecked by default, and submits the picked ids', async () => {
     vi.mocked(listDestinations).mockResolvedValue(destinations)
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByText('Destinations')
     const opsInbox = screen.getByLabelText(/^ops-inbox/) as HTMLInputElement
@@ -563,7 +514,7 @@ describe('MissionForm: destinations multi-select', () => {
   it('omits destination_ids from the create payload when none are picked', async () => {
     vi.mocked(listDestinations).mockResolvedValue(destinations)
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByText('Destinations')
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'No delivery please' } })
@@ -575,73 +526,24 @@ describe('MissionForm: destinations multi-select', () => {
     )
   })
 
-  it('offers the multi-select for a new automation (repeat on) and submits picked ids', async () => {
-    vi.mocked(listAgents).mockResolvedValue([defaultAgent])
-    vi.mocked(listDestinations).mockResolvedValue(destinations)
-    vi.mocked(createAutomation).mockResolvedValue({ id: 'sched1' })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Weekly digest' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
-
-    await screen.findByText('Destinations')
-    await screen.findByText('Agent')
-    fireEvent.click(screen.getByLabelText(/^ops-hook/))
-    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
-
-    await waitFor(() =>
-      expect(createAutomation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: { kind: 'mission', mission: expect.objectContaining({ destination_ids: ['d2'] }) },
-        }),
-      ),
-    )
-  })
-
-  it('seeds the multi-select from an edited automation and submits the updated picks', async () => {
-    vi.mocked(listDestinations).mockResolvedValue(destinations)
-    vi.mocked(patchAutomation).mockResolvedValue(automation)
-    const seeded: Automation = withMission({ destination_ids: ['d1'] })
-    renderForm(<MissionForm mode="edit" automation={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    await screen.findByText('Destinations')
-    const opsInbox = screen.getByLabelText(/^ops-inbox/) as HTMLInputElement
-    const opsHook = screen.getByLabelText(/^ops-hook/) as HTMLInputElement
-    expect(opsInbox.checked).toBe(true)
-    expect(opsHook.checked).toBe(false)
-
-    fireEvent.click(opsHook) // now both picked
-    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
-
-    await waitFor(() =>
-      expect(patchAutomation).toHaveBeenCalledWith(
-        's1',
-        expect.objectContaining({
-          action: { kind: 'mission', mission: expect.objectContaining({ destination_ids: ['d1', 'd2'] }) },
-        }),
-      ),
-    )
-  })
-
   it('leaves a disabled destination out of the list', async () => {
     vi.mocked(listDestinations).mockResolvedValue([
       destinations[0],
       { ...destinations[1], enabled: false },
     ])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByText('Destinations')
     expect(screen.getByLabelText(/^ops-inbox/)).toBeTruthy()
     expect(screen.queryByLabelText(/^ops-hook/)).toBeNull()
   })
 
-  it('still lists a disabled destination an edited automation already holds', async () => {
+  it('still lists a disabled destination a seeded follow-up already holds', async () => {
     vi.mocked(listDestinations).mockResolvedValue([
       destinations[0],
       { ...destinations[1], enabled: false },
     ])
-    const seeded: Automation = withMission({ destination_ids: ['d2'] })
-    renderForm(<MissionForm mode="edit" automation={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm initial={{ destination_ids: ['d2'] }} onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByText('Destinations')
     const opsHook = screen.getByLabelText(/^ops-hook/) as HTMLInputElement
@@ -653,7 +555,7 @@ describe('MissionForm: destinations multi-select', () => {
     vi.mocked(listDestinations).mockResolvedValue(
       destinations.map((d) => ({ ...d, enabled: false })),
     )
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await waitFor(() => expect(listDestinations).toHaveBeenCalled())
     expect(screen.queryByText('Destinations')).toBeNull()
@@ -665,7 +567,7 @@ describe('MissionForm: follow-up', () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm-followup' } as Mission)
     renderForm(
       <MissionForm
-        mode="create"
+       
         initial={{ kind: 'coding' }}
         parentMissionId="parent-1"
         onDone={vi.fn()}
@@ -690,7 +592,7 @@ describe('MissionForm: follow-up', () => {
 
   it('omits parent_mission_id from the create payload for an ordinary mission', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm2' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
@@ -706,7 +608,7 @@ describe('MissionForm: follow-up', () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm-picked' } as Mission)
     renderForm(
       <MissionForm
-        mode="create"
+       
         initialGoal={'Build "Signal Router".\n\nObjective: Routes alerts.'}
         parentMissionId="parent-1"
         onDone={vi.fn()}
@@ -732,7 +634,7 @@ describe('MissionForm: kind and light pre-fill (#447)', () => {
     vi.mocked(listConnectorRepos).mockResolvedValue([])
     renderForm(
       <MissionForm
-        mode="create"
+       
         initial={{
           repo_url: 'https://github.com/octocat/hello-world.git',
           connector_id: 'c1',
@@ -751,7 +653,7 @@ describe('MissionForm: kind and light pre-fill (#447)', () => {
     vi.mocked(listConnectorRepos).mockResolvedValue([])
     renderForm(
       <MissionForm
-        mode="create"
+       
         initial={{
           kind: 'coding',
           repo_url: 'https://github.com/octocat/hello-world.git',
@@ -776,7 +678,7 @@ describe('MissionForm: kind and light pre-fill (#447)', () => {
   })
 
   it('pre-fills light on for a summarize-shaped goal on a general mission', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), {
       target: { value: 'summarize my inbox from this week' },
@@ -786,7 +688,7 @@ describe('MissionForm: kind and light pre-fill (#447)', () => {
   })
 
   it('a manually toggled-off light stays off after the goal changes again', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), {
       target: { value: 'summarize my inbox from this week' },
@@ -804,7 +706,7 @@ describe('MissionForm: kind and light pre-fill (#447)', () => {
   })
 
   it('leaves kind and light at their current defaults when no signal is present', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Look into something' } })
     expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
@@ -822,7 +724,7 @@ describe('MissionForm: kind chip', () => {
 
   it('shows a detecting state then the classified kind after the debounce', async () => {
     vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false, has_plan: false })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug in the repo' } })
     expect(screen.getByText('Detecting…')).toBeInTheDocument()
@@ -836,7 +738,7 @@ describe('MissionForm: kind chip', () => {
   })
 
   it('debounces repeated goal edits into a single classify call', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     const goalInput = screen.getByLabelText('Goal')
     fireEvent.change(goalInput, { target: { value: 'Fix a' } })
@@ -851,7 +753,7 @@ describe('MissionForm: kind chip', () => {
   it('submits the mission with the classified kind', async () => {
     vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false, has_plan: false })
     vi.mocked(createMission).mockResolvedValue({ id: 'm3' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })
     await vi.advanceTimersByTimeAsync(600)
@@ -863,7 +765,7 @@ describe('MissionForm: kind chip', () => {
   })
 
   it('clicking the chip toggles kind and locks it against further auto-detect', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })
     await vi.advanceTimersByTimeAsync(600)
@@ -886,7 +788,7 @@ describe('MissionForm: kind chip', () => {
 
 describe('MissionForm: review harness select (issue #582)', () => {
   it('offers Native plus the read-only capable adapters under Advanced', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByRole('button', { name: 'Show advanced options' }))
@@ -904,7 +806,7 @@ describe('MissionForm: review harness select (issue #582)', () => {
 
   it('submits the picked review harness and omits it when left on Native', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm6' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByRole('button', { name: 'Show advanced options' }))
@@ -919,7 +821,7 @@ describe('MissionForm: review harness select (issue #582)', () => {
 
   it('leaves review_harness undefined when nothing is picked', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm7' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
@@ -928,29 +830,11 @@ describe('MissionForm: review harness select (issue #582)', () => {
     expect(vi.mocked(createMission).mock.calls[0][0].review_harness).toBeUndefined()
   })
 
-  it('hydrates review_harness from the automation template and sends it back on save', async () => {
-    vi.mocked(patchAutomation).mockResolvedValue(automation)
-    const seeded: Automation = withMission({ review_harness: 'claude-cli' })
-    renderForm(<MissionForm mode="edit" automation={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    await screen.findByDisplayValue('weekly-digest')
-    expect(screen.getByLabelText('Review harness')).toHaveTextContent('Claude Code')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
-    await waitFor(() =>
-      expect(patchAutomation).toHaveBeenCalledWith(
-        's1',
-        expect.objectContaining({
-          action: { kind: 'mission', mission: expect.objectContaining({ review_harness: 'claude-cli' }) },
-        }),
-      ),
-    )
-  })
 })
 
 describe('MissionForm: harness select placement', () => {
   it('shows the harness select in the main form body for a coding mission, without expanding Advanced', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
@@ -961,7 +845,7 @@ describe('MissionForm: harness select placement', () => {
   })
 
   it('omits the harness select for a general mission', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
@@ -970,7 +854,7 @@ describe('MissionForm: harness select placement', () => {
 
   it('submits the picked harness for a coding mission', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm5' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
@@ -986,7 +870,7 @@ describe('MissionForm: harness select placement', () => {
 
 describe('MissionForm: environment select', () => {
   it('shows the environment select for a coding mission, defaulted to Auto-detect', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
@@ -996,7 +880,7 @@ describe('MissionForm: environment select', () => {
   })
 
   it('omits the environment select for a general mission', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
@@ -1005,7 +889,7 @@ describe('MissionForm: environment select', () => {
 
   it('submits the picked environment for a coding mission, and omits it when left on Auto-detect', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm6' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
@@ -1020,7 +904,7 @@ describe('MissionForm: environment select', () => {
 
   it('omits environment from the create payload when left on Auto-detect', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm7' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
@@ -1034,7 +918,7 @@ describe('MissionForm: environment select', () => {
 
 describe('MissionForm: light mission toggle', () => {
   it('shows the light toggle for a general mission', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
@@ -1042,7 +926,7 @@ describe('MissionForm: light mission toggle', () => {
   })
 
   it('hides the light toggle for a coding mission', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
@@ -1053,7 +937,7 @@ describe('MissionForm: light mission toggle', () => {
   it('defaults the toggle from the classify preview when untouched', async () => {
     vi.useFakeTimers()
     vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: true, has_plan: false })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'summarize this' } })
     await vi.advanceTimersByTimeAsync(600)
@@ -1065,7 +949,7 @@ describe('MissionForm: light mission toggle', () => {
   it('an operator-touched toggle is never overridden by a later classify preview', async () => {
     vi.useFakeTimers()
     vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: true, has_plan: false })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'summarize this' } })
     // The goal's own summarize-shaped text pre-fills the toggle on
@@ -1083,7 +967,7 @@ describe('MissionForm: light mission toggle', () => {
 
   it('submits light=true for a general mission when checked', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm8' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByLabelText(/Light mission/))
@@ -1096,7 +980,7 @@ describe('MissionForm: light mission toggle', () => {
 
   it('omits light from the create payload for a coding mission', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm9' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
@@ -1110,7 +994,7 @@ describe('MissionForm: light mission toggle', () => {
 
 describe('MissionForm: has-plan checkbox', () => {
   it('shows the checkbox for a general mission', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
@@ -1118,7 +1002,7 @@ describe('MissionForm: has-plan checkbox', () => {
   })
 
   it('shows the checkbox for a coding mission too, unlike the light toggle', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
@@ -1129,7 +1013,7 @@ describe('MissionForm: has-plan checkbox', () => {
   it('defaults the checkbox from the classify preview when untouched', async () => {
     vi.useFakeTimers()
     vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: false, has_plan: true })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), {
       target: { value: 'Do the following:\n1. do a\n2. do b' },
@@ -1143,7 +1027,7 @@ describe('MissionForm: has-plan checkbox', () => {
   it('an operator-touched checkbox is never overridden by a later classify preview', async () => {
     vi.useFakeTimers()
     vi.mocked(classifyMission).mockResolvedValue({ kind: 'general', light: false, has_plan: true })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(screen.getByLabelText(/Goal already contains the plan/))
@@ -1166,7 +1050,7 @@ describe('MissionForm: has-plan checkbox', () => {
 
   it('submits has_plan=true when checked, and omits it when left unchecked', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm10' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByLabelText(/Goal already contains the plan/))
@@ -1179,7 +1063,7 @@ describe('MissionForm: has-plan checkbox', () => {
 
   it('omits has_plan from the create payload when left unchecked', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm11' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
@@ -1250,7 +1134,7 @@ async function toCodingMission() {
 describe('MissionForm: repository source', () => {
   it('defaults to None and omits repo_url/connector_id from the create payload', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm8' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     expect(screen.getByRole('radio', { name: 'None' })).toHaveAttribute('aria-checked', 'true')
@@ -1264,7 +1148,7 @@ describe('MissionForm: repository source', () => {
   })
 
   it('hides the repository section for a general mission', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
@@ -1273,7 +1157,7 @@ describe('MissionForm: repository source', () => {
 
   it('shows a hint linking to Settings → Connectors when no github connector exists', async () => {
     vi.mocked(listConnectors).mockResolvedValue([])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     fireEvent.click(screen.getByRole('radio', { name: 'Repository' }))
@@ -1298,7 +1182,7 @@ describe('MissionForm: repository source', () => {
       },
     ])
     vi.mocked(createMission).mockResolvedValue({ id: 'm10' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     fireEvent.click(screen.getByRole('radio', { name: 'Repository' }))
@@ -1334,7 +1218,7 @@ describe('MissionForm: repository source', () => {
       },
     ])
     vi.mocked(createMission).mockResolvedValue({ id: 'm11' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     fireEvent.click(screen.getByRole('radio', { name: 'Repository' }))
@@ -1360,7 +1244,7 @@ describe('MissionForm: repository source', () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     vi.mocked(createMission).mockResolvedValue({ id: 'm9' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     fireEvent.click(screen.getByRole('radio', { name: 'Repository' }))
@@ -1392,7 +1276,7 @@ describe('MissionForm: repository source', () => {
   it('surfaces a repo list load error inline', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockRejectedValue(new Error('bad credentials'))
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     fireEvent.click(screen.getByRole('radio', { name: 'Repository' }))
@@ -1406,7 +1290,7 @@ describe('MissionForm: repository source', () => {
   it('disables submit for the GitHub source until a connector and repo are chosen', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     fireEvent.click(screen.getByRole('radio', { name: 'Repository' }))
@@ -1453,7 +1337,7 @@ describe('MissionForm: destinations (github, issue #561)', () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     vi.mocked(listDestinations).mockResolvedValue([githubDestination])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMissionWithRepo()
     expect(await screen.findByText('Destinations')).toBeInTheDocument()
@@ -1478,7 +1362,7 @@ describe('MissionForm: destinations (github, issue #561)', () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     vi.mocked(listDestinations).mockResolvedValue([gitlabDestination])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     fireEvent.click(await screen.findByLabelText(/^gitlab repo/))
@@ -1493,7 +1377,7 @@ describe('MissionForm: destinations (github, issue #561)', () => {
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     vi.mocked(listDestinations).mockResolvedValue([githubDestination])
     vi.mocked(createMission).mockResolvedValue({ id: 'm11' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMissionWithRepo()
     fireEvent.click(screen.getByLabelText(/^origin repo/))
@@ -1517,7 +1401,7 @@ describe('MissionForm: destinations (github, issue #561)', () => {
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     vi.mocked(listDestinations).mockResolvedValue([githubDestination])
     vi.mocked(createMission).mockResolvedValue({ id: 'm12' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
@@ -1531,7 +1415,7 @@ describe('MissionForm: destinations (github, issue #561)', () => {
 
   it('blocks submit and shows a note when a github destination is checked on a non-coding mission', async () => {
     vi.mocked(listDestinations).mockResolvedValue([githubDestination])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     await screen.findByText('General · scratch workspace')
@@ -1542,154 +1426,12 @@ describe('MissionForm: destinations (github, issue #561)', () => {
   })
 })
 
-describe('MissionForm: create mode, repeat on a cron', () => {
+describe('MissionForm: agent and routes', () => {
   beforeEach(() => {
     vi.mocked(listAgents).mockResolvedValue([defaultAgent])
   })
 
-  it('submits an automation with the default agent, goal as name, preset cron, and general kind', async () => {
-    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc1' })
-    const onDone = vi.fn()
-    renderForm(<MissionForm mode="create" onDone={onDone} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), {
-      target: { value: 'Check the news every morning' },
-    })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
-    await screen.findByText('Agent')
-    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
-
-    await waitFor(() => expect(createAutomation).toHaveBeenCalled())
-    const input = vi.mocked(createAutomation).mock.calls[0][0]
-    expect(input).toEqual({
-      name: 'Check the news every morning',
-      agent_id: 'agent-default',
-      action: { kind: 'mission', mission: expect.objectContaining({ goal: 'Check the news every morning', kind: 'general', auto_approve_tools: true }) },
-      triggers: [{ kind: 'cron', config: { expr: '0 7 * * *' } }],
-      expires_at: undefined,
-    })
-    expect(input.action.mission).not.toHaveProperty('agent_id')
-    expect(createMission).not.toHaveBeenCalled()
-    expect(onDone).toHaveBeenCalledWith({ kind: 'automation', id: 'sc1' })
-    expect(toast.success).toHaveBeenCalledWith('Automation created')
-  })
-
-  it('blocks submit when no agent is picked and no default agent loads', async () => {
-    vi.mocked(listAgents).mockResolvedValue([])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
-    await waitFor(() => expect(screen.queryByText('Agent')).toBeNull())
-    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
-
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Pick an agent for the automation'))
-    expect(createAutomation).not.toHaveBeenCalled()
-  })
-
-  it('sends the picked agent instead of the default', async () => {
-    vi.mocked(listAgents).mockResolvedValue([defaultAgent, makeAgent({ id: 'a2', name: 'briefing' })])
-    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc3' })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
-    await screen.findByText('Agent')
-    fireEvent.click(screen.getAllByRole('combobox')[1])
-    fireEvent.click(await screen.findByText('briefing'))
-    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
-
-    await waitFor(() =>
-      expect(createAutomation).toHaveBeenCalledWith(expect.objectContaining({ agent_id: 'a2' })),
-    )
-  })
-
-  it('shows the attachment picker while repeating and submits it on the template', async () => {
-    vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att5', mime: 'application/pdf', size_bytes: 100 })
-    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc2' })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Digest the attached spec' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
-
-    const file = new File(['%PDF-1.4'], 'spec.pdf', { type: 'application/pdf' })
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement
-    fireEvent.change(input, { target: { files: [file] } })
-    await screen.findByText('spec.pdf')
-    await screen.findByText('Agent')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
-
-    await waitFor(() =>
-      expect(createAutomation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: {
-            kind: 'mission',
-            mission: expect.objectContaining({ attachments: [{ id: 'att5', name: 'spec.pdf' }] }),
-          },
-        }),
-      ),
-    )
-  })
-
-  it('forces kind to general and locks it when repeat turns on with coding selected', async () => {
-    vi.useFakeTimers()
-    vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false, has_plan: false })
-    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc1' })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    await vi.advanceTimersByTimeAsync(600)
-    await vi.advanceTimersByTimeAsync(0)
-    expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
-    expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
-
-    vi.useRealTimers()
-    await screen.findByText('Agent')
-    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
-
-    await waitFor(() =>
-      expect(createAutomation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: { kind: 'mission', mission: expect.objectContaining({ kind: 'general' }) },
-        }),
-      ),
-    )
-  })
-
-  it('disables the chip toggle while repeating (coding unavailable)', async () => {
-    vi.useFakeTimers()
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
-    await vi.advanceTimersByTimeAsync(600)
-    await vi.advanceTimersByTimeAsync(0)
-
-    expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
-    fireEvent.click(screen.getByText('General · scratch workspace'))
-    // Still general: the chip toggle no-ops for coding while repeating.
-    expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
-    vi.useRealTimers()
-  })
-
-  it('blocks submit on a malformed custom cron shape', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
-    fireEvent.click(screen.getAllByRole('combobox')[0])
-    fireEvent.click(await screen.findByText('Custom'))
-    fireEvent.change(screen.getByLabelText('Cron expression'), { target: { value: 'bad cron' } })
-
-    const submitButton = screen.getByRole('button', { name: 'Create automation' }) as HTMLButtonElement
-    expect(submitButton.disabled).toBe(true)
-    expect(createAutomation).not.toHaveBeenCalled()
-  })
-
-  it('cascades the picked agent onto review route the same as a one-off mission', async () => {
+  it('cascades the picked agent onto review route', async () => {
     vi.mocked(listAgents).mockResolvedValue([
       {
         id: 'a1',
@@ -1705,14 +1447,11 @@ describe('MissionForm: create mode, repeat on a cron', () => {
         review_route: 'careful',
       },
     ])
-    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc1' })
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
-
-    // Combobox order while repeating: Runs (cron preset), then Agent.
-    fireEvent.click(screen.getAllByRole('combobox')[1])
+    await screen.findByText('Agent')
+    fireEvent.click(screen.getAllByRole('combobox')[0])
     fireEvent.click(await screen.findByText('briefing'))
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
 
@@ -1720,7 +1459,7 @@ describe('MissionForm: create mode, repeat on a cron', () => {
   })
 
   it('renders route selects fed from the live routes list, excluding disabled routes', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
@@ -1733,7 +1472,7 @@ describe('MissionForm: create mode, repeat on a cron', () => {
 
   it('submits the picked route and review route', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm4' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
@@ -1751,7 +1490,7 @@ describe('MissionForm: create mode, repeat on a cron', () => {
 
 describe('MissionForm: plan route', () => {
   it('renders the Plan route select in Advanced, defaulted to "Same as build route"', async () => {
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
@@ -1763,7 +1502,7 @@ describe('MissionForm: plan route', () => {
 
   it('submits plan_route when a route other than the default is picked', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm13' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })
     fireEvent.click(screen.getByRole('button', { name: 'Show advanced options' }))
@@ -1780,7 +1519,7 @@ describe('MissionForm: plan route', () => {
 
   it('omits plan_route from the create payload when left on the default', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm14' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Fix a bug' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
@@ -1790,187 +1529,6 @@ describe('MissionForm: plan route', () => {
     )
   })
 
-  it('hydrates plan_route from the automation template in edit mode', async () => {
-    const automationWithPlanRoute: Automation = withMission({ plan_route: 'careful' })
-    renderForm(
-      <MissionForm mode="edit" automation={automationWithPlanRoute} onDone={vi.fn()} onCancel={vi.fn()} />,
-    )
-
-    await screen.findByDisplayValue('weekly-digest')
-    expect(screen.getByLabelText('Plan route')).toHaveTextContent('careful')
-  })
-
-  it('submits the hydrated plan_route unchanged on save', async () => {
-    vi.mocked(patchAutomation).mockResolvedValue(automation)
-    const automationWithPlanRoute: Automation = withMission({ plan_route: 'careful' })
-    renderForm(
-      <MissionForm mode="edit" automation={automationWithPlanRoute} onDone={vi.fn()} onCancel={vi.fn()} />,
-    )
-
-    await screen.findByDisplayValue('weekly-digest')
-    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
-
-    await waitFor(() =>
-      expect(patchAutomation).toHaveBeenCalledWith(
-        's1',
-        expect.objectContaining({
-          action: { kind: 'mission', mission: expect.objectContaining({ plan_route: 'careful' }) },
-        }),
-      ),
-    )
-  })
-})
-
-describe('MissionForm: edit mode', () => {
-  it('prefills from the automation, chip locked to the template kind', async () => {
-    renderForm(<MissionForm mode="edit" automation={automation} onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    expect(await screen.findByDisplayValue('weekly-digest')).toBeTruthy()
-    expect(screen.getByDisplayValue('Summarize the week')).toBeTruthy()
-    expect(screen.getByText('Weekdays, 8:00 AM')).toBeTruthy()
-    expect(screen.getByLabelText('Expires')).toHaveTextContent('Aug 1, 2026, 12:30')
-    expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
-    expect(classifyMission).not.toHaveBeenCalled()
-  })
-
-  it('preloads the automation template attachments and sends them back on save', async () => {
-    vi.mocked(patchAutomation).mockResolvedValue(automation)
-    const seeded = withMission({ attachments: [{ id: 'att9', name: 'spec.pdf', mime: 'application/pdf' }] })
-    renderForm(<MissionForm mode="edit" automation={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    await screen.findByDisplayValue('weekly-digest')
-    expect(await screen.findByText('spec.pdf')).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
-    await waitFor(() =>
-      expect(patchAutomation).toHaveBeenCalledWith(
-        's1',
-        expect.objectContaining({
-          action: {
-            kind: 'mission',
-            mission: expect.objectContaining({ attachments: [{ id: 'att9', name: 'spec.pdf' }] }),
-          },
-        }),
-      ),
-    )
-  })
-
-  it('auto-expands Advanced when the automation has a non-default review route', async () => {
-    renderForm(<MissionForm mode="edit" automation={automation} onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    await screen.findByDisplayValue('weekly-digest')
-    expect(screen.getByLabelText('Review route')).toBeInTheDocument()
-  })
-
-  it('preserves the automation kind in the patch payload and never shows Run once', async () => {
-    vi.mocked(patchAutomation).mockResolvedValue(automation)
-    const onDone = vi.fn()
-    renderForm(<MissionForm mode="edit" automation={automation} onDone={onDone} onCancel={vi.fn()} />)
-
-    expect(screen.queryByRole('radio', { name: 'Run once' })).toBeNull()
-
-    await screen.findByDisplayValue('weekly-digest')
-    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
-
-    await waitFor(() =>
-      expect(patchAutomation).toHaveBeenCalledWith(
-        's1',
-        expect.objectContaining({
-          name: 'weekly-digest',
-          action: { kind: 'mission', mission: expect.objectContaining({ kind: 'general' }) },
-        }),
-      ),
-    )
-    expect(onDone).toHaveBeenCalledWith({ kind: 'automation', id: 's1' })
-    expect(toast.success).toHaveBeenCalledWith('Automation updated')
-  })
-
-  it('patches the cron trigger in place by id and the agent, and omits an untouched expiry', async () => {
-    vi.mocked(patchAutomation).mockResolvedValue(automation)
-    const withManual: Automation = {
-      ...automation,
-      triggers: [
-        ...automation.triggers,
-        { ...automation.triggers[0], id: 't2', kind: 'manual', config: {}, tool_allowlist: ['search_mail'] },
-      ],
-    }
-    renderForm(<MissionForm mode="edit" automation={withManual} onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    await screen.findByDisplayValue('weekly-digest')
-    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
-
-    await waitFor(() => expect(patchAutomation).toHaveBeenCalled())
-    const [id, patch] = vi.mocked(patchAutomation).mock.calls[0]
-    expect(id).toBe('s1')
-    expect(patch.agent_id).toBe('a1')
-    expect(patch.triggers).toEqual([
-      { id: 't1', kind: 'cron', config: { expr: '0 8 * * 1-5' }, enabled: true },
-      { id: 't2', kind: 'manual', config: {}, tool_allowlist: ['search_mail'], enabled: true },
-    ])
-    expect(patch).not.toHaveProperty('expires_at')
-    expect(patch.action?.mission).not.toHaveProperty('agent_id')
-  })
-
-  it('adds a cron trigger without an id when the automation has none', async () => {
-    vi.mocked(patchAutomation).mockResolvedValue(automation)
-    renderForm(
-      <MissionForm mode="edit" automation={{ ...automation, triggers: [] }} onDone={vi.fn()} onCancel={vi.fn()} />,
-    )
-
-    await screen.findByDisplayValue('weekly-digest')
-    expect(screen.getByText('Daily, 7:00 AM')).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
-
-    await waitFor(() =>
-      expect(patchAutomation).toHaveBeenCalledWith(
-        's1',
-        expect.objectContaining({ triggers: [{ id: undefined, kind: 'cron', config: { expr: '0 7 * * *' }, enabled: true }] }),
-      ),
-    )
-  })
-
-  it('picks a new expiry date from the calendar and submits it', async () => {
-    // The calendar defaults its open month to the real current date, not
-    // the fixture's expires_at — fake only Date so "August 15th, 2026"
-    // stays clickable regardless of when the suite actually runs, while
-    // findByRole/waitFor's polling keeps using real timers.
-    vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(new Date('2026-08-01T00:00:00Z'))
-    vi.mocked(patchAutomation).mockResolvedValue(automation)
-    renderForm(<MissionForm mode="edit" automation={automation} onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    await screen.findByDisplayValue('weekly-digest')
-    fireEvent.click(screen.getByLabelText('Expires'))
-    fireEvent.click(await screen.findByRole('button', { name: /August 15th, 2026/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
-
-    await waitFor(() =>
-      expect(patchAutomation).toHaveBeenCalledWith(
-        's1',
-        expect.objectContaining({
-          expires_at: expect.stringContaining('-15T12:30'),
-        }),
-      ),
-    )
-  })
-
-  it('clears the expiry back to never', async () => {
-    vi.mocked(patchAutomation).mockResolvedValue(automation)
-    renderForm(<MissionForm mode="edit" automation={automation} onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    await screen.findByDisplayValue('weekly-digest')
-    fireEvent.click(screen.getByLabelText('Expires'))
-    fireEvent.click(await screen.findByRole('button', { name: 'Clear' }))
-    expect(screen.getByLabelText('Expires')).toHaveTextContent('Never')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
-    await waitFor(() =>
-      expect(patchAutomation).toHaveBeenCalledWith(
-        's1',
-        expect.objectContaining({ expires_at: null }),
-      ),
-    )
-  })
 })
 
 function makePhase(overrides: Partial<ExecutionPlanPhase> = {}): ExecutionPlanPhase {
@@ -2031,7 +1589,7 @@ const fivePhases: ExecutionPlanPhase[] = [
 describe('MissionForm: execution plan', () => {
   it('renders the execution plan table with a harness phase label and prices', async () => {
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
 
@@ -2055,7 +1613,7 @@ describe('MissionForm: execution plan', () => {
       p.phase === 'plan' ? { ...p, skipped: true, skip_reason: 'light mission' } : p,
     )
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
 
@@ -2083,7 +1641,7 @@ describe('MissionForm: execution plan', () => {
         : p,
     )
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
 
@@ -2100,7 +1658,7 @@ describe('MissionForm: execution plan', () => {
         : p,
     )
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
 
@@ -2111,7 +1669,7 @@ describe('MissionForm: execution plan', () => {
   it('picking an entry in the build model select submits route_model, and Auto omits it', async () => {
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
     vi.mocked(createMission).mockResolvedValue({ id: 'm-pin' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
     await screen.findByLabelText('Build model')
@@ -2131,7 +1689,7 @@ describe('MissionForm: execution plan', () => {
   it('omits route_model from the create payload when left on Auto', async () => {
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
     vi.mocked(createMission).mockResolvedValue({ id: 'm-pin-2' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
     await screen.findByLabelText('Build model')
@@ -2144,7 +1702,7 @@ describe('MissionForm: execution plan', () => {
 
   it('picking an entry then switching back to Auto clears the pin', async () => {
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
     await screen.findByLabelText('Build model')
@@ -2165,7 +1723,7 @@ describe('MissionForm: execution plan', () => {
       return p
     })
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
     await screen.findByText('This mission will run')
@@ -2203,7 +1761,7 @@ describe('MissionForm: unusable route gate', () => {
         : p,
     )
     vi.mocked(getMissionExecutionPlan).mockResolvedValue(plan)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
     expect(await screen.findByRole('alert')).toHaveTextContent(
@@ -2228,7 +1786,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
   it('proposes the connector + repo named in the goal and shows a note', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMissionForProposal('Clone octocat/hello-world and audit its dependencies')
 
@@ -2240,7 +1798,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
   it('labels a fuzzy match as a guess', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMissionForProposal('Clone the hello repo and audit its dependencies')
 
@@ -2250,7 +1808,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
   it('clears the proposal and suppresses it for the same goal text', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     const goalText = 'Clone octocat/hello-world and audit its dependencies'
     await toCodingMissionForProposal(goalText)
@@ -2270,7 +1828,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
   it('never overrides a source the operator picked by hand', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMission()
     fireEvent.click(screen.getByRole('radio', { name: 'Repository' }))
@@ -2295,7 +1853,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
     ]
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(ambiguousRepos)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMissionForProposal('Clone the widget repo and audit its dependencies')
 
@@ -2312,7 +1870,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
   it('proposes nothing for a general-kind goal', async () => {
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), {
       target: { value: 'Summarize the octocat/hello-world repo activity' },
@@ -2326,7 +1884,7 @@ describe('MissionForm: goal repo proposal (issue #563)', () => {
 
   it('renders nothing extra when no github connector exists', async () => {
     vi.mocked(listConnectors).mockResolvedValue([])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMissionForProposal('Clone octocat/hello-world and audit its dependencies')
     await new Promise((r) => setTimeout(r, 500))
@@ -2341,7 +1899,7 @@ describe('MissionForm: destination push-wording suggestion (issue #563)', () => 
     vi.mocked(listConnectors).mockResolvedValue([githubConnector])
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     vi.mocked(listDestinations).mockResolvedValue([githubDestination])
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMissionForProposal('Clone octocat/hello-world, fix the bug, and push the branch')
 
@@ -2360,7 +1918,7 @@ describe('MissionForm: destination push-wording suggestion (issue #563)', () => 
     vi.mocked(listConnectorRepos).mockResolvedValue(repos)
     vi.mocked(listDestinations).mockResolvedValue([githubDestination])
     vi.mocked(createMission).mockResolvedValue({ id: 'm20' } as Mission)
-    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await toCodingMissionForProposal('Clone octocat/hello-world, fix the bug, and open a pull request')
     await screen.findByText(/The goal mentions pushing/)
@@ -2369,5 +1927,38 @@ describe('MissionForm: destination push-wording suggestion (issue #563)', () => 
     await waitFor(() =>
       expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ destination_ids: undefined })),
     )
+  })
+})
+
+describe('MissionForm: make this recurring', () => {
+  it('has no repeat toggle any more', () => {
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
+    expect(screen.queryByRole('radio', { name: 'Repeat on a cron' })).toBeNull()
+    expect(screen.queryByText('When it runs')).toBeNull()
+  })
+
+  it('opens the automation editor prefilled with the mission fields and agent', async () => {
+    vi.mocked(listAgents).mockResolvedValue([makeAgent({ id: 'a2', name: 'briefing' })])
+    const router = createMemoryRouter(
+      [
+        { path: '/missions/new', element: <MissionForm onDone={vi.fn()} onCancel={vi.fn()} /> },
+        { path: '/automations/new', element: <div>automation editor</div> },
+      ],
+      { initialEntries: ['/missions/new'] },
+    )
+    render(<RouterProvider router={router} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: '  Summarize my inbox  ' } })
+    await screen.findByText('Agent')
+    fireEvent.click(screen.getAllByRole('combobox')[0])
+    fireEvent.click(await screen.findByText('briefing'))
+    fireEvent.click(screen.getByRole('button', { name: 'Make this recurring' }))
+
+    expect(router.state.location.pathname).toBe('/automations/new')
+    const state = router.state.location.state as { prefill: { action: { kind: string; mission: Record<string, unknown> }; agent_id?: string } }
+    expect(state.prefill.agent_id).toBe('a2')
+    expect(state.prefill.action.kind).toBe('mission')
+    expect(state.prefill.action.mission).toMatchObject({ goal: 'Summarize my inbox', kind: 'general', auto_approve_tools: true })
+    expect(createMission).not.toHaveBeenCalled()
   })
 })

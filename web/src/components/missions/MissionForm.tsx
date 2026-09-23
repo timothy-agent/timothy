@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import {
   classifyMission,
   type CreateMissionInput,
   createMission,
-  createAutomation,
   type ExecutorOption,
   getMissionExecutionPlan,
   getMissionExecutorOptions,
@@ -14,13 +13,11 @@ import {
   listConnectors,
   listDestinations,
   listKbCollections,
-  patchAutomation,
 } from '../../api/client'
 import type {
   AdminAgent,
   AdminConnector,
   AdminRoute,
-  Automation,
   Destination,
   ExecutionPlanPhase,
   GitHubRepo,
@@ -29,20 +26,16 @@ import type {
   Reference,
 } from '../../api/types'
 import { useAgents, useRoutes } from '../AgentPicker'
-import { slugify } from '../../lib/slugify'
-import { cronExpr, cronPresets, cronTrigger, type CronPresetValue, presetFor } from '../../lib/cron'
 import { CURRENCIES } from '../../lib/currencies'
 import { extractRepoMentions, matchRepo } from '../../lib/goalRepo'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
-import { Calendar } from '../ui/calendar'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../ui/command'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { Textarea } from '../ui/textarea'
 import { SegmentedControl } from '../timothy/segmented-control'
 import { errText } from '../../lib/errors'
 import { gitKindMeta, isGitKind } from '../../lib/gitKinds'
@@ -99,26 +92,11 @@ const kindCopy: Record<Kind, string> = {
   general: 'General · scratch workspace',
 }
 
-// An automation's mission template carries route/review_route as explicit
-// undefined when unset (see types.ts): "non-default" means any of
-// them actually has a value. Budget and auto-approve are always
-// visible now, so they never force the advanced section open.
-function hasNonDefaults(t: MissionTemplate): boolean {
-  return !!(
-    t.route ||
-    t.review_route ||
-    t.plan_route ||
-    t.harness ||
-    t.review_harness ||
-    t.environment
-  )
-}
-
 // Radix Select.Item rejects an empty string value, so the "no route
 // chosen" state is represented by this sentinel on the wire between the
 // Select and the route/reviewRoute/escalationRoute state (which stay ''
 // to match the API's own empty-means-default semantics).
-const ROUTE_DEFAULT = '__default__'
+export const ROUTE_DEFAULT = '__default__'
 
 // defaultRouteLabel mirrors the server's own empty-route resolution
 // (internal/brain/api/missions.go's CreateMission handler +
@@ -181,7 +159,7 @@ export const executorChoices: { value: string; label: string }[] = [
 // Native (the default, wire value '') plus the registered adapters.
 // cursor-cli and opencode have no read-only mode, so picking them would
 // only ever fall back to native; they are left out.
-const reviewHarnessChoices: { value: string; label: string }[] = [
+export const reviewHarnessChoices: { value: string; label: string }[] = [
   { value: EXECUTOR_DEFAULT, label: 'Native' },
   ...executorChoices.filter((c) => ['claude-cli', 'pi', 'codex-cli'].includes(c.value)),
 ]
@@ -228,11 +206,11 @@ function defaultEscalationRouteLabel(): string {
 // Sentinel for the environment Select's "auto-detect" choice: wire
 // value stays '' (omit environment from the create payload) to match
 // the API's own empty-means-auto-detect semantics (D-05x).
-const ENVIRONMENT_AUTO = '__auto__'
+export const ENVIRONMENT_AUTO = '__auto__'
 
 // environmentChoices maps an environment Select value to its label:
 // mirrors sandboxd's image allowlist (internal/sandboxd/manager.go).
-const environmentChoices: { value: string; label: string }[] = [
+export const environmentChoices: { value: string; label: string }[] = [
   { value: ENVIRONMENT_AUTO, label: 'Auto-detect' },
   { value: 'base', label: 'Base' },
   { value: 'go', label: 'Go' },
@@ -261,56 +239,17 @@ function looksLikeLightGoal(goal: string): boolean {
 // hint, never auto-checked.
 const pushSignalPattern = /\b(push|pull request|pr|merge request)\b/i
 
-// expiresAt is stored as the wire-compatible 'YYYY-MM-DDTHH:mm' string the
-// API already expects; these split it into a Date (for the calendar) and a
-// 'HH:mm' string (for the time input) and back.
-function expiresAtToDate(v: string): Date | undefined {
-  if (!v) return undefined
-  const [datePart, timePart] = v.split('T')
-  const [y, m, d] = datePart.split('-').map(Number)
-  const [h, min] = (timePart ?? '00:00').split(':').map(Number)
-  return new Date(y, m - 1, d, h, min)
-}
-
-function expiresAtToTime(v: string): string {
-  return v.split('T')[1] ?? '00:00'
-}
-
-function dateAndTimeToExpiresAt(date: Date, time: string): string {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}T${time}`
-}
-
-function formatExpiresAt(v: string): string {
-  const date = expiresAtToDate(v)
-  if (!date) return 'Never'
-  return `${date.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  })}, ${expiresAtToTime(v)}`
-}
-
-// MissionForm is the shared form behind both the new-mission page and
-// the edit-automation page. In 'create' mode it submits a one-off
-// mission or, with "Repeat on a cron" on, a new automation. In 'edit'
-// mode it always patches the given automation and locks out run-once,
-// coding, and the escalation route: the same constraints
-// the old mission and automation dialogs enforced.
+// MissionForm is the new-mission page's form: it creates a one-off
+// mission, and "Make this recurring" hands its fields to the automation
+// editor.
 export function MissionForm({
-  mode,
-  automation,
   initial,
   initialGoal,
   parentMissionId,
   onDone,
   onCancel,
 }: {
-  mode: 'create' | 'edit'
-  automation?: Automation
-  // initial seeds the form's create-mode state from a parent mission
+  // initial seeds the form's state from a parent mission
   // (a follow-up): everything except goal, which comes from
   // initialGoal or is left empty for the user to type. Read only
   // once, in the useState initializers
@@ -323,9 +262,10 @@ export function MissionForm({
   // parentMissionId, when set, is included on the create payload:
   // makes this a follow-up mission (see CreateMissionInput).
   parentMissionId?: string
-  onDone: (result: { kind: 'mission' | 'automation'; id: string }) => void
+  onDone: (missionId: string) => void
   onCancel: () => void
 }) {
+  const navigate = useNavigate()
   const agents = useAgents()
   const routes = useRoutes()
   const enabledRoutes = routes?.filter((r) => r.enabled) ?? []
@@ -336,17 +276,14 @@ export function MissionForm({
   )
   // attachments, like goal, is never seeded from a follow-up's initial:
   // a follow-up carries the parent's outcome digest as prompt context,
-  // not its documents; each new mission attaches its own. Edit mode
-  // seeds it from the automation's own stored template attachments
-  // (issue #359, see the automation-load effect below).
+  // not its documents; each new mission attaches its own.
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   // references picked via the goal field's # mentions: component
   // state only, resolved server-side at create time.
   const [references, setReferences] = useState<Reference[]>([])
   const [kind, setKind] = useState<Kind>(initial?.kind ?? 'general')
   // kindLocked freezes kind against further auto-classify calls once
-  // the user has explicitly chosen it (chip click, or the repeat-mode
-  // general override below): cleared when the goal is emptied, which
+  // the user has explicitly chosen it (chip click): cleared when the goal is emptied, which
   // resets to auto-detect for whatever's typed next. A follow-up's
   // seeded kind counts as an explicit choice too.
   const [kindLocked, setKindLocked] = useState(!!initial?.kind)
@@ -365,15 +302,13 @@ export function MissionForm({
   // "light", else "full") unless the operator has picked a flow
   // directly (flowTouched), same "permanently defer once touched"
   // pattern as lightTouched (#447). An explicit initial flow (editing
-  // a follow-up/repeat seeded from an existing mission) counts as
+  // a follow-up seeded from an existing mission) counts as
   // touched, same as initial light above.
   const [flow, setFlow] = useState<Flow>(initial?.flow ?? (initial?.light ? 'light' : 'full'))
   const [flowTouched, setFlowTouched] = useState(!!initial?.flow)
   const [agentID, setAgentID] = useState(initial?.agent_id ?? '')
   // Destinations multi-select: visible, not advanced; default is
-  // empty (deliver nowhere). Offered for a one-off create, a new
-  // automation (repeat on), and editing an existing automation: fetched
-  // once per form regardless of mode.
+  // empty (deliver nowhere). Fetched once per form.
   const [destinations, setDestinations] = useState<Destination[] | null>(null)
   const [destinationIDs, setDestinationIDs] = useState<string[]>(initial?.destination_ids ?? [])
   useEffect(() => {
@@ -526,10 +461,7 @@ export function MissionForm({
   // Never runs again for goal text the operator already cleared a
   // proposal for.
   useEffect(() => {
-    // Coding is unavailable while repeating (toggleKind/the repeat
-    // toggle both enforce that), so kind === 'coding' already implies
-    // !repeat here.
-    if (kind !== 'coding' || mode !== 'create') return
+    if (kind !== 'coding') return
     if (repoSource !== 'none' && !sourceProposed) return // a hand-picked source is never touched
     if (!githubConnectors || githubConnectors.length === 0) return
     if (goal.trim() === '' || goal === clearedForGoal) return
@@ -587,7 +519,7 @@ export function MissionForm({
       cancelled = true
       clearTimeout(t)
     }
-  }, [goal, kind, mode, repoSource, sourceProposed, githubConnectors, clearedForGoal, repoCache])
+  }, [goal, kind, repoSource, sourceProposed, githubConnectors, clearedForGoal, repoCache])
 
   // clearProposal resets the repo source and note, and suppresses
   // further proposals for the current goal text: the operator's clear
@@ -668,11 +600,8 @@ export function MissionForm({
     light,
   ])
 
-  // Pre-select the settings page's configured default currency for a
-  // fresh create: edit mode below overwrites this with the automation's
-  // own saved currency once it loads.
+  // Pre-select the settings page's configured default currency.
   useEffect(() => {
-    if (mode !== 'create') return
     getSettings()
       .then((s) => {
         const v = s.values.default_currency
@@ -681,9 +610,9 @@ export function MissionForm({
       .catch(() => {
         // Best-effort: falls back to the USD default already set.
       })
-  }, [mode])
+  }, [])
 
-  // Read-only, both modes: names the harness the settings-page
+  // Read-only: names the harness the settings-page
   // coding_executor value resolves to, purely for the Harness select's
   // "Default" label. Best-effort: an empty value just shows the plain
   // "Default (from settings)" fallback.
@@ -695,67 +624,12 @@ export function MissionForm({
       })
   }, [])
 
-  // Repeat-on-a-cron fields: read/submitted whenever repeat is on
-  // (create mode) or always (edit mode, which only ever edits an
-  // automation).
-  const [repeat, setRepeat] = useState(mode === 'edit')
-  const [automationName, setAutomationName] = useState('')
-  const [preset, setPreset] = useState<CronPresetValue>('daily-7am')
-  const [cron, setCron] = useState<string>(cronPresets[0].cron ?? '0 7 * * *')
-  const [cronError, setCronError] = useState<string | null>(null)
-  const [maxIterations, setMaxIterations] = useState('')
-  const [expiresAt, setExpiresAt] = useState('')
-  // seededExpiresAt is the edit-mode starting value: an unchanged
-  // expiry is left out of the patch.
-  const [seededExpiresAt, setSeededExpiresAt] = useState('')
-
-  // Edit mode: re-seed every time the automation to edit changes.
-  useEffect(() => {
-    if (mode !== 'edit' || !automation) return
-    const t = automation.action.mission
-    const expr = cronExpr(automation) ?? cronPresets[0].cron
-    setAutomationName(automation.name)
-    setCron(expr)
-    setPreset(presetFor(expr))
-    setGoal(t.goal)
-    setKind(t.kind)
-    setKindLocked(true)
-    setAgentID(automation.agent_id)
-    setLight(t.light ?? false)
-    setLightTouched(true)
-    setAutoApproveTools(t.auto_approve_tools ?? true)
-    setShowAdvanced(hasNonDefaults(t))
-    setRoute(t.route ?? '')
-    setReviewRoute(t.review_route ?? '')
-    setPlanRoute(t.plan_route ?? '')
-    setMaxIterations(t.max_iterations != null ? String(t.max_iterations) : '')
-    setBudget(t.budget_amount != null ? String(t.budget_amount) : '')
-    setBudgetCurrency(t.budget_currency || 'USD')
-    setHarness(t.harness ?? '')
-    setReviewHarness(t.review_harness ?? '')
-    setEnvironment(t.environment ?? '')
-    setDestinationIDs(t.destination_ids ?? [])
-    setAttachments(
-      (t.attachments ?? []).map((a) => ({
-        id: a.id,
-        mime: a.mime ?? '',
-        previewUrl: '',
-        name: a.name,
-      })),
-    )
-    const expires = automation.expires_at ? automation.expires_at.slice(0, 16) : ''
-    setExpiresAt(expires)
-    setSeededExpiresAt(expires)
-    setCronError(null)
-  }, [mode, automation])
-
   // Live kind inference: debounced 600ms after goal edits, skipped
   // once the user has locked a manual choice or the goal is empty.
   // Unlocking on an emptied goal happens in the textarea's onChange
   // below (a direct user edit), not here: this effect also runs on
-  // mount/automation-load with the PREVIOUS render's goal, and clearing
-  // the lock from here would race the automation-seed effect's own
-  // setKindLocked(true) and stomp it back to false.
+  // mount with the PREVIOUS render's goal, and clearing the lock from
+  // here would stomp a seeded lock back to false.
   useEffect(() => {
     if (goal.trim() === '' || kindLocked) return
     setClassifying(true)
@@ -809,7 +683,6 @@ export function MissionForm({
   }
 
   const toggleKind = () => {
-    if (repeat && kind === 'general') return // coding is unavailable while repeating
     setKind((k) => (k === 'coding' ? 'general' : 'coding'))
     setKindLocked(true)
   }
@@ -822,40 +695,14 @@ export function MissionForm({
     }
   }
 
-  const pickPreset = (v: CronPresetValue) => {
-    setPreset(v)
-    const found = cronPresets.find((p) => p.value === v)
-    if (found?.cron) setCron(found.cron)
-  }
-
-  const pickExpiresDate = (date: Date | undefined) => {
-    if (!date) return
-    setExpiresAt(dateAndTimeToExpiresAt(date, expiresAtToTime(expiresAt) || '00:00'))
-  }
-
-  const pickExpiresTime = (time: string) => {
-    const date = expiresAtToDate(expiresAt) ?? new Date()
-    setExpiresAt(dateAndTimeToExpiresAt(date, time))
-  }
-
-  // A client-side 5-field shape check only: the server is the
-  // authoritative cron validator (robfig/cron), this just catches
-  // obvious typos before a round trip.
-  const validCronShape = (v: string) => v.trim().split(/\s+/).length === 5
-
-  const onCronChange = (v: string) => {
-    setCron(v)
-    setCronError(null)
-  }
-
   // A GitHub source is only meaningful once it can actually resolve to
   // a clone URL: an existing repo picked.
   const githubSourceReady = repoSource !== 'github' || (!!connectorID && !!selectedRepo)
 
   // A disabled destination is rejected at create with "unknown or
-  // disabled destination id(s)", so it isn't offered, except when an
-  // automation saved earlier already holds it, where hiding it would drop
-  // it from the form while it still blocks the save.
+  // disabled destination id(s)", so it isn't offered, except when a
+  // seeded follow-up already holds it, where hiding it would drop it
+  // from the form while it still blocks the save.
   const visibleDestinations = (destinations ?? []).filter(
     (d) => d.enabled || destinationIDs.includes(d.id),
   )
@@ -881,17 +728,11 @@ export function MissionForm({
       : null
 
   const canSubmit =
-    mode === 'edit'
-      ? automationName.trim() !== '' &&
-        goal.trim() !== '' &&
-        validCronShape(cron) &&
-        !attachments.some((a) => a.uploading)
-      : goal.trim() !== '' &&
-        (!repeat || validCronShape(cron)) &&
-        githubSourceReady &&
-        githubDestinationKindOk &&
-        !attachments.some((a) => a.uploading) &&
-        unusablePhases(executionPlan).length === 0
+    goal.trim() !== '' &&
+    githubSourceReady &&
+    githubDestinationKindOk &&
+    !attachments.some((a) => a.uploading) &&
+    unusablePhases(executionPlan).length === 0
 
   const submitMission = async () => {
     const repoURL = kind === 'coding' && repoSource === 'github' ? selectedRepo?.clone_url : undefined
@@ -931,93 +772,44 @@ export function MissionForm({
         references.length > 0 ? references.map((r) => ({ kind: r.kind, id: r.id })) : undefined,
     })
     toast.success('Mission created')
-    onDone({ kind: 'mission', id })
+    onDone(id)
   }
 
-  // missionTemplate builds the automation's mission action from the form.
-  const missionTemplate = (templateKind: Kind): MissionTemplate => ({
+  // missionTemplate is the form as an automation's mission action.
+  const missionTemplate = (): MissionTemplate => ({
     goal: goal.trim(),
-    kind: templateKind,
+    kind,
     route: route || undefined,
     review_route: reviewRoute || undefined,
     plan_route: planRoute || undefined,
-    max_iterations: maxIterations ? Number(maxIterations) : undefined,
     budget_amount: budget ? Number(budget) : undefined,
     budget_currency: budget ? budgetCurrency : undefined,
     auto_approve_tools: autoApproveTools,
-    harness: templateKind === 'coding' ? harness || undefined : undefined,
+    harness: kind === 'coding' ? harness || undefined : undefined,
     review_harness: light ? undefined : reviewHarness || undefined,
-    environment: templateKind === 'coding' ? environment || undefined : undefined,
+    environment: kind === 'coding' ? environment || undefined : undefined,
     destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
-    light: templateKind === 'general' ? light : undefined,
+    light: kind === 'general' ? light : undefined,
     attachments:
       attachments.length > 0 ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' })) : undefined,
   })
 
-  // An automation needs an agent: the picked one, else the default agent.
-  const automationAgentID = agentID || agents.find((a) => a.is_default)?.id || ''
-
-  const submitAutomation = async () => {
-    const { id } = await createAutomation({
-      name: (automationName || goal).trim(),
-      agent_id: automationAgentID,
-      action: { kind: 'mission', mission: missionTemplate(kind) },
-      triggers: [{ kind: 'cron', config: { expr: cron } }],
-      expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
-    })
-    toast.success('Automation created')
-    onDone({ kind: 'automation', id })
-  }
-
-  const submitEdit = async () => {
-    if (!automation) return
-    // Replace the cron trigger in place (its id keeps its state); other
-    // triggers pass through unchanged.
-    const existing = cronTrigger(automation)
-    const others = automation.triggers
-      .filter((t) => t.id !== existing?.id)
-      .map((t) => ({ id: t.id, kind: t.kind, config: t.config, tool_allowlist: t.tool_allowlist, enabled: t.enabled }))
-    const updated = await patchAutomation(automation.id, {
-      name: automationName.trim(),
-      agent_id: agentID || undefined,
-      action: { kind: 'mission', mission: missionTemplate(automation.action.mission.kind) },
-      triggers: [{ id: existing?.id, kind: 'cron', config: { expr: cron }, enabled: true }, ...others],
-      ...(expiresAt !== seededExpiresAt && {
-        expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
-      }),
-    })
-    toast.success('Automation updated')
-    onDone({ kind: 'automation', id: updated.id })
-  }
-
   const submit = async () => {
-    if (repeat && !validCronShape(cron)) {
-      setCronError('Cron must have 5 space-separated fields (minute hour day month weekday).')
-      return
-    }
-    if (mode === 'create' && repeat && !automationAgentID) {
-      toast.error('Pick an agent for the automation')
-      return
-    }
     setBusy(true)
     try {
-      if (mode === 'edit') {
-        await submitEdit()
-      } else if (repeat) {
-        await submitAutomation()
-      } else {
-        await submitMission()
-      }
+      await submitMission()
     } catch (err) {
-      const label = mode === 'edit' ? 'update' : repeat ? 'create' : 'create'
-      const noun = mode === 'edit' || repeat ? 'automation' : 'mission'
-      toast.error(`Could not ${label} ${noun}`, { description: errText(err) })
+      toast.error('Could not create mission', { description: errText(err) })
     } finally {
       setBusy(false)
     }
   }
 
-  const submitLabel = mode === 'edit' ? 'Save automation' : repeat ? 'Create automation' : 'Create mission'
+  // makeRecurring opens the automation editor seeded with this form.
+  const makeRecurring = () =>
+    navigate('/automations/new', {
+      state: { prefill: { action: { kind: 'mission', mission: missionTemplate() }, agent_id: agentID || undefined } },
+    })
 
   return (
     <div className="space-y-8">
@@ -1025,11 +817,10 @@ export function MissionForm({
         <div>
           <h2 className="text-sm font-semibold">Goal</h2>
           <p className="text-sm text-muted-foreground">
-            What should this mission accomplish{repeat ? ' each time it fires' : ''}?
+            What should this mission accomplish?
           </p>
         </div>
-        {mode === 'create' && !repeat ? (
-          <GoalTextarea
+        <GoalTextarea
             id="mission-goal"
             aria-label="Goal"
             value={goal}
@@ -1041,34 +832,16 @@ export function MissionForm({
             autoFocus
             className="min-h-60 resize-y text-base"
           />
-        ) : (
-          <Textarea
-            id="mission-goal"
-            aria-label="Goal"
-            value={goal}
-            onChange={(e) => onGoalChange(e.target.value)}
-            placeholder="What should this mission accomplish? Markdown supported."
-            rows={10}
-            autoFocus
-            className="min-h-60 resize-y text-base"
-          />
-        )}
         <p className="text-right text-xs text-muted-foreground">
           {goalWordCount} {goalWordCount === 1 ? 'word' : 'words'}
         </p>
 
         {goal.trim() !== '' && (
-          <button type="button" onClick={toggleKind} disabled={repeat && kind === 'general'}>
+          <button type="button" onClick={toggleKind}>
             <Badge variant={classifying ? 'outline' : 'secondary'} className="cursor-pointer">
               {classifying ? 'Detecting…' : kindCopy[kind]}
             </Badge>
           </button>
-        )}
-        {repeat && (
-          <p className="text-xs text-muted-foreground">
-            Coding missions aren't supported on an automation yet: each run has no
-            repository to work in.
-          </p>
         )}
         {kind === 'general' && (
           <label htmlFor="mission-light" className="flex items-start gap-2 text-sm">
@@ -1091,7 +864,7 @@ export function MissionForm({
             </span>
           </label>
         )}
-        {mode === 'create' && !repeat && (kind !== 'general' || !light) && (
+        {(kind !== 'general' || !light) && (
           <label htmlFor="mission-has-plan" className="flex items-start gap-2 text-sm">
             <input
               id="mission-has-plan"
@@ -1112,12 +885,10 @@ export function MissionForm({
             </span>
           </label>
         )}
-        {(mode === 'create' || mode === 'edit') && (
-          <MissionAttachments attachments={attachments} onChange={setAttachments} />
-        )}
+        <MissionAttachments attachments={attachments} onChange={setAttachments} />
       </section>
 
-      {kind === 'coding' && mode === 'create' && !repeat && (
+      {kind === 'coding' && (
         <section className="space-y-3">
           <div>
             <h2 className="text-sm font-semibold">Repository</h2>
@@ -1268,111 +1039,6 @@ export function MissionForm({
 
       <section className="space-y-3">
         <div>
-          <h2 className="text-sm font-semibold">When it runs</h2>
-          <p className="text-sm text-muted-foreground">
-            {mode === 'edit'
-              ? 'This automation runs the mission above on the cron below.'
-              : 'Run it now, or repeat it on a cron as an automation.'}
-          </p>
-        </div>
-
-        {mode === 'create' && (
-          <SegmentedControl
-            aria-label="When it runs"
-            value={repeat ? 'repeat' : 'once'}
-            onChange={(v) => {
-              const next = v === 'repeat'
-              setRepeat(next)
-              if (next && kind === 'coding') {
-                setKind('general')
-                setKindLocked(true)
-              }
-            }}
-            options={[
-              { value: 'once', label: 'Run once' },
-              { value: 'repeat', label: 'Repeat on a cron' },
-            ]}
-          />
-        )}
-
-        {repeat && (
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="mission-automation-name">Automation name</Label>
-              <Input
-                id="mission-automation-name"
-                value={automationName}
-                onChange={(e) => setAutomationName(e.target.value)}
-                placeholder={slugify(goal) || 'automation name'}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>Runs</Label>
-              <Select value={preset} onValueChange={(v) => pickPreset(v as CronPresetValue)}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {cronPresets.map((p) => (
-                    <SelectItem key={p.value} value={p.value}>
-                      {p.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {preset === 'custom' && (
-                <Input
-                  aria-label="Cron expression"
-                  value={cron}
-                  onChange={(e) => onCronChange(e.target.value)}
-                  placeholder="0 7 * * *"
-                  className="font-mono"
-                />
-              )}
-              {cronError && <p className="text-xs text-destructive">{cronError}</p>}
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="mission-expires">Expires</Label>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button id="mission-expires" variant="outline" className="w-full justify-start">
-                    {formatExpiresAt(expiresAt)}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0">
-                  <Calendar
-                    mode="single"
-                    selected={expiresAtToDate(expiresAt)}
-                    onSelect={pickExpiresDate}
-                  />
-                  <div className="flex items-center gap-2 border-t border-border p-2.5">
-                    <Input
-                      aria-label="Expires time"
-                      type="time"
-                      value={expiresAtToTime(expiresAt)}
-                      onChange={(e) => pickExpiresTime(e.target.value)}
-                      disabled={!expiresAt}
-                      className="h-8.5 flex-1"
-                    />
-                    <Button variant="outline" size="sm" onClick={() => setExpiresAt('')}>
-                      Clear
-                    </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
-              <p className="text-xs text-muted-foreground">
-                Server time. The automation stops running after this moment. Empty means it never
-                expires.
-              </p>
-            </div>
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <div>
           <h2 className="text-sm font-semibold">Agent &amp; limits</h2>
           <p className="text-sm text-muted-foreground">Who runs it, and what it's allowed to spend.</p>
         </div>
@@ -1494,24 +1160,22 @@ export function MissionForm({
           </span>
         </label>
 
-        {mode === 'create' && !repeat && (
-          <label htmlFor="mission-auto-approve-plan" className="flex items-start gap-2 text-sm">
-            <input
-              id="mission-auto-approve-plan"
-              type="checkbox"
-              checked={autoApprovePlan}
-              onChange={(e) => setAutoApprovePlan(e.target.checked)}
-              className="mt-0.5"
-            />
-            <span>
-              Auto-approve the plan
-              <span className="block text-xs text-muted-foreground">
-                Advances straight from plan to work. Turn off to review and approve the plan
-                yourself before work starts.
-              </span>
+        <label htmlFor="mission-auto-approve-plan" className="flex items-start gap-2 text-sm">
+          <input
+            id="mission-auto-approve-plan"
+            type="checkbox"
+            checked={autoApprovePlan}
+            onChange={(e) => setAutoApprovePlan(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Auto-approve the plan
+            <span className="block text-xs text-muted-foreground">
+              Advances straight from plan to work. Turn off to review and approve the plan
+              yourself before work starts.
             </span>
-          </label>
-        )}
+          </span>
+        </label>
 
         {visibleDestinations.length > 0 && (
           <div className="space-y-1.5">
@@ -1600,7 +1264,7 @@ export function MissionForm({
           </div>
         )}
 
-        {mode === 'create' && !repeat && kbCollections && kbCollections.length > 0 && (
+        {kbCollections && kbCollections.length > 0 && (
           <div className="space-y-1.5">
             <Label htmlFor="mission-promote-kb">Promote to knowledge base on done</Label>
             <select
@@ -1725,36 +1389,34 @@ export function MissionForm({
                   e.g. a strong model plans while a cheap/local route builds.
                 </p>
               </div>
-              {mode === 'create' && !repeat && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="mission-escalation-route">Escalation route</Label>
-                  {routes === null ? (
-                    <Input
-                      id="mission-escalation-route"
-                      value={escalationRoute}
-                      onChange={(e) => setEscalationRoute(e.target.value)}
-                      placeholder="Off, set to switch route after a failed or reworked turn"
-                    />
-                  ) : (
-                    <Select
-                      value={escalationRoute || ROUTE_DEFAULT}
-                      onValueChange={(v) => setEscalationRoute(v === ROUTE_DEFAULT ? '' : v)}
-                    >
-                      <SelectTrigger id="mission-escalation-route" className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={ROUTE_DEFAULT}>{defaultEscalationRouteLabel()}</SelectItem>
-                        {enabledRoutes.map((r) => (
-                          <SelectItem key={r.name} value={r.name}>
-                            {r.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                </div>
-              )}
+              <div className="space-y-1.5">
+                <Label htmlFor="mission-escalation-route">Escalation route</Label>
+                {routes === null ? (
+                  <Input
+                    id="mission-escalation-route"
+                    value={escalationRoute}
+                    onChange={(e) => setEscalationRoute(e.target.value)}
+                    placeholder="Off, set to switch route after a failed or reworked turn"
+                  />
+                ) : (
+                  <Select
+                    value={escalationRoute || ROUTE_DEFAULT}
+                    onValueChange={(v) => setEscalationRoute(v === ROUTE_DEFAULT ? '' : v)}
+                  >
+                    <SelectTrigger id="mission-escalation-route" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ROUTE_DEFAULT}>{defaultEscalationRouteLabel()}</SelectItem>
+                      {enabledRoutes.map((r) => (
+                        <SelectItem key={r.name} value={r.name}>
+                          {r.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
               {!light && (
                 <div className="space-y-1.5">
                   <Label htmlFor="mission-review-harness">Review harness</Label>
@@ -1779,7 +1441,7 @@ export function MissionForm({
                   </p>
                 </div>
               )}
-              {kind === 'general' && !repeat && (
+              {kind === 'general' && (
                 <div className="space-y-1.5">
                   <Label htmlFor="mission-flow">Flow</Label>
                   <Select
@@ -1811,30 +1473,27 @@ export function MissionForm({
                   </p>
                 </div>
               )}
-              {repeat && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="mission-max-iterations">Max iterations</Label>
-                  <Input
-                    id="mission-max-iterations"
-                    type="number"
-                    value={maxIterations}
-                    onChange={(e) => setMaxIterations(e.target.value)}
-                    placeholder="Default"
-                  />
-                </div>
-              )}
             </div>
           </CollapsibleContent>
         </Collapsible>
       </section>
 
-      <div className="flex gap-2">
-        <Button variant="outline" disabled={busy} onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button disabled={!canSubmit || busy} onClick={() => void submit()}>
-          {submitLabel}
-        </Button>
+      <div className="space-y-3">
+        <div className="flex gap-2">
+          <Button variant="outline" disabled={busy} onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button disabled={!canSubmit || busy} onClick={() => void submit()}>
+            Create mission
+          </Button>
+        </div>
+        <button
+          type="button"
+          onClick={makeRecurring}
+          className="text-sm text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          Make this recurring
+        </button>
       </div>
     </div>
   )

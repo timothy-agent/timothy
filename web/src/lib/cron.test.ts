@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Automation, AutomationTrigger } from '../api/types'
-import { cronExpr, cronPresets, cronTrigger, describeCron, presetFor } from './cron'
+import { cronPresets, describeCron, describeTrigger, isCronShape, presetFor } from './cron'
 
 describe('presetFor', () => {
   it('round-trips every non-custom preset cron back to its preset value', () => {
@@ -25,55 +24,27 @@ describe('describeCron', () => {
   })
 })
 
-function trigger(over: Partial<AutomationTrigger>): AutomationTrigger {
-  return {
-    id: 't1',
-    automation_id: 'a1',
-    kind: 'cron',
-    config: { expr: '0 7 * * *' },
-    state: {},
-    enabled: true,
-    created_at: '2026-09-01T00:00:00Z',
-    updated_at: '2026-09-01T00:00:00Z',
-    ...over,
-  }
-}
+describe('isCronShape', () => {
+  it.each(['0 7 * * *', '*/15 9-17 * * 1-5', '0 8 1,15 * MON', '@daily', '@every 1h', '  0 7 * * *  '])(
+    'accepts %s',
+    (expr) => {
+      expect(isCronShape(expr)).toBe(true)
+    },
+  )
 
-function automation(triggers: AutomationTrigger[]): Automation {
-  return {
-    id: 'a1',
-    name: 'daily-brief',
-    description: '',
-    agent_id: '00000000-0000-0000-0000-000000000001',
-    action: { kind: 'mission', mission: { goal: 'brief', kind: 'general' } },
-    concurrency: 'skip',
-    max_concurrent: 1,
-    max_runs_per_hour: 6,
-    continuity: true,
-    notes_enabled: true,
-    consecutive_failures: 0,
-    enabled: true,
-    created_at: '2026-09-01T00:00:00Z',
-    updated_at: '2026-09-01T00:00:00Z',
-    triggers,
-    stats: { runs_total: 0, succeeded_7d: 0, failed_7d: 0 },
-  }
-}
+  it.each(['', '0 7 * *', '0 7 * * * *', 'every morning', '@often', '0 7 * * $'])('rejects %s', (expr) => {
+    expect(isCronShape(expr)).toBe(false)
+  })
+})
 
-describe('cronTrigger / cronExpr', () => {
-  it('returns the first enabled cron trigger', () => {
-    const a = automation([
-      trigger({ id: 'm1', kind: 'manual', config: {} }),
-      trigger({ id: 'c0', enabled: false, config: { expr: '0 * * * *' } }),
-      trigger({ id: 'c1', config: { expr: '0 8 * * 1-5' } }),
-    ])
-    expect(cronTrigger(a)?.id).toBe('c1')
-    expect(cronExpr(a)).toBe('0 8 * * 1-5')
+describe('describeTrigger', () => {
+  it('describes a cron trigger by its expression', () => {
+    expect(describeTrigger({ kind: 'cron', config: { expr: '0 * * * *' } })).toBe('Hourly')
+    expect(describeTrigger({ kind: 'cron', config: { expr: '*/5 * * * *' } })).toBe('*/5 * * * *')
   })
 
-  it('returns undefined without an enabled cron trigger', () => {
-    const a = automation([trigger({ id: 'm1', kind: 'manual', config: {} })])
-    expect(cronTrigger(a)).toBeUndefined()
-    expect(cronExpr(a)).toBeUndefined()
+  it('names other kinds in plain words', () => {
+    expect(describeTrigger({ kind: 'manual', config: {} })).toBe('manual')
+    expect(describeTrigger({ kind: 'connector_event', config: {} })).toBe('connector event')
   })
 })

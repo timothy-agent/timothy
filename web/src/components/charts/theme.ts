@@ -3,7 +3,7 @@
 // directly in modern browsers, so these are passed through as-is
 // rather than converted.
 
-function cssVar(name: string): string {
+export function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
 }
 

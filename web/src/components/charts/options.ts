@@ -325,3 +325,32 @@ export function gaugeOption(
     ],
   }
 }
+
+// sparklineOption draws succeeded and failed runs per day as two lines
+// with hidden axes, for a stat tile.
+export function sparklineOption(
+  rows: { day: string; succeeded: number; failed: number }[],
+  succeededColor: string,
+  failedColor: string,
+): EChartsOption {
+  const theme = buildBaseTheme()
+  const line = (name: string, color: string, data: number[]) => ({
+    name,
+    type: 'line' as const,
+    smooth: true,
+    showSymbol: false,
+    lineStyle: { width: 1.5, color },
+    itemStyle: { color },
+    data,
+  })
+  return {
+    grid: { left: 0, right: 0, top: 2, bottom: 2 },
+    xAxis: { type: 'category', show: false, data: rows.map((r) => r.day), boundaryGap: false },
+    yAxis: { type: 'value', show: false, min: 0 },
+    tooltip: { trigger: 'axis', ...theme.tooltip },
+    series: [
+      line('succeeded', succeededColor, rows.map((r) => r.succeeded)),
+      line('failed', failedColor, rows.map((r) => r.failed)),
+    ],
+  }
+}

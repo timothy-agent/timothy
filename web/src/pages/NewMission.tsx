@@ -70,18 +70,11 @@ export function NewMission() {
           <p className="text-sm text-muted-foreground">Loading parent mission…</p>
         ) : (
           <MissionForm
-            mode="create"
             initial={parent ? missionToInitial(parent) : undefined}
             initialGoal={pickedOptionGoal}
             parentMissionId={parent?.id}
             onCancel={() => navigate(-1)}
-            onDone={(result) => {
-              if (result.kind === 'mission') {
-                navigate(`/missions/${result.id}`)
-              } else {
-                navigate('/automations')
-              }
-            }}
+            onDone={(id) => navigate(`/missions/${id}`)}
           />
         )}
       </div>

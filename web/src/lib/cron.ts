@@ -1,4 +1,4 @@
-import type { Automation, AutomationTrigger } from '../api/types'
+import type { AutomationTrigger } from '../api/types'
 
 // cronPresets covers the common recurring shapes the automation form
 // offers directly; 'custom' has no cron value of its own: it means
@@ -29,12 +29,17 @@ export function describeCron(cron: string): string {
   return cron
 }
 
-// cronTrigger returns a's first enabled cron trigger.
-export function cronTrigger(a: Automation): AutomationTrigger | undefined {
-  return a.triggers.find((t) => t.kind === 'cron' && t.enabled)
+// Five fields of cron characters, or a robfig descriptor such as @daily.
+const cronShape =
+  /^(@(yearly|annually|monthly|weekly|daily|midnight|hourly)|@every\s+\S+|[0-9A-Za-z*?/,-]+(\s+[0-9A-Za-z*?/,-]+){4})$/
+
+// isCronShape is a permissive client check; the server parser has the final say.
+export function isCronShape(expr: string): boolean {
+  return cronShape.test(expr.trim())
 }
 
-// cronExpr returns the expression of a's first enabled cron trigger.
-export function cronExpr(a: Automation): string | undefined {
-  return cronTrigger(a)?.config.expr
+// describeTrigger labels a trigger for a badge: its cron, or its kind.
+export function describeTrigger(t: { kind: AutomationTrigger['kind']; config: { expr?: string } }): string {
+  if (t.kind === 'cron') return t.config.expr ? describeCron(t.config.expr) : 'cron'
+  return t.kind.replace('_', ' ')
 }

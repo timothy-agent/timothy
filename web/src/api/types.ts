@@ -1274,6 +1274,8 @@ export interface GitHubRepo {
 // (internal/brain/missions.MissionTemplate); the automation owns the agent.
 export interface MissionTemplate {
   goal: string
+  // name, when set, names each started mission instead of the automation.
+  name?: string
   kind: 'coding' | 'general'
   route?: string
   review_route?: string
@@ -1360,7 +1362,7 @@ export interface AutomationRun {
   trigger_id?: string
   event_id?: number
   dedup_key: string
-  status: 'queued' | 'running' | 'done' | 'failed' | 'skipped'
+  status: 'queued' | 'starting' | 'running' | 'done' | 'failed' | 'skipped'
   skip_reason?: string
   event: unknown
   mission_id?: string
@@ -1376,6 +1378,29 @@ export interface AutomationNote {
   content: string
   updated_at: string
   updated_by_run_id?: string
+}
+
+// AutomationRequirement names a destination or connector a template
+// needs, e.g. { kind: 'destination', value: 'email' }.
+export interface AutomationRequirement {
+  kind: string
+  value: string
+}
+
+// AutomationTemplate is one /v1/automations/templates entry (issue #825);
+// missing lists the requirements this instance does not satisfy yet.
+export interface AutomationTemplate {
+  id: string
+  name: string
+  description: string
+  icon: string
+  action: AutomationAction
+  triggers: { kind: AutomationTrigger['kind']; config: { expr?: string }; enabled?: boolean }[]
+  requires: AutomationRequirement[]
+  missing: AutomationRequirement[]
+  notes_enabled?: boolean
+  continuity?: boolean
+  concurrency?: Automation['concurrency']
 }
 
 // AutomationsStats is the /v1/automations/stats overview payload.

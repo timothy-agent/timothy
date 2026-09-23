@@ -66,6 +66,7 @@ describe('toolCallStatus', () => {
 describe('automationRunStatus', () => {
   it.each([
     ['queued', 'neutral'],
+    ['starting', 'neutral'],
     ['running', 'working'],
     ['done', 'success'],
     ['failed', 'error'],

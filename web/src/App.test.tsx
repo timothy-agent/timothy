@@ -81,10 +81,23 @@ describe('Theme toggle icon', () => {
   })
 })
 
+describe('Automations nav item', () => {
+  it.each(['/automations', '/automations/new', '/automations/s1', '/automations/s1/edit'])(
+    'is active on %s',
+    async (path) => {
+      renderAt(path)
+      const sidebar = document.querySelector('[data-sidebar="sidebar"]') as HTMLElement
+      const link = await within(sidebar).findByRole('link', { name: 'Automations' })
+      expect(link.getAttribute('data-active')).toBe('true')
+      expect(within(sidebar).getByRole('link', { name: 'Missions' }).getAttribute('data-active')).toBe('false')
+    },
+  )
+})
+
 describe('Legacy edit schedule route', () => {
   it('redirects /missions/schedules/:id/edit to /automations/:id/edit', async () => {
     renderAt('/missions/schedules/s1/edit')
-    // Every fetch fails here, so the redirected EditAutomation page falls
+    // Every fetch fails here, so the redirected AutomationEditor page falls
     // back to its own not-found copy: proof the route landed.
     expect(await screen.findByText('Automation not found.')).toBeTruthy()
   })

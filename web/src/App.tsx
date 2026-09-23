@@ -46,8 +46,8 @@ import { getNotificationSoundEnabled } from './lib/sound'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
 import { AutomationDetail } from './pages/AutomationDetail'
+import { AutomationEditor } from './pages/AutomationEditor'
 import { Automations } from './pages/Automations'
-import { EditAutomation } from './pages/EditAutomation'
 import { Home } from './pages/Home'
 import { Knowledge } from './pages/Knowledge'
 import { KnowledgeRedirect, Memory } from './pages/Memory'
@@ -500,7 +500,8 @@ function App() {
                 />
                 <Route path="/missions/:id" element={<MissionDetail />} />
                 <Route path="/automations" element={<Automations />} />
-                <Route path="/automations/:id/edit" element={<EditAutomation />} />
+                <Route path="/automations/new" element={<AutomationEditor mode="create" />} />
+                <Route path="/automations/:id/edit" element={<AutomationEditor mode="edit" />} />
                 <Route path="/automations/:id" element={<AutomationDetail />} />
                 <Route path="/knowledge/*" element={<Knowledge />} />
                 <Route path="/memory/knowledge/*" element={<KnowledgeRedirect />} />

@@ -1,77 +1,130 @@
-import { Pencil, Play } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { Pencil, Play, Plus, RefreshCw, StickyNote, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { getAutomation, listAutomationRuns, listDestinations, patchAutomation, runAutomationNow } from '../api/client'
-import type { Automation, AutomationRun, Destination } from '../api/types'
-import { DestinationKindIcon } from '../components/destinations/DestinationKindIcon'
-import { errText } from '../lib/errors'
+
+import {
+  deleteAutomationNote,
+  getAutomation,
+  listAgents,
+  listAutomationNotes,
+  listAutomationRuns,
+  listDestinations,
+  patchAutomation,
+  putAutomationNote,
+  runAutomationNow,
+} from '../api/client'
+import type { AdminAgent, Automation, AutomationNote, AutomationRun, Destination } from '../api/types'
+import { NotesDialog } from '../components/automations/NotesDialog'
+import { noteBytes } from '../components/automations/notes'
+import { RunHistoryTable } from '../components/automations/RunHistoryTable'
+import { isPendingRun } from '../components/automations/runs'
+import { ConfirmDialog } from '../components/timothy/confirm-dialog'
 import { EmptyState } from '../components/timothy/empty-state'
 import { IconButton } from '../components/timothy/icon-button'
 import { PageHeader } from '../components/timothy/page-header'
 import { PageShell } from '../components/timothy/page-shell'
+import { Panel } from '../components/timothy/panel'
 import { Spinner } from '../components/timothy/spinner'
-import { automationRunStatus } from '../components/timothy/status'
-import { StatusBadge } from '../components/timothy/status-badge'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
-import { cronExpr, describeCron } from '../lib/cron'
-import { relativeTime, relativeTimeUntil } from '../lib/format'
+import { Switch } from '../components/ui/switch'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
+import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip'
+import { describeTrigger } from '../lib/cron'
+import { errText } from '../lib/errors'
+import { euDateTime, humanBytes, money, relativeTime, relativeTimeUntil } from '../lib/format'
 
-// AutomationDetail shows one automation's summary plus its run history.
+// Runs poll this often while any run is queued, starting or running.
+export const runPollMs = 15_000
+const maxNotes = 10
+
+const concurrencyText: Record<Automation['concurrency'], string> = {
+  skip: 'Skip while a run is active',
+  queue: 'Queue behind the active run',
+  parallel: 'Run in parallel',
+}
+
+function Facts({ rows }: { rows: [string, ReactNode][] }) {
+  return (
+    <dl className="grid grid-cols-[minmax(0,10rem)_1fr] gap-x-4 gap-y-2 text-sm">
+      {rows.map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="text-muted-foreground">{k}</dt>
+          <dd>{v}</dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+const onOff = (v: boolean) => (v ? 'On' : 'Off')
+
+// AutomationDetail shows one automation: settings, run history and notes.
 export function AutomationDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [automation, setAutomation] = useState<Automation | null>(null)
   const [loading, setLoading] = useState(true)
   const [runs, setRuns] = useState<AutomationRun[]>([])
+  const [notes, setNotes] = useState<AutomationNote[]>([])
+  const [agents, setAgents] = useState<AdminAgent[]>([])
+  const [destinations, setDestinations] = useState<Destination[]>([])
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
-  // Destinations fetched once per page, just to resolve
-  // destination_ids into display names for the badges below.
-  const [destinations, setDestinations] = useState<Destination[]>([])
-  useEffect(() => {
-    listDestinations()
-      .then(setDestinations)
-      .catch(() => {
-        // Non-fatal: badges just don't render if this fails.
-      })
-  }, [])
+  const [noteDialog, setNoteDialog] = useState<{ note: AutomationNote | null } | null>(null)
+  const [confirmNote, setConfirmNote] = useState<AutomationNote | null>(null)
 
-  const refresh = useCallback(() => {
+  const loadAutomation = useCallback(() => {
     if (!id) return
-    getAutomation(id).then(
-      (a) => {
-        setAutomation(a)
-        setLoading(false)
-      },
-      () => {
-        setAutomation(null)
-        setLoading(false)
-      },
-    )
-    listAutomationRuns(id).then(setRuns, () => undefined)
+    getAutomation(id)
+      .then(setAutomation, () => setAutomation(null))
+      .finally(() => setLoading(false))
+  }, [id])
+  const loadRuns = useCallback(() => {
+    if (id) listAutomationRuns(id).then(setRuns, () => undefined)
+  }, [id])
+  const loadNotes = useCallback(() => {
+    if (id) listAutomationNotes(id).then(setNotes, () => undefined)
   }, [id])
 
-  useEffect(refresh, [refresh])
+  useEffect(() => {
+    loadAutomation()
+    loadRuns()
+    loadNotes()
+  }, [loadAutomation, loadRuns, loadNotes])
+  useEffect(() => {
+    listAgents().then(setAgents, () => undefined)
+    listDestinations().then(setDestinations, () => undefined)
+  }, [])
 
-  const startRename = () => {
-    if (!automation) return
-    setName(automation.name)
-    setRenaming(true)
-  }
+  const pending = runs.some(isPendingRun)
+  useEffect(() => {
+    if (!pending) return
+    const t = setInterval(loadRuns, runPollMs)
+    return () => clearInterval(t)
+  }, [pending, loadRuns])
 
   const commitRename = async () => {
     const trimmed = name.trim()
     setRenaming(false)
     if (!automation || trimmed === '' || trimmed === automation.name) return
     try {
-      await patchAutomation(automation.id, { name: trimmed })
+      setAutomation(await patchAutomation(automation.id, { name: trimmed }))
       toast.success('Automation renamed')
-      refresh()
     } catch (err) {
       toast.error('Could not rename automation', { description: errText(err) })
+    }
+  }
+
+  const setEnabled = async (enabled: boolean) => {
+    if (!automation) return
+    try {
+      setAutomation(await patchAutomation(automation.id, { enabled }))
+    } catch (err) {
+      toast.error('Could not update automation', { description: errText(err) })
     }
   }
 
@@ -80,10 +133,35 @@ export function AutomationDetail() {
     try {
       await runAutomationNow(automation.id)
       toast.success('Run requested')
-      refresh()
+      loadRuns()
     } catch (err) {
       toast.error('Could not run automation', { description: errText(err) })
     }
+  }
+
+  const saveNote = async (noteName: string, content: string) => {
+    if (!automation) return false
+    try {
+      await putAutomationNote(automation.id, noteName, content)
+      toast.success('Note saved')
+      loadNotes()
+      return true
+    } catch (err) {
+      toast.error('Could not save note', { description: errText(err) })
+      return false
+    }
+  }
+
+  const removeNote = async () => {
+    if (!automation || !confirmNote) return
+    try {
+      await deleteAutomationNote(automation.id, confirmNote.name)
+      toast.success('Note deleted')
+      loadNotes()
+    } catch (err) {
+      toast.error('Could not delete note', { description: errText(err) })
+    }
+    setConfirmNote(null)
   }
 
   if (!id) return null
@@ -109,9 +187,26 @@ export function AutomationDetail() {
     )
   }
 
-  const destinationIds = automation.action.mission.destination_ids ?? []
-  const cron = cronExpr(automation)
-  const { next_run_at: nextRun, last_run_at: lastRun } = automation.stats
+  const mission = automation.action.mission
+  const agentName = agents.find((a) => a.id === automation.agent_id)?.name
+  const destinationNames = (mission.destination_ids ?? []).map((did) => destinations.find((d) => d.id === did)?.name ?? did)
+  const nextRun = automation.stats.next_run_at
+  const statusBadge = (
+    <Badge variant={automation.enabled ? 'good' : 'neutral'} size="sm" tabIndex={automation.disabled_reason ? 0 : undefined}>
+      {automation.enabled ? 'enabled' : 'disabled'}
+    </Badge>
+  )
+
+  const updatedBy = (n: AutomationNote) => {
+    if (!n.updated_by_run_id) return 'You'
+    const missionId = runs.find((r) => r.id === n.updated_by_run_id)?.mission_id
+    if (!missionId) return 'A run'
+    return (
+      <Link to={`/missions/${missionId}`} className="underline underline-offset-2 hover:text-foreground">
+        Run mission
+      </Link>
+    )
+  }
 
   return (
     <PageShell>
@@ -135,76 +230,196 @@ export function AutomationDetail() {
           ) : (
             <div className="flex items-center gap-1.5">
               <h1 className="truncate text-title font-semibold text-foreground">{automation.name}</h1>
-              <IconButton label="Rename automation" icon={Pencil} variant="ghost" size="sm" onClick={startRename} />
+              <IconButton
+                label="Rename automation"
+                icon={Pencil}
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setName(automation.name)
+                  setRenaming(true)
+                }}
+              />
             </div>
           )
         }
         meta={
           <>
-            <Badge variant={automation.enabled ? 'good' : 'neutral'} size="sm">
-              {automation.enabled ? 'enabled' : 'disabled'}
-            </Badge>
-            {destinationIds.map((did) => {
-              const d = destinations.find((d) => d.id === did)
-              return (
-                <Badge key={did} variant="outline" size="sm">
-                  {d && <DestinationKindIcon kind={d.kind} />}
-                  {d?.name ?? did}
-                </Badge>
-              )
-            })}
+            {automation.disabled_reason ? (
+              <Tooltip>
+                <TooltipTrigger asChild>{statusBadge}</TooltipTrigger>
+                <TooltipContent>{automation.disabled_reason}</TooltipContent>
+              </Tooltip>
+            ) : (
+              statusBadge
+            )}
+            {agentName && (
+              <Badge variant="outline" size="sm">
+                {agentName}
+              </Badge>
+            )}
           </>
         }
-        description={automation.action.mission.goal}
+        description={automation.description || undefined}
         actions={
           <>
-            <Button variant="outline" onClick={() => void runNow()}>
+            <div className="flex items-center gap-2">
+              <Switch id="automation-enabled" checked={automation.enabled} onCheckedChange={(v) => void setEnabled(v)} />
+              <label htmlFor="automation-enabled" className="text-sm">
+                Enabled
+              </label>
+            </div>
+            <Button variant="outline" onClick={() => void runNow()} disabled={!automation.enabled}>
               <Play aria-hidden />
               Run now
             </Button>
-            <Button variant="outline" onClick={() => navigate(`/automations/${id}/edit`)}>
+            <Button variant="outline" onClick={() => navigate(`/automations/${automation.id}/edit`)}>
               Edit
             </Button>
           </>
         }
-      >
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-          {cron && <span className="whitespace-nowrap">{describeCron(cron)}</span>}
-          {nextRun && (
-            <>
-              {cron && <span aria-hidden>&middot;</span>}
-              <span className="whitespace-nowrap">Next run {relativeTimeUntil(nextRun)}</span>
-            </>
-          )}
-          {lastRun && (
-            <>
-              {(cron || nextRun) && <span aria-hidden>&middot;</span>}
-              <span className="whitespace-nowrap">Last run {relativeTime(lastRun)}</span>
-            </>
-          )}
-        </div>
-      </PageHeader>
+      />
 
-      {runs.length > 0 ? (
-        <ul aria-label="Runs" className="mt-8 divide-y divide-border rounded-md border border-border">
-          {runs.map((r) => (
-            <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-sm">
-              <StatusBadge status={automationRunStatus(r.status)} label={r.status} size="sm" />
-              <span className="whitespace-nowrap text-muted-foreground">{relativeTime(r.created_at)}</span>
-              {r.skip_reason && <span className="text-muted-foreground">{r.skip_reason}</span>}
-              {r.mission_id && (
-                <Link to={`/missions/${r.mission_id}`} className="ml-auto underline underline-offset-2 hover:text-foreground">
-                  View mission
-                </Link>
-              )}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="mt-8 rounded-md border border-dashed border-border">
-          <EmptyState title="No runs yet." />
-        </div>
-      )}
+      <Tabs defaultValue="settings">
+        <TabsList>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+          <TabsTrigger value="runs">Run history</TabsTrigger>
+          <TabsTrigger value="notes">Notes</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="settings" className="mt-8 space-y-6">
+          <Panel title="Triggers" description={nextRun ? `Next run ${relativeTimeUntil(nextRun)}` : undefined}>
+            <ul className="space-y-2">
+              {automation.triggers.map((t) => (
+                <li key={t.id} className="flex items-center gap-2 text-sm">
+                  <Badge variant="outline" size="sm">
+                    {t.kind.replace('_', ' ')}
+                  </Badge>
+                  {t.kind === 'cron' && (
+                    <>
+                      <span>{describeTrigger(t)}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{t.config.expr}</span>
+                    </>
+                  )}
+                  {!t.enabled && <span className="text-xs text-muted-foreground">off</span>}
+                </li>
+              ))}
+            </ul>
+          </Panel>
+
+          <Panel title="Action">
+            <p className="text-prose whitespace-pre-wrap">{mission.goal}</p>
+            <div className="mt-5">
+              <Facts
+                rows={[
+                  ['Kind', mission.kind === 'coding' ? 'Coding' : mission.light ? 'General, light' : 'General'],
+                  ['Route', mission.route || 'Default'],
+                  ['Budget per run', mission.budget_amount ? money(mission.budget_amount, mission.budget_currency || 'USD') : 'No limit'],
+                  ['Destinations', destinationNames.length > 0 ? destinationNames.join(', ') : 'None'],
+                  ['Attachments', String(mission.attachments?.length ?? 0)],
+                ]}
+              />
+            </div>
+          </Panel>
+
+          <Panel title="Limits">
+            <Facts
+              rows={[
+                ['Concurrency', concurrencyText[automation.concurrency]],
+                ['Max concurrent runs', String(automation.max_concurrent)],
+                ['Max runs per hour', String(automation.max_runs_per_hour)],
+                ['Pass result forward', onOff(automation.continuity)],
+                ['Notes', onOff(automation.notes_enabled)],
+                ['Expires', automation.expires_at ? euDateTime(automation.expires_at) : 'Never'],
+                ['Failures in a row', String(automation.consecutive_failures)],
+              ]}
+            />
+          </Panel>
+        </TabsContent>
+
+        <TabsContent value="runs" className="mt-8">
+          <Panel
+            title="Run history"
+            density="operational"
+            actions={<IconButton label="Refresh runs" icon={RefreshCw} size="sm" onClick={loadRuns} />}
+          >
+            {runs.length > 0 ? (
+              <RunHistoryTable runs={runs} triggers={automation.triggers} />
+            ) : (
+              <EmptyState title="No runs yet" density="operational" />
+            )}
+          </Panel>
+        </TabsContent>
+
+        <TabsContent value="notes" className="mt-8 space-y-4">
+          {!automation.notes_enabled && (
+            <p className="text-sm text-muted-foreground">Notes are off, so runs do not read or update them.</p>
+          )}
+          <Panel
+            title="Notes"
+            description={`${notes.length} of ${maxNotes}`}
+            density="operational"
+            actions={
+              <Button size="sm" variant="outline" disabled={notes.length >= maxNotes} onClick={() => setNoteDialog({ note: null })}>
+                <Plus aria-hidden />
+                Add note
+              </Button>
+            }
+          >
+            {notes.length > 0 ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead numeric>Size</TableHead>
+                    <TableHead>Updated</TableHead>
+                    <TableHead>Updated by</TableHead>
+                    <TableHead>
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {notes.map((n) => (
+                    <TableRow key={n.name} data-note={n.name}>
+                      <TableCell className="font-mono text-xs">{n.name}</TableCell>
+                      <TableCell numeric className="text-xs text-muted-foreground">
+                        {humanBytes(noteBytes(n.content))}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{relativeTime(n.updated_at)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{updatedBy(n)}</TableCell>
+                      <TableCell>
+                        <div className="flex justify-end gap-1">
+                          <IconButton label={`Edit ${n.name}`} icon={Pencil} size="xs" onClick={() => setNoteDialog({ note: n })} />
+                          <IconButton label={`Delete ${n.name}`} icon={Trash2} size="xs" onClick={() => setConfirmNote(n)} />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <EmptyState icon={StickyNote} title="No notes yet" density="operational" />
+            )}
+          </Panel>
+        </TabsContent>
+      </Tabs>
+
+      <NotesDialog
+        open={noteDialog !== null}
+        onOpenChange={(o) => !o && setNoteDialog(null)}
+        note={noteDialog?.note}
+        onSave={saveNote}
+      />
+      <ConfirmDialog
+        open={confirmNote !== null}
+        onOpenChange={(o) => !o && setConfirmNote(null)}
+        title={`Delete ${confirmNote?.name}?`}
+        description="Runs lose what this note held."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void removeNote()}
+      />
     </PageShell>
   )
 }

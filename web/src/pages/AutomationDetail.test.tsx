@@ -1,52 +1,37 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Automation, AutomationRun, Destination } from '../api/types'
+import type { AdminAgent, Destination } from '../api/types'
+import { agentID, makeAutomation, makeNote, makeRun } from '../components/automations/testFixtures'
 import { TooltipProvider } from '../components/ui/tooltip'
-import { AutomationDetail } from './AutomationDetail'
+import { AutomationDetail, runPollMs } from './AutomationDetail'
 
 vi.mock('../api/client', () => ({
   getAutomation: vi.fn(),
   listAutomationRuns: vi.fn(),
+  listAutomationNotes: vi.fn(),
+  listAgents: vi.fn(),
   listDestinations: vi.fn(),
   patchAutomation: vi.fn(),
   runAutomationNow: vi.fn(),
+  putAutomationNote: vi.fn(),
+  deleteAutomationNote: vi.fn(),
 }))
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { toast } from 'sonner'
-import { getAutomation, listAutomationRuns, listDestinations, patchAutomation, runAutomationNow } from '../api/client'
-
-const automation: Automation = {
-  id: 's1',
-  name: 'weekly-digest',
-  description: '',
-  agent_id: '00000000-0000-0000-0000-00000000a001',
-  action: { kind: 'mission', mission: { goal: 'Summarize the week', kind: 'general', auto_approve_tools: true } },
-  concurrency: 'skip',
-  max_concurrent: 1,
-  max_runs_per_hour: 6,
-  continuity: true,
-  notes_enabled: true,
-  consecutive_failures: 0,
-  enabled: true,
-  created_at: '2026-07-01T00:00:00Z',
-  updated_at: '2026-07-01T00:00:00Z',
-  triggers: [
-    {
-      id: 't1',
-      automation_id: 's1',
-      kind: 'cron',
-      config: { expr: '0 8 * * 1-5' },
-      state: {},
-      enabled: true,
-      created_at: '2026-07-01T00:00:00Z',
-      updated_at: '2026-07-01T00:00:00Z',
-    },
-  ],
-  stats: { runs_total: 0, succeeded_7d: 0, failed_7d: 0, next_run_at: '2026-07-27T08:00:00Z' },
-}
+import {
+  deleteAutomationNote,
+  getAutomation,
+  listAgents,
+  listAutomationNotes,
+  listAutomationRuns,
+  listDestinations,
+  patchAutomation,
+  putAutomationNote,
+  runAutomationNow,
+} from '../api/client'
 
 const destination: Destination = {
   id: 'd1',
@@ -59,191 +44,291 @@ const destination: Destination = {
   updated_at: '2026-07-01T00:00:00Z',
 }
 
-const runs: AutomationRun[] = [
-  {
-    id: 'r2',
-    automation_id: 's1',
-    trigger_id: 't1',
-    dedup_key: 'cron:2026-07-27T08:00:00Z',
-    status: 'done',
-    event: {},
-    mission_id: 'm1',
-    created_at: '2026-07-27T08:00:00Z',
-    started_at: '2026-07-27T08:00:01Z',
-    finished_at: '2026-07-27T08:05:00Z',
-  },
-  {
-    id: 'r1',
-    automation_id: 's1',
-    trigger_id: 't1',
-    dedup_key: 'cron:2026-07-26T08:00:00Z',
-    status: 'skipped',
-    skip_reason: 'previous run still active',
-    event: {},
-    created_at: '2026-07-26T08:00:00Z',
-  },
-]
-
-function renderAt(id: string) {
+function renderPage() {
   const router = createMemoryRouter(
-    [{ path: '/automations/:id', element: <AutomationDetail /> }],
-    { initialEntries: [`/automations/${id}`] },
+    [
+      { path: '/automations', element: <div>automations page</div> },
+      { path: '/automations/:id', element: <AutomationDetail /> },
+      { path: '/automations/:id/edit', element: <div>edit automation page</div> },
+      { path: '/missions/:id', element: <div>mission page</div> },
+    ],
+    { initialEntries: ['/automations/s1'] },
   )
-  return render(
+  const result = render(
     <TooltipProvider>
       <RouterProvider router={router} />
     </TooltipProvider>,
   )
+  return { router, ...result }
 }
 
-afterEach(cleanup)
+// Radix tabs switch on mousedown, not click.
+function openTab(name: string) {
+  fireEvent.mouseDown(screen.getByRole('tab', { name }), { button: 0 })
+}
+
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.mocked(getAutomation).mockRejectedValue(new Error('automation not found'))
+  vi.mocked(getAutomation).mockResolvedValue(makeAutomation())
   vi.mocked(listAutomationRuns).mockResolvedValue([])
-  vi.mocked(listDestinations).mockResolvedValue([])
+  vi.mocked(listAutomationNotes).mockResolvedValue([])
+  vi.mocked(listAgents).mockResolvedValue([{ id: agentID, name: 'briefing', enabled: true } as AdminAgent])
+  vi.mocked(listDestinations).mockResolvedValue([destination])
 })
 
-describe('AutomationDetail', () => {
-  it('shows a not-found message for an unknown automation', async () => {
-    renderAt('missing')
-    expect(await screen.findByText('Automation not found.')).toBeTruthy()
+describe('AutomationDetail header', () => {
+  it('shows the name, breadcrumb, agent badge and actions', async () => {
+    renderPage()
+    expect(await screen.findByRole('heading', { level: 1, name: 'weekly-digest' })).toBeInTheDocument()
+    const crumbs = screen.getByRole('navigation', { name: 'Breadcrumb' })
+    expect(within(crumbs).getByRole('link', { name: 'Automations' })).toBeInTheDocument()
+    expect(within(crumbs).getByText('weekly-digest')).toHaveAttribute('aria-current', 'page')
+    expect(await screen.findByText('briefing')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Run now' })).toBeInTheDocument()
+    expect(screen.getByRole('switch', { name: 'Enabled' })).toBeChecked()
   })
 
-  it('renders the automation summary and its runs with mission links', async () => {
-    vi.mocked(getAutomation).mockResolvedValue(automation)
-    vi.mocked(listAutomationRuns).mockResolvedValue(runs)
-    renderAt('s1')
-
-    expect(await screen.findByRole('heading', { name: 'weekly-digest' })).toBeTruthy()
-    expect(screen.getByText('Weekdays, 8:00 AM')).toBeTruthy()
-    expect(screen.getByText('Summarize the week')).toBeTruthy()
-    expect(getAutomation).toHaveBeenCalledWith('s1')
-    expect(listAutomationRuns).toHaveBeenCalledWith('s1')
-
-    const list = await screen.findByRole('list', { name: 'Runs' })
-    const rows = within(list).getAllByRole('listitem')
-    expect(rows).toHaveLength(2)
-    expect(within(rows[0]).getByText('done')).toBeTruthy()
-    expect(within(rows[0]).getByRole('link', { name: 'View mission' }).getAttribute('href')).toBe('/missions/m1')
-    expect(within(rows[1]).getByText('skipped')).toBeTruthy()
-    expect(within(rows[1]).getByText('previous run still active')).toBeTruthy()
-    expect(within(rows[1]).queryByRole('link')).toBeNull()
+  it('renders not found for an unknown automation', async () => {
+    vi.mocked(getAutomation).mockRejectedValue(new Error('not found'))
+    renderPage()
+    expect(await screen.findByText('Automation not found.')).toBeInTheDocument()
   })
 
-  it('shows an empty state when the automation has never run', async () => {
-    vi.mocked(getAutomation).mockResolvedValue(automation)
-    renderAt('s1')
-    expect(await screen.findByText('No runs yet.')).toBeTruthy()
+  it('shows the disabled reason as a tooltip', async () => {
+    vi.mocked(getAutomation).mockResolvedValue(
+      makeAutomation({ enabled: false, disabled_reason: 'disabled after 3 failed runs in a row' }),
+    )
+    renderPage()
+    const badge = await screen.findByText('disabled')
+    fireEvent.focus(badge)
+    expect((await screen.findAllByText('disabled after 3 failed runs in a row')).length).toBeGreaterThan(0)
   })
 
-  it('hides the cron line when the automation has no cron trigger', async () => {
-    vi.mocked(getAutomation).mockResolvedValue({ ...automation, triggers: [], stats: { ...automation.stats, next_run_at: undefined } })
-    renderAt('s1')
-    await screen.findByRole('heading', { name: 'weekly-digest' })
-    expect(screen.queryByText('Weekdays, 8:00 AM')).toBeNull()
+  it('toggles enabled from the header switch', async () => {
+    vi.mocked(patchAutomation).mockResolvedValue(makeAutomation({ enabled: false }))
+    renderPage()
+    fireEvent.click(await screen.findByRole('switch', { name: 'Enabled' }))
+    await waitFor(() => expect(patchAutomation).toHaveBeenCalledWith('s1', { enabled: false }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Enabled' })).not.toBeChecked())
   })
 
-  it('requests a run on Run now and toasts', async () => {
-    vi.mocked(getAutomation).mockResolvedValue(automation)
-    vi.mocked(runAutomationNow).mockResolvedValue({ event_id: 7 })
-    renderAt('s1')
+  it('requests a run and toasts', async () => {
+    vi.mocked(runAutomationNow).mockResolvedValue({ event_id: 9 })
+    renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
-
     await waitFor(() => expect(runAutomationNow).toHaveBeenCalledWith('s1'))
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Run requested'))
+    expect(toast.success).toHaveBeenCalledWith('Run requested')
+    await waitFor(() => expect(listAutomationRuns).toHaveBeenCalledTimes(2))
   })
 
-  it('toasts an error when Run now is refused', async () => {
-    vi.mocked(getAutomation).mockResolvedValue(automation)
+  it('toasts when run now is refused', async () => {
     vi.mocked(runAutomationNow).mockRejectedValue(new Error('automation is disabled or expired'))
-    renderAt('s1')
+    renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Run now' }))
-
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not run automation', expect.anything()))
-  })
-
-  it('shows destination badges when the automation has destination_ids', async () => {
-    vi.mocked(listDestinations).mockResolvedValue([destination])
-    vi.mocked(getAutomation).mockResolvedValue({ ...automation, action: { ...automation.action, mission: { ...automation.action.mission, destination_ids: ['d1'] } } })
-    renderAt('s1')
-    expect(await screen.findByText('ops-inbox')).toBeTruthy()
-  })
-
-  it('shows no destination badges when the automation has none attached', async () => {
-    vi.mocked(listDestinations).mockResolvedValue([destination])
-    vi.mocked(getAutomation).mockResolvedValue(automation)
-    renderAt('s1')
-    await screen.findByRole('heading', { name: 'weekly-digest' })
-    expect(screen.queryByText('ops-inbox')).toBeNull()
-  })
-
-  it('falls back to the raw destination id when it cannot be resolved', async () => {
-    vi.mocked(listDestinations).mockResolvedValue([])
-    vi.mocked(getAutomation).mockResolvedValue({ ...automation, action: { ...automation.action, mission: { ...automation.action.mission, destination_ids: ['unknown-id'] } } })
-    renderAt('s1')
-    expect(await screen.findByText('unknown-id')).toBeTruthy()
-  })
-
-  it('shows a disabled badge when the automation is disabled', async () => {
-    vi.mocked(getAutomation).mockResolvedValue({ ...automation, enabled: false })
-    renderAt('s1')
-    expect(await screen.findByText('disabled')).toBeTruthy()
-  })
-
-  it('shows the last run time when set', async () => {
-    vi.mocked(getAutomation).mockResolvedValue({
-      ...automation,
-      stats: { ...automation.stats, runs_total: 1, last_run_at: '2026-07-20T08:00:00Z', last_run_status: 'done' },
-    })
-    renderAt('s1')
-    expect(await screen.findByText(/Last run/)).toBeTruthy()
-  })
-
-  it('navigates to the edit page when Edit is clicked', async () => {
-    vi.mocked(getAutomation).mockResolvedValue(automation)
-    const router = createMemoryRouter(
-      [
-        { path: '/automations/:id', element: <AutomationDetail /> },
-        { path: '/automations/:id/edit', element: <div>edit page</div> },
-      ],
-      { initialEntries: ['/automations/s1'] },
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not run automation', { description: 'automation is disabled or expired' }),
     )
-    render(
-      <TooltipProvider>
-        <RouterProvider router={router} />
-      </TooltipProvider>,
-    )
+  })
+
+  it('renames inline', async () => {
+    vi.mocked(patchAutomation).mockResolvedValue(makeAutomation({ name: 'daily-digest' }))
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Rename automation' }))
+    const input = screen.getByLabelText('Automation name')
+    fireEvent.change(input, { target: { value: 'daily-digest' } })
+    fireEvent.blur(input)
+    await waitFor(() => expect(patchAutomation).toHaveBeenCalledWith('s1', { name: 'daily-digest' }))
+  })
+
+  it('opens the editor', async () => {
+    const { router } = renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
-    await waitFor(() => expect(router.state.location.pathname).toBe('/automations/s1/edit'))
+    expect(router.state.location.pathname).toBe('/automations/s1/edit')
+  })
+})
+
+describe('AutomationDetail settings tab', () => {
+  it('summarizes triggers, action and limits', async () => {
+    vi.mocked(getAutomation).mockResolvedValue(
+      makeAutomation({
+        action: {
+          kind: 'mission',
+          mission: { goal: 'Summarize the week', kind: 'general', destination_ids: ['d1'], budget_amount: 2, budget_currency: 'USD' },
+        },
+        concurrency: 'queue',
+        max_runs_per_hour: 4,
+      }),
+    )
+    renderPage()
+    expect(await screen.findByText('Summarize the week')).toBeInTheDocument()
+    expect(screen.getByText('Weekdays, 8:00 AM')).toBeInTheDocument()
+    expect(screen.getByText('0 8 * * 1-5')).toBeInTheDocument()
+    expect(screen.getByText(/^Next run/)).toBeInTheDocument()
+    expect(await screen.findByText('ops-inbox')).toBeInTheDocument()
+    expect(screen.getByText('Queue behind the active run')).toBeInTheDocument()
+    expect(screen.getByText('Max runs per hour').nextElementSibling).toHaveTextContent('4')
+    expect(screen.getByText('Expires').nextElementSibling).toHaveTextContent('Never')
+  })
+})
+
+describe('AutomationDetail run history tab', () => {
+  it('lists runs with pending states and skip reasons', async () => {
+    vi.mocked(listAutomationRuns).mockResolvedValue([
+      makeRun({ id: 'r3', status: 'queued', started_at: undefined, finished_at: undefined, mission_id: undefined }),
+      makeRun({ id: 'r2', status: 'skipped', skip_reason: 'previous run still active', mission_id: undefined }),
+      makeRun({ id: 'r1', status: 'done', mission_id: 'm1' }),
+    ])
+    const { router } = renderPage()
+    await screen.findByRole('tab', { name: 'Run history' })
+    openTab('Run history')
+    expect(await screen.findByText('Queued')).toBeInTheDocument()
+    expect(screen.getByText('previous run still active')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('link', { name: /Open the mission/ }))
+    expect(router.state.location.pathname).toBe('/missions/m1')
   })
 
-  it('renames the automation: pencil click, edit, Enter saves the trimmed name', async () => {
-    vi.mocked(getAutomation).mockResolvedValue(automation)
-    vi.mocked(patchAutomation).mockResolvedValue({ ...automation, name: 'New Name' })
-    renderAt('s1')
-    await screen.findByRole('heading', { name: 'weekly-digest' })
-
-    fireEvent.click(screen.getByRole('button', { name: 'Rename automation' }))
-    const input = screen.getByRole('textbox', { name: 'Automation name' })
-    fireEvent.change(input, { target: { value: 'New Name' } })
-    fireEvent.keyDown(input, { key: 'Enter' })
-
-    await waitFor(() => expect(patchAutomation).toHaveBeenCalledWith('s1', { name: 'New Name' }))
+  it('shows an empty state without runs', async () => {
+    renderPage()
+    await screen.findByRole('tab', { name: 'Run history' })
+    openTab('Run history')
+    expect(await screen.findByText('No runs yet')).toBeInTheDocument()
   })
 
-  it('cancels the rename on Escape without calling patchAutomation', async () => {
-    vi.mocked(getAutomation).mockResolvedValue(automation)
-    renderAt('s1')
-    await screen.findByRole('heading', { name: 'weekly-digest' })
+  it('refreshes on demand', async () => {
+    renderPage()
+    await screen.findByRole('tab', { name: 'Run history' })
+    openTab('Run history')
+    fireEvent.click(await screen.findByRole('button', { name: 'Refresh runs' }))
+    await waitFor(() => expect(listAutomationRuns).toHaveBeenCalledTimes(2))
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rename automation' }))
-    const input = screen.getByRole('textbox', { name: 'Automation name' })
-    fireEvent.change(input, { target: { value: 'New Name' } })
-    fireEvent.keyDown(input, { key: 'Escape' })
+  it('polls while a run is pending and stops once all are terminal', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    vi.mocked(listAutomationRuns)
+      .mockResolvedValueOnce([makeRun({ status: 'running', finished_at: undefined })])
+      .mockResolvedValue([makeRun({ status: 'done' })])
+    renderPage()
+    await screen.findByRole('heading', { level: 1, name: 'weekly-digest' })
+    expect(listAutomationRuns).toHaveBeenCalledTimes(1)
 
-    expect(screen.queryByRole('textbox', { name: 'Automation name' })).toBeNull()
-    expect(screen.getByRole('heading', { name: 'weekly-digest' })).toBeTruthy()
-    expect(patchAutomation).not.toHaveBeenCalled()
+    await act(async () => {
+      vi.advanceTimersByTime(runPollMs)
+    })
+    await waitFor(() => expect(listAutomationRuns).toHaveBeenCalledTimes(2))
+
+    await act(async () => {
+      vi.advanceTimersByTime(runPollMs * 3)
+    })
+    expect(listAutomationRuns).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not poll when every run is terminal', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    vi.mocked(listAutomationRuns).mockResolvedValue([makeRun({ status: 'failed' })])
+    renderPage()
+    await screen.findByRole('heading', { level: 1, name: 'weekly-digest' })
+    await act(async () => {
+      vi.advanceTimersByTime(runPollMs * 2)
+    })
+    expect(listAutomationRuns).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('AutomationDetail notes tab', () => {
+  it('lists notes with size, count and who updated them', async () => {
+    vi.mocked(listAutomationNotes).mockResolvedValue([
+      makeNote(),
+      makeNote({ name: 'seen', content: 'abc', updated_by_run_id: 'r1' }),
+    ])
+    vi.mocked(listAutomationRuns).mockResolvedValue([makeRun({ id: 'r1', mission_id: 'm1' })])
+    renderPage()
+    await screen.findByRole('tab', { name: 'Notes' })
+    openTab('Notes')
+    expect(await screen.findByText('progress')).toBeInTheDocument()
+    expect(screen.getByText('2 of 10')).toBeInTheDocument()
+    const seen = document.querySelector('[data-note="seen"]') as HTMLElement
+    expect(within(seen).getByText('3 B')).toBeInTheDocument()
+    expect(within(seen).getByRole('link', { name: 'Run mission' })).toHaveAttribute('href', '/missions/m1')
+    const progress = document.querySelector('[data-note="progress"]') as HTMLElement
+    expect(within(progress).getByText('You')).toBeInTheDocument()
+  })
+
+  it('adds a note through the dialog', async () => {
+    vi.mocked(putAutomationNote).mockResolvedValue(makeNote({ name: 'todo', content: 'x' }))
+    renderPage()
+    await screen.findByRole('tab', { name: 'Notes' })
+    openTab('Notes')
+    fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'todo' } })
+    fireEvent.change(within(dialog).getByLabelText('Content'), { target: { value: 'x' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(putAutomationNote).toHaveBeenCalledWith('s1', 'todo', 'x'))
+    expect(toast.success).toHaveBeenCalledWith('Note saved')
+    await waitFor(() => expect(listAutomationNotes).toHaveBeenCalledTimes(2))
+  })
+
+  it('edits a note with its name locked', async () => {
+    vi.mocked(listAutomationNotes).mockResolvedValue([makeNote()])
+    vi.mocked(putAutomationNote).mockResolvedValue(makeNote({ content: 'new' }))
+    renderPage()
+    await screen.findByRole('tab', { name: 'Notes' })
+    openTab('Notes')
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit progress' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByLabelText('Name')).toBeDisabled()
+    fireEvent.change(within(dialog).getByLabelText('Content'), { target: { value: 'new' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(putAutomationNote).toHaveBeenCalledWith('s1', 'progress', 'new'))
+  })
+
+  it('keeps the dialog open and toasts when saving fails', async () => {
+    vi.mocked(putAutomationNote).mockRejectedValue(new Error('an automation holds at most 10 notes'))
+    renderPage()
+    await screen.findByRole('tab', { name: 'Notes' })
+    openTab('Notes')
+    fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'todo' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not save note', { description: 'an automation holds at most 10 notes' }),
+    )
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('deletes a note after confirming', async () => {
+    vi.mocked(listAutomationNotes).mockResolvedValue([makeNote()])
+    vi.mocked(deleteAutomationNote).mockResolvedValue()
+    renderPage()
+    await screen.findByRole('tab', { name: 'Notes' })
+    openTab('Notes')
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete progress' }))
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+    await waitFor(() => expect(deleteAutomationNote).toHaveBeenCalledWith('s1', 'progress'))
+  })
+
+  it('disables Add note at the cap', async () => {
+    vi.mocked(listAutomationNotes).mockResolvedValue(
+      Array.from({ length: 10 }, (_, i) => makeNote({ name: `n${i}` })),
+    )
+    renderPage()
+    await screen.findByRole('tab', { name: 'Notes' })
+    openTab('Notes')
+    expect(await screen.findByText('10 of 10')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeDisabled()
+  })
+
+  it('says when notes are off', async () => {
+    vi.mocked(getAutomation).mockResolvedValue(makeAutomation({ notes_enabled: false }))
+    renderPage()
+    await screen.findByRole('tab', { name: 'Notes' })
+    openTab('Notes')
+    expect(await screen.findByText(/Notes are off/)).toBeInTheDocument()
   })
 })

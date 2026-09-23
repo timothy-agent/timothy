@@ -6,6 +6,7 @@ import {
   latencyBarsOption,
   multiLineOption,
   requestsErrorsOption,
+  sparklineOption,
   stackedBarsOption,
 } from './options'
 import type { LatencyRow } from '../../api/types'
@@ -195,5 +196,29 @@ describe('gaugeOption', () => {
     const opt = gaugeOption(5, 10, '#0f0', '#f00', (v) => `$${v}`)
     const series = opt.series as Array<{ detail: { formatter: () => string } }>
     expect(series[0].detail.formatter()).toBe('$5')
+  })
+})
+
+describe('sparklineOption', () => {
+  const rows = [
+    { day: '2026-09-22', succeeded: 3, failed: 1 },
+    { day: '2026-09-23', succeeded: 5, failed: 0 },
+  ]
+
+  it('draws succeeded and failed as two colored lines', () => {
+    const opt = sparklineOption(rows, '#0a0', '#a00')
+    const series = opt.series as Array<{ name: string; type: string; data: number[]; lineStyle: { color: string } }>
+    expect(series.map((s) => s.name)).toEqual(['succeeded', 'failed'])
+    expect(series.every((s) => s.type === 'line')).toBe(true)
+    expect(series[0].data).toEqual([3, 5])
+    expect(series[1].data).toEqual([1, 0])
+    expect(series[0].lineStyle.color).toBe('#0a0')
+    expect(series[1].lineStyle.color).toBe('#a00')
+  })
+
+  it('hides both axes', () => {
+    const opt = sparklineOption(rows, '#0a0', '#a00')
+    expect((opt.xAxis as { show: boolean }).show).toBe(false)
+    expect((opt.yAxis as { show: boolean }).show).toBe(false)
   })
 })

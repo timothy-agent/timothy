@@ -10,6 +10,7 @@ import type {
   AutomationNote,
   AutomationRun,
   AutomationsStats,
+  AutomationTemplate,
   AutomationTrigger,
   AvailableModel,
   BudgetLimit,
@@ -1674,7 +1675,16 @@ export interface AutomationTriggerInput {
   enabled?: boolean
 }
 
-export interface CreateAutomationInput {
+// AutomationLimits are the run ceilings; the server defaults each omitted one.
+export interface AutomationLimits {
+  concurrency?: Automation['concurrency']
+  max_concurrent?: number
+  max_runs_per_hour?: number
+  continuity?: boolean
+  notes_enabled?: boolean
+}
+
+export interface CreateAutomationInput extends AutomationLimits {
   name: string
   description?: string
   agent_id: string
@@ -1684,7 +1694,7 @@ export interface CreateAutomationInput {
   expires_at?: string
 }
 
-export interface PatchAutomationInput {
+export interface PatchAutomationInput extends AutomationLimits {
   name?: string
   description?: string
   agent_id?: string
@@ -1734,6 +1744,12 @@ export async function listAutomationRuns(id: string, limit?: number): Promise<Au
 
 export async function automationsStats(): Promise<AutomationsStats> {
   return request<AutomationsStats>('/v1/automations/stats')
+}
+
+// listAutomationTemplates reads the template gallery (issue #825).
+export async function listAutomationTemplates(): Promise<AutomationTemplate[]> {
+  const { templates } = await request<{ templates: AutomationTemplate[] }>('/v1/automations/templates')
+  return templates ?? []
 }
 
 export async function listAutomationNotes(id: string): Promise<AutomationNote[]> {
