@@ -264,6 +264,9 @@ func main() {
 	}
 	builtinSet := newBuiltinToolSet(builtins)
 	go runOutputGC(ctx, outputs, app.Log)
+	// D-118: stale prompt expiry and retention run with or without
+	// missions.
+	go broker.RunExpiry(ctx, time.Minute)
 
 	secrets, err := buildSecretStore(app.DB, app.Log)
 	if err != nil {
@@ -438,10 +441,10 @@ func main() {
 	if missionDriver != nil {
 		// D-071: close the unvalidated Driver.Create path (the workflows
 		// engine's spawnStep is now a second caller besides the HTTP create
-		// handler). routeExists reuses the exact same gwc.ResolveRoute
-		// check buildMissions wires for the scheduler; destinationStore may
-		// still be nil (destinations disabled), which just skips that one
-		// check (see ValidateDeps' nil-gating).
+		// handler). routeExists reuses the same gwc.ResolveRoute check as
+		// missionResolve.RouteExists above; destinationStore may still be
+		// nil (destinations disabled), which just skips that one check
+		// (see ValidateDeps' nil-gating).
 		deps := missions.ValidateDeps{
 			RouteExists: func(ctx context.Context, name string) bool {
 				_, err := gwc.ResolveRoute(ctx, name, "")

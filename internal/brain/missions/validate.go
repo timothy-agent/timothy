@@ -60,9 +60,10 @@ func validModelPin(pin string) bool {
 }
 
 // ValidateCreate enforces the domain rules a mission row must satisfy
-// regardless of which caller is creating it — the HTTP create handler
-// and the workflows engine's spawnStep both call into Driver.Create,
-// and only the HTTP handler used to validate anything (D-071). Callers
+// regardless of which caller is creating it: the HTTP create handler,
+// the scheduler's fireMission and the workflows engine's spawnStep all
+// call into Driver.Create, and only the HTTP handler used to validate
+// anything (D-071). Callers
 // must resolve their own defaults (kind, route, environment auto-detect)
 // before calling: ValidateCreate rejects an empty route rather than
 // silently picking one, so a caller that wants "the default route"

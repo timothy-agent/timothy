@@ -581,6 +581,33 @@ func TestStartRunResolvesStepThroughSharedDefaults(t *testing.T) {
 	}
 }
 
+// TestStepCreateRequestReviewRoute covers issue #849: a step with a
+// route and no plan_route keeps prove on its route, never the default.
+func TestStepCreateRequestReviewRoute(t *testing.T) {
+	t.Parallel()
+	deps := missions.ResolveDeps{RouteForRole: func(context.Context, string) string { return "default" }}
+	for _, tc := range []struct {
+		name       string
+		step       Step
+		wantReview string
+	}{
+		{"route only reviews on the route", Step{Kind: "general", Route: "fast"}, "fast"},
+		{"plan_route covers review", Step{Kind: "general", Route: "fast", PlanRoute: "strong"}, "strong"},
+		{"no routes falls back to default", Step{Kind: "general"}, "default"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m, err := missions.ResolveDefaults(context.Background(), StepCreateRequest(tc.step, "goal", "run-1", "build", "", ""), deps)
+			if err != nil {
+				t.Fatalf("ResolveDefaults: %v", err)
+			}
+			if m.ReviewRoute != tc.wantReview {
+				t.Fatalf("review_route = %q, want %q", m.ReviewRoute, tc.wantReview)
+			}
+		})
+	}
+}
+
 // TestStartRunPausesOnUnusableRoute confirms the D-100 gate applies to a
 // workflow step: the run pauses instead of spawning a mission that
 // would park on its first turn.

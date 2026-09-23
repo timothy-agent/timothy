@@ -618,3 +618,68 @@ func TestSchedulerRegression815PoisonedScheduleDoesNotCascade(t *testing.T) {
 		t.Fatalf("skips = %v, want [SKIP s2 agent_missing]", got)
 	}
 }
+
+// recordingExecer captures recordFireSkip's UPDATE and the state of
+// the context it ran on.
+type recordingExecer struct {
+	args        []any
+	ctxErr      error
+	hasDeadline bool
+}
+
+func (r *recordingExecer) Exec(ctx context.Context, _ string, args ...any) (pgconn.CommandTag, error) {
+	r.args = args
+	r.ctxErr = ctx.Err()
+	_, r.hasDeadline = ctx.Deadline()
+	return pgconn.CommandTag{}, nil
+}
+
+func TestRecordFireSkip(t *testing.T) {
+	t.Parallel()
+	routeErr := fmt.Errorf("create mission: %w", &RouteUnusableError{Route: "dead", Reason: "cooling down"})
+	cases := []struct {
+		name        string
+		pendingFire bool
+		err         error
+		wantReason  string
+		wantPending bool
+	}{
+		{"route unusable on a due fire sets pending", false, routeErr, "fire_error", true},
+		{"route unusable on a pending fire keeps pending", true, routeErr, "fire_error", true},
+		{"other error on a due fire leaves pending false", false, errors.New("insert failed"), "fire_error", false},
+		{"other error on a pending fire keeps pending", true, errors.New("insert failed"), "fire_error", true},
+		{"agent missing restores pending", false, fmt.Errorf("agent %q: %w", "a1", errAgentMissing), "agent_missing", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			db := &recordingExecer{}
+			s := &Scheduler{log: discardLog()}
+			s.recordFireSkip(context.Background(), db, Schedule{ID: "s1", PendingFire: tc.pendingFire}, time.Now(), tc.err)
+			if len(db.args) != 4 {
+				t.Fatalf("UPDATE args = %v, want 4", db.args)
+			}
+			if db.args[2] != tc.wantReason || db.args[3] != tc.wantPending {
+				t.Fatalf("skip_reason=%v pending_fire=%v, want %q %v", db.args[2], db.args[3], tc.wantReason, tc.wantPending)
+			}
+		})
+	}
+}
+
+// TestRecordFireSkipSurvivesCancelledContext covers a create failing
+// because the scheduler is shutting down: the skip write still runs, on
+// a live, bounded context.
+func TestRecordFireSkipSurvivesCancelledContext(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	db := &recordingExecer{}
+	s := &Scheduler{log: discardLog()}
+	s.recordFireSkip(ctx, db, Schedule{ID: "s1"}, time.Now(), context.Canceled)
+	if db.args == nil {
+		t.Fatal("skip UPDATE never ran")
+	}
+	if db.ctxErr != nil || !db.hasDeadline {
+		t.Fatalf("skip ctx err=%v deadline=%v, want live and bounded", db.ctxErr, db.hasDeadline)
+	}
+}

@@ -57,6 +57,12 @@ const (
 	maxParallelTools = 4
 	persistTimeout   = 10 * time.Second
 	sessionGrantTTL  = 12 * time.Hour
+	// onceCarryTTL bounds how long a once answer recorded with no live
+	// waiter stays redeemable (D-118): the permission timeout window.
+	onceCarryTTL = 30 * time.Minute
+	// permRetention is how long resolved pending_permissions rows are
+	// kept before ExpireStale deletes them.
+	permRetention = 30 * 24 * time.Hour
 	// retrieveInlineCap bounds what retrieve_output returns inline;
 	// re-offloading a retrieval would chase its own tail, so it
 	// truncates with an honest note instead.

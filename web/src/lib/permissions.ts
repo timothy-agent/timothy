@@ -6,7 +6,8 @@ import { subscribeEvents } from './events'
 // usePendingPermissions keeps the global badge/toast current: initial
 // fetch, a slow poll as a safety net for a missed signal, and an
 // instant refetch on the "permission" hub signal (fired on both
-// request and resolve — see chat.Service.SetPermissionHub). Returns
+// request and resolve, for chat and mission prompts; see
+// chat.Service.SetPermissionHub and missions.Store). Returns
 // the full list, not just a count: the toast needs each entry's tool
 // name and session id to build its message and jump link.
 export function usePendingPermissions(): PendingPermission[] {
@@ -34,16 +35,16 @@ export function usePendingPermissions(): PendingPermission[] {
   return pending
 }
 
-// newlySeen returns the entries in current whose session_id was not
-// present in seen — the pure diff behind App.tsx's "toast only on
-// first-seen" rule, pulled out so it's testable without rendering the
-// app: a raw poll/signal refetch of an unchanged list must not re-diff
-// as new.
+// newlySeen returns the entries in current whose id was not present in
+// seen: the pure diff behind App.tsx's "toast only on first-seen"
+// rule, pulled out so it's testable without rendering the app: a raw
+// poll/signal refetch of an unchanged list must not re-diff as new,
+// and a second prompt in the same session still toasts.
 export function newlySeen(
   seen: ReadonlySet<string>,
   current: PendingPermission[],
 ): PendingPermission[] {
-  return current.filter((p) => !seen.has(p.session_id))
+  return current.filter((p) => !seen.has(p.id))
 }
 
 // toastSessionLabel picks the approval toast's description: the

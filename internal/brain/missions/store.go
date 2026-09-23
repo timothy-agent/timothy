@@ -665,7 +665,19 @@ func (s *Store) SetPendingPermission(ctx context.Context, id, permissionID, tool
 	if err := appendEventTx(ctx, tx, id, "mission.permission_requested", payload, "live"); err != nil {
 		return fmt.Errorf("missions set pending permission: %w", err)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("missions set pending permission commit: %w", err)
+	}
+	s.publishPermission(id)
+	return nil
+}
+
+// publishPermission pushes the "permission" signal the web's pending
+// badge and toast refetch on, as chat prompts do (D-118).
+func (s *Store) publishPermission(missionID string) {
+	if s.hub != nil {
+		s.hub.Publish(Signal{Kind: "permission", ID: missionID})
+	}
 }
 
 // ClearPendingPermission drops a mission's parked-permission state
@@ -681,6 +693,7 @@ func (s *Store) ClearPendingPermission(ctx context.Context, id string) error {
 		WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("missions clear pending permission: %w", err)
 	}
+	s.publishPermission(id)
 	return nil
 }
 
@@ -764,6 +777,7 @@ func (s *Store) ResolvePendingPermissionTimeout(ctx context.Context, id, tool st
 	if s.hub != nil {
 		s.hub.Publish(Signal{Kind: "mission", ID: id})
 	}
+	s.publishPermission(id)
 	return nil
 }
 
@@ -807,6 +821,7 @@ func (s *Store) ResolvePendingPermission(ctx context.Context, permissionID, deci
 	if s.hub != nil {
 		s.hub.Publish(Signal{Kind: "mission", ID: missionID})
 	}
+	s.publishPermission(missionID)
 	return missionID, true, nil
 }
 

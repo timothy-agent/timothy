@@ -224,7 +224,8 @@ export interface PendingPermission {
   session_title: string
   mission_id: string
   tool: string
-  args: Record<string, unknown>
+  // A string when the call's args could not be stored as JSON.
+  args: Record<string, unknown> | string
   danger: string
   rationale: string
   origin_kind: 'chat' | 'mission'

@@ -230,8 +230,13 @@ func StepCreateRequest(step Step, goal, runID, stepName, outcome, parentMissionI
 		destinations = append(destinations, missions.DestinationEntry{DestinationID: id})
 	}
 	autoApprovePlan, autoApproveTools := true, false
+	// Prove stays on the step route unless plan_route covers it.
+	reviewRoute := ""
+	if step.PlanRoute == "" {
+		reviewRoute = step.Route
+	}
 	return missions.CreateRequest{
-		Goal: goal, Kind: step.Kind, Light: step.Light, Route: step.Route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
+		Goal: goal, Kind: step.Kind, Light: step.Light, Route: step.Route, ReviewRoute: reviewRoute, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
 		Destinations:    destinations,
 		ParentMissionID: parentMissionID,
 		Sources:         []missions.SourceEntry{{Source: missions.SourceKindMission, ID: missions.ParentLineageID, MissionID: parentMissionID, Digest: outcome}},

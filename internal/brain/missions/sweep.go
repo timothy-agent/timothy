@@ -243,7 +243,7 @@ func admitWork(ctx context.Context, gate capacityChecker, log *slog.Logger) (adm
 // settings.ValuePermissionTimeoutSeconds value (issue #445); broker is
 // the loop's PermBroker, best-effort. nil is valid (a still-running
 // turn just times out on its own permissionTimeout instead of waking
-// early, and persisted prompts are not expired).
+// early).
 func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, gateway gatewayReadyChecker, globalPermissionTimeout func(context.Context) int, globalAskTimeout func(context.Context) int, broker permissionBroker, log *slog.Logger) {
 	recoverWorking(ctx, d, store, gateway, log)
 	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, capacity, notify, globalPermissionTimeout, globalAskTimeout, broker, log)
@@ -533,7 +533,6 @@ type permissionTimeoutDriver interface {
 // sweep uses.
 type permissionBroker interface {
 	Resolve(ctx context.Context, id, decision string) bool
-	ExpireStale(ctx context.Context) (int64, error)
 }
 
 // sweepPermissionTimeouts auto-denies any mission whose pending_permission
@@ -547,18 +546,12 @@ type permissionBroker interface {
 // STILL-LIVE worker turn blocked in loop.Agent's askUser immediately
 // (with timeout: nobody answered) and to mark the persisted row
 // timeout; a false result just means the row was already resolved.
-// broker.ExpireStale first expires persisted prompts no turn can still
-// wait on (D-118), so pending_permissions never accumulates. Either
-// way, Drive picks the mission back up: if a live turn is still
+// Stale persisted prompts expire on the broker's own ticker (D-118,
+// PermBroker.RunExpiry), not here. Either way, Drive picks the mission back up: if a live turn is still
 // running it's claimDriving's own no-op, otherwise this is exactly
 // recoverWorking/reDriveStaleWorking's own rescue path for a 'working'
 // mission whose Drive loop stopped advancing.
 func sweepPermissionTimeouts(ctx context.Context, d permissionTimeoutDriver, store permissionTimeoutStore, globalPermissionTimeout func(context.Context) int, broker permissionBroker, notify messageNotifier, log *slog.Logger) {
-	if broker != nil {
-		if _, err := broker.ExpireStale(ctx); err != nil {
-			log.Error("permission timeout sweep: expire stale prompts failed", "error", err)
-		}
-	}
 	if globalPermissionTimeout == nil {
 		return
 	}

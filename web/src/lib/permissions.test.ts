@@ -99,14 +99,20 @@ describe('usePendingPermissions', () => {
 })
 
 describe('newlySeen', () => {
-  it('returns entries whose session_id is not already in seen', () => {
-    const other: PendingPermission = { ...pending, session_id: 's2' }
-    const result = newlySeen(new Set(['s1']), [pending, other])
+  it('returns entries whose id is not already in seen', () => {
+    const other: PendingPermission = { ...pending, id: 'p2', session_id: 's2' }
+    const result = newlySeen(new Set(['p1']), [pending, other])
     expect(result).toEqual([other])
   })
 
+  it('returns a second prompt in an already-seen session', () => {
+    const second: PendingPermission = { ...pending, id: 'p2', tool: 'shell' }
+    const result = newlySeen(new Set(['p1']), [pending, second])
+    expect(result).toEqual([second])
+  })
+
   it('returns nothing when every entry was already seen (a plain refetch)', () => {
-    const result = newlySeen(new Set(['s1']), [pending])
+    const result = newlySeen(new Set(['p1']), [pending])
     expect(result).toEqual([])
   })
 

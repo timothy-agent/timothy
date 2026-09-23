@@ -677,6 +677,43 @@ func TestSetNameIfEmpty(t *testing.T) {
 	}
 }
 
+// TestPendingPermissionPublishesPermissionSignal: parking and clearing
+// a mission prompt push the "permission" signal the web toast
+// refetches on.
+func TestPendingPermissionPublishesPermissionSignal(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	hub := NewHub()
+	s.SetHub(hub)
+	sub := hub.Subscribe(ctx)
+	id, err := s.Create(ctx, Mission{Goal: marker + "permission signal", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	waitPermission := func(step string) {
+		t.Helper()
+		timeout := time.After(5 * time.Second)
+		for {
+			select {
+			case sig := <-sub:
+				if sig.Kind == "permission" && sig.ID == id {
+					return
+				}
+			case <-timeout:
+				t.Fatalf("%s: no permission signal for %s", step, id)
+			}
+		}
+	}
+	if err := s.SetPendingPermission(ctx, id, "perm-signal", "shell", `{}`, "safe", "r"); err != nil {
+		t.Fatalf("SetPendingPermission: %v", err)
+	}
+	waitPermission("park")
+	if err := s.ClearPendingPermission(ctx, id); err != nil {
+		t.Fatalf("ClearPendingPermission: %v", err)
+	}
+	waitPermission("clear")
+}
+
 func TestSetAndClearPendingPermission(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
