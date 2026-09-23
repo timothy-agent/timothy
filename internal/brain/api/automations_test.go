@@ -47,11 +47,12 @@ func TestAutomationsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerAutomations(m.Handle, nil, nil, nil, nil, nil, nil)
+	a.registerAutomations(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil)
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/automations"},
 		{"POST", "/v1/automations"},
 		{"GET", "/v1/automations/stats"},
+		{"GET", "/v1/automations/templates"},
 		{"GET", "/v1/automations/abc"},
 		{"PATCH", "/v1/automations/abc"},
 		{"DELETE", "/v1/automations/abc"},
@@ -294,5 +295,92 @@ func TestStripActionAttachmentMarkdown(t *testing.T) {
 	}
 	if tmpl.Attachments[0].Markdown != "secret body" {
 		t.Fatal("strip mutated the stored template")
+	}
+}
+
+func TestAutomationTemplatesMissing(t *testing.T) {
+	t.Parallel()
+	kinds := func(k ...string) kindLister {
+		return func(context.Context) ([]string, error) { return k, nil }
+	}
+	for _, tc := range []struct {
+		name         string
+		conns, dests kindLister
+		want         map[string][]automations.Requirement
+	}{
+		{"nothing configured", nil, nil, map[string][]automations.Requirement{
+			"daily-repo-digest":   {{Kind: "connector", Value: "github"}, {Kind: "destination", Value: "email"}},
+			"pr-review-comment":   {{Kind: "connector", Value: "github"}},
+			"weekly-kb-freshness": {},
+			"inbox-triage":        {{Kind: "connector", Value: "mail"}},
+			"coverage-watch":      {{Kind: "connector", Value: "github"}},
+		}},
+		{"github and imap only", kinds("github", "imap"), kinds(), map[string][]automations.Requirement{
+			"daily-repo-digest":   {{Kind: "destination", Value: "email"}},
+			"pr-review-comment":   {},
+			"weekly-kb-freshness": {},
+			"inbox-triage":        {},
+			"coverage-watch":      {},
+		}},
+		{"all configured", kinds("github", "google"), kinds("email"), map[string][]automations.Requirement{
+			"daily-repo-digest":   {},
+			"pr-review-comment":   {},
+			"weekly-kb-freshness": {},
+			"inbox-triage":        {},
+			"coverage-watch":      {},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := &automationAPI{connectorKinds: tc.conns, destinationKinds: tc.dests}
+			w := httptest.NewRecorder()
+			h.templates(w, httptest.NewRequest("GET", "/v1/automations/templates", nil))
+			if w.Code != 200 {
+				t.Fatalf("templates = %d %s", w.Code, w.Body.String())
+			}
+			var body struct {
+				Templates []struct {
+					ID       string                    `json:"id"`
+					Requires []automations.Requirement `json:"requires"`
+					Missing  []automations.Requirement `json:"missing"`
+				} `json:"templates"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(body.Templates) != len(tc.want) {
+				t.Fatalf("got %d templates, want %d", len(body.Templates), len(tc.want))
+			}
+			for _, tpl := range body.Templates {
+				want, ok := tc.want[tpl.ID]
+				if !ok {
+					t.Fatalf("unexpected template %q", tpl.ID)
+				}
+				if tpl.Missing == nil || tpl.Requires == nil {
+					t.Fatalf("%s: requires/missing must encode as arrays, got %s", tpl.ID, w.Body.String())
+				}
+				if len(tpl.Missing) != len(want) {
+					t.Fatalf("%s missing = %+v, want %+v", tpl.ID, tpl.Missing, want)
+				}
+				for i := range want {
+					if tpl.Missing[i] != want[i] {
+						t.Fatalf("%s missing = %+v, want %+v", tpl.ID, tpl.Missing, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAutomationTemplatesLookupError(t *testing.T) {
+	t.Parallel()
+	failing := func(context.Context) ([]string, error) { return nil, errors.New("db down") }
+	for _, h := range []*automationAPI{{connectorKinds: failing}, {destinationKinds: failing}} {
+		w := httptest.NewRecorder()
+		h.templates(w, httptest.NewRequest("GET", "/v1/automations/templates", nil))
+		if w.Code != 500 {
+			t.Fatalf("templates with a failing lookup = %d, want 500", w.Code)
+		}
+		assertErrorBody(t, w, "automations_failed", "db down")
 	}
 }

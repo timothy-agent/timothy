@@ -79,7 +79,7 @@ func newAutomationHarness(t *testing.T) *automationHarness {
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
 	kicks := &atomic.Int32{}
-	a.registerAutomations(m.Handle, store, events.NewStore(pool), func() { kicks.Add(1) }, dest, &attachmentResolver{}, func(context.Context) *time.Location { return ams })
+	a.registerAutomations(m.Handle, store, events.NewStore(pool), func() { kicks.Add(1) }, dest, &attachmentResolver{}, func(context.Context) *time.Location { return ams }, nil, enabledDestinationKinds(dest))
 	a.registerDestinations(m.Handle, dest, ms, store, nil)
 	mh := &missionAPI{store: ms}
 	m.Handle("GET /v1/missions", a.auth(http.HandlerFunc(mh.list)))
@@ -413,5 +413,82 @@ func TestAutomationsAPIMissionFilterAndStats(t *testing.T) {
 	h.decode(w, &v)
 	if v.Stats.RunsTotal != 1 || v.Stats.Succeeded7d != 1 || v.Stats.LastRunStatus != "done" {
 		t.Fatalf("automation stats = %+v", v.Stats)
+	}
+}
+
+func TestAutomationTemplatesAPI(t *testing.T) {
+	h := newAutomationHarness(t)
+	w := h.do("GET", "/v1/automations/templates", "")
+	if w.Code != 200 {
+		t.Fatalf("templates = %d %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Templates []struct {
+			ID       string                    `json:"id"`
+			Action   json.RawMessage           `json:"action"`
+			Triggers json.RawMessage           `json:"triggers"`
+			Requires []automations.Requirement `json:"requires"`
+			Missing  []automations.Requirement `json:"missing"`
+		} `json:"templates"`
+	}
+	h.decode(w, &body)
+	if len(body.Templates) != 5 {
+		t.Fatalf("got %d templates, want 5", len(body.Templates))
+	}
+	db, err := h.pool.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var emailDests int
+	if err := db.QueryRow(t.Context(), `SELECT count(*) FROM destinations WHERE kind = 'email' AND enabled`).Scan(&emailDests); err != nil {
+		t.Fatalf("count email destinations: %v", err)
+	}
+	byID := map[string]int{}
+	for i, tpl := range body.Templates {
+		byID[tpl.ID] = i
+	}
+	digest := body.Templates[byID["daily-repo-digest"]]
+	// The harness passes no connector lookup, so github is always missing.
+	wantMissing := []automations.Requirement{{Kind: "connector", Value: "github"}}
+	if emailDests == 0 {
+		wantMissing = append(wantMissing, automations.Requirement{Kind: "destination", Value: "email"})
+	}
+	if fmt.Sprint(digest.Missing) != fmt.Sprint(wantMissing) {
+		t.Fatalf("digest missing = %+v, want %+v (enabled email destinations: %d)", digest.Missing, wantMissing, emailDests)
+	}
+
+	// Create from template: the fragments post back unchanged.
+	kb := body.Templates[byID["weekly-kb-freshness"]]
+	if len(kb.Requires) != 0 || len(kb.Missing) != 0 {
+		t.Fatalf("weekly-kb-freshness requires = %+v missing = %+v, want none", kb.Requires, kb.Missing)
+	}
+	create := fmt.Sprintf(`{"name": %q, "agent_id": %q, "action": %s, "triggers": %s}`, h.tag+"from-template", h.agentID, kb.Action, kb.Triggers)
+	w = h.do("POST", "/v1/automations", create)
+	if w.Code != 201 {
+		t.Fatalf("create from template = %d %s", w.Code, w.Body.String())
+	}
+	var created struct{ ID string }
+	h.decode(w, &created)
+	w = h.do("GET", "/v1/automations/"+created.ID, "")
+	if w.Code != 200 {
+		t.Fatalf("get = %d %s", w.Code, w.Body.String())
+	}
+	var v viewJSON
+	h.decode(w, &v)
+	var wantAction automations.Action
+	if err := json.Unmarshal(kb.Action, &wantAction); err != nil {
+		t.Fatalf("decode template action: %v", err)
+	}
+	gotAction, _ := json.Marshal(v.Action)
+	wantActionJSON, _ := json.Marshal(wantAction)
+	if string(gotAction) != string(wantActionJSON) {
+		t.Fatalf("stored action = %s, want %s", gotAction, wantActionJSON)
+	}
+	if len(v.Triggers) != 1 || v.Triggers[0].Kind != "cron" || !v.Triggers[0].Enabled {
+		t.Fatalf("stored triggers = %+v", v.Triggers)
+	}
+	var cfg automations.CronConfig
+	if err := json.Unmarshal(v.Triggers[0].Config, &cfg); err != nil || cfg.Expr != "0 9 * * 1" {
+		t.Fatalf("stored cron config = %s (%v), want expr 0 9 * * 1", v.Triggers[0].Config, err)
 	}
 }

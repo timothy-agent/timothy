@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
@@ -22,15 +24,17 @@ import (
 // attachments at save time, events backs run-now (nil leaves it
 // unmounted), kick asks the drainer to consume a run-now event at once
 // (nil waits for its poll) and loc is the operator timezone for stats
-// and next runs.
-func (a *API) registerAutomations(handle func(pattern string, h http.Handler), store *automations.Store, ev *events.Store, kick func(), destinations destinationLookup, attachments *attachmentResolver, loc func(ctx context.Context) *time.Location) {
+// and next runs. connectorKinds and destinationKinds list the enabled
+// kinds the templates gallery checks (nil means none configured).
+func (a *API) registerAutomations(handle func(pattern string, h http.Handler), store *automations.Store, ev *events.Store, kick func(), destinations destinationLookup, attachments *attachmentResolver, loc func(ctx context.Context) *time.Location, connectorKinds, destinationKinds kindLister) {
 	if store == nil {
 		return
 	}
-	h := &automationAPI{store: store, events: ev, kick: kick, destinations: destinations, attachments: attachments, loc: loc}
+	h := &automationAPI{store: store, events: ev, kick: kick, destinations: destinations, attachments: attachments, loc: loc, connectorKinds: connectorKinds, destinationKinds: destinationKinds}
 	handle("GET /v1/automations", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/automations", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/automations/stats", a.auth(http.HandlerFunc(h.stats)))
+	handle("GET /v1/automations/templates", a.auth(http.HandlerFunc(h.templates)))
 	handle("GET /v1/automations/{id}", a.auth(http.HandlerFunc(h.get)))
 	handle("PATCH /v1/automations/{id}", a.auth(http.HandlerFunc(h.patch)))
 	handle("DELETE /v1/automations/{id}", a.auth(http.HandlerFunc(h.delete)))
@@ -51,6 +55,46 @@ type automationAPI struct {
 	destinations destinationLookup
 	attachments  *attachmentResolver
 	loc          func(ctx context.Context) *time.Location
+
+	connectorKinds   kindLister
+	destinationKinds kindLister
+}
+
+// kindLister returns the kinds of the enabled rows of one table.
+type kindLister func(ctx context.Context) ([]string, error)
+
+// enabledConnectorKinds lists the kinds of enabled connectors in s.
+func enabledConnectorKinds(s *connectors.Store) kindLister {
+	return func(ctx context.Context) ([]string, error) {
+		rows, err := s.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var kinds []string
+		for _, c := range rows {
+			if c.Enabled {
+				kinds = append(kinds, c.Kind)
+			}
+		}
+		return kinds, nil
+	}
+}
+
+// enabledDestinationKinds lists the kinds of enabled destinations in s.
+func enabledDestinationKinds(s *destinations.Store) kindLister {
+	return func(ctx context.Context) ([]string, error) {
+		rows, err := s.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var kinds []string
+		for _, d := range rows {
+			if d.Enabled {
+				kinds = append(kinds, d.Kind)
+			}
+		}
+		return kinds, nil
+	}
 }
 
 const (
@@ -253,6 +297,36 @@ func (h *automationAPI) stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// templateView is a built-in template plus the requirements this
+// instance does not meet.
+type templateView struct {
+	automations.Template
+	Missing []automations.Requirement `json:"missing"`
+}
+
+func (h *automationAPI) templates(w http.ResponseWriter, r *http.Request) {
+	var conns, dests []string
+	var err error
+	if h.connectorKinds != nil {
+		if conns, err = h.connectorKinds(r.Context()); err != nil {
+			failAutomation(w, err)
+			return
+		}
+	}
+	if h.destinationKinds != nil {
+		if dests, err = h.destinationKinds(r.Context()); err != nil {
+			failAutomation(w, err)
+			return
+		}
+	}
+	tpls := automations.Templates()
+	views := make([]templateView, len(tpls))
+	for i, t := range tpls {
+		views[i] = templateView{Template: t, Missing: automations.Missing(t, conns, dests)}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"templates": views})
 }
 
 // triggerInput is a trigger on the wire; id names an existing trigger
