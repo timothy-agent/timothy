@@ -1324,6 +1324,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	if t := r.askUserTool(m, PhaseBuild); t != nil {
 		extra = append(extra, t)
 	}
+	extra = m.allowedExtras(extra)
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        workerRoute(m),
@@ -1332,6 +1333,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		MissionID:    m.ID,
 		System:       system,
 		Messages:     []provider.Message{{Role: "user", Content: user}},
+		ToolAllow:    m.toolAllow(nil),
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
 		// Unattended missions have nobody watching: asks fail fast
@@ -1497,6 +1499,7 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 	if t := r.askUserTool(m, PhaseDiscover); t != nil {
 		extra = append(extra, t)
 	}
+	extra = m.allowedExtras(extra)
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        oversightRoute(m),
@@ -1505,6 +1508,7 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 		MissionID:    m.ID,
 		System:       system,
 		Messages:     []provider.Message{{Role: "user", Content: user}},
+		ToolAllow:    m.toolAllow(nil),
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
 		Unattended:   m.Unattended,
@@ -1630,6 +1634,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 	if t := r.askUserTool(m, PhaseProve); t != nil {
 		extra = append(extra, t)
 	}
+	extra = m.allowedExtras(extra)
 	req := loop.Request{
 		SessionID:    m.SessionID,
 		Route:        reviewRoute(m),
@@ -1638,6 +1643,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		MissionID:    m.ID,
 		System:       system,
 		Messages:     messages,
+		ToolAllow:    m.toolAllow(nil),
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
 		Unattended:   m.Unattended,
@@ -1950,6 +1956,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	if t := r.askUserTool(m, PhasePlan); t != nil {
 		extra = append(extra, t)
 	}
+	extra = m.allowedExtras(extra)
 	req := loop.Request{
 		SessionID: m.SessionID,
 		Route:     oversightRoute(m),
@@ -1969,7 +1976,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 		// and the skills nudge above asks the planner to call it, so
 		// filtering it out left the planner an instruction it could
 		// not follow and a plan that guessed at the artifact names.
-		ToolAllow:    planToolAllow(skillsHint),
+		ToolAllow:    m.toolAllow(planToolAllow(skillsHint)),
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
 		Unattended:   m.Unattended,
@@ -2233,4 +2240,53 @@ func planToolAllow(skillsHint string) []string {
 		return []string{planToolName}
 	}
 	return []string{planToolName, "load_skill"}
+}
+
+// allowlistPassTools always pass a mission's tool_allowlist: the phase
+// sentinels, ask_user, and the loop's output and skill resolution.
+var allowlistPassTools = []string{
+	missionStatusToolName, discoverNotesToolName, planToolName, reviewVerdictToolName,
+	askUserToolName, "retrieve_output", "load_skill",
+}
+
+// allowsTool reports whether m's tool_allowlist lets a turn offer name.
+// nil allows every tool; entries match like agent allowlists
+// (tools.ToolMatches).
+func (m Mission) allowsTool(name string) bool {
+	if m.ToolAllowlist == nil || slices.Contains(allowlistPassTools, name) {
+		return true
+	}
+	return slices.ContainsFunc(m.ToolAllowlist, func(entry string) bool { return tools.ToolMatches(name, entry) })
+}
+
+// allowedExtras drops the turn-scoped tools m's tool_allowlist excludes.
+func (m Mission) allowedExtras(extra []*tools.Tool) []*tools.Tool {
+	if m.ToolAllowlist == nil {
+		return extra
+	}
+	out := make([]*tools.Tool, 0, len(extra))
+	for _, t := range extra {
+		if m.allowsTool(t.Name) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// toolAllow narrows a turn's base-tool allowlist (nil = every base
+// tool) to m's tool_allowlist. The result is never empty when m has an
+// allowlist, since loop.Request reads an empty ToolAllow as unrestricted:
+// the pass tools always survive.
+func (m Mission) toolAllow(base []string) []string {
+	if m.ToolAllowlist == nil {
+		return base
+	}
+	if base == nil {
+		return append(slices.Clone(m.ToolAllowlist), allowlistPassTools...)
+	}
+	out := slices.DeleteFunc(slices.Clone(base), func(name string) bool { return !m.allowsTool(name) })
+	if len(out) == 0 {
+		return slices.Clone(allowlistPassTools)
+	}
+	return out
 }

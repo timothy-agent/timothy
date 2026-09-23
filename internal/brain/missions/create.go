@@ -3,6 +3,7 @@ package missions
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -53,6 +54,10 @@ type CreateRequest struct {
 	AutomationRunID string
 	WorkflowRunID   string
 	WorkflowStep    string
+
+	// ToolAllowlist nil means unrestricted; entries are trimmed and
+	// deduplicated.
+	ToolAllowlist []string
 
 	// OriginKind "" resolves to OriginAPI, or OriginFollowup when
 	// ParentMissionID is set. Unattended nil derives from the origin.
@@ -214,6 +219,7 @@ func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (
 		Flow:                     flow,
 		PermissionTimeoutSeconds: permissionTimeout,
 		AutomationRunID:          req.AutomationRunID,
+		ToolAllowlist:            normalizeToolAllowlist(req.ToolAllowlist),
 		WorkflowRunID:            req.WorkflowRunID,
 		WorkflowStep:             req.WorkflowStep,
 		OriginKind:               origin,
@@ -310,4 +316,20 @@ func UnusableCreateRoute(ctx context.Context, resolve func(ctx context.Context, 
 		}
 	}
 	return "", "", false
+}
+
+// normalizeToolAllowlist trims and deduplicates entries; nil stays nil.
+// An empty entry is kept for ValidateCreate to reject.
+func normalizeToolAllowlist(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, name := range in {
+		name = strings.TrimSpace(name)
+		if !slices.Contains(out, name) {
+			out = append(out, name)
+		}
+	}
+	return out
 }

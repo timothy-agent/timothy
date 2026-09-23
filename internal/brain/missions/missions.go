@@ -202,6 +202,9 @@ type Mission struct {
 	HasPlan bool `json:"has_plan,omitempty"`
 	// AutomationRunID names the automation run that started this mission.
 	AutomationRunID string `json:"automation_run_id,omitempty"`
+	// ToolAllowlist limits the tools a mission turn is offered; nil means
+	// unrestricted. Set at create from an automation trigger (issue #857).
+	ToolAllowlist []string `json:"tool_allowlist,omitempty"`
 	// OriginKind is where the mission came from (Origin* constants),
 	// set once at create (issue #817).
 	OriginKind string `json:"origin_kind"`

@@ -1192,6 +1192,7 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 			Route: a.Route, ReviewRoute: a.ReviewRoute, PromptOverlay: a.PromptOverlay,
 			ApprovalAllowlist: a.ApprovalAllowlist,
 			Harness:           a.Harness,
+			Tools:             a.Tools,
 		}, true
 	}
 }

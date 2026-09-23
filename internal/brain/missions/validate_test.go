@@ -35,6 +35,28 @@ func TestValidateCreate(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid general mission", func(m Mission) Mission { return m }, ValidateDeps{}, false},
+		{"tool_allowlist set", func(m Mission) Mission {
+			m.ToolAllowlist = []string{"shell", "read_note"}
+			return m
+		}, ValidateDeps{}, false},
+		{"tool_allowlist at the cap", func(m Mission) Mission {
+			m.ToolAllowlist = make([]string, maxToolAllowlist)
+			for i := range m.ToolAllowlist {
+				m.ToolAllowlist[i] = fmt.Sprintf("tool_%d", i)
+			}
+			return m
+		}, ValidateDeps{}, false},
+		{"tool_allowlist over the cap", func(m Mission) Mission {
+			m.ToolAllowlist = make([]string, maxToolAllowlist+1)
+			for i := range m.ToolAllowlist {
+				m.ToolAllowlist[i] = fmt.Sprintf("tool_%d", i)
+			}
+			return m
+		}, ValidateDeps{}, true},
+		{"tool_allowlist empty entry", func(m Mission) Mission {
+			m.ToolAllowlist = []string{"shell", ""}
+			return m
+		}, ValidateDeps{}, true},
 		{"valid coding mission", func(m Mission) Mission {
 			m.Kind = "coding"
 			return m

@@ -336,11 +336,23 @@ func validateTrigger(t *Trigger) error {
 	if len(t.ToolAllowlist) > maxAllowlist {
 		return fmt.Errorf("tool_allowlist holds at most %d entries", maxAllowlist)
 	}
+	if t.ToolAllowlist == nil {
+		return nil
+	}
+	allowlist := make([]string, 0, len(t.ToolAllowlist))
 	for _, name := range t.ToolAllowlist {
-		if strings.TrimSpace(name) == "" {
+		name = strings.TrimSpace(name)
+		if name == "" {
 			return errors.New("tool_allowlist entries must be non-empty")
 		}
+		if strings.ContainsFunc(name, unicode.IsSpace) {
+			return fmt.Errorf("tool_allowlist entry %q contains whitespace", name)
+		}
+		if !slices.Contains(allowlist, name) {
+			allowlist = append(allowlist, name)
+		}
 	}
+	t.ToolAllowlist = allowlist
 	return nil
 }
 

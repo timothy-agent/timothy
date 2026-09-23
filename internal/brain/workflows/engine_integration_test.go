@@ -113,4 +113,8 @@ func TestStartRunStepMissionGetsAgentDefaults(t *testing.T) {
 	if m.PermissionTimeoutSeconds == nil || *m.PermissionTimeoutSeconds != 1800 {
 		t.Fatalf("step mission permission_timeout_seconds = %v, want 1800", m.PermissionTimeoutSeconds)
 	}
+	// Issue #857: only automation triggers restrict tools.
+	if m.ToolAllowlist != nil {
+		t.Fatalf("step mission tool_allowlist = %v, want nil", m.ToolAllowlist)
+	}
 }

@@ -3,6 +3,8 @@ package automations
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -97,6 +99,13 @@ func TestValidate(t *testing.T) {
 		{"unknown trigger kind", func(a *Automation) { a.Triggers = []Trigger{{Kind: "email"}} }, "unknown trigger kind", false},
 		{"empty allowlist entry", func(a *Automation) { a.Triggers[0].ToolAllowlist = []string{"search_web", " "} }, "non-empty", false},
 		{"allowlist too long", func(a *Automation) { a.Triggers[0].ToolAllowlist = make([]string, 65) }, "at most 64", false},
+		{"allowlist entry with inner whitespace", func(a *Automation) { a.Triggers[0].ToolAllowlist = []string{"search web"} }, "whitespace", false},
+		{"allowlist at the cap", func(a *Automation) {
+			a.Triggers[0].ToolAllowlist = make([]string, 64)
+			for i := range a.Triggers[0].ToolAllowlist {
+				a.Triggers[0].ToolAllowlist[i] = fmt.Sprintf("tool_%d", i)
+			}
+		}, "", false},
 		{"unknown concurrency", func(a *Automation) { a.Concurrency = "burst" }, "concurrency", false},
 		{"max_concurrent 2 on skip", func(a *Automation) { a.MaxConcurrent = 2 }, "parallel", false},
 		{"max_concurrent 2 on queue", func(a *Automation) { a.Concurrency, a.MaxConcurrent = ConcurrencyQueue, 2 }, "parallel", false},
@@ -189,12 +198,18 @@ func TestValidateNormalizes(t *testing.T) {
 	t.Parallel()
 	a := validAutomation()
 	a.Name = "  padded  "
-	a.Triggers = []Trigger{{Kind: TriggerCron, Config: json.RawMessage(` { "expr" : "0 9 * * *" } `)}, {Kind: TriggerManual}}
+	a.Triggers = []Trigger{{Kind: TriggerCron, Config: json.RawMessage(` { "expr" : "0 9 * * *" } `), ToolAllowlist: []string{" shell ", "read_note", "shell"}}, {Kind: TriggerManual, ToolAllowlist: []string{}}}
 	if err := Validate(&a); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
 	if a.Name != "padded" || string(a.Triggers[0].Config) != `{"expr":"0 9 * * *"}` || string(a.Triggers[1].Config) != `{}` {
 		t.Fatalf("normalized name=%q configs=%s %s", a.Name, a.Triggers[0].Config, a.Triggers[1].Config)
+	}
+	if got := a.Triggers[0].ToolAllowlist; !slices.Equal(got, []string{"shell", "read_note"}) {
+		t.Fatalf("normalized tool_allowlist = %v, want [shell read_note]", got)
+	}
+	if got := a.Triggers[1].ToolAllowlist; got == nil || len(got) != 0 {
+		t.Fatalf("empty tool_allowlist = %#v, want an empty non-nil list", got)
 	}
 }
 

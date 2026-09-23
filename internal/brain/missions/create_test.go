@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -309,5 +310,33 @@ func TestSingleMissionsInsert(t *testing.T) {
 	}
 	if len(hits) != 1 || hits[0] != "store.go" {
 		t.Fatalf("INSERT INTO missions found in %v, want exactly once in store.go", hits)
+	}
+}
+
+// TestResolveDefaultsToolAllowlist pins issue #857: entries are trimmed
+// and deduplicated, nil stays nil (unrestricted) and an empty entry
+// survives for ValidateCreate to reject.
+func TestResolveDefaultsToolAllowlist(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"nil stays unrestricted", nil, nil},
+		{"trimmed and deduplicated", []string{" shell", "shell ", "read_note", "shell"}, []string{"shell", "read_note"}},
+		{"blank entry kept for validation", []string{"shell", "  "}, []string{"shell", ""}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m, err := ResolveDefaults(context.Background(), CreateRequest{Kind: KindGeneral, ToolAllowlist: tc.in}, ResolveDeps{})
+			if err != nil {
+				t.Fatalf("ResolveDefaults: %v", err)
+			}
+			if !slices.Equal(m.ToolAllowlist, tc.want) || (tc.want == nil) != (m.ToolAllowlist == nil) {
+				t.Fatalf("ToolAllowlist = %#v, want %#v", m.ToolAllowlist, tc.want)
+			}
+		})
 	}
 }

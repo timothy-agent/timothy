@@ -6,12 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
 const (
@@ -223,8 +226,6 @@ func (s *Starter) createMission(ctx context.Context, tx pgx.Tx, automationID, ru
 	if !agentExists {
 		return "", fmt.Errorf("agent %s: %w", a.AgentID, errAgentMissing)
 	}
-	// Trigger tool_allowlist is not applied yet: missions carry no
-	// per-mission allowlist (issue #857).
 	req, err := s.createRequest(ctx, tx, a, runID, runEvent(rawEvent))
 	if err != nil {
 		return "", err
@@ -275,8 +276,61 @@ func (s *Starter) createRequest(ctx context.Context, tx pgx.Tx, a Automation, ru
 	if e, ok := notesSource(notes); ok {
 		sources = append(sources, e)
 	}
+	allowlist, err := runToolAllowlist(ctx, tx, a, runID, event)
+	if err != nil {
+		return missions.CreateRequest{}, err
+	}
+	if len(allowlist) > 0 {
+		var agentTools []string
+		if s.resolve.Agent != nil {
+			if d, ok := s.resolve.Agent(ctx, a.AgentID); ok {
+				agentTools = d.Tools
+			}
+		}
+		req.ToolAllowlist = intersectToolAllowlist(allowlist, agentTools)
+		if len(req.ToolAllowlist) == 0 {
+			s.log.Info("automations: trigger tool_allowlist shares no tool with the agent, run gets no tools", "automation_id", a.ID, "run_id", runID)
+			req.ToolAllowlist = []string{noToolsAllowlist}
+		}
+	}
 	req.Sources = append(sources, req.Sources...)
 	return req, nil
+}
+
+// noToolsAllowlist is a mission allowlist that offers no tool beyond
+// the always-offered sentinels.
+const noToolsAllowlist = "mission_status"
+
+// runToolAllowlist returns the tool_allowlist of the trigger that fired
+// runID: its own trigger, or the automation's manual trigger for a
+// run.now. nil when that trigger has none or is gone.
+func runToolAllowlist(ctx context.Context, tx pgx.Tx, a Automation, runID string, event map[string]any) ([]string, error) {
+	var triggerID *string
+	if err := tx.QueryRow(ctx, `SELECT trigger_id::text FROM automation_runs WHERE id = $1`, runID).Scan(&triggerID); err != nil {
+		return nil, fmt.Errorf("automations start: run trigger: %w", err)
+	}
+	for _, t := range a.Triggers {
+		if triggerID != nil && t.ID == *triggerID ||
+			triggerID == nil && event["kind"] == events.KindRunNow && t.Kind == TriggerManual {
+			return t.ToolAllowlist, nil
+		}
+	}
+	return nil, nil
+}
+
+// intersectToolAllowlist keeps the trigger entries the agent's Tools
+// grant: an entry survives when some agent tool equals or matches it
+// (tools.ToolMatches). Agent Tools are the ceiling, except for the
+// note tools, which the automation grants itself.
+func intersectToolAllowlist(trigger, agentTools []string) []string {
+	var out []string
+	for _, entry := range trigger {
+		if entry == readNoteToolName || entry == writeNoteToolName ||
+			slices.ContainsFunc(agentTools, func(tool string) bool { return tools.ToolMatches(tool, entry) }) {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // previousLineage finds the mission of automationID's newest finished

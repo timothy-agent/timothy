@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -2072,5 +2073,61 @@ func TestCreateUsesSettingsMaxIterations(t *testing.T) {
 	}
 	if m.MaxIterations != 12 {
 		t.Fatalf("MaxIterations = %d, want the explicit 12", m.MaxIterations)
+	}
+}
+
+// TestCreateToolAllowlistRoundTrip pins issue #857's storage: an
+// allowlist persists and reads back, an empty one stores NULL, and an
+// HTTP-style create request (no allowlist) stays NULL.
+func TestCreateToolAllowlistRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	isNull := func(id string) bool {
+		var null bool
+		if err := db.QueryRow(ctx, `SELECT tool_allowlist IS NULL FROM missions WHERE id = $1`, id).Scan(&null); err != nil {
+			t.Fatalf("query tool_allowlist: %v", err)
+		}
+		return null
+	}
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "allowlist set", Kind: KindGeneral, ToolAllowlist: []string{"shell", "read_note"}})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !slices.Equal(m.ToolAllowlist, []string{"shell", "read_note"}) {
+		t.Fatalf("ToolAllowlist = %v, want [shell read_note]", m.ToolAllowlist)
+	}
+
+	id, err = s.Create(ctx, Mission{Goal: marker + "allowlist empty", Kind: KindGeneral, ToolAllowlist: []string{}})
+	if err != nil {
+		t.Fatalf("Create empty: %v", err)
+	}
+	if !isNull(id) {
+		t.Fatal("empty tool_allowlist stored non-NULL, want NULL")
+	}
+
+	req, err := ResolveDefaults(ctx, CreateRequest{Goal: marker + "http create", Kind: KindGeneral, Route: "default"}, ResolveDeps{})
+	if err != nil {
+		t.Fatalf("ResolveDefaults: %v", err)
+	}
+	if err := ValidateCreate(ctx, req, ValidateDeps{}); err != nil {
+		t.Fatalf("ValidateCreate: %v", err)
+	}
+	if id, err = s.Create(ctx, req); err != nil {
+		t.Fatalf("Create http-style: %v", err)
+	}
+	if !isNull(id) {
+		t.Fatal("http-style create stored a tool_allowlist, want NULL")
+	}
+	if m, err = s.Get(ctx, id); err != nil || m.ToolAllowlist != nil {
+		t.Fatalf("Get http-style = %v, %v, want nil allowlist", m.ToolAllowlist, err)
 	}
 }

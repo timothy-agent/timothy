@@ -3832,3 +3832,138 @@ func TestNoteToolsReachBuildAndProve(t *testing.T) {
 		})
 	}
 }
+
+// TestMissionAllowsTool pins issue #857's allowlist match: nil allows
+// everything, entries match exactly or by connector suffix
+// (tools.ToolMatches), and the sentinels always pass.
+func TestMissionAllowsTool(t *testing.T) {
+	cases := []struct {
+		name  string
+		allow []string
+		tool  string
+		want  bool
+	}{
+		{"nil allows any tool", nil, "shell", true},
+		{"exact match", []string{"shell"}, "shell", true},
+		{"connector suffix match", []string{"search_mail"}, "gmail_search_mail", true},
+		{"miss", []string{"read_note"}, "write_note", false},
+		{"empty allowlist allows only sentinels", []string{}, "shell", false},
+		{"sentinel always passes", []string{"read_note"}, missionStatusToolName, true},
+		{"load_skill always passes", []string{"read_note"}, "load_skill", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (Mission{ToolAllowlist: tc.allow}).allowsTool(tc.tool); got != tc.want {
+				t.Fatalf("allowsTool(%q) with %v = %v, want %v", tc.tool, tc.allow, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMissionToolAllow pins the base-surface narrowing: unrestricted
+// keeps the caller's list, an allowlist adds the pass tools to a nil
+// base, intersects a set base, and never returns an empty list (the
+// loop reads empty as unrestricted).
+func TestMissionToolAllow(t *testing.T) {
+	restricted := Mission{ToolAllowlist: []string{"shell"}}
+	if got := (Mission{}).toolAllow(nil); got != nil {
+		t.Fatalf("unrestricted toolAllow(nil) = %v, want nil", got)
+	}
+	if got := (Mission{}).toolAllow([]string{planToolName}); !slices.Equal(got, []string{planToolName}) {
+		t.Fatalf("unrestricted toolAllow(plan) = %v", got)
+	}
+	if got := restricted.toolAllow(nil); !slices.Contains(got, "shell") || !slices.Contains(got, "load_skill") || slices.Contains(got, "fetch_url") {
+		t.Fatalf("restricted toolAllow(nil) = %v, want shell plus the pass tools", got)
+	}
+	if got := restricted.toolAllow([]string{"shell", "fetch_url"}); !slices.Equal(got, []string{"shell"}) {
+		t.Fatalf("restricted toolAllow(shell, fetch_url) = %v, want [shell]", got)
+	}
+	if got := restricted.toolAllow([]string{"fetch_url"}); len(got) == 0 || slices.Contains(got, "fetch_url") {
+		t.Fatalf("restricted toolAllow(fetch_url) = %v, want a non-empty list without fetch_url", got)
+	}
+}
+
+// TestToolAllowlistNarrowsEveryPhase pins issue #857 at the request
+// level: a mission with a tool_allowlist offers only allowed extras and
+// base tools on discover, plan, build and review, while its sentinels
+// stay; a mission without one is unchanged.
+func TestToolAllowlistNarrowsEveryPhase(t *testing.T) {
+	noteTools := func(context.Context, Mission) []*tools.Tool {
+		return []*tools.Tool{
+			{Name: "read_note", ReadOnly: true, Execute: func(context.Context, json.RawMessage) (string, error) { return "", nil }},
+			{Name: "write_note", Execute: func(context.Context, json.RawMessage) (string, error) { return "", nil }},
+		}
+	}
+	recall := func(context.Context, string, int) ([]builtin.SearchMemoryHit, error) { return nil, nil }
+	m := Mission{ID: "m1", Route: "default", ReviewRoute: "default", Goal: "g", Workspace: "/workspace/missions/m1",
+		AutomationRunID: "r1", ToolAllowlist: []string{"read_note"}}
+
+	cases := []struct {
+		name     string
+		event    stream.StreamEvent
+		sentinel string
+		run      func(r *nativeRunner, m Mission) error
+	}{
+		{"discover", toolEndEvent(discoverNotesToolName, `{"findings":"ok"}`), discoverNotesToolName, func(r *nativeRunner, m Mission) error {
+			_, _, _, err := r.DiscoverSession(context.Background(), m)
+			return err
+		}},
+		{"plan", toolEndEvent(planToolName, `{"units":[{"title":"t","artifacts":["out.md"],"criteria":["c1","c2"],"check_cmd":"grep -q done out.md"}]}`), planToolName, func(r *nativeRunner, m Mission) error {
+			_, err := r.PlanSession(context.Background(), m, "")
+			return err
+		}},
+		{"build", toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`), missionStatusToolName, func(r *nativeRunner, m Mission) error {
+			_, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "g"})
+			return err
+		}},
+		{"review", toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`), reviewVerdictToolName, func(r *nativeRunner, m Mission) error {
+			_, err := r.RunReview(context.Background(), m, ReviewPacket{Goal: "g", Diff: "d"})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &scriptedAgent{batches: [][]stream.StreamEvent{{tc.event}}}
+			r := newTestRunner(agent)
+			r.SetAutomationTools(noteTools)
+			r.SetSearchMemory(recall)
+			if err := tc.run(r, m); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			req := agent.requests[0]
+			for _, banned := range []string{"shell", "write_file", "write_note", "search_memory"} {
+				if hasTool(req, banned) {
+					t.Fatalf("%s extras = %v, must not offer %s", tc.name, toolNames(req), banned)
+				}
+			}
+			if !hasTool(req, tc.sentinel) {
+				t.Fatalf("%s extras = %v, lost the %s sentinel", tc.name, toolNames(req), tc.sentinel)
+			}
+			if (tc.name == "build" || tc.name == "review") && !hasTool(req, "read_note") {
+				t.Fatalf("%s extras = %v, want the allowed read_note", tc.name, toolNames(req))
+			}
+			if tc.name == "plan" {
+				if !slices.Equal(req.ToolAllow, []string{planToolName}) {
+					t.Fatalf("plan ToolAllow = %v, want [%s]", req.ToolAllow, planToolName)
+				}
+				return
+			}
+			if !slices.Contains(req.ToolAllow, "read_note") || slices.Contains(req.ToolAllow, "shell") {
+				t.Fatalf("%s ToolAllow = %v, want read_note and no shell", tc.name, req.ToolAllow)
+			}
+		})
+	}
+
+	// Unrestricted: the worker keeps its full surface.
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)}}}
+	r := newTestRunner(agent)
+	r.SetAutomationTools(noteTools)
+	open := m
+	open.ToolAllowlist = nil
+	if _, _, err := r.RunWorker(context.Background(), open, WorkPacket{Goal: "g"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if req := agent.requests[0]; req.ToolAllow != nil || !hasTool(req, "shell") || !hasTool(req, "write_note") {
+		t.Fatalf("unrestricted worker ToolAllow = %v extras = %v, want nil and shell/write_note", req.ToolAllow, toolNames(req))
+	}
+}

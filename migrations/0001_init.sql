@@ -734,6 +734,10 @@ CREATE TABLE IF NOT EXISTS missions (
     pending_permission    jsonb,
     -- Automation run that started this mission, if any.
     automation_run_id     uuid REFERENCES automation_runs(id) ON DELETE SET NULL,
+    -- Tools the mission may be offered, from its automation trigger's
+    -- tool_allowlist intersected with the agent's Tools. NULL means
+    -- unrestricted (issue #857).
+    tool_allowlist        text[],
     -- ParentMissionID names the terminal mission this one follows up
     -- on (api/missions.go's create); parents are terminal, exactly the
     -- rows Delete can remove, so SET NULL keeps a follow-up mission

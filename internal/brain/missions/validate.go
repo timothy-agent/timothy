@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
@@ -44,6 +45,10 @@ type ValidateDeps struct {
 	// entirely, same degrade-to-unchecked reasoning as DestinationKind.
 	KBCollectionExists func(ctx context.Context, id string) (bool, error)
 }
+
+// maxToolAllowlist caps a mission's tool_allowlist entries at the
+// automation trigger cap, so an intersected trigger list always fits.
+const maxToolAllowlist = 64
 
 // validModelPin reports whether pin is well-formed "provider name/model"
 // (D-078) — a non-empty provider part and a non-empty model part
@@ -143,6 +148,12 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 		return fmt.Errorf(`%w: plan_route_model must be "provider name/model"`, ErrInvalidMission)
 	case m.ReviewRouteModel != "" && !validModelPin(m.ReviewRouteModel):
 		return fmt.Errorf(`%w: review_route_model must be "provider name/model"`, ErrInvalidMission)
+	}
+	if len(m.ToolAllowlist) > maxToolAllowlist {
+		return fmt.Errorf("%w: tool_allowlist has more than %d entries", ErrInvalidMission, maxToolAllowlist)
+	}
+	if slices.Contains(m.ToolAllowlist, "") {
+		return fmt.Errorf("%w: tool_allowlist entries must be non-empty", ErrInvalidMission)
 	}
 	for _, e := range m.Destinations {
 		if e.DestinationID == "" || e.RepoURL == "" {

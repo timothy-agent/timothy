@@ -56,6 +56,9 @@ type AgentDefaults struct {
 	// Harness is the agent's own harness field; empty means the agent
 	// does not override.
 	Harness string
+	// Tools is the agent's tool allowlist, the ceiling for a trigger's
+	// tool_allowlist (issue #857).
+	Tools []string
 }
 
 // AgentResolver resolves an agent id to its current defaults; ok

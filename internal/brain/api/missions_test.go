@@ -456,6 +456,8 @@ func TestMissionsCreateRejectsUnknownFields(t *testing.T) {
 	for _, body := range []string{
 		`{"goal":"g","kind":"coding","sources":[{"source":"github","repo_url":"https://github.com/o/r"}]}`,
 		`{"goal":"g","kind":"coding","repoURL":"https://github.com/o/r"}`,
+		// tool_allowlist is set only by automation triggers (issue #857).
+		`{"goal":"g","kind":"general","tool_allowlist":["shell"]}`,
 	} {
 		code, got := post(body)
 		if code != 400 {
