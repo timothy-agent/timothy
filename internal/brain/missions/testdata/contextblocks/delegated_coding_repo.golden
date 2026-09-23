@@ -1,0 +1,13 @@
+Goal: Fix the login bug
+Iteration: 0
+
+Plan:
+- [pending] Write summary
+
+
+Current unit: Write summary
+  criterion: c1
+  criterion: c2
+  must produce (exact path): out.md
+  checked by: test -s out.md
+Do this unit now.

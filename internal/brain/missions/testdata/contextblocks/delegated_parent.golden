@@ -1,0 +1,22 @@
+Goal: Continue the work
+Iteration: 0
+
+Follow-up of a previous mission; its outcome digest is at /w/runs/r1/refs/parent-mission.md (background only, this mission's plan below is the work).
+
+Plan:
+- [pending] Write summary
+
+Progress so far:
+- 2026-09-01 10:00 UTC: started
+
+
+Current unit: Write summary
+  criterion: c1
+  criterion: c2
+  must produce (exact path): out.md
+  checked by: test -s out.md
+Do this unit now.
+
+=== file refs/parent-mission.md ===
+mission goal: parent
+terminal state: done

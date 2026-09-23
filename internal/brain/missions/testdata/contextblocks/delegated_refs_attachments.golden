@@ -1,0 +1,19 @@
+Goal: Draft the plan
+Iteration: 0
+
+Referenced documents, read when the unit needs them:
+- Runbook: /w/runs/r1/refs/01-runbook.md
+- s2: /w/runs/r1/refs/02-s2.md
+
+Progress so far:
+- 2026-09-01 10:00 UTC: started
+
+
+Attached document spec.pdf:
+# Spec
+do the thing
+
+=== file refs/01-runbook.md ===
+kb doc: the login flow uses OAuth
+=== file refs/02-s2.md ===
+chat digest without a name

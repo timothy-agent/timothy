@@ -743,7 +743,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "permission_timeout_seconds must not be negative")
 		return
 	}
-	// Sources order matches packet.go's renderSources exactly (issue
+	// Sources order matches packet.go's contextBlocks exactly (issue
 	// #481): parent-mission digest, then referenced picks, then
 	// attached PDFs, then the github clone source (order-independent,
 	// rendered nowhere).

@@ -1,0 +1,9 @@
+Goal: Fix the login bug
+Iteration: 0
+
+Current unit: Write summary
+Plan:
+- [pending] Write summary
+  must produce (exact path): out.md
+  checked by: test -s out.md
+

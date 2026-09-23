@@ -1447,17 +1447,12 @@ func discoverMaxSteps(m Mission) int {
 // produced the returned notes; empty when the turn errored.
 func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, servedProvider, servedModel string, err error) {
 	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m)
-	user := "Goal: " + NeutralizeSlot(m.Goal)
-	if pc := m.ParentContext(); pc != "" {
-		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(pc)
-	}
-	if rc := m.ReferencedContext(); rc != "" {
-		user += "\n\nReferenced context:\n" + NeutralizeSlot(rc)
-	}
+	sc := contextBlocks(m.Sources, contextSession, "")
+	user := "Goal: " + NeutralizeSlot(m.Goal) + sc.head
 	if notes := progressWithOperatorNotes(m.Progress, progressRenderCap, nil); notes != "" {
 		user += "\n\nProgress so far (includes any operator answers to prior questions):\n" + notes
 	}
-	user += renderAttachments(m.Attachments())
+	user += sc.tail
 
 	extra := []*tools.Tool{DiscoverNotesTool()}
 	if shell := r.missionShell(m); shell != nil {
@@ -1913,13 +1908,8 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)
 	}
-	if pc := m.ParentContext(); pc != "" {
-		user += "\n\nPrevious mission outcome:\n" + NeutralizeSlot(pc)
-	}
-	if rc := m.ReferencedContext(); rc != "" {
-		user += "\n\nReferenced context:\n" + NeutralizeSlot(rc)
-	}
-	user += renderAttachments(m.Attachments())
+	sc := contextBlocks(m.Sources, contextSession, "")
+	user += sc.head + sc.tail
 	extra := []*tools.Tool{PlanTool()}
 	if t := r.kbSearchTool(m, nil); t != nil {
 		extra = append(extra, t)

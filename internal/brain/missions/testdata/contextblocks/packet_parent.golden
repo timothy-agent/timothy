@@ -1,0 +1,16 @@
+Goal: Continue the work
+Iteration: 0
+
+Current unit: Write summary
+Plan:
+- [pending] Write summary
+  must produce (exact path): out.md
+  checked by: test -s out.md
+
+Progress so far:
+- 2026-09-01 10:00 UTC: started
+
+Previous mission outcome:
+mission goal: parent
+terminal state: done
+
