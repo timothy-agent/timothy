@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
@@ -397,8 +398,13 @@ func (s *Store) Get(ctx context.Context, id string) (Mission, error) {
 		return Mission{}, fmt.Errorf("missions get: %w", err)
 	}
 	m, err := scanMissionWithFailureReason(db.QueryRow(ctx, `SELECT `+missionColumns+`, fr.reason FROM missions`+failureReasonJoin+` WHERE missions.id = $1`, id))
-	if err != nil {
+	// 22P02: a malformed id can never exist, so it is not found too.
+	var pgErr *pgconn.PgError
+	if errors.Is(err, pgx.ErrNoRows) || (errors.As(err, &pgErr) && pgErr.Code == "22P02") {
 		return Mission{}, fmt.Errorf("mission %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return Mission{}, fmt.Errorf("missions get %s: %w", id, err)
 	}
 	return m, nil
 }

@@ -135,6 +135,29 @@ func TestMissionCRUD(t *testing.T) {
 	}
 }
 
+// TestGetMapsOnlyNoRowsToNotFound: an unknown or malformed id is
+// ErrNotFound; any other failure (here a cancelled context) is returned
+// as itself so events consumers retry instead of treating the mission
+// as gone.
+func TestGetMapsOnlyNoRowsToNotFound(t *testing.T) {
+	s := testStore(t)
+	if _, err := s.Get(t.Context(), "00000000-0000-0000-0000-000000000000"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get of a nonexistent id = %v, want ErrNotFound", err)
+	}
+	if _, err := s.Get(t.Context(), "not-a-uuid"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get of a malformed id = %v, want ErrNotFound", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := s.Get(ctx, "00000000-0000-0000-0000-000000000000")
+	if err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatalf("Get with a cancelled context = %v, want a non-ErrNotFound error", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get with a cancelled context = %v, want it to wrap context.Canceled", err)
+	}
+}
+
 // TestListFilterQueryMatchesNameOrGoal covers ListFilter.Query (the
 // composer #-mention mission search, GET /v1/missions?q=): a
 // case-insensitive substring match on name OR goal, applied at the SQL

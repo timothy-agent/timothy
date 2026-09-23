@@ -3,9 +3,11 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -498,6 +500,47 @@ func TestOnMissionTerminalRecordsUnknownPlaceholderWarning(t *testing.T) {
 	qa := spawner.last()
 	if qa.Goal != "check " {
 		t.Fatalf("qa goal = %q, want unknown placeholder rendered empty", qa.Goal)
+	}
+}
+
+// TestOnMissionTerminalFailedSpawnKeepsCurrentStep: the placeholder
+// warning written before a failed Create must not advance the run.
+func TestOnMissionTerminalFailedSpawnKeepsCurrentStep(t *testing.T) {
+	def := Definition{
+		Entry: "coder",
+		Steps: map[string]Step{
+			"coder": {Goal: "write code", Kind: "coding"},
+			"qa":    {Goal: "check {{context.MISSING}}", Kind: "general"},
+		},
+		Edges: []Edge{
+			{From: "coder", On: "mission.done", To: "qa", MaxIterations: 1},
+		},
+	}
+	_ = def.Validate()
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", def, true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	runID, err := e.StartRun(context.Background(), "wf1", nil)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	coderMission := spawner.last()
+	coderMission.ID = "coder-mission"
+	coderMission.Phase = missions.PhaseDone
+	spawner.createErr = errors.New("create failed")
+	if err := e.OnMissionTerminal(context.Background(), coderMission); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
+
+	run, _ := store.GetRun(context.Background(), runID)
+	if run.Status != "paused" || run.CurrentStep != "coder" {
+		t.Fatalf("run = %s/%s, want paused on coder", run.Status, run.CurrentStep)
+	}
+	kinds := store.eventKinds(runID)
+	if !slices.Contains(kinds, "run.warning") || slices.Contains(kinds, "edge.taken") {
+		t.Fatalf("events = %v, want run.warning and no edge.taken", kinds)
 	}
 }
 

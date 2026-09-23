@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -25,6 +26,9 @@ const (
 	maxAttempts = 5
 	// consumerTimeout bounds one consumer's Handle call.
 	consumerTimeout = 5 * time.Minute
+	// drainIdleTimeout replaces pgpool's 60s idle-in-transaction timeout
+	// for the drain tx, which stays idle while a consumer runs.
+	drainIdleTimeout = consumerTimeout + time.Minute
 )
 
 // drainLockKey is this package's advisory lock key ("EVNT"), distinct
@@ -98,6 +102,12 @@ func (d *Drainer) Drain(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("events drain: begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	// Transaction-scoped: the pooled connection keeps its default after.
+	if _, err := tx.Exec(ctx, `SELECT set_config('idle_in_transaction_session_timeout', $1, true)`,
+		strconv.FormatInt(drainIdleTimeout.Milliseconds(), 10)); err != nil {
+		return 0, fmt.Errorf("events drain: idle timeout: %w", err)
+	}
 
 	var acquired bool
 	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, int64(drainLockKey)).Scan(&acquired); err != nil {

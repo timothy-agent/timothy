@@ -475,16 +475,17 @@ func main() {
 	}
 	// D-117: terminal mission effects run as events consumers, drained
 	// from the events rows ApplyTransition commits. The first drain runs
-	// at boot, so events a crash left unprocessed are consumed then.
+	// at boot, so events a crash left unprocessed are consumed then. Run
+	// starts below, after the last missionDriver.Set* call.
+	var drainer *events.Drainer
 	if missionDriver != nil {
 		consumers := []events.Consumer{missions.NewMemoryConsumer(missionDriver)}
 		if workflowEngine != nil {
 			consumers = append(consumers, workflowEngine)
 		}
-		drainer := events.NewDrainer(events.NewStore(app.DB), consumers,
+		drainer = events.NewDrainer(events.NewStore(app.DB), consumers,
 			app.Metrics.NewCounterVec("events_processed_total", "Inbox events handled by kind and result.", "kind", "result"), app.Log)
 		missionDriver.SetEventsKick(drainer.Kick)
-		go drainer.Run(ctx)
 	}
 	// deliver: chat-facing ad-hoc send to one operator-configured
 	// destination. Registered here, not inside buildAgent, for the same
@@ -819,6 +820,12 @@ func main() {
 	// refs artifact copy just wrote).
 	if attachmentStore != nil && missionDriver != nil {
 		missionDriver.SetPromoteKB(destinations.PromoteKB(attachmentStore, kbStore, mc, kbEnrich, app.Log))
+	}
+
+	// Drainer starts only once the driver is fully wired, so no event is
+	// consumed before memory extraction and the other hooks exist.
+	if drainer != nil {
+		go drainer.Run(ctx)
 	}
 
 	// search_kb: nil-safe wiring, same shape as memory retrieve/extract

@@ -85,7 +85,7 @@ func (e *Engine) StartRun(ctx context.Context, workflowID string, runContext map
 	if err != nil {
 		return "", fmt.Errorf("workflows start run: %w", err)
 	}
-	if _, err := e.spawnStep(ctx, runID, def.Entry, def.Steps[def.Entry], runContext, "", ""); err != nil {
+	if _, err := e.spawnStep(ctx, runID, def.Entry, def.Entry, def.Steps[def.Entry], runContext, "", ""); err != nil {
 		e.pauseRun(ctx, runID, fmt.Sprintf("spawn entry step %q failed: %s", def.Entry, err.Error()))
 		return runID, fmt.Errorf("workflows start run: spawn entry step: %w", err)
 	}
@@ -179,7 +179,7 @@ func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) erro
 		return nil
 	}
 	outcome := missions.OutcomeDigest(m, events, m.Phase, m.FailureReason)
-	if _, err := e.spawnStep(ctx, m.WorkflowRunID, matched.To, step, run.Context, outcome, m.ID); err != nil {
+	if _, err := e.spawnStep(ctx, m.WorkflowRunID, run.CurrentStep, matched.To, step, run.Context, outcome, m.ID); err != nil {
 		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("spawn step %q failed: %s", matched.To, err.Error()))
 		return nil
 	}
@@ -197,11 +197,13 @@ func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) erro
 // spawnStep creates the next mission for step, interpolating its goal
 // from outcome + run context, and appends a run.warning event for any
 // unknown {{context.KEY}} placeholder before creating the mission.
-func (e *Engine) spawnStep(ctx context.Context, runID, stepName string, step Step, runContext map[string]string, outcome, parentMissionID string) (string, error) {
+// currentStep is the run's step now; the warning keeps it so the run
+// only advances after Create succeeds.
+func (e *Engine) spawnStep(ctx context.Context, runID, currentStep, stepName string, step Step, runContext map[string]string, outcome, parentMissionID string) (string, error) {
 	goal, unknown := interpolate(step.Goal, outcome, runContext)
 	for _, key := range unknown {
 		if err := e.store.ApplyRunTransition(ctx, runID, RunTransition{
-			Status: "running", CurrentStep: stepName,
+			Status: "running", CurrentStep: currentStep,
 			Events: []RunTransitionEvent{{Kind: "run.warning", Payload: map[string]any{
 				"message": fmt.Sprintf("unknown placeholder {{context.%s}} rendered empty", key), "step": stepName,
 			}}},
