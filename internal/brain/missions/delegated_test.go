@@ -589,7 +589,7 @@ func TestDelegatedRunWorker_WritesReferenceFiles(t *testing.T) {
 
 	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
 	m := testMission("m1", t.TempDir())
-	packet := WorkPacket{Goal: "test", ParentContext: "parent digest", References: []SourceEntry{{Source: SourceKindKB, Name: "Design", Digest: "kb body"}}}
+	packet := WorkPacket{Goal: "test", Sources: []SourceEntry{parentSource("parent digest"), {Source: SourceKindKB, Name: "Design", Digest: "kb body"}}}
 
 	if _, _, err := r.RunWorker(testCtx(t), m, packet); err != nil {
 		t.Fatalf("RunWorker: %v", err)

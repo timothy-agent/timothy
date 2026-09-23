@@ -40,24 +40,10 @@ type WorkPacket struct {
 	// python3 exists, and can report "done" on a step whose own
 	// check_cmd will fail for want of a runtime that was never there.
 	ExecEnvironmentNote string
-	// ParentContext is the parent mission's outcome digest, set only
-	// for a follow-up mission (Mission.ParentContext()) -- gives the
-	// worker the prior mission's result without reopening it.
-	ParentContext string
-	// ReferencedContext is the picked composer #-mention references
-	// (Mission.ReferencedContext()), additive to ParentContext: gives
-	// the worker the content of what the user explicitly pinned at
-	// create time.
-	ReferencedContext string
-	// References are the same picks as entries (Mission.ReferenceEntries());
-	// RenderForDelegated writes each to a file in the run dir and lists
-	// the paths instead of inlining the digests (issue #705).
-	References []SourceEntry
-	// Attachments are the mission's create-time documents, images, and
-	// audio clips ("pdf" Sources entries, issue #359) -- reach every
-	// worker turn via Render, including a delegated executor's turn
-	// (executor packets also go through Render).
-	Attachments []SourceEntry
+	// Sources are the mission's source entries (Mission.Sources):
+	// parent digest, referenced picks and attachments reach the worker
+	// through contextBlocks.
+	Sources []SourceEntry
 	// SkillsIndex is the rendered skill index for the mission's agent
 	// (skills.Index over the agent's allowlist), resolved at packet
 	// build time like the scheduler's other agent defaults — an agent
@@ -173,7 +159,6 @@ func (p WorkPacket) Render() (system, user string) {
 // DONE without a single tool call.
 func (p WorkPacket) RenderForDelegated(runDir string) (system, user string, files map[string]string) {
 	system = p.systemPrompt("")
-	files = map[string]string{}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal: %s\n", NeutralizeSlot(p.Goal))
@@ -185,19 +170,9 @@ func (p WorkPacket) RenderForDelegated(runDir string) (system, user string, file
 		b.WriteString("\n\n")
 	}
 
-	if p.ParentContext != "" {
-		files["refs/parent-mission.md"] = p.ParentContext
-		fmt.Fprintf(&b, "Follow-up of a previous mission; its outcome digest is at %s (background only, this mission's plan below is the work).\n\n", filepath.Join(runDir, "refs", "parent-mission.md"))
-	}
-	if len(p.References) > 0 {
-		b.WriteString("Referenced documents, read when the unit needs them:\n")
-		for i, e := range p.References {
-			rel := filepath.Join("refs", fmt.Sprintf("%02d-%s.md", i+1, slugify(referenceName(e))))
-			files[rel] = e.Digest
-			fmt.Fprintf(&b, "- %s: %s\n", NeutralizeSlot(referenceName(e)), filepath.Join(runDir, rel))
-		}
-		b.WriteString("\n")
-	}
+	sc := contextBlocks(p.Sources, contextDelegated, runDir)
+	files = sc.files
+	b.WriteString(sc.head)
 
 	if len(p.Plan.Units) > 0 {
 		b.WriteString("Plan:\n")
@@ -216,7 +191,7 @@ func (p WorkPacket) RenderForDelegated(runDir string) (system, user string, file
 		b.WriteString("\n")
 	}
 
-	b.WriteString(renderAttachments(p.Attachments))
+	b.WriteString(sc.tail)
 
 	if len(p.Plan.Units) > 0 {
 		if unit, _ := currentUnit(p.Plan); unit != nil {
@@ -353,19 +328,9 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 		b.WriteString("\n")
 	}
 
-	if p.ParentContext != "" {
-		b.WriteString("Previous mission outcome:\n")
-		b.WriteString(NeutralizeSlot(p.ParentContext))
-		b.WriteString("\n")
-	}
-
-	if p.ReferencedContext != "" {
-		b.WriteString("Referenced context:\n")
-		b.WriteString(NeutralizeSlot(p.ReferencedContext))
-		b.WriteString("\n")
-	}
-
-	b.WriteString(renderAttachments(p.Attachments))
+	sc := contextBlocks(p.Sources, contextPacket, "")
+	b.WriteString(sc.head)
+	b.WriteString(sc.tail)
 
 	return system, b.String()
 }
@@ -462,15 +427,78 @@ func attachmentLabel(mime string) string {
 	}
 }
 
-// renderAttachments formats each attachment with markdown into a
-// section labeled by mime (attachmentLabel), neutralized like every
-// other model-reachable field, shared by WorkPacket.Render and the
-// discover/plan runner sessions (runner.go) so the three near-identical
-// loops stay in sync. An attachment with no markdown (a conversion
-// that somehow never ran) renders nothing.
-func renderAttachments(atts []SourceEntry) string {
-	var b strings.Builder
-	for _, a := range atts {
+// contextMode selects how contextBlocks formats a prompt site's
+// source-derived context.
+type contextMode int
+
+const (
+	// contextSession is the discover and plan user prompt: each block
+	// opens with a blank line.
+	contextSession contextMode = iota
+	// contextPacket is WorkPacket.Render: each block ends with a newline.
+	contextPacket
+	// contextDelegated is WorkPacket.RenderForDelegated (issue #705): the
+	// parent digest and each referenced pick go to a file under
+	// runDir/refs and the prompt lists their paths.
+	contextDelegated
+)
+
+// sourceContext is contextBlocks' output. head carries the parent
+// digest then the referenced picks, tail the attachments; files holds
+// contextDelegated's ref files keyed relative to runDir.
+type sourceContext struct {
+	head, tail string
+	files      map[string]string
+}
+
+// contextBlocks renders every source-derived prompt block, the one
+// place a SourceEntry kind reaches a prompt (issue #819). The repo
+// source renders nowhere. Per site: plan and the native packet write
+// head then tail back to back, discover writes its progress notes
+// between them, and the delegated prompt writes head right after the
+// goal and tail after the git log. Attachments (issue #359) render the
+// same at every site: a section per attachment labeled by mime
+// (attachmentLabel), skipping one with no markdown.
+func contextBlocks(sources []SourceEntry, mode contextMode, runDir string) sourceContext {
+	m := Mission{Sources: sources}
+	var sc sourceContext
+	var head strings.Builder
+	pc, rc := m.ParentContext(), m.ReferencedContext()
+	switch mode {
+	case contextSession:
+		if pc != "" {
+			head.WriteString("\n\nPrevious mission outcome:\n" + NeutralizeSlot(pc))
+		}
+		if rc != "" {
+			head.WriteString("\n\nReferenced context:\n" + NeutralizeSlot(rc))
+		}
+	case contextPacket:
+		if pc != "" {
+			head.WriteString("Previous mission outcome:\n" + NeutralizeSlot(pc) + "\n")
+		}
+		if rc != "" {
+			head.WriteString("Referenced context:\n" + NeutralizeSlot(rc) + "\n")
+		}
+	case contextDelegated:
+		sc.files = map[string]string{}
+		if pc != "" {
+			sc.files["refs/parent-mission.md"] = pc
+			fmt.Fprintf(&head, "Follow-up of a previous mission; its outcome digest is at %s (background only, this mission's plan below is the work).\n\n", filepath.Join(runDir, "refs", "parent-mission.md"))
+		}
+		if refs := m.ReferenceEntries(); len(refs) > 0 {
+			head.WriteString("Referenced documents, read when the unit needs them:\n")
+			for i, e := range refs {
+				rel := filepath.Join("refs", fmt.Sprintf("%02d-%s.md", i+1, slugify(referenceName(e))))
+				sc.files[rel] = e.Digest
+				fmt.Fprintf(&head, "- %s: %s\n", NeutralizeSlot(referenceName(e)), filepath.Join(runDir, rel))
+			}
+			head.WriteString("\n")
+		}
+	}
+	sc.head = head.String()
+
+	var tail strings.Builder
+	for _, a := range m.Attachments() {
 		if a.Markdown == "" {
 			continue
 		}
@@ -478,7 +506,8 @@ func renderAttachments(atts []SourceEntry) string {
 		if name == "" {
 			name = a.ID
 		}
-		fmt.Fprintf(&b, "\n"+attachmentLabel(a.Mime), NeutralizeSlot(name), NeutralizeSlot(a.Markdown))
+		fmt.Fprintf(&tail, "\n"+attachmentLabel(a.Mime), NeutralizeSlot(name), NeutralizeSlot(a.Markdown))
 	}
-	return b.String()
+	sc.tail = tail.String()
+	return sc
 }

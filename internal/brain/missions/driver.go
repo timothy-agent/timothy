@@ -2255,7 +2255,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	p := WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Plan: m.Plan, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
-		ExecEnvironmentNote: execEnvironmentNote(loc), ParentContext: m.ParentContext(), ReferencedContext: m.ReferencedContext(), References: m.ReferenceEntries(), Attachments: m.Attachments(),
+		ExecEnvironmentNote: execEnvironmentNote(loc), Sources: m.Sources,
 		Light: m.RunsPlanless(), Location: loc,
 		Findings: m.ReviewFindings, ReworkRound: m.ReworkRounds, MaxRounds: m.MaxIterations,
 	}
