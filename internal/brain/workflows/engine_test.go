@@ -712,3 +712,15 @@ func TestEdgeTakenFor(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleSkipsDeletedStepMission(t *testing.T) {
+	spawner := &fakeSpawner{}
+	e := testEngine(newFakeEngineStore(), spawner)
+	ev := terminalEvent(t, events.MissionPayload{MissionID: "gone", Phase: string(missions.PhaseDone), WorkflowRunID: "run"})
+	if err := e.Handle(context.Background(), nil, ev); err != nil {
+		t.Fatalf("Handle for a deleted step mission = %v, want nil so the event is processed, not retried", err)
+	}
+	if got := len(spawner.missions); got != 0 {
+		t.Fatalf("spawned missions = %d, want 0", got)
+	}
+}

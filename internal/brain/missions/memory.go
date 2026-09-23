@@ -3,6 +3,7 @@ package missions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -70,6 +71,11 @@ func (d *Driver) ExtractMemory(ctx context.Context, id string, terminal Phase, f
 		return nil
 	}
 	m, err := d.store.Get(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		// A deleted mission has nothing to extract; retrying cannot change that.
+		d.log.Info("memory extraction: mission deleted, skipping", "mission_id", id)
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("memory extraction: load mission: %w", err)
 	}

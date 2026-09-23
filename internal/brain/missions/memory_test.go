@@ -297,13 +297,13 @@ func TestDriverExtractsMemoryOnceOnRedelivery(t *testing.T) {
 	}
 }
 
-func TestExtractMemoryReturnsLoadError(t *testing.T) {
+func TestExtractMemorySkipsDeletedMission(t *testing.T) {
 	d := testDriver(newFakeStore(), &scriptedRunner{})
 	rec := &recordingExtract{}
 	d.SetMemoryExtract(rec.fn())
 
-	if err := consumeTerminal(t, d, "missing", PhaseDone, ""); err == nil {
-		t.Fatal("consume for an unknown mission = nil error, want error so the drainer retries")
+	if err := consumeTerminal(t, d, "missing", PhaseDone, ""); err != nil {
+		t.Fatalf("consume for a deleted mission = %v, want nil so the event is processed, not retried", err)
 	}
 	if got := rec.count(); got != 0 {
 		t.Fatalf("extraction calls = %d, want 0", got)

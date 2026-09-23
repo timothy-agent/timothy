@@ -3,11 +3,13 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/brain/events"
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
 // Name, Kinds and Handle make Engine the events consumer that advances
@@ -29,6 +31,11 @@ func (e *Engine) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error {
 		return nil
 	}
 	m, err := e.events.Get(ctx, p.MissionID)
+	if errors.Is(err, missions.ErrNotFound) {
+		// A deleted step mission cannot advance its run; retrying cannot change that.
+		e.log.Info("workflows: step mission deleted, skipping event", "mission_id", p.MissionID, "run_id", p.WorkflowRunID)
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("workflows: load mission %s: %w", p.MissionID, err)
 	}
