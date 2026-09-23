@@ -41,12 +41,20 @@ type Drainer struct {
 	consumers []Consumer
 	processed *prometheus.CounterVec // labels kind, result; nil skips
 	kick      chan struct{}
-	log       *slog.Logger
+	// afterCommit runs after a drain commits a non-empty batch.
+	afterCommit func()
+	log         *slog.Logger
 }
 
 // NewDrainer wires consumers; processed may be nil.
 func NewDrainer(store *Store, consumers []Consumer, processed *prometheus.CounterVec, log *slog.Logger) *Drainer {
 	return &Drainer{store: store, consumers: consumers, processed: processed, kick: make(chan struct{}, 1), log: log}
+}
+
+// SetAfterCommit wires fn to run after every drain that commits at
+// least one event, so work a consumer committed can start at once.
+func (d *Drainer) SetAfterCommit(fn func()) {
+	d.afterCommit = fn
 }
 
 // Kick asks for a drain now instead of at the next tick. Never blocks.
@@ -127,6 +135,9 @@ func (d *Drainer) Drain(ctx context.Context) (int, error) {
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, fmt.Errorf("events drain: commit: %w", err)
+	}
+	if len(batch) > 0 && d.afterCommit != nil {
+		d.afterCommit()
 	}
 	return len(batch), nil
 }

@@ -47,7 +47,7 @@ func TestAutomationsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerAutomations(m.Handle, nil, nil, nil, nil, nil)
+	a.registerAutomations(m.Handle, nil, nil, nil, nil, nil, nil)
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/automations"},
 		{"POST", "/v1/automations"},

@@ -20,12 +20,14 @@ import (
 // nil store leaves it unmounted. destinations validates an action's
 // destination_ids (nil rejects any), attachments resolves its
 // attachments at save time, events backs run-now (nil leaves it
-// unmounted) and loc is the operator timezone for stats and next runs.
-func (a *API) registerAutomations(handle func(pattern string, h http.Handler), store *automations.Store, ev *events.Store, destinations destinationLookup, attachments *attachmentResolver, loc func(ctx context.Context) *time.Location) {
+// unmounted), kick asks the drainer to consume a run-now event at once
+// (nil waits for its poll) and loc is the operator timezone for stats
+// and next runs.
+func (a *API) registerAutomations(handle func(pattern string, h http.Handler), store *automations.Store, ev *events.Store, kick func(), destinations destinationLookup, attachments *attachmentResolver, loc func(ctx context.Context) *time.Location) {
 	if store == nil {
 		return
 	}
-	h := &automationAPI{store: store, events: ev, destinations: destinations, attachments: attachments, loc: loc}
+	h := &automationAPI{store: store, events: ev, kick: kick, destinations: destinations, attachments: attachments, loc: loc}
 	handle("GET /v1/automations", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/automations", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/automations/stats", a.auth(http.HandlerFunc(h.stats)))
@@ -45,6 +47,7 @@ func (a *API) registerAutomations(handle func(pattern string, h http.Handler), s
 type automationAPI struct {
 	store        *automations.Store
 	events       *events.Store
+	kick         func()
 	destinations destinationLookup
 	attachments  *attachmentResolver
 	loc          func(ctx context.Context) *time.Location
@@ -432,8 +435,8 @@ func (h *automationAPI) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// runNow records a run.now event for an enabled, unexpired automation.
-// Nothing consumes it until the dispatcher lands (issue #822).
+// runNow records a run.now event for an enabled, unexpired automation
+// and kicks the drainer so the dispatcher consumes it at once.
 func (h *automationAPI) runNow(w http.ResponseWriter, r *http.Request) {
 	a, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -454,6 +457,9 @@ func (h *automationAPI) runNow(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "automations_failed", err.Error())
 		return
+	}
+	if h.kick != nil {
+		h.kick()
 	}
 	writeJSON(w, http.StatusAccepted, map[string]int64{"event_id": eventID})
 }

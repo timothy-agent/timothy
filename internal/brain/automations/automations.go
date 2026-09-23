@@ -30,11 +30,12 @@ const (
 	ConcurrencyQueue    = "queue"
 	ConcurrencyParallel = "parallel"
 
-	RunQueued  = "queued"
-	RunRunning = "running"
-	RunDone    = "done"
-	RunFailed  = "failed"
-	RunSkipped = "skipped"
+	RunQueued   = "queued"
+	RunStarting = "starting"
+	RunRunning  = "running"
+	RunDone     = "done"
+	RunFailed   = "failed"
+	RunSkipped  = "skipped"
 )
 
 const (

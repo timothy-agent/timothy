@@ -487,14 +487,34 @@ func main() {
 		eventStore = events.NewStore(app.DB)
 	}
 	var drainer *events.Drainer
+	var automationTicker *automations.Ticker
+	var automationStarter *automations.Starter
+	var eventsKick func()
 	if missionDriver != nil {
+		// Automations (issue #822): the ticker writes cron.due events,
+		// the dispatcher consumer decides runs inside the drain tx and
+		// the starter creates the missions of committed starting runs.
+		var destinationEnabled func(ctx context.Context, id string) (bool, error)
+		if destinationStore != nil {
+			destinationEnabled = destinationStore.EnabledByID
+		}
+		automationStarter = automations.NewStarter(automationStore, missionDriver.Create, missionResolve, destinationEnabled, app.Log)
+		var notify func(ctx context.Context, missionID, kind, message string) error
+		if missionNotifier != nil {
+			notify = missionNotifier.NotifyMessage
+		}
 		consumers := []events.Consumer{missions.NewMemoryConsumer(missionDriver)}
 		if workflowEngine != nil {
 			consumers = append(consumers, workflowEngine)
 		}
+		consumers = append(consumers, automations.NewDispatcher(notify, app.Log))
 		drainer = events.NewDrainer(eventStore, consumers,
 			app.Metrics.NewCounterVec("events_processed_total", "Inbox events handled by kind and result.", "kind", "result"), app.Log)
+		drainer.SetAfterCommit(automationStarter.Kick)
 		missionDriver.SetEventsKick(drainer.Kick)
+		eventsKick = drainer.Kick
+		automationTicker = automations.NewTicker(automationStore, eventStore,
+			func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyAutomations) }, flags.Location, drainer.Kick, app.Log)
 	}
 	// deliver: chat-facing ad-hoc send to one operator-configured
 	// destination. Registered here, not inside buildAgent, for the same
@@ -835,6 +855,8 @@ func main() {
 	// consumed before memory extraction and the other hooks exist.
 	if drainer != nil {
 		go drainer.Run(ctx)
+		go automationTicker.Run(ctx)
+		go automationStarter.Run(ctx)
 	}
 
 	// search_kb: nil-safe wiring, same shape as memory retrieve/extract
@@ -914,7 +936,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, pdfService, captionImage)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

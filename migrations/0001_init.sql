@@ -593,8 +593,8 @@ CREATE TABLE IF NOT EXISTS automation_triggers (
 );
 CREATE INDEX IF NOT EXISTS automation_triggers_automation_idx ON automation_triggers (automation_id);
 
--- One firing. status (queued | running | done | failed | skipped) is
--- not CHECK-constrained, same reasoning as missions.phase. The
+-- One firing. status (queued | starting | running | done | failed |
+-- skipped) is not CHECK-constrained, same reasoning as missions.phase. The
 -- mission_id foreign key is added after the missions table.
 CREATE TABLE IF NOT EXISTS automation_runs (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),

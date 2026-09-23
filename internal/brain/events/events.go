@@ -26,6 +26,11 @@ const (
 	SourceManual = "manual"
 	// KindRunNow asks for one run of an automation.
 	KindRunNow = "run.now"
+
+	// SourceCron marks events the automations cron ticker produced.
+	SourceCron = "cron"
+	// KindCronDue is one due boundary of a cron trigger.
+	KindCronDue = "cron.due"
 )
 
 // Event is one events row.
@@ -113,6 +118,51 @@ func RunNow(automationID string, at time.Time) (Event, error) {
 		return Event{}, fmt.Errorf("events: marshal run.now payload: %w", err)
 	}
 	return Event{Source: SourceManual, Kind: KindRunNow, DedupKey: newRequestID(), Payload: raw}, nil
+}
+
+// DecodeRunNow reads a run.now event's payload.
+func DecodeRunNow(ev Event) (RunNowPayload, error) {
+	var p RunNowPayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil {
+		return RunNowPayload{}, fmt.Errorf("events: decode run.now payload of event %d: %w", ev.ID, err)
+	}
+	if p.AutomationID == "" {
+		return RunNowPayload{}, fmt.Errorf("events: event %d has no automation_id", ev.ID)
+	}
+	return p, nil
+}
+
+// CronDuePayload is the payload of a cron.due event. Boundary carries
+// the operator timezone offset.
+type CronDuePayload struct {
+	AutomationID string    `json:"automation_id"`
+	TriggerID    string    `json:"trigger_id"`
+	Boundary     time.Time `json:"boundary"`
+}
+
+// CronDue builds the event for one due boundary of a cron trigger,
+// deduplicated by trigger id and the boundary's UTC instant.
+func CronDue(automationID, triggerID string, boundary time.Time) (Event, error) {
+	if automationID == "" || triggerID == "" {
+		return Event{}, fmt.Errorf("events: cron.due event needs an automation and a trigger id")
+	}
+	raw, err := json.Marshal(CronDuePayload{AutomationID: automationID, TriggerID: triggerID, Boundary: boundary})
+	if err != nil {
+		return Event{}, fmt.Errorf("events: marshal cron.due payload: %w", err)
+	}
+	return Event{Source: SourceCron, Kind: KindCronDue, DedupKey: triggerID + "|" + boundary.UTC().Format(time.RFC3339), Payload: raw}, nil
+}
+
+// DecodeCronDue reads a cron.due event's payload.
+func DecodeCronDue(ev Event) (CronDuePayload, error) {
+	var p CronDuePayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil {
+		return CronDuePayload{}, fmt.Errorf("events: decode cron.due payload of event %d: %w", ev.ID, err)
+	}
+	if p.AutomationID == "" || p.TriggerID == "" || p.Boundary.IsZero() {
+		return CronDuePayload{}, fmt.Errorf("events: event %d is missing automation_id, trigger_id or boundary", ev.ID)
+	}
+	return p, nil
 }
 
 // newRequestID returns a random RFC 4122 version 4 UUID.

@@ -427,6 +427,12 @@ func (s *Store) CreateRun(ctx context.Context, tx pgx.Tx, r Run) (id string, ins
 		}
 		q = db
 	}
+	return insertRun(ctx, q, r)
+}
+
+// insertRun inserts r through q; inserted is false on a dedup key
+// conflict.
+func insertRun(ctx context.Context, q dbtx, r Run) (id string, inserted bool, err error) {
 	event := []byte(r.Event)
 	if len(event) == 0 {
 		event = []byte(`{}`)

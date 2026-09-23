@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ type automationHarness struct {
 	missions *missions.Store
 	tag      string
 	agentID  string
+	kicks    *atomic.Int32
 }
 
 func newAutomationHarness(t *testing.T) *automationHarness {
@@ -76,11 +78,12 @@ func newAutomationHarness(t *testing.T) *automationHarness {
 	ams, _ := time.LoadLocation("Europe/Amsterdam")
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerAutomations(m.Handle, store, events.NewStore(pool), dest, &attachmentResolver{}, func(context.Context) *time.Location { return ams })
+	kicks := &atomic.Int32{}
+	a.registerAutomations(m.Handle, store, events.NewStore(pool), func() { kicks.Add(1) }, dest, &attachmentResolver{}, func(context.Context) *time.Location { return ams })
 	a.registerDestinations(m.Handle, dest, ms, store, nil)
 	mh := &missionAPI{store: ms}
 	m.Handle("GET /v1/missions", a.auth(http.HandlerFunc(mh.list)))
-	return &automationHarness{t: t, mux: m, pool: pool, missions: ms, tag: tag, agentID: agentID}
+	return &automationHarness{t: t, mux: m, pool: pool, missions: ms, tag: tag, agentID: agentID, kicks: kicks}
 }
 
 func (h *automationHarness) do(method, path, body string) *httptest.ResponseRecorder {
@@ -302,6 +305,9 @@ func TestAutomationsAPIRunNow(t *testing.T) {
 	if count != 1 || source != "manual" || kind != "run.now" || automationID != id || out.EventID == 0 {
 		t.Fatalf("events = %d %s %s %s (id %d), want exactly one manual run.now", count, source, kind, automationID, out.EventID)
 	}
+	if got := h.kicks.Load(); got != 1 {
+		t.Fatalf("drainer kicks after run now = %d, want 1", got)
+	}
 
 	if w = h.do("PATCH", "/v1/automations/"+id, `{"enabled": false}`); w.Code != 200 {
 		t.Fatalf("disable = %d", w.Code)
@@ -322,6 +328,9 @@ func TestAutomationsAPIRunNow(t *testing.T) {
 	_ = db.QueryRow(t.Context(), `SELECT count(*) FROM events WHERE source = 'manual' AND payload->>'automation_id' = $1`, id).Scan(&count)
 	if count != 1 {
 		t.Fatalf("events after refused run-now = %d, want 1", count)
+	}
+	if got := h.kicks.Load(); got != 1 {
+		t.Fatalf("drainer kicks after refused run-now = %d, want 1", got)
 	}
 }
 

@@ -479,3 +479,24 @@ func TestDrainRaisesIdleTimeoutForTheBatch(t *testing.T) {
 		t.Fatalf("idle timeout after drain = %q, want the pool default 60000", after)
 	}
 }
+
+func TestDrainRunsAfterCommitOnlyForANonEmptyBatch(t *testing.T) {
+	s := testStore(t)
+	src := testSource(t)
+	d := NewDrainer(s, []Consumer{&recorder{}}, nil, testLog())
+	calls := 0
+	d.SetAfterCommit(func() { calls++ })
+	if _, err := drain(t, s, src, d); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("after-commit calls on an empty batch = %d, want 0", calls)
+	}
+	insertEvents(t, s, src, "a", "b")
+	if n, err := drain(t, s, src, d); err != nil || n != 2 {
+		t.Fatalf("Drain = %d, %v, want 2", n, err)
+	}
+	if calls != 1 {
+		t.Fatalf("after-commit calls = %d, want 1", calls)
+	}
+}
