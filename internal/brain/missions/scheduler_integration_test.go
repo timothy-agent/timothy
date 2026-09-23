@@ -5,16 +5,19 @@ package missions
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
@@ -668,10 +671,10 @@ func TestSchedulerSkipsScheduleWithDeletedAgent(t *testing.T) {
 }
 
 // TestSchedulerRegression815FailedInsertDoesNotAbortTick reproduces
-// issue #815 against real Postgres: a template with an invalid kind
-// used to fail its INSERT and abort the shared transaction (25P02) so
-// no schedule fired. Since issue #816 it is rejected before
-// Driver.Create and recorded as fire_error on that schedule alone.
+// issue #815 against real Postgres: a statement failing inside the tick
+// transaction used to abort it (25P02) so no schedule fired. A test
+// trigger makes the poisoned schedule's fire UPDATE raise in fireOne,
+// so only fireEach's SAVEPOINT keeps the other two schedules firing.
 func TestSchedulerRegression815FailedInsertDoesNotAbortTick(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
@@ -679,8 +682,29 @@ func TestSchedulerRegression815FailedInsertDoesNotAbortTick(t *testing.T) {
 
 	goal := marker + "regression-815 run"
 	first := createDueScheduleWithTemplate(t, ctx, db, marker+"regression-815-1", map[string]any{"goal": goal, "kind": "general"})
-	poisoned := createDueScheduleWithTemplate(t, ctx, db, marker+"regression-815-2", map[string]any{"goal": goal, "kind": "bogus"})
+	poisoned := createDueScheduleWithTemplate(t, ctx, db, marker+"regression-815-2", map[string]any{"goal": goal, "kind": "general"})
 	third := createDueScheduleWithTemplate(t, ctx, db, marker+"regression-815-3", map[string]any{"goal": goal, "kind": "general"})
+
+	// Fails only the successful-fire UPDATE (skip_reason cleared), so
+	// markSkipped's fire_error write still lands after the rollback.
+	dropPoison := func(ctx context.Context) {
+		_, _ = db.Exec(ctx, `DROP TRIGGER IF EXISTS itest_poison_815 ON schedules`)
+		_, _ = db.Exec(ctx, `DROP FUNCTION IF EXISTS itest_poison_815()`)
+	}
+	dropPoison(ctx)
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		dropPoison(cctx)
+	})
+	if _, err := db.Exec(ctx, `CREATE FUNCTION itest_poison_815() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'itest poison #815'; END $$`); err != nil {
+		t.Fatalf("create poison function: %v", err)
+	}
+	if _, err := db.Exec(ctx, fmt.Sprintf(`CREATE TRIGGER itest_poison_815 BEFORE UPDATE ON schedules FOR EACH ROW
+		WHEN (OLD.id = '%s'::uuid AND NEW.skip_reason = '') EXECUTE FUNCTION itest_poison_815()`, poisoned)); err != nil {
+		t.Fatalf("create poison trigger: %v", err)
+	}
 
 	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
@@ -693,9 +717,52 @@ func TestSchedulerRegression815FailedInsertDoesNotAbortTick(t *testing.T) {
 	if n := countScheduleMissions(t, ctx, db, third); n != 1 {
 		t.Fatalf("third schedule missions = %d, want 1 (before #815 this was 0: 25P02 cascade)", n)
 	}
+	if n := countScheduleMissions(t, ctx, db, poisoned); n != 0 {
+		t.Fatalf("poisoned schedule missions = %d, want 0", n)
+	}
 	_, skippedAt, reason := scheduleFlags(t, ctx, db, poisoned)
 	if skippedAt == nil || reason != "fire_error" {
 		t.Fatalf("poisoned last_skipped_at=%v skip_reason=%q, want a timestamp and fire_error", skippedAt, reason)
+	}
+}
+
+// TestSchedulerRouteOutageRetriesFire covers issue #849: a due fire
+// rejected by the route gate records fire_error with pending_fire set,
+// and the next tick after the route recovers creates the mission.
+func TestSchedulerRouteOutageRetriesFire(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	db, _ := store.db.Get()
+
+	id := createDueScheduleWithTemplate(t, ctx, db, marker+"route-outage", map[string]any{"goal": marker + "route outage run", "kind": "general"})
+	var down atomic.Bool
+	down.Store(true)
+	sched := testScheduler(store, nil)
+	sched.resolve.ResolveRoute = func(_ context.Context, route, _ string) (*gwclient.ResolvedRoute, error) {
+		return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{{Usable: !down.Load(), SkipReason: "cooling down"}}}, nil
+	}
+
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if n := countScheduleMissions(t, ctx, db, id); n != 0 {
+		t.Fatalf("missions during outage = %d, want 0", n)
+	}
+	pending, skippedAt, reason := scheduleFlags(t, ctx, db, id)
+	if !pending || skippedAt == nil || reason != "fire_error" {
+		t.Fatalf("pending=%v last_skipped_at=%v skip_reason=%q, want pending set and fire_error", pending, skippedAt, reason)
+	}
+
+	down.Store(false)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+	if n := countScheduleMissions(t, ctx, db, id); n != 1 {
+		t.Fatalf("missions after recovery = %d, want 1", n)
+	}
+	pending, skippedAt, reason = scheduleFlags(t, ctx, db, id)
+	if pending || skippedAt != nil || reason != "" {
+		t.Fatalf("pending=%v last_skipped_at=%v skip_reason=%q, want all cleared after the retry fired", pending, skippedAt, reason)
 	}
 }
 

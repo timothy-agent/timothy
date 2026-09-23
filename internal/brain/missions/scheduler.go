@@ -494,25 +494,47 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 // fireMission creates sc's mission through the shared create path
 // (ValidateTemplate, ResolveDefaults, Driver.Create) after tick's
 // bookkeeping committed. A failure records agent_missing or fire_error
-// on this schedule only, advancing last_run and restoring pending_fire
-// to its value before the tick, the same end state a rolled-back fire
-// used to leave.
+// on this schedule only (recordFireSkip).
 func (s *Scheduler) fireMission(ctx context.Context, sc Schedule, now time.Time) {
 	id, err := s.createFromSchedule(ctx, sc)
 	if err == nil {
 		s.log.Info("scheduler: fired", "schedule_id", sc.ID, "mission_id", id)
 		return
 	}
-	reason := skipReasonFor(err)
-	s.log.Warn("scheduler: schedule skipped, fire failed", "schedule_id", sc.ID, "name", sc.Name, "reason", reason, "error", err)
 	db, dbErr := s.db.Get()
 	if dbErr != nil {
 		s.log.Error("scheduler: recording skip failed", "schedule_id", sc.ID, "error", dbErr)
 		return
 	}
-	if _, err := db.Exec(ctx, `UPDATE schedules SET
+	s.recordFireSkip(ctx, db, sc, now, err)
+}
+
+// fireSkipTimeout bounds recordFireSkip's detached UPDATE.
+const fireSkipTimeout = 10 * time.Second
+
+// skipExecer is the Exec slice recordFireSkip needs from a pool.
+type skipExecer interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+// recordFireSkip advances last_run and records the failed fire's skip
+// reason. pending_fire is restored to its value before the tick, or set
+// when the route gate rejected the fire, so a transient route outage
+// retries on a later tick. The write runs detached from ctx's
+// cancellation so a shutdown mid-create still lands it.
+func (s *Scheduler) recordFireSkip(ctx context.Context, db skipExecer, sc Schedule, now time.Time, fireErr error) {
+	reason := skipReasonFor(fireErr)
+	s.log.Warn("scheduler: schedule skipped, fire failed", "schedule_id", sc.ID, "name", sc.Name, "reason", reason, "error", fireErr)
+	pending := sc.PendingFire
+	var routeErr *RouteUnusableError
+	if errors.As(fireErr, &routeErr) {
+		pending = true
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fireSkipTimeout)
+	defer cancel()
+	if _, err := db.Exec(wctx, `UPDATE schedules SET
 			last_run = $2, last_skipped_at = $2, skip_reason = $3, pending_fire = $4, updated_at = now()
-		WHERE id = $1`, sc.ID, now, reason, sc.PendingFire); err != nil {
+		WHERE id = $1`, sc.ID, now, reason, pending); err != nil {
 		s.log.Error("scheduler: recording skip failed", "schedule_id", sc.ID, "error", err)
 	}
 }

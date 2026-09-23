@@ -166,7 +166,7 @@ type missionAPI struct {
 	// gateway's own no_route error, same as an unconfigured route.
 	routeForRole func(context.Context, string) string
 	// classify resolves an omitted create request's kind from its goal
-	// (classifyKind below) and backs the /v1/missions/classify preview
+	// (missions.ClassifyKind) and backs the /v1/missions/classify preview
 	// endpoint; nil (no gateway wiring) makes every omitted kind default
 	// straight to "coding", same as any classify error.
 	classify agents.Classify
@@ -426,7 +426,7 @@ func (h *missionAPI) decorateTopModels(ctx context.Context, rows []missions.Miss
 type createMissionRequest struct {
 	Goal string `json:"goal"`
 	// Kind is optional: an empty value is classified from Goal (see
-	// classifyKind) rather than rejected — the web UI's chip preview
+	// missions.ClassifyKind) rather than rejected: the web UI's chip preview
 	// resolves it before submit, but any other caller (a script, a
 	// future integration) can still just send a goal and let the
 	// server decide.
@@ -675,6 +675,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", `origin_kind must be "api", "chat" or "followup"`)
 		return
 	}
+	if req.OriginKind == missions.OriginFollowup && req.ParentMissionID == "" {
+		jsonError(w, http.StatusBadRequest, "bad_request", `origin_kind "followup" requires parent_mission_id`)
+		return
+	}
 	if unknown := req.unknownDestinationRepoURLIDs(); len(unknown) > 0 {
 		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("destination_repo_urls names id(s) not in destination_ids: %s", strings.Join(unknown, ", ")))
 		return
@@ -836,15 +840,6 @@ func (h *missionAPI) routeUnusable(ctx context.Context, route, harness string) (
 	return missions.RouteUnusable(ctx, h.resolveRoute, route, harness)
 }
 
-// unusableCreateRoute runs the D-100 gate for req's routes under flow
-// (missions.UnusableCreateRoute).
-func (h *missionAPI) unusableCreateRoute(ctx context.Context, req createMissionRequest, flow missions.Flow) (route, reason string, unusable bool) {
-	return missions.UnusableCreateRoute(ctx, h.resolveRoute, missions.Mission{
-		Route: req.Route, PlanRoute: req.PlanRoute, ReviewRoute: req.ReviewRoute, EscalationRoute: req.EscalationRoute,
-		Harness: req.Harness, Flow: flow,
-	})
-}
-
 // routing handles PATCH /v1/missions/{id}/routing (D-100, issue #536):
 // rewrites a paused mission's review route and optional model pin. The
 // route must resolve with at least one usable chain entry on the chat
@@ -965,18 +960,6 @@ func (h *missionAPI) generateName(id, goal string) {
 	}()
 }
 
-// classifyKind decides how a mission's work happens when the create
-// request omits kind. Classifies by deliverable, not topic: a book or
-// article about coding is general, since it produces no repository
-// files. Falls back to "general" on a nil classifier, a classify
-// error, or an unrecognised reply, since general is the cheaper
-// mistake, no worktree, no branch, no coding harness, while create()
-// still receives the operator's explicit kind from the form, so this
-// only changes the suggestion.
-func classifyKind(ctx context.Context, classify agents.Classify, goal string) string {
-	return missions.ClassifyKind(ctx, classify, goal)
-}
-
 // classifyLight decides whether a general-kind goal is single-pass
 // (deliverable in one worker turn, no plan or artifacts needed) — only
 // ever a suggestion for the web UI's toggle default; create() still
@@ -1015,18 +998,18 @@ func classifyHasPlan(goal string) bool {
 	return len(hasPlanPattern.FindAllString(goal, -1)) >= 2
 }
 
-// classifyKindAndLight answers both classifyKind and classifyLight's
+// classifyKindAndLight answers both missions.ClassifyKind and classifyLight's
 // questions in one model call — used only by the preview endpoint
 // (classifyGoal), which needs both on every debounced keystroke and
 // would otherwise pay for two full LLM turns per preview. create()'s
-// fallback path keeps using classifyKind/classifyLight separately,
+// fallback path keeps using missions.ClassifyKind/classifyLight separately,
 // since it only ever needs light after kind is already known to be
 // general. Parsing takes the first recognised kind word and the first
 // recognised light/full word, in order, from the reply's fields
 // (punctuation stripped), rather than requiring exactly two fields.
 // Falls back to kind=general, light=false on a nil classifier, a
 // classify error, or no recognised word, the same cheap-mistake bias
-// as classifyKind: no worktree, no branch, no coding harness, and
+// as missions.ClassifyKind: no worktree, no branch, no coding harness, and
 // create() still receives the operator's explicit kind and light flag
 // from the form, so this only changes the suggestion.
 func classifyKindAndLight(ctx context.Context, classify agents.Classify, goal string) (kind string, light bool) {
