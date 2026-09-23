@@ -5,10 +5,12 @@ package missions
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -558,5 +560,123 @@ func TestSchedulerBackfillSkipRecordsReason(t *testing.T) {
 	}
 	if skippedAt == nil || reason != "backfill_grace" {
 		t.Fatalf("last_skipped_at=%v skip_reason=%q, want a timestamp and backfill_grace", skippedAt, reason)
+	}
+}
+
+// createDueScheduleWithTemplate inserts a schedule due on this tick
+// ("* * * * *" backdated two minutes) with a caller-supplied template.
+func createDueScheduleWithTemplate(t *testing.T, ctx context.Context, db *pgxpool.Pool, name string, template map[string]any) string {
+	t.Helper()
+	templateJSON, err := json.Marshal(template)
+	if err != nil {
+		t.Fatalf("marshal template: %v", err)
+	}
+	var id string
+	if err := db.QueryRow(ctx, `INSERT INTO schedules (name, cron, mission_template, created_at)
+		VALUES ($1, '* * * * *', $2, now() - interval '2 minutes') RETURNING id`, name, templateJSON).Scan(&id); err != nil {
+		t.Fatalf("create schedule: %v", err)
+	}
+	return id
+}
+
+func countScheduleMissions(t *testing.T, ctx context.Context, db *pgxpool.Pool, scheduleID string) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM missions WHERE schedule_id = $1`, scheduleID).Scan(&n); err != nil {
+		t.Fatalf("count missions: %v", err)
+	}
+	return n
+}
+
+// TestSchedulerSkipsScheduleWithDeletedAgent covers issue #815: the
+// middle of three due schedules names a deleted agent; the other two
+// fire and the middle one records skip_reason agent_missing.
+func TestSchedulerSkipsScheduleWithDeletedAgent(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	db, _ := store.db.Get()
+
+	agentPrefix := "itest-mission-agent-"
+	var liveAgent, deletedAgent string
+	if err := db.QueryRow(ctx, `INSERT INTO agents (name) VALUES ($1) RETURNING id`, agentPrefix+"live").Scan(&liveAgent); err != nil {
+		t.Fatalf("insert agent: %v", err)
+	}
+	if err := db.QueryRow(ctx, `INSERT INTO agents (name) VALUES ($1) RETURNING id`, agentPrefix+"gone").Scan(&deletedAgent); err != nil {
+		t.Fatalf("insert agent: %v", err)
+	}
+	if _, err := db.Exec(ctx, `DELETE FROM agents WHERE id = $1`, deletedAgent); err != nil {
+		t.Fatalf("delete agent: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(cctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		sweep(cctx, conn) // fired missions reference liveAgent
+		_, _ = conn.Exec(cctx, `DELETE FROM agents WHERE name LIKE $1 || '%'`, agentPrefix)
+	})
+
+	goal := marker + "agent-missing run"
+	first := createDueScheduleWithTemplate(t, ctx, db, marker+"agent-missing-1", map[string]any{"goal": goal, "kind": "general"})
+	poisoned := createDueScheduleWithTemplate(t, ctx, db, marker+"agent-missing-2", map[string]any{"goal": goal, "kind": "general", "agent_id": deletedAgent})
+	third := createDueScheduleWithTemplate(t, ctx, db, marker+"agent-missing-3", map[string]any{"goal": goal, "kind": "general", "agent_id": liveAgent})
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if n := countScheduleMissions(t, ctx, db, first); n != 1 {
+		t.Fatalf("first schedule missions = %d, want 1", n)
+	}
+	if n := countScheduleMissions(t, ctx, db, third); n != 1 {
+		t.Fatalf("third schedule missions = %d, want 1", n)
+	}
+	if n := countScheduleMissions(t, ctx, db, poisoned); n != 0 {
+		t.Fatalf("poisoned schedule missions = %d, want 0", n)
+	}
+	_, skippedAt, reason := scheduleFlags(t, ctx, db, poisoned)
+	if skippedAt == nil || reason != "agent_missing" {
+		t.Fatalf("poisoned last_skipped_at=%v skip_reason=%q, want a timestamp and agent_missing", skippedAt, reason)
+	}
+	for _, id := range []string{first, third} {
+		if _, skippedAt, reason := scheduleFlags(t, ctx, db, id); skippedAt != nil || reason != "" {
+			t.Fatalf("fired schedule %s last_skipped_at=%v skip_reason=%q, want cleared", id, skippedAt, reason)
+		}
+	}
+}
+
+// TestSchedulerRegression815FailedInsertDoesNotAbortTick reproduces
+// issue #815 against real Postgres: a template whose INSERT fails
+// (kind violates missions_kind_check, which no pre-check catches)
+// used to abort the shared transaction (25P02) so no schedule fired.
+// The per-schedule savepoint now contains it to that one row.
+func TestSchedulerRegression815FailedInsertDoesNotAbortTick(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	db, _ := store.db.Get()
+
+	goal := marker + "regression-815 run"
+	first := createDueScheduleWithTemplate(t, ctx, db, marker+"regression-815-1", map[string]any{"goal": goal, "kind": "general"})
+	poisoned := createDueScheduleWithTemplate(t, ctx, db, marker+"regression-815-2", map[string]any{"goal": goal, "kind": "bogus"})
+	third := createDueScheduleWithTemplate(t, ctx, db, marker+"regression-815-3", map[string]any{"goal": goal, "kind": "general"})
+
+	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if n := countScheduleMissions(t, ctx, db, first); n != 1 {
+		t.Fatalf("first schedule missions = %d, want 1", n)
+	}
+	if n := countScheduleMissions(t, ctx, db, third); n != 1 {
+		t.Fatalf("third schedule missions = %d, want 1 (before #815 this was 0: 25P02 cascade)", n)
+	}
+	_, skippedAt, reason := scheduleFlags(t, ctx, db, poisoned)
+	if skippedAt == nil || reason != "fire_error" {
+		t.Fatalf("poisoned last_skipped_at=%v skip_reason=%q, want a timestamp and fire_error", skippedAt, reason)
 	}
 }

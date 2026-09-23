@@ -267,3 +267,74 @@ func TestStripTemplateAttachmentMarkdown(t *testing.T) {
 		t.Fatal("stripTemplateAttachmentMarkdown dropped the id/mime/name")
 	}
 }
+
+func TestValidateTemplateAgentID(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		agentID string
+		wantErr bool
+	}{
+		{"empty is allowed", "", false},
+		{"uuid accepted", "0b8f2f4e-6f1c-4b8a-9d2e-3c4b5a6d7e8f", false},
+		{"slug rejected", "researcher", true},
+		{"truncated uuid rejected", "0b8f2f4e-6f1c-4b8a-9d2e", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateTemplateAgentID(missions.MissionTemplate{AgentID: tc.agentID})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateTemplateAgentID(%q) = %v, wantErr %v", tc.agentID, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestScheduleCreateRejectsNonUUIDAgentID: validation runs before the
+// store is touched, so a nil store is fine.
+func TestScheduleCreateRejectsNonUUIDAgentID(t *testing.T) {
+	t.Parallel()
+	h := &scheduleAPI{}
+	body, _ := json.Marshal(createScheduleRequest{
+		Name: "daily", Cron: "0 7 * * *",
+		MissionTemplate: missions.MissionTemplate{Goal: "g", Kind: "general", AgentID: "not-a-uuid"},
+	})
+	req := httptest.NewRequest("POST", "/v1/schedules", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.create(w, req)
+	if w.Code != 400 {
+		t.Fatalf("create with a non-UUID agent_id = %d, want 400", w.Code)
+	}
+	assertErrorBody(t, w, "bad_request", "agent_id")
+}
+
+func TestSchedulePatchRejectsNonUUIDAgentID(t *testing.T) {
+	t.Parallel()
+	h := &scheduleAPI{}
+	body, _ := json.Marshal(patchScheduleRequest{
+		MissionTemplate: &missions.MissionTemplate{Goal: "g", Kind: "general", AgentID: "not-a-uuid"},
+	})
+	req := httptest.NewRequest("PATCH", "/v1/schedules/abc", bytes.NewReader(body))
+	req.SetPathValue("id", "abc")
+	w := httptest.NewRecorder()
+	h.patch(w, req)
+	if w.Code != 400 {
+		t.Fatalf("patch with a non-UUID agent_id = %d, want 400", w.Code)
+	}
+	assertErrorBody(t, w, "bad_request", "agent_id")
+}
+
+func assertErrorBody(t *testing.T, w *httptest.ResponseRecorder, wantCode, wantInMessage string) {
+	t.Helper()
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	if body["error"] != wantCode {
+		t.Fatalf("error = %q, want %q", body["error"], wantCode)
+	}
+	if !strings.Contains(body["message"], wantInMessage) {
+		t.Fatalf("message = %q, want it to mention %q", body["message"], wantInMessage)
+	}
+}

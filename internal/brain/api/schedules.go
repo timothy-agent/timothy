@@ -81,6 +81,15 @@ func validateLightTemplate(t missions.MissionTemplate) error {
 	return nil
 }
 
+// validateTemplateAgentID rejects a present agent_id that is not a
+// UUID; a malformed id would otherwise fail every fire (issue #815).
+func validateTemplateAgentID(t missions.MissionTemplate) error {
+	if t.AgentID != "" && !validSessionID(t.AgentID) {
+		return fmt.Errorf("mission_template.agent_id must be a UUID")
+	}
+	return nil
+}
+
 // resolveTemplateAttachments converts a create/patch request's
 // mission_template.attachments (wire shape: id and optional name only)
 // into converted SourceEntry values, stored on the template so a fire
@@ -224,6 +233,10 @@ func (h *scheduleAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
+	if err := validateTemplateAgentID(req.MissionTemplate); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	atts, err := h.resolveTemplateAttachments(r.Context(), req.MissionTemplate.Attachments, nil)
 	if err != nil {
 		jsonError(w, attachmentErrorStatus(err), "bad_request", err.Error())
@@ -270,6 +283,10 @@ func (h *scheduleAPI) patch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := validateLightTemplate(*req.MissionTemplate); err != nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		if err := validateTemplateAgentID(*req.MissionTemplate); err != nil {
 			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}

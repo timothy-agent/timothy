@@ -3,11 +3,14 @@ package missions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/robfig/cron/v3"
 
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -42,9 +45,10 @@ type Schedule struct {
 	// because a mission from this schedule was still active (fireOne's
 	// dedup) — cleared the moment it actually fires.
 	PendingFire bool `json:"pending_fire"`
-	// LastSkippedAt/SkipReason record the most recent skip (either
-	// "backfill_grace" or "active_mission"), cleared on any successful
-	// fire — nil/empty means the schedule's last due boundary fired
+	// LastSkippedAt/SkipReason record the most recent skip
+	// ("backfill_grace", "active_mission", "agent_missing" or
+	// "fire_error"), cleared on any successful
+	// fire; nil/empty means the schedule's last due boundary fired
 	// (or it has never been due).
 	LastSkippedAt *time.Time `json:"last_skipped_at,omitempty"`
 	SkipReason    string     `json:"skip_reason,omitempty"`
@@ -314,12 +318,56 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("scheduler: schedules rows: %w", err)
 	}
 
-	for _, sc := range schedules {
-		if err := s.fireOne(ctx, tx, sc, now); err != nil {
-			s.log.Error("scheduler: schedule firing failed", "schedule_id", sc.ID, "name", sc.Name, "error", err)
-		}
+	if err := s.fireEach(ctx, tx, schedules, now, s.fireOne); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// errAgentMissing marks a template agent_id that names no agents row.
+var errAgentMissing = errors.New("template agent does not exist")
+
+// skipReasonFor maps a failed fire to the skip_reason recorded on its
+// schedule: agent_missing for a missing agent (pre-check or the
+// missions.agent_id foreign key), fire_error for anything else.
+func skipReasonFor(err error) string {
+	if errors.Is(err, errAgentMissing) {
+		return "agent_missing"
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" && strings.Contains(pgErr.ConstraintName, "agent_id") {
+		return "agent_missing"
+	}
+	return "fire_error"
+}
+
+// fireEach runs fire for every schedule inside its own savepoint (issue
+// #815): a failure rolls back only that schedule's work and records it
+// as skipped, so one bad row cannot abort the shared transaction and
+// take every later schedule down with it (25P02).
+func (s *Scheduler) fireEach(ctx context.Context, tx pgx.Tx, schedules []Schedule, now time.Time, fire func(context.Context, pgx.Tx, Schedule, time.Time) error) error {
+	for _, sc := range schedules {
+		if _, err := tx.Exec(ctx, `SAVEPOINT schedule_fire`); err != nil {
+			return fmt.Errorf("scheduler: savepoint: %w", err)
+		}
+		if fireErr := fire(ctx, tx, sc, now); fireErr != nil {
+			if _, err := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT schedule_fire`); err != nil {
+				return fmt.Errorf("scheduler: rollback to savepoint: %w", err)
+			}
+			reason := skipReasonFor(fireErr)
+			s.log.Warn("scheduler: schedule skipped, fire failed", "schedule_id", sc.ID, "name", sc.Name, "reason", reason, "error", fireErr)
+			if err := s.markSkipped(ctx, tx, sc, now, reason); err != nil {
+				s.log.Error("scheduler: recording skip failed", "schedule_id", sc.ID, "error", err)
+				if _, err := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT schedule_fire`); err != nil {
+					return fmt.Errorf("scheduler: rollback to savepoint: %w", err)
+				}
+			}
+		}
+		if _, err := tx.Exec(ctx, `RELEASE SAVEPOINT schedule_fire`); err != nil {
+			return fmt.Errorf("scheduler: release savepoint: %w", err)
+		}
+	}
+	return nil
 }
 
 // fireOne evaluates and, if due (or carrying a pending fire from an
@@ -437,14 +485,15 @@ func (s *Scheduler) activeMissionExists(ctx context.Context, tx pgx.Tx, schedule
 	return activeCount > 0, nil
 }
 
-// markSkipped records a backfill-grace skip's reason/time — last_run
-// still advances so the next boundary computes from now, not the stale
-// anchor (same rule the pre-existing backfill-skip path always followed).
+// markSkipped records a skip's reason/time (backfill_grace, or a failed
+// fire's agent_missing/fire_error); last_run still advances so the next
+// boundary computes from now, not the stale anchor (same rule the
+// pre-existing backfill-skip path always followed).
 func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now time.Time, reason string) error {
 	if _, err := tx.Exec(ctx, `UPDATE schedules SET
 			last_run = $2, last_skipped_at = $2, skip_reason = $3, updated_at = now()
 		WHERE id = $1`, sc.ID, now, reason); err != nil {
-		return fmt.Errorf("advance last_run (backfill skip): %w", err)
+		return fmt.Errorf("advance last_run (%s skip): %w", reason, err)
 	}
 	return nil
 }
@@ -468,6 +517,9 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 // create/patch validation (schedules.go) covers the rest at schedule
 // creation time.
 func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
+	if err := checkAgentExists(ctx, tx, sc.MissionTemplate.AgentID); err != nil {
+		return err
+	}
 	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
 	// destinations is NOT NULL; entries built from the (fire-time
 	// re-checked) template destination ids. Destination (kind) is left
@@ -522,6 +574,23 @@ func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedu
 		t.Goal, name, t.Kind, t.AgentID, s.missions.maxIterationsFor(ctx, t.MaxIterations), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
 		promptOverlay, t.AutoApproveTools, true, plan, sc.ID, t.Harness, t.Environment, sourcesJSON, destinationsJSON, phase, flow, t.ReviewHarness)
 	return err
+}
+
+// checkAgentExists returns errAgentMissing when agentID is set but
+// names no agents row, so a deleted or malformed agent is caught before
+// the INSERT instead of failing it.
+func checkAgentExists(ctx context.Context, tx pgx.Tx, agentID string) error {
+	if agentID == "" {
+		return nil
+	}
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agents WHERE id::text = lower($1))`, agentID).Scan(&exists); err != nil {
+		return fmt.Errorf("check agent: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("agent %q: %w", agentID, errAgentMissing)
+	}
+	return nil
 }
 
 // filterDestinationIDs is the fire-time re-check on a template's
