@@ -189,6 +189,121 @@ func TestResolveDefaultsRouteGate(t *testing.T) {
 	}
 }
 
+// TestResolveDefaultsOrigin covers issue #817: origin_kind defaults,
+// followup derivation, unattended derivation and override, and the
+// 1800s permission timeout default for unattended missions only.
+func TestResolveDefaultsOrigin(t *testing.T) {
+	t.Parallel()
+	seconds := func(n int) *int { return &n }
+	cases := []struct {
+		name           string
+		req            CreateRequest
+		wantOrigin     string
+		wantUnattended bool
+		wantTimeout    *int
+	}{
+		{"api default", CreateRequest{}, OriginAPI, false, nil},
+		{"explicit api", CreateRequest{OriginKind: OriginAPI}, OriginAPI, false, nil},
+		{"parent derives followup", CreateRequest{ParentMissionID: "p1"}, OriginFollowup, false, nil},
+		{"explicit api with parent derives followup", CreateRequest{OriginKind: OriginAPI, ParentMissionID: "p1"}, OriginFollowup, false, nil},
+		{"chat with parent stays chat", CreateRequest{OriginKind: OriginChat, ParentMissionID: "p1"}, OriginChat, false, nil},
+		{"chat", CreateRequest{OriginKind: OriginChat}, OriginChat, false, nil},
+		{"automation derives unattended", CreateRequest{OriginKind: OriginAutomation}, OriginAutomation, true, seconds(1800)},
+		{"workflow derives unattended", CreateRequest{OriginKind: OriginWorkflow}, OriginWorkflow, true, seconds(1800)},
+		{"workflow with parent stays workflow", CreateRequest{OriginKind: OriginWorkflow, ParentMissionID: "p1"}, OriginWorkflow, true, seconds(1800)},
+		{"api overridden unattended", CreateRequest{Unattended: boolPtr(true)}, OriginAPI, true, seconds(1800)},
+		{"automation overridden attended", CreateRequest{OriginKind: OriginAutomation, Unattended: boolPtr(false)}, OriginAutomation, false, nil},
+		{"unattended keeps explicit timeout", CreateRequest{OriginKind: OriginAutomation, PermissionTimeoutSeconds: seconds(60)}, OriginAutomation, true, seconds(60)},
+		{"unattended keeps explicit zero timeout", CreateRequest{OriginKind: OriginWorkflow, PermissionTimeoutSeconds: seconds(0)}, OriginWorkflow, true, seconds(0)},
+		{"attended keeps explicit timeout", CreateRequest{PermissionTimeoutSeconds: seconds(90)}, OriginAPI, false, seconds(90)},
+		{"unknown origin passes through", CreateRequest{OriginKind: "cron"}, "cron", false, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.req.Kind = KindGeneral
+			m, err := ResolveDefaults(context.Background(), tc.req, ResolveDeps{})
+			if err != nil {
+				t.Fatalf("ResolveDefaults: %v", err)
+			}
+			if m.OriginKind != tc.wantOrigin || m.Unattended != tc.wantUnattended {
+				t.Fatalf("origin=%q unattended=%v, want %q %v", m.OriginKind, m.Unattended, tc.wantOrigin, tc.wantUnattended)
+			}
+			switch {
+			case tc.wantTimeout == nil && m.PermissionTimeoutSeconds != nil:
+				t.Fatalf("PermissionTimeoutSeconds = %d, want nil", *m.PermissionTimeoutSeconds)
+			case tc.wantTimeout != nil && (m.PermissionTimeoutSeconds == nil || *m.PermissionTimeoutSeconds != *tc.wantTimeout):
+				t.Fatalf("PermissionTimeoutSeconds = %v, want %d", m.PermissionTimeoutSeconds, *tc.wantTimeout)
+			}
+		})
+	}
+}
+
+// TestResolveDefaultsOriginValidates: a resolved mission passes
+// ValidateCreate for every known origin and fails for an unknown one.
+func TestResolveDefaultsOriginValidates(t *testing.T) {
+	t.Parallel()
+	for _, origin := range []string{"", OriginAPI, OriginAutomation, OriginWorkflow, OriginChat, OriginFollowup} {
+		m, err := ResolveDefaults(context.Background(), CreateRequest{Kind: KindGeneral, Route: "default", OriginKind: origin}, ResolveDeps{})
+		if err != nil {
+			t.Fatalf("ResolveDefaults(%q): %v", origin, err)
+		}
+		if err := ValidateCreate(context.Background(), m, ValidateDeps{}); err != nil {
+			t.Fatalf("ValidateCreate(origin %q): %v", origin, err)
+		}
+	}
+	m, _ := ResolveDefaults(context.Background(), CreateRequest{Kind: KindGeneral, Route: "default", OriginKind: "cron"}, ResolveDeps{})
+	if err := ValidateCreate(context.Background(), m, ValidateDeps{}); !errors.Is(err, ErrInvalidMission) {
+		t.Fatalf("ValidateCreate(origin cron) = %v, want ErrInvalidMission", err)
+	}
+}
+
+// TestTemplateCreateRequestResolvesAutomation: a schedule fire resolves
+// to an unattended automation mission with the 1800s timeout default.
+func TestTemplateCreateRequestResolvesAutomation(t *testing.T) {
+	t.Parallel()
+	req := TemplateCreateRequest(Schedule{ID: "s1", Name: "digest", MissionTemplate: MissionTemplate{Goal: "g", Kind: KindGeneral}}, nil)
+	if req.OriginKind != OriginAutomation {
+		t.Fatalf("OriginKind = %q, want automation", req.OriginKind)
+	}
+	m, err := ResolveDefaults(context.Background(), req, ResolveDeps{})
+	if err != nil {
+		t.Fatalf("ResolveDefaults: %v", err)
+	}
+	if m.OriginKind != OriginAutomation || !m.Unattended || m.PermissionTimeoutSeconds == nil || *m.PermissionTimeoutSeconds != 1800 {
+		t.Fatalf("origin=%q unattended=%v timeout=%v, want automation true 1800", m.OriginKind, m.Unattended, m.PermissionTimeoutSeconds)
+	}
+}
+
+// TestNoScheduleIDUnattendedInference guards issue #817: no non-test
+// source in this package infers "nobody is watching" from ScheduleID
+// or WorkflowRunID; Mission.Unattended is the one rule.
+func TestNoScheduleIDUnattendedInference(t *testing.T) {
+	t.Parallel()
+	src := os.DirFS(".")
+	files, err := fs.Glob(src, "*.go")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	// filter.ScheduleID (ListFilter) narrows a query, not an inference.
+	inference := regexp.MustCompile(`(\w+)\.(ScheduleID|WorkflowRunID)\s*!=\s*""`)
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		body, err := fs.ReadFile(src, f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for _, match := range inference.FindAllStringSubmatch(string(body), -1) {
+			if match[1] == "filter" {
+				continue
+			}
+			t.Errorf("%s: %q infers unattended from a lineage id, use Mission.Unattended", f, match[0])
+		}
+	}
+}
+
 func TestTemplateCreateRequestCarriesScheduleFields(t *testing.T) {
 	t.Parallel()
 	sc := Schedule{ID: "s1", Name: "inbox-digest", MissionTemplate: MissionTemplate{Goal: "g", Kind: KindGeneral, AutoApproveTools: false}}

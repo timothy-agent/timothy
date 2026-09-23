@@ -125,17 +125,27 @@ func TestAskUserToolExecuteParkerErrorNoPanic(t *testing.T) {
 	}
 }
 
-// TestAskBudgetFor confirms scheduler/workflow missions get zero budget
-// (nobody is watching to answer), everyone else gets askBudget.
+// TestAskBudgetFor confirms unattended missions get zero budget
+// (nobody is watching to answer) and the decision reads only the
+// Unattended column (issue #817).
 func TestAskBudgetFor(t *testing.T) {
 	t.Parallel()
-	if got := askBudgetFor(Mission{}); got != askBudget {
-		t.Fatalf("askBudgetFor(plain mission) = %d, want %d", got, askBudget)
+	cases := []struct {
+		name string
+		m    Mission
+		want int
+	}{
+		{"plain", Mission{}, askBudget},
+		{"unattended", Mission{Unattended: true}, 0},
+		{"automation origin", Mission{OriginKind: OriginAutomation, ScheduleID: "sched1", Unattended: true}, 0},
+		{"workflow origin", Mission{OriginKind: OriginWorkflow, WorkflowRunID: "wf1", Unattended: true}, 0},
+		{"schedule id overridden attended", Mission{OriginKind: OriginAutomation, ScheduleID: "sched1"}, askBudget},
+		{"workflow run overridden attended", Mission{OriginKind: OriginWorkflow, WorkflowRunID: "wf1"}, askBudget},
+		{"api overridden unattended", Mission{OriginKind: OriginAPI, Unattended: true}, 0},
 	}
-	if got := askBudgetFor(Mission{ScheduleID: "sched1"}); got != 0 {
-		t.Fatalf("askBudgetFor(scheduled) = %d, want 0", got)
-	}
-	if got := askBudgetFor(Mission{WorkflowRunID: "wf1"}); got != 0 {
-		t.Fatalf("askBudgetFor(workflow) = %d, want 0", got)
+	for _, tc := range cases {
+		if got := askBudgetFor(tc.m); got != tc.want {
+			t.Errorf("askBudgetFor(%s) = %d, want %d", tc.name, got, tc.want)
+		}
 	}
 }

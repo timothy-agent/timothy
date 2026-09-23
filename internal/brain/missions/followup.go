@@ -125,6 +125,7 @@ func (d *Driver) CreateFollowUp(ctx context.Context, parentID string, opts Follo
 		AutoApproveTools: parent.AutoApproveTools, AutoApprovePlan: parent.AutoApprovePlan, PromptOverlay: parent.PromptOverlay,
 		Harness: parent.Harness, Environment: parent.Environment,
 		Flow: parent.Flow, ParentMissionID: parent.ID, Sources: sources,
+		OriginKind: OriginFollowup,
 		// Deliberately NOT copied from parent: Destinations (push consent,
 		// destination_ids, and kb promotion are per-mission human choices,
 		// D-061, operator addresses outputs per mission), pdf sources (a

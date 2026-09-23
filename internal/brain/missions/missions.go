@@ -201,6 +201,12 @@ type Mission struct {
 	// there.
 	HasPlan    bool   `json:"has_plan,omitempty"`
 	ScheduleID string `json:"schedule_id,omitempty"`
+	// OriginKind is where the mission came from (Origin* constants),
+	// set once at create (issue #817).
+	OriginKind string `json:"origin_kind"`
+	// Unattended marks a mission nobody is watching: permission asks
+	// deny immediately and ask_user has budget 0. Set once at create.
+	Unattended bool `json:"unattended"`
 	// ParentMissionID names the terminal mission this one follows up on
 	// (api/missions.go's create) — empty for an ordinary mission.
 	ParentMissionID string `json:"parent_mission_id,omitempty"`

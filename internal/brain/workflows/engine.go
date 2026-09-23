@@ -225,6 +225,7 @@ func StepCreateRequest(step Step, goal, runID, stepName, outcome, parentMissionI
 		Sources:         []missions.SourceEntry{{Source: missions.SourceKindMission, ID: missions.ParentLineageID, MissionID: parentMissionID, Digest: outcome}},
 		WorkflowRunID:   runID, WorkflowStep: stepName,
 		AutoApprovePlan: &autoApprovePlan, AutoApproveTools: &autoApproveTools,
+		OriginKind: missions.OriginWorkflow,
 	}
 }
 

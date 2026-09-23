@@ -15,8 +15,8 @@ const askUserToolName = "ask_user"
 // askBudget caps how many ask_user calls one mission may spend,
 // enforced by the harness (Execute below), never the prompt: a
 // mission asking for every ambiguity would defeat #446's "assume and
-// declare" default. Scheduler/workflow missions get budget 0 instead
-// (see askBudgetFor): nobody is watching to answer.
+// declare" default. Unattended missions get budget 0 instead (see
+// askBudgetFor): nobody is watching to answer.
 const askBudget = 2
 
 // askUserKinds enumerates ask_user's valid kind values.
@@ -30,12 +30,11 @@ type askUserArgs struct {
 	ProposedDefault string   `json:"proposed_default"`
 }
 
-// askBudgetFor is the ask_user budget for one mission: 0 for a
-// scheduler-fired or workflow-spawned mission (same signal
-// nativeRunner already uses for Unattended: nobody is watching to
-// answer a parked question), askBudget otherwise.
+// askBudgetFor is the ask_user budget for one mission: 0 for an
+// unattended mission (nobody is watching to answer a parked
+// question), askBudget otherwise.
 func askBudgetFor(m Mission) int {
-	if m.ScheduleID != "" || m.WorkflowRunID != "" {
+	if m.Unattended {
 		return 0
 	}
 	return askBudget

@@ -281,7 +281,8 @@ func failMission(w http.ResponseWriter, err error) {
 // list serves GET /v1/missions, optionally narrowed by ?schedule_id=
 // (a recurring schedule's fire history: every mission it spawned),
 // ?q= (case-insensitive substring match on name or goal, the
-// composer #-mention mission search), and/or ?limit= (a positive
+// composer #-mention mission search), ?origin_kind= (one
+// missions.Origin* value), and/or ?limit= (a positive
 // result cap). All are ignored when empty/absent, the original
 // "every mission" behavior, and a malformed value is a 400 rather
 // than a silently-empty filter.
@@ -293,6 +294,13 @@ func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		filter.ScheduleID = v
+	}
+	if v := r.URL.Query().Get("origin_kind"); v != "" {
+		if !missions.ValidOrigin(v) {
+			jsonError(w, http.StatusBadRequest, "bad_request", "unknown origin_kind")
+			return
+		}
+		filter.OriginKind = v
 	}
 	filter.Query = r.URL.Query().Get("q")
 	if v := r.URL.Query().Get("limit"); v != "" {
@@ -560,6 +568,11 @@ type createMissionRequest struct {
 	// positive integer sets this mission's own park-forever/auto-deny
 	// bound. Never negative.
 	PermissionTimeoutSeconds *int `json:"permission_timeout_seconds"`
+	// OriginKind is "api" (default), "chat" or "followup"; automation
+	// and workflow are internal-only (issue #817).
+	OriginKind string `json:"origin_kind"`
+	// Unattended nil derives from the origin.
+	Unattended *bool `json:"unattended"`
 }
 
 // destinationEntries normalizes the request's DestinationIDs/
@@ -619,6 +632,8 @@ func (r createMissionRequest) createRequest(parentMissionID string, sources []mi
 		Light:                    r.Light,
 		Flow:                     r.Flow,
 		PermissionTimeoutSeconds: r.PermissionTimeoutSeconds,
+		OriginKind:               r.OriginKind,
+		Unattended:               r.Unattended,
 		ParentMissionID:          parentMissionID,
 		Sources:                  sources,
 		Destinations:             r.destinationEntries(),
@@ -652,6 +667,12 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Goal == "" {
 		jsonError(w, http.StatusBadRequest, "bad_request", "goal is required")
+		return
+	}
+	switch req.OriginKind {
+	case "", missions.OriginAPI, missions.OriginChat, missions.OriginFollowup:
+	default:
+		jsonError(w, http.StatusBadRequest, "bad_request", `origin_kind must be "api", "chat" or "followup"`)
 		return
 	}
 	if unknown := req.unknownDestinationRepoURLIDs(); len(unknown) > 0 {

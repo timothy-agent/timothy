@@ -894,6 +894,10 @@ export interface Mission {
   top_model?: string
   top_model_provider?: string
   schedule_id?: string
+  // origin_kind (issue #817) is where the mission came from; unattended
+  // marks a mission nobody is watching (permission asks deny at once).
+  origin_kind?: 'api' | 'automation' | 'workflow' | 'chat' | 'followup'
+  unattended?: boolean
   // parent_mission_id names the terminal mission this one follows up
   // on: absent for an ordinary mission.
   parent_mission_id?: string

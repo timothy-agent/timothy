@@ -106,4 +106,11 @@ func TestStartRunStepMissionGetsAgentDefaults(t *testing.T) {
 	if m.WorkflowStep != "build" || !m.AutoApprovePlan || m.BudgetCurrency != "USD" {
 		t.Fatalf("step mission step=%q auto_approve_plan=%v currency=%q", m.WorkflowStep, m.AutoApprovePlan, m.BudgetCurrency)
 	}
+	// Issue #817: the row records a workflow origin nobody is watching.
+	if m.OriginKind != missions.OriginWorkflow || !m.Unattended {
+		t.Fatalf("step mission origin_kind=%q unattended=%v, want workflow true", m.OriginKind, m.Unattended)
+	}
+	if m.PermissionTimeoutSeconds == nil || *m.PermissionTimeoutSeconds != 1800 {
+		t.Fatalf("step mission permission_timeout_seconds = %v, want 1800", m.PermissionTimeoutSeconds)
+	}
 }

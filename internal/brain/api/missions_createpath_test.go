@@ -44,11 +44,19 @@ func TestCreatePathGolden(t *testing.T) {
 			stepReq := workflows.StepCreateRequest(workflows.Step{Goal: goal, Kind: tc.kind, AgentID: tc.agent, PlanRoute: "strong", Light: tc.light, DestinationIDs: []string{"d1"}}, goal, "run-1", "build", "", "")
 
 			var got []missions.Mission
-			for _, req := range []missions.CreateRequest{apiReq, schedReq, stepReq} {
+			wantOrigin := []string{missions.OriginAPI, missions.OriginAutomation, missions.OriginWorkflow}
+			for i, req := range []missions.CreateRequest{apiReq, schedReq, stepReq} {
 				m, err := missions.ResolveDefaults(context.Background(), req, deps)
 				if err != nil {
 					t.Fatalf("ResolveDefaults: %v", err)
 				}
+				// Origin, unattended and the unattended permission
+				// timeout differ by caller by design (issue #817).
+				unattended := i > 0
+				if m.OriginKind != wantOrigin[i] || m.Unattended != unattended || (m.PermissionTimeoutSeconds != nil) != unattended {
+					t.Fatalf("caller %d: origin=%q unattended=%v timeout=%v, want %q %v", i, m.OriginKind, m.Unattended, m.PermissionTimeoutSeconds, wantOrigin[i], unattended)
+				}
+				m.OriginKind, m.Unattended, m.PermissionTimeoutSeconds = "", false, nil
 				m.Name, m.ScheduleID, m.WorkflowRunID, m.WorkflowStep = "", "", "", ""
 				m.AutoApprovePlan, m.AutoApproveTools = false, false
 				m.Sources, m.ParentMissionID = nil, ""

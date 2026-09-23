@@ -128,8 +128,8 @@ func TestDeleteRefusesMissionSession(t *testing.T) {
 	}
 
 	var missionID string
-	if err := db.QueryRow(ctx, `INSERT INTO missions (goal, kind, session_id)
-		VALUES ('itest-delete-guard', 'general', $1) RETURNING id`, id).Scan(&missionID); err != nil {
+	if err := db.QueryRow(ctx, `INSERT INTO missions (goal, kind, session_id, origin_kind)
+		VALUES ('itest-delete-guard', 'general', $1, 'api') RETURNING id`, id).Scan(&missionID); err != nil {
 		t.Fatalf("seed mission: %v", err)
 	}
 	t.Cleanup(func() {
@@ -340,7 +340,7 @@ func TestListExcludesMissionSessions(t *testing.T) {
 	}
 	var missionID string
 	if err := db.QueryRow(ctx,
-		"INSERT INTO missions (goal, kind, session_id) VALUES ($1, 'general', $2) RETURNING id",
+		"INSERT INTO missions (goal, kind, session_id, origin_kind) VALUES ($1, 'general', $2, 'api') RETURNING id",
 		marker, missionSessionID).Scan(&missionID); err != nil {
 		t.Fatalf("insert mission: %v", err)
 	}

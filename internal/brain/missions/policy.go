@@ -16,6 +16,30 @@ const (
 	SessionPolicyFresh  = "fresh"
 )
 
+// Origin* are Mission.OriginKind's values (issue #817): where the
+// mission came from.
+const (
+	OriginAPI        = "api"
+	OriginAutomation = "automation"
+	OriginWorkflow   = "workflow"
+	OriginChat       = "chat"
+	OriginFollowup   = "followup"
+)
+
+// ValidOrigin reports whether raw names one of the Origin* values.
+func ValidOrigin(raw string) bool {
+	switch raw {
+	case OriginAPI, OriginAutomation, OriginWorkflow, OriginChat, OriginFollowup:
+		return true
+	default:
+		return false
+	}
+}
+
+// defaultPermissionTimeoutUnattended is the parked-permission timeout
+// an unattended mission gets when the request sets none (issue #817).
+const defaultPermissionTimeoutUnattended = 1800
+
 // Flow names the phase set a mission runs, chosen once at create time
 // and snapshotted onto the row (D-090, issue #459): never model-
 // mutable, no tool or sentinel arg can change it.

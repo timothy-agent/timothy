@@ -839,7 +839,17 @@ CREATE TABLE IF NOT EXISTS missions (
     -- operator's own plan, so the plan turn transcribes it into units
     -- instead of designing one from scratch. false (default) is
     -- today's behavior unchanged.
-    has_plan              boolean NOT NULL DEFAULT false
+    has_plan              boolean NOT NULL DEFAULT false,
+    -- origin_kind records where the mission came from (issue #817):
+    -- 'api' (HTTP create), 'automation' (schedule fire), 'workflow'
+    -- (workflow step), 'chat', 'followup' (parent_mission_id set).
+    origin_kind           text NOT NULL
+        CHECK (origin_kind IN ('api', 'automation', 'workflow', 'chat', 'followup')),
+    -- unattended marks a mission nobody is watching: permission asks
+    -- deny immediately and ask_user has budget 0. Derived from
+    -- origin_kind at create (true for automation/workflow) unless the
+    -- request overrides it.
+    unattended            boolean NOT NULL DEFAULT false
 );
 
 CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);

@@ -53,6 +53,11 @@ type CreateRequest struct {
 	ScheduleID    string
 	WorkflowRunID string
 	WorkflowStep  string
+
+	// OriginKind "" resolves to OriginAPI, or OriginFollowup when
+	// ParentMissionID is set. Unattended nil derives from the origin.
+	OriginKind string
+	Unattended *bool
 }
 
 // ResolveDeps are the lookups ResolveDefaults needs. Every field is
@@ -90,7 +95,8 @@ func (e *RouteUnusableError) Error() string {
 // empty), agent route/review_route/prompt overlay, harness precedence
 // (ResolveHarness), default or coding route, review_route falling back
 // to plan_route, auto-approve defaults, budget currency, flow, max
-// iterations, then the D-100 usable-route gate. ValidateCreate (run by
+// iterations, origin/unattended and the unattended permission timeout,
+// then the D-100 usable-route gate. ValidateCreate (run by
 // Driver.Create) stays the shape check on the result.
 func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (Mission, error) {
 	kind := req.Kind
@@ -176,6 +182,22 @@ func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (
 	if maxIterations <= 0 {
 		maxIterations = fallbackMaxIterations
 	}
+	origin := req.OriginKind
+	if origin == "" {
+		origin = OriginAPI
+	}
+	if origin == OriginAPI && req.ParentMissionID != "" {
+		origin = OriginFollowup
+	}
+	unattended := origin == OriginAutomation || origin == OriginWorkflow
+	if req.Unattended != nil {
+		unattended = *req.Unattended
+	}
+	permissionTimeout := req.PermissionTimeoutSeconds
+	if permissionTimeout == nil && unattended {
+		seconds := defaultPermissionTimeoutUnattended
+		permissionTimeout = &seconds
+	}
 
 	m := Mission{
 		Goal: req.Goal, Name: req.Name, Kind: kind, AgentID: req.AgentID,
@@ -190,10 +212,12 @@ func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (
 		Sources:                  req.Sources,
 		Destinations:             req.Destinations,
 		Flow:                     flow,
-		PermissionTimeoutSeconds: req.PermissionTimeoutSeconds,
+		PermissionTimeoutSeconds: permissionTimeout,
 		ScheduleID:               req.ScheduleID,
 		WorkflowRunID:            req.WorkflowRunID,
 		WorkflowStep:             req.WorkflowStep,
+		OriginKind:               origin,
+		Unattended:               unattended,
 	}
 	// Route gate (D-100, issue #536): every phase axis this flow runs
 	// must have a usable chain entry, else the first turn parks on the

@@ -213,6 +213,27 @@ func TestStartRunForcesAutoApprovePlanTrue(t *testing.T) {
 	}
 }
 
+// TestStartRunSpawnsUnattendedWorkflowMission covers issue #817: a
+// workflow-spawned mission records origin_kind=workflow and is
+// unattended, so permission asks deny instead of parking forever.
+func TestStartRunSpawnsUnattendedWorkflowMission(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	if _, err := e.StartRun(context.Background(), "wf1", map[string]string{"K": "v"}); err != nil {
+		t.Fatalf("StartRun() = %v", err)
+	}
+	m := spawner.last()
+	if m.OriginKind != missions.OriginWorkflow || !m.Unattended {
+		t.Fatalf("spawned mission origin_kind=%q unattended=%v, want workflow true", m.OriginKind, m.Unattended)
+	}
+	if m.PermissionTimeoutSeconds == nil || *m.PermissionTimeoutSeconds != 1800 {
+		t.Fatalf("spawned mission permission_timeout_seconds = %v, want 1800", m.PermissionTimeoutSeconds)
+	}
+}
+
 func TestStartRunRefusesDisabledWorkflow(t *testing.T) {
 	store := newFakeEngineStore()
 	store.putWorkflow("wf1", coderQADefinition(), false)

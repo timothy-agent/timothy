@@ -1996,36 +1996,69 @@ func TestMissionToolsSandboxCapsOutput(t *testing.T) {
 	}
 }
 
-// TestRunWorkerUnattendedFollowsScheduleID is the D-039 wiring check:
-// a schedule-fired mission (ScheduleID set) has nobody watching its
-// turns, so the loop.Request it hands to the agent must say so.
-func TestRunWorkerUnattendedFollowsScheduleID(t *testing.T) {
-	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
-	}}
-	r := newTestRunner(agent)
-	m := Mission{ID: "m1", Route: "default", ScheduleID: "sched-1"}
-	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
+// TestRunnerUnattendedFollowsColumn is the D-039 wiring check (issue
+// #817): every phase's loop.Request carries Mission.Unattended, never
+// an inference from ScheduleID or WorkflowRunID.
+func TestRunnerUnattendedFollowsColumn(t *testing.T) {
+	phases := map[string]struct {
+		batch []stream.StreamEvent
+		run   func(r *nativeRunner, m Mission) error
+	}{
+		"worker": {
+			batch: []stream.StreamEvent{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+			run: func(r *nativeRunner, m Mission) error {
+				_, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"})
+				return err
+			},
+		},
+		"discover": {
+			batch: []stream.StreamEvent{toolEndEvent(discoverNotesToolName, `{"findings":"none"}`)},
+			run: func(r *nativeRunner, m Mission) error {
+				_, _, _, err := r.DiscoverSession(context.Background(), m)
+				return err
+			},
+		},
+		"plan": {
+			batch: []stream.StreamEvent{toolEndEvent(planToolName, `{"units":[{"title":"u","artifacts":["out.md"],"criteria":["c1","c2"],"check_cmd":"go test ./..."}]}`)},
+			run: func(r *nativeRunner, m Mission) error {
+				_, err := r.PlanSession(context.Background(), m, "")
+				return err
+			},
+		},
+		"review": {
+			batch: []stream.StreamEvent{toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
+			run: func(r *nativeRunner, m Mission) error {
+				_, err := r.RunReview(context.Background(), m, ReviewPacket{Goal: "goal", Diff: "diff"})
+				return err
+			},
+		},
 	}
-	if !agent.requests[0].Unattended {
-		t.Fatal("worker request Unattended = false, want true for a schedule-fired mission")
+	cases := []struct {
+		name    string
+		mission Mission
+		want    bool
+	}{
+		{"unattended column", Mission{Unattended: true}, true},
+		{"attended plain", Mission{}, false},
+		{"schedule id without column", Mission{ScheduleID: "sched-1"}, false},
+		{"workflow run without column", Mission{WorkflowRunID: "run-1"}, false},
+		{"unattended with origin api", Mission{OriginKind: OriginAPI, Unattended: true}, true},
 	}
-}
-
-// TestRunWorkerAttendedWithoutScheduleID is the other half: a
-// UI-created mission (no ScheduleID) keeps the park-and-answer flow.
-func TestRunWorkerAttendedWithoutScheduleID(t *testing.T) {
-	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
-	}}
-	r := newTestRunner(agent)
-	m := Mission{ID: "m1", Route: "default"}
-	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
-		t.Fatalf("RunWorker: %v", err)
-	}
-	if agent.requests[0].Unattended {
-		t.Fatal("worker request Unattended = true, want false without a ScheduleID")
+	for phase, p := range phases {
+		for _, tc := range cases {
+			t.Run(phase+"/"+tc.name, func(t *testing.T) {
+				agent := &scriptedAgent{batches: [][]stream.StreamEvent{p.batch}}
+				r := newTestRunner(agent)
+				m := tc.mission
+				m.ID, m.Route, m.ReviewRoute, m.Goal = "m1", "default", "default", "test"
+				if err := p.run(r, m); err != nil {
+					t.Fatalf("%s: %v", phase, err)
+				}
+				if got := agent.requests[0].Unattended; got != tc.want {
+					t.Fatalf("%s request Unattended = %v, want %v", phase, got, tc.want)
+				}
+			})
+		}
 	}
 }
 

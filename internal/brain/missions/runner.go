@@ -305,7 +305,7 @@ func (r *nativeRunner) SetAskParker(p askUserParker) {
 
 // askUserTool builds this turn's ask_user ExtraTool, or nil when no
 // parker is wired or the mission's budget is already exhausted (0 for
-// scheduler/workflow missions per askBudgetFor, or spent for anyone
+// unattended missions per askBudgetFor, or spent for anyone
 // else): an exhausted/disabled ask_user is simply not offered, rather
 // than offered and always erroring.
 func (r *nativeRunner) askUserTool(m Mission, phase Phase) *tools.Tool {
@@ -515,8 +515,8 @@ func countOperatorNotes(notes []ProgressNote) int {
 // connector's enabled state edited mid-mission applies on the very
 // next turn. Being offered a read tool here is separate from being
 // pre-approved to call it without asking: these tools are not in
-// tools.Permissions' exempt set (same as chat), so an unattended,
-// schedule-fired mission (Unattended: true, D-039) still needs a
+// tools.Permissions' exempt set (same as chat), so an unattended
+// mission (Unattended: true, D-039) still needs a
 // standing grant or the call fails fast instead of parking. That grant
 // already exists: driver.go's grantSessionDefaults seeds one from the
 // mission's agent's ApprovalAllowlist (a separate field from Tools) at
@@ -1308,10 +1308,10 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		Messages:     []provider.Message{{Role: "user", Content: user}},
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
-		// Schedule-fired missions have nobody watching: asks fail fast
-		// with feedback instead of parking (D-039). UI-created missions
-		// (ScheduleID empty) keep the park-and-answer flow.
-		Unattended: m.ScheduleID != "",
+		// Unattended missions have nobody watching: asks fail fast
+		// with feedback instead of parking (D-039). Attended missions
+		// keep the park-and-answer flow.
+		Unattended: m.Unattended,
 		// D-076/D-089: worker turns get mid-run steering, same mechanism
 		// now shared by discover/plan/prove turns (issue #458).
 		Steering: r.steeringFor(m.ID, packet.Progress),
@@ -1486,7 +1486,7 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 		Messages:     []provider.Message{{Role: "user", Content: user}},
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
-		Unattended:   m.ScheduleID != "",
+		Unattended:   m.Unattended,
 		// D-089: discover turns get the same mid-turn steering as worker
 		// turns (issue #458): a note posted while discover is in flight
 		// reaches this turn instead of only the next phase's prompt.
@@ -1618,7 +1618,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 		Messages:     messages,
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
-		Unattended:   m.ScheduleID != "",
+		Unattended:   m.Unattended,
 		// D-089: same mid-turn steering as discover/plan/worker (issue #458).
 		Steering: r.steeringFor(m.ID, m.Progress),
 		// D-093: the reviewer judges evidence the harness already
@@ -1955,7 +1955,7 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 		ToolAllow:    planToolAllow(skillsHint),
 		ExtraTools:   extra,
 		BuiltinsOnly: true,
-		Unattended:   m.ScheduleID != "",
+		Unattended:   m.Unattended,
 		// D-089: same mid-turn steering as discover/worker (issue #458).
 		Steering: r.steeringFor(m.ID, m.Progress),
 	}

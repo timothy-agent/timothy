@@ -76,6 +76,9 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	default:
 		return fmt.Errorf(`%w: kind must be "coding" or "general"`, ErrInvalidMission)
 	}
+	if !ValidOrigin(m.OriginKind) {
+		return fmt.Errorf("%w: unknown origin_kind %q", ErrInvalidMission, m.OriginKind)
+	}
 	if !ValidFlow(string(m.Flow)) {
 		return fmt.Errorf("%w: unknown flow %q", ErrInvalidMission, m.Flow)
 	}

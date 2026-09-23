@@ -88,6 +88,14 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	if code := call("/v1/missions?limit=nope"); code != 400 {
 		t.Fatalf("non-numeric limit = %d, want 400", code)
 	}
+	if code := call("/v1/missions?origin_kind=cron"); code != 400 {
+		t.Fatalf("unknown origin_kind = %d, want 400", code)
+	}
+	for _, origin := range []string{"api", "automation", "workflow", "chat", "followup"} {
+		if code := call("/v1/missions?origin_kind=" + origin); code != 500 {
+			t.Fatalf("origin_kind=%s against a degraded store = %d, want 500 (passed validation)", origin, code)
+		}
+	}
 	// Valid shapes pass validation and reach the (degraded) store,
 	// which then 500s — proving they were NOT rejected as bad input.
 	if code := call("/v1/missions"); code != 500 {
@@ -1288,6 +1296,106 @@ func TestMissionsCreateHasPlan(t *testing.T) {
 	}
 	if code, body := call(`{"goal":"do something","kind":"general"}`); code != http.StatusBadRequest || strings.Contains(body, "has_plan") {
 		t.Fatalf("create with has_plan omitted = %d %s, want 400 from the degraded driver, not has_plan validation", code, body)
+	}
+}
+
+// TestMissionsCreateValidatesOriginKind covers issue #817: the wire
+// accepts origin_kind api, chat or followup (or none); automation and
+// workflow are internal-only and 400, as does an unknown value.
+func TestMissionsCreateValidatesOriginKind(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver.SetValidateDeps(missions.ValidateDeps{})
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+
+	call := func(body string) (int, string) {
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		return w.Code, w.Body.String()
+	}
+
+	for _, origin := range []string{"automation", "workflow", "cron"} {
+		code, body := call(`{"goal":"g","kind":"general","origin_kind":"` + origin + `"}`)
+		if code != http.StatusBadRequest || !strings.Contains(body, "origin_kind must be") {
+			t.Fatalf("origin_kind=%s = %d %s, want 400 from origin_kind validation", origin, code, body)
+		}
+	}
+	// Accepted values pass validation and fail downstream on the
+	// degraded store instead.
+	for _, body := range []string{
+		`{"goal":"g","kind":"general"}`,
+		`{"goal":"g","kind":"general","origin_kind":"api"}`,
+		`{"goal":"g","kind":"general","origin_kind":"chat","unattended":true}`,
+		`{"goal":"g","kind":"general","origin_kind":"followup","unattended":false}`,
+	} {
+		if code, resp := call(body); code != http.StatusBadRequest || strings.Contains(resp, "origin_kind") {
+			t.Fatalf("create %s = %d %s, want 400 from the degraded driver, not origin_kind validation", body, code, resp)
+		}
+	}
+}
+
+// TestCreateMissionRequestMapsOrigin pins the wire decode of
+// origin_kind and unattended onto missions.CreateRequest: an omitted
+// unattended stays nil so ResolveDefaults derives it from the origin.
+func TestCreateMissionRequestMapsOrigin(t *testing.T) {
+	t.Parallel()
+	yes, no := true, false
+	tests := []struct {
+		body           string
+		wantOrigin     string
+		wantUnattended *bool
+	}{
+		{`{"goal":"g"}`, "", nil},
+		{`{"goal":"g","origin_kind":"chat"}`, "chat", nil},
+		{`{"goal":"g","unattended":true}`, "", &yes},
+		{`{"goal":"g","origin_kind":"followup","unattended":false}`, "followup", &no},
+	}
+	for _, tc := range tests {
+		var req createMissionRequest
+		if err := json.Unmarshal([]byte(tc.body), &req); err != nil {
+			t.Fatalf("decode %s: %v", tc.body, err)
+		}
+		cr := req.createRequest("", nil)
+		if cr.OriginKind != tc.wantOrigin {
+			t.Fatalf("%s: OriginKind = %q, want %q", tc.body, cr.OriginKind, tc.wantOrigin)
+		}
+		switch {
+		case tc.wantUnattended == nil && cr.Unattended != nil:
+			t.Fatalf("%s: Unattended = %v, want nil", tc.body, *cr.Unattended)
+		case tc.wantUnattended != nil && (cr.Unattended == nil || *cr.Unattended != *tc.wantUnattended):
+			t.Fatalf("%s: Unattended = %v, want %v", tc.body, cr.Unattended, *tc.wantUnattended)
+		}
+	}
+}
+
+// TestMissionResponseIncludesOrigin: the mission JSON always carries
+// origin_kind and unattended, false included.
+func TestMissionResponseIncludesOrigin(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{log: discard()}
+	out := h.decorateTopModels(context.Background(), []missions.Mission{
+		{ID: "m1", OriginKind: missions.OriginWorkflow, Unattended: true},
+		{ID: "m2", OriginKind: missions.OriginAPI},
+	})
+	raw, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got[0]["origin_kind"] != "workflow" || got[0]["unattended"] != true {
+		t.Fatalf("m1 = origin_kind %v unattended %v, want workflow true", got[0]["origin_kind"], got[0]["unattended"])
+	}
+	if got[1]["origin_kind"] != "api" || got[1]["unattended"] != false {
+		t.Fatalf("m2 = origin_kind %v unattended %v, want api false", got[1]["origin_kind"], got[1]["unattended"])
 	}
 }
 

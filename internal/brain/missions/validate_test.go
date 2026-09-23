@@ -11,7 +11,7 @@ import (
 // each table test case mutates a copy of this to isolate the one rule
 // under test.
 func baseValidMission() Mission {
-	return Mission{Kind: "general", Route: "default", Flow: FlowFull}
+	return Mission{Kind: "general", Route: "default", Flow: FlowFull, OriginKind: OriginAPI}
 }
 
 // withGitHubSource returns m with its "github" Sources entry set to
@@ -47,6 +47,30 @@ func TestValidateCreate(t *testing.T) {
 			m.Kind = ""
 			return m
 		}, ValidateDeps{}, true},
+		{"empty origin_kind", func(m Mission) Mission {
+			m.OriginKind = ""
+			return m
+		}, ValidateDeps{}, true},
+		{"unknown origin_kind", func(m Mission) Mission {
+			m.OriginKind = "cron"
+			return m
+		}, ValidateDeps{}, true},
+		{"origin_kind automation", func(m Mission) Mission {
+			m.OriginKind = OriginAutomation
+			return m
+		}, ValidateDeps{}, false},
+		{"origin_kind workflow", func(m Mission) Mission {
+			m.OriginKind = OriginWorkflow
+			return m
+		}, ValidateDeps{}, false},
+		{"origin_kind chat", func(m Mission) Mission {
+			m.OriginKind = OriginChat
+			return m
+		}, ValidateDeps{}, false},
+		{"origin_kind followup", func(m Mission) Mission {
+			m.OriginKind = OriginFollowup
+			return m
+		}, ValidateDeps{}, false},
 		{"flow light on coding", func(m Mission) Mission {
 			m.Kind, m.Flow = "coding", FlowLight
 			return m

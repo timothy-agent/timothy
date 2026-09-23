@@ -346,8 +346,8 @@ type Request struct {
 	// shared registry other callers read.
 	ExtraTools []*tools.Tool
 
-	// Unattended marks a turn nobody is watching (schedule-fired
-	// missions): a permission ask resolves as immediate denial instead
+	// Unattended marks a turn nobody is watching (a mission with
+	// Unattended set): a permission ask resolves as immediate denial instead
 	// of parking on a human prompt for the full timeout (D-039).
 	Unattended bool
 

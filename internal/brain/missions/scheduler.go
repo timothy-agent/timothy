@@ -574,6 +574,7 @@ func TemplateCreateRequest(sc Schedule, destinationIDs []string) CreateRequest {
 		Sources:      t.Attachments,
 		Destinations: destinations,
 		ScheduleID:   sc.ID,
+		OriginKind:   OriginAutomation,
 	}
 }
 
