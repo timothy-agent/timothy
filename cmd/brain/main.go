@@ -27,6 +27,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
@@ -471,7 +472,19 @@ func main() {
 		workflowStore = workflows.NewStore(app.DB, app.Log)
 		workflowEngine = workflows.NewEngine(workflowStore, missionDriver, missionStore, app.Log)
 		workflowEngine.SetResolveDeps(missionResolve)
-		missionDriver.SetOnTerminal(workflowEngine.OnMissionTerminal)
+	}
+	// D-117: terminal mission effects run as events consumers, drained
+	// from the events rows ApplyTransition commits. The first drain runs
+	// at boot, so events a crash left unprocessed are consumed then.
+	if missionDriver != nil {
+		consumers := []events.Consumer{missions.NewMemoryConsumer(missionDriver)}
+		if workflowEngine != nil {
+			consumers = append(consumers, workflowEngine)
+		}
+		drainer := events.NewDrainer(events.NewStore(app.DB), consumers,
+			app.Metrics.NewCounterVec("events_processed_total", "Inbox events handled by kind and result.", "kind", "result"), app.Log)
+		missionDriver.SetEventsKick(drainer.Kick)
+		go drainer.Run(ctx)
 	}
 	// deliver: chat-facing ad-hoc send to one operator-configured
 	// destination. Registered here, not inside buildAgent, for the same

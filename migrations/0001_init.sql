@@ -874,6 +874,27 @@ CREATE TABLE IF NOT EXISTS mission_events (
     PRIMARY KEY (mission_id, seq)
 );
 
+-- Durable inbox for side effects that must survive a crash (D-117,
+-- internal/brain/events): a producer inserts a row in the same
+-- transaction as the state change, the drainer runs its consumers
+-- after commit. source is 'mission' today; kind is mission.done or
+-- mission.failed. A row with processed_at and last_error set after
+-- attempts reached the cap is dead-lettered.
+CREATE TABLE IF NOT EXISTS events (
+    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    source        text NOT NULL,
+    kind          text NOT NULL,
+    dedup_key     text NOT NULL,
+    payload       jsonb NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    processed_at  timestamptz,
+    attempts      int NOT NULL DEFAULT 0,
+    last_error    text,
+    UNIQUE (source, dedup_key)
+);
+
+CREATE INDEX IF NOT EXISTS events_unprocessed_idx ON events (id) WHERE processed_at IS NULL;
+
 -- Durable notification inbox (internal/brain/missions/notify.go):
 -- always written for actionable transitions regardless of whether the
 -- best-effort webhook fan-out succeeds.

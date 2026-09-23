@@ -87,11 +87,12 @@ func sweep(ctx context.Context, db execer) {
 
 // sweepMissionsSQL deletes missions matching filter along with the
 // hidden sessions they provisioned, which would otherwise linger as
-// empty chats in the session list.
+// empty chats in the session list, and their events inbox rows.
 func sweepMissionsSQL(filter string) string {
 	return `WITH gone AS (
-		DELETE FROM missions WHERE ` + filter + ` RETURNING session_id
-	), ids AS (SELECT session_id FROM gone WHERE session_id IS NOT NULL),
+		DELETE FROM missions WHERE ` + filter + ` RETURNING id, session_id
+	), ev AS (DELETE FROM events WHERE source = 'mission' AND dedup_key IN (SELECT id::text FROM gone)),
+	ids AS (SELECT session_id FROM gone WHERE session_id IS NOT NULL),
 	g AS (DELETE FROM session_grants WHERE session_id IN (SELECT session_id FROM ids)),
 	a AS (DELETE FROM tool_audit WHERE session_id IN (SELECT session_id FROM ids)),
 	o AS (DELETE FROM tool_outputs WHERE session_id IN (SELECT session_id FROM ids)),

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
@@ -106,6 +108,12 @@ func (f *fakeEngineStore) CountEdgeFirings(ctx context.Context, runID, from, on,
 	return n, nil
 }
 
+func (f *fakeEngineStore) RunEvents(ctx context.Context, runID string) ([]RunEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]RunEvent(nil), f.events[runID]...), nil
+}
+
 func (f *fakeEngineStore) eventKinds(runID string) []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -136,6 +144,17 @@ func (f *fakeSpawner) Create(ctx context.Context, m missions.Mission) (string, e
 
 func (f *fakeSpawner) Events(ctx context.Context, id string) ([]missions.Event, error) {
 	return nil, nil
+}
+
+func (f *fakeSpawner) Get(ctx context.Context, id string) (missions.Mission, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.missions {
+		if m.ID == id {
+			return m, nil
+		}
+	}
+	return missions.Mission{}, missions.ErrNotFound
 }
 
 func (f *fakeSpawner) last() missions.Mission {
@@ -304,7 +323,9 @@ func TestOnMissionTerminalAdvancesToNextStep(t *testing.T) {
 	coderMission.ID = "coder-mission"
 	coderMission.Phase = missions.PhaseDone
 
-	e.OnMissionTerminal(context.Background(), coderMission)
+	if err := e.OnMissionTerminal(context.Background(), coderMission); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
 
 	if spawner.count() != 2 {
 		t.Fatalf("spawned missions = %d, want 2 (coder + qa)", spawner.count())
@@ -331,7 +352,9 @@ func TestOnMissionTerminalEndsRunOnToEnd(t *testing.T) {
 	store.runs[runID] = run
 
 	qaMission := missions.Mission{ID: "qa-mission", WorkflowRunID: runID, WorkflowStep: "qa", Phase: missions.PhaseDone}
-	e.OnMissionTerminal(context.Background(), qaMission)
+	if err := e.OnMissionTerminal(context.Background(), qaMission); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
 
 	run, _ = store.GetRun(context.Background(), runID)
 	if run.Status != "done" {
@@ -350,7 +373,9 @@ func TestOnMissionTerminalPausesOnNoMatchingEdge(t *testing.T) {
 	coderMission.ID = "coder-mission"
 	coderMission.Phase = missions.PhaseFailed // no edge wired for coder+mission.failed
 
-	e.OnMissionTerminal(context.Background(), coderMission)
+	if err := e.OnMissionTerminal(context.Background(), coderMission); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
 
 	run, _ := store.GetRun(context.Background(), runID)
 	if run.Status != "paused" {
@@ -382,7 +407,9 @@ func TestOnMissionTerminalCapExceededFailsRun(t *testing.T) {
 	coder1 := spawner.last()
 	coder1.ID = "coder-1"
 	coder1.Phase = missions.PhaseDone
-	e.OnMissionTerminal(context.Background(), coder1)
+	if err := e.OnMissionTerminal(context.Background(), coder1); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
 
 	// Manually rewind the run back to "coder" to simulate a second
 	// coder mission finishing and trying to take the SAME edge again —
@@ -392,7 +419,9 @@ func TestOnMissionTerminalCapExceededFailsRun(t *testing.T) {
 	store.runs[runID] = run
 
 	coder2 := missions.Mission{ID: "coder-2", WorkflowRunID: runID, WorkflowStep: "coder", Phase: missions.PhaseDone}
-	e.OnMissionTerminal(context.Background(), coder2)
+	if err := e.OnMissionTerminal(context.Background(), coder2); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
 
 	run, _ = store.GetRun(context.Background(), runID)
 	if run.Status != "failed" {
@@ -423,7 +452,9 @@ func TestOnMissionTerminalIgnoresNonRunningRun(t *testing.T) {
 	coderMission := spawner.last()
 	coderMission.ID = "coder-mission"
 	coderMission.Phase = missions.PhaseDone
-	e.OnMissionTerminal(context.Background(), coderMission)
+	if err := e.OnMissionTerminal(context.Background(), coderMission); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
 
 	if spawner.count() != 1 {
 		t.Fatalf("spawned missions = %d, want 1 (no further spawn on a non-running run)", spawner.count())
@@ -451,7 +482,9 @@ func TestOnMissionTerminalRecordsUnknownPlaceholderWarning(t *testing.T) {
 	coderMission := spawner.last()
 	coderMission.ID = "coder-mission"
 	coderMission.Phase = missions.PhaseDone
-	e.OnMissionTerminal(context.Background(), coderMission)
+	if err := e.OnMissionTerminal(context.Background(), coderMission); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
 
 	found := false
 	for _, k := range store.eventKinds(runID) {
@@ -528,5 +561,154 @@ func TestStartRunPausesOnUnusableRoute(t *testing.T) {
 	}
 	if run, _ := store.GetRun(context.Background(), runID); run.Status != "paused" {
 		t.Fatalf("run status = %q, want paused", run.Status)
+	}
+}
+
+// TestOnMissionTerminalRedeliveryIsNoOp covers D-117's at-least-once
+// delivery: the same terminal mission handled twice advances the run
+// once.
+func TestOnMissionTerminalRedeliveryIsNoOp(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	runID, _ := e.StartRun(context.Background(), "wf1", nil)
+	coderMission := spawner.last()
+	coderMission.Phase = missions.PhaseDone
+	for range 2 {
+		if err := e.OnMissionTerminal(context.Background(), coderMission); err != nil {
+			t.Fatalf("OnMissionTerminal: %v", err)
+		}
+	}
+	if spawner.count() != 2 {
+		t.Fatalf("spawned missions = %d, want 2 (coder + one qa)", spawner.count())
+	}
+	run, _ := store.GetRun(context.Background(), runID)
+	if run.CurrentStep != "qa" {
+		t.Fatalf("run step = %s, want qa", run.CurrentStep)
+	}
+}
+
+// TestOnMissionTerminalSelfLoopRedeliveryIsNoOp covers a step whose
+// edge loops back to itself: current step still matches, so only the
+// edge.taken record for the mission stops a second spawn.
+func TestOnMissionTerminalSelfLoopRedeliveryIsNoOp(t *testing.T) {
+	def := Definition{
+		Entry: "coder",
+		Steps: map[string]Step{"coder": {Goal: "write code", Kind: "coding"}},
+		Edges: []Edge{{From: "coder", On: "mission.done", To: "coder", MaxIterations: 5}},
+	}
+	_ = def.Validate()
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", def, true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	if _, err := e.StartRun(context.Background(), "wf1", nil); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	first := spawner.last()
+	first.Phase = missions.PhaseDone
+	for range 2 {
+		if err := e.OnMissionTerminal(context.Background(), first); err != nil {
+			t.Fatalf("OnMissionTerminal: %v", err)
+		}
+	}
+	if spawner.count() != 2 {
+		t.Fatalf("spawned missions = %d, want 2", spawner.count())
+	}
+}
+
+func TestOnMissionTerminalIgnoresMissionFromAnotherStep(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	runID, _ := e.StartRun(context.Background(), "wf1", nil)
+	stale := missions.Mission{ID: "qa-old", WorkflowRunID: runID, WorkflowStep: "qa", Phase: missions.PhaseDone}
+	if err := e.OnMissionTerminal(context.Background(), stale); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
+	run, _ := store.GetRun(context.Background(), runID)
+	if run.Status != "running" || run.CurrentStep != "coder" || spawner.count() != 1 {
+		t.Fatalf("run = %+v, spawned = %d, want untouched", run, spawner.count())
+	}
+}
+
+func TestOnMissionTerminalReturnsLoadError(t *testing.T) {
+	e := testEngine(newFakeEngineStore(), &fakeSpawner{})
+	err := e.OnMissionTerminal(context.Background(), missions.Mission{ID: "m", WorkflowRunID: "missing", Phase: missions.PhaseDone})
+	if err == nil {
+		t.Fatal("OnMissionTerminal on an unknown run = nil error, want error so the drainer retries")
+	}
+}
+
+func terminalEvent(t *testing.T, p events.MissionPayload) events.Event {
+	t.Helper()
+	ev, err := events.MissionTerminal(p)
+	if err != nil {
+		t.Fatalf("MissionTerminal: %v", err)
+	}
+	return ev
+}
+
+func TestEngineHandle(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+	runID, _ := e.StartRun(context.Background(), "wf1", nil)
+	coder := spawner.last()
+	// The fake spawner hands back what it stored; mark it terminal there.
+	spawner.mu.Lock()
+	spawner.missions[0].Phase = missions.PhaseDone
+	spawner.mu.Unlock()
+
+	if got := strings.Join(e.Kinds(), ","); got != "mission.done,mission.failed" {
+		t.Fatalf("Kinds() = %s", got)
+	}
+
+	// No workflow run: nothing loads, nothing spawns.
+	if err := e.Handle(context.Background(), nil, terminalEvent(t, events.MissionPayload{MissionID: "other", Phase: "done"})); err != nil {
+		t.Fatalf("Handle without run: %v", err)
+	}
+	// Unknown mission: error, retried by the drainer.
+	if err := e.Handle(context.Background(), nil, terminalEvent(t, events.MissionPayload{MissionID: "ghost", Phase: "done", WorkflowRunID: runID})); err == nil {
+		t.Fatal("Handle for an unknown mission = nil error, want error")
+	}
+	if spawner.count() != 1 {
+		t.Fatalf("spawned = %d, want 1 before the real event", spawner.count())
+	}
+
+	if err := e.Handle(context.Background(), nil, terminalEvent(t, events.MissionPayload{MissionID: coder.ID, Phase: "done", WorkflowRunID: runID})); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	run, _ := store.GetRun(context.Background(), runID)
+	if run.CurrentStep != "qa" || spawner.count() != 2 {
+		t.Fatalf("run = %+v, spawned = %d, want advanced to qa", run, spawner.count())
+	}
+}
+
+func TestEdgeTakenFor(t *testing.T) {
+	evs := []RunEvent{
+		{Kind: "run.warning", Payload: json.RawMessage(`{"mission_id":"m1"}`)},
+		{Kind: "edge.taken", Payload: json.RawMessage(`{"mission_id":"m2"}`)},
+		{Kind: "edge.taken", Payload: json.RawMessage(`not json`)},
+	}
+	tests := []struct {
+		id   string
+		want bool
+	}{
+		{"m1", false},
+		{"m2", true},
+		{"m3", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := edgeTakenFor(evs, tt.id); got != tt.want {
+			t.Fatalf("edgeTakenFor(%q) = %v, want %v", tt.id, got, tt.want)
+		}
 	}
 }

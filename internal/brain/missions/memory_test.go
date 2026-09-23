@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 )
 
 func TestOutcomeDigest(t *testing.T) {
@@ -165,6 +167,36 @@ func waitForCalls(t *testing.T, r *recordingExtract, want int) {
 	t.Fatalf("extraction calls = %d, want %d", r.count(), want)
 }
 
+// consumeTerminal delivers the mission's terminal event to the memory
+// consumer, the way the events drainer does after commit (D-117).
+func consumeTerminal(t *testing.T, d *Driver, id string, phase Phase, reason string) error {
+	t.Helper()
+	ev, err := events.MissionTerminal(events.MissionPayload{MissionID: id, Phase: string(phase), Reason: reason})
+	if err != nil {
+		t.Fatalf("MissionTerminal: %v", err)
+	}
+	return NewMemoryConsumer(d).Handle(context.Background(), nil, ev)
+}
+
+func TestMemoryConsumerKinds(t *testing.T) {
+	c := NewMemoryConsumer(nil)
+	if c.Name() == "" {
+		t.Fatal("consumer name is empty")
+	}
+	got := strings.Join(c.Kinds(), ",")
+	if got != events.KindMissionDone+","+events.KindMissionFailed {
+		t.Fatalf("Kinds() = %s, want mission.done and mission.failed", got)
+	}
+}
+
+func TestMemoryConsumerRejectsBadPayload(t *testing.T) {
+	d := testDriver(newFakeStore(), &scriptedRunner{})
+	d.SetMemoryExtract((&recordingExtract{}).fn())
+	if err := NewMemoryConsumer(d).Handle(context.Background(), nil, events.Event{Payload: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("Handle with no mission_id = nil error, want error")
+	}
+}
+
 func TestDriverExtractsMemoryOnDone(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, SessionID: "sess-1"})
@@ -179,6 +211,14 @@ func TestDriverExtractsMemoryOnDone(t *testing.T) {
 
 	driveN(t, d, "m1", 5) // discover -> plan -> build -> prove -> result -> done
 
+	// The driver itself no longer extracts: the consumer does.
+	time.Sleep(20 * time.Millisecond)
+	if got := rec.count(); got != 0 {
+		t.Fatalf("extraction calls before the event is consumed = %d, want 0", got)
+	}
+	if err := consumeTerminal(t, d, "m1", PhaseDone, ""); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
 	waitForCalls(t, rec, 1)
 
 	events, _ := store.Events(context.Background(), "m1")
@@ -204,6 +244,9 @@ func TestDriverExtractsMemoryOnFailed(t *testing.T) {
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Phase != PhaseFailed {
 		t.Fatalf("mission phase = %s, want failed", m.Phase)
+	}
+	if err := consumeTerminal(t, d, "m1", PhaseFailed, "iterations exhausted"); err != nil {
+		t.Fatalf("consume: %v", err)
 	}
 	waitForCalls(t, rec, 1)
 }
@@ -231,72 +274,50 @@ func TestDriverDoesNotExtractOnNonTerminalTransitions(t *testing.T) {
 	}
 }
 
-func TestDriverExtractsMemoryOnceOnRedrive(t *testing.T) {
+func TestDriverExtractsMemoryOnceOnRedelivery(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDone, Status: StatusDone, SessionID: "sess-1"})
-	// The mission is already terminal; simulate a re-drive (sweep/boot
-	// recovery) by calling extractMissionMemory directly a second time
-	// after the first has already recorded its idempotency event.
+	// The events drainer delivers at least once: a second delivery of
+	// the same terminal event must not extract twice.
 	d := testDriver(store, &scriptedRunner{})
 	rec := &recordingExtract{}
 	d.SetMemoryExtract(rec.fn())
 
-	m, _ := store.Get(context.Background(), "m1")
-	d.extractMissionMemory(context.Background(), m, PhaseDone, "")
+	if err := consumeTerminal(t, d, "m1", PhaseDone, ""); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
 	waitForCalls(t, rec, 1)
 
-	d.extractMissionMemory(context.Background(), m, PhaseDone, "")
+	if err := consumeTerminal(t, d, "m1", PhaseDone, ""); err != nil {
+		t.Fatalf("second consume: %v", err)
+	}
 	time.Sleep(20 * time.Millisecond)
 	if got := rec.count(); got != 1 {
-		t.Fatalf("extraction calls after re-drive = %d, want 1 (idempotency guard must suppress the second attempt)", got)
+		t.Fatalf("extraction calls after redelivery = %d, want 1 (idempotency guard must suppress the second attempt)", got)
 	}
 }
 
-// TestDriverMemoryExtractionErrorDoesNotBlockTransition asserts the
-// mission transition completes regardless of what the wired
-// MemoryExtract does — its signature has no error return (see
-// MemoryExtract's doc comment), so a caller like main.go's wrapper
-// that fails to reach memoryd only ever logs; nothing propagates back
-// to the driver that could block or unwind the transition already
-// committed before extraction was even dispatched.
-func TestDriverMemoryExtractionErrorDoesNotBlockTransition(t *testing.T) {
-	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, SessionID: "sess-1"})
-	runner := &scriptedRunner{
-		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
-		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
-		reviewVerdicts: []ReviewVerdict{{Approved: true}},
-	}
-	d := testDriver(store, runner)
+func TestExtractMemoryReturnsLoadError(t *testing.T) {
+	d := testDriver(newFakeStore(), &scriptedRunner{})
 	rec := &recordingExtract{}
-	d.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) {
-		// Simulates main.go's wrapper swallowing a memoryd error: logged
-		// there, never surfaced here.
-		rec.fn()(ctx, sessionID, seq, text, route)
-	})
+	d.SetMemoryExtract(rec.fn())
 
-	driveN(t, d, "m1", 5)
-	m, err := store.Get(context.Background(), "m1")
-	if err != nil {
-		t.Fatal(err)
+	if err := consumeTerminal(t, d, "missing", PhaseDone, ""); err == nil {
+		t.Fatal("consume for an unknown mission = nil error, want error so the drainer retries")
 	}
-	if m.Phase != PhaseDone {
-		t.Fatalf("mission phase = %s, want done despite extraction failure", m.Phase)
+	if got := rec.count(); got != 0 {
+		t.Fatalf("extraction calls = %d, want 0", got)
 	}
-	waitForCalls(t, rec, 1)
 }
 
 func TestDriverSkipsExtractionWhenNilClient(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true, SessionID: "sess-1"})
-	runner := &scriptedRunner{
-		plans:          []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
-		workerVerdicts: []WorkerVerdict{{Outcome: "done", Evidence: "did it"}},
-		reviewVerdicts: []ReviewVerdict{{Approved: true}},
-	}
-	d := testDriver(store, runner) // no SetMemoryExtract call: d.memory stays nil
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDone, Status: StatusDone, SessionID: "sess-1"})
+	d := testDriver(store, &scriptedRunner{}) // no SetMemoryExtract call: d.memory stays nil
 
-	driveN(t, d, "m1", 5)
+	if err := consumeTerminal(t, d, "m1", PhaseDone, ""); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
 
 	events, _ := store.Events(context.Background(), "m1")
 	if alreadyExtracted(events) {
@@ -311,8 +332,9 @@ func TestDriverSkipsExtractionWhenNoSession(t *testing.T) {
 	rec := &recordingExtract{}
 	d.SetMemoryExtract(rec.fn())
 
-	m, _ := store.Get(context.Background(), "m1")
-	d.extractMissionMemory(context.Background(), m, PhaseDone, "")
+	if err := consumeTerminal(t, d, "m1", PhaseDone, ""); err != nil {
+		t.Fatalf("consume: %v", err)
+	}
 	time.Sleep(20 * time.Millisecond)
 	if got := rec.count(); got != 0 {
 		t.Fatalf("extraction calls with no hidden session = %d, want 0", got)

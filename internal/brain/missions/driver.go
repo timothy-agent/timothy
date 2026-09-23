@@ -236,12 +236,10 @@ type Driver struct {
 	// artifact-path resolution, both out of missions' reach.
 	artifactCopy ArtifactCopy
 
-	// onTerminal wires the workflows engine's reaction to a mission
-	// reaching a terminal phase (see SetOnTerminal / fireOnTerminal) —
-	// nil-safe: unset skips it entirely, same as deliverDestinations. A
-	// func type for the same import-cycle reason: workflows needs
-	// missions.Mission, so missions can't import workflows back.
-	onTerminal OnTerminal
+	// kickEvents asks the events drainer to run now after a terminal
+	// transition committed its events row (D-117); nil waits for the
+	// drainer's own tick.
+	kickEvents func()
 
 	// promoteKB wires the kb-promotion hook fired on a mission's terminal
 	// done transition (see SetPromoteKB / promoteToKB), nil-safe: unset
@@ -623,7 +621,7 @@ func reviewTokensExceeded(used, ceiling int64) bool {
 }
 
 // SetMemoryExtract wires the memoryd extraction hook fired once a
-// mission reaches a terminal phase (see extractMissionMemory) — a
+// mission reaches a terminal phase (see ExtractMemory), a
 // setter (not a NewDriver parameter) for the same reason SetAgentResolver
 // is. Optional — nil (today's default) leaves missions extracting
 // nothing into memory.
@@ -785,19 +783,9 @@ func (d *Driver) copyArtifacts(ctx context.Context, id string, m Mission) Missio
 	return m
 }
 
-// OnTerminal reacts to a mission reaching a terminal phase —
-// workflows.Engine.OnMissionTerminal satisfies this. Fire-and-forget by
-// contract, same as DestinationDeliver: it must never return an error,
-// block, or affect mission state (the engine only reads terminal
-// missions and creates new ones, never mutates the terminal mission).
-type OnTerminal func(ctx context.Context, m Mission)
-
-// SetOnTerminal wires the workflows engine's reaction hook (see
-// fireOnTerminal) — a setter for the same reason SetDestinationDeliver
-// is. Optional — nil skips it entirely, same as a mission with no
-// workflow_run_id.
-func (d *Driver) SetOnTerminal(fn OnTerminal) {
-	d.onTerminal = fn
+// SetEventsKick wires the events drainer's Kick (D-117).
+func (d *Driver) SetEventsKick(fn func()) {
+	d.kickEvents = fn
 }
 
 // SetValidateDeps wires the store-backed checks ValidateCreate needs
@@ -808,20 +796,6 @@ func (d *Driver) SetOnTerminal(fn OnTerminal) {
 // existing tests that build a bare Mission{} keep passing.
 func (d *Driver) SetValidateDeps(deps ValidateDeps) {
 	d.validateDeps = &deps
-}
-
-// fireOnTerminal fires the workflows engine hook for any mission
-// reaching a terminal phase (done or failed) that names a
-// workflow_run_id — an ordinary mission (workflow_run_id empty) never
-// reaches the engine at all. m is onTerminal's single reload, same as
-// deliverToDestinations. Detached from ctx: the mission is already
-// terminal, so this must outlive a request that may be winding down.
-func (d *Driver) fireOnTerminal(m Mission) {
-	if d.onTerminal == nil || m.WorkflowRunID == "" {
-		return
-	}
-	rctx := context.Background()
-	go d.onTerminal(rctx, m) //nolint:gosec // G118: deliberate — the mission is already terminal, the hook must outlive whatever request/ctx observed that transition
 }
 
 // resultStepOrder documents runResult's fixed sequence (slice 1 of the
@@ -889,32 +863,15 @@ func (d *Driver) runResult(ctx context.Context, m Mission) (StepInput, error) {
 }
 
 // D-073: runTerminalHooks is the single place Advance and Signal fire
-// every terminal-transition hook, replacing what used to be a verbatim
-// block duplicated in both. Since D-086 (the result phase), this only
-// covers the hooks that fire on EVERY terminal transition (done or
-// failed): delivery/copy/promote moved into runResult, which the
-// driver runs as an ordinary phase step before the mission ever
-// reaches this function.
-//
-// Fixed order:
-//  1. sandbox container removal (async, best-effort)
-//  2. one mission reload
-//  3. memory extraction, workflow onTerminal: each handed the SAME
-//     reloaded Mission, no hook reloads on its own
-//
-// A hook failure is logged by the hook itself and never stops the
-// rest of the sequence.
-func (d *Driver) runTerminalHooks(ctx context.Context, id string, terminal Phase, events []EventDraft) {
+// the terminal-transition hooks. D-117: memory extraction and the
+// workflow advance are events consumers now, fed by the events row
+// ApplyTransition commits; this only tears down the sandbox
+// (best-effort) and kicks the drainer.
+func (d *Driver) runTerminalHooks(id string) {
 	d.removeSandbox(id)
-
-	reason := failedReason(events)
-	m, err := d.store.Get(ctx, id)
-	if err != nil {
-		d.log.Warn("driver: terminal hooks: reload mission failed", "mission_id", id, "error", err)
-		return
+	if d.kickEvents != nil {
+		d.kickEvents()
 	}
-	d.extractMissionMemory(ctx, m, terminal, reason)
-	d.fireOnTerminal(m)
 }
 
 // removeSandbox best-effort tears down a mission's sandbox container in
@@ -1164,7 +1121,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		return false, fmt.Errorf("driver advance: apply transition: %w", err)
 	}
 	if t.Next.Phase.Terminal() {
-		d.runTerminalHooks(ctx, id, t.Next.Phase, t.Events)
+		d.runTerminalHooks(id)
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
@@ -1251,7 +1208,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 		return fmt.Errorf("driver: signal: apply transition: %w", err)
 	}
 	if t.Next.Phase.Terminal() {
-		d.runTerminalHooks(ctx, id, t.Next.Phase, t.Events)
+		d.runTerminalHooks(id)
 	}
 	if d.notify != nil {
 		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -30,6 +31,9 @@ type Store struct {
 	db  *pgpool.Pool
 	log *slog.Logger
 	hub *Hub
+	// events receives the mission.done/mission.failed row a terminal
+	// ApplyTransition writes in its own transaction (D-117).
+	events *events.Store
 	// defaultMaxIterations resolves the iteration ceiling a mission
 	// created without one gets (settings.mission_default_max_iterations);
 	// nil, before SetDefaultMaxIterations is called, means the built-in
@@ -38,7 +42,7 @@ type Store struct {
 }
 
 func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
-	return &Store{db: db, log: log}
+	return &Store{db: db, log: log, events: events.NewStore(db)}
 }
 
 // fallbackMaxIterations is the iteration ceiling used when neither the
@@ -1134,8 +1138,12 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
-	var currentPhase string
-	if err := tx.QueryRow(ctx, `SELECT phase FROM missions WHERE id = $1 FOR UPDATE`, id).Scan(&currentPhase); err != nil {
+	var (
+		currentPhase, workflowRunID, originKind string
+		unattended                              bool
+	)
+	if err := tx.QueryRow(ctx, `SELECT phase, COALESCE(workflow_run_id::text, ''), origin_kind, unattended
+		FROM missions WHERE id = $1 FOR UPDATE`, id).Scan(&currentPhase, &workflowRunID, &originKind, &unattended); err != nil {
 		if err == pgx.ErrNoRows {
 			return fmt.Errorf("mission %s: %w", id, ErrNotFound)
 		}
@@ -1213,6 +1221,20 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	for _, ev := range t.Events {
 		if err := appendEventTx(ctx, tx, id, ev.Kind, ev.Payload, "live"); err != nil {
 			return fmt.Errorf("missions apply transition event: %w", err)
+		}
+	}
+	// D-117: the terminal effects (workflow advance, memory extraction)
+	// ride an events row committed with the transition itself.
+	if t.Next.Phase.Terminal() {
+		ev, err := events.MissionTerminal(events.MissionPayload{
+			MissionID: id, Phase: string(t.Next.Phase), Reason: failedReason(t.Events),
+			WorkflowRunID: workflowRunID, OriginKind: originKind, Unattended: unattended,
+		})
+		if err != nil {
+			return fmt.Errorf("missions apply transition: %w", err)
+		}
+		if err := s.events.Insert(ctx, tx, ev); err != nil {
+			return fmt.Errorf("missions apply transition: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

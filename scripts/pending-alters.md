@@ -21,3 +21,21 @@ ALTER TABLE missions DROP CONSTRAINT IF EXISTS missions_origin_kind_check,
   ADD CONSTRAINT missions_origin_kind_check
   CHECK (origin_kind IN ('api', 'automation', 'workflow', 'chat', 'followup'));
 ```
+
+Issue #818: events inbox.
+
+```sql
+CREATE TABLE IF NOT EXISTS events (
+    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    source        text NOT NULL,
+    kind          text NOT NULL,
+    dedup_key     text NOT NULL,
+    payload       jsonb NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    processed_at  timestamptz,
+    attempts      int NOT NULL DEFAULT 0,
+    last_error    text,
+    UNIQUE (source, dedup_key)
+);
+CREATE INDEX IF NOT EXISTS events_unprocessed_idx ON events (id) WHERE processed_at IS NULL;
+```

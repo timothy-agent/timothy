@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 )
 
 // memoryExtractedKind marks that a mission's one terminal extraction
 // pass has already fired — the append-only idempotency record
-// extractMissionMemory checks before running, since mission_events has
+// ExtractMemory checks before running, since mission_events has
 // no other way to record "this already happened" (D-idempotent-event,
 // same pattern mission.review_skipped/mission.turn already use for
 // non-transition bookkeeping).
@@ -55,27 +59,29 @@ func alreadyExtracted(events []Event) bool {
 	return false
 }
 
-// extractMissionMemory runs the mission's one terminal extraction pass:
-// called by runTerminalHooks for every transition whose Next.Phase is
-// terminal (done or failed). m is runTerminalHooks' single reload,
-// this no longer reloads itself. Nil memory client, or a mission with
-// no hidden session, skips silently, matching the nil-gated dependency
-// pattern the rest of the driver's optional hooks use (fireOnComplete,
-// notify). Extraction failures can never fail or block the mission
-// transition: MemoryExtract's own contract (see its doc comment) is
-// fire-and-forget, so nothing here can return an error to the caller
-// even in principle.
-func (d *Driver) extractMissionMemory(ctx context.Context, m Mission, terminal Phase, failureReason string) {
-	if d.memory == nil || m.SessionID == "" {
-		return
+// ExtractMemory runs the mission's one terminal extraction pass (D-117:
+// called by MemoryConsumer for every mission.done/mission.failed
+// event). Nil memory client, or a mission with no hidden session,
+// skips silently. The mission.memory_extracted record makes a repeated
+// call a no-op. Errors are the load/record failures a retry can fix;
+// the extraction call itself stays fire-and-forget (see MemoryExtract).
+func (d *Driver) ExtractMemory(ctx context.Context, id string, terminal Phase, failureReason string) error {
+	if d.memory == nil {
+		return nil
+	}
+	m, err := d.store.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("memory extraction: load mission: %w", err)
+	}
+	if m.SessionID == "" {
+		return nil
 	}
 	events, err := d.store.Events(ctx, m.ID)
 	if err != nil {
-		d.log.Warn("driver: memory extraction: load events failed", "mission_id", m.ID, "error", err)
-		return
+		return fmt.Errorf("memory extraction: load events: %w", err)
 	}
 	if alreadyExtracted(events) {
-		return
+		return nil
 	}
 	digest := OutcomeDigest(m, events, terminal, failureReason)
 	// The idempotency record must land BEFORE dispatch, not after: the
@@ -86,10 +92,30 @@ func (d *Driver) extractMissionMemory(ctx context.Context, m Mission, terminal P
 	// pass. Marking the attempt (not "succeeded") is the same commitment
 	// AppendEvent's other bookkeeping-only callers make.
 	if err := d.store.AppendEvent(ctx, m.ID, memoryExtractedKind, map[string]any{"terminal": string(terminal)}); err != nil {
-		d.log.Warn("driver: memory extraction: record event failed", "mission_id", m.ID, "error", err)
-		return
+		return fmt.Errorf("memory extraction: record event: %w", err)
 	}
 	go d.memory(context.Background(), m.SessionID, 0, digest, "") //nolint:gosec // G118: deliberate — the mission is already terminal, extraction must outlive whatever request/ctx observed that transition
+	return nil
+}
+
+// MemoryConsumer is the events consumer that runs ExtractMemory for
+// every terminal mission (D-117).
+type MemoryConsumer struct{ d *Driver }
+
+func NewMemoryConsumer(d *Driver) MemoryConsumer { return MemoryConsumer{d: d} }
+
+func (MemoryConsumer) Name() string { return "mission-memory" }
+
+func (MemoryConsumer) Kinds() []string {
+	return []string{events.KindMissionDone, events.KindMissionFailed}
+}
+
+func (c MemoryConsumer) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error {
+	p, err := events.DecodeMission(ev)
+	if err != nil {
+		return err
+	}
+	return c.d.ExtractMemory(ctx, p.MissionID, Phase(p.Phase), p.Reason)
 }
 
 // backfillMissionName regenerates a missing display name when a

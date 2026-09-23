@@ -17,23 +17,24 @@ type engineStore interface {
 	GetRun(ctx context.Context, id string) (Run, error)
 	ApplyRunTransition(ctx context.Context, id string, t RunTransition) error
 	CountEdgeFirings(ctx context.Context, runID, from, on, to string) (int, error)
+	RunEvents(ctx context.Context, runID string) ([]RunEvent, error)
 }
 
 // missionSpawner is the narrow slice of *missions.Driver the engine
 // needs to spawn a step's mission — an interface so engine_test.go can
 // fake it without a real Driver. workflows importing missions.Mission
 // directly (not vice versa) is what keeps this acyclic: missions never
-// imports workflows, it only calls back into it through the
-// missions.OnTerminal func type wired by cmd/brain/main.go.
+// imports workflows, the engine hears about terminal missions as an
+// events consumer (D-117).
 type missionSpawner interface {
 	Create(ctx context.Context, m missions.Mission) (string, error)
 }
 
 // missionEvents is the narrow slice of *missions.Store the engine needs
-// to assemble a terminal mission's OutcomeDigest for the next step's
-// goal interpolation — *missions.Store satisfies it (Driver has no
-// Events passthrough of its own).
+// to load a terminal mission and assemble its OutcomeDigest for the
+// next step's goal interpolation; *missions.Store satisfies it.
 type missionEvents interface {
+	Get(ctx context.Context, id string) (missions.Mission, error)
 	Events(ctx context.Context, id string) ([]missions.Event, error)
 }
 
@@ -94,30 +95,39 @@ func (e *Engine) StartRun(ctx context.Context, workflowID string, runContext map
 // OnMissionTerminal reacts to mission m reaching a terminal phase: load
 // its run, find the edge from its step matching the outcome, and either
 // spawn the next step, end the run, pause it, or fail it on cap
-// exceeded. m.WorkflowRunID must be non-empty — the driver's OnTerminal
-// hook already filters for that before calling in. Every decision
-// appends a run event; the engine never mutates the mission itself.
-func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) {
+// exceeded. m.WorkflowRunID must be non-empty (Handle filters for
+// that). Every decision appends a run event; the engine never mutates
+// the mission itself. Idempotent for redelivery: a run no longer
+// running, on another step, or that already took an edge for m is left
+// alone. Errors are load failures before any run write, safe to retry.
+func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) error {
 	run, err := e.store.GetRun(ctx, m.WorkflowRunID)
 	if err != nil {
-		e.log.Warn("workflows: terminal mission: load run failed", "run_id", m.WorkflowRunID, "mission_id", m.ID, "error", err)
-		return
+		return fmt.Errorf("workflows: terminal mission %s: load run %s: %w", m.ID, m.WorkflowRunID, err)
 	}
 	if run.Status != "running" {
 		// A run already paused/done/failed/cancelled ignores a late
 		// terminal event from a step mission that raced past it (e.g. a
 		// second edge firing while the run was already being cancelled).
-		return
+		return nil
+	}
+	if m.WorkflowStep != "" && m.WorkflowStep != run.CurrentStep {
+		return nil
+	}
+	runEvents, err := e.store.RunEvents(ctx, m.WorkflowRunID)
+	if err != nil {
+		return fmt.Errorf("workflows: terminal mission %s: load run events: %w", m.ID, err)
+	}
+	if edgeTakenFor(runEvents, m.ID) {
+		return nil
 	}
 	wf, err := e.store.Get(ctx, run.WorkflowID)
 	if err != nil {
-		e.log.Warn("workflows: terminal mission: load workflow failed", "workflow_id", run.WorkflowID, "error", err)
-		return
+		return fmt.Errorf("workflows: terminal mission %s: load workflow %s: %w", m.ID, run.WorkflowID, err)
 	}
 	def, err := ParseDefinition(wf.Definition)
 	if err != nil {
-		e.log.Warn("workflows: terminal mission: parse definition failed", "workflow_id", run.WorkflowID, "error", err)
-		return
+		return fmt.Errorf("workflows: terminal mission %s: parse definition of %s: %w", m.ID, run.WorkflowID, err)
 	}
 
 	on := "mission.done"
@@ -141,38 +151,37 @@ func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) {
 		// with no matching edge is equally a dead end the author likely
 		// forgot to wire — same pause treatment.
 		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("no matching edge for step %q on %s", run.CurrentStep, on))
-		return
+		return nil
 	}
 
 	firings, err := e.store.CountEdgeFirings(ctx, m.WorkflowRunID, matched.From, matched.On, matched.To)
 	if err != nil {
-		e.log.Warn("workflows: terminal mission: count edge firings failed", "run_id", m.WorkflowRunID, "error", err)
-		return
+		return fmt.Errorf("workflows: terminal mission %s: count edge firings: %w", m.ID, err)
 	}
 	if firings >= matched.MaxIterations {
 		e.failRun(ctx, m.WorkflowRunID, matched)
-		return
+		return nil
 	}
 
 	if matched.To == endStep {
 		e.endRun(ctx, m.WorkflowRunID, matched)
-		return
+		return nil
 	}
 
 	step, ok := def.Steps[matched.To]
 	if !ok {
 		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("edge targets unknown step %q", matched.To))
-		return
+		return nil
 	}
 	events, err := e.events.Events(ctx, m.ID)
 	if err != nil {
 		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("load mission %s events failed: %s", m.ID, err.Error()))
-		return
+		return nil
 	}
 	outcome := missions.OutcomeDigest(m, events, m.Phase, m.FailureReason)
 	if _, err := e.spawnStep(ctx, m.WorkflowRunID, matched.To, step, run.Context, outcome, m.ID); err != nil {
 		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("spawn step %q failed: %s", matched.To, err.Error()))
-		return
+		return nil
 	}
 	if err := e.store.ApplyRunTransition(ctx, m.WorkflowRunID, RunTransition{
 		Status: "running", CurrentStep: matched.To,
@@ -182,6 +191,7 @@ func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) {
 	}); err != nil {
 		e.log.Warn("workflows: terminal mission: advance run failed", "run_id", m.WorkflowRunID, "error", err)
 	}
+	return nil
 }
 
 // spawnStep creates the next mission for step, interpolating its goal
