@@ -76,9 +76,8 @@ type MissionTemplate struct {
 	BudgetAmount   *float64 `json:"budget_amount,omitempty"`
 	BudgetCurrency string   `json:"budget_currency,omitempty"`
 	// Harness selects the execution strategy for a coding mission's
-	// worker turns (D-051); empty applies the settings default at fire
-	// time via resolveTemplateDefaults, same precedence as create()'s
-	// own handling of an omitted request field.
+	// worker turns (D-051); empty resolves at fire time through
+	// ResolveDefaults, the same precedence a one-off create gets.
 	Harness string `json:"harness,omitempty"`
 	// ReviewHarness (issue #582) is copied onto the fired mission as-is:
 	// the registered executor its review round runs as a read-only
@@ -89,9 +88,8 @@ type MissionTemplate struct {
 	// kind=coding, api/schedules.go).
 	Light bool `json:"light,omitempty"`
 	// Environment selects the sandbox image key (D-05x) a coding
-	// mission's container runs; empty auto-detects at fire time via
-	// resolveTemplateDefaults (goal keyword only — no worktree exists
-	// yet), same precedence as create()'s own handling.
+	// mission's container runs; empty is detected against the real
+	// workspace once it exists (issue #495).
 	Environment string `json:"environment,omitempty"`
 	// AutoApproveTools defaults true for a scheduled mission, same as
 	// api/missions.go's create handler — a mission fired unattended
@@ -102,7 +100,7 @@ type MissionTemplate struct {
 	// template's fired missions deliver their outcome digest to.
 	// Validated at schedule create/patch time (same rule as mission
 	// create, api/missions.go's validateDestinationIDs); re-filtered at
-	// FIRE time by resolveTemplateDefaults since a destination can be
+	// FIRE time by filterDestinationIDs since a destination can be
 	// deleted or disabled between when the schedule was made and when
 	// it next fires.
 	DestinationIDs []string `json:"destination_ids,omitempty"`
@@ -110,15 +108,14 @@ type MissionTemplate struct {
 	// (issue #359), resolved into markdown/caption/transcript at
 	// schedule create/patch time (api/schedules.go) rather than on
 	// every fire, so a fired mission spends nothing to attach them.
-	// createFromTemplate copies these straight onto the new mission's
+	// TemplateCreateRequest copies these straight onto the new mission's
 	// sources.
 	Attachments []SourceEntry `json:"attachments,omitempty"`
 }
 
-// AgentDefaults is the slice of an agents row a fired mission borrows
-// when its template leaves the corresponding field empty — mirrors
-// api/missions.go's create-handler resolution so a scheduler-fired
-// mission gets the same defaults a UI-created one would.
+// AgentDefaults is the slice of an agents row a new mission borrows
+// when its create request leaves the corresponding field empty
+// (ResolveDefaults), and the provisioning-time grants the driver reads.
 type AgentDefaults struct {
 	// Name is the agent's display name, used to label a mission's
 	// turns in the timeline (issue #473), resolved fresh here rather
@@ -130,7 +127,7 @@ type AgentDefaults struct {
 	PromptOverlay     string
 	ApprovalAllowlist []string
 	// Harness is the agent's own harness field, consulted by
-	// resolveTemplateDefaults/ResolveHarness ahead of
+	// ResolveDefaults/ResolveHarness ahead of
 	// settings.coding_executor (mission.harness -> agent.harness ->
 	// settings.coding_executor -> native). Empty means the agent
 	// doesn't override.
@@ -145,7 +142,7 @@ type AgentDefaults struct {
 type AgentResolver func(ctx context.Context, agentID string) (AgentDefaults, bool)
 
 // DestinationEnabled reports whether id names a real, enabled
-// destinations row — the fire-time re-check resolveTemplateDefaults
+// destinations row, the fire-time re-check filterDestinationIDs
 // runs on a template's DestinationIDs, mirroring
 // api/missions.go's validateDestinationIDs but tolerant instead of
 // rejecting: a destination deleted or disabled since the schedule was
@@ -160,15 +157,13 @@ type DestinationEnabled func(ctx context.Context, id string) (bool, error)
 // platform/migrate.go idiom rather than introducing a second
 // scheduling paradigm).
 type Scheduler struct {
-	db                    *pgpool.Pool
-	missions              *Store
-	resolve               AgentResolver
-	enabled               func(ctx context.Context) bool
-	routeForRole          func(context.Context, string) string
-	routeExists           func(context.Context, string) bool
-	codingExecutorDefault func(context.Context) string
-	destinationEnabled    DestinationEnabled
-	log                   *slog.Logger
+	db *pgpool.Pool
+	// create is Driver.Create: validate, insert, provision, Drive.
+	create             func(ctx context.Context, m Mission) (string, error)
+	resolve            ResolveDeps
+	enabled            func(ctx context.Context) bool
+	destinationEnabled DestinationEnabled
+	log                *slog.Logger
 
 	// location resolves the operator's configured timezone: cron
 	// expressions are evaluated in this zone (schedule.Next reads the
@@ -178,28 +173,14 @@ type Scheduler struct {
 	location func(ctx context.Context) *time.Location
 }
 
-// NewScheduler wires the scheduler with the agent resolver
-// createFromTemplate uses to fill in missing route/review_route/
-// budget/prompt_overlay at fire time, the scheduler_enabled feature
-// switch (D-032) that tick checks first, routeForRole (D-049) for
-// the "default" system role's route when an agent's own route is also
-// empty, routeExists for a coding template's route preferring the
-// operator's "coding" route over "default" when it exists (see
-// DefaultCodingRoute), codingExecutorDefault (D-051) for a coding
-// template that omits harness, and destinationEnabled for the
-// fire-time re-check of a template's DestinationIDs — nil-safe on all
-// six: a nil resolve leaves an unresolved AgentID's fields at whatever
-// the template already specified, a nil enabled defaults every tick to
-// enabled (degrade open, since a config-read hiccup pausing every
-// schedule silently would be worse than one that keeps firing), a
-// nil/unbound routeForRole leaves the route "", a nil routeExists
-// skips straight to the default route, a nil codingExecutorDefault
-// leaves harness at whatever the template specified (native if
-// empty), and a nil destinationEnabled leaves DestinationIDs
-// unfiltered (destinations disabled entirely — nothing to check
-// against).
-func NewScheduler(db *pgpool.Pool, missions *Store, resolve AgentResolver, enabled func(ctx context.Context) bool, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string, destinationEnabled DestinationEnabled, log *slog.Logger) *Scheduler {
-	return &Scheduler{db: db, missions: missions, resolve: resolve, enabled: enabled, routeForRole: routeForRole, routeExists: routeExists, codingExecutorDefault: codingExecutorDefault, destinationEnabled: destinationEnabled, log: log}
+// NewScheduler wires the scheduler. create is Driver.Create, the only
+// way a fire makes a mission (issue #816); resolve is the same
+// ResolveDeps every other create path uses; enabled is the
+// scheduler_enabled feature switch (D-032) tick checks first, nil
+// degrades open; destinationEnabled is the fire-time re-check of a
+// template's DestinationIDs, nil drops every id.
+func NewScheduler(db *pgpool.Pool, create func(ctx context.Context, m Mission) (string, error), resolve ResolveDeps, enabled func(ctx context.Context) bool, destinationEnabled DestinationEnabled, log *slog.Logger) *Scheduler {
+	return &Scheduler{db: db, create: create, resolve: resolve, enabled: enabled, destinationEnabled: destinationEnabled, log: log}
 }
 
 // SetDestinationEnabled wires the fire-time destination re-check after
@@ -318,10 +299,28 @@ func (s *Scheduler) tick(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("scheduler: schedules rows: %w", err)
 	}
 
-	if err := s.fireEach(ctx, tx, schedules, now, s.fireOne); err != nil {
+	var fired []Schedule
+	fire := func(ctx context.Context, tx pgx.Tx, sc Schedule, now time.Time) error {
+		due, err := s.fireOne(ctx, tx, sc, now)
+		if err == nil && due {
+			fired = append(fired, sc)
+		}
 		return err
 	}
-	return tx.Commit(ctx)
+	if err := s.fireEach(ctx, tx, schedules, now, fire); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("scheduler: commit: %w", err)
+	}
+	// Missions are created only after the bookkeeping commits, so a
+	// fire is at most once: Driver.Create provisions and starts Drive,
+	// which must see a committed row and must never run for a fire
+	// whose last_run advance rolled back.
+	for _, sc := range fired {
+		s.fireMission(ctx, sc, now)
+	}
+	return nil
 }
 
 // errAgentMissing marks a template agent_id that names no agents row.
@@ -370,11 +369,11 @@ func (s *Scheduler) fireEach(ctx context.Context, tx pgx.Tx, schedules []Schedul
 	return nil
 }
 
-// fireOne evaluates and, if due (or carrying a pending fire from an
-// earlier dedup skip), fires one schedule at most once — inside the
-// same transaction tick holds, so last_run/pending_fire/skip fields and
-// any created mission commit atomically together.
-func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now time.Time) error {
+// fireOne evaluates one schedule inside tick's transaction and records
+// its last_run/pending_fire/skip bookkeeping there. fire reports that
+// the schedule fires this tick (due, or carrying a pending fire from an
+// earlier dedup skip); tick creates its mission after commit.
+func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now time.Time) (fire bool, err error) {
 	// A never-run schedule anchors on its own creation, not "now" —
 	// otherwise Next(now) is always in the future and it could never
 	// fire on its very first eligible boundary.
@@ -395,7 +394,7 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 	}
 	dec, err := dueDecision(sc.Cron, anchor.In(loc), now.In(loc), misfireGrace)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Backfill skip: past misfireGrace, never fires for this boundary —
@@ -406,12 +405,12 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 	// unrelated late boundary).
 	if dec == decisionBackfillSkip {
 		if err := s.markSkipped(ctx, tx, sc, now, "backfill_grace"); err != nil {
-			return err
+			return false, err
 		}
-		return s.tryFirePending(ctx, tx, sc, now)
+		return s.tryFirePending(ctx, tx, sc)
 	}
 	if dec == decisionSkip {
-		return s.tryFirePending(ctx, tx, sc, now)
+		return s.tryFirePending(ctx, tx, sc)
 	}
 
 	// dec == decisionFire: due this tick. Whether or not a pending fire
@@ -420,7 +419,7 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 	// pending, so pending_fire clears here rather than firing twice.
 	active, err := s.activeMissionExists(ctx, tx, sc.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if active {
 		// Live-queue dedup: a mission from THIS schedule still active
@@ -430,20 +429,17 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 		if _, err := tx.Exec(ctx, `UPDATE schedules SET
 				last_run = $2, pending_fire = true, last_skipped_at = $2, skip_reason = $3, updated_at = now()
 			WHERE id = $1`, sc.ID, now, "active_mission"); err != nil {
-			return fmt.Errorf("advance last_run (dedup skip): %w", err)
+			return false, fmt.Errorf("advance last_run (dedup skip): %w", err)
 		}
 		s.log.Info("scheduler: skipped firing, a mission from this schedule is still active", "schedule_id", sc.ID)
-		return nil
-	}
-	if err := s.createFromTemplate(ctx, tx, sc); err != nil {
-		return fmt.Errorf("create mission: %w", err)
+		return false, nil
 	}
 	if _, err := tx.Exec(ctx, `UPDATE schedules SET
 			last_run = $2, pending_fire = false, last_skipped_at = NULL, skip_reason = '', updated_at = now()
 		WHERE id = $1`, sc.ID, now); err != nil {
-		return fmt.Errorf("advance last_run: %w", err)
+		return false, fmt.Errorf("advance last_run: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // tryFirePending fires a carried-forward pending fire when no mission
@@ -452,26 +448,23 @@ func (s *Scheduler) fireOne(ctx context.Context, tx pgx.Tx, sc Schedule, now tim
 // SUBSEQUENT tick (not just the one right after) checks it here until
 // the active mission finally clears. A no-op when pending_fire is
 // false, or when a mission is still active.
-func (s *Scheduler) tryFirePending(ctx context.Context, tx pgx.Tx, sc Schedule, now time.Time) error {
+func (s *Scheduler) tryFirePending(ctx context.Context, tx pgx.Tx, sc Schedule) (bool, error) {
 	if !sc.PendingFire {
-		return nil
+		return false, nil
 	}
 	active, err := s.activeMissionExists(ctx, tx, sc.ID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if active {
-		return nil
-	}
-	if err := s.createFromTemplate(ctx, tx, sc); err != nil {
-		return fmt.Errorf("create mission (pending fire): %w", err)
+		return false, nil
 	}
 	if _, err := tx.Exec(ctx, `UPDATE schedules SET
 			pending_fire = false, last_skipped_at = NULL, skip_reason = '', updated_at = now()
 		WHERE id = $1`, sc.ID); err != nil {
-		return fmt.Errorf("clear pending_fire: %w", err)
+		return false, fmt.Errorf("clear pending_fire: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 // activeMissionExists reports whether a mission from schedule id is
@@ -498,93 +491,123 @@ func (s *Scheduler) markSkipped(ctx context.Context, tx pgx.Tx, sc Schedule, now
 	return nil
 }
 
-// createFromTemplate inserts a new mission from the schedule's
-// template, tagged with the schedule that spawned it. It resolves the
-// template's agent_id AT FIRE TIME (mirroring api/missions.go's create
-// handler): an empty route/review_route/budget/prompt_overlay is
-// filled from the agent's current defaults, and an agent's own empty
-// route (its "use the default chain" shorthand) still falls back to
-// the "default" system role's route since the gateway requires a real
-// route name. This inserted row bypasses Driver.Create entirely — it
-// has no session, no workspace, no grants yet — so it is provisioned
-// lazily the first time Advance/Drive touches it (see driver.go's
-// ensureProvisioned).
-// D-071: this inserts directly via SQL rather than Driver.Create, so
-// ValidateCreate never runs against a schedule-fired mission — left as
-// is for this slice. resolveTemplateDefaults (route/harness/environment)
-// and filterDestinationIDs (destination_ids existence) already cover
-// this insert's subset of ValidateCreate's checks; a schedule's own
-// create/patch validation (schedules.go) covers the rest at schedule
-// creation time.
-func (s *Scheduler) createFromTemplate(ctx context.Context, tx pgx.Tx, sc Schedule) error {
-	if err := checkAgentExists(ctx, tx, sc.MissionTemplate.AgentID); err != nil {
-		return err
+// fireMission creates sc's mission through the shared create path
+// (ValidateTemplate, ResolveDefaults, Driver.Create) after tick's
+// bookkeeping committed. A failure records agent_missing or fire_error
+// on this schedule only, advancing last_run and restoring pending_fire
+// to its value before the tick, the same end state a rolled-back fire
+// used to leave.
+func (s *Scheduler) fireMission(ctx context.Context, sc Schedule, now time.Time) {
+	id, err := s.createFromSchedule(ctx, sc)
+	if err == nil {
+		s.log.Info("scheduler: fired", "schedule_id", sc.ID, "mission_id", id)
+		return
 	}
-	t, promptOverlay := resolveTemplateDefaults(ctx, sc.MissionTemplate, s.resolve, s.routeForRole, s.routeExists, s.codingExecutorDefault)
-	// destinations is NOT NULL; entries built from the (fire-time
-	// re-checked) template destination ids. Destination (kind) is left
-	// empty here: the deliverer resolves the live kind by id at
-	// delivery time (destinations.Deliverer.deliverOne), so nothing
-	// downstream reads this entry's own kind field.
-	destinationIDs := s.filterDestinationIDs(ctx, t.DestinationIDs)
-	entries := make([]DestinationEntry, 0, len(destinationIDs))
-	for _, id := range destinationIDs {
-		entries = append(entries, DestinationEntry{DestinationID: id})
+	reason := skipReasonFor(err)
+	s.log.Warn("scheduler: schedule skipped, fire failed", "schedule_id", sc.ID, "name", sc.Name, "reason", reason, "error", err)
+	db, dbErr := s.db.Get()
+	if dbErr != nil {
+		s.log.Error("scheduler: recording skip failed", "schedule_id", sc.ID, "error", dbErr)
+		return
 	}
-	destinationsJSON, err := json.Marshal(entries)
+	if _, err := db.Exec(ctx, `UPDATE schedules SET
+			last_run = $2, last_skipped_at = $2, skip_reason = $3, pending_fire = $4, updated_at = now()
+		WHERE id = $1`, sc.ID, now, reason, sc.PendingFire); err != nil {
+		s.log.Error("scheduler: recording skip failed", "schedule_id", sc.ID, "error", err)
+	}
+}
+
+// createFromSchedule builds sc's CreateRequest and hands it to
+// Driver.Create. The template is re-validated here since a row can
+// predate the save-time check.
+func (s *Scheduler) createFromSchedule(ctx context.Context, sc Schedule) (string, error) {
+	if err := ValidateTemplate(sc.MissionTemplate); err != nil {
+		return "", fmt.Errorf("%w: %s", ErrInvalidMission, err.Error())
+	}
+	db, err := s.db.Get()
 	if err != nil {
-		return fmt.Errorf("marshal destinations: %w", err)
+		return "", fmt.Errorf("scheduler: %w", err)
 	}
-	// sources is NOT NULL; a nil Attachments marshals to "null" (store.go
-	// Create hits the same rule for its own sources column).
-	sources := t.Attachments
-	if sources == nil {
-		sources = []SourceEntry{}
+	if err := checkAgentExists(ctx, db, sc.MissionTemplate.AgentID); err != nil {
+		return "", err
 	}
-	sourcesJSON, err := json.Marshal(sources)
+	if s.create == nil {
+		return "", errors.New("scheduler: no mission creator wired")
+	}
+	req := TemplateCreateRequest(sc, s.filterDestinationIDs(ctx, sc.MissionTemplate.DestinationIDs))
+	m, err := ResolveDefaults(ctx, req, s.resolve)
 	if err != nil {
-		return fmt.Errorf("marshal sources: %w", err)
+		return "", fmt.Errorf("create mission: %w", err)
 	}
-	plan, _ := json.Marshal(Plan{})
-	budgetCurrency := t.BudgetCurrency
-	if budgetCurrency == "" {
-		budgetCurrency = "USD"
+	id, err := s.create(ctx, m)
+	if err != nil {
+		return "", fmt.Errorf("create mission: %w", err)
 	}
+	return id, nil
+}
+
+// TemplateCreateRequest maps a schedule's template onto a CreateRequest.
+// destinationIDs are the template's ids after the fire-time re-check.
+// The mission is named after the template, else the schedule, carries
+// the schedule id, and always auto-approves its plan (D-087): nobody is
+// watching an unattended mission.
+func TemplateCreateRequest(sc Schedule, destinationIDs []string) CreateRequest {
+	t := sc.MissionTemplate
 	name := t.Name
 	if name == "" {
 		name = sc.Name
 	}
-	// flow follows light exactly at fire time (D-090, issue #459): a
-	// schedule template has no flow field of its own, only light, but
-	// a digest schedule that runs light must still produce flow='light'
-	// so all D-069 code paths (policyFor, packet.go's WorkPacket.Light)
-	// key off the same value consistently (issue #479 dropped the
-	// redundant light column, flow is now the only column written).
-	flow := FlowFull
-	if t.Light {
-		flow = FlowLight
+	// The deliverer resolves each entry's kind by id at delivery time.
+	var destinations []DestinationEntry
+	for _, id := range destinationIDs {
+		destinations = append(destinations, DestinationEntry{DestinationID: id})
 	}
-	phase := initialPhase(t.Kind, flow)
-	// auto_approve_plan is forced true here, never taken from the
-	// template (D-087, issue #456): a scheduler-fired mission runs
-	// unattended, so nobody is watching to approve its plan.
-	_, err = tx.Exec(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, prompt_overlay, auto_approve_tools, auto_approve_plan, plan, schedule_id, harness, environment, sources, destinations, phase, flow, review_harness)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)`,
-		t.Goal, name, t.Kind, t.AgentID, s.missions.maxIterationsFor(ctx, t.MaxIterations), t.BudgetAmount, budgetCurrency, t.Route, t.ReviewRoute, t.PlanRoute,
-		promptOverlay, t.AutoApproveTools, true, plan, sc.ID, t.Harness, t.Environment, sourcesJSON, destinationsJSON, phase, flow, t.ReviewHarness)
-	return err
+	autoApproveTools := t.AutoApproveTools
+	autoApprovePlan := true
+	return CreateRequest{
+		Goal: t.Goal, Name: name, Kind: t.Kind, AgentID: t.AgentID,
+		Route: t.Route, ReviewRoute: t.ReviewRoute, PlanRoute: t.PlanRoute,
+		MaxIterations: t.MaxIterations, BudgetAmount: t.BudgetAmount, BudgetCurrency: t.BudgetCurrency,
+		AutoApproveTools: &autoApproveTools, AutoApprovePlan: &autoApprovePlan,
+		Harness: t.Harness, ReviewHarness: t.ReviewHarness, Environment: t.Environment,
+		Light:        t.Light,
+		Sources:      t.Attachments,
+		Destinations: destinations,
+		ScheduleID:   sc.ID,
+	}
+}
+
+// ValidateTemplate rejects a template no fire could turn into a valid
+// mission: an empty goal, a kind other than coding or general, or light
+// on a non-general kind. The schedule API runs it at save time and the
+// scheduler again at fire time.
+func ValidateTemplate(t MissionTemplate) error {
+	if strings.TrimSpace(t.Goal) == "" {
+		return errors.New("mission_template.goal is required")
+	}
+	if t.Kind != KindCoding && t.Kind != KindGeneral {
+		return errors.New(`mission_template.kind must be "coding" or "general"`)
+	}
+	if t.Light && t.Kind != KindGeneral {
+		return errors.New("mission_template.light is only valid for kind=general")
+	}
+	return nil
+}
+
+// rowQuerier is the QueryRow slice shared by a pool and a transaction.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 // checkAgentExists returns errAgentMissing when agentID is set but
-// names no agents row, so a deleted or malformed agent is caught before
-// the INSERT instead of failing it.
-func checkAgentExists(ctx context.Context, tx pgx.Tx, agentID string) error {
+// names no agents row, so a deleted or malformed agent is reported as
+// agent_missing instead of a generic insert failure.
+func checkAgentExists(ctx context.Context, q rowQuerier, agentID string) error {
 	if agentID == "" {
 		return nil
 	}
 	var exists bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agents WHERE id::text = lower($1))`, agentID).Scan(&exists); err != nil {
+	if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agents WHERE id::text = lower($1))`, agentID).Scan(&exists); err != nil {
 		return fmt.Errorf("check agent: %w", err)
 	}
 	if !exists {
@@ -621,63 +644,4 @@ func (s *Scheduler) filterDestinationIDs(ctx context.Context, ids []string) []st
 		out = append(out, id)
 	}
 	return out
-}
-
-// resolveTemplateDefaults is the pure fire-time resolution step
-// createFromTemplate performs, split out so it's unit-testable without
-// a real pgx.Tx: an empty route/review_route/budget is filled from the
-// resolved agent's current defaults (nil-safe — a nil resolve, or one
-// that reports ok=false, leaves the template exactly as given except
-// for the final default-role fallback), the resolved agent's prompt
-// overlay is returned separately since MissionTemplate itself carries
-// no such field, a coding template's still-empty route prefers the
-// operator's "coding" route over "default" when it exists
-// (DefaultCodingRoute), and a coding template that omits harness
-// resolves through ResolveHarness (mission.harness -> agent.harness ->
-// settings.coding_executor -> native) - mirrors api/missions.go
-// create()'s own precedence so a scheduler-fired mission inherits it
-// too.
-func resolveTemplateDefaults(ctx context.Context, t MissionTemplate, resolve AgentResolver, routeForRole func(context.Context, string) string, routeExists func(context.Context, string) bool, codingExecutorDefault func(context.Context) string) (MissionTemplate, string) {
-	promptOverlay := ""
-	var agentHarness string
-	if resolve != nil {
-		if defaults, ok := resolve(ctx, t.AgentID); ok {
-			if t.Route == "" {
-				t.Route = defaults.Route
-			}
-			if t.ReviewRoute == "" {
-				t.ReviewRoute = defaults.ReviewRoute
-			}
-			promptOverlay = defaults.PromptOverlay
-			agentHarness = defaults.Harness
-		}
-	}
-	policy := policyFor(t.Kind, FlowFull)
-	defaultRoute := ""
-	if routeForRole != nil {
-		defaultRoute = routeForRole(ctx, "default")
-	}
-	if t.Route == "" {
-		if t.Kind == KindCoding {
-			t.Route = DefaultCodingRoute(ctx, routeExists, defaultRoute)
-		} else {
-			t.Route = defaultRoute
-		}
-	}
-	if t.ReviewRoute == "" {
-		// Same masking guard as the create handler: an explicit
-		// plan_route covers review unless review_route was set itself.
-		if t.PlanRoute != "" {
-			t.ReviewRoute = t.PlanRoute
-		} else {
-			t.ReviewRoute = defaultRoute
-		}
-	}
-	if policy.canDelegate {
-		t.Harness, _ = ResolveHarness(ctx, t.Kind, t.Harness, agentHarness, codingExecutorDefault)
-	}
-	// Environment (D-05x): no settings default (unlike Harness above) —
-	// an omitted template stays "" and is detected against the real
-	// workspace once it exists (issue #495), never from goal text.
-	return t, promptOverlay
 }

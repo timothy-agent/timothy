@@ -129,7 +129,9 @@ func TestDueDecisionNonUTCLocation(t *testing.T) {
 	}
 }
 
-func TestResolveTemplateDefaults(t *testing.T) {
+// TestTemplateCreateRequestResolvesDefaults runs a template through the
+// scheduler's builder and ResolveDefaults, the path every fire takes.
+func TestTemplateCreateRequestResolvesDefaults(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -278,7 +280,12 @@ func TestResolveTemplateDefaults(t *testing.T) {
 					return false
 				}
 			}
-			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve, routeForRole, routeExists, tc.codingExec)
+			deps := ResolveDeps{Agent: tc.resolve, RouteForRole: routeForRole, RouteExists: routeExists, CodingExecutorDefault: tc.codingExec}
+			got, err := ResolveDefaults(context.Background(), TemplateCreateRequest(Schedule{MissionTemplate: tc.template}, nil), deps)
+			if err != nil {
+				t.Fatalf("ResolveDefaults: %v", err)
+			}
+			overlay := got.PromptOverlay
 			if got.Route != tc.wantRoute {
 				t.Errorf("Route = %q, want %q", got.Route, tc.wantRoute)
 			}
@@ -298,15 +305,17 @@ func TestResolveTemplateDefaults(t *testing.T) {
 	}
 }
 
-// TestResolveTemplateDefaultsPassesLightThrough confirms light (D-069)
-// is untouched by fire-time resolution — it has no agent-level default
-// and no coding-only precedence the way harness/environment do.
-func TestResolveTemplateDefaultsPassesLightThrough(t *testing.T) {
+// TestTemplateCreateRequestLightMapsToLightFlow confirms a light
+// template (D-069) fires as flow=light.
+func TestTemplateCreateRequestLightMapsToLightFlow(t *testing.T) {
 	t.Parallel()
-	routeForRole := func(context.Context, string) string { return "default" }
-	got, _ := resolveTemplateDefaults(context.Background(), MissionTemplate{Goal: "g", Kind: "general", Light: true}, nil, routeForRole, nil, nil)
-	if !got.Light {
-		t.Fatal("Light = false, want true (passed through unchanged)")
+	deps := ResolveDeps{RouteForRole: func(context.Context, string) string { return "default" }}
+	got, err := ResolveDefaults(context.Background(), TemplateCreateRequest(Schedule{MissionTemplate: MissionTemplate{Goal: "g", Kind: "general", Light: true}}, nil), deps)
+	if err != nil {
+		t.Fatalf("ResolveDefaults: %v", err)
+	}
+	if got.Flow != FlowLight {
+		t.Fatalf("Flow = %q, want %q", got.Flow, FlowLight)
 	}
 }
 

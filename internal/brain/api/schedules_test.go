@@ -338,3 +338,43 @@ func assertErrorBody(t *testing.T, w *httptest.ResponseRecorder, wantCode, wantI
 		t.Fatalf("message = %q, want it to mention %q", body["message"], wantInMessage)
 	}
 }
+
+// TestScheduleSaveRejectsInvalidTemplate covers issue #816's save-time
+// template check on create and patch: a missing goal, an invalid kind
+// and light on kind=coding all 400 before the store is touched.
+func TestScheduleSaveRejectsInvalidTemplate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		template missions.MissionTemplate
+		want     string
+	}{
+		{"missing goal", missions.MissionTemplate{Kind: "general"}, "goal is required"},
+		{"empty kind", missions.MissionTemplate{Goal: "g"}, "kind must be"},
+		{"invalid kind", missions.MissionTemplate{Goal: "g", Kind: "bogus"}, "kind must be"},
+		{"light coding", missions.MissionTemplate{Goal: "g", Kind: "coding", Light: true}, "light is only valid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := &scheduleAPI{}
+			body, _ := json.Marshal(createScheduleRequest{Name: "daily", Cron: "0 7 * * *", MissionTemplate: tc.template})
+			w := httptest.NewRecorder()
+			h.create(w, httptest.NewRequest("POST", "/v1/schedules", bytes.NewReader(body)))
+			if w.Code != 400 {
+				t.Fatalf("create = %d, want 400", w.Code)
+			}
+			assertErrorBody(t, w, "bad_request", tc.want)
+
+			template := tc.template
+			body, _ = json.Marshal(patchScheduleRequest{MissionTemplate: &template})
+			req := httptest.NewRequest("PATCH", "/v1/schedules/abc", bytes.NewReader(body))
+			req.SetPathValue("id", "abc")
+			w = httptest.NewRecorder()
+			h.patch(w, req)
+			if w.Code != 400 {
+				t.Fatalf("patch = %d, want 400", w.Code)
+			}
+			assertErrorBody(t, w, "bad_request", tc.want)
+		})
+	}
+}

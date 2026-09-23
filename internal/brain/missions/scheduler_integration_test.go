@@ -5,6 +5,8 @@ package missions
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"os"
 	"sync"
 	"testing"
@@ -12,7 +14,23 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/SumonMSelim/timothy/internal/brain/session"
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
+
+// testScheduler fires through ResolveDefaults and a creator that
+// validates and inserts like Driver.Create, minus provisioning.
+func testScheduler(store *Store, destinationEnabled DestinationEnabled) *Scheduler {
+	create := func(ctx context.Context, m Mission) (string, error) {
+		if err := ValidateCreate(ctx, m, ValidateDeps{}); err != nil {
+			return "", err
+		}
+		return store.Create(ctx, m)
+	}
+	deps := ResolveDeps{RouteForRole: func(context.Context, string) string { return "default" }, DefaultMaxIterations: store.DefaultMaxIterations}
+	return NewScheduler(store.db, create, deps, nil, destinationEnabled, store.log)
+}
 
 func createTestSchedule(t *testing.T, store *Store, name, cronExpr string) string {
 	t.Helper()
@@ -50,8 +68,8 @@ func TestSchedulerNoDoubleFireAcrossInstances(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched1 := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
-	sched2 := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched1 := testScheduler(store, nil)
+	sched2 := testScheduler(store, nil)
 
 	now := time.Now()
 	var wg sync.WaitGroup
@@ -77,7 +95,7 @@ func TestSchedulerNoDoubleFireAcrossInstances(t *testing.T) {
 
 // TestSchedulerFireUsesScheduleNameDirectly confirms a scheduler-fired
 // mission's name is the schedule's own name, set directly at insert
-// time (createFromTemplate) — no LLM/gateway call involved, unlike a
+// time (TemplateCreateRequest), no LLM/gateway call involved, unlike a
 // UI-created mission's async name generation.
 func TestSchedulerFireUsesScheduleNameDirectly(t *testing.T) {
 	store := testStore(t)
@@ -90,7 +108,7 @@ func TestSchedulerFireUsesScheduleNameDirectly(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -107,7 +125,7 @@ func TestSchedulerFireUsesScheduleNameDirectly(t *testing.T) {
 // TestSchedulerFireForcesAutoApprovePlanTrue confirms D-087 (issue
 // #456): a scheduler-fired mission always gets auto_approve_plan=true.
 // MissionTemplate has no field for it at all, so this is really
-// confirming createFromTemplate's own INSERT hardcodes true rather
+// confirming TemplateCreateRequest forces true rather
 // than silently leaving the column at its Go zero-value false.
 func TestSchedulerFireForcesAutoApprovePlanTrue(t *testing.T) {
 	store := testStore(t)
@@ -120,7 +138,7 @@ func TestSchedulerFireForcesAutoApprovePlanTrue(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -154,7 +172,7 @@ func TestSchedulerFireCopiesReviewHarness(t *testing.T) {
 		_, _ = db.Exec(cctx, "DELETE FROM schedules WHERE id = $1", id)
 	})
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -205,7 +223,7 @@ func TestSchedulerFireUsesTemplateNameOverSlug(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -219,7 +237,7 @@ func TestSchedulerFireUsesTemplateNameOverSlug(t *testing.T) {
 	}
 }
 
-// TestSchedulerFireCopiesTemplateAttachments confirms createFromTemplate
+// TestSchedulerFireCopiesTemplateAttachments confirms a fire
 // copies a template's pre-converted attachments (issue #359) onto the
 // fired mission's sources column, so a fire spends nothing to attach
 // them.
@@ -258,7 +276,7 @@ func TestSchedulerFireCopiesTemplateAttachments(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -320,7 +338,7 @@ func TestSchedulerFireFiltersDestinationIDs(t *testing.T) {
 			return false, nil // droppedMissing: unknown id
 		}
 	}
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, destinationEnabled, store.log)
+	sched := testScheduler(store, destinationEnabled)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -361,7 +379,7 @@ func TestSchedulerLiveQueueDedup(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	now := time.Now()
 	if err := sched.tick(ctx, now); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -417,7 +435,7 @@ func TestSchedulerDedupSkipSetsPendingFireAndRecordsReason(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -454,7 +472,7 @@ func TestSchedulerPendingFireResolvesOnceMissionClears(t *testing.T) {
 		t.Fatalf("attach schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	// First tick: due, but the mission above is active -> dedup skip,
 	// pending_fire set.
 	if err := sched.tick(ctx, time.Now()); err != nil {
@@ -507,7 +525,7 @@ func TestSchedulerDueAndPendingFiresOnce(t *testing.T) {
 		t.Fatalf("seed pending schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -542,7 +560,7 @@ func TestSchedulerBackfillSkipRecordsReason(t *testing.T) {
 		t.Fatalf("backdate schedule: %v", err)
 	}
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -624,7 +642,7 @@ func TestSchedulerSkipsScheduleWithDeletedAgent(t *testing.T) {
 	poisoned := createDueScheduleWithTemplate(t, ctx, db, marker+"agent-missing-2", map[string]any{"goal": goal, "kind": "general", "agent_id": deletedAgent})
 	third := createDueScheduleWithTemplate(t, ctx, db, marker+"agent-missing-3", map[string]any{"goal": goal, "kind": "general", "agent_id": liveAgent})
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -650,10 +668,10 @@ func TestSchedulerSkipsScheduleWithDeletedAgent(t *testing.T) {
 }
 
 // TestSchedulerRegression815FailedInsertDoesNotAbortTick reproduces
-// issue #815 against real Postgres: a template whose INSERT fails
-// (kind violates missions_kind_check, which no pre-check catches)
-// used to abort the shared transaction (25P02) so no schedule fired.
-// The per-schedule savepoint now contains it to that one row.
+// issue #815 against real Postgres: a template with an invalid kind
+// used to fail its INSERT and abort the shared transaction (25P02) so
+// no schedule fired. Since issue #816 it is rejected before
+// Driver.Create and recorded as fire_error on that schedule alone.
 func TestSchedulerRegression815FailedInsertDoesNotAbortTick(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
@@ -664,7 +682,7 @@ func TestSchedulerRegression815FailedInsertDoesNotAbortTick(t *testing.T) {
 	poisoned := createDueScheduleWithTemplate(t, ctx, db, marker+"regression-815-2", map[string]any{"goal": goal, "kind": "bogus"})
 	third := createDueScheduleWithTemplate(t, ctx, db, marker+"regression-815-3", map[string]any{"goal": goal, "kind": "general"})
 
-	sched := NewScheduler(store.db, store, nil, nil, nil, nil, nil, nil, store.log)
+	sched := testScheduler(store, nil)
 	if err := sched.tick(ctx, time.Now()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -678,5 +696,98 @@ func TestSchedulerRegression815FailedInsertDoesNotAbortTick(t *testing.T) {
 	_, skippedAt, reason := scheduleFlags(t, ctx, db, poisoned)
 	if skippedAt == nil || reason != "fire_error" {
 		t.Fatalf("poisoned last_skipped_at=%v skip_reason=%q, want a timestamp and fire_error", skippedAt, reason)
+	}
+}
+
+// TestSchedulerFireProvisionsMissionViaDriver covers issue #816: one
+// tick fires through a real Driver.Create, so the mission is
+// provisioned (hidden session, workspace) instead of a bare row, and
+// still carries schedule_id and auto_approve_plan=true.
+func TestSchedulerFireProvisionsMissionViaDriver(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	db, _ := store.db.Get()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	wsRoot := t.TempDir()
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+	d := NewDriver(store, runner, NewWorkspace(wsRoot, nil, log), nil, session.NewStore(store.db, log), tools.NewPermissions(store.db, wsRoot), nil, nil, log)
+	d.SetValidateDeps(ValidateDeps{})
+	deps := ResolveDeps{RouteForRole: func(context.Context, string) string { return "default" }}
+	sched := NewScheduler(store.db, d.Create, deps, nil, nil, log)
+
+	id := createDueScheduleWithTemplate(t, ctx, db, marker+"provisioned", map[string]any{"goal": marker + "provisioned run", "kind": "general", "light": true})
+	if err := sched.tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	var missionID string
+	if err := db.QueryRow(ctx, `SELECT id FROM missions WHERE schedule_id = $1`, id).Scan(&missionID); err != nil {
+		t.Fatalf("query fired mission: %v", err)
+	}
+	// Wait for the background Drive to settle so teardown doesn't race it.
+	var m Mission
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		var err error
+		m, err = store.Get(ctx, missionID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if (m.Status != StatusIdle && m.Status != StatusWorking) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if m.SessionID == "" || m.Workspace == "" {
+		t.Fatalf("fired mission session=%q workspace=%q, want both provisioned by Driver.Create", m.SessionID, m.Workspace)
+	}
+	if m.ScheduleID != id || !m.AutoApprovePlan || m.Flow != FlowLight || m.Phase != PhaseBuild {
+		t.Fatalf("fired mission schedule=%q auto_approve_plan=%v flow=%q phase=%q, want %q true light build", m.ScheduleID, m.AutoApprovePlan, m.Flow, m.Phase, id)
+	}
+	if _, skippedAt, reason := scheduleFlags(t, ctx, db, id); skippedAt != nil || reason != "" {
+		t.Fatalf("skip fields = %v %q, want cleared after a successful fire", skippedAt, reason)
+	}
+}
+
+// TestSchedulerRejectsLightCodingTemplateAtFire covers issue #816: a
+// stored light+coding template (predating the save-time check) is
+// skipped with fire_error and creates nothing.
+func TestSchedulerRejectsLightCodingTemplateAtFire(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	db, _ := store.db.Get()
+
+	id := createDueScheduleWithTemplate(t, ctx, db, marker+"light-coding", map[string]any{"goal": marker + "light coding run", "kind": "coding", "light": true})
+	if err := testScheduler(store, nil).tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if n := countScheduleMissions(t, ctx, db, id); n != 0 {
+		t.Fatalf("missions = %d, want 0", n)
+	}
+	if _, skippedAt, reason := scheduleFlags(t, ctx, db, id); skippedAt == nil || reason != "fire_error" {
+		t.Fatalf("last_skipped_at=%v skip_reason=%q, want a timestamp and fire_error", skippedAt, reason)
+	}
+}
+
+// TestSchedulerFailedPendingFireKeepsPendingFlag confirms a pending
+// fire whose create fails keeps pending_fire, the state a rolled-back
+// savepoint left before issue #816 moved creation after commit.
+func TestSchedulerFailedPendingFireKeepsPendingFlag(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	db, _ := store.db.Get()
+
+	id := createDueScheduleWithTemplate(t, ctx, db, marker+"pending-fails", map[string]any{"goal": "", "kind": "general"})
+	// Not due (last_run now), but carrying a pending fire.
+	if _, err := db.Exec(ctx, `UPDATE schedules SET last_run = now(), pending_fire = true WHERE id = $1`, id); err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+	if err := testScheduler(store, nil).tick(ctx, time.Now()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	pending, skippedAt, reason := scheduleFlags(t, ctx, db, id)
+	if !pending || skippedAt == nil || reason != "fire_error" {
+		t.Fatalf("pending=%v last_skipped_at=%v skip_reason=%q, want pending kept and fire_error", pending, skippedAt, reason)
 	}
 }

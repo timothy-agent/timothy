@@ -938,13 +938,13 @@ func (d *Driver) removeSandbox(id string) {
 	}()
 }
 
-// Create inserts the mission row bare (no session, no workspace yet),
-// then calls ensureProvisioned to give it both — the exact same
-// provisioning step Advance calls lazily for a mission that reached
-// the store some other way (scheduler.go's createFromTemplate). Kicks
-// off the first Drive in a background goroutine — callers (the API's
-// create handler) get the new id back immediately without waiting on
-// the mission to actually run.
+// Create validates m, inserts the mission row bare (no session, no
+// workspace yet), then calls ensureProvisioned to give it both, the
+// same provisioning step Advance calls lazily for a row that reached
+// the store without one. Kicks off the first Drive in a background
+// goroutine; callers (the API create handler, the scheduler, the
+// workflow engine) get the new id back immediately. Callers resolve
+// defaults first via ResolveDefaults.
 func (d *Driver) Create(ctx context.Context, m Mission) (string, error) {
 	if d.validateDeps != nil {
 		if err := ValidateCreate(ctx, m, *d.validateDeps); err != nil {
@@ -1012,9 +1012,9 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 			return false, nil
 		}
 	}
-	// A mission that reached the store without going through Create
-	// (scheduler.go's createFromTemplate inserts a bare row directly) has
-	// no session and no workspace yet — provision it now, on the first
+	// A mission whose provisioning did not complete in Create (or a row
+	// inserted directly by a test) has no session and no workspace
+	// yet: provision it now, on the first
 	// turn that actually drives it, rather than leaving the worker with
 	// no shell/write_file tools (runner.go's missionTools returns nil for
 	// an empty WorkRoot).

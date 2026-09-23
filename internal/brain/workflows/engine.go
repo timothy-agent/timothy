@@ -47,26 +47,22 @@ type Engine struct {
 	events  missionEvents
 	log     *slog.Logger
 
-	// routeForRole resolves a step's default route when it omits one
-	// (see SetRouteForRole / spawnStep) — the same seam missions'
-	// scheduler and api/missions.go's create handler resolve "default"
-	// through, so a workflow step behaves like any other mission create
-	// that doesn't name a route. nil-gated: unset leaves an empty
-	// step.Route empty, which Driver.Create's ValidateCreate (D-071)
-	// then rejects.
-	routeForRole func(ctx context.Context, role string) string
+	// resolve is the shared create-path lookups (missions.ResolveDefaults)
+	// a step's mission resolves through, same as the API and scheduler.
+	// The zero value skips every lookup; an empty step route then stays
+	// empty and ValidateCreate (D-071) rejects it.
+	resolve missions.ResolveDeps
 }
 
 func NewEngine(store engineStore, spawner missionSpawner, events missionEvents, log *slog.Logger) *Engine {
 	return &Engine{store: store, spawner: spawner, events: events, log: log}
 }
 
-// SetRouteForRole wires the default-route resolver spawnStep uses for a
-// step that omits its own route — a setter for the same reason
-// missions.Driver's other optional deps are: cmd/brain/main.go builds
-// the gateway route resolver alongside the Engine itself.
-func (e *Engine) SetRouteForRole(fn func(ctx context.Context, role string) string) {
-	e.routeForRole = fn
+// SetResolveDeps wires the create-path lookups spawnStep resolves a
+// step's mission through (agent defaults, harness precedence, default
+// and coding routes, the D-100 route gate).
+func (e *Engine) SetResolveDeps(deps missions.ResolveDeps) {
+	e.resolve = deps
 }
 
 // StartRun creates a new run for workflowID and spawns the entry step's
@@ -203,37 +199,33 @@ func (e *Engine) spawnStep(ctx context.Context, runID, stepName string, step Ste
 			e.log.Warn("workflows: spawn step: record unknown placeholder warning failed", "run_id", runID, "key", key, "error", err)
 		}
 	}
-	route := step.Route
-	if route == "" && e.routeForRole != nil {
-		route = e.routeForRole(ctx, "default")
+	m, err := missions.ResolveDefaults(ctx, StepCreateRequest(step, goal, runID, stepName, outcome, parentMissionID), e.resolve)
+	if err != nil {
+		return "", err
 	}
-	// flow follows light exactly, same normalization as
-	// api/missions.go's create handler (D-090, issue #459): a workflow
-	// step has no flow field of its own, only light.
-	flow := missions.FlowFull
-	if step.Light {
-		flow = missions.FlowLight
-	}
-	// step.DestinationIDs becomes bare-id destination entries, same shape
-	// api/missions.go's create handler normalizes a request into (see
-	// missions.DestinationEntry). A step wanting a push names a github
-	// destination row's id here.
+	return e.spawner.Create(ctx, m)
+}
+
+// StepCreateRequest maps a workflow step onto the shared
+// missions.CreateRequest. goal is the interpolated step goal; outcome
+// becomes the parent-lineage source (issue #481). The mission always
+// auto-approves its plan (D-087) and keeps tool approval off, as
+// workflow missions always have.
+func StepCreateRequest(step Step, goal, runID, stepName, outcome, parentMissionID string) missions.CreateRequest {
+	// A step wanting a push names a github destination row's id here.
 	var destinations []missions.DestinationEntry
 	for _, id := range step.DestinationIDs {
 		destinations = append(destinations, missions.DestinationEntry{DestinationID: id})
 	}
-	// outcome becomes this step's mission's parent-lineage Sources entry
-	// (issue #481), same shape as followup.go's own CreateFollowUp.
-	sources := []missions.SourceEntry{{Source: missions.SourceKindMission, ID: missions.ParentLineageID, MissionID: parentMissionID, Digest: outcome}}
-	return e.spawner.Create(ctx, missions.Mission{
-		Goal: goal, Kind: step.Kind, Flow: flow, Route: route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
+	autoApprovePlan, autoApproveTools := true, false
+	return missions.CreateRequest{
+		Goal: goal, Kind: step.Kind, Light: step.Light, Route: step.Route, PlanRoute: step.PlanRoute, AgentID: step.AgentID,
 		Destinations:    destinations,
-		ParentMissionID: parentMissionID, Sources: sources,
-		WorkflowRunID: runID, WorkflowStep: stepName,
-		// Forced true (D-087, issue #456): a workflow-spawned mission
-		// runs unattended, so nobody is watching to approve its plan.
-		AutoApprovePlan: true,
-	})
+		ParentMissionID: parentMissionID,
+		Sources:         []missions.SourceEntry{{Source: missions.SourceKindMission, ID: missions.ParentLineageID, MissionID: parentMissionID, Digest: outcome}},
+		WorkflowRunID:   runID, WorkflowStep: stepName,
+		AutoApprovePlan: &autoApprovePlan, AutoApproveTools: &autoApproveTools,
+	}
 }
 
 func (e *Engine) pauseRun(ctx context.Context, runID, reason string) {
