@@ -10,7 +10,7 @@ import (
 
 // registerAttachments mounts the attachment upload/download surface.
 // Nil-gated: store is nil when ATTACHMENTS_DIR is unset, leaving the
-// surface unmounted (404s), same pattern as missions/schedules/agents.
+// surface unmounted (404s), same pattern as missions/automations/agents.
 func (a *API) registerAttachments(handle func(pattern string, h http.Handler), store *attachments.Store) {
 	if store == nil {
 		return

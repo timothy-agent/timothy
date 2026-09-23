@@ -258,35 +258,17 @@ func TestResolveDefaultsOriginValidates(t *testing.T) {
 	}
 }
 
-// TestTemplateCreateRequestResolvesAutomation: a schedule fire resolves
-// to an unattended automation mission with the 1800s timeout default.
-func TestTemplateCreateRequestResolvesAutomation(t *testing.T) {
-	t.Parallel()
-	req := TemplateCreateRequest(Schedule{ID: "s1", Name: "digest", MissionTemplate: MissionTemplate{Goal: "g", Kind: KindGeneral}}, nil)
-	if req.OriginKind != OriginAutomation {
-		t.Fatalf("OriginKind = %q, want automation", req.OriginKind)
-	}
-	m, err := ResolveDefaults(context.Background(), req, ResolveDeps{})
-	if err != nil {
-		t.Fatalf("ResolveDefaults: %v", err)
-	}
-	if m.OriginKind != OriginAutomation || !m.Unattended || m.PermissionTimeoutSeconds == nil || *m.PermissionTimeoutSeconds != 1800 {
-		t.Fatalf("origin=%q unattended=%v timeout=%v, want automation true 1800", m.OriginKind, m.Unattended, m.PermissionTimeoutSeconds)
-	}
-}
-
-// TestNoScheduleIDUnattendedInference guards issue #817: no non-test
-// source in this package infers "nobody is watching" from ScheduleID
-// or WorkflowRunID; Mission.Unattended is the one rule.
-func TestNoScheduleIDUnattendedInference(t *testing.T) {
+// TestNoLineageUnattendedInference guards issue #817: no non-test
+// source in this package infers "nobody is watching" from
+// AutomationRunID or WorkflowRunID; Mission.Unattended is the one rule.
+func TestNoLineageUnattendedInference(t *testing.T) {
 	t.Parallel()
 	src := os.DirFS(".")
 	files, err := fs.Glob(src, "*.go")
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
-	// filter.ScheduleID (ListFilter) narrows a query, not an inference.
-	inference := regexp.MustCompile(`(\w+)\.(ScheduleID|WorkflowRunID)\s*!=\s*""`)
+	inference := regexp.MustCompile(`(\w+)\.(AutomationRunID|WorkflowRunID)\s*!=\s*""`)
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -296,82 +278,8 @@ func TestNoScheduleIDUnattendedInference(t *testing.T) {
 			t.Fatalf("read %s: %v", f, err)
 		}
 		for _, match := range inference.FindAllStringSubmatch(string(body), -1) {
-			if match[1] == "filter" {
-				continue
-			}
 			t.Errorf("%s: %q infers unattended from a lineage id, use Mission.Unattended", f, match[0])
 		}
-	}
-}
-
-func TestTemplateCreateRequestCarriesScheduleFields(t *testing.T) {
-	t.Parallel()
-	sc := Schedule{ID: "s1", Name: "inbox-digest", MissionTemplate: MissionTemplate{Goal: "g", Kind: KindGeneral, AutoApproveTools: false}}
-	req := TemplateCreateRequest(sc, []string{"d1"})
-	if req.ScheduleID != "s1" || req.Name != "inbox-digest" || req.AutoApprovePlan == nil || !*req.AutoApprovePlan {
-		t.Fatalf("req = %+v, want schedule id, schedule name, auto_approve_plan true", req)
-	}
-	if req.AutoApproveTools == nil || *req.AutoApproveTools {
-		t.Fatal("AutoApproveTools must carry the template's explicit false")
-	}
-	if len(req.Destinations) != 1 || req.Destinations[0].DestinationID != "d1" {
-		t.Fatalf("Destinations = %+v, want d1", req.Destinations)
-	}
-	sc.MissionTemplate.Name = "Today's Meetings"
-	if got := TemplateCreateRequest(sc, nil).Name; got != "Today's Meetings" {
-		t.Fatalf("Name = %q, want the template's own name", got)
-	}
-}
-
-func TestValidateTemplate(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name    string
-		t       MissionTemplate
-		wantErr string
-	}{
-		{"valid general", MissionTemplate{Goal: "g", Kind: KindGeneral}, ""},
-		{"valid light general", MissionTemplate{Goal: "g", Kind: KindGeneral, Light: true}, ""},
-		{"valid coding", MissionTemplate{Goal: "g", Kind: KindCoding}, ""},
-		{"missing goal", MissionTemplate{Kind: KindGeneral}, "goal is required"},
-		{"blank goal", MissionTemplate{Goal: "  ", Kind: KindGeneral}, "goal is required"},
-		{"empty kind", MissionTemplate{Goal: "g"}, "kind must be"},
-		{"bogus kind", MissionTemplate{Goal: "g", Kind: "bogus"}, "kind must be"},
-		{"light coding", MissionTemplate{Goal: "g", Kind: KindCoding, Light: true}, "light is only valid for kind=general"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			err := ValidateTemplate(tc.t)
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatalf("ValidateTemplate: %v", err)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("err = %v, want it to mention %q", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-// TestScheduleFireRejectsLightCodingTemplate covers the fire-time half
-// of the light+coding rule: a stored row that predates the save check
-// fails before Driver.Create and maps to fire_error.
-func TestScheduleFireRejectsLightCodingTemplate(t *testing.T) {
-	t.Parallel()
-	created := false
-	s := &Scheduler{log: discardLog(), create: func(context.Context, Mission) (string, error) { created = true; return "m1", nil }}
-	_, err := s.createFromSchedule(context.Background(), Schedule{ID: "s1", MissionTemplate: MissionTemplate{Goal: "g", Kind: KindCoding, Light: true}})
-	if err == nil || !errors.Is(err, ErrInvalidMission) {
-		t.Fatalf("err = %v, want ErrInvalidMission", err)
-	}
-	if created {
-		t.Fatal("Driver.Create reached for an invalid template")
-	}
-	if got := skipReasonFor(err); got != "fire_error" {
-		t.Fatalf("skip reason = %q, want fire_error", got)
 	}
 }
 

@@ -233,7 +233,7 @@ type missionAPI struct {
 }
 
 // destinationLookup is the narrow slice of *destinations.Store the
-// schedule handlers need to validate destination_ids — EnabledByID
+// automation handlers need to validate destination_ids: EnabledByID
 // reports whether id names a real, enabled row (ok=false covers both
 // "unknown id" and "disabled", both rejected identically). Mission
 // create validation moved into missions.ValidateCreate (D-071).
@@ -278,8 +278,8 @@ func failMission(w http.ResponseWriter, err error) {
 	}
 }
 
-// list serves GET /v1/missions, optionally narrowed by ?schedule_id=
-// (a recurring schedule's fire history: every mission it spawned),
+// list serves GET /v1/missions, optionally narrowed by ?automation_id=
+// (every mission an automation's runs started),
 // ?q= (case-insensitive substring match on name or goal, the
 // composer #-mention mission search), ?origin_kind= (one
 // missions.Origin* value), and/or ?limit= (a positive
@@ -288,12 +288,12 @@ func failMission(w http.ResponseWriter, err error) {
 // than a silently-empty filter.
 func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 	var filter missions.ListFilter
-	if v := r.URL.Query().Get("schedule_id"); v != "" {
+	if v := r.URL.Query().Get("automation_id"); v != "" {
 		if !validSessionID(v) {
-			jsonError(w, http.StatusBadRequest, "bad_request", "schedule_id must be a UUID")
+			jsonError(w, http.StatusBadRequest, "bad_request", "automation_id must be a UUID")
 			return
 		}
-		filter.ScheduleID = v
+		filter.AutomationID = v
 	}
 	if v := r.URL.Query().Get("origin_kind"); v != "" {
 		if !missions.ValidOrigin(v) {
@@ -462,7 +462,7 @@ type createMissionRequest struct {
 	// currency when the user hasn't explicitly overridden it — this
 	// keeps the handler simple and stateless w.r.t. settings, UNLIKE
 	// Harness below: the coding-executor default must apply on every
-	// creation path (including the scheduler, which never goes through
+	// creation path (including automation runs, which never go through
 	// the web UI), so create() reads settings for that one field.
 	BudgetCurrency string `json:"budget_currency"`
 	// Harness selects the execution strategy for a coding mission's
@@ -494,7 +494,7 @@ type createMissionRequest struct {
 	// false" reasoning as AutoApproveTools above): false parks the
 	// mission for operator approve/replan/rediscover once the plan
 	// phase lands (D-087, issue #456). Ignored (forced true) for
-	// scheduler-fired and workflow-spawned missions.
+	// automation-started and workflow-spawned missions.
 	AutoApprovePlan *bool `json:"auto_approve_plan"`
 	// RepoURL is a GitHub repo's https clone URL: when set, the mission
 	// clones it instead of self-initializing an empty repo. Mutually
@@ -1203,8 +1203,8 @@ func (h *missionAPI) baseRoute(ctx context.Context, kind, explicitRoute, agentID
 }
 
 // resolveHarness resolves the build phase's harness via
-// missions.ResolveHarness, the same precedence chain create() and the
-// scheduler's fire path use: explicit -> agent -> settings -> native.
+// missions.ResolveHarness, the same precedence chain create() and
+// automation runs use: explicit -> agent -> settings -> native.
 // Only kind=coding can ever delegate (mirrors policy.go's
 // canDelegate) - any other kind always stays native regardless of
 // what resolves.

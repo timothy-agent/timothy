@@ -32,9 +32,9 @@ export function MissionCard({
       <Link to={`/missions/${mission.id}`}>
         <div className="flex flex-wrap items-center gap-1.5">
           <StatusBadge status={missionStatus(mission)} label={statusLabel(mission)} size="sm" />
-          {mission.schedule_id && (
+          {mission.automation_run_id && (
             <Badge variant="secondary" size="sm">
-              recurring
+              automation
             </Badge>
           )}
           {mission.phase === 'plan' && mission.pause_reason === 'approval' && (

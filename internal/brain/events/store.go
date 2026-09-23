@@ -29,6 +29,20 @@ func (s *Store) Insert(ctx context.Context, tx pgx.Tx, ev Event) error {
 	return nil
 }
 
+// Add inserts ev in its own transaction and returns its id.
+func (s *Store) Add(ctx context.Context, ev Event) (int64, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return 0, fmt.Errorf("events add: %w", err)
+	}
+	var id int64
+	if err := db.QueryRow(ctx, `INSERT INTO events (source, kind, dedup_key, payload) VALUES ($1, $2, $3, $4) RETURNING id`,
+		ev.Source, ev.Kind, ev.DedupKey, []byte(ev.Payload)).Scan(&id); err != nil {
+		return 0, fmt.Errorf("events add: %w", err)
+	}
+	return id, nil
+}
+
 // claimBatch locks up to limit unprocessed events in id order, skipping
 // rows another transaction already holds.
 func claimBatch(ctx context.Context, tx pgx.Tx, limit int) ([]Event, error) {

@@ -451,8 +451,8 @@ func (s *Store) SetDefault(ctx context.Context, id string) error {
 }
 
 // Delete removes an agent; the default is protected (sessions must
-// always have somewhere to land), and so is any agent a schedule
-// template still names (issue #815).
+// always have somewhere to land), and so is any agent an automation
+// still runs as (issues #815, #821).
 func (s *Store) Delete(ctx context.Context, id string) error {
 	db, err := s.db.Get()
 	if err != nil {
@@ -465,7 +465,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if before.IsDefault {
 		return fmt.Errorf("the default agent cannot be deleted: %w", ErrInUse)
 	}
-	rows, err := db.Query(ctx, `SELECT name FROM schedules WHERE mission_template->>'agent_id' = $1 ORDER BY name`, id)
+	rows, err := db.Query(ctx, `SELECT name FROM automations WHERE agent_id = $1 ORDER BY name`, id)
 	if err != nil {
 		return fmt.Errorf("agents delete: %w", err)
 	}
@@ -474,7 +474,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("agents delete: %w", err)
 	}
 	if len(names) > 0 {
-		return fmt.Errorf("agent is used by schedule(s) %s: %w", strings.Join(names, ", "), ErrInUse)
+		return fmt.Errorf("agent is used by automation(s) %s: %w", strings.Join(names, ", "), ErrInUse)
 	}
 	if _, err := db.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("agents delete: %w", err)

@@ -28,7 +28,7 @@ type ValidateDeps struct {
 	// bool-only signature can't distinguish "unknown route" from "gateway
 	// unreachable" — folding it into create-time validation would risk
 	// rejecting a momentarily-unreachable-but-valid route. Kept on
-	// ValidateDeps (wired the same way DestinationEnabled is) for a
+	// ValidateDeps (wired the same way DestinationKind is) for a
 	// future caller that wants that stricter check.
 	RouteExists func(ctx context.Context, name string) bool
 	// DestinationKind reports a destination row's kind and enabled state
@@ -41,7 +41,7 @@ type ValidateDeps struct {
 	DestinationKind func(ctx context.Context, id string) (kind string, enabled bool, err error)
 	// KBCollectionExists reports whether id names a real kb_collections
 	// row: nil skips a "kb" destination entry's collection_id validation
-	// entirely, same degrade-to-unchecked reasoning as DestinationEnabled.
+	// entirely, same degrade-to-unchecked reasoning as DestinationKind.
 	KBCollectionExists func(ctx context.Context, id string) (bool, error)
 }
 
@@ -61,7 +61,7 @@ func validModelPin(pin string) bool {
 
 // ValidateCreate enforces the domain rules a mission row must satisfy
 // regardless of which caller is creating it: the HTTP create handler,
-// the scheduler's fireMission and the workflows engine's spawnStep all
+// automation runs and the workflows engine's spawnStep all
 // call into Driver.Create, and only the HTTP handler used to validate
 // anything (D-071). Callers
 // must resolve their own defaults (kind, route, environment auto-detect)

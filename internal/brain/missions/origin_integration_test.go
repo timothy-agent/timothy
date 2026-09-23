@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -89,34 +90,50 @@ func TestStoreOriginRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSchedulerFireRecordsAutomationOrigin covers issue #817: a
-// scheduler-fired mission row has origin_kind=automation, unattended
-// true and the 1800s permission timeout default.
-func TestSchedulerFireRecordsAutomationOrigin(t *testing.T) {
+// TestAutomationRunMissionRecordsOrigin covers issues #817/#821: a
+// mission built from an automation template links its run, records
+// origin_kind=automation, unattended and the 1800s timeout, and the
+// automation_id list filter finds it.
+func TestAutomationRunMissionRecordsOrigin(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-
-	id := createTestSchedule(t, store, marker+"automation-origin", "* * * * *")
 	db, _ := store.db.Get()
-	if _, err := db.Exec(ctx, "UPDATE schedules SET created_at = $2 WHERE id = $1", id, time.Now().Add(-2*time.Minute)); err != nil {
-		t.Fatalf("backdate schedule: %v", err)
+	tag := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	var automationID, runID string
+	if err := db.QueryRow(ctx, `INSERT INTO automations (name, agent_id, action)
+		VALUES ($1, (SELECT id FROM agents WHERE is_default LIMIT 1), '{"kind":"mission"}') RETURNING id`, marker+tag+" origin").Scan(&automationID); err != nil {
+		t.Fatalf("insert automation: %v", err)
 	}
-	if err := testScheduler(store, nil).tick(ctx, time.Now()); err != nil {
-		t.Fatalf("tick: %v", err)
+	if err := db.QueryRow(ctx, `INSERT INTO automation_runs (automation_id, dedup_key, status) VALUES ($1, $2, 'running') RETURNING id`, automationID, "itest-"+tag).Scan(&runID); err != nil {
+		t.Fatalf("insert run: %v", err)
 	}
-	var missionID string
-	if err := db.QueryRow(ctx, `SELECT id FROM missions WHERE schedule_id = $1`, id).Scan(&missionID); err != nil {
-		t.Fatalf("query fired mission: %v", err)
+	req := TemplateCreateRequest(MissionTemplate{Goal: marker + tag + " automation origin", Kind: KindGeneral, Light: true}, marker+tag, "", nil, runID)
+	req.Route = "default"
+	m, err := ResolveDefaults(ctx, req, ResolveDeps{})
+	if err != nil {
+		t.Fatalf("ResolveDefaults: %v", err)
 	}
-	m, err := store.Get(ctx, missionID)
+	missionID, err := store.Create(ctx, m)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := store.Get(ctx, missionID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if m.OriginKind != OriginAutomation || !m.Unattended {
-		t.Fatalf("fired mission origin_kind=%q unattended=%v, want automation true", m.OriginKind, m.Unattended)
+	if got.OriginKind != OriginAutomation || !got.Unattended || got.AutomationRunID != runID {
+		t.Fatalf("mission origin_kind=%q unattended=%v run=%q, want automation true %s", got.OriginKind, got.Unattended, got.AutomationRunID, runID)
 	}
-	if m.PermissionTimeoutSeconds == nil || *m.PermissionTimeoutSeconds != 1800 {
-		t.Fatalf("fired mission permission_timeout_seconds = %v, want 1800", m.PermissionTimeoutSeconds)
+	if got.PermissionTimeoutSeconds == nil || *got.PermissionTimeoutSeconds != 1800 {
+		t.Fatalf("permission_timeout_seconds = %v, want 1800", got.PermissionTimeoutSeconds)
+	}
+	rows, err := store.List(ctx, ListFilter{AutomationID: automationID})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != missionID {
+		t.Fatalf("List(automation_id) = %d rows, want exactly the run's mission", len(rows))
 	}
 }
 

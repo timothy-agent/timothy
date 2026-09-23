@@ -91,7 +91,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay,
 	pending_permission, auto_approve_tools, auto_approve_plan, last_evidence,
-	discover_notes, replan_used, schedule_id, session_id, harness, review_harness, environment,
+	discover_notes, replan_used, automation_run_id, session_id, harness, review_harness, environment,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow,
 	review_findings, rework_rounds, has_plan, executor_session_policy, harness_retries, origin_kind, unattended`
@@ -160,7 +160,7 @@ func scanPendingInput(m *Mission, raw []byte) {
 func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	var (
 		m                                                            Mission
-		agentID, scheduleID, sessionID, parentMission                *string
+		agentID, automationRunID, sessionID, parentMission           *string
 		phase, status                                                string
 		pendingPermissionRaw                                         []byte
 		plan, progress, sourcesRaw, artifactRefsRaw, destinationsRaw []byte
@@ -176,7 +176,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment,
+		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -193,8 +193,8 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
-	if scheduleID != nil {
-		m.ScheduleID = *scheduleID
+	if automationRunID != nil {
+		m.AutomationRunID = *automationRunID
 	}
 	if sessionID != nil {
 		m.SessionID = *sessionID
@@ -249,7 +249,7 @@ const failureReasonJoin = `
 func scanMission(row pgx.Row) (Mission, error) {
 	var (
 		m                                                            Mission
-		agentID, scheduleID, sessionID, parentMission                *string
+		agentID, automationRunID, sessionID, parentMission           *string
 		phase, status                                                string
 		pendingPermissionRaw                                         []byte
 		plan, progress, sourcesRaw, artifactRefsRaw, destinationsRaw []byte
@@ -264,7 +264,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &scheduleID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment,
+		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -281,8 +281,8 @@ func scanMission(row pgx.Row) (Mission, error) {
 	if agentID != nil {
 		m.AgentID = *agentID
 	}
-	if scheduleID != nil {
-		m.ScheduleID = *scheduleID
+	if automationRunID != nil {
+		m.AutomationRunID = *automationRunID
 	}
 	if sessionID != nil {
 		m.SessionID = *sessionID
@@ -374,9 +374,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 		origin = OriginAPI
 	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness, executor_session_policy, schedule_id, origin_kind, unattended)
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness, executor_session_policy, automation_run_id, origin_kind, unattended)
 		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30, $31, $32, NULLIF($33, '')::uuid, $34, $35) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, s.maxIterationsFor(ctx, m.MaxIterations), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy, m.ScheduleID, origin, m.Unattended,
+		m.Goal, m.Name, m.Kind, m.AgentID, s.maxIterationsFor(ctx, m.MaxIterations), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy, m.AutomationRunID, origin, m.Unattended,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -451,11 +451,11 @@ func (s *Store) Delete(ctx context.Context, id string) (Mission, error) {
 }
 
 // ListFilter narrows List's result set — the zero value (no filter,
-// no limit) is the original "every mission" behavior. Added for a
-// recurring schedule's fire history view (?schedule_id=) and any
-// future paginated list (?limit=), both optional.
+// no limit) is the original "every mission" behavior.
 type ListFilter struct {
-	ScheduleID string
+	// AutomationID, when set, keeps only missions started by that
+	// automation's runs (GET /v1/missions?automation_id=).
+	AutomationID string
 	// OriginKind, when set, keeps only missions of that origin
 	// (GET /v1/missions?origin_kind=).
 	OriginKind string
@@ -478,9 +478,9 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) 
 	query := `SELECT ` + missionColumns + `, fr.reason FROM missions` + failureReasonJoin
 	var args []any
 	var where []string
-	if filter.ScheduleID != "" {
-		args = append(args, filter.ScheduleID)
-		where = append(where, fmt.Sprintf("schedule_id = $%d", len(args)))
+	if filter.AutomationID != "" {
+		args = append(args, filter.AutomationID)
+		where = append(where, fmt.Sprintf("automation_run_id IN (SELECT id FROM automation_runs WHERE automation_id = $%d)", len(args)))
 	}
 	if filter.OriginKind != "" {
 		args = append(args, filter.OriginKind)
@@ -1010,7 +1010,7 @@ func (s *Store) SetDiscoverNotes(ctx context.Context, id, notes string) error {
 }
 
 // SetNameIfEmpty writes an auto-generated display name without
-// clobbering one already set (a scheduler-fired mission's own
+// clobbering one already set (an automation-started mission's own
 // template name, or an earlier successful generation) — mirrors
 // session.Store.SetTitleIfEmpty exactly: a plain guarded UPDATE, not
 // state-machine/append-only, since name is display metadata about the
@@ -1422,7 +1422,7 @@ func (s *Store) ReconcileTerminal(ctx context.Context, id string, proposed Phase
 // SetSession attaches the mission's hidden bookkeeping session id —
 // used by lazy provisioning (driver.go's ensureProvisioned) for a
 // mission that reached the store without going through Driver.Create
-// (a scheduler-fired row, see scheduler.go's createFromTemplate).
+// (a row inserted directly, as tests do).
 // Race-idempotent by construction: the WHERE clause only ever matches
 // a mission that doesn't already have one, so two concurrent
 // ensureProvisioned calls for the same never-provisioned mission (a

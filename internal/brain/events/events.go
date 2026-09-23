@@ -7,6 +7,7 @@ package events
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -20,6 +21,11 @@ const (
 
 	KindMissionDone   = "mission.done"
 	KindMissionFailed = "mission.failed"
+
+	// SourceManual marks events an operator requested through the API.
+	SourceManual = "manual"
+	// KindRunNow asks for one run of an automation.
+	KindRunNow = "run.now"
 )
 
 // Event is one events row.
@@ -88,4 +94,32 @@ func DecodeMission(ev Event) (MissionPayload, error) {
 		return MissionPayload{}, fmt.Errorf("events: event %d has no mission_id", ev.ID)
 	}
 	return p, nil
+}
+
+// RunNowPayload is the payload of a run.now event.
+type RunNowPayload struct {
+	AutomationID string    `json:"automation_id"`
+	RequestedAt  time.Time `json:"requested_at"`
+}
+
+// RunNow builds the event for an operator's run-now request on an
+// automation, deduplicated by a fresh request id.
+func RunNow(automationID string, at time.Time) (Event, error) {
+	if automationID == "" {
+		return Event{}, fmt.Errorf("events: run.now event needs an automation id")
+	}
+	raw, err := json.Marshal(RunNowPayload{AutomationID: automationID, RequestedAt: at.UTC().Truncate(time.Second)})
+	if err != nil {
+		return Event{}, fmt.Errorf("events: marshal run.now payload: %w", err)
+	}
+	return Event{Source: SourceManual, Kind: KindRunNow, DedupKey: newRequestID(), Payload: raw}, nil
+}
+
+// newRequestID returns a random RFC 4122 version 4 UUID.
+func newRequestID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }

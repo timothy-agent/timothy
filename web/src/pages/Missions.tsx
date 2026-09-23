@@ -90,8 +90,8 @@ export function Missions() {
         if (kindFilter !== 'all' && m.kind !== kindFilter) return false
         if (harnessFilter !== 'all' && harnessLabel(m.harness) !== harnessFilter) return false
         if (modelFilter !== 'all' && m.top_model !== modelFilter) return false
-        if (sourceFilter === 'manual' && m.schedule_id) return false
-        if (sourceFilter === 'automated' && !m.schedule_id) return false
+        if (sourceFilter === 'manual' && m.origin_kind === 'automation') return false
+        if (sourceFilter === 'automated' && m.origin_kind !== 'automation') return false
         return true
       }),
     [missions, kindFilter, harnessFilter, modelFilter, sourceFilter],

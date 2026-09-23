@@ -387,7 +387,7 @@ func (s *Store) CountEdgeFirings(ctx context.Context, runID, from, on, to string
 
 // isUniqueViolation reports whether err is Postgres's unique_violation
 // (23505) — workflows.name's UNIQUE constraint. Mirrors
-// missions/schedules.go's isUniqueViolation.
+// agents.go's isUniqueViolation.
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"

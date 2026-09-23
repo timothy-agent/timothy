@@ -899,7 +899,7 @@ func (d *Driver) removeSandbox(id string) {
 // workspace yet), then calls ensureProvisioned to give it both, the
 // same provisioning step Advance calls lazily for a row that reached
 // the store without one. Kicks off the first Drive in a background
-// goroutine; callers (the API create handler, the scheduler, the
+// goroutine; callers (the API create handler, automation runs, the
 // workflow engine) get the new id back immediately. Callers resolve
 // defaults first via ResolveDefaults.
 func (d *Driver) Create(ctx context.Context, m Mission) (string, error) {

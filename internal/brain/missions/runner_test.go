@@ -1838,7 +1838,7 @@ func TestRunWorkerGetsMissionScopedShell(t *testing.T) {
 
 // TestRunWorkerIncludesConnectorReadsWhenResolverSet confirms RunWorker
 // layers the connector reads resolver's tools into ExtraTools:
-// scheduled general missions (daily inbox digest) need gmail/calendar
+// automation general missions (daily inbox digest) need gmail/calendar
 // reads despite BuiltinsOnly.
 func TestRunWorkerIncludesConnectorReadsWhenResolverSet(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -1887,7 +1887,7 @@ func TestRunWorkerOmitsConnectorReadsWhenResolverUnset(t *testing.T) {
 
 // TestDiscoverSessionIncludesConnectorReadsWhenResolverSet mirrors
 // TestRunWorkerIncludesConnectorReadsWhenResolverSet for the discover
-// phase: scheduled missions may need connector reads before planning
+// phase: automation missions may need connector reads before planning
 // too.
 func TestDiscoverSessionIncludesConnectorReadsWhenResolverSet(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -1998,7 +1998,7 @@ func TestMissionToolsSandboxCapsOutput(t *testing.T) {
 
 // TestRunnerUnattendedFollowsColumn is the D-039 wiring check (issue
 // #817): every phase's loop.Request carries Mission.Unattended, never
-// an inference from ScheduleID or WorkflowRunID.
+// an inference from AutomationRunID or WorkflowRunID.
 func TestRunnerUnattendedFollowsColumn(t *testing.T) {
 	phases := map[string]struct {
 		batch []stream.StreamEvent
@@ -2040,7 +2040,7 @@ func TestRunnerUnattendedFollowsColumn(t *testing.T) {
 	}{
 		{"unattended column", Mission{Unattended: true}, true},
 		{"attended plain", Mission{}, false},
-		{"schedule id without column", Mission{ScheduleID: "sched-1"}, false},
+		{"automation run without column", Mission{AutomationRunID: "run-1"}, false},
 		{"workflow run without column", Mission{WorkflowRunID: "run-1"}, false},
 		{"unattended with origin api", Mission{OriginKind: OriginAPI, Unattended: true}, true},
 	}

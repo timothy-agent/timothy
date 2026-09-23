@@ -10,7 +10,6 @@ import {
   deleteMission,
   getMission,
   listDestinations,
-  listSchedules,
   missionEvents,
   missionUsage,
   openMissionPR,
@@ -28,7 +27,6 @@ import type {
   MissionEvent,
   MissionPROpenedPayload,
   MissionUsage,
-  Schedule,
 } from '../api/types'
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { CostDisplay } from '../components/missions/CostDisplay'
@@ -65,7 +63,6 @@ import { PageShell } from '../components/timothy/page-shell'
 import { Panel } from '../components/timothy/panel'
 import { StatusBadge } from '../components/timothy/status-badge'
 import { missionStatus } from '../components/timothy/status'
-import { describeCron } from '../lib/schedules'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
 import { compact, euDateTime, formatDuration, missionDisplayName, money, relativeTime } from '../lib/format'
@@ -122,11 +119,6 @@ function budgetPercentSpent(usage: MissionUsage, budgetCurrency: string, budgetA
   )
   if ((amount == null || amount === 0) && hasOtherSpend) return null
   return Math.round(((amount ?? 0) / budgetAmount) * 100)
-}
-
-function formatDate(v?: string): string {
-  if (!v) return 'N/A'
-  return new Date(v).toLocaleString()
 }
 
 // githubFullName/githubHTMLURL derive the display label and browsable
@@ -245,7 +237,6 @@ export function MissionDetail() {
   const [mission, setMission] = useState<Mission | null>(null)
   const [events, setEvents] = useState<MissionEvent[]>([])
   const [usage, setUsage] = useState<MissionUsage | null>(null)
-  const [schedule, setSchedule] = useState<Schedule | null>(null)
   // destinations backs the badges/Destinations card below: fetched
   // once, same call the mission create form uses, so a destination
   // entry's own id-only reference can resolve to its name/kind/config.
@@ -338,20 +329,6 @@ export function MissionDetail() {
       () => refresh(),
     )
   }, [refresh, id])
-
-  // No GET-by-id for schedules; the list is small, so find the one
-  // this mission fired from rather than adding a single-row endpoint.
-  const scheduleID = mission?.schedule_id
-  useEffect(() => {
-    if (!scheduleID) {
-      setSchedule(null)
-      return
-    }
-    listSchedules().then(
-      (rows) => setSchedule(rows.find((s) => s.id === scheduleID) ?? null),
-      () => undefined,
-    )
-  }, [scheduleID])
 
   // Chime only on the transition into a permission block, not on every
   // poll while it stays pending — the banner itself is the persistent
@@ -672,10 +649,8 @@ export function MissionDetail() {
         />
       </PageHeader>
 
-      {schedule && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          Recurring · {describeCron(schedule.cron)} · next run {formatDate(schedule.next_run)}
-        </p>
+      {mission.automation_run_id && (
+        <p className="mt-1 text-xs text-muted-foreground">Fired by an automation</p>
       )}
       {mission.parent_mission_id && (
         <p className="mt-1 text-xs text-muted-foreground">

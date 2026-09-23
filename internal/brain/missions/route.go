@@ -26,7 +26,7 @@ func DefaultCodingRoute(ctx context.Context, routeExists func(context.Context, s
 }
 
 // Harness provenance values, shared by every resolution site
-// (mission create, schedule fire, execution-plan preview) so they
+// (mission create, automation run, execution-plan preview) so they
 // can never disagree on what a given source is called.
 const (
 	HarnessSourceExplicit = "explicit"

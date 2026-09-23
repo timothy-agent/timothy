@@ -32,7 +32,7 @@ const (
 )
 
 // drainLockKey is this package's advisory lock key ("EVNT"), distinct
-// from migrate's "TIMO", missions' "TIMS" and the scheduler's "MISS".
+// from migrate's "TIMO" and missions' "TIMS".
 const drainLockKey = 0x45564E54
 
 // Drainer delivers unprocessed events to their consumers (D-117).

@@ -46,7 +46,7 @@ type WorkPacket struct {
 	Sources []SourceEntry
 	// SkillsIndex is the rendered skill index for the mission's agent
 	// (skills.Index over the agent's allowlist), resolved at packet
-	// build time like the scheduler's other agent defaults — an agent
+	// build time like the other agent defaults, so an agent
 	// edited mid-mission applies on the next turn. Empty when the
 	// mission has no agent, the agent lists no skills, or the driver's
 	// resolver is unwired. Native workers only: a delegated CLI has no

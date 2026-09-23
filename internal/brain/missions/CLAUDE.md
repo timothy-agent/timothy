@@ -9,7 +9,7 @@ CLAUDE.md so other work does not pay for it every session.
   (native runner over `loop.Agent`), `policy.go` (per-kind/light
   behavior flags), `provision.go`, `budget.go`, `verifier.go`,
   `worktree.go`, `packet.go`, `sentinel.go`, `review.go`, `verify.go`,
-  `scheduler.go`, `notify.go`, `sweep.go`, `memory.go`. Schema:
+  `template.go`, `notify.go`, `sweep.go`, `memory.go`. Schema:
   `migrations/0001_init.sql` (edited in place pre-release, never new
   ALTER migrations).
 - Mission phases (D-086 issue #455, renamed again by issue #611):
@@ -27,7 +27,7 @@ CLAUDE.md so other work does not pay for it every session.
 - Light missions (D-069, kind=general only): born in phase=build,
   skip discover/plan/prove; the deliverable travels in mission_status's
   `final_output` argument (reasoning models emit tool calls with no
-  plain text). Digest schedules run light.
+  plain text). Digest automations run light.
 - Worker turns END on successful sentinel execution
   (`loop.Request.EndTurnTools`, D-075): never reintroduce a
   post-sentinel model call — chat models ramble through it, reasoning
@@ -52,9 +52,9 @@ CLAUDE.md so other work does not pay for it every session.
   audio transcribed via the whisper sidecar, all ONCE at create (prompt-
   cache stability), stored on the mission's `sources` jsonb column,
   rendered neutralized into every prompt labeled by mime (document/
-  image/audio); capped at 8; API responses strip the markdown. Schedule
-  templates carry the same attachments, resolved once at schedule
-  create/patch time so a fire never re-converts.
+  image/audio); capped at 8; API responses strip the markdown. Automation
+  mission actions carry the same attachments, resolved once at
+  automation create/patch time so a run never re-converts.
 - PDF export: POST /v1/missions/{id}/export-pdf renders workspace
   markdown (single file, or all files merged book-style) through
   `internal/brain/pdfgen`, which caches by content hash in
@@ -216,7 +216,7 @@ CLAUDE.md so other work does not pay for it every session.
   with its plan index; a findings-only round asks no rubric.
 - Every retry, iteration and auto-resume ceiling is an operator
   setting, read per turn rather than compiled in (issue #718):
-  `mission_default_max_iterations` (Store.Create/scheduler via
+  `mission_default_max_iterations` (Store.Create via
   `SetDefaultMaxIterations`), `mission_backoff_failures`,
   `mission_stall_rounds` and `mission_harness_retry_cap` (the
   statemachine `Config`, built per Advance by `Driver.config` from

@@ -900,7 +900,8 @@ export interface Mission {
   // for a mission with no ledger rows yet.
   top_model?: string
   top_model_provider?: string
-  schedule_id?: string
+  // automation_run_id names the automation run that started this mission.
+  automation_run_id?: string
   // origin_kind (issue #817) is where the mission came from; unattended
   // marks a mission nobody is watching (permission asks deny at once).
   origin_kind?: 'api' | 'automation' | 'workflow' | 'chat' | 'followup'
@@ -1269,13 +1270,11 @@ export interface GitHubRepo {
   pushed_at: string
 }
 
-// MissionTemplate is the frozen mission-creation payload a schedule
-// fires at each tick (internal/brain/missions.MissionTemplate): same
-// shape as CreateMissionInput.
+// MissionTemplate is an automation's mission action
+// (internal/brain/missions.MissionTemplate); the automation owns the agent.
 export interface MissionTemplate {
   goal: string
   kind: 'coding' | 'general'
-  agent_id?: string
   route?: string
   review_route?: string
   // plan_route, when set, is the route discover/plan/replan/prove run
@@ -1286,43 +1285,106 @@ export interface MissionTemplate {
   budget_currency?: string
   auto_approve_tools?: boolean
   harness?: string
-  // review_harness is copied onto every fired mission as-is (issue #582).
+  // review_harness is copied onto every started mission as-is (issue #582).
   review_harness?: string
   environment?: string
-  // destination_ids names operator-created destinations this template's
-  // fired missions deliver their outcome digest to. Re-validated at
-  // fire time: a destination deleted or disabled since the schedule
-  // was created is dropped silently rather than failing the fire.
+  // destination_ids names operator-created destinations the started
+  // missions deliver their outcome digest to.
   destination_ids?: string[]
   // light marks a mission that skips discover/plan/prove (D-069);
-  // only valid for kind=general, rejected for kind=coding at schedule
-  // create/update.
+  // only valid for kind=general.
   light?: boolean
-  // attachments name documents, images, and audio clips (issue #359)
-  // resolved into markdown/caption/transcript once at schedule create/
-  // patch time; markdown is never sent over the wire (see
-  // api/schedules.go's stripTemplateAttachmentMarkdown).
+  // attachments are converted once at automation create/patch time
+  // (issue #359); markdown is never sent over the wire.
   attachments?: { id: string; name?: string; mime?: string }[]
 }
 
-// Schedule is a recurring cron trigger that fires mission_template
-// (internal/brain/missions.Schedule), managed from the Missions page's
-// recurring schedules section. next_run is server-computed, present
-// whenever the cron parses.
-export interface Schedule {
+// AutomationAction is what a run does (internal/brain/automations.Action).
+export interface AutomationAction {
+  kind: 'mission'
+  mission: MissionTemplate
+}
+
+// AutomationTrigger is one automation_triggers row; config is
+// { expr } for a cron trigger and {} for a manual one.
+export interface AutomationTrigger {
   id: string
-  name: string
-  cron: string
-  mission_template: MissionTemplate
+  automation_id: string
+  kind: 'cron' | 'manual' | 'webhook' | 'connector_event' | 'channel'
+  config: { expr?: string }
+  credential_ref?: string
+  tool_allowlist?: string[]
+  state: unknown
   enabled: boolean
-  expires_at?: string
-  last_run?: string
-  next_run?: string
   created_at: string
   updated_at: string
-  pending_fire: boolean
-  last_skipped_at?: string
+}
+
+// AutomationStats is one automation's run summary (the view's stats).
+export interface AutomationStats {
+  runs_total: number
+  succeeded_7d: number
+  failed_7d: number
+  last_run_at?: string
+  last_run_status?: AutomationRun['status']
+  next_run_at?: string
+}
+
+// Automation is one automation with its triggers and run stats
+// (internal/brain/api/automations.go's automationView).
+export interface Automation {
+  id: string
+  name: string
+  description: string
+  agent_id: string
+  action: AutomationAction
+  concurrency: 'skip' | 'queue' | 'parallel'
+  max_concurrent: number
+  max_runs_per_hour: number
+  continuity: boolean
+  notes_enabled: boolean
+  consecutive_failures: number
+  disabled_reason?: string
+  enabled: boolean
+  expires_at?: string
+  created_at: string
+  updated_at: string
+  triggers: AutomationTrigger[]
+  stats: AutomationStats
+}
+
+// AutomationRun is one automation_runs row.
+export interface AutomationRun {
+  id: string
+  automation_id: string
+  trigger_id?: string
+  event_id?: number
+  dedup_key: string
+  status: 'queued' | 'running' | 'done' | 'failed' | 'skipped'
   skip_reason?: string
+  event: unknown
+  mission_id?: string
+  workflow_run_id?: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+}
+
+// AutomationNote is one automation_notes row.
+export interface AutomationNote {
+  name: string
+  content: string
+  updated_at: string
+  updated_by_run_id?: string
+}
+
+// AutomationsStats is the /v1/automations/stats overview payload.
+export interface AutomationsStats {
+  total: number
+  enabled: number
+  succeeded_7d: number
+  failed_7d: number
+  sparkline: { day: string; succeeded: number; failed: number }[]
 }
 
 // ExecutionPlanPrices mirrors CatalogPrice's price shape for one

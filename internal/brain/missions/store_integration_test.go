@@ -67,22 +67,11 @@ type execer interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
-// sweep clears every fixture row this package's tests create. Missions
-// spawned by a test schedule carry the schedule's mission_template
-// goal verbatim, not the marker prefix: delete them via the schedule
-// join FIRST, before deleting schedules (whose FK would otherwise
-// orphan them under ON DELETE CASCADE at an unpredictable order
-// relative to a concurrently running test). Schedule NAMES can't carry
-// marker verbatim (it has a trailing space; schedule names must be a
-// slug: see schedules_integration_test.go's slugMarker), so schedule
-// rows are also swept by the slug form.
+// sweep clears every fixture row this package's tests create: missions
+// by goal prefix, then automations by name prefix (runs cascade).
 func sweep(ctx context.Context, db execer) {
-	slug := strings.TrimSpace(marker)
-	_, _ = db.Exec(ctx, sweepMissionsSQL(`schedule_id IN (
-		SELECT id FROM schedules WHERE name LIKE $1 || '%' OR name LIKE $2 || '%'
-	)`), marker, slug)
-	_, _ = db.Exec(ctx, "DELETE FROM schedules WHERE name LIKE $1 || '%' OR name LIKE $2 || '%'", marker, slug)
 	_, _ = db.Exec(ctx, sweepMissionsSQL("goal LIKE $1 || '%'"), marker)
+	_, _ = db.Exec(ctx, "DELETE FROM automations WHERE name LIKE $1 || '%'", marker)
 }
 
 // sweepMissionsSQL deletes missions matching filter along with the
@@ -644,7 +633,7 @@ func TestMissionNameRoundTrips(t *testing.T) {
 
 // TestSetNameIfEmpty mirrors session.Store.SetTitleIfEmpty's own
 // integration coverage: a name lands once and a second call (the
-// generation retrying, or racing a scheduler-set name) never clobbers
+// generation retrying, or racing an automation-set name) never clobbers
 // it.
 func TestSetNameIfEmpty(t *testing.T) {
 	s := testStore(t)

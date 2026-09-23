@@ -2695,7 +2695,7 @@ func TestChatSeedsApprovalAllowlistAsStandingGrant(t *testing.T) {
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
 	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
-		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
+		return agents.Agent{ID: "agent-1", Name: "planner", Memory: true,
 			ApprovalAllowlist: []string{"list_calendar_events"}}, true
 	}
 	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
@@ -2749,7 +2749,7 @@ func TestChatSeedsApprovalAllowlistOnceIdempotent(t *testing.T) {
 	gw := &fakeGW{events: okEvents("done")}
 	log := newFakeLog()
 	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
-		return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
+		return agents.Agent{ID: "agent-1", Name: "planner", Memory: true,
 			ApprovalAllowlist: []string{"list_calendar_events"}}, true
 	}
 	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
@@ -2787,7 +2787,7 @@ func TestChatAgentSwitchGrantsNewAllowlist(t *testing.T) {
 	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
 		switch id {
 		case "agent-1":
-			return agents.Agent{ID: "agent-1", Name: "scheduler", Memory: true,
+			return agents.Agent{ID: "agent-1", Name: "planner", Memory: true,
 				ApprovalAllowlist: []string{"list_calendar_events"}}, true
 		case "agent-2":
 			return agents.Agent{ID: "agent-2", Name: "mailer", Memory: true,

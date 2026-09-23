@@ -5,6 +5,7 @@ package agents
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -265,26 +266,27 @@ func TestAgentMissionColumns(t *testing.T) {
 	}
 }
 
-// TestAgentDeleteRefusedWhileScheduleReferencesIt covers issue #815:
-// Delete returns ErrInUse naming every schedule whose template names
-// the agent, and succeeds once no schedule does.
-func TestAgentDeleteRefusedWhileScheduleReferencesIt(t *testing.T) {
+// TestAgentDeleteRefusedWhileAutomationUsesIt covers issues #815/#821:
+// Delete returns ErrInUse naming every automation that runs as the
+// agent, and succeeds once none does.
+func TestAgentDeleteRefusedWhileAutomationUsesIt(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
+	tag := fmt.Sprintf("%d-", time.Now().UnixNano())
 	db, err := s.db.Get()
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 
-	id, err := s.Create(ctx, Agent{Name: marker + "scheduled", Enabled: true})
+	id, err := s.Create(ctx, Agent{Name: marker + tag + "automated", Enabled: true})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	scheduleNames := []string{marker + "schedule-a", marker + "schedule-b"}
-	for _, n := range scheduleNames {
-		if _, err := db.Exec(ctx, `INSERT INTO schedules (name, cron, mission_template)
-			VALUES ($1, '0 9 * * *', jsonb_build_object('goal', 'g', 'kind', 'general', 'agent_id', $2::text))`, n, id); err != nil {
-			t.Fatalf("insert schedule: %v", err)
+	automationNames := []string{marker + tag + "automation-a", marker + tag + "automation-b"}
+	for _, n := range automationNames {
+		if _, err := db.Exec(ctx, `INSERT INTO automations (name, agent_id, action)
+			VALUES ($1, $2, '{"kind":"mission"}')`, n, id); err != nil {
+			t.Fatalf("insert automation: %v", err)
 		}
 	}
 	t.Cleanup(func() {
@@ -295,21 +297,21 @@ func TestAgentDeleteRefusedWhileScheduleReferencesIt(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.Close(cctx) }()
-		_, _ = conn.Exec(cctx, `DELETE FROM schedules WHERE name LIKE $1 || '%'`, marker)
+		_, _ = conn.Exec(cctx, `DELETE FROM automations WHERE name LIKE $1 || '%'`, marker+tag)
 	})
 
 	err = s.Delete(ctx, id)
 	if !errors.Is(err, ErrInUse) {
-		t.Fatalf("Delete of a schedule-referenced agent = %v, want ErrInUse", err)
+		t.Fatalf("Delete of an automation-referenced agent = %v, want ErrInUse", err)
 	}
-	for _, n := range scheduleNames {
+	for _, n := range automationNames {
 		if !strings.Contains(err.Error(), n) {
-			t.Fatalf("error %q does not name schedule %q", err, n)
+			t.Fatalf("error %q does not name automation %q", err, n)
 		}
 	}
 
-	if _, err := db.Exec(ctx, `DELETE FROM schedules WHERE name LIKE $1 || '%'`, marker); err != nil {
-		t.Fatalf("delete schedules: %v", err)
+	if _, err := db.Exec(ctx, `DELETE FROM automations WHERE name LIKE $1 || '%'`, marker+tag); err != nil {
+		t.Fatalf("delete automations: %v", err)
 	}
 	if err := s.Delete(ctx, id); err != nil {
 		t.Fatalf("Delete once unreferenced: %v", err)

@@ -9,8 +9,7 @@ import (
 
 // tickInterval matches the source's own cadence: open.er-api.com
 // publishes once a day, so polling faster buys nothing. No advisory
-// lock (unlike scheduler.go's cross-instance dedup, which guards a
-// side-effecting fire): Upsert's ON CONFLICT DO NOTHING makes two
+// lock: Upsert's ON CONFLICT DO NOTHING makes two
 // instances fetching the same day idempotent, so the simpler ticker-
 // only loop is enough here.
 const tickInterval = 6 * time.Hour

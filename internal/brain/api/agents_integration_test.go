@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -17,10 +18,10 @@ import (
 	"github.com/SumonMSelim/timothy/migrations"
 )
 
-// TestDeleteAgentReferencedByScheduleReturns409 covers issue #815: an
-// agent a schedule template names cannot be deleted, and the refusal
-// names the schedule.
-func TestDeleteAgentReferencedByScheduleReturns409(t *testing.T) {
+// TestDeleteAgentReferencedByAutomationReturns409 covers issues
+// #815/#821: an agent an automation runs as cannot be deleted, and the
+// refusal names the automation.
+func TestDeleteAgentReferencedByAutomationReturns409(t *testing.T) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
 		t.Skip("DATABASE_URL not set; skipping integration test")
@@ -42,18 +43,18 @@ func TestDeleteAgentReferencedByScheduleReturns409(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	const prefix = "itest-api-agent-inuse-"
+	prefix := fmt.Sprintf("itest-api-agent-inuse-%d-", time.Now().UnixNano())
 	var agentID string
 	if err := db.QueryRow(ctx, `INSERT INTO agents (name) VALUES ($1) RETURNING id`, prefix+"agent").Scan(&agentID); err != nil {
 		t.Fatalf("insert agent: %v", err)
 	}
-	if _, err := db.Exec(ctx, `INSERT INTO schedules (name, cron, mission_template) VALUES ($1, '0 9 * * *', jsonb_build_object('goal', 'g', 'kind', 'general', 'agent_id', $2::text))`, prefix+"schedule", agentID); err != nil {
-		t.Fatalf("insert schedule: %v", err)
+	if _, err := db.Exec(ctx, `INSERT INTO automations (name, agent_id, action) VALUES ($1, $2, '{"kind":"mission"}')`, prefix+"automation", agentID); err != nil {
+		t.Fatalf("insert automation: %v", err)
 	}
 	t.Cleanup(func() {
 		cctx, ccancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer ccancel()
-		_, _ = db.Exec(cctx, `DELETE FROM schedules WHERE name LIKE $1 || '%'`, prefix)
+		_, _ = db.Exec(cctx, `DELETE FROM automations WHERE name LIKE $1 || '%'`, prefix)
 		_, _ = db.Exec(cctx, `DELETE FROM agents WHERE name LIKE $1 || '%'`, prefix)
 	})
 
@@ -68,7 +69,7 @@ func TestDeleteAgentReferencedByScheduleReturns409(t *testing.T) {
 	if w.Code != 409 {
 		t.Fatalf("DELETE referenced agent = %d, want 409 (body %s)", w.Code, w.Body.String())
 	}
-	assertErrorBody(t, w, "in_use", prefix+"schedule")
+	assertErrorBody(t, w, "in_use", prefix+"automation")
 
 	var still bool
 	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agents WHERE id = $1)`, agentID).Scan(&still); err != nil {

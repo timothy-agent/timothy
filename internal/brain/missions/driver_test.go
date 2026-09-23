@@ -2279,7 +2279,7 @@ func TestDriverSignalResumeGuardsMissingSessionID(t *testing.T) {
 
 // TestDriverAdvanceLazilyProvisionsBareMission reproduces the fix for
 // the plan's defect #1: a mission inserted directly (bypassing
-// Create — exactly what scheduler.go's createFromTemplate does) has no
+// Create, as tests and older rows do) has no
 // session and no workspace. The first Advance call must provision both
 // before running the phase, or the worker gets no shell/write_file
 // tools (runner.go's missionTools returns nil for an empty WorkRoot).
@@ -2288,7 +2288,7 @@ func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
 	// A bare row, exactly as createFromTemplate leaves it: no
 	// SessionID, no Workspace/Worktree.
 	store.put("m1", Mission{
-		ID: "m1", Goal: "scheduled run", Kind: "general",
+		ID: "m1", Goal: "automation run", Kind: "general",
 		Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, AutoApproveTools: true,
 	})
 	granter := &fakeGranter{}

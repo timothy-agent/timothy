@@ -5,6 +5,12 @@ import type {
   AdminRoute,
   AdminSkill,
   AdminTool,
+  Automation,
+  AutomationAction,
+  AutomationNote,
+  AutomationRun,
+  AutomationsStats,
+  AutomationTrigger,
   AvailableModel,
   BudgetLimit,
   BudgetStatus,
@@ -30,13 +36,11 @@ import type {
   MissionEvent,
   MissionFile,
   MissionUsage,
-  MissionTemplate,
   Notification,
   PendingPermission,
   ProviderHealth,
   ReferenceKind,
   RetrievedMemory,
-  Schedule,
   SessionMeta,
   TestResult,
   Transcript,
@@ -1341,17 +1345,17 @@ export async function getMissionExecutionPlan(params: {
   return phases ?? []
 }
 
-// listMissions returns every mission by default; opts narrows to one
-// schedule's fire history (scheduleId), a text search (query, the
+// listMissions returns every mission by default; opts narrows to the
+// missions one automation's runs started (automationId), a text search (query, the
 // composer #-mention mission search), and/or caps the result count
 // (limit): all map directly to the server's optional query params.
 export async function listMissions(opts?: {
-  scheduleId?: string
+  automationId?: string
   query?: string
   limit?: number
 }): Promise<Mission[]> {
   const params = new URLSearchParams()
-  if (opts?.scheduleId) params.set('schedule_id', opts.scheduleId)
+  if (opts?.automationId) params.set('automation_id', opts.automationId)
   if (opts?.query) params.set('q', opts.query)
   if (opts?.limit) params.set('limit', String(opts.limit))
   const qs = params.size > 0 ? `?${params.toString()}` : ''
@@ -1658,46 +1662,94 @@ export async function exportMessagePDF(
   })
 }
 
-// --- schedules (recurring cron triggers that fire mission templates) ---
+// --- automations (triggers that fire a mission action) ---
 
-export interface CreateScheduleInput {
+// AutomationTriggerInput is a trigger on the wire; id keeps an existing
+// trigger (and its state) on patch.
+export interface AutomationTriggerInput {
+  id?: string
+  kind: AutomationTrigger['kind']
+  config: { expr?: string }
+  tool_allowlist?: string[]
+  enabled?: boolean
+}
+
+export interface CreateAutomationInput {
   name: string
-  cron: string
-  mission_template: MissionTemplate
+  description?: string
+  agent_id: string
+  action: AutomationAction
+  triggers: AutomationTriggerInput[]
   enabled?: boolean
   expires_at?: string
 }
 
-export async function listSchedules(): Promise<Schedule[]> {
-  const { schedules } = await request<{ schedules: Schedule[] }>('/v1/schedules')
-  return schedules ?? []
+export interface PatchAutomationInput {
+  name?: string
+  description?: string
+  agent_id?: string
+  action?: AutomationAction
+  triggers?: AutomationTriggerInput[]
+  enabled?: boolean
+  // null clears the expiry; omit to leave it unchanged.
+  expires_at?: string | null
 }
 
-export async function createSchedule(input: CreateScheduleInput): Promise<{ id: string }> {
-  return request<{ id: string }>('/v1/schedules', {
+export async function listAutomations(): Promise<Automation[]> {
+  const { automations } = await request<{ automations: Automation[] }>('/v1/automations')
+  return automations ?? []
+}
+
+export async function getAutomation(id: string): Promise<Automation> {
+  return request<Automation>(`/v1/automations/${id}`)
+}
+
+export async function createAutomation(input: CreateAutomationInput): Promise<{ id: string }> {
+  return request<{ id: string }>('/v1/automations', {
     method: 'POST',
     body: JSON.stringify(input),
   })
 }
 
-export async function patchSchedule(
-  id: string,
-  patch: {
-    name?: string
-    cron?: string
-    mission_template?: MissionTemplate
-    enabled?: boolean
-    expires_at?: string | null
-  },
-): Promise<Schedule> {
-  return request<Schedule>(`/v1/schedules/${id}`, {
+export async function patchAutomation(id: string, patch: PatchAutomationInput): Promise<Automation> {
+  return request<Automation>(`/v1/automations/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   })
 }
 
-export async function deleteSchedule(id: string): Promise<void> {
-  await request<void>(`/v1/schedules/${id}`, { method: 'DELETE' })
+export async function deleteAutomation(id: string): Promise<void> {
+  await request<void>(`/v1/automations/${id}`, { method: 'DELETE' })
+}
+
+export async function runAutomationNow(id: string): Promise<{ event_id: number }> {
+  return request<{ event_id: number }>(`/v1/automations/${id}/run`, { method: 'POST' })
+}
+
+export async function listAutomationRuns(id: string, limit?: number): Promise<AutomationRun[]> {
+  const qs = limit ? `?limit=${limit}` : ''
+  const { runs } = await request<{ runs: AutomationRun[] }>(`/v1/automations/${id}/runs${qs}`)
+  return runs ?? []
+}
+
+export async function automationsStats(): Promise<AutomationsStats> {
+  return request<AutomationsStats>('/v1/automations/stats')
+}
+
+export async function listAutomationNotes(id: string): Promise<AutomationNote[]> {
+  const { notes } = await request<{ notes: AutomationNote[] }>(`/v1/automations/${id}/notes`)
+  return notes ?? []
+}
+
+export async function putAutomationNote(id: string, name: string, content: string): Promise<AutomationNote> {
+  return request<AutomationNote>(`/v1/automations/${id}/notes/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ content }),
+  })
+}
+
+export async function deleteAutomationNote(id: string, name: string): Promise<void> {
+  await request<void>(`/v1/automations/${id}/notes/${encodeURIComponent(name)}`, { method: 'DELETE' })
 }
 
 // backendVersion reads the running brain's version from /health. That

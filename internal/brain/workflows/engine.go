@@ -49,7 +49,7 @@ type Engine struct {
 	log     *slog.Logger
 
 	// resolve is the shared create-path lookups (missions.ResolveDefaults)
-	// a step's mission resolves through, same as the API and scheduler.
+	// a step's mission resolves through, same as the API.
 	// The zero value skips every lookup; an empty step route then stays
 	// empty and ValidateCreate (D-071) rejects it.
 	resolve missions.ResolveDeps

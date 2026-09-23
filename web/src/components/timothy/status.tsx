@@ -67,3 +67,12 @@ export function toolCallStatus(s: 'running' | 'ok' | 'denied' | 'error' | 'block
   if (s === 'denied' || s === 'canceled') return 'neutral'
   return 'error'
 }
+
+// automationRunStatus maps an automation run's status onto the model.
+export function automationRunStatus(s: 'queued' | 'running' | 'done' | 'failed' | 'skipped'): Status {
+  if (s === 'running') return 'working'
+  if (s === 'done') return 'success'
+  if (s === 'failed') return 'error'
+  if (s === 'skipped') return 'warning'
+  return 'neutral'
+}

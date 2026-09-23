@@ -56,7 +56,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	}
 }
 
-// TestMissionsListFilterValidation confirms bad ?schedule_id=/?limit=
+// TestMissionsListFilterValidation confirms bad ?automation_id=/?limit=
 // values 400 before ever reaching the store — a never-connecting pool
 // (bad DSN, degraded) is enough to prove this, since a request that
 // got past validation would instead surface a 500 from the store call.
@@ -76,8 +76,8 @@ func TestMissionsListFilterValidation(t *testing.T) {
 		return w.Code
 	}
 
-	if code := call("/v1/missions?schedule_id=not-a-uuid"); code != 400 {
-		t.Fatalf("bad schedule_id = %d, want 400", code)
+	if code := call("/v1/missions?automation_id=not-a-uuid"); code != 400 {
+		t.Fatalf("bad automation_id = %d, want 400", code)
 	}
 	if code := call("/v1/missions?limit=0"); code != 400 {
 		t.Fatalf("limit=0 = %d, want 400", code)
@@ -1744,7 +1744,7 @@ func TestExecutionPlanHarnessSourceSettings(t *testing.T) {
 // TestExecutionPlanHarnessSourceAgent confirms the picked agent's own
 // harness wins over the settings default, source "agent" - the same
 // mission.harness -> agent.harness -> settings.coding_executor ->
-// native precedence create() and the scheduler's fire path use
+// native precedence create() and automation runs use
 // (missions.ResolveHarness).
 func TestExecutionPlanHarnessSourceAgent(t *testing.T) {
 	t.Parallel()

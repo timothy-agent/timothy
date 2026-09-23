@@ -234,7 +234,8 @@ describe('Missions board', () => {
       kind: 'coding',
       harness: 'claude-cli',
       top_model: 'claude-opus-4',
-      schedule_id: 's1',
+      automation_run_id: 'r1',
+      origin_kind: 'automation',
     }
 
     it('narrows by kind', async () => {
@@ -275,7 +276,7 @@ describe('Missions board', () => {
       expect(screen.getByText('Refactor the payments module')).toBeTruthy()
     })
 
-    it('narrows by source: automated means schedule_id is set', async () => {
+    it('narrows by source: automated means origin_kind is automation', async () => {
       vi.mocked(listMissions).mockResolvedValue([mission, coding])
       renderPage()
       await screen.findByText('Fix the login bug')
@@ -285,6 +286,18 @@ describe('Missions board', () => {
 
       expect(screen.queryByText('Fix the login bug')).toBeNull()
       expect(screen.getByText('Refactor the payments module')).toBeTruthy()
+    })
+
+    it('narrows by source: manual hides automation-started missions', async () => {
+      vi.mocked(listMissions).mockResolvedValue([mission, coding])
+      renderPage()
+      await screen.findByText('Fix the login bug')
+
+      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by source' }))
+      fireEvent.click(await screen.findByRole('option', { name: 'Manual' }))
+
+      expect(screen.getByText('Fix the login bug')).toBeTruthy()
+      expect(screen.queryByText('Refactor the payments module')).toBeNull()
     })
 
     it('shows no count when no filter is active', async () => {

@@ -1,5 +1,7 @@
-// cronPresets covers the common recurring shapes the schedule dialog
-// offers directly; 'custom' has no cron value of its own — it means
+import type { Automation, AutomationTrigger } from '../api/types'
+
+// cronPresets covers the common recurring shapes the automation form
+// offers directly; 'custom' has no cron value of its own: it means
 // "let the user type one," matched last by presetFor.
 export const cronPresets = [
   { value: 'daily-7am', label: 'Daily, 7:00 AM', cron: '0 7 * * *' },
@@ -11,7 +13,7 @@ export const cronPresets = [
 export type CronPresetValue = (typeof cronPresets)[number]['value']
 
 // presetFor maps a stored cron expression back to the preset that
-// produced it, so editing a schedule reopens the same preset it was
+// produced it, so editing an automation reopens the same preset it was
 // created with rather than always falling back to "Custom".
 export function presetFor(cron: string): CronPresetValue {
   const match = cronPresets.find((p) => p.cron === cron)
@@ -25,4 +27,14 @@ export function describeCron(cron: string): string {
   const preset = cronPresets.find((p) => p.cron === cron)
   if (preset) return preset.label
   return cron
+}
+
+// cronTrigger returns a's first enabled cron trigger.
+export function cronTrigger(a: Automation): AutomationTrigger | undefined {
+  return a.triggers.find((t) => t.kind === 'cron' && t.enabled)
+}
+
+// cronExpr returns the expression of a's first enabled cron trigger.
+export function cronExpr(a: Automation): string | undefined {
+  return cronTrigger(a)?.config.expr
 }

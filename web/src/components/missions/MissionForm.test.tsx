@@ -1,14 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminAgent, AdminConnector, AdminRoute, GitHubRepo, Mission, Schedule } from '../../api/types'
+import type { AdminAgent, AdminConnector, AdminRoute, Automation, GitHubRepo, Mission, MissionTemplate } from '../../api/types'
+import { toast } from 'sonner'
 import { defaultRouteLabel, MissionForm } from './MissionForm'
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 vi.mock('../../api/client', () => ({
   classifyMission: vi.fn(),
   createMission: vi.fn(),
-  createSchedule: vi.fn(),
-  patchSchedule: vi.fn(),
+  createAutomation: vi.fn(),
+  patchAutomation: vi.fn(),
   listAgents: vi.fn(),
   listRoutes: vi.fn(),
   listConnectors: vi.fn(),
@@ -27,7 +30,7 @@ vi.mock('../../api/client', () => ({
 import {
   classifyMission,
   createMission,
-  createSchedule,
+  createAutomation,
   getMissionExecutionPlan,
   getMissionExecutorOptions,
   getSettings,
@@ -38,7 +41,7 @@ import {
   listMissions,
   listRoutes,
   listSessions,
-  patchSchedule,
+  patchAutomation,
   searchKbDocuments,
   uploadAttachment,
 } from '../../api/client'
@@ -57,22 +60,62 @@ const routes: AdminRoute[] = [
   { name: 'disabled-route', strategy: 'ordered', enabled: false, chain: [] },
 ]
 
-const schedule: Schedule = {
+const automation: Automation = {
   id: 's1',
   name: 'weekly-digest',
-  cron: '0 8 * * 1-5',
-  mission_template: {
-    goal: 'Summarize the week',
-    kind: 'general',
-    auto_approve_tools: true,
-    review_route: 'default',
+  description: '',
+  agent_id: 'a1',
+  action: {
+    kind: 'mission',
+    mission: {
+      goal: 'Summarize the week',
+      kind: 'general',
+      auto_approve_tools: true,
+      review_route: 'default',
+    },
   },
+  concurrency: 'skip',
+  max_concurrent: 1,
+  max_runs_per_hour: 6,
+  continuity: true,
+  notes_enabled: true,
+  consecutive_failures: 0,
   enabled: true,
   expires_at: '2026-08-01T12:30:00Z',
-  next_run: '2026-07-27T08:00:00Z',
   created_at: '2026-07-01T00:00:00Z',
   updated_at: '2026-07-01T00:00:00Z',
-  pending_fire: false,
+  triggers: [
+    {
+      id: 't1',
+      automation_id: 's1',
+      kind: 'cron',
+      config: { expr: '0 8 * * 1-5' },
+      state: { last_fired_at: '2026-07-20T08:00:00Z' },
+      enabled: true,
+      created_at: '2026-07-01T00:00:00Z',
+      updated_at: '2026-07-01T00:00:00Z',
+    },
+  ],
+  stats: { runs_total: 3, succeeded_7d: 3, failed_7d: 0, next_run_at: '2026-07-27T08:00:00Z' },
+}
+
+// withMission returns the fixture automation with its mission template patched.
+function withMission(patch: Partial<MissionTemplate>): Automation {
+  return { ...automation, action: { kind: 'mission', mission: { ...automation.action.mission, ...patch } } }
+}
+
+// defaultAgent is the agent an automation falls back to when none is picked.
+const defaultAgent: AdminAgent = {
+  id: 'agent-default',
+  name: 'general',
+  description: '',
+  prompt_overlay: '',
+  route: '',
+  skills: [],
+  tools: [],
+  memory: false,
+  is_default: true,
+  enabled: true,
 }
 
 function makeAgent(overrides: Partial<AdminAgent> = {}): AdminAgent {
@@ -532,35 +575,34 @@ describe('MissionForm: destinations multi-select', () => {
     )
   })
 
-  it('offers the multi-select for a new schedule (repeat on) and submits picked ids', async () => {
+  it('offers the multi-select for a new automation (repeat on) and submits picked ids', async () => {
+    vi.mocked(listAgents).mockResolvedValue([defaultAgent])
     vi.mocked(listDestinations).mockResolvedValue(destinations)
-    vi.mocked(createSchedule).mockResolvedValue({ id: 'sched1' })
+    vi.mocked(createAutomation).mockResolvedValue({ id: 'sched1' })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Weekly digest' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
 
     await screen.findByText('Destinations')
+    await screen.findByText('Agent')
     fireEvent.click(screen.getByLabelText(/^ops-hook/))
-    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
 
     await waitFor(() =>
-      expect(createSchedule).toHaveBeenCalledWith(
+      expect(createAutomation).toHaveBeenCalledWith(
         expect.objectContaining({
-          mission_template: expect.objectContaining({ destination_ids: ['d2'] }),
+          action: { kind: 'mission', mission: expect.objectContaining({ destination_ids: ['d2'] }) },
         }),
       ),
     )
   })
 
-  it('seeds the multi-select from an edited schedule and submits the updated picks', async () => {
+  it('seeds the multi-select from an edited automation and submits the updated picks', async () => {
     vi.mocked(listDestinations).mockResolvedValue(destinations)
-    vi.mocked(patchSchedule).mockResolvedValue(schedule)
-    const seeded: Schedule = {
-      ...schedule,
-      mission_template: { ...schedule.mission_template, destination_ids: ['d1'] },
-    }
-    renderForm(<MissionForm mode="edit" schedule={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
+    vi.mocked(patchAutomation).mockResolvedValue(automation)
+    const seeded: Automation = withMission({ destination_ids: ['d1'] })
+    renderForm(<MissionForm mode="edit" automation={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByText('Destinations')
     const opsInbox = screen.getByLabelText(/^ops-inbox/) as HTMLInputElement
@@ -569,13 +611,13 @@ describe('MissionForm: destinations multi-select', () => {
     expect(opsHook.checked).toBe(false)
 
     fireEvent.click(opsHook) // now both picked
-    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
 
     await waitFor(() =>
-      expect(patchSchedule).toHaveBeenCalledWith(
+      expect(patchAutomation).toHaveBeenCalledWith(
         's1',
         expect.objectContaining({
-          mission_template: expect.objectContaining({ destination_ids: ['d1', 'd2'] }),
+          action: { kind: 'mission', mission: expect.objectContaining({ destination_ids: ['d1', 'd2'] }) },
         }),
       ),
     )
@@ -593,16 +635,13 @@ describe('MissionForm: destinations multi-select', () => {
     expect(screen.queryByLabelText(/^ops-hook/)).toBeNull()
   })
 
-  it('still lists a disabled destination an edited schedule already holds', async () => {
+  it('still lists a disabled destination an edited automation already holds', async () => {
     vi.mocked(listDestinations).mockResolvedValue([
       destinations[0],
       { ...destinations[1], enabled: false },
     ])
-    const seeded: Schedule = {
-      ...schedule,
-      mission_template: { ...schedule.mission_template, destination_ids: ['d2'] },
-    }
-    renderForm(<MissionForm mode="edit" schedule={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
+    const seeded: Automation = withMission({ destination_ids: ['d2'] })
+    renderForm(<MissionForm mode="edit" automation={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByText('Destinations')
     const opsHook = screen.getByLabelText(/^ops-hook/) as HTMLInputElement
@@ -889,23 +928,20 @@ describe('MissionForm: review harness select (issue #582)', () => {
     expect(vi.mocked(createMission).mock.calls[0][0].review_harness).toBeUndefined()
   })
 
-  it('hydrates review_harness from the schedule template and sends it back on save', async () => {
-    vi.mocked(patchSchedule).mockResolvedValue(schedule)
-    const seeded: Schedule = {
-      ...schedule,
-      mission_template: { ...schedule.mission_template, review_harness: 'claude-cli' },
-    }
-    renderForm(<MissionForm mode="edit" schedule={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
+  it('hydrates review_harness from the automation template and sends it back on save', async () => {
+    vi.mocked(patchAutomation).mockResolvedValue(automation)
+    const seeded: Automation = withMission({ review_harness: 'claude-cli' })
+    renderForm(<MissionForm mode="edit" automation={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByDisplayValue('weekly-digest')
     expect(screen.getByLabelText('Review harness')).toHaveTextContent('Claude Code')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
     await waitFor(() =>
-      expect(patchSchedule).toHaveBeenCalledWith(
+      expect(patchAutomation).toHaveBeenCalledWith(
         's1',
         expect.objectContaining({
-          mission_template: expect.objectContaining({ review_harness: 'claude-cli' }),
+          action: { kind: 'mission', mission: expect.objectContaining({ review_harness: 'claude-cli' }) },
         }),
       ),
     )
@@ -1506,56 +1542,91 @@ describe('MissionForm: destinations (github, issue #561)', () => {
   })
 })
 
-describe('MissionForm: create mode, repeat on schedule', () => {
-  it('submits a schedule with the goal as the default name, preset cron, and general kind', async () => {
-    vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })
+describe('MissionForm: create mode, repeat on a cron', () => {
+  beforeEach(() => {
+    vi.mocked(listAgents).mockResolvedValue([defaultAgent])
+  })
+
+  it('submits an automation with the default agent, goal as name, preset cron, and general kind', async () => {
+    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc1' })
     const onDone = vi.fn()
     renderForm(<MissionForm mode="create" onDone={onDone} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), {
       target: { value: 'Check the news every morning' },
     })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
+    await screen.findByText('Agent')
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+
+    await waitFor(() => expect(createAutomation).toHaveBeenCalled())
+    const input = vi.mocked(createAutomation).mock.calls[0][0]
+    expect(input).toEqual({
+      name: 'Check the news every morning',
+      agent_id: 'agent-default',
+      action: { kind: 'mission', mission: expect.objectContaining({ goal: 'Check the news every morning', kind: 'general', auto_approve_tools: true }) },
+      triggers: [{ kind: 'cron', config: { expr: '0 7 * * *' } }],
+      expires_at: undefined,
+    })
+    expect(input.action.mission).not.toHaveProperty('agent_id')
+    expect(createMission).not.toHaveBeenCalled()
+    expect(onDone).toHaveBeenCalledWith({ kind: 'automation', id: 'sc1' })
+    expect(toast.success).toHaveBeenCalledWith('Automation created')
+  })
+
+  it('blocks submit when no agent is picked and no default agent loads', async () => {
+    vi.mocked(listAgents).mockResolvedValue([])
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
+    await waitFor(() => expect(screen.queryByText('Agent')).toBeNull())
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Pick an agent for the automation'))
+    expect(createAutomation).not.toHaveBeenCalled()
+  })
+
+  it('sends the picked agent instead of the default', async () => {
+    vi.mocked(listAgents).mockResolvedValue([defaultAgent, makeAgent({ id: 'a2', name: 'briefing' })])
+    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc3' })
+    renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
+    await screen.findByText('Agent')
+    fireEvent.click(screen.getAllByRole('combobox')[1])
+    fireEvent.click(await screen.findByText('briefing'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
 
     await waitFor(() =>
-      expect(createSchedule).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: 'Check the news every morning',
-          cron: '0 7 * * *',
-          mission_template: expect.objectContaining({
-            goal: 'Check the news every morning',
-            kind: 'general',
-            auto_approve_tools: true,
-          }),
-        }),
-      ),
+      expect(createAutomation).toHaveBeenCalledWith(expect.objectContaining({ agent_id: 'a2' })),
     )
-    expect(createMission).not.toHaveBeenCalled()
-    expect(onDone).toHaveBeenCalledWith({ kind: 'schedule', id: 'sc1' })
   })
 
   it('shows the attachment picker while repeating and submits it on the template', async () => {
     vi.mocked(uploadAttachment).mockResolvedValue({ id: 'att5', mime: 'application/pdf', size_bytes: 100 })
-    vi.mocked(createSchedule).mockResolvedValue({ id: 'sc2' })
+    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc2' })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Digest the attached spec' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
 
     const file = new File(['%PDF-1.4'], 'spec.pdf', { type: 'application/pdf' })
     const input = document.querySelector('input[type="file"]') as HTMLInputElement
     fireEvent.change(input, { target: { files: [file] } })
     await screen.findByText('spec.pdf')
+    await screen.findByText('Agent')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
 
     await waitFor(() =>
-      expect(createSchedule).toHaveBeenCalledWith(
+      expect(createAutomation).toHaveBeenCalledWith(
         expect.objectContaining({
-          mission_template: expect.objectContaining({
-            attachments: [{ id: 'att5', name: 'spec.pdf' }],
-          }),
+          action: {
+            kind: 'mission',
+            mission: expect.objectContaining({ attachments: [{ id: 'att5', name: 'spec.pdf' }] }),
+          },
         }),
       ),
     )
@@ -1564,7 +1635,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
   it('forces kind to general and locks it when repeat turns on with coding selected', async () => {
     vi.useFakeTimers()
     vi.mocked(classifyMission).mockResolvedValue({ kind: 'coding', light: false, has_plan: false })
-    vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })
+    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc1' })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
@@ -1572,16 +1643,17 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
     expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
 
     vi.useRealTimers()
-    fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }))
+    await screen.findByText('Agent')
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
 
     await waitFor(() =>
-      expect(createSchedule).toHaveBeenCalledWith(
+      expect(createAutomation).toHaveBeenCalledWith(
         expect.objectContaining({
-          mission_template: expect.objectContaining({ kind: 'general' }),
+          action: { kind: 'mission', mission: expect.objectContaining({ kind: 'general' }) },
         }),
       ),
     )
@@ -1592,7 +1664,7 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
     await vi.advanceTimersByTimeAsync(600)
     await vi.advanceTimersByTimeAsync(0)
 
@@ -1607,14 +1679,14 @@ describe('MissionForm: create mode, repeat on schedule', () => {
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
     fireEvent.click(screen.getAllByRole('combobox')[0])
     fireEvent.click(await screen.findByText('Custom'))
     fireEvent.change(screen.getByLabelText('Cron expression'), { target: { value: 'bad cron' } })
 
-    const submitButton = screen.getByRole('button', { name: 'Create schedule' }) as HTMLButtonElement
+    const submitButton = screen.getByRole('button', { name: 'Create automation' }) as HTMLButtonElement
     expect(submitButton.disabled).toBe(true)
-    expect(createSchedule).not.toHaveBeenCalled()
+    expect(createAutomation).not.toHaveBeenCalled()
   })
 
   it('cascades the picked agent onto review route the same as a one-off mission', async () => {
@@ -1633,11 +1705,11 @@ describe('MissionForm: create mode, repeat on schedule', () => {
         review_route: 'careful',
       },
     ])
-    vi.mocked(createSchedule).mockResolvedValue({ id: 'sc1' })
+    vi.mocked(createAutomation).mockResolvedValue({ id: 'sc1' })
     renderForm(<MissionForm mode="create" onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on schedule' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Repeat on a cron' }))
 
     // Combobox order while repeating: Runs (cron preset), then Agent.
     fireEvent.click(screen.getAllByRole('combobox')[1])
@@ -1718,13 +1790,10 @@ describe('MissionForm: plan route', () => {
     )
   })
 
-  it('hydrates plan_route from the schedule template in edit mode', async () => {
-    const scheduleWithPlanRoute: Schedule = {
-      ...schedule,
-      mission_template: { ...schedule.mission_template, plan_route: 'careful' },
-    }
+  it('hydrates plan_route from the automation template in edit mode', async () => {
+    const automationWithPlanRoute: Automation = withMission({ plan_route: 'careful' })
     renderForm(
-      <MissionForm mode="edit" schedule={scheduleWithPlanRoute} onDone={vi.fn()} onCancel={vi.fn()} />,
+      <MissionForm mode="edit" automation={automationWithPlanRoute} onDone={vi.fn()} onCancel={vi.fn()} />,
     )
 
     await screen.findByDisplayValue('weekly-digest')
@@ -1732,23 +1801,20 @@ describe('MissionForm: plan route', () => {
   })
 
   it('submits the hydrated plan_route unchanged on save', async () => {
-    vi.mocked(patchSchedule).mockResolvedValue(schedule)
-    const scheduleWithPlanRoute: Schedule = {
-      ...schedule,
-      mission_template: { ...schedule.mission_template, plan_route: 'careful' },
-    }
+    vi.mocked(patchAutomation).mockResolvedValue(automation)
+    const automationWithPlanRoute: Automation = withMission({ plan_route: 'careful' })
     renderForm(
-      <MissionForm mode="edit" schedule={scheduleWithPlanRoute} onDone={vi.fn()} onCancel={vi.fn()} />,
+      <MissionForm mode="edit" automation={automationWithPlanRoute} onDone={vi.fn()} onCancel={vi.fn()} />,
     )
 
     await screen.findByDisplayValue('weekly-digest')
-    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
 
     await waitFor(() =>
-      expect(patchSchedule).toHaveBeenCalledWith(
+      expect(patchAutomation).toHaveBeenCalledWith(
         's1',
         expect.objectContaining({
-          mission_template: expect.objectContaining({ plan_route: 'careful' }),
+          action: { kind: 'mission', mission: expect.objectContaining({ plan_route: 'careful' }) },
         }),
       ),
     )
@@ -1756,8 +1822,8 @@ describe('MissionForm: plan route', () => {
 })
 
 describe('MissionForm: edit mode', () => {
-  it('prefills from the schedule, chip locked to the template kind', async () => {
-    renderForm(<MissionForm mode="edit" schedule={schedule} onDone={vi.fn()} onCancel={vi.fn()} />)
+  it('prefills from the automation, chip locked to the template kind', async () => {
+    renderForm(<MissionForm mode="edit" automation={automation} onDone={vi.fn()} onCancel={vi.fn()} />)
 
     expect(await screen.findByDisplayValue('weekly-digest')).toBeTruthy()
     expect(screen.getByDisplayValue('Summarize the week')).toBeTruthy()
@@ -1767,60 +1833,100 @@ describe('MissionForm: edit mode', () => {
     expect(classifyMission).not.toHaveBeenCalled()
   })
 
-  it('preloads the schedule template attachments and sends them back on save', async () => {
-    vi.mocked(patchSchedule).mockResolvedValue(schedule)
-    const seeded: Schedule = {
-      ...schedule,
-      mission_template: {
-        ...schedule.mission_template,
-        attachments: [{ id: 'att9', name: 'spec.pdf', mime: 'application/pdf' }],
-      },
-    }
-    renderForm(<MissionForm mode="edit" schedule={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
+  it('preloads the automation template attachments and sends them back on save', async () => {
+    vi.mocked(patchAutomation).mockResolvedValue(automation)
+    const seeded = withMission({ attachments: [{ id: 'att9', name: 'spec.pdf', mime: 'application/pdf' }] })
+    renderForm(<MissionForm mode="edit" automation={seeded} onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByDisplayValue('weekly-digest')
     expect(await screen.findByText('spec.pdf')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
     await waitFor(() =>
-      expect(patchSchedule).toHaveBeenCalledWith(
+      expect(patchAutomation).toHaveBeenCalledWith(
         's1',
         expect.objectContaining({
-          mission_template: expect.objectContaining({
-            attachments: [{ id: 'att9', name: 'spec.pdf' }],
-          }),
+          action: {
+            kind: 'mission',
+            mission: expect.objectContaining({ attachments: [{ id: 'att9', name: 'spec.pdf' }] }),
+          },
         }),
       ),
     )
   })
 
-  it('auto-expands Advanced when the schedule has a non-default review route', async () => {
-    renderForm(<MissionForm mode="edit" schedule={schedule} onDone={vi.fn()} onCancel={vi.fn()} />)
+  it('auto-expands Advanced when the automation has a non-default review route', async () => {
+    renderForm(<MissionForm mode="edit" automation={automation} onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByDisplayValue('weekly-digest')
     expect(screen.getByLabelText('Review route')).toBeInTheDocument()
   })
 
-  it('preserves the schedule kind in the patch payload and never shows Run once', async () => {
-    vi.mocked(patchSchedule).mockResolvedValue(schedule)
+  it('preserves the automation kind in the patch payload and never shows Run once', async () => {
+    vi.mocked(patchAutomation).mockResolvedValue(automation)
     const onDone = vi.fn()
-    renderForm(<MissionForm mode="edit" schedule={schedule} onDone={onDone} onCancel={vi.fn()} />)
+    renderForm(<MissionForm mode="edit" automation={automation} onDone={onDone} onCancel={vi.fn()} />)
 
     expect(screen.queryByRole('radio', { name: 'Run once' })).toBeNull()
 
     await screen.findByDisplayValue('weekly-digest')
-    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
 
     await waitFor(() =>
-      expect(patchSchedule).toHaveBeenCalledWith(
+      expect(patchAutomation).toHaveBeenCalledWith(
         's1',
         expect.objectContaining({
           name: 'weekly-digest',
-          mission_template: expect.objectContaining({ kind: 'general' }),
+          action: { kind: 'mission', mission: expect.objectContaining({ kind: 'general' }) },
         }),
       ),
     )
-    expect(onDone).toHaveBeenCalledWith({ kind: 'schedule', id: 's1' })
+    expect(onDone).toHaveBeenCalledWith({ kind: 'automation', id: 's1' })
+    expect(toast.success).toHaveBeenCalledWith('Automation updated')
+  })
+
+  it('patches the cron trigger in place by id and the agent, and omits an untouched expiry', async () => {
+    vi.mocked(patchAutomation).mockResolvedValue(automation)
+    const withManual: Automation = {
+      ...automation,
+      triggers: [
+        ...automation.triggers,
+        { ...automation.triggers[0], id: 't2', kind: 'manual', config: {}, tool_allowlist: ['search_mail'] },
+      ],
+    }
+    renderForm(<MissionForm mode="edit" automation={withManual} onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    await screen.findByDisplayValue('weekly-digest')
+    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
+
+    await waitFor(() => expect(patchAutomation).toHaveBeenCalled())
+    const [id, patch] = vi.mocked(patchAutomation).mock.calls[0]
+    expect(id).toBe('s1')
+    expect(patch.agent_id).toBe('a1')
+    expect(patch.triggers).toEqual([
+      { id: 't1', kind: 'cron', config: { expr: '0 8 * * 1-5' }, enabled: true },
+      { id: 't2', kind: 'manual', config: {}, tool_allowlist: ['search_mail'], enabled: true },
+    ])
+    expect(patch).not.toHaveProperty('expires_at')
+    expect(patch.action?.mission).not.toHaveProperty('agent_id')
+  })
+
+  it('adds a cron trigger without an id when the automation has none', async () => {
+    vi.mocked(patchAutomation).mockResolvedValue(automation)
+    renderForm(
+      <MissionForm mode="edit" automation={{ ...automation, triggers: [] }} onDone={vi.fn()} onCancel={vi.fn()} />,
+    )
+
+    await screen.findByDisplayValue('weekly-digest')
+    expect(screen.getByText('Daily, 7:00 AM')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
+
+    await waitFor(() =>
+      expect(patchAutomation).toHaveBeenCalledWith(
+        's1',
+        expect.objectContaining({ triggers: [{ id: undefined, kind: 'cron', config: { expr: '0 7 * * *' }, enabled: true }] }),
+      ),
+    )
   })
 
   it('picks a new expiry date from the calendar and submits it', async () => {
@@ -1830,16 +1936,16 @@ describe('MissionForm: edit mode', () => {
     // findByRole/waitFor's polling keeps using real timers.
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-08-01T00:00:00Z'))
-    vi.mocked(patchSchedule).mockResolvedValue(schedule)
-    renderForm(<MissionForm mode="edit" schedule={schedule} onDone={vi.fn()} onCancel={vi.fn()} />)
+    vi.mocked(patchAutomation).mockResolvedValue(automation)
+    renderForm(<MissionForm mode="edit" automation={automation} onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByDisplayValue('weekly-digest')
     fireEvent.click(screen.getByLabelText('Expires'))
     fireEvent.click(await screen.findByRole('button', { name: /August 15th, 2026/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
 
     await waitFor(() =>
-      expect(patchSchedule).toHaveBeenCalledWith(
+      expect(patchAutomation).toHaveBeenCalledWith(
         's1',
         expect.objectContaining({
           expires_at: expect.stringContaining('-15T12:30'),
@@ -1849,17 +1955,17 @@ describe('MissionForm: edit mode', () => {
   })
 
   it('clears the expiry back to never', async () => {
-    vi.mocked(patchSchedule).mockResolvedValue(schedule)
-    renderForm(<MissionForm mode="edit" schedule={schedule} onDone={vi.fn()} onCancel={vi.fn()} />)
+    vi.mocked(patchAutomation).mockResolvedValue(automation)
+    renderForm(<MissionForm mode="edit" automation={automation} onDone={vi.fn()} onCancel={vi.fn()} />)
 
     await screen.findByDisplayValue('weekly-digest')
     fireEvent.click(screen.getByLabelText('Expires'))
     fireEvent.click(await screen.findByRole('button', { name: 'Clear' }))
     expect(screen.getByLabelText('Expires')).toHaveTextContent('Never')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save schedule' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save automation' }))
     await waitFor(() =>
-      expect(patchSchedule).toHaveBeenCalledWith(
+      expect(patchAutomation).toHaveBeenCalledWith(
         's1',
         expect.objectContaining({ expires_at: null }),
       ),

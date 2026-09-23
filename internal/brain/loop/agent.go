@@ -340,7 +340,7 @@ type Request struct {
 	// than inferred.
 	// ExtraTools still layer on top as normal — missions.nativeRunner's
 	// worker/discover turns use exactly this to add back read-only
-	// connector tools (gmail/calendar reads) that scheduled general
+	// connector tools (gmail/calendar reads) that automation general
 	// missions need, gated on the agent's Tools allowlist and never
 	// including MCP or write-capable tools (missions.ConnectorReadsResolver).
 	BuiltinsOnly bool
@@ -1074,7 +1074,7 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID, mis
 		return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied", codePolicyDenied
 	case tools.DecisionAsk:
 		if unattended {
-			// No human is watching a schedule-fired mission's turn — parking
+			// No human is watching an unattended mission's turn: parking
 			// on askUser would strand it for the full permissionTimeout with
 			// nobody to answer (D-039). Fail fast with feedback that steers
 			// the model toward calls the allowlist actually grants.
@@ -1186,7 +1186,7 @@ func classifyToolError(err error) string {
 // tool_result, so this is additive, not a behavior change for it.
 //
 // attendedMission (issue #650) is a mission turn with a human
-// operator and no schedule behind it: the parked permission IS that
+// operator and no automation behind it: the parked permission IS that
 // turn's pause point (StorePermissionParker records it, the mission
 // UI offers approve/deny), so no loop-level timer competes with it —
 // only the turn's own context ending can end the wait. A chat turn

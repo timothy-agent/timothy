@@ -61,9 +61,9 @@ const featureCopy: Record<string, { label: string; description: string }> = {
     label: 'Compaction',
     description: 'Off: sessions grow unbounded until re-enabled. Useful when debugging context.',
   },
-  scheduler_enabled: {
-    label: 'Scheduler',
-    description: 'Off: recurring schedules stop firing missions.',
+  automations_enabled: {
+    label: 'Automations',
+    description: 'Off: automations stop firing missions.',
   },
   kb_image_captioning_enabled: {
     label: 'KB image captioning',
@@ -572,7 +572,7 @@ function TimezoneCard({ values, onSaved }: { values: Record<string, string>; onS
   return (
     <SettingValueCard
       title="Timezone"
-      description="Dates and times everywhere follow this timezone: delivery timestamps, schedule cron times, and the current date shown to models. Empty defaults to UTC."
+      description="Dates and times everywhere follow this timezone: delivery timestamps, automation cron times, and the current date shown to models. Empty defaults to UTC."
       dirty={false}
     >
       <Popover open={open} onOpenChange={setOpen}>

@@ -23,6 +23,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/api"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
+	"github.com/SumonMSelim/timothy/internal/brain/automations"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
@@ -227,7 +228,7 @@ func main() {
 
 	// captionImage converts an image's bytes into a plain-prose
 	// description: built once and shared by the KB enricher below and
-	// mission/schedule attachment resolution (issue #359) so both draw
+	// mission/automation attachment resolution (issue #359) so both draw
 	// on the same vision-route mechanism.
 	captionImage := chat.CaptionImageOverGateway(gwc, app.Log)
 	// recognizeImage reads text off an image with the local ocr sidecar:
@@ -353,10 +354,10 @@ func main() {
 	}
 	missionSandbox := sandboxclient.New(sandboxdURL)
 
-	// Built here, above buildMissions, so both the scheduler (fire-time
-	// route/review_route/budget/prompt_overlay resolution) and the
-	// driver (ApprovalAllowlist grants at provisioning time) can close
-	// over the same registry.
+	// Built here, above buildMissions, so both the create-path defaults
+	// (route/review_route/prompt_overlay resolution) and the driver
+	// (ApprovalAllowlist grants at provisioning time) can close over the
+	// same registry.
 	agentReg := agents.NewStore(app.DB, app.Log)
 
 	routeForRole := func(ctx context.Context, role string) string {
@@ -372,7 +373,7 @@ func main() {
 	// promotion hook use later in this function.
 	kbStore := kb.New(app.DB)
 	// One set of create-path lookups for every mission creator the brain
-	// runs besides the HTTP handler (scheduler, workflow engine), wired
+	// runs besides the HTTP handler (the workflow engine), wired
 	// from the same sources the handler's own fields use (issue #816).
 	missionResolve := missions.ResolveDeps{
 		Classify:     chat.ClassifyOverGateway(gwc),
@@ -386,7 +387,7 @@ func main() {
 		DefaultMaxIterations:  flags.MissionDefaultMaxIterations,
 		ResolveRoute:          gwc.ResolveRoute,
 	}
-	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, missionResolve, fxStore, gwc, secrets, conns, mc, packs, app.Log)
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, gwc,
 			flags.PermissionTimeoutSeconds, flags.AskTimeoutSeconds, broker, app.Log)
@@ -431,9 +432,6 @@ func main() {
 	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, repoAdapter, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
 		missionDriver.SetDestinationDeliver(destinationDeliverer.Deliver)
-	}
-	if missionScheduler != nil && destinationStore != nil {
-		missionScheduler.SetDestinationEnabled(destinationStore.EnabledByID)
 	}
 	if missionDriver != nil && destinationStore != nil {
 		missionDriver.SetGitHubPolicyResolver(destinationStore.RepoPolicy)
@@ -480,13 +478,21 @@ func main() {
 	// from the events rows ApplyTransition commits. The first drain runs
 	// at boot, so events a crash left unprocessed are consumed then. Run
 	// starts below, after the last missionDriver.Set* call.
+	// Automations (issue #821) start missions, so they live inside the
+	// missions gate; the events store also backs run-now requests.
+	var automationStore *automations.Store
+	var eventStore *events.Store
+	if missionDriver != nil {
+		automationStore = automations.NewStore(app.DB)
+		eventStore = events.NewStore(app.DB)
+	}
 	var drainer *events.Drainer
 	if missionDriver != nil {
 		consumers := []events.Consumer{missions.NewMemoryConsumer(missionDriver)}
 		if workflowEngine != nil {
 			consumers = append(consumers, workflowEngine)
 		}
-		drainer = events.NewDrainer(events.NewStore(app.DB), consumers,
+		drainer = events.NewDrainer(eventStore, consumers,
 			app.Metrics.NewCounterVec("events_processed_total", "Inbox events handled by kind and result.", "kind", "result"), app.Log)
 		missionDriver.SetEventsKick(drainer.Kick)
 	}
@@ -908,7 +914,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, pdfService, captionImage)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, pdfService, captionImage)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -1138,12 +1144,9 @@ func (d destinationLister) List(ctx context.Context) ([]builtin.DestinationInfo,
 // on memory denies well before 4 concurrent missions.
 const missionWorkSlotMax = 4
 
-// missionAgentResolver adapts agentReg.ResolveByID to scheduler.go's
-// AgentResolver / driver.go's SetAgentResolver shape: both need the
-// SAME resolution (route/review_route/prompt_overlay/
-// approval_allowlist/harness from an agents row), just at different
-// moments (schedule fire time vs mission provisioning time), so one
-// adapter serves both call sites.
+// missionAgentResolver adapts agentReg.ResolveByID to the
+// missions.AgentResolver shape shared by ResolveDeps (create time) and
+// driver.go's SetAgentResolver (provisioning time).
 func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 	return func(ctx context.Context, agentID string) (missions.AgentDefaults, bool) {
 		a, ok := agentReg.ResolveByID(ctx, agentID)
@@ -1222,20 +1225,18 @@ func intersectReadOnlyConnectorTools(allow []string, available []*tools.Tool) []
 }
 
 // buildMissions wires the mission engine (Store, Driver, Notifier,
-// Scheduler, Hub). Gated on WORKSPACES: no workspace root configured
-// means missions stay entirely inert: no goroutines started, nothing
-// scheduled, the API surface unmounted (registerMissions 404s on a nil
-// store). agentReg is D-034's agent registry, resolved at scheduler
-// fire time and mission provisioning time (never schedule-create
-// time) so an agent edited after the fact still applies.
-// missionResolve is the create-path lookups scheduler fires use. The hub
+// Workspace, Hub). Gated on WORKSPACES: no workspace root configured
+// means missions stay entirely inert: no goroutines started, the API
+// surface unmounted (registerMissions 404s on a nil store). agentReg
+// is D-034's agent registry, resolved at mission provisioning time so
+// an agent edited after the fact still applies. The hub
 // lives inside the same gate as everything else here: no missions,
 // no push events either.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, missionResolve missions.ResolveDeps, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, packs []skills.Skill, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub, *missions.Scheduler) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, packs []skills.Skill, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
-		return nil, nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	hub := missions.NewHub()
 	store := missions.NewStore(db, log)
@@ -1437,11 +1438,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		// branch GitHub may since have deleted (see followUpBaseRef).
 		driver.SetPRStateResolver(prStateResolver(conns.GitClient))
 	}
-	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
-	scheduler := missions.NewScheduler(db, driver.Create, missionResolve, schedulerEnabled, nil, log)
-	scheduler.SetLocation(flags.Location)
-	go scheduler.Run(ctx)
-	return store, driver, notifier, workspace, hub, scheduler
+	return store, driver, notifier, workspace, hub
 }
 
 // connsGitClients adapts *connectors.Manager to destinations.Clients

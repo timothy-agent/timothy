@@ -2415,7 +2415,7 @@ func TestAgentForceToolClearedWhenNotOffered(t *testing.T) {
 }
 
 // TestAgentUnattendedAskDeniesImmediately is D-039's second failure
-// mode: an unattended (schedule-fired) turn hitting DecisionAsk must
+// mode: an unattended (automation-started) turn hitting DecisionAsk must
 // deny immediately with feedback naming the rationale, never call
 // askUser (so no EventPermissionRequest, no 10-minute wait). The test
 // itself finishing well under that timeout is part of the assertion.

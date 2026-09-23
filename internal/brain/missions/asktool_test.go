@@ -137,9 +137,9 @@ func TestAskBudgetFor(t *testing.T) {
 	}{
 		{"plain", Mission{}, askBudget},
 		{"unattended", Mission{Unattended: true}, 0},
-		{"automation origin", Mission{OriginKind: OriginAutomation, ScheduleID: "sched1", Unattended: true}, 0},
+		{"automation origin", Mission{OriginKind: OriginAutomation, AutomationRunID: "run1", Unattended: true}, 0},
 		{"workflow origin", Mission{OriginKind: OriginWorkflow, WorkflowRunID: "wf1", Unattended: true}, 0},
-		{"schedule id overridden attended", Mission{OriginKind: OriginAutomation, ScheduleID: "sched1"}, askBudget},
+		{"automation run overridden attended", Mission{OriginKind: OriginAutomation, AutomationRunID: "run1"}, askBudget},
 		{"workflow run overridden attended", Mission{OriginKind: OriginWorkflow, WorkflowRunID: "wf1"}, askBudget},
 		{"api overridden unattended", Mission{OriginKind: OriginAPI, Unattended: true}, 0},
 	}

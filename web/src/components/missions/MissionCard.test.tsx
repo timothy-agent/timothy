@@ -194,15 +194,15 @@ describe('MissionCard cost', () => {
   })
 })
 
-describe('MissionCard recurring badge', () => {
-  it('shows a recurring badge when schedule_id is set', () => {
-    renderCard({ ...baseMission, schedule_id: 's1' })
-    expect(screen.getByText('recurring')).toBeInTheDocument()
+describe('MissionCard automation badge', () => {
+  it('shows an automation badge when automation_run_id is set', () => {
+    renderCard({ ...baseMission, automation_run_id: 'r1', origin_kind: 'automation' })
+    expect(screen.getByText('automation')).toBeInTheDocument()
   })
 
-  it('omits the recurring badge when schedule_id is unset', () => {
+  it('omits the automation badge when automation_run_id is unset', () => {
     renderCard({ ...baseMission })
-    expect(screen.queryByText('recurring')).not.toBeInTheDocument()
+    expect(screen.queryByText('automation')).not.toBeInTheDocument()
   })
 })
 

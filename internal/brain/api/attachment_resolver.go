@@ -15,7 +15,7 @@ import (
 )
 
 // attachmentError is a resolver failure carrying the HTTP status the
-// caller (mission create, schedule create/patch) should map it to via
+// caller (mission create, automation create/patch) should map it to via
 // jsonError; every existing resolveAttachments message is preserved
 // verbatim so callers/tests don't need to change.
 type attachmentError struct {
@@ -40,7 +40,7 @@ func attachmentErrorStatus(err error) int {
 }
 
 // attachmentResolver converts already-uploaded attachment refs into
-// missions.SourceEntry values, shared by mission create and schedule
+// missions.SourceEntry values, shared by mission create and automation
 // create/patch (issue #359: images and audio, extending the original
 // PDF/text-only path) so both surfaces convert attachments identically.
 type attachmentResolver struct {

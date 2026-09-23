@@ -9,7 +9,7 @@ import (
 )
 
 // CreateRequest is a mission create before defaults are applied, shared
-// by the HTTP create handler, the scheduler and the workflow engine
+// by the HTTP create handler, automation runs and the workflow engine
 // (issue #816). Empty fields mean "resolve the default";
 // ResolveDefaults turns it into the Mission Driver.Create persists.
 type CreateRequest struct {
@@ -50,9 +50,9 @@ type CreateRequest struct {
 	Sources         []SourceEntry
 	Destinations    []DestinationEntry
 
-	ScheduleID    string
-	WorkflowRunID string
-	WorkflowStep  string
+	AutomationRunID string
+	WorkflowRunID   string
+	WorkflowStep    string
 
 	// OriginKind "" resolves to OriginAPI, or OriginFollowup when
 	// ParentMissionID is set. Unattended nil derives from the origin.
@@ -213,7 +213,7 @@ func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (
 		Destinations:             req.Destinations,
 		Flow:                     flow,
 		PermissionTimeoutSeconds: permissionTimeout,
-		ScheduleID:               req.ScheduleID,
+		AutomationRunID:          req.AutomationRunID,
 		WorkflowRunID:            req.WorkflowRunID,
 		WorkflowStep:             req.WorkflowStep,
 		OriginKind:               origin,

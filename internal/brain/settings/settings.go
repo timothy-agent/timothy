@@ -18,13 +18,12 @@ import (
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
-// Known switch keys. The scheduler switch stores now and gains a
-// consumer with the harness phase.
+// Known switch keys. KeyAutomations gates automation runs.
 const (
 	KeyTools            = "tools_enabled"
 	KeyMemoryExtraction = "memory_extraction_enabled"
 	KeyCompaction       = "compaction_enabled"
-	KeyScheduler        = "scheduler_enabled"
+	KeyAutomations      = "automations_enabled"
 	// KeyKBImageCaptioning gates spending on vision-model calls to
 	// caption images at KB ingest (issues #349/#350); unlike every other
 	// switch here it defaults OFF for an absent row (knownKeysOff), since
@@ -43,7 +42,7 @@ const (
 )
 
 var knownKeys = map[string]bool{
-	KeyTools: true, KeyMemoryExtraction: true, KeyCompaction: true, KeyScheduler: true,
+	KeyTools: true, KeyMemoryExtraction: true, KeyCompaction: true, KeyAutomations: true,
 	KeyKBImageCaptioning: true, KeyKBLocalOCR: true, KeyPRAttribution: true,
 }
 

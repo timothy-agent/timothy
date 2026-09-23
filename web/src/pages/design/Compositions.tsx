@@ -256,12 +256,12 @@ export function Compositions() {
         <div className="flex flex-wrap items-center gap-4">
           <Dialog>
             <DialogTrigger asChild>
-              <Button variant="outline">Edit schedule</Button>
+              <Button variant="outline">Edit automation</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Edit schedule</DialogTitle>
-                <DialogDescription>Changes apply to the next scheduled run.</DialogDescription>
+                <DialogTitle>Edit automation</DialogTitle>
+                <DialogDescription>Changes apply to the next run.</DialogDescription>
               </DialogHeader>
               <div className="space-y-5">
                 <Field label="Cron expression">{(props) => <Input {...props} defaultValue="0 8 * * 1" className="font-mono" />}</Field>

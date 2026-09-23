@@ -18,9 +18,11 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
+	"github.com/SumonMSelim/timothy/internal/brain/automations"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
@@ -119,10 +121,10 @@ var memoryRoutePatterns = []string{
 // whisperURL empty leaves /v1/transcribe unmounted (WHISPER_URL unset).
 // caption converts an image attachment's bytes into a plain-prose
 // description (issue #359, chat.CaptionImageOverGateway) for mission
-// create/schedule attachment resolution; nil (no gateway wiring) makes
+// and automation attachment resolution; nil (no gateway wiring) makes
 // every image attachment fail with attachmentResolver's "could not be
 // described" error.
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, kbEnrich *kb.Enricher, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, pdfService *pdfgen.Service, caption func(context.Context, string, []byte) string) {
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, kbEnrich *kb.Enricher, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, automationStore *automations.Store, eventStore *events.Store, pdfService *pdfgen.Service, caption func(context.Context, string, []byte) string) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates, pdfService: pdfService}
 	if missionStore != nil {
 		a.missionPerms = missionStore
@@ -185,18 +187,23 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	}
 	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveRoute, nameMission, topModels, conns, missionAttachments, markitdownURL, pdfService, kbStore, kbIngest, kbEnrich, whisperURL, caption)
 	resolver := &attachmentResolver{store: missionAttachments, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: whisperClient, caption: caption, enrich: kbEnrich, log: log}
-	a.registerSchedules(srv.Handle, missionStore, destLookup, resolver)
-	// destinationRefs/destinationScheduleRefs are *missions.Store itself
-	// (ActiveMissionReferencesDestination / ScheduleReferencingDestinationID) —
-	// nil-boxed the same way connLister is above so a nil missionStore
-	// keeps registerDestinations' refs checks honest.
+	var location func(context.Context) *time.Location
+	if flags != nil {
+		location = flags.Location
+	}
+	a.registerAutomations(srv.Handle, automationStore, eventStore, destLookup, resolver, location)
+	// destRefs is *missions.Store and destAutomationRefs *automations.Store,
+	// nil-boxed the same way connLister is above so a nil store keeps
+	// registerDestinations' refs checks honest.
 	var destRefs destinationRefs
-	var destScheduleRefs destinationScheduleRefs
 	if missionStore != nil {
 		destRefs = missionStore
-		destScheduleRefs = missionStore
 	}
-	a.registerDestinations(srv.Handle, destinationStore, destRefs, destScheduleRefs, destinationTest)
+	var destAutomationRefs destinationAutomationRefs
+	if automationStore != nil {
+		destAutomationRefs = automationStore
+	}
+	a.registerDestinations(srv.Handle, destinationStore, destRefs, destAutomationRefs, destinationTest)
 	// Same nil-box guard as connLister above: a nil *workflows.Engine
 	// boxed straight into workflowStarter would be a non-nil interface
 	// value, breaking registerWorkflows' engine == nil gate on

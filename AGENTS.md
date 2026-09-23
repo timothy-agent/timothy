@@ -68,7 +68,9 @@ via the existing `--env-file` Make targets.
   transition logic), `store.go` (`ApplyTransition` is the only state
   writer; append-only `mission_events`), `driver.go`, `runner.go`,
   `policy.go` (per-kind/light behavior), `provision.go`, `budget.go`,
-  `verifier.go`, `sentinel.go`, `packet.go`, `scheduler.go`.
+  `verifier.go`, `sentinel.go`, `packet.go`, `template.go` (the mission
+  template an automation action carries; automations themselves live
+  in `internal/brain/automations`).
 - Light missions (kind=general, `light` flag): born in phase=build,
   skip discover/plan; the worker carries the deliverable in
   mission_status's `final_output` argument.

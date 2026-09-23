@@ -155,7 +155,7 @@ var ErrTimeout = errors.New("sandbox: command timed out")
 // key — the ONLY way an image is ever chosen; a request carries the
 // key, never a free-form image string (mirrors
 // internal/brain/missions.Environments, which the API validates
-// create/schedule requests against before this is ever reached). ""
+// mission and automation requests against before this is ever reached). ""
 // and "base" both resolve to the operator-configured base image
 // (MISSION_SANDBOX_IMAGE) — "" is Manager's zero-value default for
 // back-compat with a caller that predates the environment axis, "base"

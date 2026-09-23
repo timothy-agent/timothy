@@ -162,7 +162,7 @@ func TestValidateEmailNoConnectors(t *testing.T) {
 	}
 }
 
-// fakeMissionRefs/fakeScheduleRefs let TestDeleteReferenceGuards
+// fakeMissionRefs/fakeAutomationRefs let TestDeleteReferenceGuards
 // exercise Delete's two reference checks without a real Postgres pool
 // — both fakes return before Delete ever reaches s.db.Get() when they
 // report a reference, which is the only path this test needs (a
@@ -177,13 +177,13 @@ func (f fakeMissionRefs) ActiveMissionReferencesDestination(context.Context, str
 	return f.referenced, f.err
 }
 
-type fakeScheduleRefs struct {
+type fakeAutomationRefs struct {
 	name       string
 	referenced bool
 	err        error
 }
 
-func (f fakeScheduleRefs) ScheduleReferencingDestinationID(context.Context, string) (string, bool, error) {
+func (f fakeAutomationRefs) NameReferencingDestination(context.Context, string) (string, bool, error) {
 	return f.name, f.referenced, f.err
 }
 
@@ -208,22 +208,22 @@ func TestDeleteReferenceGuards(t *testing.T) {
 		}
 	})
 
-	t.Run("enabled schedule reference refuses with ErrReferenced naming the schedule", func(t *testing.T) {
+	t.Run("enabled automation reference refuses with ErrReferenced naming the automation", func(t *testing.T) {
 		t.Parallel()
 		s := &Store{}
-		err := s.Delete(t.Context(), "d1", nil, fakeScheduleRefs{name: "daily-brief", referenced: true})
+		err := s.Delete(t.Context(), "d1", nil, fakeAutomationRefs{name: "daily-brief", referenced: true})
 		if !errors.Is(err, ErrReferenced) {
 			t.Fatalf("Delete = %v, want ErrReferenced", err)
 		}
 		if !bytes.Contains([]byte(err.Error()), []byte("daily-brief")) {
-			t.Fatalf("Delete error %q does not name the referencing schedule", err.Error())
+			t.Fatalf("Delete error %q does not name the referencing automation", err.Error())
 		}
 	})
 
-	t.Run("schedule reference lookup error propagates", func(t *testing.T) {
+	t.Run("automation reference lookup error propagates", func(t *testing.T) {
 		t.Parallel()
 		s := &Store{}
-		err := s.Delete(t.Context(), "d1", nil, fakeScheduleRefs{err: errors.New("db down")})
+		err := s.Delete(t.Context(), "d1", nil, fakeAutomationRefs{err: errors.New("db down")})
 		if err == nil || errors.Is(err, ErrReferenced) {
 			t.Fatalf("Delete = %v, want a propagated (non-ErrReferenced) error", err)
 		}

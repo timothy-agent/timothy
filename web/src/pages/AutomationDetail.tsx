@@ -1,10 +1,9 @@
-import { Pencil } from 'lucide-react'
+import { Pencil, Play } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { listDestinations, listMissions, listSchedules, patchSchedule } from '../api/client'
-import type { Destination, Mission, Schedule } from '../api/types'
-import { MissionCard } from '../components/missions/MissionCard'
+import { getAutomation, listAutomationRuns, listDestinations, patchAutomation, runAutomationNow } from '../api/client'
+import type { Automation, AutomationRun, Destination } from '../api/types'
 import { DestinationKindIcon } from '../components/destinations/DestinationKindIcon'
 import { errText } from '../lib/errors'
 import { EmptyState } from '../components/timothy/empty-state'
@@ -12,21 +11,21 @@ import { IconButton } from '../components/timothy/icon-button'
 import { PageHeader } from '../components/timothy/page-header'
 import { PageShell } from '../components/timothy/page-shell'
 import { Spinner } from '../components/timothy/spinner'
+import { automationRunStatus } from '../components/timothy/status'
+import { StatusBadge } from '../components/timothy/status-badge'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
-import { describeCron } from '../lib/schedules'
+import { cronExpr, describeCron } from '../lib/cron'
 import { relativeTime, relativeTimeUntil } from '../lib/format'
 
-// AutomationDetail shows one schedule's summary plus the missions it
-// has fired — no GET-by-id for schedules, same as EditSchedule, so the
-// list (small) is searched for the one being viewed.
+// AutomationDetail shows one automation's summary plus its run history.
 export function AutomationDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [schedule, setSchedule] = useState<Schedule | null>(null)
+  const [automation, setAutomation] = useState<Automation | null>(null)
   const [loading, setLoading] = useState(true)
-  const [missions, setMissions] = useState<Mission[]>([])
+  const [runs, setRuns] = useState<AutomationRun[]>([])
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
   // Destinations fetched once per page, just to resolve
@@ -42,34 +41,48 @@ export function AutomationDetail() {
 
   const refresh = useCallback(() => {
     if (!id) return
-    listSchedules().then(
-      (rows) => {
-        setSchedule(rows.find((s) => s.id === id) ?? null)
+    getAutomation(id).then(
+      (a) => {
+        setAutomation(a)
         setLoading(false)
       },
-      () => setLoading(false),
+      () => {
+        setAutomation(null)
+        setLoading(false)
+      },
     )
-    listMissions({ scheduleId: id }).then(setMissions, () => undefined)
+    listAutomationRuns(id).then(setRuns, () => undefined)
   }, [id])
 
   useEffect(refresh, [refresh])
 
   const startRename = () => {
-    if (!schedule) return
-    setName(schedule.name)
+    if (!automation) return
+    setName(automation.name)
     setRenaming(true)
   }
 
   const commitRename = async () => {
     const trimmed = name.trim()
     setRenaming(false)
-    if (!schedule || trimmed === '' || trimmed === schedule.name) return
+    if (!automation || trimmed === '' || trimmed === automation.name) return
     try {
-      await patchSchedule(schedule.id, { name: trimmed })
+      await patchAutomation(automation.id, { name: trimmed })
       toast.success('Automation renamed')
       refresh()
     } catch (err) {
       toast.error('Could not rename automation', { description: errText(err) })
+    }
+  }
+
+  const runNow = async () => {
+    if (!automation) return
+    try {
+      await runAutomationNow(automation.id)
+      toast.success('Run requested')
+      refresh()
+    } catch (err) {
+      toast.error('Could not run automation', { description: errText(err) })
     }
   }
 
@@ -83,7 +96,7 @@ export function AutomationDetail() {
     )
   }
 
-  if (!schedule) {
+  if (!automation) {
     return (
       <PageShell>
         <p className="text-sm text-muted-foreground">
@@ -96,13 +109,15 @@ export function AutomationDetail() {
     )
   }
 
-  const destinationIds = schedule.mission_template.destination_ids ?? []
+  const destinationIds = automation.action.mission.destination_ids ?? []
+  const cron = cronExpr(automation)
+  const { next_run_at: nextRun, last_run_at: lastRun } = automation.stats
 
   return (
     <PageShell>
       <PageHeader
-        breadcrumbs={[{ label: 'Automations', href: '/automations' }, { label: schedule.name }]}
-        title={schedule.name}
+        breadcrumbs={[{ label: 'Automations', href: '/automations' }, { label: automation.name }]}
+        title={automation.name}
         titleNode={
           renaming ? (
             <Input
@@ -119,15 +134,15 @@ export function AutomationDetail() {
             />
           ) : (
             <div className="flex items-center gap-1.5">
-              <h1 className="truncate text-title font-semibold text-foreground">{schedule.name}</h1>
+              <h1 className="truncate text-title font-semibold text-foreground">{automation.name}</h1>
               <IconButton label="Rename automation" icon={Pencil} variant="ghost" size="sm" onClick={startRename} />
             </div>
           )
         }
         meta={
           <>
-            <Badge variant={schedule.enabled ? 'good' : 'neutral'} size="sm">
-              {schedule.enabled ? 'enabled' : 'disabled'}
+            <Badge variant={automation.enabled ? 'good' : 'neutral'} size="sm">
+              {automation.enabled ? 'enabled' : 'disabled'}
             </Badge>
             {destinationIds.map((did) => {
               const d = destinations.find((d) => d.id === did)
@@ -140,40 +155,56 @@ export function AutomationDetail() {
             })}
           </>
         }
-        description={schedule.mission_template.goal}
+        description={automation.action.mission.goal}
         actions={
-          <Button variant="outline" onClick={() => navigate(`/automations/${id}/edit`)}>
-            Edit
-          </Button>
+          <>
+            <Button variant="outline" onClick={() => void runNow()}>
+              <Play aria-hidden />
+              Run now
+            </Button>
+            <Button variant="outline" onClick={() => navigate(`/automations/${id}/edit`)}>
+              Edit
+            </Button>
+          </>
         }
       >
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
-          <span className="whitespace-nowrap">{describeCron(schedule.cron)}</span>
-          {schedule.next_run && (
+          {cron && <span className="whitespace-nowrap">{describeCron(cron)}</span>}
+          {nextRun && (
             <>
-              <span aria-hidden>&middot;</span>
-              <span className="whitespace-nowrap">Next run {relativeTimeUntil(schedule.next_run)}</span>
+              {cron && <span aria-hidden>&middot;</span>}
+              <span className="whitespace-nowrap">Next run {relativeTimeUntil(nextRun)}</span>
             </>
           )}
-          {schedule.last_run && (
+          {lastRun && (
             <>
-              <span aria-hidden>&middot;</span>
-              <span className="whitespace-nowrap">Last run {relativeTime(schedule.last_run)}</span>
+              {(cron || nextRun) && <span aria-hidden>&middot;</span>}
+              <span className="whitespace-nowrap">Last run {relativeTime(lastRun)}</span>
             </>
           )}
         </div>
       </PageHeader>
 
-      <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {missions.map((m) => (
-          <MissionCard key={m.id} mission={m} />
-        ))}
-        {missions.length === 0 && (
-          <div className="col-span-full rounded-md border border-dashed border-border">
-            <EmptyState title="No missions fired yet." />
-          </div>
-        )}
-      </div>
+      {runs.length > 0 ? (
+        <ul aria-label="Runs" className="mt-8 divide-y divide-border rounded-md border border-border">
+          {runs.map((r) => (
+            <li key={r.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-sm">
+              <StatusBadge status={automationRunStatus(r.status)} label={r.status} size="sm" />
+              <span className="whitespace-nowrap text-muted-foreground">{relativeTime(r.created_at)}</span>
+              {r.skip_reason && <span className="text-muted-foreground">{r.skip_reason}</span>}
+              {r.mission_id && (
+                <Link to={`/missions/${r.mission_id}`} className="ml-auto underline underline-offset-2 hover:text-foreground">
+                  View mission
+                </Link>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="mt-8 rounded-md border border-dashed border-border">
+          <EmptyState title="No runs yet." />
+        </div>
+      )}
     </PageShell>
   )
 }

@@ -175,8 +175,8 @@ func TestResolveProjectAllowlistAllows(t *testing.T) {
 // exists to remove. This is also the D-039 unattended-mission case
 // (requirement 8): loop.Agent's resolveAndRun only consults
 // Request.Unattended inside the DecisionAsk branch — a DecisionAllow
-// result (this test) reaches execution unconditionally, schedule-fired
-// or not, so a schedule-fired mission with this same grant/sandbox
+// result (this test) reaches execution unconditionally, attended
+// or not, so an unattended mission with this same grant/sandbox
 // combination gains the identical capability with no further wiring.
 func TestResolveSandboxOpaqueWithGrantAllows(t *testing.T) {
 	p, sid := integrationPermissions(t)

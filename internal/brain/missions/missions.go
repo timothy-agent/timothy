@@ -24,7 +24,7 @@ type Mission struct {
 	Goal string `json:"goal"`
 	// Name is a short display name generated once from Goal, the same
 	// way a chat session's title is (chat.go's autoTitle) — see
-	// Store.SetNameIfEmpty. Scheduler-fired missions get the schedule's
+	// Store.SetNameIfEmpty. Automation-started missions get the automation's
 	// own name directly, no LLM call. Empty means generation hasn't
 	// landed yet; the UI falls back to a truncated Goal.
 	Name    string `json:"name,omitempty"`
@@ -189,7 +189,7 @@ type Mission struct {
 	// mission has always worked. false parks the mission on
 	// PauseApproval instead (D-087, issue #456), waiting for an
 	// operator to approve/replan/rediscover. Snapshotted at create
-	// time, same as AutoApproveTools; scheduler.go and the workflow
+	// time, same as AutoApproveTools; automation runs and the workflow
 	// engine both force this true regardless of template/step input:
 	// an unattended mission has nobody to approve its plan.
 	AutoApprovePlan bool `json:"auto_approve_plan"`
@@ -199,8 +199,9 @@ type Mission struct {
 	// of designing one from scratch. Snapshotted at create time, never
 	// model-mutable; light missions never plan, so this has no effect
 	// there.
-	HasPlan    bool   `json:"has_plan,omitempty"`
-	ScheduleID string `json:"schedule_id,omitempty"`
+	HasPlan bool `json:"has_plan,omitempty"`
+	// AutomationRunID names the automation run that started this mission.
+	AutomationRunID string `json:"automation_run_id,omitempty"`
 	// OriginKind is where the mission came from (Origin* constants),
 	// set once at create (issue #817).
 	OriginKind string `json:"origin_kind"`

@@ -84,10 +84,9 @@ describe('Theme toggle icon', () => {
 describe('Legacy edit schedule route', () => {
   it('redirects /missions/schedules/:id/edit to /automations/:id/edit', async () => {
     renderAt('/missions/schedules/s1/edit')
-    // No GET-by-id for schedules: the redirected EditSchedule page can't
-    // resolve 's1' against an empty (failed-fetch) schedule list, so it
-    // falls back to its own not-found copy — proof the route landed.
-    expect(await screen.findByText('Schedule not found.')).toBeTruthy()
+    // Every fetch fails here, so the redirected EditAutomation page falls
+    // back to its own not-found copy: proof the route landed.
+    expect(await screen.findByText('Automation not found.')).toBeTruthy()
   })
 })
 

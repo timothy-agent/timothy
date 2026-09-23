@@ -198,7 +198,7 @@ type Patch struct {
 }
 
 // ErrNameConflict is the sentinel error the HTTP layer maps onto 409,
-// mirroring missions.ErrScheduleNameConflict.
+// mirroring automations.ErrNameConflict.
 var ErrNameConflict = fmt.Errorf("a connector with this name already exists")
 
 func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {

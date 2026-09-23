@@ -5,7 +5,7 @@ import {
   classifyMission,
   type CreateMissionInput,
   createMission,
-  createSchedule,
+  createAutomation,
   type ExecutorOption,
   getMissionExecutionPlan,
   getMissionExecutorOptions,
@@ -14,22 +14,23 @@ import {
   listConnectors,
   listDestinations,
   listKbCollections,
-  patchSchedule,
+  patchAutomation,
 } from '../../api/client'
 import type {
   AdminAgent,
   AdminConnector,
   AdminRoute,
+  Automation,
   Destination,
   ExecutionPlanPhase,
   GitHubRepo,
   KbCollection,
+  MissionTemplate,
   Reference,
-  Schedule,
 } from '../../api/types'
 import { useAgents, useRoutes } from '../AgentPicker'
 import { slugify } from '../../lib/slugify'
-import { cronPresets, type CronPresetValue, presetFor } from '../../lib/schedules'
+import { cronExpr, cronPresets, cronTrigger, type CronPresetValue, presetFor } from '../../lib/cron'
 import { CURRENCIES } from '../../lib/currencies'
 import { extractRepoMentions, matchRepo } from '../../lib/goalRepo'
 import { Badge } from '../ui/badge'
@@ -98,14 +99,12 @@ const kindCopy: Record<Kind, string> = {
   general: 'General · scratch workspace',
 }
 
-// A schedule's mission_template carries route/review_route as explicit
+// An automation's mission template carries route/review_route as explicit
 // undefined when unset (see types.ts): "non-default" means any of
-// them, or a non-default agent, actually has a value. Budget and
-// auto-approve are always visible now, so they never force the
-// advanced section open.
-function hasNonDefaults(t: Schedule['mission_template']): boolean {
+// them actually has a value. Budget and auto-approve are always
+// visible now, so they never force the advanced section open.
+function hasNonDefaults(t: MissionTemplate): boolean {
   return !!(
-    t.agent_id ||
     t.route ||
     t.review_route ||
     t.plan_route ||
@@ -295,14 +294,14 @@ function formatExpiresAt(v: string): string {
 }
 
 // MissionForm is the shared form behind both the new-mission page and
-// the edit-schedule page. In 'create' mode it submits a one-off
-// mission or, with "Repeat on schedule" on, a new schedule. In 'edit'
-// mode it always patches the given schedule and locks out run-once,
+// the edit-automation page. In 'create' mode it submits a one-off
+// mission or, with "Repeat on a cron" on, a new automation. In 'edit'
+// mode it always patches the given automation and locks out run-once,
 // coding, and the escalation route: the same constraints
-// NewMissionDialog/ScheduleDialog enforced.
+// the old mission and automation dialogs enforced.
 export function MissionForm({
   mode,
-  schedule,
+  automation,
   initial,
   initialGoal,
   parentMissionId,
@@ -310,7 +309,7 @@ export function MissionForm({
   onCancel,
 }: {
   mode: 'create' | 'edit'
-  schedule?: Schedule
+  automation?: Automation
   // initial seeds the form's create-mode state from a parent mission
   // (a follow-up): everything except goal, which comes from
   // initialGoal or is left empty for the user to type. Read only
@@ -324,7 +323,7 @@ export function MissionForm({
   // parentMissionId, when set, is included on the create payload:
   // makes this a follow-up mission (see CreateMissionInput).
   parentMissionId?: string
-  onDone: (result: { kind: 'mission' | 'schedule'; id: string }) => void
+  onDone: (result: { kind: 'mission' | 'automation'; id: string }) => void
   onCancel: () => void
 }) {
   const agents = useAgents()
@@ -338,8 +337,8 @@ export function MissionForm({
   // attachments, like goal, is never seeded from a follow-up's initial:
   // a follow-up carries the parent's outcome digest as prompt context,
   // not its documents; each new mission attaches its own. Edit mode
-  // seeds it from the schedule's own stored template attachments
-  // (issue #359, see the schedule-load effect below).
+  // seeds it from the automation's own stored template attachments
+  // (issue #359, see the automation-load effect below).
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   // references picked via the goal field's # mentions: component
   // state only, resolved server-side at create time.
@@ -373,7 +372,7 @@ export function MissionForm({
   const [agentID, setAgentID] = useState(initial?.agent_id ?? '')
   // Destinations multi-select: visible, not advanced; default is
   // empty (deliver nowhere). Offered for a one-off create, a new
-  // schedule (repeat on), and editing an existing schedule: fetched
+  // automation (repeat on), and editing an existing automation: fetched
   // once per form regardless of mode.
   const [destinations, setDestinations] = useState<Destination[] | null>(null)
   const [destinationIDs, setDestinationIDs] = useState<string[]>(initial?.destination_ids ?? [])
@@ -670,7 +669,7 @@ export function MissionForm({
   ])
 
   // Pre-select the settings page's configured default currency for a
-  // fresh create: edit mode below overwrites this with the schedule's
+  // fresh create: edit mode below overwrites this with the automation's
   // own saved currency once it loads.
   useEffect(() => {
     if (mode !== 'create') return
@@ -696,67 +695,66 @@ export function MissionForm({
       })
   }, [])
 
-  // Repeat-on-schedule fields: read/submitted whenever repeat is on
-  // (create mode) or always (edit mode, which only ever edits a
-  // schedule).
+  // Repeat-on-a-cron fields: read/submitted whenever repeat is on
+  // (create mode) or always (edit mode, which only ever edits an
+  // automation).
   const [repeat, setRepeat] = useState(mode === 'edit')
-  const [scheduleName, setScheduleName] = useState('')
+  const [automationName, setAutomationName] = useState('')
   const [preset, setPreset] = useState<CronPresetValue>('daily-7am')
   const [cron, setCron] = useState<string>(cronPresets[0].cron ?? '0 7 * * *')
   const [cronError, setCronError] = useState<string | null>(null)
   const [maxIterations, setMaxIterations] = useState('')
   const [expiresAt, setExpiresAt] = useState('')
+  // seededExpiresAt is the edit-mode starting value: an unchanged
+  // expiry is left out of the patch.
+  const [seededExpiresAt, setSeededExpiresAt] = useState('')
 
-  // Edit mode: re-seed every time the schedule to edit changes.
+  // Edit mode: re-seed every time the automation to edit changes.
   useEffect(() => {
-    if (mode !== 'edit' || !schedule) return
-    setScheduleName(schedule.name)
-    setCron(schedule.cron)
-    setPreset(presetFor(schedule.cron))
-    setGoal(schedule.mission_template.goal)
-    setKind(schedule.mission_template.kind)
+    if (mode !== 'edit' || !automation) return
+    const t = automation.action.mission
+    const expr = cronExpr(automation) ?? cronPresets[0].cron
+    setAutomationName(automation.name)
+    setCron(expr)
+    setPreset(presetFor(expr))
+    setGoal(t.goal)
+    setKind(t.kind)
     setKindLocked(true)
-    setAgentID(schedule.mission_template.agent_id ?? '')
-    setLight(schedule.mission_template.light ?? false)
+    setAgentID(automation.agent_id)
+    setLight(t.light ?? false)
     setLightTouched(true)
-    setAutoApproveTools(schedule.mission_template.auto_approve_tools ?? true)
-    setShowAdvanced(hasNonDefaults(schedule.mission_template))
-    setRoute(schedule.mission_template.route ?? '')
-    setReviewRoute(schedule.mission_template.review_route ?? '')
-    setPlanRoute(schedule.mission_template.plan_route ?? '')
-    setMaxIterations(
-      schedule.mission_template.max_iterations != null
-        ? String(schedule.mission_template.max_iterations)
-        : '',
-    )
-    setBudget(
-      schedule.mission_template.budget_amount != null
-        ? String(schedule.mission_template.budget_amount)
-        : '',
-    )
-    setBudgetCurrency(schedule.mission_template.budget_currency || 'USD')
-    setHarness(schedule.mission_template.harness ?? '')
-    setReviewHarness(schedule.mission_template.review_harness ?? '')
-    setEnvironment(schedule.mission_template.environment ?? '')
-    setDestinationIDs(schedule.mission_template.destination_ids ?? [])
+    setAutoApproveTools(t.auto_approve_tools ?? true)
+    setShowAdvanced(hasNonDefaults(t))
+    setRoute(t.route ?? '')
+    setReviewRoute(t.review_route ?? '')
+    setPlanRoute(t.plan_route ?? '')
+    setMaxIterations(t.max_iterations != null ? String(t.max_iterations) : '')
+    setBudget(t.budget_amount != null ? String(t.budget_amount) : '')
+    setBudgetCurrency(t.budget_currency || 'USD')
+    setHarness(t.harness ?? '')
+    setReviewHarness(t.review_harness ?? '')
+    setEnvironment(t.environment ?? '')
+    setDestinationIDs(t.destination_ids ?? [])
     setAttachments(
-      (schedule.mission_template.attachments ?? []).map((a) => ({
+      (t.attachments ?? []).map((a) => ({
         id: a.id,
         mime: a.mime ?? '',
         previewUrl: '',
         name: a.name,
       })),
     )
-    setExpiresAt(schedule.expires_at ? schedule.expires_at.slice(0, 16) : '')
+    const expires = automation.expires_at ? automation.expires_at.slice(0, 16) : ''
+    setExpiresAt(expires)
+    setSeededExpiresAt(expires)
     setCronError(null)
-  }, [mode, schedule])
+  }, [mode, automation])
 
   // Live kind inference: debounced 600ms after goal edits, skipped
   // once the user has locked a manual choice or the goal is empty.
   // Unlocking on an emptied goal happens in the textarea's onChange
   // below (a direct user edit), not here: this effect also runs on
-  // mount/schedule-load with the PREVIOUS render's goal, and clearing
-  // the lock from here would race the schedule-seed effect's own
+  // mount/automation-load with the PREVIOUS render's goal, and clearing
+  // the lock from here would race the automation-seed effect's own
   // setKindLocked(true) and stomp it back to false.
   useEffect(() => {
     if (goal.trim() === '' || kindLocked) return
@@ -855,8 +853,8 @@ export function MissionForm({
   const githubSourceReady = repoSource !== 'github' || (!!connectorID && !!selectedRepo)
 
   // A disabled destination is rejected at create with "unknown or
-  // disabled destination id(s)", so it isn't offered — except when a
-  // schedule saved earlier already holds it, where hiding it would drop
+  // disabled destination id(s)", so it isn't offered, except when an
+  // automation saved earlier already holds it, where hiding it would drop
   // it from the form while it still blocks the save.
   const visibleDestinations = (destinations ?? []).filter(
     (d) => d.enabled || destinationIDs.includes(d.id),
@@ -884,7 +882,7 @@ export function MissionForm({
 
   const canSubmit =
     mode === 'edit'
-      ? scheduleName.trim() !== '' &&
+      ? automationName.trim() !== '' &&
         goal.trim() !== '' &&
         validCronShape(cron) &&
         !attachments.some((a) => a.uploading)
@@ -936,68 +934,60 @@ export function MissionForm({
     onDone({ kind: 'mission', id })
   }
 
-  const submitSchedule = async () => {
-    const { id } = await createSchedule({
-      name: (scheduleName || goal).trim(),
-      cron,
-      mission_template: {
-        goal: goal.trim(),
-        kind,
-        agent_id: agentID || undefined,
-        route: route || undefined,
-        review_route: reviewRoute || undefined,
-        plan_route: planRoute || undefined,
-        max_iterations: maxIterations ? Number(maxIterations) : undefined,
-        budget_amount: budget ? Number(budget) : undefined,
-        budget_currency: budget ? budgetCurrency : undefined,
-        auto_approve_tools: autoApproveTools,
-        harness: kind === 'coding' ? harness || undefined : undefined,
-        review_harness: light ? undefined : reviewHarness || undefined,
-        environment: kind === 'coding' ? environment || undefined : undefined,
-        destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
-        light: kind === 'general' ? light : undefined,
-        attachments:
-          attachments.length > 0
-            ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' }))
-            : undefined,
-      },
+  // missionTemplate builds the automation's mission action from the form.
+  const missionTemplate = (templateKind: Kind): MissionTemplate => ({
+    goal: goal.trim(),
+    kind: templateKind,
+    route: route || undefined,
+    review_route: reviewRoute || undefined,
+    plan_route: planRoute || undefined,
+    max_iterations: maxIterations ? Number(maxIterations) : undefined,
+    budget_amount: budget ? Number(budget) : undefined,
+    budget_currency: budget ? budgetCurrency : undefined,
+    auto_approve_tools: autoApproveTools,
+    harness: templateKind === 'coding' ? harness || undefined : undefined,
+    review_harness: light ? undefined : reviewHarness || undefined,
+    environment: templateKind === 'coding' ? environment || undefined : undefined,
+    destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
+    light: templateKind === 'general' ? light : undefined,
+    attachments:
+      attachments.length > 0 ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' })) : undefined,
+  })
+
+  // An automation needs an agent: the picked one, else the default agent.
+  const automationAgentID = agentID || agents.find((a) => a.is_default)?.id || ''
+
+  const submitAutomation = async () => {
+    const { id } = await createAutomation({
+      name: (automationName || goal).trim(),
+      agent_id: automationAgentID,
+      action: { kind: 'mission', mission: missionTemplate(kind) },
+      triggers: [{ kind: 'cron', config: { expr: cron } }],
       expires_at: expiresAt ? new Date(expiresAt).toISOString() : undefined,
     })
-    toast.success('Schedule created')
-    onDone({ kind: 'schedule', id })
+    toast.success('Automation created')
+    onDone({ kind: 'automation', id })
   }
 
   const submitEdit = async () => {
-    if (!schedule) return
-    const sc = await patchSchedule(schedule.id, {
-      name: scheduleName.trim(),
-      cron,
-      mission_template: {
-        goal: goal.trim(),
-        kind: schedule.mission_template.kind,
-        agent_id: agentID || undefined,
-        route: route || undefined,
-        review_route: reviewRoute || undefined,
-        plan_route: planRoute || undefined,
-        max_iterations: maxIterations ? Number(maxIterations) : undefined,
-        budget_amount: budget ? Number(budget) : undefined,
-        budget_currency: budget ? budgetCurrency : undefined,
-        auto_approve_tools: autoApproveTools,
-        harness: schedule.mission_template.kind === 'coding' ? harness || undefined : undefined,
-        review_harness: light ? undefined : reviewHarness || undefined,
-        environment:
-          schedule.mission_template.kind === 'coding' ? environment || undefined : undefined,
-        destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
-        light: schedule.mission_template.kind === 'general' ? light : undefined,
-        attachments:
-          attachments.length > 0
-            ? attachments.map((a) => ({ id: a.id, name: a.name ?? '' }))
-            : undefined,
-      },
-      expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+    if (!automation) return
+    // Replace the cron trigger in place (its id keeps its state); other
+    // triggers pass through unchanged.
+    const existing = cronTrigger(automation)
+    const others = automation.triggers
+      .filter((t) => t.id !== existing?.id)
+      .map((t) => ({ id: t.id, kind: t.kind, config: t.config, tool_allowlist: t.tool_allowlist, enabled: t.enabled }))
+    const updated = await patchAutomation(automation.id, {
+      name: automationName.trim(),
+      agent_id: agentID || undefined,
+      action: { kind: 'mission', mission: missionTemplate(automation.action.mission.kind) },
+      triggers: [{ id: existing?.id, kind: 'cron', config: { expr: cron }, enabled: true }, ...others],
+      ...(expiresAt !== seededExpiresAt && {
+        expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+      }),
     })
-    toast.success('Schedule updated')
-    onDone({ kind: 'schedule', id: sc.id })
+    toast.success('Automation updated')
+    onDone({ kind: 'automation', id: updated.id })
   }
 
   const submit = async () => {
@@ -1005,25 +995,29 @@ export function MissionForm({
       setCronError('Cron must have 5 space-separated fields (minute hour day month weekday).')
       return
     }
+    if (mode === 'create' && repeat && !automationAgentID) {
+      toast.error('Pick an agent for the automation')
+      return
+    }
     setBusy(true)
     try {
       if (mode === 'edit') {
         await submitEdit()
       } else if (repeat) {
-        await submitSchedule()
+        await submitAutomation()
       } else {
         await submitMission()
       }
     } catch (err) {
       const label = mode === 'edit' ? 'update' : repeat ? 'create' : 'create'
-      const noun = mode === 'edit' || repeat ? 'schedule' : 'mission'
+      const noun = mode === 'edit' || repeat ? 'automation' : 'mission'
       toast.error(`Could not ${label} ${noun}`, { description: errText(err) })
     } finally {
       setBusy(false)
     }
   }
 
-  const submitLabel = mode === 'edit' ? 'Save schedule' : repeat ? 'Create schedule' : 'Create mission'
+  const submitLabel = mode === 'edit' ? 'Save automation' : repeat ? 'Create automation' : 'Create mission'
 
   return (
     <div className="space-y-8">
@@ -1072,7 +1066,7 @@ export function MissionForm({
         )}
         {repeat && (
           <p className="text-xs text-muted-foreground">
-            Coding missions aren't supported on a recurring schedule yet: each fire has no
+            Coding missions aren't supported on an automation yet: each run has no
             repository to work in.
           </p>
         )}
@@ -1277,14 +1271,14 @@ export function MissionForm({
           <h2 className="text-sm font-semibold">When it runs</h2>
           <p className="text-sm text-muted-foreground">
             {mode === 'edit'
-              ? 'This schedule fires the mission above on the cron below.'
-              : 'Run it now, or fire it on a recurring schedule instead.'}
+              ? 'This automation runs the mission above on the cron below.'
+              : 'Run it now, or repeat it on a cron as an automation.'}
           </p>
         </div>
 
         {mode === 'create' && (
           <SegmentedControl
-            aria-label="Schedule"
+            aria-label="When it runs"
             value={repeat ? 'repeat' : 'once'}
             onChange={(v) => {
               const next = v === 'repeat'
@@ -1296,7 +1290,7 @@ export function MissionForm({
             }}
             options={[
               { value: 'once', label: 'Run once' },
-              { value: 'repeat', label: 'Repeat on schedule' },
+              { value: 'repeat', label: 'Repeat on a cron' },
             ]}
           />
         )}
@@ -1304,12 +1298,12 @@ export function MissionForm({
         {repeat && (
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="mission-schedule-name">Schedule name</Label>
+              <Label htmlFor="mission-automation-name">Automation name</Label>
               <Input
-                id="mission-schedule-name"
-                value={scheduleName}
-                onChange={(e) => setScheduleName(e.target.value)}
-                placeholder={slugify(goal) || 'schedule name'}
+                id="mission-automation-name"
+                value={automationName}
+                onChange={(e) => setAutomationName(e.target.value)}
+                placeholder={slugify(goal) || 'automation name'}
               />
             </div>
 
@@ -1369,7 +1363,7 @@ export function MissionForm({
                 </PopoverContent>
               </Popover>
               <p className="text-xs text-muted-foreground">
-                Server time. The schedule stops firing after this moment. Empty means it never
+                Server time. The automation stops running after this moment. Empty means it never
                 expires.
               </p>
             </div>

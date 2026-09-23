@@ -141,7 +141,7 @@ func TestSetOriginAddsWhenNone(t *testing.T) {
 	workdir := t.TempDir()
 	gitRun(t, workdir, "init", "-q")
 
-	w := NewWorkspace(t.TempDir(), nil, discardLog())
+	w := NewWorkspace(t.TempDir(), nil, discardLogger())
 	if err := w.SetOrigin(context.Background(), workdir, "https://github.com/octo/new-repo.git"); err != nil {
 		t.Fatalf("SetOrigin: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestSetOriginRepointsExisting(t *testing.T) {
 	gitRun(t, workdir, "init", "-q")
 	gitRun(t, workdir, "remote", "add", "origin", "https://github.com/octo/old-repo.git")
 
-	w := NewWorkspace(t.TempDir(), nil, discardLog())
+	w := NewWorkspace(t.TempDir(), nil, discardLogger())
 	if err := w.SetOrigin(context.Background(), workdir, "https://github.com/octo/new-repo.git"); err != nil {
 		t.Fatalf("SetOrigin: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestSetOriginRejectsNonHTTPS(t *testing.T) {
 	workdir := t.TempDir()
 	gitRun(t, workdir, "init", "-q")
 
-	w := NewWorkspace(t.TempDir(), nil, discardLog())
+	w := NewWorkspace(t.TempDir(), nil, discardLogger())
 	err := w.SetOrigin(context.Background(), workdir, "git@github.com:octo/new-repo.git")
 	if !errors.Is(err, ErrRemoteUnsupported) {
 		t.Fatalf("SetOrigin with an scp-style URL: err = %v, want ErrRemoteUnsupported", err)

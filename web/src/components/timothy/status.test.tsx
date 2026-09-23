@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { missionStatus, toolCallStatus } from './status'
+import { automationRunStatus, missionStatus, toolCallStatus } from './status'
 
 describe('missionStatus', () => {
   it('maps idle to neutral', () => {
@@ -60,5 +60,17 @@ describe('toolCallStatus', () => {
 
   it('maps blocked to error', () => {
     expect(toolCallStatus('blocked')).toBe('error')
+  })
+})
+
+describe('automationRunStatus', () => {
+  it.each([
+    ['queued', 'neutral'],
+    ['running', 'working'],
+    ['done', 'success'],
+    ['failed', 'error'],
+    ['skipped', 'warning'],
+  ] as const)('maps %s to %s', (run, want) => {
+    expect(automationRunStatus(run)).toBe(want)
   })
 })

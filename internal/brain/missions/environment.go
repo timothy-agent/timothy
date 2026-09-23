@@ -8,7 +8,7 @@ import (
 // Environments is the D-05x allowlist of sandbox environment keys a
 // coding mission may explicitly select — mirrored by sandboxd's own
 // key->image map (internal/sandboxd/manager.go); kept here too so the
-// API layer can validate a create/schedule request without brain
+// API layer can validate a mission or automation request without brain
 // importing sandboxd. "base" forces the base image explicitly
 // (distinct from "", which means "detect", see ValidEnvironment).
 var Environments = map[string]bool{

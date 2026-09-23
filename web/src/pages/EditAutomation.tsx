@@ -1,24 +1,22 @@
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
-import { listSchedules } from '../api/client'
-import type { Schedule } from '../api/types'
+import { getAutomation } from '../api/client'
+import type { Automation } from '../api/types'
 import { MissionForm } from '../components/missions/MissionForm'
 
-// No GET-by-id for schedules; the list is small, so find the one
-// being edited rather than adding a single-row endpoint (same pattern
-// as MissionDetail's schedule strip).
-export function EditSchedule() {
+// EditAutomation loads one automation and edits it through MissionForm.
+export function EditAutomation() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [schedule, setSchedule] = useState<Schedule | null>(null)
+  const [automation, setAutomation] = useState<Automation | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     if (!id) return
-    listSchedules().then(
-      (rows) => {
-        setSchedule(rows.find((s) => s.id === id) ?? null)
+    getAutomation(id).then(
+      (a) => {
+        setAutomation(a)
         setLoading(false)
       },
       () => setLoading(false),
@@ -35,11 +33,11 @@ export function EditSchedule() {
     )
   }
 
-  if (!schedule) {
+  if (!automation) {
     return (
       <div className="mx-auto w-full max-w-full px-8 py-6">
         <p className="text-sm text-muted-foreground">
-          Schedule not found.{' '}
+          Automation not found.{' '}
           <Link to="/automations" className="underline underline-offset-2 hover:text-foreground">
             Back to automations
           </Link>
@@ -61,14 +59,14 @@ export function EditSchedule() {
       <div className="mt-6">
         <h1 className="text-xl font-semibold tracking-tight">Edit automation</h1>
         <p className="text-sm text-muted-foreground">
-          A recurring mission that fires on the cron below.
+          A recurring mission that runs on the cron below.
         </p>
       </div>
 
       <div className="mt-8">
         <MissionForm
           mode="edit"
-          schedule={schedule}
+          automation={automation}
           onCancel={() => navigate(`/automations/${id}`)}
           onDone={() => navigate(`/automations/${id}`)}
         />

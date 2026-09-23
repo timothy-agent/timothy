@@ -180,9 +180,7 @@ func (m Mission) RunsPlanless() bool {
 
 // initialPhase is the phase a newly created mission row starts in:
 // PhaseBuild for a flow=light mission (D-069, skips discover/plan),
-// PhaseDiscover otherwise. Shared by store.go's Create and
-// scheduler.go's createFromTemplate, which both used to duplicate
-// this check inline.
+// PhaseDiscover otherwise. Used by store.go's Create.
 func initialPhase(kind string, flow Flow) Phase {
 	if policyFor(kind, flow).skipsPlanning {
 		return PhaseBuild

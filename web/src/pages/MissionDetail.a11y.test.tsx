@@ -23,7 +23,6 @@ vi.mock('../api/client', () => ({
   replanMission: vi.fn(),
   rediscoverMission: vi.fn(),
   listMissionFiles: vi.fn(),
-  listSchedules: vi.fn(),
   downloadMissionFile: vi.fn(),
   downloadMissionArchive: vi.fn(),
   downloadMissionPdfExport: vi.fn(),
@@ -38,7 +37,7 @@ vi.mock('../api/client', () => ({
   listDestinations: vi.fn().mockResolvedValue([]),
 }))
 
-import { getMission, getSettings, listMissionFiles, listSchedules, missionEvents, missionUsage } from '../api/client'
+import { getMission, getSettings, listMissionFiles, missionEvents, missionUsage } from '../api/client'
 
 const baseMission: Mission = {
   id: 'm1',
@@ -87,7 +86,6 @@ beforeEach(() => {
     unpriced_requests: 0,
     models: [],
   })
-  vi.mocked(listSchedules).mockResolvedValue([])
   vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
   vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
 })

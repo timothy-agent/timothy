@@ -490,31 +490,6 @@ SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '
     NOT EXISTS (SELECT 1 FROM agents WHERE is_default)
 WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'general');
 
--- Schedules fire mission templates on a cron cadence
--- (internal/brain/missions/scheduler.go). mission_template is applied
--- verbatim as the new mission's initial columns each firing.
-CREATE TABLE IF NOT EXISTS schedules (
-    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name              text UNIQUE NOT NULL,
-    cron              text NOT NULL,
-    mission_template  jsonb NOT NULL DEFAULT '{}',
-    enabled           boolean NOT NULL DEFAULT true,
-    expires_at        timestamptz,
-    last_run          timestamptz,
-    created_at        timestamptz NOT NULL DEFAULT now(),
-    updated_at        timestamptz NOT NULL DEFAULT now(),
-    -- A due fire skipped because a mission from this schedule was still
-    -- active is not lost: pending_fire carries it forward so the next
-    -- tick with no active mission fires it, instead of the schedule
-    -- silently missing that boundary forever (scheduler.go's fireOne).
-    pending_fire      boolean NOT NULL DEFAULT false,
-    -- Records the most recent skip (backfill grace or active-mission
-    -- dedup) for the schedules API to surface; cleared on any
-    -- successful fire.
-    last_skipped_at   timestamptz,
-    skip_reason       text NOT NULL DEFAULT ''
-);
-
 -- Agentic workflows: an orchestration layer above missions
 -- (internal/brain/workflows). A workflow is composable data (steps +
 -- edges); missions stay atoms, spawned one at a time by the engine
@@ -557,6 +532,96 @@ CREATE TABLE IF NOT EXISTS workflow_run_events (
     payload     jsonb NOT NULL DEFAULT '{}',
     created_at  timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (run_id, seq)
+);
+
+-- Durable inbox for side effects that must survive a crash (D-117,
+-- internal/brain/events): a producer inserts a row in the same
+-- transaction as the state change, the drainer runs its consumers
+-- after commit. source is 'mission' (kind mission.done or
+-- mission.failed) or 'manual' (kind run.now). A row with processed_at
+-- and last_error set after attempts reached the cap is dead-lettered.
+CREATE TABLE IF NOT EXISTS events (
+    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    source        text NOT NULL,
+    kind          text NOT NULL,
+    dedup_key     text NOT NULL,
+    payload       jsonb NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    processed_at  timestamptz,
+    attempts      int NOT NULL DEFAULT 0,
+    last_error    text,
+    UNIQUE (source, dedup_key)
+);
+
+CREATE INDEX IF NOT EXISTS events_unprocessed_idx ON events (id) WHERE processed_at IS NULL;
+
+-- Automations (issue #821, internal/brain/automations): triggers fire
+-- runs of one action as one agent, under Go-enforced ceilings.
+-- action is {"kind":"mission","mission":{...template}}.
+CREATE TABLE IF NOT EXISTS automations (
+    id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name                 text NOT NULL,
+    description          text NOT NULL DEFAULT '',
+    agent_id             uuid NOT NULL REFERENCES agents(id),
+    action               jsonb NOT NULL,
+    concurrency          text NOT NULL DEFAULT 'skip' CHECK (concurrency IN ('skip','queue','parallel')),
+    max_concurrent       int NOT NULL DEFAULT 1 CHECK (max_concurrent BETWEEN 1 AND 3),
+    max_runs_per_hour    int NOT NULL DEFAULT 6 CHECK (max_runs_per_hour BETWEEN 1 AND 60),
+    continuity           boolean NOT NULL DEFAULT true,
+    notes_enabled        boolean NOT NULL DEFAULT true,
+    consecutive_failures int NOT NULL DEFAULT 0,
+    disabled_reason      text,
+    enabled              boolean NOT NULL DEFAULT true,
+    expires_at           timestamptz,
+    created_at           timestamptz NOT NULL DEFAULT now(),
+    updated_at           timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS automations_name_ci ON automations (lower(btrim(name)));
+
+-- state holds per-trigger bookkeeping (last_fired_at, cursors).
+CREATE TABLE IF NOT EXISTS automation_triggers (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    automation_id  uuid NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+    kind           text NOT NULL CHECK (kind IN ('cron','manual','webhook','connector_event','channel')),
+    config         jsonb NOT NULL DEFAULT '{}',
+    credential_ref text,
+    tool_allowlist jsonb,
+    state          jsonb NOT NULL DEFAULT '{}',
+    enabled        boolean NOT NULL DEFAULT true,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS automation_triggers_automation_idx ON automation_triggers (automation_id);
+
+-- One firing. status (queued | running | done | failed | skipped) is
+-- not CHECK-constrained, same reasoning as missions.phase. The
+-- mission_id foreign key is added after the missions table.
+CREATE TABLE IF NOT EXISTS automation_runs (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    automation_id   uuid NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+    trigger_id      uuid REFERENCES automation_triggers(id) ON DELETE SET NULL,
+    event_id        bigint REFERENCES events(id) ON DELETE SET NULL,
+    dedup_key       text NOT NULL,
+    status          text NOT NULL,
+    skip_reason     text,
+    event           jsonb NOT NULL DEFAULT '{}',
+    mission_id      uuid,
+    workflow_run_id uuid REFERENCES workflow_runs(id) ON DELETE SET NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    started_at      timestamptz,
+    finished_at     timestamptz,
+    UNIQUE (automation_id, dedup_key)
+);
+CREATE INDEX IF NOT EXISTS automation_runs_automation_created_idx ON automation_runs (automation_id, created_at DESC);
+
+-- Named cross-run text; at most 10 per automation, enforced in Go.
+CREATE TABLE IF NOT EXISTS automation_notes (
+    automation_id     uuid NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
+    name              text NOT NULL CHECK (name ~ '^[a-z0-9_-]{1,64}$'),
+    content           text NOT NULL CHECK (octet_length(content) <= 4096),
+    updated_at        timestamptz NOT NULL DEFAULT now(),
+    updated_by_run_id uuid REFERENCES automation_runs(id) ON DELETE SET NULL,
+    PRIMARY KEY (automation_id, name)
 );
 
 -- Missions are long-running, agent-driven units of work distinct from
@@ -653,8 +718,8 @@ CREATE TABLE IF NOT EXISTS missions (
     -- into one jsonb column rather than five text columns since the
     -- fields are always read/written/cleared together.
     pending_permission    jsonb,
-    -- Schedule that fired this mission, if any.
-    schedule_id           uuid REFERENCES schedules(id),
+    -- Automation run that started this mission, if any.
+    automation_run_id     uuid REFERENCES automation_runs(id) ON DELETE SET NULL,
     -- ParentMissionID names the terminal mission this one follows up
     -- on (api/missions.go's create); parents are terminal, exactly the
     -- rows Delete can remove, so SET NULL keeps a follow-up mission
@@ -736,7 +801,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- column existed. false parks the mission on pause_reason='approval'
     -- instead, waiting for an operator approve/replan/rediscover verb --
     -- never auto-resumed by any sweep, an approval decision has no safe
-    -- default. Forced true at creation for scheduler-fired and
+    -- default. Forced true at creation for automation-started and
     -- workflow-spawned missions regardless of template/step input.
     auto_approve_plan     boolean NOT NULL DEFAULT true,
     -- The reviewer judges the baseline git diff, but a general
@@ -769,9 +834,9 @@ CREATE TABLE IF NOT EXISTS missions (
     -- Short display name, generated once (store.SetNameIfEmpty) the
     -- same way a chat session's title is (chat.go's autoTitle): a
     -- one-shot best-effort gateway call after creation, never blocking
-    -- or failing creation. Scheduler-fired missions get the schedule's
+    -- or failing creation. Automation-started missions get the automation's
     -- own name directly, no LLM call. Empty means generation hasn't
-    -- landed yet (or a scheduler mission predates this column); the UI
+    -- landed yet; the UI
     -- falls back to a truncated goal. Never re-summarized once set.
     name                  text NOT NULL DEFAULT '',
     -- destinations replaces the five separate columns issue #480
@@ -841,7 +906,7 @@ CREATE TABLE IF NOT EXISTS missions (
     -- today's behavior unchanged.
     has_plan              boolean NOT NULL DEFAULT false,
     -- origin_kind records where the mission came from (issue #817):
-    -- 'api' (HTTP create), 'automation' (schedule fire), 'workflow'
+    -- 'api' (HTTP create), 'automation' (automation run), 'workflow'
     -- (workflow step), 'chat', 'followup' (parent_mission_id set).
     origin_kind           text NOT NULL
         CHECK (origin_kind IN ('api', 'automation', 'workflow', 'chat', 'followup')),
@@ -856,6 +921,13 @@ CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);
 -- The work-slot cap (ClaimWorkSlot) and the boot sweep both need
 -- "which missions are actively occupying a slot," cheaply.
 CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (phase) WHERE phase NOT IN ('done', 'failed');
+CREATE INDEX IF NOT EXISTS missions_automation_run_idx ON missions (automation_run_id) WHERE automation_run_id IS NOT NULL;
+
+-- automation_runs.mission_id and missions.automation_run_id reference
+-- each other, so this foreign key lands once missions exists.
+ALTER TABLE automation_runs DROP CONSTRAINT IF EXISTS automation_runs_mission_id_fkey;
+ALTER TABLE automation_runs ADD CONSTRAINT automation_runs_mission_id_fkey
+    FOREIGN KEY (mission_id) REFERENCES missions(id) ON DELETE SET NULL;
 
 -- Append-only event log, the mission's audit trail and the Timeline
 -- UI's data source. seq is assigned under a SELECT ... FOR UPDATE on
@@ -897,27 +969,6 @@ CREATE INDEX IF NOT EXISTS pending_permissions_pending_idx
     ON pending_permissions (created_at) WHERE resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS pending_permissions_carry_idx
     ON pending_permissions (session_id, mission_id, tool) WHERE carry_over;
-
--- Durable inbox for side effects that must survive a crash (D-117,
--- internal/brain/events): a producer inserts a row in the same
--- transaction as the state change, the drainer runs its consumers
--- after commit. source is 'mission' today; kind is mission.done or
--- mission.failed. A row with processed_at and last_error set after
--- attempts reached the cap is dead-lettered.
-CREATE TABLE IF NOT EXISTS events (
-    id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    source        text NOT NULL,
-    kind          text NOT NULL,
-    dedup_key     text NOT NULL,
-    payload       jsonb NOT NULL,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    processed_at  timestamptz,
-    attempts      int NOT NULL DEFAULT 0,
-    last_error    text,
-    UNIQUE (source, dedup_key)
-);
-
-CREATE INDEX IF NOT EXISTS events_unprocessed_idx ON events (id) WHERE processed_at IS NULL;
 
 -- Durable notification inbox (internal/brain/missions/notify.go):
 -- always written for actionable transitions regardless of whether the

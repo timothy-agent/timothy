@@ -23,7 +23,6 @@ vi.mock('../api/client', () => ({
   rediscoverMission: vi.fn(),
   answerMissionQuestion: vi.fn(),
   listMissionFiles: vi.fn(),
-  listSchedules: vi.fn(),
   downloadMissionFile: vi.fn(),
   downloadMissionArchive: vi.fn(),
   downloadMissionPdfExport: vi.fn(),
@@ -48,7 +47,6 @@ import {
   getSettings,
   listDestinations,
   listMissionFiles,
-  listSchedules,
   missionEvents,
   missionUsage,
   openMissionPR,
@@ -163,7 +161,6 @@ beforeEach(() => {
     models: [],
   })
   vi.mocked(listMissionFiles).mockResolvedValue({ files: [], truncated: false })
-  vi.mocked(listSchedules).mockResolvedValue([])
   vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
   vi.mocked(listDestinations).mockResolvedValue([])
 })
@@ -1262,29 +1259,16 @@ describe('MissionDetail', () => {
     expect(screen.queryByRole('heading', { level: 2, name: 'Result' })).toBeNull()
   })
 
-  it('shows a recurring schedule strip when the mission fired from a schedule', async () => {
-    vi.mocked(getMission).mockResolvedValue({ ...baseMission, schedule_id: 'sc1' })
-    vi.mocked(listSchedules).mockResolvedValue([
-      {
-        id: 'sc1',
-        name: 'daily-brief',
-        cron: '0 7 * * *',
-        mission_template: { goal: 'brief', kind: 'general' },
-        enabled: true,
-        next_run: '2026-01-02T07:00:00Z',
-        created_at: '2026-01-01T00:00:00Z',
-        updated_at: '2026-01-01T00:00:00Z',
-        pending_fire: false,
-      },
-    ])
+  it('says the mission was fired by an automation when automation_run_id is set', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, automation_run_id: 'r1', origin_kind: 'automation' })
     renderPage()
-    expect(await screen.findByText(/Recurring · Daily, 7:00 AM · next run/)).toBeTruthy()
+    expect(await screen.findByText('Fired by an automation')).toBeTruthy()
   })
 
-  it('omits the recurring strip for a one-off mission', async () => {
+  it('omits the automation line for a one-off mission', async () => {
     renderPage()
     await screen.findByRole('heading', { name: 'Fix the login bug' })
-    expect(screen.queryByText(/Recurring ·/)).toBeNull()
+    expect(screen.queryByText('Fired by an automation')).toBeNull()
   })
 })
 

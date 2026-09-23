@@ -9,9 +9,9 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/workflows"
 )
 
-// TestCreatePathGolden feeds one input through the API, scheduler and
+// TestCreatePathGolden feeds one input through the API, automation and
 // workflow builders and asserts ResolveDefaults resolves all three to
-// the same mission once the caller-owned fields (schedule/workflow
+// the same mission once the caller-owned fields (automation run/workflow
 // ids, name, lineage, forced approvals) are set aside (issue #816).
 func TestCreatePathGolden(t *testing.T) {
 	t.Parallel()
@@ -31,7 +31,7 @@ func TestCreatePathGolden(t *testing.T) {
 		agent string
 		light bool
 		// route/planRoute are the input's routes; reviewRoute is sent
-		// only by the API and scheduler (a step has no review_route).
+		// only by the API and automations (a step has no review_route).
 		route, planRoute, reviewRoute string
 		wantReview                    string
 	}{
@@ -43,14 +43,14 @@ func TestCreatePathGolden(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			apiReq := createMissionRequest{Goal: goal, Kind: tc.kind, AgentID: tc.agent, Route: tc.route, ReviewRoute: tc.reviewRoute, PlanRoute: tc.planRoute, Light: tc.light, DestinationIDs: []string{"d1"}}.createRequest("", nil)
-			schedReq := missions.TemplateCreateRequest(missions.Schedule{ID: "s1", Name: "nightly", MissionTemplate: missions.MissionTemplate{
-				Goal: goal, Kind: tc.kind, AgentID: tc.agent, Route: tc.route, ReviewRoute: tc.reviewRoute, PlanRoute: tc.planRoute, Light: tc.light, DestinationIDs: []string{"d1"},
-			}}, []string{"d1"})
+			autoReq := missions.TemplateCreateRequest(missions.MissionTemplate{
+				Goal: goal, Kind: tc.kind, Route: tc.route, ReviewRoute: tc.reviewRoute, PlanRoute: tc.planRoute, Light: tc.light, DestinationIDs: []string{"d1"},
+			}, "nightly", tc.agent, []string{"d1"}, "r1")
 			stepReq := workflows.StepCreateRequest(workflows.Step{Goal: goal, Kind: tc.kind, AgentID: tc.agent, Route: tc.route, PlanRoute: tc.planRoute, Light: tc.light, DestinationIDs: []string{"d1"}}, goal, "run-1", "build", "", "")
 
 			var got []missions.Mission
 			wantOrigin := []string{missions.OriginAPI, missions.OriginAutomation, missions.OriginWorkflow}
-			for i, req := range []missions.CreateRequest{apiReq, schedReq, stepReq} {
+			for i, req := range []missions.CreateRequest{apiReq, autoReq, stepReq} {
 				m, err := missions.ResolveDefaults(context.Background(), req, deps)
 				if err != nil {
 					t.Fatalf("ResolveDefaults: %v", err)
@@ -62,13 +62,13 @@ func TestCreatePathGolden(t *testing.T) {
 					t.Fatalf("caller %d: origin=%q unattended=%v timeout=%v, want %q %v", i, m.OriginKind, m.Unattended, m.PermissionTimeoutSeconds, wantOrigin[i], unattended)
 				}
 				m.OriginKind, m.Unattended, m.PermissionTimeoutSeconds = "", false, nil
-				m.Name, m.ScheduleID, m.WorkflowRunID, m.WorkflowStep = "", "", "", ""
+				m.Name, m.AutomationRunID, m.WorkflowRunID, m.WorkflowStep = "", "", "", ""
 				m.AutoApprovePlan, m.AutoApproveTools = false, false
 				m.Sources, m.ParentMissionID = nil, ""
 				got = append(got, m)
 			}
 			if !reflect.DeepEqual(got[0], got[1]) {
-				t.Fatalf("scheduler resolved differently:\napi   %+v\nsched %+v", got[0], got[1])
+				t.Fatalf("automation resolved differently:\napi  %+v\nauto %+v", got[0], got[1])
 			}
 			if !reflect.DeepEqual(got[0], got[2]) {
 				t.Fatalf("workflow resolved differently:\napi  %+v\nstep %+v", got[0], got[2])

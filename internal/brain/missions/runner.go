@@ -521,7 +521,7 @@ func countOperatorNotes(notes []ProgressNote) int {
 // already exists: driver.go's grantSessionDefaults seeds one from the
 // mission's agent's ApprovalAllowlist (a separate field from Tools) at
 // provisioning time, the same path a chat agent's connector-tool
-// grants take. An agent that wants its scheduled missions to actually
+// grants take. An agent that wants its automation missions to actually
 // read gmail/calendar unattended must list the tool in BOTH Tools (to
 // be offered here) and ApprovalAllowlist (to be pre-approved).
 type ConnectorReadsResolver func(ctx context.Context, agentID string) []*tools.Tool
@@ -698,7 +698,7 @@ func (r *nativeRunner) skillsNudge(ctx context.Context, m Mission) string {
 
 // connectorReadTools resolves m's read-only connector tools (nil
 // resolver or no agent id means none): appended to worker/discover
-// ExtraTools so a scheduled mission (daily inbox digest, calendar
+// ExtraTools so an automation mission (daily inbox digest, calendar
 // summary) can read gmail/calendar without the base connector surface
 // (which BuiltinsOnly excludes) ever reopening for a write.
 func (r *nativeRunner) connectorReadTools(ctx context.Context, m Mission) []*tools.Tool {

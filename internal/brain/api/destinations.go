@@ -17,11 +17,11 @@ type destinationRefs interface {
 	ActiveMissionReferencesDestination(ctx context.Context, destinationID string) (bool, error)
 }
 
-// destinationScheduleRefs is the narrow slice of *missions.Store the
-// delete guard needs to also refuse deletion while an enabled
-// schedule's mission_template still references the destination.
-type destinationScheduleRefs interface {
-	ScheduleReferencingDestinationID(ctx context.Context, destinationID string) (name string, ok bool, err error)
+// destinationAutomationRefs is the slice of *automations.Store the
+// delete guard needs to refuse deletion while an enabled automation's
+// mission action still references the destination.
+type destinationAutomationRefs interface {
+	NameReferencingDestination(ctx context.Context, destinationID string) (name string, ok bool, err error)
 }
 
 // destinationTester sends a canned test payload through a
@@ -37,11 +37,11 @@ type destinationTester interface {
 // surface — served locally like connectors, nil-gated on store (no
 // WORKSPACES/missions disables destinations too, since delivery has no
 // meaning without missions).
-func (a *API) registerDestinations(handle func(pattern string, h http.Handler), store *destinations.Store, refs destinationRefs, scheduleRefs destinationScheduleRefs, tester destinationTester) {
+func (a *API) registerDestinations(handle func(pattern string, h http.Handler), store *destinations.Store, refs destinationRefs, automationRefs destinationAutomationRefs, tester destinationTester) {
 	if store == nil {
 		return
 	}
-	h := &destinationAPI{store: store, refs: refs, scheduleRefs: scheduleRefs, tester: tester}
+	h := &destinationAPI{store: store, refs: refs, automationRefs: automationRefs, tester: tester}
 	handle("GET /v1/admin/destinations", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/admin/destinations", a.auth(http.HandlerFunc(h.create)))
 	handle("PATCH /v1/admin/destinations/{id}", a.auth(http.HandlerFunc(h.patch)))
@@ -50,10 +50,10 @@ func (a *API) registerDestinations(handle func(pattern string, h http.Handler), 
 }
 
 type destinationAPI struct {
-	store        *destinations.Store
-	refs         destinationRefs
-	scheduleRefs destinationScheduleRefs
-	tester       destinationTester
+	store          *destinations.Store
+	refs           destinationRefs
+	automationRefs destinationAutomationRefs
+	tester         destinationTester
 }
 
 func failDestination(w http.ResponseWriter, err error) {
@@ -104,11 +104,11 @@ func (h *destinationAPI) patch(w http.ResponseWriter, r *http.Request) {
 }
 
 // delete refuses with 409 while any non-terminal mission, or any
-// enabled schedule's mission_template, still references this
-// destination (naming the schedule) — historical (terminal) mission
-// references and disabled schedules never block deletion.
+// enabled automation's mission action, still references this
+// destination (naming the automation). Terminal mission references and
+// disabled automations never block deletion.
 func (h *destinationAPI) delete(w http.ResponseWriter, r *http.Request) {
-	if err := h.store.Delete(r.Context(), r.PathValue("id"), h.refs, h.scheduleRefs); err != nil {
+	if err := h.store.Delete(r.Context(), r.PathValue("id"), h.refs, h.automationRefs); err != nil {
 		failDestination(w, err)
 		return
 	}

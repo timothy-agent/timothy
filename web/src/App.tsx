@@ -47,7 +47,7 @@ import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
 import { AutomationDetail } from './pages/AutomationDetail'
 import { Automations } from './pages/Automations'
-import { EditSchedule } from './pages/EditSchedule'
+import { EditAutomation } from './pages/EditAutomation'
 import { Home } from './pages/Home'
 import { Knowledge } from './pages/Knowledge'
 import { KnowledgeRedirect, Memory } from './pages/Memory'
@@ -500,7 +500,7 @@ function App() {
                 />
                 <Route path="/missions/:id" element={<MissionDetail />} />
                 <Route path="/automations" element={<Automations />} />
-                <Route path="/automations/:id/edit" element={<EditSchedule />} />
+                <Route path="/automations/:id/edit" element={<EditAutomation />} />
                 <Route path="/automations/:id" element={<AutomationDetail />} />
                 <Route path="/knowledge/*" element={<Knowledge />} />
                 <Route path="/memory/knowledge/*" element={<KnowledgeRedirect />} />

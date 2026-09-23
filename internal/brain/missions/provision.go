@@ -101,11 +101,10 @@ type provisioner struct {
 // ensureProvisioned gives a mission everything Create used to set up
 // inline — a hidden session, its standing grants, and a workspace —
 // but callable a second time for a mission that reached the store some
-// OTHER way (scheduler.go's createFromTemplate inserts a bare row
-// directly, bypassing Create entirely: no session, no workspace, no
-// grants). Advance calls this at the top of every turn so a
-// scheduler-born mission gets provisioned the first time anything
-// actually drives it, not at fire time. Idempotent: a mission that
+// OTHER way (a bare row inserted directly, bypassing Create entirely:
+// no session, no workspace, no grants). Advance calls this at the top
+// of every turn so such a mission gets provisioned the first time
+// anything actually drives it. Idempotent: a mission that
 // already has both a session and a workspace/worktree is a no-op,
 // and SetSession's own WHERE session_id IS NULL guard makes a second
 // concurrent attempt safe even without that check.
@@ -441,8 +440,7 @@ func (p *provisioner) parentPRMerged(ctx context.Context, m, parent Mission) boo
 // grantSessionDefaults pre-authorizes a freshly created hidden session:
 // standing "safe shell" approval when the mission opted in, plus every
 // tool in the mission's agent's ApprovalAllowlist (resolved at
-// provisioning time via resolveAgent, same fire-time-not-create-time
-// principle as scheduler.go's createFromTemplate — an agent's allowlist
+// provisioning time via resolveAgent, so an agent's allowlist
 // edited after the mission started still applies to a not-yet-
 // provisioned mission). All best-effort: a failed grant just means the
 // mission asks on its first call instead of running unattended —

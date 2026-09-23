@@ -112,13 +112,12 @@ func TestDriverEndToEndCodingMission(t *testing.T) {
 	}
 }
 
-// TestDriverLazilyProvisionsBareSchedulerStyleMission reproduces the
+// TestDriverLazilyProvisionsBareMission reproduces the
 // plan's defect #1 against a real Postgres store: a mission inserted
-// directly (bypassing Driver.Create — exactly what scheduler.go's
-// createFromTemplate does) has no session, no workspace, no grants.
+// directly (bypassing Driver.Create) has no session, no workspace, no grants.
 // One Advance call must provision all three before running the phase,
 // or the worker gets no shell/write_file tools at all.
-func TestDriverLazilyProvisionsBareSchedulerStyleMission(t *testing.T) {
+func TestDriverLazilyProvisionsBareMission(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
