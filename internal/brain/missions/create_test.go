@@ -211,6 +211,7 @@ func TestResolveDefaultsOrigin(t *testing.T) {
 		{"automation derives unattended", CreateRequest{OriginKind: OriginAutomation}, OriginAutomation, true, seconds(1800)},
 		{"workflow derives unattended", CreateRequest{OriginKind: OriginWorkflow}, OriginWorkflow, true, seconds(1800)},
 		{"workflow with parent stays workflow", CreateRequest{OriginKind: OriginWorkflow, ParentMissionID: "p1"}, OriginWorkflow, true, seconds(1800)},
+		{"automation with parent stays automation", CreateRequest{OriginKind: OriginAutomation, ParentMissionID: "p1"}, OriginAutomation, true, seconds(1800)},
 		{"api overridden unattended", CreateRequest{Unattended: boolPtr(true)}, OriginAPI, true, seconds(1800)},
 		{"automation overridden attended", CreateRequest{OriginKind: OriginAutomation, Unattended: boolPtr(false)}, OriginAutomation, false, nil},
 		{"unattended keeps explicit timeout", CreateRequest{OriginKind: OriginAutomation, PermissionTimeoutSeconds: seconds(60)}, OriginAutomation, true, seconds(60)},

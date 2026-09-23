@@ -3768,3 +3768,67 @@ func TestRenderReviewContentFindingsOnlyHasNoRubric(t *testing.T) {
 		t.Fatalf("findings-only content lost the plain criteria list:\n%s", got)
 	}
 }
+
+// TestNoteToolsReachBuildAndProve pins issue #823: an automation
+// mission's build turn gets every note tool, prove only the ReadOnly
+// ones, discover and plan none, and a mission the resolver skips none.
+func TestNoteToolsReachBuildAndProve(t *testing.T) {
+	noteTools := func(_ context.Context, m Mission) []*tools.Tool {
+		if m.AutomationRunID == "" {
+			return nil
+		}
+		return []*tools.Tool{
+			{Name: "read_note", ReadOnly: true, Execute: func(context.Context, json.RawMessage) (string, error) { return "", nil }},
+			{Name: "write_note", Execute: func(context.Context, json.RawMessage) (string, error) { return "", nil }},
+		}
+	}
+	run := Mission{ID: "m1", Route: "default", ReviewRoute: "default", Goal: "build a thing", AutomationRunID: "r1"}
+	plain := run
+	plain.AutomationRunID = ""
+
+	cases := []struct {
+		name            string
+		m               Mission
+		event           stream.StreamEvent
+		run             func(r *nativeRunner, m Mission) error
+		wantRead, write bool
+	}{
+		{"discover", run, toolEndEvent(discoverNotesToolName, `{"findings":"ok"}`), func(r *nativeRunner, m Mission) error {
+			_, _, _, err := r.DiscoverSession(context.Background(), m)
+			return err
+		}, false, false},
+		{"plan", run, toolEndEvent(planToolName, `{"units":[{"title":"t","artifacts":["out.md"],"criteria":["c1","c2"],"check_cmd":"grep -q done out.md"}]}`), func(r *nativeRunner, m Mission) error {
+			_, err := r.PlanSession(context.Background(), m, "")
+			return err
+		}, false, false},
+		{"build", run, toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`), func(r *nativeRunner, m Mission) error {
+			_, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"})
+			return err
+		}, true, true},
+		{"review", run, toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`), func(r *nativeRunner, m Mission) error {
+			_, err := r.RunReview(context.Background(), m, ReviewPacket{Goal: "goal", Diff: "d"})
+			return err
+		}, true, false},
+		{"build outside a run", plain, toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`), func(r *nativeRunner, m Mission) error {
+			_, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"})
+			return err
+		}, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &scriptedAgent{batches: [][]stream.StreamEvent{{tc.event}}}
+			r := newTestRunner(agent)
+			r.SetAutomationTools(noteTools)
+			if err := tc.run(r, tc.m); err != nil {
+				t.Fatalf("%s: %v", tc.name, err)
+			}
+			req := agent.requests[0]
+			if hasTool(req, "read_note") != tc.wantRead || hasTool(req, "write_note") != tc.write {
+				t.Fatalf("%s tools = %v, want read_note=%v write_note=%v", tc.name, toolNames(req), tc.wantRead, tc.write)
+			}
+			if (tc.wantRead || tc.write) && !req.BuiltinsOnly {
+				t.Fatalf("%s: note tools must ride a BuiltinsOnly turn", tc.name)
+			}
+		})
+	}
+}

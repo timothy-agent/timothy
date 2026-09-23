@@ -157,6 +157,12 @@ func kbSource(digest string) SourceEntry {
 
 // TestContextBlocks covers each source kind and the empty case in every
 // mode.
+// triggerEntry and notesEntry are the two automation run sources.
+var (
+	triggerEntry = SourceEntry{Source: SourceKindTrigger, Name: "Trigger", Digest: `{"kind": "run.now"}`}
+	notesEntry   = SourceEntry{Source: SourceKindNotes, Name: "Automation notes", Digest: "run_count:\n3"}
+)
+
 func TestContextBlocks(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -181,6 +187,14 @@ func TestContextBlocks(t *testing.T) {
 		{name: "mission pick", sources: []SourceEntry{{Source: SourceKindMission, MissionID: "m9", Digest: "d"}}, mode: contextSession, head: "\n\nReferenced context:\nm9:\nd"},
 		{name: "brief", sources: []SourceEntry{{Source: SourceKindBrief, Name: "Brief", Digest: "b"}}, mode: contextPacket, head: "Referenced context:\nBrief:\nb\n"},
 		{name: "pick without digest", sources: []SourceEntry{{Source: SourceKindKB, Name: "x"}}, mode: contextPacket},
+		{name: "trigger session", sources: []SourceEntry{triggerEntry}, mode: contextSession, head: "\n\nReferenced context:\nTrigger:\n{\"kind\": \"run.now\"}"},
+		{name: "notes packet", sources: []SourceEntry{notesEntry}, mode: contextPacket, head: "Referenced context:\nAutomation notes:\nrun_count:\n3\n"},
+		{
+			name: "trigger and notes delegated", sources: []SourceEntry{triggerEntry, notesEntry}, mode: contextDelegated,
+			head:  "Referenced documents, read when the unit needs them:\n- Trigger: /r/refs/01-trigger.md\n- Automation notes: /r/refs/02-automation-notes.md\n\n",
+			files: map[string]string{"refs/01-trigger.md": triggerEntry.Digest, "refs/02-automation-notes.md": notesEntry.Digest},
+		},
+		{name: "empty notes digest", sources: []SourceEntry{{Source: SourceKindNotes, Name: "Automation notes"}}, mode: contextPacket},
 		{
 			name: "picks delegated", sources: []SourceEntry{kbSource("k"), {Source: SourceKindBrief, Name: "Brief", Digest: "b"}}, mode: contextDelegated,
 			head:  "Referenced documents, read when the unit needs them:\n- runbook: /r/refs/01-runbook.md\n- Brief: /r/refs/02-brief.md\n\n",
@@ -208,6 +222,23 @@ func TestContextBlocks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAutomationSourcesAreReferences pins that the trigger and notes
+// sources are references, never the parent lineage snapshot.
+func TestAutomationSourcesAreReferences(t *testing.T) {
+	m := Mission{Sources: []SourceEntry{parentSource("p"), triggerEntry, notesEntry}}
+	if got := m.ParentContext(); got != "p" {
+		t.Fatalf("ParentContext = %q, want p", got)
+	}
+	refs := m.ReferenceEntries()
+	if len(refs) != 2 || refs[0].Source != SourceKindTrigger || refs[1].Source != SourceKindNotes {
+		t.Fatalf("ReferenceEntries = %+v, want trigger then notes", refs)
+	}
+	want := "Trigger:\n" + triggerEntry.Digest + "\n\nAutomation notes:\n" + notesEntry.Digest
+	if got := m.ReferencedContext(); got != want {
+		t.Fatalf("ReferencedContext = %q, want %q", got, want)
 	}
 }
 

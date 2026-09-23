@@ -4566,3 +4566,36 @@ func TestDriverCeilingsComeFromSettings(t *testing.T) {
 		t.Fatalf("pause reason = %q, want backoff on the 2nd failure with a cap of 2", m.PauseReason)
 	}
 }
+
+// TestDriverCreateGrantsAutomationTools pins issue #823: an automation
+// mission's session is pre-approved for the tools its run's grants
+// resolver names; a mission the resolver skips gets no grant.
+func TestDriverCreateGrantsAutomationTools(t *testing.T) {
+	for _, tc := range []struct {
+		name, runID string
+		want        int
+	}{{"automation run", "run-1", 1}, {"plain mission", "", 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			granter := &fakeGranter{}
+			d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+			d.SetAutomationGrants(func(_ context.Context, m Mission) []string {
+				if m.AutomationRunID == "" {
+					return nil
+				}
+				return []string{"write_note"}
+			})
+			id, err := d.Create(context.Background(), Mission{Goal: "g", Kind: "general", Route: "route-x", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, AutomationRunID: tc.runID})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			m, _ := store.Get(context.Background(), id)
+			if len(granter.calls) != tc.want {
+				t.Fatalf("grants = %+v, want %d", granter.calls, tc.want)
+			}
+			if tc.want == 1 && (granter.calls[0].tool != "write_note" || granter.calls[0].pattern != "*" || granter.calls[0].sessionID != m.SessionID) {
+				t.Fatalf("grant = %+v, want write_note * on session %q", granter.calls[0], m.SessionID)
+			}
+		})
+	}
+}

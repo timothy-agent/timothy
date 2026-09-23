@@ -326,6 +326,12 @@ func (d *Driver) SetAgentResolver(resolve AgentResolver) {
 	d.provision.resolveAgent = resolve
 }
 
+// SetAutomationGrants wires the resolver for the tools an automation
+// mission's session is pre-approved for at provisioning.
+func (d *Driver) SetAutomationGrants(fn func(ctx context.Context, m Mission) []string) {
+	d.provision.automationGrants = fn
+}
+
 // agentName resolves a mission's agent to its display name for the
 // mission.turn event payload (issue #473). Empty agentID or an unwired/
 // missing resolver both return "" rather than erroring: a label is a

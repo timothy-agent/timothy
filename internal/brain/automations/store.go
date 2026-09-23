@@ -601,7 +601,12 @@ func (s *Store) ListNotes(ctx context.Context, automationID string) ([]Note, err
 	if err != nil {
 		return nil, fmt.Errorf("automations notes: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT name, content, updated_at, updated_by_run_id FROM automation_notes
+	return listNotes(ctx, db, automationID)
+}
+
+// listNotes reads an automation's notes by name through q.
+func listNotes(ctx context.Context, q dbtx, automationID string) ([]Note, error) {
+	rows, err := q.Query(ctx, `SELECT name, content, updated_at, updated_by_run_id FROM automation_notes
 		WHERE automation_id = $1 ORDER BY name`, automationID)
 	if err != nil {
 		return nil, fmt.Errorf("automations notes: %w", err)

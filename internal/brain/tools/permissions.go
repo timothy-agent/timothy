@@ -122,6 +122,9 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			// memory (issue #648): the query is the only argument and
 			// nothing it returns reaches a side effect.
 			"search_memory": true,
+			// read_note reads the running automation's own notes, the
+			// automation id bound in Go at construction, never model input.
+			"read_note": true,
 			// A connector's deferred-tool index entry point is exempt
 			// too, but its name is only known once a connector is
 			// built: see SetLoadTools.

@@ -245,6 +245,10 @@ type nativeRunner struct {
 	// reads are offered, same as before this existed.
 	connectorReads ConnectorReadsResolver
 
+	// automationTools resolves an automation mission's note tools per
+	// turn (see SetAutomationTools); nil means none.
+	automationTools func(ctx context.Context, m Mission) []*tools.Tool
+
 	// progressReader reads back a mission's live progress log: backs
 	// mid-run steering note delivery (see steeringFor). nil-safe: unset
 	// means a worker turn's Steering func is never wired, matching
@@ -651,6 +655,27 @@ func (r *nativeRunner) writingSamplesTool() *tools.Tool {
 // Optional: unwired means search_memory is never offered, exactly as
 // kbSearch behaves.
 func (r *nativeRunner) SetSearchMemory(fn SearchMemoryFunc) { r.recall = fn }
+
+// SetAutomationTools wires the resolver for an automation mission's
+// note tools, called on every build and prove turn.
+func (r *nativeRunner) SetAutomationTools(fn func(ctx context.Context, m Mission) []*tools.Tool) {
+	r.automationTools = fn
+}
+
+// noteTools returns m's automation tools for one turn: all of them on
+// build, only the ReadOnly ones elsewhere.
+func (r *nativeRunner) noteTools(ctx context.Context, m Mission, phase Phase) []*tools.Tool {
+	if r.automationTools == nil {
+		return nil
+	}
+	var out []*tools.Tool
+	for _, t := range r.automationTools(ctx, m) {
+		if phase == PhaseBuild || t.ReadOnly {
+			out = append(out, t)
+		}
+	}
+	return out
+}
 
 // searchMemoryTool builds this turn's search_memory ExtraTool, gated
 // exactly like kbSearchTool. Offered in discover, plan and build, not
@@ -1295,6 +1320,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		extra = append(extra, t)
 	}
 	extra = append(extra, r.connectorReadTools(ctx, m)...)
+	extra = append(extra, r.noteTools(ctx, m, PhaseBuild)...)
 	if t := r.askUserTool(m, PhaseBuild); t != nil {
 		extra = append(extra, t)
 	}
@@ -1600,6 +1626,7 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 	messages := []provider.Message{{Role: "user", Content: renderReviewContent(packet)}}
 
 	extra := append([]*tools.Tool{ReviewVerdictTool()}, r.missionTools(m)...)
+	extra = append(extra, r.noteTools(ctx, m, PhaseProve)...)
 	if t := r.askUserTool(m, PhaseProve); t != nil {
 		extra = append(extra, t)
 	}

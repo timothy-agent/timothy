@@ -498,7 +498,7 @@ func main() {
 		if destinationStore != nil {
 			destinationEnabled = destinationStore.EnabledByID
 		}
-		automationStarter = automations.NewStarter(automationStore, missionDriver.Create, missionResolve, destinationEnabled, app.Log)
+		automationStarter = automations.NewStarter(automationStore, missionDriver.Create, missionResolve, missionStore.ParentLineage, destinationEnabled, app.Log)
 		var notify func(ctx context.Context, missionID, kind, message string) error
 		if missionNotifier != nil {
 			notify = missionNotifier.NotifyMessage
@@ -1336,6 +1336,10 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	nativeRunner.SetEnvironmentSink(store)
 	nativeRunner.SetLocation(flags.Location)
 	nativeRunner.SetAskParker(store)
+	// Automation missions get read_note/write_note scoped to their run's
+	// automation (issue #823).
+	noteStore := automations.NewStore(db)
+	nativeRunner.SetAutomationTools(automations.MissionTools(noteStore, log))
 	// The delegated runner wraps native with D-051/D-052's CLI-executor
 	// dispatch: resolve a worker route's chain via the gateway, spawn a
 	// harness entry's CLI detached in the mission's own sandbox container,
@@ -1353,6 +1357,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	perms := tools.NewPermissions(db, toolWorkspaceRoot)
 	driver := missions.NewDriver(store, runner, workspace, notifier, sessions, perms, sandboxMgr.Exec, sandboxMgr, log)
 	driver.SetFXRates(fxStore)
+	driver.SetAutomationGrants(automations.MissionGrants(noteStore, log))
 	driver.SetCapacityGate(sandboxMgr)
 	driver.SetGitBranchPattern(flags.GitBranchPattern)
 	driver.SetGitCommitStyle(flags.GitCommitStyle)

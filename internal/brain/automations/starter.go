@@ -42,6 +42,8 @@ type Starter struct {
 	// create is Driver.Create.
 	create  func(ctx context.Context, m missions.Mission) (string, error)
 	resolve missions.ResolveDeps
+	// lineage is missions.Store.ParentLineage; nil turns continuity off.
+	lineage func(ctx context.Context, missionID string) (missions.SourceEntry, error)
 	// destinationEnabled re-checks an action's destination ids; nil
 	// drops every id.
 	destinationEnabled func(ctx context.Context, id string) (bool, error)
@@ -50,10 +52,10 @@ type Starter struct {
 	now                func() time.Time
 }
 
-// NewStarter wires the starter. create is Driver.Create and resolve
-// the shared create-path lookups.
-func NewStarter(store *Store, create func(ctx context.Context, m missions.Mission) (string, error), resolve missions.ResolveDeps, destinationEnabled func(ctx context.Context, id string) (bool, error), log *slog.Logger) *Starter {
-	return &Starter{store: store, create: create, resolve: resolve, destinationEnabled: destinationEnabled,
+// NewStarter wires the starter. create is Driver.Create, resolve the
+// shared create-path lookups and lineage missions.Store.ParentLineage.
+func NewStarter(store *Store, create func(ctx context.Context, m missions.Mission) (string, error), resolve missions.ResolveDeps, lineage func(ctx context.Context, missionID string) (missions.SourceEntry, error), destinationEnabled func(ctx context.Context, id string) (bool, error), log *slog.Logger) *Starter {
+	return &Starter{store: store, create: create, resolve: resolve, lineage: lineage, destinationEnabled: destinationEnabled,
 		kick: make(chan struct{}, 1), log: log, now: time.Now}
 }
 
@@ -158,7 +160,7 @@ func (s *Starter) start(ctx context.Context, tx pgx.Tx, runID, automationID stri
 	}
 	var createErr error
 	if missionID == "" {
-		missionID, createErr = s.createMission(ctx, tx, automationID, runID)
+		missionID, createErr = s.createMission(ctx, tx, automationID, runID, event)
 	}
 	if createErr == nil {
 		if _, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'running', mission_id = $2 WHERE id = $1`, runID, missionID); err != nil {
@@ -203,7 +205,7 @@ func (s *Starter) start(ctx context.Context, tx pgx.Tx, runID, automationID stri
 
 // createMission builds the run's mission from its automation's action
 // and hands it to create.
-func (s *Starter) createMission(ctx context.Context, tx pgx.Tx, automationID, runID string) (string, error) {
+func (s *Starter) createMission(ctx context.Context, tx pgx.Tx, automationID, runID string, rawEvent []byte) (string, error) {
 	a, err := getAutomation(ctx, tx, automationID, "")
 	if err != nil {
 		return "", err
@@ -223,7 +225,10 @@ func (s *Starter) createMission(ctx context.Context, tx pgx.Tx, automationID, ru
 	}
 	// Trigger tool_allowlist is not applied yet: missions carry no
 	// per-mission allowlist (issue #857).
-	req := missions.TemplateCreateRequest(*a.Action.Mission, a.Name, a.AgentID, s.filterDestinationIDs(ctx, a.Action.Mission.DestinationIDs), runID)
+	req, err := s.createRequest(ctx, tx, a, runID, runEvent(rawEvent))
+	if err != nil {
+		return "", err
+	}
 	m, err := missions.ResolveDefaults(ctx, req, s.resolve)
 	if err != nil {
 		return "", fmt.Errorf("resolve mission: %w", err)
@@ -233,6 +238,73 @@ func (s *Starter) createMission(ctx context.Context, tx pgx.Tx, automationID, ru
 		return "", fmt.Errorf("create mission: %w", err)
 	}
 	return id, nil
+}
+
+// createRequest maps a's mission action onto the run's CreateRequest.
+// Goal and name are interpolated before any source is attached, so
+// outcome text is never interpolated. Sources are the parent lineage
+// (continuity), the trigger, the notes, then the action's attachments.
+func (s *Starter) createRequest(ctx context.Context, tx pgx.Tx, a Automation, runID string, event map[string]any) (missions.CreateRequest, error) {
+	var notes []Note
+	if a.NotesEnabled {
+		var err error
+		if notes, err = listNotes(ctx, tx, a.ID); err != nil {
+			return missions.CreateRequest{}, err
+		}
+	}
+	tmpl := *a.Action.Mission
+	byName := noteMap(notes)
+	tmpl.Goal = Interpolate(tmpl.Goal, event, byName)
+	tmpl.Name = Interpolate(tmpl.Name, event, byName)
+	req := missions.TemplateCreateRequest(tmpl, a.Name, a.AgentID, s.filterDestinationIDs(ctx, tmpl.DestinationIDs), runID)
+
+	var sources []missions.SourceEntry
+	if a.Continuity {
+		parentID, lineage, err := s.previousLineage(ctx, tx, a.ID, runID)
+		if err != nil {
+			return missions.CreateRequest{}, err
+		}
+		if parentID != "" {
+			req.ParentMissionID = parentID
+			sources = append(sources, lineage)
+		}
+	}
+	if e, ok := triggerSource(event); ok {
+		sources = append(sources, e)
+	}
+	if e, ok := notesSource(notes); ok {
+		sources = append(sources, e)
+	}
+	req.Sources = append(sources, req.Sources...)
+	return req, nil
+}
+
+// previousLineage finds the mission of automationID's newest finished
+// run other than runID and returns its lineage source. "" when there is
+// none, continuity is unwired or that mission was deleted.
+func (s *Starter) previousLineage(ctx context.Context, tx pgx.Tx, automationID, runID string) (string, missions.SourceEntry, error) {
+	if s.lineage == nil {
+		return "", missions.SourceEntry{}, nil
+	}
+	var missionID string
+	err := tx.QueryRow(ctx, `SELECT mission_id FROM automation_runs
+		WHERE automation_id = $1 AND id <> $2 AND status IN ('done', 'failed') AND mission_id IS NOT NULL
+		ORDER BY created_at DESC, id DESC LIMIT 1`, automationID, runID).Scan(&missionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", missions.SourceEntry{}, nil
+	}
+	if err != nil {
+		return "", missions.SourceEntry{}, fmt.Errorf("automations start: previous run: %w", err)
+	}
+	src, err := s.lineage(ctx, missionID)
+	if errors.Is(err, missions.ErrNotFound) {
+		s.log.Info("automations: previous mission is gone, starting without continuity", "automation_id", automationID, "run_id", runID, "mission_id", missionID)
+		return "", missions.SourceEntry{}, nil
+	}
+	if err != nil {
+		return "", missions.SourceEntry{}, fmt.Errorf("automations start: previous mission lineage: %w", err)
+	}
+	return missionID, src, nil
 }
 
 // mergeRunEvent merges patch into a run's event.

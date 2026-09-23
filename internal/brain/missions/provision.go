@@ -43,6 +43,10 @@ type provisioner struct {
 	// existed.
 	resolveAgent AgentResolver
 
+	// automationGrants names the tools an automation mission's session
+	// is pre-approved for (see Driver.SetAutomationGrants); nil grants none.
+	automationGrants func(ctx context.Context, m Mission) []string
+
 	// resolveCloneToken resolves a github-kind connector_id to the PAT
 	// that authenticates ensureProvisioned's clone (see SetCloneTokenResolver)
 	// — nil-safe: unset means a mission with repo_url set fails
@@ -442,7 +446,8 @@ func (p *provisioner) parentPRMerged(ctx context.Context, m, parent Mission) boo
 // tool in the mission's agent's ApprovalAllowlist (resolved at
 // provisioning time via resolveAgent, so an agent's allowlist
 // edited after the mission started still applies to a not-yet-
-// provisioned mission). All best-effort: a failed grant just means the
+// provisioned mission), plus an automation run's automationGrants.
+// All best-effort: a failed grant just means the
 // mission asks on its first call instead of running unattended —
 // degraded autonomy, never a broken mission.
 //
@@ -461,6 +466,13 @@ func (p *provisioner) grantSessionDefaults(ctx context.Context, m Mission) {
 	if m.AutoApproveTools {
 		if err := p.perms.Grant(ctx, m.SessionID, "shell", "*", missionGrantTTL); err != nil {
 			p.log.Warn("driver: auto-approve grant failed", "mission_id", m.ID, "error", err)
+		}
+	}
+	if p.automationGrants != nil {
+		for _, tool := range p.automationGrants(ctx, m) {
+			if err := p.perms.Grant(ctx, m.SessionID, tool, "*", missionGrantTTL); err != nil {
+				p.log.Warn("driver: automation grant failed", "mission_id", m.ID, "tool", tool, "error", err)
+			}
 		}
 	}
 	if p.resolveAgent == nil {

@@ -343,6 +343,8 @@ const (
 	SourceKindChat      = "chat"
 	SourceKindKB        = "kb"
 	SourceKindBrief     = "brief"
+	SourceKindTrigger   = "trigger"
+	SourceKindNotes     = "notes"
 )
 
 // SourceEntry is one input a mission's discover/plan/work prompts draw
@@ -373,7 +375,9 @@ const (
 // mission's workspace at path Name, materialized into this mission's
 // workspace by the provisioner (see provision.go) before the first
 // turn. A "brief" entry carries a follow-up brief in Digest, with Name
-// "Brief".
+// "Brief". An automation run adds a "trigger" entry (the run's event,
+// Name "Trigger") and a "notes" entry (its notes, Name "Automation
+// notes"), both rendered as referenced context.
 type SourceEntry struct {
 	Source      string `json:"source"`
 	ConnectorID string `json:"connector_id,omitempty"`
@@ -480,7 +484,7 @@ func (m Mission) ReferenceEntries() []SourceEntry {
 	var out []SourceEntry
 	for _, e := range m.Sources {
 		switch e.Source {
-		case SourceKindChat, SourceKindKB, SourceKindBrief:
+		case SourceKindChat, SourceKindKB, SourceKindBrief, SourceKindTrigger, SourceKindNotes:
 		case SourceKindMission:
 			if e.ID == ParentLineageID {
 				continue // the lineage snapshot, not a referenced pick

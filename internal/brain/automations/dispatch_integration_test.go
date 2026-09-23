@@ -60,7 +60,7 @@ func newDispatchHarness(t *testing.T) *dispatchHarness {
 			h.startedAt[id] = h.clock
 		}
 		return id, err
-	}, missions.ResolveDeps{}, nil, log)
+	}, missions.ResolveDeps{}, h.missions.ParentLineage, nil, log)
 	h.starter.now = func() time.Time { return h.clock }
 	h.ticker = NewTicker(s, h.events, nil, func(context.Context) *time.Location { return h.loc }, nil, log)
 	t.Cleanup(func() {

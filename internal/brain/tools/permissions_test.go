@@ -422,3 +422,17 @@ func TestConnectorLoadToolExemption(t *testing.T) {
 		}
 	}
 }
+
+// TestNoteToolExemption pins issue #823: read_note is a pure read and
+// exempt; write_note is never exempt by name, so only a session grant
+// lets it run without asking.
+func TestNoteToolExemption(t *testing.T) {
+	t.Parallel()
+	p := NewPermissions(nil, "/workspace")
+	if !p.exempt["read_note"] {
+		t.Fatal("read_note must be exempt")
+	}
+	if p.exempt["write_note"] {
+		t.Fatal("write_note must not be exempt by name")
+	}
+}

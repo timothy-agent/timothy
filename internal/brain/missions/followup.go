@@ -75,6 +75,26 @@ type FollowUpOptions struct {
 	Brief  Brief
 }
 
+// LineageSource is parent's outcome digest as the parent-lineage
+// "mission" source entry a follow-up carries.
+func LineageSource(parent Mission, events []Event) SourceEntry {
+	return SourceEntry{Source: SourceKindMission, ID: ParentLineageID, MissionID: parent.ID, Digest: OutcomeDigest(parent, events, parent.Phase, parent.FailureReason)}
+}
+
+// ParentLineage reads mission parentID and its events and returns its
+// LineageSource; an unknown id wraps ErrNotFound.
+func (s *Store) ParentLineage(ctx context.Context, parentID string) (SourceEntry, error) {
+	parent, err := s.Get(ctx, parentID)
+	if err != nil {
+		return SourceEntry{}, err
+	}
+	events, err := s.Events(ctx, parentID)
+	if err != nil {
+		return SourceEntry{}, fmt.Errorf("parent lineage: read events: %w", err)
+	}
+	return LineageSource(parent, events), nil
+}
+
 // CreateFollowUp spawns a new mission continuing a terminal parent —
 // the driver-layer counterpart of api/missions.go's create handler's
 // own ParentMissionID branch, reused by builtin.FollowupMission so a
@@ -101,9 +121,8 @@ func (d *Driver) CreateFollowUp(ctx context.Context, parentID string, opts Follo
 	if err != nil {
 		return "", fmt.Errorf("create follow-up: %w", err)
 	}
-	parentSource := SourceEntry{Source: SourceKindMission, ID: ParentLineageID, MissionID: parent.ID, Digest: OutcomeDigest(parent, events, parent.Phase, parent.FailureReason)}
 	var sources []SourceEntry
-	sources = append(sources, parentSource)
+	sources = append(sources, LineageSource(parent, events))
 	if repo, ok := parent.repoSource(); ok {
 		sources = append(sources, repo)
 	}
