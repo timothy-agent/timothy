@@ -341,7 +341,8 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 }
 
 // replaceTriggers makes want the automation's trigger set. A kept row
-// preserves its state unless its kind changed.
+// preserves its state unless its kind changed; re-enabling a disabled
+// row clears its disabled_reason and auth_failures.
 func replaceTriggers(ctx context.Context, tx pgx.Tx, automationID string, existing, want []Trigger) error {
 	known := map[string]bool{}
 	for _, t := range existing {
@@ -368,7 +369,9 @@ func replaceTriggers(ctx context.Context, tx pgx.Tx, automationID string, existi
 			return fmt.Errorf("automations trigger update: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE automation_triggers SET
-				state = CASE WHEN kind = $3 THEN state ELSE '{}' END,
+				state = CASE WHEN kind <> $3 THEN '{}'
+					WHEN $7 AND NOT enabled THEN state - 'disabled_reason' - 'auth_failures'
+					ELSE state END,
 				kind = $3, config = $4, credential_ref = NULLIF($5, ''), tool_allowlist = $6, enabled = $7, updated_at = now()
 			WHERE id = $1 AND automation_id = $2`,
 			t.ID, automationID, t.Kind, []byte(t.Config), t.CredentialRef, allowlist, t.Enabled); err != nil {
@@ -761,4 +764,141 @@ func (s *Store) NameReferencingDestination(ctx context.Context, destinationID st
 		return "", false, fmt.Errorf("automations destination reference: %w", err)
 	}
 	return name, true, nil
+}
+
+const (
+	// HookAuthFailureLimit failed signatures within HookAuthFailureWindow
+	// disable a webhook trigger.
+	HookAuthFailureLimit  = 20
+	HookAuthFailureWindow = 10 * time.Minute
+
+	// TriggerDisabledAuthFailures is state.disabled_reason of a trigger
+	// the auth failure guard disabled.
+	TriggerDisabledAuthFailures = "auth_failures"
+)
+
+// WebhookTrigger returns an enabled webhook trigger and its automation
+// in one query. Only the automation's id, name, enabled flag and
+// expiry are set. A missing, non-webhook or disabled trigger, and a
+// disabled or expired automation, are ErrNotFound.
+func (s *Store) WebhookTrigger(ctx context.Context, id string, now time.Time) (Trigger, Automation, error) {
+	if !isUUID(id) {
+		return Trigger{}, Automation{}, fmt.Errorf("webhook trigger %q: %w", id, ErrNotFound)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return Trigger{}, Automation{}, fmt.Errorf("automations webhook trigger: %w", err)
+	}
+	var t Trigger
+	var a Automation
+	var config, allowlist, state []byte
+	var credentialRef *string
+	err = db.QueryRow(ctx, `SELECT t.id, t.automation_id, t.kind, t.config, t.credential_ref, t.tool_allowlist, t.state, t.enabled,
+			t.created_at, t.updated_at, a.id, a.name, a.enabled, a.expires_at
+		FROM automation_triggers t JOIN automations a ON a.id = t.automation_id
+		WHERE t.id = $1 AND t.kind = 'webhook' AND t.enabled AND a.enabled AND (a.expires_at IS NULL OR a.expires_at > $2)`, id, now).
+		Scan(&t.ID, &t.AutomationID, &t.Kind, &config, &credentialRef, &allowlist, &state, &t.Enabled,
+			&t.CreatedAt, &t.UpdatedAt, &a.ID, &a.Name, &a.Enabled, &a.ExpiresAt)
+	if isNotFound(err) {
+		return Trigger{}, Automation{}, fmt.Errorf("webhook trigger %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return Trigger{}, Automation{}, fmt.Errorf("automations webhook trigger: %w", err)
+	}
+	t.Config, t.State = json.RawMessage(config), json.RawMessage(state)
+	if credentialRef != nil {
+		t.CredentialRef = *credentialRef
+	}
+	if len(allowlist) > 0 {
+		_ = json.Unmarshal(allowlist, &t.ToolAllowlist)
+	}
+	a.Triggers = []Trigger{t}
+	return t, a, nil
+}
+
+// recordAuthFailure appends now to failures, drops entries older than
+// the window and keeps the newest HookAuthFailureLimit. trip reports
+// that the window holds the limit.
+func recordAuthFailure(failures []time.Time, now time.Time) (kept []time.Time, trip bool) {
+	kept = []time.Time{}
+	for _, f := range append(failures, now) {
+		if now.Sub(f) < HookAuthFailureWindow {
+			kept = append(kept, f)
+		}
+	}
+	if len(kept) > HookAuthFailureLimit {
+		kept = kept[len(kept)-HookAuthFailureLimit:]
+	}
+	return kept, len(kept) >= HookAuthFailureLimit
+}
+
+// RecordHookAuthFailure appends a failed signature at now to the
+// trigger's state.auth_failures under its row lock. disabled reports
+// that this failure disabled the trigger.
+func (s *Store) RecordHookAuthFailure(ctx context.Context, triggerID string, now time.Time) (disabled bool, err error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return false, fmt.Errorf("automations hook auth failure: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("automations hook auth failure: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var raw []byte
+	var enabled bool
+	err = tx.QueryRow(ctx, `SELECT state, enabled FROM automation_triggers WHERE id = $1 FOR UPDATE`, triggerID).Scan(&raw, &enabled)
+	if isNotFound(err) {
+		return false, fmt.Errorf("webhook trigger %s: %w", triggerID, ErrNotFound)
+	}
+	if err != nil {
+		return false, fmt.Errorf("automations hook auth failure: %w", err)
+	}
+	state := map[string]any{}
+	_ = json.Unmarshal(raw, &state)
+	var failures []time.Time
+	if list, ok := state["auth_failures"].([]any); ok {
+		for _, v := range list {
+			if str, ok := v.(string); ok {
+				if at, err := time.Parse(time.RFC3339Nano, str); err == nil {
+					failures = append(failures, at)
+				}
+			}
+		}
+	}
+	kept, trip := recordAuthFailure(failures, now)
+	stamps := make([]string, len(kept))
+	for i, f := range kept {
+		stamps[i] = f.UTC().Format(time.RFC3339Nano)
+	}
+	state["auth_failures"] = stamps
+	disabled = trip && enabled
+	if disabled {
+		state["disabled_reason"] = TriggerDisabledAuthFailures
+	}
+	out, err := json.Marshal(state)
+	if err != nil {
+		return false, fmt.Errorf("automations hook auth failure: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE automation_triggers SET state = $2, enabled = enabled AND NOT $3 WHERE id = $1`,
+		triggerID, out, disabled); err != nil {
+		return false, fmt.Errorf("automations hook auth failure: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("automations hook auth failure: %w", err)
+	}
+	return disabled, nil
+}
+
+// RecordHookDelivery stamps state.last_delivery_at on a trigger.
+func (s *Store) RecordHookDelivery(ctx context.Context, triggerID string, now time.Time) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("automations hook delivery: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE automation_triggers SET state = state || jsonb_build_object('last_delivery_at', $2::text) WHERE id = $1`,
+		triggerID, now.UTC().Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("automations hook delivery: %w", err)
+	}
+	return nil
 }

@@ -122,8 +122,14 @@ func TestAutomationCreateRejectsBeforeStore(t *testing.T) {
 			b["triggers"] = []any{map[string]any{"kind": "cron", "config": map[string]any{"expr": "nope"}}}
 		}, "bad_cron", "invalid cron expression"},
 		{"no triggers", func(b map[string]any) { b["triggers"] = []any{} }, "bad_request", "at least one trigger"},
-		{"webhook trigger", func(b map[string]any) {
+		{"webhook trigger without config", func(b map[string]any) {
 			b["triggers"] = []any{map[string]any{"kind": "webhook"}}
+		}, "bad_request", "webhook trigger config"},
+		{"webhook trigger without credential_ref", func(b map[string]any) {
+			b["triggers"] = []any{map[string]any{"kind": "webhook", "config": map[string]any{"scheme": "generic"}}}
+		}, "bad_request", "credential_ref"},
+		{"channel trigger", func(b map[string]any) {
+			b["triggers"] = []any{map[string]any{"kind": "channel"}}
 		}, "bad_request", "not available yet"},
 		{"max_concurrent without parallel", func(b map[string]any) { b["max_concurrent"] = 2 }, "bad_request", "parallel"},
 		{"unknown destination", func(b map[string]any) {

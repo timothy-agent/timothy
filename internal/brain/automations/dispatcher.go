@@ -26,11 +26,12 @@ const (
 	SkipSuperseded  = "superseded"
 )
 
-// Dispatcher is the events consumer that turns cron.due and run.now
-// events into runs and finalizes runs when their mission ends. All of
+// Dispatcher is the events consumer that turns cron.due, run.now,
+// webhook and connector events into runs and finalizes runs when their mission ends. All of
 // its writes go through the drain transaction.
 type Dispatcher struct {
-	// notify is Notifier.NotifyMessage; nil skips the notification.
+	// notify is Notifier.NotifyMessage; an empty mission id is an
+	// operator-level notification. nil skips the notification.
 	notify func(ctx context.Context, missionID, kind, message string) error
 	log    *slog.Logger
 	now    func() time.Time
@@ -44,7 +45,7 @@ func NewDispatcher(notify func(ctx context.Context, missionID, kind, message str
 func (d *Dispatcher) Name() string { return "automations" }
 
 func (d *Dispatcher) Kinds() []string {
-	return append([]string{events.KindCronDue, events.KindRunNow, events.KindMissionDone, events.KindMissionFailed}, events.ConnectorKinds()...)
+	return append([]string{events.KindCronDue, events.KindRunNow, events.KindWebhookReceived, events.KindMissionDone, events.KindMissionFailed}, events.ConnectorKinds()...)
 }
 
 // Handle routes ev to fire or finalize.
@@ -65,6 +66,14 @@ func (d *Dispatcher) Handle(ctx context.Context, tx pgx.Tx, ev events.Event) err
 		}
 		return d.fire(ctx, tx, ev, p.AutomationID, nil, ev.DedupKey,
 			map[string]any{"kind": ev.Kind, "source": ev.Source, "requested_at": p.RequestedAt.Format(time.RFC3339)})
+	case events.KindWebhookReceived:
+		p, err := events.DecodeWebhook(ev)
+		if err != nil {
+			return err
+		}
+		trigger := p.TriggerID
+		return d.fire(ctx, tx, ev, p.AutomationID, &trigger, p.TriggerID+"|"+p.Delivery,
+			map[string]any{"kind": ev.Kind, "source": ev.Source, "scheme": p.Scheme, "delivery": p.Delivery, "headers": p.Headers, "body": p.Body})
 	case events.KindMissionDone, events.KindMissionFailed:
 		p, err := events.DecodeMission(ev)
 		if err != nil {

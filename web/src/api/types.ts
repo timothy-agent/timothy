@@ -1211,7 +1211,8 @@ export interface MissionFile {
 
 export interface Notification {
   id: string
-  mission_id: string
+  // Absent on an operator-level notification that belongs to no mission.
+  mission_id?: string
   kind: string
   message: string
   read: boolean

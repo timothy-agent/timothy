@@ -27,3 +27,11 @@ binary boots; it reads the column on every mission load.
 ```sql
 ALTER TABLE missions ADD COLUMN IF NOT EXISTS tool_allowlist text[];
 ```
+
+Issue #827: operator notifications without a mission (webhook trigger
+guard, automation breaker with no mission). Run before the new binary
+boots; it inserts rows with a NULL mission_id.
+
+```sql
+ALTER TABLE notifications ALTER COLUMN mission_id DROP NOT NULL;
+```

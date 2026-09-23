@@ -109,14 +109,21 @@ export function Missions() {
         <div className="mb-6 space-y-2">
           {unread.map((n) => (
             <Alert key={n.id} tone={notificationTone(n.kind)} className="flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => navigate(`/missions/${n.mission_id}`)}
-                className="flex items-center gap-2 text-left hover:underline"
-              >
-                <Bell aria-hidden className="size-4 shrink-0" />
-                {n.message}
-              </button>
+              {n.mission_id ? (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/missions/${n.mission_id}`)}
+                  className="flex items-center gap-2 text-left hover:underline"
+                >
+                  <Bell aria-hidden className="size-4 shrink-0" />
+                  {n.message}
+                </button>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <Bell aria-hidden className="size-4 shrink-0" />
+                  {n.message}
+                </span>
+              )}
               <IconButton
                 label="Dismiss"
                 icon={X}

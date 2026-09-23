@@ -55,6 +55,9 @@ func TestValidate(t *testing.T) {
 	cron := func(expr string) Trigger {
 		return Trigger{Kind: TriggerCron, Config: json.RawMessage(`{"expr":"` + expr + `"}`)}
 	}
+	webhook := func(config, credentialRef string) Trigger {
+		return Trigger{Kind: TriggerWebhook, Config: json.RawMessage(config), CredentialRef: credentialRef}
+	}
 	cases := []struct {
 		name    string
 		mutate  func(*Automation)
@@ -90,7 +93,32 @@ func TestValidate(t *testing.T) {
 			a.Triggers = []Trigger{{Kind: TriggerManual, Config: json.RawMessage(`{"x":1}`)}}
 		}, "no config", false},
 		{"manual null config", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerManual, Config: json.RawMessage(`null`)}} }, "", false},
-		{"webhook not yet", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerWebhook}} }, "not available yet", false},
+		{"webhook generic", func(a *Automation) { a.Triggers = []Trigger{webhook(`{"scheme":"generic"}`, "HOOK_SECRET")} }, "", false},
+		{"webhook github with filters", func(a *Automation) {
+			a.Triggers = []Trigger{webhook(`{"scheme":"github","filters":[{"path":"$.action","equals":"opened"},{"path":"pull_request.user.login","equals":"me"}]}`, "hooks/gh.key")}
+		}, "", false},
+		{"webhook allowlist", func(a *Automation) {
+			a.Triggers = []Trigger{webhook(`{"scheme":"generic"}`, "HOOK_SECRET")}
+			a.Triggers[0].ToolAllowlist = []string{"search_web"}
+		}, "", false},
+		{"webhook without config", func(a *Automation) { a.Triggers = []Trigger{webhook(``, "HOOK_SECRET")} }, "webhook trigger config", false},
+		{"webhook unknown key", func(a *Automation) { a.Triggers = []Trigger{webhook(`{"scheme":"generic","secret":"x"}`, "HOOK_SECRET")} }, "webhook trigger config", false},
+		{"webhook no scheme", func(a *Automation) { a.Triggers = []Trigger{webhook(`{}`, "HOOK_SECRET")} }, "scheme", false},
+		{"webhook unknown scheme", func(a *Automation) { a.Triggers = []Trigger{webhook(`{"scheme":"slack"}`, "HOOK_SECRET")} }, "scheme", false},
+		{"webhook without credential_ref", func(a *Automation) { a.Triggers = []Trigger{webhook(`{"scheme":"generic"}`, "")} }, "credential_ref", false},
+		{"webhook credential_ref with spaces", func(a *Automation) { a.Triggers = []Trigger{webhook(`{"scheme":"generic"}`, "my secret")} }, "credential_ref", false},
+		{"webhook eleven filters", func(a *Automation) {
+			a.Triggers = []Trigger{webhook(`{"scheme":"generic","filters":[`+strings.TrimSuffix(strings.Repeat(`{"path":"a","equals":"b"},`, 11), ",")+`]}`, "HOOK_SECRET")}
+		}, "at most 10 filters", false},
+		{"webhook ten filters", func(a *Automation) {
+			a.Triggers = []Trigger{webhook(`{"scheme":"generic","filters":[`+strings.TrimSuffix(strings.Repeat(`{"path":"a","equals":"b"},`, 10), ",")+`]}`, "HOOK_SECRET")}
+		}, "", false},
+		{"webhook array path", func(a *Automation) {
+			a.Triggers = []Trigger{webhook(`{"scheme":"generic","filters":[{"path":"$.labels[0]","equals":"x"}]}`, "HOOK_SECRET")}
+		}, "filter path", false},
+		{"webhook empty path", func(a *Automation) {
+			a.Triggers = []Trigger{webhook(`{"scheme":"generic","filters":[{"path":"","equals":"x"}]}`, "HOOK_SECRET")}
+		}, "filter path", false},
 		{"connector_event without config", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerConnectorEvent}} }, "connector_event trigger config", false},
 		{"credential_ref on connector_event", func(a *Automation) {
 			a.Triggers = []Trigger{{Kind: TriggerConnectorEvent, CredentialRef: "X", Config: json.RawMessage(`{"connector_id":"` + agentID + `","repo":"o/r","events":["pr.opened"]}`)}}
@@ -341,5 +369,96 @@ func TestPatchApply(t *testing.T) {
 	got := Patch{Name: &name, Enabled: &enabled, Triggers: &triggers}.apply(a)
 	if got.Name != "renamed" || got.Enabled || len(got.Triggers) != 1 || got.Triggers[0].Kind != TriggerManual {
 		t.Fatalf("apply = %+v", got)
+	}
+}
+
+func TestValidateWebhookConfigCanonical(t *testing.T) {
+	t.Parallel()
+	a := validAutomation()
+	a.Triggers = []Trigger{{Kind: TriggerWebhook, CredentialRef: "HOOK_SECRET",
+		Config: json.RawMessage(`{"scheme":"github","filters":[{"path":"action","equals":"opened"},{"path":"$.a.b","equals":""}]}`)}}
+	if err := Validate(&a); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	want := `{"scheme":"github","filters":[{"path":"$.action","equals":"opened"},{"path":"$.a.b","equals":""}]}`
+	if got := string(a.Triggers[0].Config); got != want {
+		t.Fatalf("canonical config = %s, want %s", got, want)
+	}
+	a.Triggers[0].Config = json.RawMessage(`{"scheme":"generic"}`)
+	if err := Validate(&a); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := string(a.Triggers[0].Config); got != `{"scheme":"generic","filters":[]}` {
+		t.Fatalf("canonical config without filters = %s", got)
+	}
+}
+
+func TestMatchWebhookFilters(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"action":"opened","number":42,"draft":false,"pull_request":{"user":{"login":"octo"}},"labels":["x"],"empty":"","none":null}`)
+	f := func(path, equals string) WebhookFilter { return WebhookFilter{Path: path, Equals: equals} }
+	cases := []struct {
+		name    string
+		filters []WebhookFilter
+		body    []byte
+		want    bool
+	}{
+		{"no filters", nil, body, true},
+		{"no filters non-JSON", nil, []byte("hello"), true},
+		{"equals hit", []WebhookFilter{f("$.action", "opened")}, body, true},
+		{"equals miss", []WebhookFilter{f("$.action", "closed")}, body, false},
+		{"nested path", []WebhookFilter{f("$.pull_request.user.login", "octo")}, body, true},
+		{"nested miss", []WebhookFilter{f("$.pull_request.user.login", "other")}, body, false},
+		{"number as written", []WebhookFilter{f("$.number", "42")}, body, true},
+		{"bool", []WebhookFilter{f("$.draft", "false")}, body, true},
+		{"empty string value", []WebhookFilter{f("$.empty", "")}, body, true},
+		{"missing path", []WebhookFilter{f("$.nope", "")}, body, false},
+		{"null value", []WebhookFilter{f("$.none", "")}, body, false},
+		{"object value", []WebhookFilter{f("$.pull_request", "")}, body, false},
+		{"array value", []WebhookFilter{f("$.labels", `["x"]`)}, body, false},
+		{"through a scalar", []WebhookFilter{f("$.action.x", "")}, body, false},
+		{"all must hit", []WebhookFilter{f("$.action", "opened"), f("$.number", "7")}, body, false},
+		{"both hit", []WebhookFilter{f("$.action", "opened"), f("$.number", "42")}, body, true},
+		{"non-JSON body", []WebhookFilter{f("$.action", "opened")}, []byte("action=opened"), false},
+		{"JSON array body", []WebhookFilter{f("$.action", "opened")}, []byte(`[{"action":"opened"}]`), false},
+		{"empty body", []WebhookFilter{f("$.action", "opened")}, nil, false},
+	}
+	for _, tc := range cases {
+		if got := MatchWebhookFilters(tc.filters, tc.body); got != tc.want {
+			t.Errorf("%s: MatchWebhookFilters = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestRecordAuthFailure(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	var failures []time.Time
+	for i := range HookAuthFailureLimit - 1 {
+		var trip bool
+		failures, trip = recordAuthFailure(failures, now.Add(time.Duration(i)*time.Second))
+		if trip {
+			t.Fatalf("failure %d tripped, want 20 to trip", i+1)
+		}
+	}
+	if len(failures) != 19 {
+		t.Fatalf("kept %d, want 19", len(failures))
+	}
+	kept, trip := recordAuthFailure(failures, now.Add(30*time.Second))
+	if !trip || len(kept) != 20 {
+		t.Fatalf("20th failure in the window: trip %v kept %d, want trip with 20", trip, len(kept))
+	}
+	// Past the window the first 19 fall out.
+	kept, trip = recordAuthFailure(failures, now.Add(HookAuthFailureWindow+20*time.Second))
+	if trip || len(kept) != 1 {
+		t.Fatalf("after the window: trip %v kept %d, want 1 without trip", trip, len(kept))
+	}
+	// The list never grows past the limit.
+	many := make([]time.Time, 40)
+	for i := range many {
+		many[i] = now
+	}
+	if kept, _ = recordAuthFailure(many, now); len(kept) != HookAuthFailureLimit {
+		t.Fatalf("kept %d, want capped at %d", len(kept), HookAuthFailureLimit)
 	}
 }

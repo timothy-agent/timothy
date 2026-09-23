@@ -248,3 +248,67 @@ func TestConnectorEvent(t *testing.T) {
 		t.Error("DecodeConnectorEvent accepted a payload without ids")
 	}
 }
+
+func TestWebhookReceived(t *testing.T) {
+	base := WebhookPayload{TriggerID: "t1", AutomationID: "a1", Scheme: "github", Delivery: "d1",
+		Headers: map[string]string{"x-github-event": "pull_request"}, Body: json.RawMessage(`{"action":"opened"}`)}
+	ev, err := WebhookReceived(base)
+	if err != nil {
+		t.Fatalf("WebhookReceived: %v", err)
+	}
+	if ev.Source != SourceWebhook || ev.Kind != KindWebhookReceived || ev.DedupKey != "hook:t1:d1" {
+		t.Fatalf("event = %+v", ev)
+	}
+	back, err := DecodeWebhook(ev)
+	if err != nil {
+		t.Fatalf("DecodeWebhook: %v", err)
+	}
+	if back.TriggerID != "t1" || back.AutomationID != "a1" || back.Scheme != "github" || string(back.Body) != `{"action":"opened"}` || back.Headers["x-github-event"] != "pull_request" {
+		t.Fatalf("round trip = %+v", back)
+	}
+
+	for name, body := range map[string]json.RawMessage{
+		"not JSON": json.RawMessage("action=opened"),
+		"empty":    nil,
+		"too big":  json.RawMessage(`{"a":"` + strings.Repeat("x", MaxWebhookBodyBytes) + `"}`),
+	} {
+		p := base
+		p.Body = body
+		ev, err := WebhookReceived(p)
+		if err != nil {
+			t.Fatalf("%s: WebhookReceived: %v", name, err)
+		}
+		back, _ := DecodeWebhook(ev)
+		if string(back.Body) != `{"raw_truncated":true}` {
+			t.Errorf("%s: body = %s, want raw_truncated marker", name, back.Body)
+		}
+	}
+	p := base
+	p.Body = json.RawMessage(`{"a":"` + strings.Repeat("x", MaxWebhookBodyBytes-8) + `"}`)
+	ev, _ = WebhookReceived(p)
+	if back, _ := DecodeWebhook(ev); len(back.Body) != MaxWebhookBodyBytes {
+		t.Errorf("body at the cap = %d bytes, want kept whole", len(back.Body))
+	}
+
+	p = base
+	p.Delivery = strings.Repeat("d", 1000)
+	ev, _ = WebhookReceived(p)
+	if len(ev.DedupKey) != len("hook:t1:")+maxDeliveryBytes {
+		t.Errorf("dedup key length = %d, want delivery capped at %d", len(ev.DedupKey), maxDeliveryBytes)
+	}
+
+	for _, missing := range []func(*WebhookPayload){
+		func(p *WebhookPayload) { p.TriggerID = "" },
+		func(p *WebhookPayload) { p.AutomationID = "" },
+		func(p *WebhookPayload) { p.Delivery = "" },
+	} {
+		p := base
+		missing(&p)
+		if _, err := WebhookReceived(p); err == nil {
+			t.Errorf("WebhookReceived(%+v) accepted a missing id", p)
+		}
+	}
+	if _, err := DecodeWebhook(Event{Payload: json.RawMessage(`{"trigger_id":"t1"}`)}); err == nil {
+		t.Error("DecodeWebhook accepted a payload without automation_id and delivery")
+	}
+}

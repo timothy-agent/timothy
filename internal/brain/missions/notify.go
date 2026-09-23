@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -173,12 +174,48 @@ func (n *Notifier) fanOut(ctx context.Context, missionID, kind, message string) 
 // before/after Status classification doesn't cover — used by the
 // driver's on_complete auto-fire hook (fireOnComplete) to surface a
 // failed automatic push/PR, the same durable-inbox-row-plus-best-effort-
-// webhook shape OnTransition itself uses.
+// webhook shape OnTransition itself uses. An empty missionID is
+// NotifyOperator.
 func (n *Notifier) NotifyMessage(ctx context.Context, missionID, kind, message string) error {
+	if missionID == "" {
+		return n.NotifyOperator(ctx, kind, message)
+	}
 	if err := n.sendOncePerMission(ctx, missionID, kind, message); err != nil {
 		return fmt.Errorf("notify: %w", err)
 	}
 	n.fanOut(ctx, missionID, kind, message)
+	return nil
+}
+
+// operatorDedupWindow suppresses a repeated operator notification of
+// the same kind and message.
+const operatorDedupWindow = 10 * time.Minute
+
+// NotifyOperator fires a notification that belongs to no mission: a
+// row with NULL mission_id, written at most once per kind and message
+// within operatorDedupWindow, then the same webhook fan-out.
+func (n *Notifier) NotifyOperator(ctx context.Context, kind, message string) error {
+	db, err := n.db.Get()
+	if err != nil {
+		return fmt.Errorf("notify operator: get pool: %w", err)
+	}
+	var id string
+	err = db.QueryRow(ctx, `INSERT INTO notifications (mission_id, kind, message)
+		SELECT NULL::uuid, $1, $2
+		WHERE NOT EXISTS (
+			SELECT 1 FROM notifications WHERE mission_id IS NULL AND kind = $1 AND message = $2
+				AND created_at > now() - make_interval(secs => $3)
+		) RETURNING id`, kind, message, operatorDedupWindow.Seconds()).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("notify operator: insert: %w", err)
+	}
+	if n.hub != nil {
+		n.hub.Publish(Signal{Kind: "notification", ID: id})
+	}
+	n.fanOut(ctx, "", kind, message)
 	return nil
 }
 
@@ -196,7 +233,8 @@ func (n *Notifier) ClearMission(ctx context.Context, missionID string) error {
 	return nil
 }
 
-// List returns unread-first notifications across all missions.
+// List returns unread-first notifications across all missions and
+// operator-level rows (no mission id).
 func (n *Notifier) List(ctx context.Context) ([]Notification, error) {
 	db, err := n.db.Get()
 	if err != nil {
@@ -211,8 +249,12 @@ func (n *Notifier) List(ctx context.Context) ([]Notification, error) {
 	out := []Notification{}
 	for rows.Next() {
 		var note Notification
-		if err := rows.Scan(&note.ID, &note.MissionID, &note.Kind, &note.Message, &note.Read, &note.CreatedAt); err != nil {
+		var missionID *string
+		if err := rows.Scan(&note.ID, &missionID, &note.Kind, &note.Message, &note.Read, &note.CreatedAt); err != nil {
 			return nil, fmt.Errorf("notify: list: %w", err)
+		}
+		if missionID != nil {
+			note.MissionID = *missionID
 		}
 		out = append(out, note)
 	}

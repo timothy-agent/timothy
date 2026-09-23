@@ -50,16 +50,19 @@ type Starter struct {
 	// destinationEnabled re-checks an action's destination ids; nil
 	// drops every id.
 	destinationEnabled func(ctx context.Context, id string) (bool, error)
-	kick               chan struct{}
+	// notify is Notifier.NotifyMessage; nil skips the notification.
+	notify func(ctx context.Context, missionID, kind, message string) error
+	kick   chan struct{}
 	log                *slog.Logger
 	now                func() time.Time
 }
 
 // NewStarter wires the starter. create is Driver.Create, resolve the
-// shared create-path lookups and lineage missions.Store.ParentLineage.
-func NewStarter(store *Store, create func(ctx context.Context, m missions.Mission) (string, error), resolve missions.ResolveDeps, lineage func(ctx context.Context, missionID string) (missions.SourceEntry, error), destinationEnabled func(ctx context.Context, id string) (bool, error), log *slog.Logger) *Starter {
+// shared create-path lookups, lineage missions.Store.ParentLineage and
+// notify Notifier.NotifyMessage.
+func NewStarter(store *Store, create func(ctx context.Context, m missions.Mission) (string, error), resolve missions.ResolveDeps, lineage func(ctx context.Context, missionID string) (missions.SourceEntry, error), destinationEnabled func(ctx context.Context, id string) (bool, error), notify func(ctx context.Context, missionID, kind, message string) error, log *slog.Logger) *Starter {
 	return &Starter{store: store, create: create, resolve: resolve, lineage: lineage, destinationEnabled: destinationEnabled,
-		kick: make(chan struct{}, 1), log: log, now: time.Now}
+		notify: notify, kick: make(chan struct{}, 1), log: log, now: time.Now}
 }
 
 // Kick asks for a pass now. Never blocks.
@@ -195,13 +198,15 @@ func (s *Starter) start(ctx context.Context, tx pgx.Tx, runID, automationID stri
 		return err
 	}
 	s.log.Warn("automations: run failed to start", "automation_id", automationID, "run_id", runID, "reason", reason, "error", createErr)
-	_, disabled, err := finalizeRun(ctx, tx, runID, automationID, "", true, reason, now, s.log)
+	name, disabled, err := finalizeRun(ctx, tx, runID, automationID, "", true, reason, now, s.log)
 	if err != nil {
 		return err
 	}
-	if disabled {
-		// notifications rows belong to a mission, and this run has none.
-		s.log.Warn("automations: disabled with no mission to notify on", "automation_id", automationID, "run_id", runID)
+	if disabled && s.notify != nil {
+		// No mission exists, so the notification is operator-level.
+		if err := s.notify(ctx, "", "automation_disabled", disabledMessage(name)); err != nil {
+			s.log.Warn("automations: disable notification failed", "automation_id", automationID, "run_id", runID, "error", err)
+		}
 	}
 	return nil
 }

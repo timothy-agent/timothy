@@ -500,11 +500,11 @@ func main() {
 		if destinationStore != nil {
 			destinationEnabled = destinationStore.EnabledByID
 		}
-		automationStarter = automations.NewStarter(automationStore, missionDriver.Create, missionResolve, missionStore.ParentLineage, destinationEnabled, app.Log)
 		var notify func(ctx context.Context, missionID, kind, message string) error
 		if missionNotifier != nil {
 			notify = missionNotifier.NotifyMessage
 		}
+		automationStarter = automations.NewStarter(automationStore, missionDriver.Create, missionResolve, missionStore.ParentLineage, destinationEnabled, notify, app.Log)
 		consumers := []events.Consumer{missions.NewMemoryConsumer(missionDriver)}
 		if workflowEngine != nil {
 			consumers = append(consumers, workflowEngine)

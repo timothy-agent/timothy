@@ -60,7 +60,7 @@ func newDispatchHarness(t *testing.T) *dispatchHarness {
 			h.startedAt[id] = h.clock
 		}
 		return id, err
-	}, missions.ResolveDeps{}, h.missions.ParentLineage, nil, log)
+	}, missions.ResolveDeps{}, h.missions.ParentLineage, nil, notifier.NotifyMessage, log)
 	h.starter.now = func() time.Time { return h.clock }
 	h.ticker = NewTicker(s, h.events, nil, func(context.Context) *time.Location { return h.loc }, nil, log)
 	t.Cleanup(func() {
@@ -524,6 +524,23 @@ func TestStarterRouteUnusable(t *testing.T) {
 	h.wantStatuses(id, "failed/route_unusable", "failed/create_failed")
 	if a, _ := h.store.Get(t.Context(), id); a.ConsecutiveFailures != 2 {
 		t.Fatalf("consecutive_failures = %d, want 2", a.ConsecutiveFailures)
+	}
+
+	// The third failure trips the breaker with no mission to attach the
+	// notification to: the operator gets one with a NULL mission_id.
+	h.fireNow(id)
+	h.pass()
+	if a, _ := h.store.Get(t.Context(), id); a.Enabled {
+		t.Fatal("automation still enabled after 3 failed starts")
+	}
+	msg := h.tag + "route was disabled after 3 consecutive failed runs"
+	t.Cleanup(func() {
+		if db, err := h.pool.Get(); err == nil {
+			_, _ = db.Exec(context.Background(), `DELETE FROM notifications WHERE message = $1`, msg)
+		}
+	})
+	if n := h.count(`SELECT count(*) FROM notifications WHERE mission_id IS NULL AND kind = 'automation_disabled' AND message = $1`, msg); n != 1 {
+		t.Fatalf("operator automation_disabled notifications = %d, want 1", n)
 	}
 }
 

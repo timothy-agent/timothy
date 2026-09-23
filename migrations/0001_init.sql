@@ -990,10 +990,11 @@ CREATE INDEX IF NOT EXISTS pending_permissions_carry_idx
 
 -- Durable notification inbox (internal/brain/missions/notify.go):
 -- always written for actionable transitions regardless of whether the
--- best-effort webhook fan-out succeeds.
+-- best-effort webhook fan-out succeeds. mission_id NULL marks an
+-- operator-level notification (Notifier.NotifyOperator).
 CREATE TABLE IF NOT EXISTS notifications (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    mission_id  uuid NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+    mission_id  uuid REFERENCES missions(id) ON DELETE CASCADE,
     kind        text NOT NULL,
     message     text NOT NULL DEFAULT '',
     read        boolean NOT NULL DEFAULT false,

@@ -46,6 +46,7 @@ const (
 	maxTriggers         = 5
 	maxAllowlist        = 64
 	maxTriggerLabels    = 10
+	maxWebhookFilters   = 10
 	// MaxNotes caps notes per automation.
 	MaxNotes = 10
 	// MaxNoteBytes caps one note's content.
@@ -143,6 +144,83 @@ type ConnectorEventConfig struct {
 }
 
 var repoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+const (
+	WebhookSchemeGitHub  = "github"
+	WebhookSchemeGeneric = "generic"
+)
+
+// WebhookConfig is a webhook trigger's config: the signature scheme
+// and filters every delivery must pass before it becomes an event.
+type WebhookConfig struct {
+	Scheme  string          `json:"scheme"`
+	Filters []WebhookFilter `json:"filters"`
+}
+
+// WebhookFilter matches when the scalar at Path in the JSON body,
+// rendered with fmt.Sprint, equals Equals.
+type WebhookFilter struct {
+	Path   string `json:"path"`
+	Equals string `json:"equals"`
+}
+
+var (
+	webhookPathRe     = regexp.MustCompile(`^(\$\.)?[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$`)
+	credentialRefRe   = regexp.MustCompile(`^[A-Za-z0-9_./-]{1,128}$`)
+	webhookConfigHelp = `webhook trigger config must be {"scheme": "github" | "generic", "filters": [{"path": "$.a.b", "equals": "..."}]}`
+)
+
+// validateWebhookConfig checks raw strictly and returns its canonical
+// form: every filter path in "$.a.b" form, filters never nil.
+func validateWebhookConfig(raw json.RawMessage) (WebhookConfig, error) {
+	var c WebhookConfig
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if len(raw) == 0 || dec.Decode(&c) != nil {
+		return c, errors.New(webhookConfigHelp)
+	}
+	if c.Scheme != WebhookSchemeGitHub && c.Scheme != WebhookSchemeGeneric {
+		return c, errors.New(`webhook trigger scheme must be "github" or "generic"`)
+	}
+	if len(c.Filters) > maxWebhookFilters {
+		return c, fmt.Errorf("webhook trigger holds at most %d filters", maxWebhookFilters)
+	}
+	filters := []WebhookFilter{}
+	for _, f := range c.Filters {
+		if !webhookPathRe.MatchString(f.Path) {
+			return c, fmt.Errorf(`webhook trigger filter path %q must be a dotted path like "$.action" or "pull_request.user.login"`, f.Path)
+		}
+		filters = append(filters, WebhookFilter{Path: "$." + strings.TrimPrefix(f.Path, "$."), Equals: f.Equals})
+	}
+	c.Filters = filters
+	return c, nil
+}
+
+// MatchWebhookFilters reports whether body passes every filter. With
+// no filters any body matches; otherwise a body that is not a JSON
+// object, a missing path or a non-scalar value is a miss.
+func MatchWebhookFilters(filters []WebhookFilter, body []byte) bool {
+	if len(filters) == 0 {
+		return true
+	}
+	var doc map[string]any
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if dec.Decode(&doc) != nil || doc == nil {
+		return false
+	}
+	for _, f := range filters {
+		v := lookupPath(doc, strings.Split(strings.TrimPrefix(f.Path, "$."), "."))
+		switch v.(type) {
+		case nil, map[string]any, []any:
+			return false
+		}
+		if fmt.Sprint(v) != f.Equals {
+			return false
+		}
+	}
+	return true
+}
 
 // validateConnectorEventConfig checks raw strictly and returns its
 // canonical form: lowercase connector id and repo, deduplicated events,
@@ -325,12 +403,21 @@ func validateTrigger(t *Trigger) error {
 			return err
 		}
 		t.Config, _ = json.Marshal(c)
-	case TriggerWebhook, TriggerChannel:
+	case TriggerWebhook:
+		c, err := validateWebhookConfig(t.Config)
+		if err != nil {
+			return err
+		}
+		t.Config, _ = json.Marshal(c)
+		if !credentialRefRe.MatchString(t.CredentialRef) {
+			return errors.New("webhook trigger needs credential_ref, the name of the secret holding its signing key")
+		}
+	case TriggerChannel:
 		return fmt.Errorf("trigger kind %q is not available yet", t.Kind)
 	default:
 		return fmt.Errorf("unknown trigger kind %q", t.Kind)
 	}
-	if t.CredentialRef != "" {
+	if t.CredentialRef != "" && t.Kind != TriggerWebhook {
 		return fmt.Errorf("credential_ref is not valid on a %s trigger", t.Kind)
 	}
 	if len(t.ToolAllowlist) > maxAllowlist {

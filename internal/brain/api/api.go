@@ -1,6 +1,7 @@
 // Package api is brain's public HTTP surface: bearer-authenticated
 // session management and chat over SSE. /health and /metrics stay
-// open (mounted by the platform server before auth exists).
+// open (mounted by the platform server before auth exists), and
+// POST /hooks/{trigger_id} is verified by HMAC instead of the token.
 package api
 
 import (
@@ -201,6 +202,11 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 		destinationKinds = enabledDestinationKinds(destinationStore)
 	}
 	a.registerAutomations(srv.Handle, automationStore, eventStore, eventsKick, destLookup, resolver, location, connectorKinds, destinationKinds, connLookup)
+	var notifyOperator func(ctx context.Context, kind, message string) error
+	if missionNotifier != nil {
+		notifyOperator = missionNotifier.NotifyOperator
+	}
+	a.registerHooks(srv.Handle, automationStore, eventStore, eventsKick, resolveSecret, notifyOperator)
 	// destRefs is *missions.Store and destAutomationRefs *automations.Store,
 	// nil-boxed the same way connLister is above so a nil store keeps
 	// registerDestinations' refs checks honest.

@@ -100,6 +100,24 @@ describe('Missions board', () => {
     expect(banner.closest('[data-tone]')).toHaveAttribute('data-tone', 'warning')
   })
 
+  it('renders an operator notification without a mission link', async () => {
+    const note: Notification = {
+      id: 'n2',
+      kind: 'automation_trigger_disabled',
+      message: 'Deploy hook: webhook trigger disabled after 20 failed signatures in 10m0s',
+      read: false,
+      created_at: '2026-01-01T00:00:00Z',
+    }
+    vi.mocked(listNotifications).mockResolvedValue([note])
+    renderPage()
+    const text = await screen.findByText(
+      'Deploy hook: webhook trigger disabled after 20 failed signatures in 10m0s',
+    )
+    expect(text.closest('button')).toBeNull()
+    expect(text.closest('[data-tone]')).toHaveAttribute('data-tone', 'warning')
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeTruthy()
+  })
+
   it('does not show read notifications', async () => {
     const note: Notification = {
       id: 'n1',

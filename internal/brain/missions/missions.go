@@ -670,10 +670,11 @@ type Event struct {
 	CreatedAt   time.Time       `json:"created_at"`
 }
 
-// Notification is one row from the notifications inbox.
+// Notification is one row from the notifications inbox. MissionID is
+// empty for an operator-level notification.
 type Notification struct {
 	ID        string    `json:"id"`
-	MissionID string    `json:"mission_id"`
+	MissionID string    `json:"mission_id,omitempty"`
 	Kind      string    `json:"kind"`
 	Message   string    `json:"message"`
 	Read      bool      `json:"read"`

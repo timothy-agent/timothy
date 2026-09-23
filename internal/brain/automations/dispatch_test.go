@@ -212,7 +212,7 @@ func TestMatchConnectorEvent(t *testing.T) {
 func TestDispatcherKindsIncludeConnectorKinds(t *testing.T) {
 	t.Parallel()
 	kinds := NewDispatcher(nil, slog.New(slog.NewTextHandler(io.Discard, nil))).Kinds()
-	for _, k := range append(events.ConnectorKinds(), events.KindCronDue, events.KindRunNow, events.KindMissionDone, events.KindMissionFailed) {
+	for _, k := range append(events.ConnectorKinds(), events.KindCronDue, events.KindRunNow, events.KindWebhookReceived, events.KindMissionDone, events.KindMissionFailed) {
 		if !slices.Contains(kinds, k) {
 			t.Errorf("Kinds() lacks %q", k)
 		}
@@ -230,5 +230,16 @@ func TestHandleSkipsSelfConnectorEvent(t *testing.T) {
 	d := NewDispatcher(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := d.Handle(t.Context(), nil, ev); err != nil {
 		t.Fatalf("Handle: %v", err)
+	}
+}
+
+// TestHandleRejectsMalformedWebhookEvent: a webhook event missing its
+// ids fails decode before any query, so a nil tx is never touched.
+func TestHandleRejectsMalformedWebhookEvent(t *testing.T) {
+	t.Parallel()
+	d := NewDispatcher(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ev := events.Event{Source: events.SourceWebhook, Kind: events.KindWebhookReceived, Payload: json.RawMessage(`{"trigger_id":"t"}`)}
+	if err := d.Handle(t.Context(), nil, ev); err == nil {
+		t.Fatal("Handle accepted a webhook event without automation_id and delivery")
 	}
 }

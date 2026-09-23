@@ -46,6 +46,16 @@ const (
 
 	// MaxConnectorBodyBytes caps a connector event's body.
 	MaxConnectorBodyBytes = 4096
+
+	// SourceWebhook marks events an inbound webhook delivery produced.
+	SourceWebhook = "webhook"
+	// KindWebhookReceived is one verified webhook delivery.
+	KindWebhookReceived = "webhook.received"
+
+	// MaxWebhookBodyBytes caps the JSON body a webhook event keeps.
+	MaxWebhookBodyBytes = 64 << 10
+	// maxDeliveryBytes caps a delivery id in the dedup key.
+	maxDeliveryBytes = 256
 )
 
 // ConnectorKinds returns every connector event kind.
@@ -233,6 +243,48 @@ func DecodeConnectorEvent(ev Event) (ConnectorEventPayload, error) {
 	}
 	if p.ConnectorID == "" || p.ProviderEventID == "" {
 		return ConnectorEventPayload{}, fmt.Errorf("events: event %d is missing connector_id or provider_event_id", ev.ID)
+	}
+	return p, nil
+}
+
+// WebhookPayload is the payload of a webhook.received event. Body is
+// the JSON body, or {"raw_truncated": true} when it was not JSON or
+// exceeded MaxWebhookBodyBytes.
+type WebhookPayload struct {
+	TriggerID    string            `json:"trigger_id"`
+	AutomationID string            `json:"automation_id"`
+	Scheme       string            `json:"scheme"`
+	Delivery     string            `json:"delivery"`
+	ReceivedAt   time.Time         `json:"received_at"`
+	Headers      map[string]string `json:"headers"`
+	Body         json.RawMessage   `json:"body"`
+}
+
+// WebhookReceived builds the event for one verified delivery,
+// deduplicated by trigger id and delivery id.
+func WebhookReceived(p WebhookPayload) (Event, error) {
+	if p.TriggerID == "" || p.AutomationID == "" || p.Delivery == "" {
+		return Event{}, fmt.Errorf("events: webhook event needs a trigger id, an automation id and a delivery id")
+	}
+	p.Delivery = capUTF8(p.Delivery, maxDeliveryBytes)
+	if len(p.Body) > MaxWebhookBodyBytes || !json.Valid(p.Body) {
+		p.Body = json.RawMessage(`{"raw_truncated":true}`)
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return Event{}, fmt.Errorf("events: marshal webhook payload: %w", err)
+	}
+	return Event{Source: SourceWebhook, Kind: KindWebhookReceived, DedupKey: "hook:" + p.TriggerID + ":" + p.Delivery, Payload: raw}, nil
+}
+
+// DecodeWebhook reads a webhook.received event's payload.
+func DecodeWebhook(ev Event) (WebhookPayload, error) {
+	var p WebhookPayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil {
+		return WebhookPayload{}, fmt.Errorf("events: decode webhook payload of event %d: %w", ev.ID, err)
+	}
+	if p.TriggerID == "" || p.AutomationID == "" || p.Delivery == "" {
+		return WebhookPayload{}, fmt.Errorf("events: event %d is missing trigger_id, automation_id or delivery", ev.ID)
 	}
 	return p, nil
 }
