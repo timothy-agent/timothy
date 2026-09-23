@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -42,7 +44,7 @@ func NewDispatcher(notify func(ctx context.Context, missionID, kind, message str
 func (d *Dispatcher) Name() string { return "automations" }
 
 func (d *Dispatcher) Kinds() []string {
-	return []string{events.KindCronDue, events.KindRunNow, events.KindMissionDone, events.KindMissionFailed}
+	return append([]string{events.KindCronDue, events.KindRunNow, events.KindMissionDone, events.KindMissionFailed}, events.ConnectorKinds()...)
 }
 
 // Handle routes ev to fire or finalize.
@@ -70,7 +72,81 @@ func (d *Dispatcher) Handle(ctx context.Context, tx pgx.Tx, ev events.Event) err
 		}
 		return d.finalizeMission(ctx, tx, p.MissionID, ev.Kind == events.KindMissionFailed)
 	}
+	if slices.Contains(events.ConnectorKinds(), ev.Kind) {
+		return d.handleConnectorEvent(ctx, tx, ev)
+	}
 	return nil
+}
+
+// handleConnectorEvent fires every enabled connector_event trigger of
+// an enabled, unexpired automation whose filters match ev. An event
+// the connector's own identity authored never fires.
+func (d *Dispatcher) handleConnectorEvent(ctx context.Context, tx pgx.Tx, ev events.Event) error {
+	p, err := events.DecodeConnectorEvent(ev)
+	if err != nil {
+		return err
+	}
+	if p.Self {
+		d.log.Debug("automations: connector event authored by the connector identity, skipping", "event_id", ev.ID, "kind", ev.Kind, "repo", p.Repo)
+		return nil
+	}
+	rows, err := tx.Query(ctx, `SELECT t.id, t.automation_id, t.config
+		FROM automation_triggers t JOIN automations a ON a.id = t.automation_id
+		WHERE t.kind = 'connector_event' AND t.enabled AND a.enabled AND (a.expires_at IS NULL OR a.expires_at > $1)
+		ORDER BY t.created_at, t.id`, d.now())
+	if err != nil {
+		return fmt.Errorf("automations connector event: query triggers: %w", err)
+	}
+	type match struct{ triggerID, automationID string }
+	var matched []match
+	for rows.Next() {
+		var m match
+		var raw []byte
+		if err := rows.Scan(&m.triggerID, &m.automationID, &raw); err != nil {
+			rows.Close()
+			return fmt.Errorf("automations connector event: scan trigger: %w", err)
+		}
+		var cfg ConnectorEventConfig
+		if json.Unmarshal(raw, &cfg) == nil && matchConnectorEvent(cfg, p) {
+			matched = append(matched, m)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("automations connector event: triggers: %w", err)
+	}
+	if len(matched) == 0 {
+		return nil
+	}
+	var runEvent map[string]any
+	_ = json.Unmarshal(ev.Payload, &runEvent)
+	runEvent["source"] = ev.Source
+	for _, m := range matched {
+		trigger := m.triggerID
+		if err := d.fire(ctx, tx, ev, m.automationID, &trigger, trigger+"|"+p.ProviderEventID, runEvent); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// matchConnectorEvent reports whether p passes cfg's connector, repo,
+// kind and label filters. Empty cfg.Labels matches any label set.
+func matchConnectorEvent(cfg ConnectorEventConfig, p events.ConnectorEventPayload) bool {
+	if !strings.EqualFold(cfg.ConnectorID, p.ConnectorID) || !strings.EqualFold(cfg.Repo, p.Repo) || !slices.Contains(cfg.Events, p.Kind) {
+		return false
+	}
+	if len(cfg.Labels) == 0 {
+		return true
+	}
+	for _, want := range cfg.Labels {
+		for _, have := range p.Labels {
+			if strings.EqualFold(want, have) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // decisionInput is what decide needs to know about an automation at

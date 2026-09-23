@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -68,6 +69,7 @@ func newAutomationHarness(t *testing.T) *automationHarness {
 		_, _ = db.Exec(cctx, `DELETE FROM events WHERE source = 'manual' AND payload->>'automation_id' IN (SELECT id::text FROM automations WHERE name LIKE $1 || '%')`, tag)
 		_, _ = db.Exec(cctx, `DELETE FROM automations WHERE name LIKE $1 || '%'`, tag)
 		_, _ = db.Exec(cctx, `DELETE FROM destinations WHERE name LIKE $1 || '%'`, tag)
+		_, _ = db.Exec(cctx, `DELETE FROM connectors WHERE name LIKE $1 || '%'`, tag)
 	})
 	var agentID string
 	if err := db.QueryRow(t.Context(), `SELECT id FROM agents WHERE is_default LIMIT 1`).Scan(&agentID); err != nil {
@@ -79,7 +81,7 @@ func newAutomationHarness(t *testing.T) *automationHarness {
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
 	kicks := &atomic.Int32{}
-	a.registerAutomations(m.Handle, store, events.NewStore(pool), func() { kicks.Add(1) }, dest, &attachmentResolver{}, func(context.Context) *time.Location { return ams }, nil, enabledDestinationKinds(dest))
+	a.registerAutomations(m.Handle, store, events.NewStore(pool), func() { kicks.Add(1) }, dest, &attachmentResolver{}, func(context.Context) *time.Location { return ams }, nil, enabledDestinationKinds(dest), storeConnectorLookup(connectors.NewStore(pool, log)))
 	a.registerDestinations(m.Handle, dest, ms, store, nil)
 	mh := &missionAPI{store: ms}
 	m.Handle("GET /v1/missions", a.auth(http.HandlerFunc(mh.list)))
@@ -365,6 +367,46 @@ func TestAutomationsAPIDestinationGuard(t *testing.T) {
 		h.tag+"gone", h.agentID, destID)
 	if w = h.do("POST", "/v1/automations", body); w.Code != 400 {
 		t.Fatalf("create with deleted destination = %d, want 400", w.Code)
+	}
+}
+
+// TestAutomationsAPIConnectorEventTrigger: a connector_event trigger
+// needs an enabled github connector, on create and on patch.
+func TestAutomationsAPIConnectorEventTrigger(t *testing.T) {
+	h := newAutomationHarness(t)
+	db, _ := h.pool.Get()
+	insert := func(name, kind string, enabled bool) string {
+		var id string
+		if err := db.QueryRow(t.Context(), `INSERT INTO connectors (name, kind, credential_ref, enabled) VALUES ($1, $2, 'GH_PAT', $3) RETURNING id`,
+			h.tag+name, kind, enabled).Scan(&id); err != nil {
+			t.Fatalf("insert connector: %v", err)
+		}
+		return id
+	}
+	gh, ghOff, bb := insert("gh", "github", true), insert("gh-off", "github", false), insert("bb", "bitbucket", true)
+	body := func(name, connectorID string) string {
+		return fmt.Sprintf(`{"name": %q, "agent_id": %q, "action": {"kind": "mission", "mission": {"goal": "g", "kind": "general"}},
+			"triggers": [{"kind": "connector_event", "config": {"connector_id": %q, "repo": "Timothy-Agent/Timothy", "events": ["pr.opened"], "labels": ["timothy"]}}]}`,
+			h.tag+name, h.agentID, connectorID)
+	}
+	w := h.do("POST", "/v1/automations", body("watch", gh))
+	if w.Code != 201 {
+		t.Fatalf("create = %d %s", w.Code, w.Body.String())
+	}
+	var out struct{ ID string }
+	h.decode(w, &out)
+	w = h.do("GET", "/v1/automations/"+out.ID, "")
+	if !strings.Contains(w.Body.String(), `"repo":"timothy-agent/timothy"`) {
+		t.Fatalf("stored config not canonical: %s", w.Body.String())
+	}
+	for name, id := range map[string]string{"off": ghOff, "bb": bb, "missing": "00000000-0000-4000-8000-000000000000"} {
+		if w := h.do("POST", "/v1/automations", body(name, id)); w.Code != 400 {
+			t.Errorf("create with %s connector = %d %s, want 400", name, w.Code, w.Body.String())
+		}
+	}
+	patch := fmt.Sprintf(`{"triggers": [{"kind": "connector_event", "config": {"connector_id": %q, "repo": "o/r", "events": ["pr.opened"]}}]}`, bb)
+	if w := h.do("PATCH", "/v1/automations/"+out.ID, patch); w.Code != 400 {
+		t.Fatalf("patch to a bitbucket connector = %d %s, want 400", w.Code, w.Body.String())
 	}
 }
 

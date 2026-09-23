@@ -2,10 +2,15 @@ package automations
 
 import (
 	"encoding/json"
+	"io"
+	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 )
 
 func TestDecide(t *testing.T) {
@@ -166,5 +171,64 @@ func TestSelfTriggeredWithoutOrigin(t *testing.T) {
 		if err != nil || self {
 			t.Errorf("selfTriggered(%s) = %v, %v, want false", payload, self, err)
 		}
+	}
+}
+
+func TestMatchConnectorEvent(t *testing.T) {
+	t.Parallel()
+	cfg := ConnectorEventConfig{ConnectorID: "c1", Repo: "o/r", Events: []string{events.KindPROpened, events.KindPRLabeled}, Labels: []string{"timothy"}}
+	base := events.ConnectorEventPayload{ConnectorID: "c1", Repo: "o/r", Kind: events.KindPROpened, Labels: []string{"bug", "timothy"}}
+	for _, tc := range []struct {
+		name   string
+		cfg    func(*ConnectorEventConfig)
+		p      func(*events.ConnectorEventPayload)
+		expect bool
+	}{
+		{"match", nil, nil, true},
+		{"repo case", nil, func(p *events.ConnectorEventPayload) { p.Repo = "O/R" }, true},
+		{"connector case", func(c *ConnectorEventConfig) { c.ConnectorID = "C1" }, nil, true},
+		{"label case", nil, func(p *events.ConnectorEventPayload) { p.Labels = []string{"Timothy"} }, true},
+		{"other connector", nil, func(p *events.ConnectorEventPayload) { p.ConnectorID = "c2" }, false},
+		{"other repo", nil, func(p *events.ConnectorEventPayload) { p.Repo = "o/other" }, false},
+		{"kind not listed", nil, func(p *events.ConnectorEventPayload) { p.Kind = events.KindIssueComment }, false},
+		{"no label overlap", nil, func(p *events.ConnectorEventPayload) { p.Labels = []string{"bug"} }, false},
+		{"no labels on event", nil, func(p *events.ConnectorEventPayload) { p.Labels = nil }, false},
+		{"empty label filter", func(c *ConnectorEventConfig) { c.Labels = nil }, func(p *events.ConnectorEventPayload) { p.Labels = nil }, true},
+	} {
+		c, p := cfg, base
+		c.Labels = append([]string(nil), cfg.Labels...)
+		if tc.cfg != nil {
+			tc.cfg(&c)
+		}
+		if tc.p != nil {
+			tc.p(&p)
+		}
+		if got := matchConnectorEvent(c, p); got != tc.expect {
+			t.Errorf("%s: matchConnectorEvent = %v, want %v", tc.name, got, tc.expect)
+		}
+	}
+}
+
+func TestDispatcherKindsIncludeConnectorKinds(t *testing.T) {
+	t.Parallel()
+	kinds := NewDispatcher(nil, slog.New(slog.NewTextHandler(io.Discard, nil))).Kinds()
+	for _, k := range append(events.ConnectorKinds(), events.KindCronDue, events.KindRunNow, events.KindMissionDone, events.KindMissionFailed) {
+		if !slices.Contains(kinds, k) {
+			t.Errorf("Kinds() lacks %q", k)
+		}
+	}
+}
+
+// TestHandleSkipsSelfConnectorEvent: a self-authored event returns
+// before any query, so a nil tx is never touched.
+func TestHandleSkipsSelfConnectorEvent(t *testing.T) {
+	t.Parallel()
+	ev, err := events.ConnectorEvent(events.ConnectorEventPayload{Provider: "github", ConnectorID: "c1", Repo: "o/r", Kind: events.KindPROpened, ProviderEventID: "9", Self: true})
+	if err != nil {
+		t.Fatalf("ConnectorEvent: %v", err)
+	}
+	d := NewDispatcher(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := d.Handle(t.Context(), nil, ev); err != nil {
+		t.Fatalf("Handle: %v", err)
 	}
 }

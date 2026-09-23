@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
@@ -43,6 +45,7 @@ const (
 	maxDescriptionRunes = 1024
 	maxTriggers         = 5
 	maxAllowlist        = 64
+	maxTriggerLabels    = 10
 	// MaxNotes caps notes per automation.
 	MaxNotes = 10
 	// MaxNoteBytes caps one note's content.
@@ -127,6 +130,84 @@ type Note struct {
 // CronConfig is a cron trigger's config.
 type CronConfig struct {
 	Expr string `json:"expr"`
+}
+
+// ConnectorEventConfig is a connector_event trigger's config: events
+// of the listed kinds on repo through connector ConnectorID, carrying
+// any of Labels (empty matches every label set).
+type ConnectorEventConfig struct {
+	ConnectorID string   `json:"connector_id"`
+	Repo        string   `json:"repo"`
+	Events      []string `json:"events"`
+	Labels      []string `json:"labels"`
+}
+
+var repoRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+// validateConnectorEventConfig checks raw strictly and returns its
+// canonical form: lowercase connector id and repo, deduplicated events,
+// trimmed labels.
+func validateConnectorEventConfig(raw json.RawMessage) (ConnectorEventConfig, error) {
+	var c ConnectorEventConfig
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if len(raw) == 0 || dec.Decode(&c) != nil {
+		return c, errors.New(`connector_event trigger config must be {"connector_id": "<uuid>", "repo": "owner/name", "events": [...], "labels": [...]}`)
+	}
+	if !isUUID(c.ConnectorID) {
+		return c, errors.New("connector_event trigger connector_id must be a UUID")
+	}
+	c.ConnectorID = strings.ToLower(c.ConnectorID)
+	if !repoRe.MatchString(c.Repo) {
+		return c, errors.New(`connector_event trigger repo must be "owner/name"`)
+	}
+	c.Repo = strings.ToLower(c.Repo)
+	if len(c.Events) == 0 {
+		return c, errors.New("connector_event trigger events must not be empty")
+	}
+	kinds := events.ConnectorKinds()
+	var evs []string
+	for _, e := range c.Events {
+		if !slices.Contains(kinds, e) {
+			return c, fmt.Errorf("connector_event trigger event %q must be one of %s", e, strings.Join(kinds, ", "))
+		}
+		if !slices.Contains(evs, e) {
+			evs = append(evs, e)
+		}
+	}
+	c.Events = evs
+	if len(c.Labels) > maxTriggerLabels {
+		return c, fmt.Errorf("connector_event trigger holds at most %d labels", maxTriggerLabels)
+	}
+	labels := []string{}
+	for _, l := range c.Labels {
+		l = strings.TrimSpace(l)
+		if l == "" {
+			return c, errors.New("connector_event trigger labels must be non-empty")
+		}
+		labels = append(labels, l)
+	}
+	c.Labels = labels
+	return c, nil
+}
+
+// ConnectorEventIDs returns the connector ids the connector_event
+// triggers in ts name, lowercased, skipping configs that do not parse.
+func ConnectorEventIDs(ts []Trigger) []string {
+	var ids []string
+	for _, t := range ts {
+		if t.Kind != TriggerConnectorEvent {
+			continue
+		}
+		var c ConnectorEventConfig
+		if json.Unmarshal(t.Config, &c) != nil || c.ConnectorID == "" {
+			continue
+		}
+		if id := strings.ToLower(c.ConnectorID); !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // validateName trims name and checks it: 1..64 runes, no control
@@ -238,7 +319,13 @@ func validateTrigger(t *Trigger) error {
 			return errors.New("manual trigger takes no config")
 		}
 		t.Config = json.RawMessage(`{}`)
-	case TriggerWebhook, TriggerConnectorEvent, TriggerChannel:
+	case TriggerConnectorEvent:
+		c, err := validateConnectorEventConfig(t.Config)
+		if err != nil {
+			return err
+		}
+		t.Config, _ = json.Marshal(c)
+	case TriggerWebhook, TriggerChannel:
 		return fmt.Errorf("trigger kind %q is not available yet", t.Kind)
 	default:
 		return fmt.Errorf("unknown trigger kind %q", t.Kind)

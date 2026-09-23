@@ -12,6 +12,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
@@ -47,7 +48,7 @@ func TestAutomationsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerAutomations(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerAutomations(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/automations"},
 		{"POST", "/v1/automations"},
@@ -382,5 +383,47 @@ func TestAutomationTemplatesLookupError(t *testing.T) {
 			t.Fatalf("templates with a failing lookup = %d, want 500", w.Code)
 		}
 		assertErrorBody(t, w, "automations_failed", "db down")
+	}
+}
+
+func TestValidateTriggerConnectors(t *testing.T) {
+	type row struct {
+		kind    string
+		enabled bool
+	}
+	rows := map[string]row{"gh": {"github", true}, "gh-off": {"github", false}, "bb": {"bitbucket", true}}
+	lookup := connectorLookup(func(_ context.Context, id string) (string, bool, error) {
+		switch id {
+		case "boom":
+			return "", false, errors.New("db down")
+		}
+		r, ok := rows[id]
+		if !ok {
+			return "", false, connectors.ErrNotFound
+		}
+		return r.kind, r.enabled, nil
+	})
+	trigger := func(id string) []automations.Trigger {
+		return []automations.Trigger{{Kind: automations.TriggerConnectorEvent, Config: json.RawMessage(`{"connector_id":"` + id + `","repo":"o/r","events":["pr.opened"]}`)}}
+	}
+	h := &automationAPI{connectors: lookup}
+	if err := h.validateTriggerConnectors(t.Context(), trigger("gh")); err != nil {
+		t.Fatalf("enabled github: %v", err)
+	}
+	if err := h.validateTriggerConnectors(t.Context(), []automations.Trigger{{Kind: automations.TriggerManual}}); err != nil {
+		t.Fatalf("no connector_event trigger: %v", err)
+	}
+	for _, id := range []string{"gh-off", "bb", "missing"} {
+		var ve *automations.ValidationError
+		if err := h.validateTriggerConnectors(t.Context(), trigger(id)); !errors.As(err, &ve) {
+			t.Errorf("%s: err = %v, want a ValidationError", id, err)
+		}
+	}
+	var ve *automations.ValidationError
+	if err := h.validateTriggerConnectors(t.Context(), trigger("boom")); err == nil || errors.As(err, &ve) {
+		t.Errorf("lookup failure: err = %v, want a plain error", err)
+	}
+	if err := (&automationAPI{}).validateTriggerConnectors(t.Context(), trigger("gh")); !errors.As(err, &ve) {
+		t.Errorf("no lookup: err = %v, want a ValidationError", err)
 	}
 }

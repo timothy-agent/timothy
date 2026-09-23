@@ -4,6 +4,7 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -240,6 +241,20 @@ func TestInsertDedupsBySourceAndKey(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("rows for duplicate key = %d, want 1", n)
+	}
+}
+
+func TestAddIfNewReportsInsertOnce(t *testing.T) {
+	s := testStore(t)
+	src := testSource(t)
+	ev := Event{Source: src, Kind: testKind, DedupKey: "once", Payload: json.RawMessage(`{}`)}
+	id, inserted, err := s.AddIfNew(t.Context(), ev)
+	if err != nil || !inserted || id == 0 {
+		t.Fatalf("first AddIfNew = (%d, %v, %v), want a new id", id, inserted, err)
+	}
+	id2, inserted, err := s.AddIfNew(t.Context(), ev)
+	if err != nil || inserted || id2 != 0 {
+		t.Fatalf("second AddIfNew = (%d, %v, %v), want (0, false, nil)", id2, inserted, err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -156,5 +157,17 @@ func TestMissionCeilingDefaults(t *testing.T) {
 		if !nonNegativeIntKeys[tc.name] {
 			t.Errorf("%s is not validated as a non-negative integer", tc.name)
 		}
+	}
+}
+
+// TestGitHubPollIntervalDefault pins the poller's 60 s default for an
+// absent row and the key's registration as a non-negative integer.
+func TestGitHubPollIntervalDefault(t *testing.T) {
+	s := degradedStore(t)
+	if got := s.GitHubPollInterval(context.Background()); got != DefaultGitHubPollSeconds*time.Second {
+		t.Fatalf("GitHubPollInterval() = %v, want %ds", got, DefaultGitHubPollSeconds)
+	}
+	if !knownValueKeys[ValueGitHubPollSeconds] || !nonNegativeIntKeys[ValueGitHubPollSeconds] {
+		t.Fatal("ValueGitHubPollSeconds missing from knownValueKeys or nonNegativeIntKeys")
 	}
 }

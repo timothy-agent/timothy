@@ -456,6 +456,38 @@ func insertRun(ctx context.Context, q dbtx, r Run) (id string, inserted bool, er
 	return id, true, nil
 }
 
+// Watch is one (connector, repo) pair a connector_event trigger polls.
+type Watch struct {
+	ConnectorID string
+	Repo        string
+}
+
+// ConnectorEventWatches returns the distinct watches of every enabled
+// connector_event trigger. A disabled automation keeps polling so the
+// operator can watch a repo without any run starting; the dispatcher
+// matches enabled automations only.
+func (s *Store) ConnectorEventWatches(ctx context.Context) ([]Watch, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("automations watches: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT DISTINCT lower(config->>'connector_id'), lower(config->>'repo')
+		FROM automation_triggers WHERE kind = 'connector_event' AND enabled
+			AND config->>'connector_id' IS NOT NULL AND config->>'repo' IS NOT NULL
+		ORDER BY 1, 2`)
+	if err != nil {
+		return nil, fmt.Errorf("automations watches: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Watch, error) {
+		var w Watch
+		return w, row.Scan(&w.ConnectorID, &w.Repo)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("automations watches: %w", err)
+	}
+	return out, nil
+}
+
 // DayCount is one sparkline bucket: a local calendar day.
 type DayCount struct {
 	Day       string `json:"day"`

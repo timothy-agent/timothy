@@ -78,7 +78,8 @@ func Templates() []Template {
 					"opened pull request in owner/name instead. Read the description and the diff, then post one review comment "+
 					"on the pull request. List real problems first (bugs, missing tests, security issues), each with its file and "+
 					"line, then smaller suggestions. Skip style points a linter would catch."),
-			// Manual until Phase 2: a connector_event trigger on pr.opened arrives with 2.1.
+			// Manual: a template cannot name a connector id, so the operator adds
+			// a connector_event trigger on pr.opened (issue #826) after creating.
 			Triggers: []TemplateTrigger{{Kind: TriggerManual, Config: json.RawMessage(`{}`)}},
 			Requires: []Requirement{{RequireConnector, "github"}},
 		},

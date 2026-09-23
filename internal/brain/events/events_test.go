@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -205,5 +206,45 @@ func TestKickNeverBlocks(t *testing.T) {
 	}
 	if len(d.kick) != 1 {
 		t.Fatalf("pending kicks = %d, want 1", len(d.kick))
+	}
+}
+
+func TestConnectorEvent(t *testing.T) {
+	base := ConnectorEventPayload{Provider: "github", ConnectorID: "c1", Repo: "o/r", Kind: KindPROpened, ProviderEventID: "42"}
+	ev, err := ConnectorEvent(base)
+	if err != nil {
+		t.Fatalf("ConnectorEvent: %v", err)
+	}
+	if ev.Source != SourceConnector || ev.Kind != KindPROpened || ev.DedupKey != "github:c1:42" {
+		t.Fatalf("event = %+v", ev)
+	}
+	got, err := DecodeConnectorEvent(ev)
+	if err != nil || got.Repo != "o/r" || got.ProviderEventID != "42" {
+		t.Fatalf("DecodeConnectorEvent = %+v, %v", got, err)
+	}
+
+	long := base
+	long.Body = strings.Repeat("é", MaxConnectorBodyBytes)
+	ev, err = ConnectorEvent(long)
+	if err != nil {
+		t.Fatalf("ConnectorEvent long: %v", err)
+	}
+	got, _ = DecodeConnectorEvent(ev)
+	if len(got.Body) > MaxConnectorBodyBytes || len(got.Body) < MaxConnectorBodyBytes-1 || !utf8.ValidString(got.Body) {
+		t.Fatalf("body = %d bytes, valid %v; want capped at %d on a rune boundary", len(got.Body), utf8.ValidString(got.Body), MaxConnectorBodyBytes)
+	}
+
+	for name, p := range map[string]ConnectorEventPayload{
+		"unknown kind":   {Provider: "github", ConnectorID: "c1", Kind: "pr.closed", ProviderEventID: "1"},
+		"no connector":   {Provider: "github", Kind: KindPROpened, ProviderEventID: "1"},
+		"no provider id": {Provider: "github", ConnectorID: "c1", Kind: KindPROpened},
+		"no provider":    {ConnectorID: "c1", Kind: KindPROpened, ProviderEventID: "1"},
+	} {
+		if _, err := ConnectorEvent(p); err == nil {
+			t.Errorf("%s: ConnectorEvent accepted %+v", name, p)
+		}
+	}
+	if _, err := DecodeConnectorEvent(Event{ID: 1, Payload: json.RawMessage(`{"kind":"pr.opened"}`)}); err == nil {
+		t.Error("DecodeConnectorEvent accepted a payload without ids")
 	}
 }

@@ -10,7 +10,9 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -31,7 +33,25 @@ const (
 	SourceCron = "cron"
 	// KindCronDue is one due boundary of a cron trigger.
 	KindCronDue = "cron.due"
+
+	// SourceConnector marks events a connector poller produced.
+	SourceConnector = "connector"
+
+	KindPROpened        = "pr.opened"
+	KindPRLabeled       = "pr.labeled"
+	KindPRReview        = "pr.review"
+	KindPRReviewComment = "pr.review_comment"
+	KindIssueComment    = "issue.comment"
+	KindCheckCompleted  = "check.completed"
+
+	// MaxConnectorBodyBytes caps a connector event's body.
+	MaxConnectorBodyBytes = 4096
 )
+
+// ConnectorKinds returns every connector event kind.
+func ConnectorKinds() []string {
+	return []string{KindPROpened, KindPRLabeled, KindPRReview, KindPRReviewComment, KindIssueComment, KindCheckCompleted}
+}
 
 // Event is one events row.
 type Event struct {
@@ -163,6 +183,70 @@ func DecodeCronDue(ev Event) (CronDuePayload, error) {
 		return CronDuePayload{}, fmt.Errorf("events: event %d is missing automation_id, trigger_id or boundary", ev.ID)
 	}
 	return p, nil
+}
+
+// ConnectorEventPayload is the payload of a connector event. Self is
+// true when the connector's own identity authored it.
+type ConnectorEventPayload struct {
+	Provider        string    `json:"provider"`
+	ConnectorID     string    `json:"connector_id"`
+	Repo            string    `json:"repo"`
+	Kind            string    `json:"kind"`
+	Action          string    `json:"action,omitempty"`
+	Number          int       `json:"number,omitempty"`
+	Title           string    `json:"title,omitempty"`
+	URL             string    `json:"url,omitempty"`
+	Author          string    `json:"author,omitempty"`
+	Labels          []string  `json:"labels,omitempty"`
+	Body            string    `json:"body,omitempty"`
+	PullRequest     bool      `json:"pull_request,omitempty"`
+	Conclusion      string    `json:"conclusion,omitempty"`
+	CheckName       string    `json:"check_name,omitempty"`
+	Self            bool      `json:"self"`
+	ProviderEventID string    `json:"provider_event_id"`
+	OccurredAt      time.Time `json:"occurred_at"`
+}
+
+// ConnectorEvent builds the event for one normalized provider event,
+// deduplicated by provider, connector and provider event id. Body is
+// capped at MaxConnectorBodyBytes.
+func ConnectorEvent(p ConnectorEventPayload) (Event, error) {
+	if !slices.Contains(ConnectorKinds(), p.Kind) {
+		return Event{}, fmt.Errorf("events: unknown connector event kind %q", p.Kind)
+	}
+	if p.Provider == "" || p.ConnectorID == "" || p.ProviderEventID == "" {
+		return Event{}, fmt.Errorf("events: connector event needs a provider, a connector id and a provider event id")
+	}
+	p.Body = capUTF8(p.Body, MaxConnectorBodyBytes)
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return Event{}, fmt.Errorf("events: marshal connector payload: %w", err)
+	}
+	return Event{Source: SourceConnector, Kind: p.Kind, DedupKey: p.Provider + ":" + p.ConnectorID + ":" + p.ProviderEventID, Payload: raw}, nil
+}
+
+// DecodeConnectorEvent reads a connector event's payload.
+func DecodeConnectorEvent(ev Event) (ConnectorEventPayload, error) {
+	var p ConnectorEventPayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil {
+		return ConnectorEventPayload{}, fmt.Errorf("events: decode connector payload of event %d: %w", ev.ID, err)
+	}
+	if p.ConnectorID == "" || p.ProviderEventID == "" {
+		return ConnectorEventPayload{}, fmt.Errorf("events: event %d is missing connector_id or provider_event_id", ev.ID)
+	}
+	return p, nil
+}
+
+// capUTF8 cuts s to at most max bytes on a rune boundary.
+func capUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // newRequestID returns a random RFC 4122 version 4 UUID.

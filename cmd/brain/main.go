@@ -30,6 +30,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
+	"github.com/SumonMSelim/timothy/internal/brain/gitevents"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
@@ -489,6 +490,7 @@ func main() {
 	var drainer *events.Drainer
 	var automationTicker *automations.Ticker
 	var automationStarter *automations.Starter
+	var githubPoller *gitevents.Poller
 	var eventsKick func()
 	if missionDriver != nil {
 		// Automations (issue #822): the ticker writes cron.due events,
@@ -515,6 +517,13 @@ func main() {
 		eventsKick = drainer.Kick
 		automationTicker = automations.NewTicker(automationStore, eventStore,
 			func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyAutomations) }, flags.Location, drainer.Kick, app.Log)
+		// GitHub event poller (issue #826): connector_event trigger watches
+		// feed the events inbox; needs the connector surface.
+		if conns != nil {
+			githubPoller = gitevents.NewPoller(conns.GitHubEventReader, automationStore.ConnectorEventWatches, gitevents.NewStore(app.DB), eventStore,
+				func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyAutomations) }, flags.GitHubPollInterval, drainer.Kick,
+				app.Metrics.NewCounterVec("github_poll_events_total", "GitHub events the poller wrote to the inbox, by kind.", "kind"), app.Log)
+		}
 	}
 	// deliver: chat-facing ad-hoc send to one operator-configured
 	// destination. Registered here, not inside buildAgent, for the same
@@ -857,6 +866,9 @@ func main() {
 		go drainer.Run(ctx)
 		go automationTicker.Run(ctx)
 		go automationStarter.Run(ctx)
+		if githubPoller != nil {
+			go githubPoller.Run(ctx)
+		}
 	}
 
 	// search_kb: nil-safe wiring, same shape as memory retrieve/extract

@@ -89,7 +89,10 @@ func TestValidate(t *testing.T) {
 		}, "no config", false},
 		{"manual null config", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerManual, Config: json.RawMessage(`null`)}} }, "", false},
 		{"webhook not yet", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerWebhook}} }, "not available yet", false},
-		{"connector_event not yet", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerConnectorEvent}} }, "not available yet", false},
+		{"connector_event without config", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerConnectorEvent}} }, "connector_event trigger config", false},
+		{"credential_ref on connector_event", func(a *Automation) {
+			a.Triggers = []Trigger{{Kind: TriggerConnectorEvent, CredentialRef: "X", Config: json.RawMessage(`{"connector_id":"` + agentID + `","repo":"o/r","events":["pr.opened"]}`)}}
+		}, "credential_ref", false},
 		{"channel not yet", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerChannel}} }, "not available yet", false},
 		{"unknown trigger kind", func(a *Automation) { a.Triggers = []Trigger{{Kind: "email"}} }, "unknown trigger kind", false},
 		{"empty allowlist entry", func(a *Automation) { a.Triggers[0].ToolAllowlist = []string{"search_web", " "} }, "non-empty", false},
@@ -124,6 +127,61 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("errors.Is(ErrBadCron) = %v, want %v", !tc.badCron, tc.badCron)
 			}
 		})
+	}
+}
+
+func TestValidateConnectorEventConfig(t *testing.T) {
+	t.Parallel()
+	const id = "0B8F2F4E-6F1C-4B8A-9D2E-3C4B5A6D7E8F"
+	for _, tc := range []struct {
+		name, config, want, wantErr string
+	}{
+		{"canonical", `{"connector_id":"` + id + `","repo":"Timothy-Agent/Timothy","events":["pr.opened","pr.labeled","pr.opened"],"labels":[" timothy "]}`,
+			`{"connector_id":"` + strings.ToLower(id) + `","repo":"timothy-agent/timothy","events":["pr.opened","pr.labeled"],"labels":["timothy"]}`, ""},
+		{"no labels", `{"connector_id":"` + id + `","repo":"o/r.go","events":["check.completed"]}`,
+			`{"connector_id":"` + strings.ToLower(id) + `","repo":"o/r.go","events":["check.completed"],"labels":[]}`, ""},
+		{"all kinds", `{"connector_id":"` + id + `","repo":"o/r","events":["pr.opened","pr.labeled","pr.review","pr.review_comment","issue.comment","check.completed"]}`, "", ""},
+		{"empty", ``, "", "config must be"},
+		{"unknown field", `{"connector_id":"` + id + `","repo":"o/r","events":["pr.opened"],"branch":"main"}`, "", "config must be"},
+		{"non-uuid connector", `{"connector_id":"github","repo":"o/r","events":["pr.opened"]}`, "", "UUID"},
+		{"bad repo", `{"connector_id":"` + id + `","repo":"o/r/x","events":["pr.opened"]}`, "", "owner/name"},
+		{"repo without owner", `{"connector_id":"` + id + `","repo":"r","events":["pr.opened"]}`, "", "owner/name"},
+		{"no events", `{"connector_id":"` + id + `","repo":"o/r","events":[]}`, "", "must not be empty"},
+		{"unknown event", `{"connector_id":"` + id + `","repo":"o/r","events":["pr.closed"]}`, "", "must be one of"},
+		{"empty label", `{"connector_id":"` + id + `","repo":"o/r","events":["pr.opened"],"labels":["a"," "]}`, "", "non-empty"},
+		{"eleven labels", `{"connector_id":"` + id + `","repo":"o/r","events":["pr.opened"],"labels":["1","2","3","4","5","6","7","8","9","10","11"]}`, "", "at most 10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tr := Trigger{Kind: TriggerConnectorEvent, Config: json.RawMessage(tc.config)}
+			err := validateTrigger(&tr)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("validateTrigger = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateTrigger: %v", err)
+			}
+			if tc.want != "" && string(tr.Config) != tc.want {
+				t.Fatalf("config = %s, want %s", tr.Config, tc.want)
+			}
+		})
+	}
+}
+
+func TestConnectorEventIDs(t *testing.T) {
+	t.Parallel()
+	ts := []Trigger{
+		{Kind: TriggerCron, Config: json.RawMessage(`{"expr":"0 9 * * *"}`)},
+		{Kind: TriggerConnectorEvent, Config: json.RawMessage(`{"connector_id":"AA","repo":"o/r"}`)},
+		{Kind: TriggerConnectorEvent, Config: json.RawMessage(`{"connector_id":"aa","repo":"o/s"}`)},
+		{Kind: TriggerConnectorEvent, Config: json.RawMessage(`[`)},
+		{Kind: TriggerConnectorEvent, Config: json.RawMessage(`{"connector_id":"bb"}`)},
+	}
+	if got := ConnectorEventIDs(ts); strings.Join(got, ",") != "aa,bb" {
+		t.Fatalf("ConnectorEventIDs = %v, want [aa bb]", got)
 	}
 }
 

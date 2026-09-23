@@ -624,6 +624,20 @@ CREATE TABLE IF NOT EXISTS automation_notes (
     PRIMARY KEY (automation_id, name)
 );
 
+-- GitHub event poller cursors (issue #826, internal/brain/gitevents):
+-- one row per watched (connector, repo). runs_since bounds the workflow
+-- runs query; next_poll_at honors X-Poll-Interval and rate backoff.
+CREATE TABLE IF NOT EXISTS github_poll_cursors (
+    connector_id  uuid NOT NULL REFERENCES connectors(id) ON DELETE CASCADE,
+    repo          text NOT NULL,
+    etag          text NOT NULL DEFAULT '',
+    last_event_id text NOT NULL DEFAULT '',
+    runs_since    timestamptz NOT NULL DEFAULT now(),
+    next_poll_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (connector_id, repo)
+);
+
 -- Missions are long-running, agent-driven units of work distinct from
 -- chat sessions: a mission survives across many model turns, tracks a
 -- plan and progress log, and drives itself through a fixed phase

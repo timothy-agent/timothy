@@ -185,7 +185,15 @@ const (
 	// default) permits none, so an internal receiver is always an
 	// explicit opt-in.
 	ValueOutboundHostAllowlist = "outbound_host_allowlist"
+	// ValueGitHubPollSeconds is the GitHub event poller's interval in
+	// seconds (issue #826); "" or "0" defers to DefaultGitHubPollSeconds.
+	// The poller enforces its own 30 s floor.
+	ValueGitHubPollSeconds = "github_poll_seconds"
 )
+
+// DefaultGitHubPollSeconds is the GitHub event poller's interval when
+// ValueGitHubPollSeconds is unset.
+const DefaultGitHubPollSeconds = 60
 
 // Mission ceiling defaults, used when the matching setting is unset.
 const (
@@ -239,7 +247,7 @@ var knownValueKeys = map[string]bool{
 	ValueMissionDefaultMaxIterations: true, ValueMissionBackoffFailures: true,
 	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
-	ValueOutboundHostAllowlist: true,
+	ValueOutboundHostAllowlist: true, ValueGitHubPollSeconds: true,
 }
 
 // nonNegativeIntKeys are the settings whose value must parse as an
@@ -252,6 +260,7 @@ var nonNegativeIntKeys = map[string]bool{
 	ValueMissionDefaultMaxIterations: true, ValueMissionBackoffFailures: true,
 	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
+	ValueGitHubPollSeconds: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -427,6 +436,16 @@ func (s *Store) MissionAutoResumeBackoffMax(ctx context.Context) int {
 // MissionAutoResumeInfraMax bounds the sweep's infra auto-resumes.
 func (s *Store) MissionAutoResumeInfraMax(ctx context.Context) int {
 	return s.nonNegativeInt(ctx, ValueMissionAutoResumeInfraMax, DefaultMissionAutoResumeInfraMax)
+}
+
+// GitHubPollInterval is the GitHub event poller's interval; unset or 0
+// falls back to DefaultGitHubPollSeconds.
+func (s *Store) GitHubPollInterval(ctx context.Context) time.Duration {
+	n := s.nonNegativeInt(ctx, ValueGitHubPollSeconds, DefaultGitHubPollSeconds)
+	if n == 0 {
+		n = DefaultGitHubPollSeconds
+	}
+	return time.Duration(n) * time.Second
 }
 
 // nonNegativeInt reads key as an integer >= 0, falling back to def when

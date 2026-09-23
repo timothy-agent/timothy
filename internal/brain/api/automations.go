@@ -26,11 +26,13 @@ import (
 // (nil waits for its poll) and loc is the operator timezone for stats
 // and next runs. connectorKinds and destinationKinds list the enabled
 // kinds the templates gallery checks (nil means none configured).
-func (a *API) registerAutomations(handle func(pattern string, h http.Handler), store *automations.Store, ev *events.Store, kick func(), destinations destinationLookup, attachments *attachmentResolver, loc func(ctx context.Context) *time.Location, connectorKinds, destinationKinds kindLister) {
+// connectors checks a connector_event trigger's connector (nil rejects
+// any).
+func (a *API) registerAutomations(handle func(pattern string, h http.Handler), store *automations.Store, ev *events.Store, kick func(), destinations destinationLookup, attachments *attachmentResolver, loc func(ctx context.Context) *time.Location, connectorKinds, destinationKinds kindLister, connectors connectorLookup) {
 	if store == nil {
 		return
 	}
-	h := &automationAPI{store: store, events: ev, kick: kick, destinations: destinations, attachments: attachments, loc: loc, connectorKinds: connectorKinds, destinationKinds: destinationKinds}
+	h := &automationAPI{store: store, events: ev, kick: kick, destinations: destinations, attachments: attachments, loc: loc, connectorKinds: connectorKinds, destinationKinds: destinationKinds, connectors: connectors}
 	handle("GET /v1/automations", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/automations", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/automations/stats", a.auth(http.HandlerFunc(h.stats)))
@@ -58,10 +60,54 @@ type automationAPI struct {
 
 	connectorKinds   kindLister
 	destinationKinds kindLister
+	connectors       connectorLookup
 }
 
 // kindLister returns the kinds of the enabled rows of one table.
 type kindLister func(ctx context.Context) ([]string, error)
+
+// connectorLookup reports one connector's kind and enabled flag; a
+// missing connector is connectors.ErrNotFound.
+type connectorLookup func(ctx context.Context, id string) (kind string, enabled bool, err error)
+
+// storeConnectorLookup looks connectors up in s.
+func storeConnectorLookup(s *connectors.Store) connectorLookup {
+	return func(ctx context.Context, id string) (string, bool, error) {
+		c, err := s.Get(ctx, id)
+		if err != nil {
+			return "", false, err
+		}
+		return c.Kind, c.Enabled, nil
+	}
+}
+
+// validateTriggerConnectors rejects a connector_event trigger whose
+// connector is missing, disabled or not a github connector.
+func (h *automationAPI) validateTriggerConnectors(ctx context.Context, ts []automations.Trigger) error {
+	ids := automations.ConnectorEventIDs(ts)
+	if len(ids) == 0 {
+		return nil
+	}
+	if h.connectors == nil {
+		return &automations.ValidationError{Err: errors.New("connectors are not enabled")}
+	}
+	for _, id := range ids {
+		kind, enabled, err := h.connectors(ctx, id)
+		if errors.Is(err, connectors.ErrNotFound) {
+			return &automations.ValidationError{Err: fmt.Errorf("unknown connector_id %s", id)}
+		}
+		if err != nil {
+			return fmt.Errorf("connector_id %s: %w", id, err)
+		}
+		if kind != "github" {
+			return &automations.ValidationError{Err: fmt.Errorf("connector %s is kind %s; connector_event triggers need a github connector", id, kind)}
+		}
+		if !enabled {
+			return &automations.ValidationError{Err: fmt.Errorf("connector %s is disabled", id)}
+		}
+	}
+	return nil
+}
 
 // enabledConnectorKinds lists the kinds of enabled connectors in s.
 func enabledConnectorKinds(s *connectors.Store) kindLister {
@@ -408,6 +454,10 @@ func (h *automationAPI) create(w http.ResponseWriter, r *http.Request) {
 		failAutomation(w, err)
 		return
 	}
+	if err := h.validateTriggerConnectors(r.Context(), a.Triggers); err != nil {
+		failAutomation(w, err)
+		return
+	}
 	if err := h.prepareAction(r.Context(), &a.Action, nil); err != nil {
 		failAutomation(w, err)
 		return
@@ -473,6 +523,10 @@ func (h *automationAPI) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Triggers != nil {
 		ts := toTriggers(*req.Triggers)
+		if err := h.validateTriggerConnectors(r.Context(), ts); err != nil {
+			failAutomation(w, err)
+			return
+		}
 		p.Triggers = &ts
 	}
 	if req.Action != nil {

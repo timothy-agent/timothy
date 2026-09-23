@@ -192,13 +192,15 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 		location = flags.Location
 	}
 	var connectorKinds, destinationKinds kindLister
+	var connLookup connectorLookup
 	if conns != nil {
 		connectorKinds = enabledConnectorKinds(conns.Store())
+		connLookup = storeConnectorLookup(conns.Store())
 	}
 	if destinationStore != nil {
 		destinationKinds = enabledDestinationKinds(destinationStore)
 	}
-	a.registerAutomations(srv.Handle, automationStore, eventStore, eventsKick, destLookup, resolver, location, connectorKinds, destinationKinds)
+	a.registerAutomations(srv.Handle, automationStore, eventStore, eventsKick, destLookup, resolver, location, connectorKinds, destinationKinds, connLookup)
 	// destRefs is *missions.Store and destAutomationRefs *automations.Store,
 	// nil-boxed the same way connLister is above so a nil store keeps
 	// registerDestinations' refs checks honest.

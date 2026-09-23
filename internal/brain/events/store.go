@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -41,6 +42,25 @@ func (s *Store) Add(ctx context.Context, ev Event) (int64, error) {
 		return 0, fmt.Errorf("events add: %w", err)
 	}
 	return id, nil
+}
+
+// AddIfNew inserts ev in its own transaction. inserted is false when an
+// event with the same (source, dedup_key) already exists.
+func (s *Store) AddIfNew(ctx context.Context, ev Event) (id int64, inserted bool, err error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return 0, false, fmt.Errorf("events add: %w", err)
+	}
+	err = db.QueryRow(ctx, `INSERT INTO events (source, kind, dedup_key, payload) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (source, dedup_key) DO NOTHING RETURNING id`,
+		ev.Source, ev.Kind, ev.DedupKey, []byte(ev.Payload)).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("events add: %w", err)
+	}
+	return id, true, nil
 }
 
 // claimBatch locks up to limit unprocessed events in id order, skipping
