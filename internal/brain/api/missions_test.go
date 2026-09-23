@@ -732,10 +732,10 @@ func TestMissionsCreateReferencesValidation(t *testing.T) {
 	})
 }
 
-// TestClassifyKind exercises classifyKind's deliverable-based parsing:
+// TestClassifyKind exercises missions.ClassifyKind's deliverable-based parsing:
 // the first recognised word in the reply wins, and nil classify, a
 // classify error, or an unrecognised reply all fall back to "general"
-// (see classifyKind's doc comment).
+// (see missions.ClassifyKind's doc comment).
 func TestClassifyKind(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -788,9 +788,9 @@ func TestClassifyKind(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := classifyKind(context.Background(), tc.classify, "some goal")
+			got := missions.ClassifyKind(context.Background(), tc.classify, "some goal")
 			if got != tc.want {
-				t.Fatalf("classifyKind() = %q, want %q", got, tc.want)
+				t.Fatalf("ClassifyKind() = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -806,9 +806,9 @@ func TestClassifyKindPrompt(t *testing.T) {
 		gotPrompt = prompt
 		return "general", nil
 	}
-	classifyKind(context.Background(), classify, "some goal")
+	missions.ClassifyKind(context.Background(), classify, "some goal")
 	if !strings.Contains(gotPrompt, "deliverable") && !strings.Contains(gotPrompt, "book") {
-		t.Fatalf("classifyKind prompt = %q, want it to mention deliverable or the book counter-example", gotPrompt)
+		t.Fatalf("ClassifyKind prompt = %q, want it to mention deliverable or the book counter-example", gotPrompt)
 	}
 }
 
@@ -866,7 +866,7 @@ func TestClassifyLight(t *testing.T) {
 // classifyGoal uses: happy paths for both axes, the first recognised
 // kind and light/full words winning in order even with extra fields,
 // and every classify failure or unrecognised reply falling back to
-// kind=general light=false, the same cheap-mistake bias classifyKind
+// kind=general light=false, the same cheap-mistake bias missions.ClassifyKind
 // applies alone.
 func TestClassifyKindAndLight(t *testing.T) {
 	t.Parallel()
@@ -1228,7 +1228,7 @@ func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 }
 
 // TestMissionsCreateKindOptional confirms an omitted kind no longer
-// 400s: it reaches classifyKind (defaulting to "general" with no
+// 400s: it reaches missions.ClassifyKind (defaulting to "general" with no
 // classify wired) and then the degraded store, which 500s — proving
 // validation accepted the empty kind rather than rejecting it. An
 // explicit kind is still validated and honored exactly as before.
@@ -1301,7 +1301,8 @@ func TestMissionsCreateHasPlan(t *testing.T) {
 
 // TestMissionsCreateValidatesOriginKind covers issue #817: the wire
 // accepts origin_kind api, chat or followup (or none); automation and
-// workflow are internal-only and 400, as does an unknown value.
+// workflow are internal-only and 400, as does an unknown value, and
+// followup without parent_mission_id 400s (issue #849).
 func TestMissionsCreateValidatesOriginKind(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
@@ -1320,10 +1321,17 @@ func TestMissionsCreateValidatesOriginKind(t *testing.T) {
 		return w.Code, w.Body.String()
 	}
 
-	for _, origin := range []string{"automation", "workflow", "cron"} {
-		code, body := call(`{"goal":"g","kind":"general","origin_kind":"` + origin + `"}`)
-		if code != http.StatusBadRequest || !strings.Contains(body, "origin_kind must be") {
-			t.Fatalf("origin_kind=%s = %d %s, want 400 from origin_kind validation", origin, code, body)
+	for _, tc := range []struct {
+		body, want string
+	}{
+		{`{"goal":"g","kind":"general","origin_kind":"automation"}`, "origin_kind must be"},
+		{`{"goal":"g","kind":"general","origin_kind":"workflow"}`, "origin_kind must be"},
+		{`{"goal":"g","kind":"general","origin_kind":"cron"}`, "origin_kind must be"},
+		{`{"goal":"g","kind":"general","origin_kind":"followup"}`, "requires parent_mission_id"},
+	} {
+		code, body := call(tc.body)
+		if code != http.StatusBadRequest || !strings.Contains(body, tc.want) {
+			t.Fatalf("create %s = %d %s, want 400 containing %q", tc.body, code, body, tc.want)
 		}
 	}
 	// Accepted values pass validation and fail downstream on the
@@ -1332,7 +1340,7 @@ func TestMissionsCreateValidatesOriginKind(t *testing.T) {
 		`{"goal":"g","kind":"general"}`,
 		`{"goal":"g","kind":"general","origin_kind":"api"}`,
 		`{"goal":"g","kind":"general","origin_kind":"chat","unattended":true}`,
-		`{"goal":"g","kind":"general","origin_kind":"followup","unattended":false}`,
+		`{"goal":"g","kind":"general","origin_kind":"followup","parent_mission_id":"p1","unattended":false}`,
 	} {
 		if code, resp := call(body); code != http.StatusBadRequest || strings.Contains(resp, "origin_kind") {
 			t.Fatalf("create %s = %d %s, want 400 from the degraded driver, not origin_kind validation", body, code, resp)
@@ -2183,7 +2191,6 @@ func resolveRouteFixture(_ context.Context, route, harness string) (*gwclient.Re
 // gate (D-100, issue #536) across phase axes and flows.
 func TestMissionsUnusableCreateRoute(t *testing.T) {
 	t.Parallel()
-	h := &missionAPI{log: discard(), resolveRoute: resolveRouteFixture}
 	for _, tc := range []struct {
 		name       string
 		req        createMissionRequest
@@ -2202,12 +2209,15 @@ func TestMissionsUnusableCreateRoute(t *testing.T) {
 		{name: "harness axis resolves separately", req: createMissionRequest{Route: "harness-only-dead", Harness: "claude-cli", ReviewRoute: "alive"}, flow: missions.FlowFull, wantRoute: "harness-only-dead", wantReason: "no executor entry"},
 		{name: "resolve error never blocks", req: createMissionRequest{Route: "unknown", ReviewRoute: "unknown"}, flow: missions.FlowFull},
 	} {
-		route, reason, unusable := h.unusableCreateRoute(context.Background(), tc.req, tc.flow)
+		route, reason, unusable := missions.UnusableCreateRoute(context.Background(), resolveRouteFixture, missions.Mission{
+			Route: tc.req.Route, PlanRoute: tc.req.PlanRoute, ReviewRoute: tc.req.ReviewRoute, EscalationRoute: tc.req.EscalationRoute,
+			Harness: tc.req.Harness, Flow: tc.flow,
+		})
 		if unusable != (tc.wantRoute != "") || route != tc.wantRoute || reason != tc.wantReason {
 			t.Errorf("%s: got (%q, %q, %v), want (%q, %q, %v)", tc.name, route, reason, unusable, tc.wantRoute, tc.wantReason, tc.wantRoute != "")
 		}
 	}
-	if _, _, unusable := (&missionAPI{log: discard()}).unusableCreateRoute(context.Background(), createMissionRequest{Route: "dead"}, missions.FlowFull); unusable {
+	if _, _, unusable := missions.UnusableCreateRoute(context.Background(), nil, missions.Mission{Route: "dead", Flow: missions.FlowFull}); unusable {
 		t.Fatal("no gateway wiring must never block create")
 	}
 }

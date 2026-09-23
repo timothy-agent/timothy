@@ -30,18 +30,23 @@ func TestCreatePathGolden(t *testing.T) {
 		kind  string
 		agent string
 		light bool
+		// route/planRoute are the input's routes; reviewRoute is sent
+		// only by the API and scheduler (a step has no review_route).
+		route, planRoute, reviewRoute string
+		wantReview                    string
 	}{
-		{"coding with agent", missions.KindCoding, "a1", false},
-		{"coding without agent", missions.KindCoding, "", false},
-		{"general light", missions.KindGeneral, "a1", true},
+		{"coding with agent", missions.KindCoding, "a1", false, "", "strong", "", "strong"},
+		{"coding without agent", missions.KindCoding, "", false, "", "strong", "", "strong"},
+		{"general light", missions.KindGeneral, "a1", true, "", "strong", "", "strong"},
+		{"route without plan_route", missions.KindGeneral, "a1", false, "fast", "", "fast", "fast"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			apiReq := createMissionRequest{Goal: goal, Kind: tc.kind, AgentID: tc.agent, PlanRoute: "strong", Light: tc.light, DestinationIDs: []string{"d1"}}.createRequest("", nil)
+			apiReq := createMissionRequest{Goal: goal, Kind: tc.kind, AgentID: tc.agent, Route: tc.route, ReviewRoute: tc.reviewRoute, PlanRoute: tc.planRoute, Light: tc.light, DestinationIDs: []string{"d1"}}.createRequest("", nil)
 			schedReq := missions.TemplateCreateRequest(missions.Schedule{ID: "s1", Name: "nightly", MissionTemplate: missions.MissionTemplate{
-				Goal: goal, Kind: tc.kind, AgentID: tc.agent, PlanRoute: "strong", Light: tc.light, DestinationIDs: []string{"d1"},
+				Goal: goal, Kind: tc.kind, AgentID: tc.agent, Route: tc.route, ReviewRoute: tc.reviewRoute, PlanRoute: tc.planRoute, Light: tc.light, DestinationIDs: []string{"d1"},
 			}}, []string{"d1"})
-			stepReq := workflows.StepCreateRequest(workflows.Step{Goal: goal, Kind: tc.kind, AgentID: tc.agent, PlanRoute: "strong", Light: tc.light, DestinationIDs: []string{"d1"}}, goal, "run-1", "build", "", "")
+			stepReq := workflows.StepCreateRequest(workflows.Step{Goal: goal, Kind: tc.kind, AgentID: tc.agent, Route: tc.route, PlanRoute: tc.planRoute, Light: tc.light, DestinationIDs: []string{"d1"}}, goal, "run-1", "build", "", "")
 
 			var got []missions.Mission
 			wantOrigin := []string{missions.OriginAPI, missions.OriginAutomation, missions.OriginWorkflow}
@@ -68,8 +73,8 @@ func TestCreatePathGolden(t *testing.T) {
 			if !reflect.DeepEqual(got[0], got[2]) {
 				t.Fatalf("workflow resolved differently:\napi  %+v\nstep %+v", got[0], got[2])
 			}
-			if got[0].ReviewRoute != "strong" || got[0].MaxIterations != 6 || got[0].BudgetCurrency != "USD" {
-				t.Fatalf("resolved = %+v, want review_route from plan_route, max 6, USD", got[0])
+			if got[0].ReviewRoute != tc.wantReview || got[0].MaxIterations != 6 || got[0].BudgetCurrency != "USD" {
+				t.Fatalf("resolved = %+v, want review_route %q, max 6, USD", got[0], tc.wantReview)
 			}
 		})
 	}
