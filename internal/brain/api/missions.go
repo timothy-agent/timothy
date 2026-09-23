@@ -603,6 +603,28 @@ func (r createMissionRequest) unknownDestinationRepoURLIDs() []string {
 	return unknown
 }
 
+// createRequest maps the wire request onto the shared
+// missions.CreateRequest; parentMissionID and sources are resolved by
+// the handler (store lookups, attachment conversion, references).
+func (r createMissionRequest) createRequest(parentMissionID string, sources []missions.SourceEntry) missions.CreateRequest {
+	return missions.CreateRequest{
+		Goal: r.Goal, Kind: r.Kind, AgentID: r.AgentID,
+		Route: r.Route, ReviewRoute: r.ReviewRoute, PlanRoute: r.PlanRoute, EscalationRoute: r.EscalationRoute,
+		RouteModel: r.RouteModel, PlanRouteModel: r.PlanRouteModel, ReviewRouteModel: r.ReviewRouteModel,
+		MaxIterations: r.MaxIterations, BudgetAmount: r.BudgetAmount, BudgetCurrency: r.BudgetCurrency,
+		AutoApproveTools: r.AutoApproveTools, AutoApprovePlan: r.AutoApprovePlan,
+		Harness: r.Harness, ReviewHarness: r.ReviewHarness, Environment: r.Environment,
+		ExecutorSessionPolicy:    r.ExecutorSessionPolicy,
+		HasPlan:                  r.HasPlan,
+		Light:                    r.Light,
+		Flow:                     r.Flow,
+		PermissionTimeoutSeconds: r.PermissionTimeoutSeconds,
+		ParentMissionID:          parentMissionID,
+		Sources:                  sources,
+		Destinations:             r.destinationEntries(),
+	}
+}
+
 // missionAttachmentInput names one already-uploaded attachment to
 // resolve at create time; Name is display-only (the store itself
 // doesn't carry a filename).
@@ -611,10 +633,11 @@ type missionAttachmentInput struct {
 	Name string `json:"name"`
 }
 
-// create validates the request, resolves route/review_route/budget
-// defaults from the chosen agent when the request omits them, and
-// hands off to Driver.Create — provisioning and the mission's first
-// turn happen in the background; this returns {id} immediately.
+// create decodes and checks the wire request, resolves what needs the
+// HTTP layer (connector, parent digest, attachments, references),
+// applies the shared defaults (missions.ResolveDefaults) and hands off
+// to Driver.Create; provisioning and the first turn run in the
+// background.
 func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	var req createMissionRequest
 	// Unknown fields are rejected rather than dropped: a misspelled or
@@ -635,27 +658,6 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("destination_repo_urls names id(s) not in destination_ids: %s", strings.Join(unknown, ", ")))
 		return
 	}
-	if req.Kind == "" {
-		req.Kind = classifyKind(r.Context(), h.classify, req.Goal)
-	}
-	if req.Harness == "native" {
-		req.Harness = ""
-	}
-	if req.ReviewHarness == "native" {
-		req.ReviewHarness = ""
-	}
-	// codingExecutorDefault/environment auto-detect are HTTP-request-time
-	// resolution seams (settings lookup, goal-keyword heuristic) with no
-	// place in ValidateCreate's pure struct-shape rules; the resulting
-	// values still pass through ValidateCreate's kind/harness/environment
-	// checks below via Driver.Create. ResolveHarness applies the full
-	// mission.harness -> agent.harness -> settings.coding_executor ->
-	// native precedence (missions.ResolveHarness).
-	var agentHarness string
-	if h.resolveAgentHarness != nil {
-		agentHarness, _ = h.resolveAgentHarness(r.Context(), req.AgentID)
-	}
-	req.Harness, _ = missions.ResolveHarness(r.Context(), req.Kind, req.Harness, agentHarness, h.codingExecutorDefault)
 	// Environment stays "" unless the request names one: detection runs
 	// against the real workspace (repo markers after the clone, then
 	// the discover turn's report, issue #495), never against goal text.
@@ -716,89 +718,8 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	// Resolve even with an empty AgentID: ResolveByID("") falls back to
-	// the default agent, same as chat sessions that don't pick one — a
-	// mission created without an explicit agent still needs a real
-	// route, not an empty string the gateway will reject. By id, not
-	// name: req.AgentID is the mission row's agent_id FK value (the
-	// picker sends a.id), unlike chat's session.agent which is a name.
-	var promptOverlay string
-	if h.agentReg != nil {
-		if a, ok := h.agentReg.ResolveByID(r.Context(), req.AgentID); ok {
-			if req.Route == "" {
-				req.Route = a.Route
-			}
-			if req.ReviewRoute == "" {
-				req.ReviewRoute = a.ReviewRoute
-			}
-			promptOverlay = a.PromptOverlay
-		}
-	}
-	// An agent's route (and this handler's own fallback) can still be
-	// "" — that's each agent's shorthand for "the default chain," same
-	// as chat's own default-role fallback — but the gateway requires a
-	// real route name, so the substitution has to happen somewhere
-	// concrete.
-	defaultRoute := ""
-	if h.routeForRole != nil {
-		defaultRoute = h.routeForRole(r.Context(), "default")
-	}
-	if req.Route == "" {
-		if req.Kind == missions.KindCoding {
-			req.Route = missions.DefaultCodingRoute(r.Context(), h.routeExists, defaultRoute)
-		} else {
-			req.Route = defaultRoute
-		}
-	}
-	if req.ReviewRoute == "" {
-		// Review is an oversight phase: an explicit plan_route covers it
-		// unless review_route itself was set. Defaulting to defaultRoute
-		// here would bake a masking value into the row and plan_route
-		// would never reach review (runner precedence: review_route >
-		// plan_route > route).
-		if req.PlanRoute != "" {
-			req.ReviewRoute = req.PlanRoute
-		} else {
-			req.ReviewRoute = defaultRoute
-		}
-	}
-
-	autoApproveTools := true
-	if req.AutoApproveTools != nil {
-		autoApproveTools = *req.AutoApproveTools
-	}
-	autoApprovePlan := true
-	if req.AutoApprovePlan != nil {
-		autoApprovePlan = *req.AutoApprovePlan
-	}
 	if req.PermissionTimeoutSeconds != nil && *req.PermissionTimeoutSeconds < 0 {
 		jsonError(w, http.StatusBadRequest, "bad_request", "permission_timeout_seconds must not be negative")
-		return
-	}
-	budgetCurrency := req.BudgetCurrency
-	if budgetCurrency == "" {
-		budgetCurrency = "USD"
-	}
-	// flow/light normalization (D-090, issue #459): flow omitted maps to
-	// today's exact pre-#459 behavior (light=true -> "light", else
-	// "full"). Any other mismatch between an explicit flow and light (or
-	// kind=coding requesting a non-full flow) is left for
-	// missions.ValidateCreate to reject with the specific reason, not
-	// silently resolved here. issue #479 dropped the mission.light
-	// column: flow alone drives every downstream code path now.
-	flow := req.Flow
-	if flow == "" {
-		if req.Light {
-			flow = string(missions.FlowLight)
-		} else {
-			flow = string(missions.FlowFull)
-		}
-	}
-	// Route gate (D-100, issue #536): every phase axis this flow runs
-	// must resolve to at least one usable chain entry, else the mission
-	// would park on its first turn with the gateway's no_route error.
-	if route, reason, unusable := h.unusableCreateRoute(r.Context(), req, missions.Flow(flow)); unusable {
-		jsonError(w, http.StatusBadRequest, "route_unusable", fmt.Sprintf("route %q has no usable provider: %s", route, reason))
 		return
 	}
 	// Sources order matches packet.go's renderSources exactly (issue
@@ -822,20 +743,17 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		}
 		sources = append(sources, missions.SourceEntry{Source: sourceKind, ConnectorID: req.ConnectorID, RepoURL: repoURL})
 	}
-	m := missions.Mission{
-		Goal: req.Goal, Kind: req.Kind, AgentID: req.AgentID,
-		Route: req.Route, ReviewRoute: req.ReviewRoute, PlanRoute: req.PlanRoute, EscalationRoute: req.EscalationRoute,
-		RouteModel: req.RouteModel, PlanRouteModel: req.PlanRouteModel, ReviewRouteModel: req.ReviewRouteModel,
-		MaxIterations: req.MaxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
-		AutoApproveTools: autoApproveTools, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay, Harness: req.Harness, Environment: req.Environment,
-		ReviewHarness:            req.ReviewHarness,
-		ExecutorSessionPolicy:    req.ExecutorSessionPolicy,
-		HasPlan:                  req.HasPlan,
-		ParentMissionID:          parentMissionID,
-		Sources:                  sources,
-		Destinations:             req.destinationEntries(),
-		Flow:                     missions.Flow(flow),
-		PermissionTimeoutSeconds: req.PermissionTimeoutSeconds,
+	// Kind, harness, agent, route, flow and budget defaults plus the
+	// D-100 route gate are the shared create path (issue #816).
+	m, err := missions.ResolveDefaults(r.Context(), req.createRequest(parentMissionID, sources), h.resolveDeps())
+	if err != nil {
+		var unusable *missions.RouteUnusableError
+		if errors.As(err, &unusable) {
+			jsonError(w, http.StatusBadRequest, "route_unusable", err.Error())
+			return
+		}
+		failMission(w, err)
+		return
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {
@@ -866,64 +784,44 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, h.decorateTopModels(r.Context(), []missions.Mission{sanitizeMission(created)})[0])
 }
 
-// routeUnusable resolves route on the given axis (harness == "" is the
-// chat axis) and reports whether the chain has entries but none is
-// usable, with the first entry's skip reason. A resolve error, missing
-// gateway wiring, or an empty chain is never "unusable": the gate
-// blocks only on positive evidence of dead entries, same degrade
-// executorOptions applies.
-func (h *missionAPI) routeUnusable(ctx context.Context, route, harness string) (reason string, unusable bool) {
-	if route == "" || h.resolveRoute == nil {
-		return "", false
+// resolveDeps builds the shared create-path lookups from this
+// handler's wiring.
+func (h *missionAPI) resolveDeps() missions.ResolveDeps {
+	deps := missions.ResolveDeps{
+		Classify:              h.classify,
+		RouteForRole:          h.routeForRole,
+		RouteExists:           h.routeExists,
+		CodingExecutorDefault: h.codingExecutorDefault,
+		ResolveRoute:          h.resolveRoute,
 	}
-	resolved, err := h.resolveRoute(ctx, route, harness)
-	if err != nil || resolved == nil || len(resolved.Entries) == 0 {
-		return "", false
-	}
-	reason = "no usable provider for this route"
-	for _, e := range resolved.Entries {
-		if e.Usable {
-			return "", false
-		}
-		if reason == "no usable provider for this route" && e.SkipReason != "" {
-			reason = e.SkipReason
+	if h.agentReg != nil {
+		deps.Agent = func(ctx context.Context, id string) (missions.AgentDefaults, bool) {
+			a, ok := h.agentReg.ResolveByID(ctx, id)
+			if !ok {
+				return missions.AgentDefaults{}, false
+			}
+			return missions.AgentDefaults{Route: a.Route, ReviewRoute: a.ReviewRoute, PromptOverlay: a.PromptOverlay, Harness: a.Harness}, true
 		}
 	}
-	return reason, true
+	if h.store != nil {
+		deps.DefaultMaxIterations = h.store.DefaultMaxIterations
+	}
+	return deps
 }
 
-// unusableCreateRoute walks the phase axes a create request's flow
-// actually runs (D-100): build on the harness axis, discover/plan on
-// the oversight route and prove on the review route (chat axis) unless
-// the flow skips them, escalate when set. Returns the first route with
-// zero usable entries and its reason.
+// routeUnusable reports whether route has entries on the given axis
+// but none usable (missions.RouteUnusable).
+func (h *missionAPI) routeUnusable(ctx context.Context, route, harness string) (reason string, unusable bool) {
+	return missions.RouteUnusable(ctx, h.resolveRoute, route, harness)
+}
+
+// unusableCreateRoute runs the D-100 gate for req's routes under flow
+// (missions.UnusableCreateRoute).
 func (h *missionAPI) unusableCreateRoute(ctx context.Context, req createMissionRequest, flow missions.Flow) (route, reason string, unusable bool) {
-	type axis struct{ route, harness string }
-	axes := []axis{{req.Route, req.Harness}}
-	if flow != missions.FlowLight {
-		oversight := req.PlanRoute
-		if oversight == "" {
-			oversight = req.Route
-		}
-		axes = append(axes, axis{oversight, ""})
-	}
-	if flow == missions.FlowFull || flow == "" {
-		axes = append(axes, axis{req.ReviewRoute, ""})
-	}
-	if req.EscalationRoute != "" {
-		axes = append(axes, axis{req.EscalationRoute, ""})
-	}
-	seen := map[axis]bool{}
-	for _, a := range axes {
-		if a.route == "" || seen[a] {
-			continue
-		}
-		seen[a] = true
-		if reason, bad := h.routeUnusable(ctx, a.route, a.harness); bad {
-			return a.route, reason, true
-		}
-	}
-	return "", "", false
+	return missions.UnusableCreateRoute(ctx, h.resolveRoute, missions.Mission{
+		Route: req.Route, PlanRoute: req.PlanRoute, ReviewRoute: req.ReviewRoute, EscalationRoute: req.EscalationRoute,
+		Harness: req.Harness, Flow: flow,
+	})
 }
 
 // routing handles PATCH /v1/missions/{id}/routing (D-100, issue #536):
@@ -1055,27 +953,7 @@ func (h *missionAPI) generateName(id, goal string) {
 // still receives the operator's explicit kind from the form, so this
 // only changes the suggestion.
 func classifyKind(ctx context.Context, classify agents.Classify, goal string) string {
-	if classify == nil {
-		return "general"
-	}
-	prompt := "Decide how this mission's work happens, based on its deliverable, not its topic. Answer with exactly one word.\n" +
-		"coding — the mission produces or changes code, scripts, or configuration files in a repository.\n" +
-		"general — the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n\n" +
-		"Goal: " + goal
-	reply, err := classify(ctx, prompt)
-	if err != nil {
-		return "general"
-	}
-	// First recognised word decides.
-	for _, field := range strings.Fields(strings.ToLower(reply)) {
-		switch strings.Trim(field, ".,") {
-		case "coding":
-			return "coding"
-		case "general":
-			return "general"
-		}
-	}
-	return "general"
+	return missions.ClassifyKind(ctx, classify, goal)
 }
 
 // classifyLight decides whether a general-kind goal is single-pass

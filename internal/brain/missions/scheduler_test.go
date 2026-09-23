@@ -3,11 +3,16 @@ package missions
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func TestDueDecision(t *testing.T) {
@@ -124,7 +129,9 @@ func TestDueDecisionNonUTCLocation(t *testing.T) {
 	}
 }
 
-func TestResolveTemplateDefaults(t *testing.T) {
+// TestTemplateCreateRequestResolvesDefaults runs a template through the
+// scheduler's builder and ResolveDefaults, the path every fire takes.
+func TestTemplateCreateRequestResolvesDefaults(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -273,7 +280,12 @@ func TestResolveTemplateDefaults(t *testing.T) {
 					return false
 				}
 			}
-			got, overlay := resolveTemplateDefaults(context.Background(), tc.template, tc.resolve, routeForRole, routeExists, tc.codingExec)
+			deps := ResolveDeps{Agent: tc.resolve, RouteForRole: routeForRole, RouteExists: routeExists, CodingExecutorDefault: tc.codingExec}
+			got, err := ResolveDefaults(context.Background(), TemplateCreateRequest(Schedule{MissionTemplate: tc.template}, nil), deps)
+			if err != nil {
+				t.Fatalf("ResolveDefaults: %v", err)
+			}
+			overlay := got.PromptOverlay
 			if got.Route != tc.wantRoute {
 				t.Errorf("Route = %q, want %q", got.Route, tc.wantRoute)
 			}
@@ -293,15 +305,17 @@ func TestResolveTemplateDefaults(t *testing.T) {
 	}
 }
 
-// TestResolveTemplateDefaultsPassesLightThrough confirms light (D-069)
-// is untouched by fire-time resolution — it has no agent-level default
-// and no coding-only precedence the way harness/environment do.
-func TestResolveTemplateDefaultsPassesLightThrough(t *testing.T) {
+// TestTemplateCreateRequestLightMapsToLightFlow confirms a light
+// template (D-069) fires as flow=light.
+func TestTemplateCreateRequestLightMapsToLightFlow(t *testing.T) {
 	t.Parallel()
-	routeForRole := func(context.Context, string) string { return "default" }
-	got, _ := resolveTemplateDefaults(context.Background(), MissionTemplate{Goal: "g", Kind: "general", Light: true}, nil, routeForRole, nil, nil)
-	if !got.Light {
-		t.Fatal("Light = false, want true (passed through unchanged)")
+	deps := ResolveDeps{RouteForRole: func(context.Context, string) string { return "default" }}
+	got, err := ResolveDefaults(context.Background(), TemplateCreateRequest(Schedule{MissionTemplate: MissionTemplate{Goal: "g", Kind: "general", Light: true}}, nil), deps)
+	if err != nil {
+		t.Fatalf("ResolveDefaults: %v", err)
+	}
+	if got.Flow != FlowLight {
+		t.Fatalf("Flow = %q, want %q", got.Flow, FlowLight)
 	}
 }
 
@@ -397,4 +411,210 @@ func TestFilterDestinationIDs(t *testing.T) {
 
 func discardLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestSkipReasonFor(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"pre-check miss", fmt.Errorf("create mission: %w", fmt.Errorf("agent %q: %w", "a1", errAgentMissing)), "agent_missing"},
+		{"agent_id foreign key violation", fmt.Errorf("create mission: %w", &pgconn.PgError{Code: "23503", ConstraintName: "missions_agent_id_fkey"}), "agent_missing"},
+		{"other foreign key violation", &pgconn.PgError{Code: "23503", ConstraintName: "missions_schedule_id_fkey"}, "fire_error"},
+		{"check violation", &pgconn.PgError{Code: "23514", ConstraintName: "missions_kind_check"}, "fire_error"},
+		{"aborted transaction", &pgconn.PgError{Code: "25P02"}, "fire_error"},
+		{"plain error", errors.New("parse cron"), "fire_error"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := skipReasonFor(tc.err); got != tc.want {
+				t.Fatalf("skipReasonFor = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// abortingTx is a pgx.Tx fake that models Postgres's aborted
+// transaction state: once a statement fails, every later statement
+// returns 25P02 until ROLLBACK TO SAVEPOINT clears it.
+type abortingTx struct {
+	pgx.Tx
+	aborted  bool
+	failFor  map[string]error // INSERT arg -> error it fails with
+	executed []string
+}
+
+func (f *abortingTx) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	sql = strings.Join(strings.Fields(sql), " ")
+	if strings.HasPrefix(sql, "ROLLBACK TO SAVEPOINT") {
+		f.aborted = false
+		f.executed = append(f.executed, sql)
+		return pgconn.CommandTag{}, nil
+	}
+	if f.aborted {
+		return pgconn.CommandTag{}, &pgconn.PgError{Code: "25P02", Message: "current transaction is aborted"}
+	}
+	if strings.HasPrefix(sql, "INSERT") && len(args) > 0 {
+		if err, ok := f.failFor[args[0].(string)]; ok {
+			f.aborted = true
+			return pgconn.CommandTag{}, err
+		}
+	}
+	entry := sql
+	if strings.HasPrefix(sql, "INSERT") {
+		entry = fmt.Sprintf("INSERT %v", args[0])
+	}
+	if strings.HasPrefix(sql, "UPDATE schedules") {
+		entry = fmt.Sprintf("SKIP %v %v", args[0], args[2])
+	}
+	f.executed = append(f.executed, entry)
+	return pgconn.CommandTag{}, nil
+}
+
+// insertFire stands in for fireOne: one INSERT keyed by schedule id.
+func insertFire(ctx context.Context, tx pgx.Tx, sc Schedule, _ time.Time) error {
+	if _, err := tx.Exec(ctx, "INSERT INTO missions", sc.ID); err != nil {
+		return fmt.Errorf("create mission: %w", err)
+	}
+	return nil
+}
+
+func filterExecuted(executed []string, prefixes ...string) []string {
+	var out []string
+	for _, e := range executed {
+		for _, p := range prefixes {
+			if strings.HasPrefix(e, p) {
+				out = append(out, e)
+			}
+		}
+	}
+	return out
+}
+
+func threeSchedules() []Schedule {
+	return []Schedule{{ID: "s1"}, {ID: "s2"}, {ID: "s3"}}
+}
+
+func TestFireEachSavepointControlFlow(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		failFor   map[string]error
+		wantFires []string
+		wantSkips []string
+	}{
+		{
+			name:      "all succeed",
+			wantFires: []string{"INSERT s1", "INSERT s2", "INSERT s3"},
+		},
+		{
+			name:      "middle agent missing",
+			failFor:   map[string]error{"s2": &pgconn.PgError{Code: "23503", ConstraintName: "missions_agent_id_fkey"}},
+			wantFires: []string{"INSERT s1", "INSERT s3"},
+			wantSkips: []string{"SKIP s2 agent_missing"},
+		},
+		{
+			name:      "first fails with another error",
+			failFor:   map[string]error{"s1": &pgconn.PgError{Code: "23514", ConstraintName: "missions_kind_check"}},
+			wantFires: []string{"INSERT s2", "INSERT s3"},
+			wantSkips: []string{"SKIP s1 fire_error"},
+		},
+		{
+			name: "all fail",
+			failFor: map[string]error{
+				"s1": &pgconn.PgError{Code: "23514"},
+				"s2": &pgconn.PgError{Code: "23503", ConstraintName: "missions_agent_id_fkey"},
+				"s3": &pgconn.PgError{Code: "23514"},
+			},
+			wantSkips: []string{"SKIP s1 fire_error", "SKIP s2 agent_missing", "SKIP s3 fire_error"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tx := &abortingTx{failFor: tc.failFor}
+			s := &Scheduler{log: discardLog()}
+			if err := s.fireEach(context.Background(), tx, threeSchedules(), time.Now(), insertFire); err != nil {
+				t.Fatalf("fireEach: %v", err)
+			}
+			if got := filterExecuted(tx.executed, "INSERT"); !slices.Equal(got, tc.wantFires) {
+				t.Fatalf("fires = %v, want %v", got, tc.wantFires)
+			}
+			if got := filterExecuted(tx.executed, "SKIP"); !slices.Equal(got, tc.wantSkips) {
+				t.Fatalf("skips = %v, want %v", got, tc.wantSkips)
+			}
+			if got := len(filterExecuted(tx.executed, "SAVEPOINT")); got != 3 {
+				t.Fatalf("savepoints = %d, want 3", got)
+			}
+			if got := len(filterExecuted(tx.executed, "RELEASE SAVEPOINT")); got != 3 {
+				t.Fatalf("releases = %d, want 3", got)
+			}
+			if got := len(filterExecuted(tx.executed, "ROLLBACK TO SAVEPOINT")); got != len(tc.wantSkips) {
+				t.Fatalf("rollbacks = %d, want %d", got, len(tc.wantSkips))
+			}
+		})
+	}
+}
+
+// TestFireEachSecondOfThreeFailsLeavesTwoFiresOneSkip covers the
+// missing-agent pre-check path: no DB error at all, just the sentinel.
+func TestFireEachSecondOfThreeFailsLeavesTwoFiresOneSkip(t *testing.T) {
+	t.Parallel()
+	tx := &abortingTx{}
+	fire := func(ctx context.Context, tx pgx.Tx, sc Schedule, now time.Time) error {
+		if sc.ID == "s2" {
+			return fmt.Errorf("create mission: %w", errAgentMissing)
+		}
+		return insertFire(ctx, tx, sc, now)
+	}
+	s := &Scheduler{log: discardLog()}
+	if err := s.fireEach(context.Background(), tx, threeSchedules(), time.Now(), fire); err != nil {
+		t.Fatalf("fireEach: %v", err)
+	}
+	if got := filterExecuted(tx.executed, "INSERT"); !slices.Equal(got, []string{"INSERT s1", "INSERT s3"}) {
+		t.Fatalf("fires = %v, want [INSERT s1 INSERT s3]", got)
+	}
+	if got := filterExecuted(tx.executed, "SKIP"); !slices.Equal(got, []string{"SKIP s2 agent_missing"}) {
+		t.Fatalf("skips = %v, want [SKIP s2 agent_missing]", got)
+	}
+}
+
+// TestSchedulerRegression815PoisonedScheduleDoesNotCascade reproduces
+// issue #815: before per-schedule savepoints, a failed INSERT for the
+// second schedule left the shared transaction aborted, so the third
+// schedule's INSERT and every skip update returned 25P02 and nothing
+// fired. abortingTx models that abort state.
+func TestSchedulerRegression815PoisonedScheduleDoesNotCascade(t *testing.T) {
+	t.Parallel()
+	poison := &pgconn.PgError{Code: "23503", ConstraintName: "missions_agent_id_fkey"}
+
+	// Without savepoints (the pre-fix loop), the fake cascades.
+	pre := &abortingTx{failFor: map[string]error{"s2": poison}}
+	var preErrs int
+	for _, sc := range threeSchedules() {
+		if err := insertFire(context.Background(), pre, sc, time.Now()); err != nil {
+			preErrs++
+		}
+	}
+	if preErrs != 2 {
+		t.Fatalf("pre-fix loop errors = %d, want 2 (s2 fails, s3 hits 25P02)", preErrs)
+	}
+
+	tx := &abortingTx{failFor: map[string]error{"s2": poison}}
+	s := &Scheduler{log: discardLog()}
+	if err := s.fireEach(context.Background(), tx, threeSchedules(), time.Now(), insertFire); err != nil {
+		t.Fatalf("fireEach: %v", err)
+	}
+	if tx.aborted {
+		t.Fatal("transaction left aborted after fireEach, commit would fail")
+	}
+	if got := filterExecuted(tx.executed, "INSERT"); !slices.Equal(got, []string{"INSERT s1", "INSERT s3"}) {
+		t.Fatalf("fires = %v, want [INSERT s1 INSERT s3]", got)
+	}
+	if got := filterExecuted(tx.executed, "SKIP"); !slices.Equal(got, []string{"SKIP s2 agent_missing"}) {
+		t.Fatalf("skips = %v, want [SKIP s2 agent_missing]", got)
+	}
 }

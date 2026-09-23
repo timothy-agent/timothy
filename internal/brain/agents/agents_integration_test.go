@@ -264,3 +264,54 @@ func TestAgentMissionColumns(t *testing.T) {
 		t.Fatalf("harness after clearing = %q, want empty (inherit)", a.Harness)
 	}
 }
+
+// TestAgentDeleteRefusedWhileScheduleReferencesIt covers issue #815:
+// Delete returns ErrInUse naming every schedule whose template names
+// the agent, and succeeds once no schedule does.
+func TestAgentDeleteRefusedWhileScheduleReferencesIt(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	id, err := s.Create(ctx, Agent{Name: marker + "scheduled", Enabled: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	scheduleNames := []string{marker + "schedule-a", marker + "schedule-b"}
+	for _, n := range scheduleNames {
+		if _, err := db.Exec(ctx, `INSERT INTO schedules (name, cron, mission_template)
+			VALUES ($1, '0 9 * * *', jsonb_build_object('goal', 'g', 'kind', 'general', 'agent_id', $2::text))`, n, id); err != nil {
+			t.Fatalf("insert schedule: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(cctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, `DELETE FROM schedules WHERE name LIKE $1 || '%'`, marker)
+	})
+
+	err = s.Delete(ctx, id)
+	if !errors.Is(err, ErrInUse) {
+		t.Fatalf("Delete of a schedule-referenced agent = %v, want ErrInUse", err)
+	}
+	for _, n := range scheduleNames {
+		if !strings.Contains(err.Error(), n) {
+			t.Fatalf("error %q does not name schedule %q", err, n)
+		}
+	}
+
+	if _, err := db.Exec(ctx, `DELETE FROM schedules WHERE name LIKE $1 || '%'`, marker); err != nil {
+		t.Fatalf("delete schedules: %v", err)
+	}
+	if err := s.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete once unreferenced: %v", err)
+	}
+}

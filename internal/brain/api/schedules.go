@@ -71,12 +71,11 @@ func (h *scheduleAPI) validateDestinationIDs(ctx context.Context, ids []string) 
 	return nil
 }
 
-// validateLightTemplate rejects a template that pairs light with
-// kind=coding — light (D-069) only makes sense for a kind=general
-// mission, same rule create() enforces for a one-off mission.
-func validateLightTemplate(t missions.MissionTemplate) error {
-	if t.Light && t.Kind != missions.KindGeneral {
-		return fmt.Errorf("mission_template.light is only valid for kind=general")
+// validateTemplateAgentID rejects a present agent_id that is not a
+// UUID; a malformed id would otherwise fail every fire (issue #815).
+func validateTemplateAgentID(t missions.MissionTemplate) error {
+	if t.AgentID != "" && !validSessionID(t.AgentID) {
+		return fmt.Errorf("mission_template.agent_id must be a UUID")
 	}
 	return nil
 }
@@ -220,7 +219,11 @@ func (h *scheduleAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	if err := validateLightTemplate(req.MissionTemplate); err != nil {
+	if err := missions.ValidateTemplate(req.MissionTemplate); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if err := validateTemplateAgentID(req.MissionTemplate); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
@@ -269,7 +272,11 @@ func (h *scheduleAPI) patch(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}
-		if err := validateLightTemplate(*req.MissionTemplate); err != nil {
+		if err := missions.ValidateTemplate(*req.MissionTemplate); err != nil {
+			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+			return
+		}
+		if err := validateTemplateAgentID(*req.MissionTemplate); err != nil {
 			jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 			return
 		}

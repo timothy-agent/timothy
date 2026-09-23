@@ -66,6 +66,12 @@ func (s *Store) maxIterationsFor(ctx context.Context, want int) int {
 	return fallbackMaxIterations
 }
 
+// DefaultMaxIterations is the ceiling a mission created without one
+// gets: the configured default, else fallbackMaxIterations.
+func (s *Store) DefaultMaxIterations(ctx context.Context) int {
+	return s.maxIterationsFor(ctx, 0)
+}
+
 // SetHub wires the push-notification hub: a nil hub (the default,
 // before this is called) makes every publish below a no-op, so a
 // mission API test or a build without SSE wired up behaves exactly as
@@ -309,7 +315,8 @@ func scanMission(row pgx.Row) (Mission, error) {
 	return m, nil
 }
 
-// Create inserts a mission row in phase=discover, status=idle.
+// Create inserts a mission row in its initial phase, status=idle. It is
+// the package's single missions insert (issue #816).
 func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	db, err := s.db.Get()
 	if err != nil {
@@ -354,9 +361,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 	}
 	phase := initialPhase(m.Kind, flow)
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness, executor_session_policy)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30, $31, $32) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, s.maxIterationsFor(ctx, m.MaxIterations), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness, executor_session_policy, schedule_id)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30, $31, $32, NULLIF($33, '')::uuid) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, s.maxIterationsFor(ctx, m.MaxIterations), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy, m.ScheduleID,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)

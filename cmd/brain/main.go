@@ -367,7 +367,22 @@ func main() {
 	// below) can close over the same store the kb admin API and mission
 	// promotion hook use later in this function.
 	kbStore := kb.New(app.DB)
-	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, routeForRole, fxStore, gwc, secrets, conns, mc, packs, app.Log)
+	// One set of create-path lookups for every mission creator the brain
+	// runs besides the HTTP handler (scheduler, workflow engine), wired
+	// from the same sources the handler's own fields use (issue #816).
+	missionResolve := missions.ResolveDeps{
+		Classify:     chat.ClassifyOverGateway(gwc),
+		Agent:        missionAgentResolver(agentReg),
+		RouteForRole: routeForRole,
+		RouteExists: func(ctx context.Context, name string) bool {
+			_, err := gwc.ResolveRoute(ctx, name, "")
+			return err == nil
+		},
+		CodingExecutorDefault: flags.CodingExecutor,
+		DefaultMaxIterations:  flags.MissionDefaultMaxIterations,
+		ResolveRoute:          gwc.ResolveRoute,
+	}
+	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, missionResolve, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, gwc,
 			flags.PermissionTimeoutSeconds, flags.AskTimeoutSeconds, broker.Resolve, app.Log)
@@ -455,7 +470,7 @@ func main() {
 	if missionDriver != nil && os.Getenv("WORKFLOWS_ENABLED") != "" {
 		workflowStore = workflows.NewStore(app.DB, app.Log)
 		workflowEngine = workflows.NewEngine(workflowStore, missionDriver, missionStore, app.Log)
-		workflowEngine.SetRouteForRole(routeForRole)
+		workflowEngine.SetResolveDeps(missionResolve)
 		missionDriver.SetOnTerminal(workflowEngine.OnMissionTerminal)
 	}
 	// deliver: chat-facing ad-hoc send to one operator-configured
@@ -1189,10 +1204,11 @@ func intersectReadOnlyConnectorTools(allow []string, available []*tools.Tool) []
 // scheduled, the API surface unmounted (registerMissions 404s on a nil
 // store). agentReg is D-034's agent registry, resolved at scheduler
 // fire time and mission provisioning time (never schedule-create
-// time) so an agent edited after the fact still applies. The hub
+// time) so an agent edited after the fact still applies.
+// missionResolve is the create-path lookups scheduler fires use. The hub
 // lives inside the same gate as everything else here: no missions,
 // no push events either.
-func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, routeForRole func(context.Context, string) string, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, packs []skills.Skill, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub, *missions.Scheduler) {
+func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sessions *session.Store, toolWorkspaceRoot string, flags *settings.Store, sandboxMgr *sandboxclient.Client, agentReg *agents.Store, missionResolve missions.ResolveDeps, fxStore *fxrates.Store, gwc *gwclient.Client, secrets *secretstore.Store, conns *connectors.Manager, mc *memclient.Client, packs []skills.Skill, log *slog.Logger) (*missions.Store, *missions.Driver, *missions.Notifier, *missions.Workspace, *missions.Hub, *missions.Scheduler) {
 	root := os.Getenv("WORKSPACES")
 	if root == "" {
 		log.Info("WORKSPACES not set; missions disabled")
@@ -1399,15 +1415,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		driver.SetPRStateResolver(prStateResolver(conns.GitClient))
 	}
 	schedulerEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyScheduler) }
-	// routeExists backs DefaultCodingRoute's preference check for a
-	// coding template's route (see api/missions.go's own copy of this
-	// wiring for the create-request path): false on any resolve error,
-	// never a hard failure.
-	routeExists := func(ctx context.Context, name string) bool {
-		_, err := gwc.ResolveRoute(ctx, name, "")
-		return err == nil
-	}
-	scheduler := missions.NewScheduler(db, store, resolveAgent, schedulerEnabled, routeForRole, routeExists, flags.CodingExecutor, nil, log)
+	scheduler := missions.NewScheduler(db, driver.Create, missionResolve, schedulerEnabled, nil, log)
 	scheduler.SetLocation(flags.Location)
 	go scheduler.Run(ctx)
 	return store, driver, notifier, workspace, hub, scheduler

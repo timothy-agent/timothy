@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
@@ -443,5 +444,68 @@ func TestOnMissionTerminalRecordsUnknownPlaceholderWarning(t *testing.T) {
 	qa := spawner.last()
 	if qa.Goal != "check " {
 		t.Fatalf("qa goal = %q, want unknown placeholder rendered empty", qa.Goal)
+	}
+}
+
+// TestStartRunResolvesStepThroughSharedDefaults covers issue #816: a
+// step's mission gets its agent's route/review route/overlay and the
+// harness precedence chain, not just a default route.
+func TestStartRunResolvesStepThroughSharedDefaults(t *testing.T) {
+	store := newFakeEngineStore()
+	d := Definition{
+		Entry: "coder",
+		Steps: map[string]Step{"coder": {Goal: "write the code", Kind: "coding", AgentID: "agent-1"}},
+		Edges: []Edge{{From: "coder", On: "mission.done", To: endStep, MaxIterations: 1}},
+	}
+	_ = d.Validate()
+	store.putWorkflow("wf1", d, true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+	e.SetResolveDeps(missions.ResolveDeps{
+		Agent: func(_ context.Context, id string) (missions.AgentDefaults, bool) {
+			if id != "agent-1" {
+				return missions.AgentDefaults{}, false
+			}
+			return missions.AgentDefaults{Route: "agent-route", ReviewRoute: "agent-review", PromptOverlay: "overlay", Harness: "codex-cli"}, true
+		},
+		RouteForRole:          func(context.Context, string) string { return "default" },
+		CodingExecutorDefault: func(context.Context) string { return "claude-cli" },
+	})
+
+	if _, err := e.StartRun(context.Background(), "wf1", nil); err != nil {
+		t.Fatalf("StartRun() = %v", err)
+	}
+	m := spawner.last()
+	if m.Route != "agent-route" || m.ReviewRoute != "agent-review" || m.PromptOverlay != "overlay" || m.Harness != "codex-cli" {
+		t.Fatalf("spawned mission route=%q review=%q overlay=%q harness=%q, want the agent's defaults", m.Route, m.ReviewRoute, m.PromptOverlay, m.Harness)
+	}
+	if !m.AutoApprovePlan || m.AutoApproveTools || m.BudgetCurrency != "USD" || m.Flow != missions.FlowFull {
+		t.Fatalf("spawned mission plan=%v tools=%v currency=%q flow=%q", m.AutoApprovePlan, m.AutoApproveTools, m.BudgetCurrency, m.Flow)
+	}
+}
+
+// TestStartRunPausesOnUnusableRoute confirms the D-100 gate applies to a
+// workflow step: the run pauses instead of spawning a mission that
+// would park on its first turn.
+func TestStartRunPausesOnUnusableRoute(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+	e.SetResolveDeps(missions.ResolveDeps{
+		RouteForRole: func(context.Context, string) string { return "dead" },
+		ResolveRoute: func(_ context.Context, route, _ string) (*gwclient.ResolvedRoute, error) {
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{{Usable: false, SkipReason: "disabled"}}}, nil
+		},
+	})
+	runID, err := e.StartRun(context.Background(), "wf1", nil)
+	if err == nil {
+		t.Fatal("StartRun() = nil, want the route gate error")
+	}
+	if spawner.count() != 0 {
+		t.Fatalf("spawned missions = %d, want 0", spawner.count())
+	}
+	if run, _ := store.GetRun(context.Background(), runID); run.Status != "paused" {
+		t.Fatalf("run status = %q, want paused", run.Status)
 	}
 }
