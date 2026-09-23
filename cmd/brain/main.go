@@ -264,6 +264,9 @@ func main() {
 	}
 	builtinSet := newBuiltinToolSet(builtins)
 	go runOutputGC(ctx, outputs, app.Log)
+	// D-118: stale prompt expiry and retention run with or without
+	// missions.
+	go broker.RunExpiry(ctx, time.Minute)
 
 	secrets, err := buildSecretStore(app.DB, app.Log)
 	if err != nil {

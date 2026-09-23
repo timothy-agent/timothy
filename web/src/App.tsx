@@ -398,13 +398,13 @@ function App() {
     }
   }, [])
 
-  // Toast + sound fire only for a NEWLY seen pending permission (a
-  // session_id not present on the previous render) — every poll/signal
+  // Toast + sound fire only for a NEWLY seen pending permission (an
+  // id not present on the previous render): every poll/signal
   // refetch would otherwise re-toast the same still-pending ask.
   const seenPermissions = useRef<Set<string>>(new Set())
   useEffect(() => {
     const fresh = newlySeen(seenPermissions.current, pendingPermissions)
-    const current = new Set(pendingPermissions.map((p) => p.session_id))
+    const current = new Set(pendingPermissions.map((p) => p.id))
     if (fresh.length > 0) {
       if (getNotificationSoundEnabled()) playAlertSound()
       for (const p of fresh) {

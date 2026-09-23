@@ -31,9 +31,11 @@ func (s *apiPermStore) Insert(_ context.Context, p loop.PendingPermission) error
 	return nil
 }
 
-func (s *apiPermStore) Redeem(context.Context, loop.PendingPermission, time.Duration) (string, string, error) {
+func (s *apiPermStore) Redeem(context.Context, loop.PendingPermission, time.Duration, time.Duration) (string, string, error) {
 	return "", "", nil
 }
+
+func (s *apiPermStore) RedeemID(context.Context, string) (string, bool, error) { return "", true, nil }
 
 func (s *apiPermStore) Adopt(context.Context, loop.PendingPermission, []string) (string, error) {
 	return "", nil
@@ -56,6 +58,8 @@ func (s *apiPermStore) Resolve(_ context.Context, id, decision string, carry boo
 }
 
 func (s *apiPermStore) Expire(context.Context, []string, time.Duration) (int64, error) { return 0, nil }
+
+func (s *apiPermStore) Prune(context.Context, time.Duration) (int64, error) { return 0, nil }
 
 func (s *apiPermStore) Pending(context.Context) ([]loop.PendingPermission, error) {
 	s.mu.Lock()

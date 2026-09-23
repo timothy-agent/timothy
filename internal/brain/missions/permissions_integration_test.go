@@ -245,15 +245,15 @@ func TestPermissionAnsweredAfterRestartWithinWindowDoesNotResolveAsTimeout(t *te
 	}
 }
 
-// TestSweepExpiresStalePendingPermissionRows covers D-118's cleanup: a
-// mission prompt its mission no longer references and a chat prompt
-// older than the chat timeout expire as timeout; a referenced mission
-// prompt, a fresh chat prompt and a live one stay pending.
-func TestSweepExpiresStalePendingPermissionRows(t *testing.T) {
+// TestExpireStalePendingPermissionRows covers D-118's cleanup: a
+// mission prompt over a minute old its mission no longer references and
+// a chat prompt older than the chat timeout expire as timeout; a
+// referenced mission prompt, a fresh orphan (SetPendingPermission may
+// not have landed yet), a fresh chat prompt and a live one stay pending.
+func TestExpireStalePendingPermissionRows(t *testing.T) {
 	store := testStore(t)
 	ctx := t.Context()
 	m := attendedMissionWithSession(t, store, fmt.Sprintf("perm-expire %d", time.Now().UnixNano()))
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	db, _ := store.db.Get()
 
 	old := persistedBroker(store)
@@ -270,13 +270,14 @@ func TestSweepExpiresStalePendingPermissionRows(t *testing.T) {
 		return id
 	}
 	orphan := mk(m.ID, "orphan")
+	freshOrphan := mk(m.ID, "fresh-orphan")
 	referenced := mk(m.ID, "referenced")
 	staleChat := mk("", "stale-chat")
 	freshChat := mk("", "fresh-chat")
 	if err := store.SetPendingPermission(ctx, m.ID, referenced, "referenced", "{}", "safe", "r"); err != nil {
 		t.Fatalf("SetPendingPermission: %v", err)
 	}
-	if _, err := db.Exec(ctx, `UPDATE pending_permissions SET created_at = now() - interval '1 hour' WHERE id = $1`, staleChat); err != nil {
+	if _, err := db.Exec(ctx, `UPDATE pending_permissions SET created_at = now() - interval '1 hour' WHERE id = ANY($1)`, []string{staleChat, orphan, referenced}); err != nil {
 		t.Fatalf("backdate: %v", err)
 	}
 
@@ -285,9 +286,11 @@ func TestSweepExpiresStalePendingPermissionRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(live): %v", err)
 	}
-	sweepPermissionTimeouts(ctx, &fakePermissionTimeoutDriver{}, store, nil, restarted, nil, log)
+	if _, err := restarted.ExpireStale(ctx); err != nil {
+		t.Fatalf("ExpireStale: %v", err)
+	}
 
-	want := map[string]string{orphan: loop.DecideTimeout, staleChat: loop.DecideTimeout, referenced: "", freshChat: "", live: ""}
+	want := map[string]string{orphan: loop.DecideTimeout, staleChat: loop.DecideTimeout, referenced: "", freshOrphan: "", freshChat: "", live: ""}
 	for id, decision := range want {
 		var got string
 		if err := db.QueryRow(ctx, `SELECT COALESCE(decision, '') FROM pending_permissions WHERE id = $1`, id).Scan(&got); err != nil {

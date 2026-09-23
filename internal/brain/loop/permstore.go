@@ -34,7 +34,7 @@ func (s *PGPermStore) Insert(ctx context.Context, p PendingPermission) error {
 	return nil
 }
 
-func (s *PGPermStore) Redeem(ctx context.Context, p PendingPermission, within time.Duration) (string, string, error) {
+func (s *PGPermStore) Redeem(ctx context.Context, p PendingPermission, onceWithin, sessionWithin time.Duration) (string, string, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return "", "", fmt.Errorf("loop: pending permission redeem: %w", err)
@@ -47,11 +47,11 @@ func (s *PGPermStore) Redeem(ctx context.Context, p PendingPermission, within ti
 			  AND session_id IS NOT DISTINCT FROM NULLIF($1, '')::uuid
 			  AND mission_id IS NOT DISTINCT FROM NULLIF($2, '')::uuid
 			  AND tool = $3 AND args = $4::jsonb
-			  AND resolved_at > now() - $5::interval
+			  AND resolved_at > now() - CASE decision WHEN 'once' THEN $5::interval ELSE $6::interval END
 			ORDER BY resolved_at LIMIT 1
 			FOR UPDATE SKIP LOCKED)
 		RETURNING id, decision`,
-		p.SessionID, p.MissionID, p.Tool, string(p.Args), fmt.Sprintf("%d seconds", int64(within.Seconds()))).Scan(&id, &decision)
+		p.SessionID, p.MissionID, p.Tool, string(p.Args), pgInterval(onceWithin), pgInterval(sessionWithin)).Scan(&id, &decision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", nil
 	}
@@ -59,6 +59,30 @@ func (s *PGPermStore) Redeem(ctx context.Context, p PendingPermission, within ti
 		return "", "", fmt.Errorf("loop: pending permission redeem: %w", err)
 	}
 	return id, decision, nil
+}
+
+func (s *PGPermStore) RedeemID(ctx context.Context, id string) (string, bool, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", false, fmt.Errorf("loop: pending permission redeem id: %w", err)
+	}
+	var decision string
+	var pending bool
+	err = db.QueryRow(ctx, `WITH cur AS (
+			SELECT id, resolved_at IS NULL AS pending, carry_over, COALESCE(decision, '') AS decision
+			FROM pending_permissions WHERE id = $1 FOR UPDATE),
+		consumed AS (
+			UPDATE pending_permissions p SET carry_over = false
+			FROM cur WHERE p.id = cur.id AND cur.carry_over
+			RETURNING p.id)
+		SELECT CASE WHEN cur.carry_over THEN cur.decision ELSE '' END, cur.pending FROM cur`, id).Scan(&decision, &pending)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("loop: pending permission redeem id: %w", err)
+	}
+	return decision, pending, nil
 }
 
 func (s *PGPermStore) Adopt(ctx context.Context, p PendingPermission, live []string) (string, error) {
@@ -113,14 +137,31 @@ func (s *PGPermStore) Expire(ctx context.Context, live []string, chatTimeout tim
 		SET resolved_at = now(), decision = 'timeout'
 		WHERE p.resolved_at IS NULL AND NOT (p.id = ANY($1))
 		  AND ((p.mission_id IS NULL AND p.created_at < now() - $2::interval)
-		    OR (p.mission_id IS NOT NULL AND NOT EXISTS (
+		    OR (p.mission_id IS NOT NULL AND p.created_at < now() - interval '1 minute' AND NOT EXISTS (
 		        SELECT 1 FROM missions m
 		        WHERE m.id = p.mission_id AND m.pending_permission->>'id' = p.id)))`,
-		live, fmt.Sprintf("%d seconds", int64(chatTimeout.Seconds())))
+		live, pgInterval(chatTimeout))
 	if err != nil {
 		return 0, fmt.Errorf("loop: pending permission expire: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+func (s *PGPermStore) Prune(ctx context.Context, olderThan time.Duration) (int64, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return 0, fmt.Errorf("loop: pending permission prune: %w", err)
+	}
+	tag, err := db.Exec(ctx, `DELETE FROM pending_permissions
+		WHERE resolved_at < now() - $1::interval`, pgInterval(olderThan))
+	if err != nil {
+		return 0, fmt.Errorf("loop: pending permission prune: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+func pgInterval(d time.Duration) string {
+	return fmt.Sprintf("%d seconds", int64(d.Seconds()))
 }
 
 func (s *PGPermStore) Pending(ctx context.Context) ([]PendingPermission, error) {

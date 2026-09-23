@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 )
@@ -52,9 +55,14 @@ type PermStore interface {
 	// Insert writes a new pending row with p.ID.
 	Insert(ctx context.Context, p PendingPermission) error
 	// Redeem consumes a carried-over answer for the same call (session,
-	// mission, tool, args) resolved within the window; id is "" when
-	// none exists.
-	Redeem(ctx context.Context, p PendingPermission, within time.Duration) (id, decision string, err error)
+	// mission, tool, args) resolved within its window (onceWithin for a
+	// once answer, sessionWithin for a session one); id is "" when none
+	// exists.
+	Redeem(ctx context.Context, p PendingPermission, onceWithin, sessionWithin time.Duration) (id, decision string, err error)
+	// RedeemID consumes row id's carried-over answer, if any. decision
+	// is "" when nothing was consumed; pending reports whether the row
+	// is still unresolved.
+	RedeemID(ctx context.Context, id string) (decision string, pending bool, err error)
 	// Adopt returns the id of a still-pending row for the same call
 	// whose id is not in live, "" when none exists.
 	Adopt(ctx context.Context, p PendingPermission, live []string) (string, error)
@@ -63,9 +71,12 @@ type PermStore interface {
 	// id is unknown or already resolved.
 	Resolve(ctx context.Context, id, decision string, carry bool) (row PendingPermission, ok bool, err error)
 	// Expire marks timeout on pending rows not in live that no turn can
-	// still wait on: chat rows older than chatTimeout, mission rows the
-	// mission no longer references.
+	// still wait on: chat rows older than chatTimeout, mission rows over
+	// a minute old the mission no longer references (the grace covers
+	// the gap before SetPendingPermission lands).
 	Expire(ctx context.Context, live []string, chatTimeout time.Duration) (int64, error)
+	// Prune deletes rows resolved more than olderThan ago.
+	Prune(ctx context.Context, olderThan time.Duration) (int64, error)
 	// Pending lists every unresolved row, oldest first.
 	Pending(ctx context.Context) ([]PendingPermission, error)
 }
@@ -86,6 +97,10 @@ type PermStore interface {
 type PermBroker struct {
 	mu      sync.Mutex
 	pending map[string]chan string
+	// resolveMu serializes Resolve against Create's adopt path, so an
+	// answer landing between Adopt and register is seen by exactly one
+	// of them.
+	resolveMu sync.Mutex
 	store   PermStore
 	events  EventAppender
 	log     *slog.Logger
@@ -118,7 +133,12 @@ func (b *PermBroker) Create(ctx context.Context, p PendingPermission) (string, <
 		return id, ch, nil
 	}
 	p.Args = normalizeArgs(p.Args)
-	id, decision, err := b.store.Redeem(ctx, p, sessionGrantTTL)
+	var id, decision string
+	err := b.withArgsFallback(&p, func() error {
+		var err error
+		id, decision, err = b.store.Redeem(ctx, p, onceCarryTTL, sessionGrantTTL)
+		return err
+	})
 	if err != nil {
 		return "", nil, err
 	}
@@ -130,24 +150,60 @@ func (b *PermBroker) Create(ctx context.Context, p PendingPermission) (string, <
 	if err != nil {
 		return "", nil, err
 	}
-	if adopted != "" && b.register(adopted, ch) {
-		return adopted, ch, nil
+	if adopted != "" {
+		ok, err := b.adopt(ctx, adopted, ch)
+		if err != nil {
+			return "", nil, err
+		}
+		if ok {
+			return adopted, ch, nil
+		}
 	}
 	// Registered before the insert so Expire never sees the new row
 	// without a live waiter.
 	p.ID = newPermID()
 	b.register(p.ID, ch)
-	if err := b.store.Insert(ctx, p); err != nil {
+	if err := b.withArgsFallback(&p, func() error { return b.store.Insert(ctx, p) }); err != nil {
 		b.drop(p.ID)
 		return "", nil, err
 	}
 	return p.ID, ch, nil
 }
 
+// adopt registers ch as id's waiter, then re-reads the row: an answer
+// recorded after Adopt but before register is consumed and delivered
+// here. False (registration dropped) when id already has a waiter or
+// was resolved with nothing left to carry; the caller opens a new
+// prompt.
+func (b *PermBroker) adopt(ctx context.Context, id string, ch chan string) (bool, error) {
+	b.resolveMu.Lock()
+	defer b.resolveMu.Unlock()
+	if !b.register(id, ch) {
+		return false, nil
+	}
+	decision, pending, err := b.store.RedeemID(ctx, id)
+	if err != nil {
+		b.drop(id)
+		return false, err
+	}
+	if decision != "" {
+		b.drop(id)
+		ch <- decision
+		return true, nil
+	}
+	if !pending {
+		b.drop(id)
+		return false, nil
+	}
+	return true, nil
+}
+
 // Resolve delivers the user's decision: marks the row resolved and
 // wakes the live waiter, if any. False = unknown or already answered
 // id (the API returns 404).
 func (b *PermBroker) Resolve(ctx context.Context, id, decision string) bool {
+	b.resolveMu.Lock()
+	defer b.resolveMu.Unlock()
 	b.mu.Lock()
 	ch, live := b.pending[id]
 	if live {
@@ -198,13 +254,41 @@ func (b *PermBroker) Pending(ctx context.Context) ([]PendingPermission, error) {
 }
 
 // ExpireStale marks timeout on persisted prompts no live turn waits on
-// and no future ask can adopt (see PermStore.Expire); chat prompts use
-// the loop's own permission timeout.
+// and no future ask can adopt (see PermStore.Expire), then deletes rows
+// resolved more than permRetention ago; chat prompts use the loop's own
+// permission timeout.
 func (b *PermBroker) ExpireStale(ctx context.Context) (int64, error) {
 	if b.store == nil {
 		return 0, nil
 	}
-	return b.store.Expire(ctx, b.liveIDs(), getPermissionTimeout())
+	n, err := b.store.Expire(ctx, b.liveIDs(), getPermissionTimeout())
+	if err != nil {
+		return n, err
+	}
+	if _, err := b.store.Prune(ctx, permRetention); err != nil {
+		return n, err
+	}
+	return n, nil
+}
+
+// RunExpiry calls ExpireStale every interval until ctx ends. It runs
+// whether or not missions are enabled (D-118).
+func (b *PermBroker) RunExpiry(ctx context.Context, interval time.Duration) {
+	if b.store == nil {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if _, err := b.ExpireStale(ctx); err != nil {
+				b.log.Error("permission broker: expire stale prompts", "error", err)
+			}
+		}
+	}
 }
 
 // register adds a live waiter for id; false when id already has one.
@@ -251,4 +335,23 @@ func normalizeArgs(args json.RawMessage) json.RawMessage {
 	}
 	s, _ := json.Marshal(string(args))
 	return s
+}
+
+// withArgsFallback runs fn; when Postgres rejects p.Args as jsonb
+// (valid JSON it cannot store, such as \u0000 or an out-of-range
+// number), it wraps p.Args as a JSON string and runs fn once more.
+func (b *PermBroker) withArgsFallback(p *PendingPermission, fn func() error) error {
+	err := fn()
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return err
+	}
+	switch pgErr.Code {
+	case "22P02", "22P05", "22003":
+	default:
+		return err
+	}
+	s, _ := json.Marshal(string(p.Args))
+	p.Args = s
+	return fn()
 }

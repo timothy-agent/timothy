@@ -415,37 +415,16 @@ func TestSweepPermissionTimeoutsResolvesAndDrives(t *testing.T) {
 	if len(broker.resolved) != 1 || broker.resolved[0] != "p1|timeout" {
 		t.Fatalf("broker Resolve calls = %v, want exactly [p1|timeout]", broker.resolved)
 	}
-	if broker.expired != 1 {
-		t.Fatalf("broker ExpireStale calls = %d, want 1", broker.expired)
-	}
-}
-
-// TestSweepPermissionTimeoutsExpiresStalePromptsWhenDisabled confirms
-// persisted prompts expire (D-118) even when the mission permission
-// timeout is disabled: the table must never accumulate.
-func TestSweepPermissionTimeoutsExpiresStalePromptsWhenDisabled(t *testing.T) {
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	broker := &fakePermissionBroker{}
-	sweepPermissionTimeouts(context.Background(), &fakePermissionTimeoutDriver{}, &fakePermissionTimeoutStore{}, nil, broker, nil, log)
-	if broker.expired != 1 || len(broker.resolved) != 0 {
-		t.Fatalf("expired=%d resolved=%v, want one expiry and no resolve", broker.expired, broker.resolved)
-	}
 }
 
 // fakePermissionBroker records the permission sweep's broker calls.
 type fakePermissionBroker struct {
 	resolved []string
-	expired  int
 }
 
 func (b *fakePermissionBroker) Resolve(_ context.Context, id, decision string) bool {
 	b.resolved = append(b.resolved, id+"|"+decision)
 	return true
-}
-
-func (b *fakePermissionBroker) ExpireStale(context.Context) (int64, error) {
-	b.expired++
-	return 0, nil
 }
 
 // TestSweepPermissionTimeoutsNilResolveBrokerSafe confirms a nil

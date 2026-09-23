@@ -895,6 +895,8 @@ CREATE TABLE IF NOT EXISTS pending_permissions (
 
 CREATE INDEX IF NOT EXISTS pending_permissions_pending_idx
     ON pending_permissions (created_at) WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS pending_permissions_carry_idx
+    ON pending_permissions (session_id, mission_id, tool) WHERE carry_over;
 
 -- Durable inbox for side effects that must survive a crash (D-117,
 -- internal/brain/events): a producer inserts a row in the same

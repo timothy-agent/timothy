@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 )
 
@@ -27,6 +29,12 @@ type fakePermStore struct {
 	order     []string
 	insertErr error
 	inserted  []string
+	// afterAdopt runs after Adopt returns id, outside the lock.
+	afterAdopt func(id string)
+	// jsonbErrs makes the next Redeem/Insert call per key ("redeem",
+	// "insert") fail once with a jsonb cast error.
+	jsonbErrs map[string]bool
+	pruned    []time.Duration
 }
 
 func newFakePermStore() *fakePermStore { return &fakePermStore{rows: map[string]*fakePermRow{}} }
@@ -35,11 +43,23 @@ func sameCall(a, b PendingPermission) bool {
 	return a.SessionID == b.SessionID && a.MissionID == b.MissionID && a.Tool == b.Tool && string(a.Args) == string(b.Args)
 }
 
+// failJSONB consumes a queued jsonb cast failure for op.
+func (f *fakePermStore) failJSONB(op string) error {
+	if f.jsonbErrs[op] {
+		delete(f.jsonbErrs, op)
+		return &pgconn.PgError{Code: "22P05", Message: "unsupported Unicode escape sequence"}
+	}
+	return nil
+}
+
 func (f *fakePermStore) Insert(_ context.Context, p PendingPermission) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.insertErr != nil {
 		return f.insertErr
+	}
+	if err := f.failJSONB("insert"); err != nil {
+		return err
 	}
 	f.rows[p.ID] = &fakePermRow{p: p}
 	f.order = append(f.order, p.ID)
@@ -47,11 +67,18 @@ func (f *fakePermStore) Insert(_ context.Context, p PendingPermission) error {
 	return nil
 }
 
-func (f *fakePermStore) Redeem(_ context.Context, p PendingPermission, within time.Duration) (string, string, error) {
+func (f *fakePermStore) Redeem(_ context.Context, p PendingPermission, onceWithin, sessionWithin time.Duration) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failJSONB("redeem"); err != nil {
+		return "", "", err
+	}
 	for _, id := range f.order {
 		r := f.rows[id]
+		within := sessionWithin
+		if r.decision == DecideOnce {
+			within = onceWithin
+		}
 		if r.carry && sameCall(r.p, p) && time.Since(r.resolvedAt) < within {
 			r.carry = false
 			return id, r.decision, nil
@@ -60,7 +87,29 @@ func (f *fakePermStore) Redeem(_ context.Context, p PendingPermission, within ti
 	return "", "", nil
 }
 
+func (f *fakePermStore) RedeemID(_ context.Context, id string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.rows[id]
+	if !ok {
+		return "", false, nil
+	}
+	if r.carry {
+		r.carry = false
+		return r.decision, !r.resolved, nil
+	}
+	return "", !r.resolved, nil
+}
+
 func (f *fakePermStore) Adopt(_ context.Context, p PendingPermission, live []string) (string, error) {
+	id, err := f.adopt(p, live)
+	if id != "" && f.afterAdopt != nil {
+		f.afterAdopt(id)
+	}
+	return id, err
+}
+
+func (f *fakePermStore) adopt(p PendingPermission, live []string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	isLive := map[string]bool{}
@@ -88,6 +137,13 @@ func (f *fakePermStore) Resolve(_ context.Context, id, decision string, carry bo
 }
 
 func (f *fakePermStore) Expire(_ context.Context, live []string, _ time.Duration) (int64, error) {
+	return 0, nil
+}
+
+func (f *fakePermStore) Prune(_ context.Context, olderThan time.Duration) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pruned = append(f.pruned, olderThan)
 	return 0, nil
 }
 
@@ -367,4 +423,178 @@ func TestPermBrokerNilStoreKeepsInMemoryBehaviour(t *testing.T) {
 	if n, err := b.ExpireStale(t.Context()); n != 0 || err != nil {
 		t.Fatalf("nil-store ExpireStale = %d, %v", n, err)
 	}
+}
+
+// TestPermBrokerAnswerBetweenAdoptAndRegisterDeliversOnce covers the
+// adopt/register race: the operator answers the orphan after Adopt
+// returns it but before the new waiter registers. The answer is
+// carried, then consumed by the adopting ask exactly once.
+func TestPermBrokerAnswerBetweenAdoptAndRegisterDeliversOnce(t *testing.T) {
+	store := newFakePermStore()
+	old := NewPermBroker()
+	old.SetStore(store, nil, nil)
+	id, _, _ := old.Create(t.Context(), chatPrompt())
+
+	b := NewPermBroker()
+	b.SetStore(store, nil, nil)
+	resolved := false
+	store.afterAdopt = func(adopted string) {
+		store.afterAdopt = nil
+		resolved = b.Resolve(t.Context(), adopted, DecideOnce)
+	}
+	gotID, ch, err := b.Create(t.Context(), chatPrompt())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !resolved {
+		t.Fatal("Resolve in the race window = false, want true")
+	}
+	if gotID != id || len(store.inserted) != 1 {
+		t.Fatalf("id=%q inserted=%v, want the adopted %q and no new row", gotID, store.inserted, id)
+	}
+	if len(ch) != 1 || <-ch != DecideOnce {
+		t.Fatal("waiter did not get the once answer")
+	}
+	if r := store.row(id); r.carry {
+		t.Fatalf("row = %+v, want carry consumed", r)
+	}
+	if ids := b.liveIDs(); len(ids) != 0 {
+		t.Fatalf("live ids = %v, want none after delivery", ids)
+	}
+	nextID, next, _ := b.Create(t.Context(), chatPrompt())
+	if nextID == id || len(next) != 0 {
+		t.Fatal("once answer delivered twice")
+	}
+}
+
+// TestPermBrokerDenyBetweenAdoptAndRegisterOpensNewPrompt: a deny in
+// the race window carries nothing, so the ask opens a fresh prompt, as
+// it would had the deny landed before Adopt.
+func TestPermBrokerDenyBetweenAdoptAndRegisterOpensNewPrompt(t *testing.T) {
+	store := newFakePermStore()
+	old := NewPermBroker()
+	old.SetStore(store, nil, nil)
+	id, _, _ := old.Create(t.Context(), chatPrompt())
+
+	b := NewPermBroker()
+	b.SetStore(store, nil, nil)
+	store.afterAdopt = func(adopted string) {
+		store.afterAdopt = nil
+		b.Resolve(t.Context(), adopted, DecideDeny)
+	}
+	gotID, ch, err := b.Create(t.Context(), chatPrompt())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if gotID == id || len(store.inserted) != 2 || len(ch) != 0 {
+		t.Fatalf("id=%q inserted=%v queued=%d, want a fresh pending prompt", gotID, store.inserted, len(ch))
+	}
+	if ids := b.liveIDs(); len(ids) != 1 || ids[0] != gotID {
+		t.Fatalf("live ids = %v, want only %q", ids, gotID)
+	}
+}
+
+func TestPermBrokerCarryWindowByDecision(t *testing.T) {
+	cases := []struct {
+		decision string
+		age      time.Duration
+		redeemed bool
+	}{
+		{DecideOnce, 29 * time.Minute, true},
+		{DecideOnce, 31 * time.Minute, false},
+		{DecideSession, 31 * time.Minute, true},
+		{DecideSession, 11 * time.Hour, true},
+		{DecideSession, 13 * time.Hour, false},
+	}
+	for _, tc := range cases {
+		store := newFakePermStore()
+		old := NewPermBroker()
+		old.SetStore(store, nil, nil)
+		id, _, _ := old.Create(t.Context(), chatPrompt())
+		b := NewPermBroker()
+		b.SetStore(store, nil, nil)
+		b.Resolve(t.Context(), id, tc.decision)
+		store.mu.Lock()
+		store.rows[id].resolvedAt = time.Now().Add(-tc.age)
+		store.mu.Unlock()
+		gotID, ch, err := b.Create(t.Context(), chatPrompt())
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if got := gotID == id && len(ch) == 1; got != tc.redeemed {
+			t.Fatalf("%s answered %v ago: redeemed=%v, want %v", tc.decision, tc.age, got, tc.redeemed)
+		}
+	}
+}
+
+func TestPermBrokerWrapsArgsJSONBRejects(t *testing.T) {
+	for _, op := range []string{"redeem", "insert"} {
+		store := newFakePermStore()
+		store.jsonbErrs = map[string]bool{op: true}
+		b := NewPermBroker()
+		b.SetStore(store, nil, nil)
+		p := chatPrompt()
+		p.Args = json.RawMessage(`{"a":"\u0000"}`)
+		id, ch, err := b.Create(t.Context(), p)
+		if err != nil {
+			t.Fatalf("%s: Create: %v", op, err)
+		}
+		want, _ := json.Marshal(`{"a":"\u0000"}`)
+		if got := string(store.row(id).p.Args); got != string(want) {
+			t.Fatalf("%s: args stored as %s, want %s", op, got, want)
+		}
+		if len(ch) != 0 {
+			t.Fatalf("%s: want a pending prompt", op)
+		}
+	}
+}
+
+func TestPermBrokerOtherStoreErrorsNotRetried(t *testing.T) {
+	store := newFakePermStore()
+	store.insertErr = &pgconn.PgError{Code: "23505"}
+	b := NewPermBroker()
+	b.SetStore(store, nil, nil)
+	if _, _, err := b.Create(t.Context(), chatPrompt()); err == nil {
+		t.Fatal("Create succeeded, want the unique violation")
+	}
+}
+
+func TestPermBrokerExpireStalePrunes(t *testing.T) {
+	store := newFakePermStore()
+	b := NewPermBroker()
+	b.SetStore(store, nil, nil)
+	if _, err := b.ExpireStale(t.Context()); err != nil {
+		t.Fatalf("ExpireStale: %v", err)
+	}
+	if len(store.pruned) != 1 || store.pruned[0] != permRetention {
+		t.Fatalf("pruned = %v, want one prune at %v", store.pruned, permRetention)
+	}
+}
+
+func TestPermBrokerRunExpiryTicksUntilCancel(t *testing.T) {
+	store := newFakePermStore()
+	b := NewPermBroker()
+	b.SetStore(store, nil, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		b.RunExpiry(ctx, time.Millisecond)
+		close(done)
+	}()
+	deadline := time.After(5 * time.Second)
+	for {
+		store.mu.Lock()
+		n := len(store.pruned)
+		store.mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("RunExpiry did not tick")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
 }
