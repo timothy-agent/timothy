@@ -674,9 +674,9 @@ func TestEngineHandle(t *testing.T) {
 	if err := e.Handle(context.Background(), nil, terminalEvent(t, events.MissionPayload{MissionID: "other", Phase: "done"})); err != nil {
 		t.Fatalf("Handle without run: %v", err)
 	}
-	// Unknown mission: error, retried by the drainer.
-	if err := e.Handle(context.Background(), nil, terminalEvent(t, events.MissionPayload{MissionID: "ghost", Phase: "done", WorkflowRunID: runID})); err == nil {
-		t.Fatal("Handle for an unknown mission = nil error, want error")
+	// Deleted mission: skipped, the event is processed rather than retried.
+	if err := e.Handle(context.Background(), nil, terminalEvent(t, events.MissionPayload{MissionID: "ghost", Phase: "done", WorkflowRunID: runID})); err != nil {
+		t.Fatalf("Handle for a deleted mission = %v, want nil", err)
 	}
 	if spawner.count() != 1 {
 		t.Fatalf("spawned = %d, want 1 before the real event", spawner.count())
@@ -710,5 +710,17 @@ func TestEdgeTakenFor(t *testing.T) {
 		if got := edgeTakenFor(evs, tt.id); got != tt.want {
 			t.Fatalf("edgeTakenFor(%q) = %v, want %v", tt.id, got, tt.want)
 		}
+	}
+}
+
+func TestHandleSkipsDeletedStepMission(t *testing.T) {
+	spawner := &fakeSpawner{}
+	e := testEngine(newFakeEngineStore(), spawner)
+	ev := terminalEvent(t, events.MissionPayload{MissionID: "gone", Phase: string(missions.PhaseDone), WorkflowRunID: "run"})
+	if err := e.Handle(context.Background(), nil, ev); err != nil {
+		t.Fatalf("Handle for a deleted step mission = %v, want nil so the event is processed, not retried", err)
+	}
+	if got := len(spawner.missions); got != 0 {
+		t.Fatalf("spawned missions = %d, want 0", got)
 	}
 }
