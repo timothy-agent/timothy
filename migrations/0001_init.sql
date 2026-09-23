@@ -874,6 +874,28 @@ CREATE TABLE IF NOT EXISTS mission_events (
     PRIMARY KEY (mission_id, seq)
 );
 
+-- Persisted permission prompts (D-118, internal/brain/loop/permbroker.go):
+-- id is the broker id. decision is once|session|deny|timeout, NULL
+-- while pending. carry_over marks a once/session answer recorded with
+-- no live turn, consumed by the next ask of the same call.
+CREATE TABLE IF NOT EXISTS pending_permissions (
+    id          text PRIMARY KEY,
+    session_id  uuid REFERENCES sessions(id) ON DELETE CASCADE,
+    mission_id  uuid REFERENCES missions(id) ON DELETE CASCADE,
+    tool        text NOT NULL,
+    args        jsonb NOT NULL DEFAULT '{}',
+    danger      text NOT NULL DEFAULT '',
+    rationale   text NOT NULL DEFAULT '',
+    origin_kind text NOT NULL DEFAULT 'chat',
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    resolved_at timestamptz,
+    decision    text,
+    carry_over  boolean NOT NULL DEFAULT false
+);
+
+CREATE INDEX IF NOT EXISTS pending_permissions_pending_idx
+    ON pending_permissions (created_at) WHERE resolved_at IS NULL;
+
 -- Durable inbox for side effects that must survive a crash (D-117,
 -- internal/brain/events): a producer inserts a row in the same
 -- transaction as the state change, the drainer runs its consumers

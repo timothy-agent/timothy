@@ -796,7 +796,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			run = append(run, c)
 		}
 		attendedMission := req.MissionID != "" && !req.Unattended
-		executed := a.executeAll(ctx, exec, req.SessionID, run, toolNames, req.Unattended, attendedMission, req.ToolResultCap, emit)
+		executed := a.executeAll(ctx, exec, req.SessionID, req.MissionID, run, toolNames, req.Unattended, attendedMission, req.ToolResultCap, emit)
 		results := make([]provider.ToolResult, 0, len(calls))
 		for i, c := range calls {
 			if refused[i] {
@@ -923,13 +923,13 @@ func EffortFor(results []provider.ToolResult) string {
 // — a mission turn with an operator watching it, threaded down to
 // askUser so a parked permission there waits for the mission's own
 // pause/resume instead of racing a loop-level timer.
-func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string, calls []provider.ToolCall, toolNames map[string]bool, unattended, attendedMission bool, resultCap int, emit func(stream.StreamEvent)) []provider.ToolResult {
+func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID, missionID string, calls []provider.ToolCall, toolNames map[string]bool, unattended, attendedMission bool, resultCap int, emit func(stream.StreamEvent)) []provider.ToolResult {
 	results := make([]provider.ToolResult, len(calls))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(maxParallelTools)
 	for i, call := range calls {
 		g.Go(func() error {
-			results[i] = a.executeOne(gctx, exec, sessionID, call, toolNames, unattended, attendedMission, resultCap, emit)
+			results[i] = a.executeOne(gctx, exec, sessionID, missionID, call, toolNames, unattended, attendedMission, resultCap, emit)
 			return nil
 		})
 	}
@@ -937,7 +937,7 @@ func (a *Agent) executeAll(ctx context.Context, exec Executor, sessionID string,
 	return results
 }
 
-func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended, attendedMission bool, resultCap int, emit func(stream.StreamEvent)) provider.ToolResult {
+func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID, missionID string, call provider.ToolCall, toolNames map[string]bool, unattended, attendedMission bool, resultCap int, emit func(stream.StreamEvent)) provider.ToolResult {
 	start := time.Now()
 	// A fresh collector per call: media a tool emits during THIS
 	// Execute rides on ctx, drained right below, never leaking into a
@@ -958,7 +958,7 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 				content, status, code = fmt.Sprintf("tool %s failed with an internal error: %v", call.Name, p), "error", codeToolError
 			}
 		}()
-		return a.resolveAndRun(ctx, exec, sessionID, call, toolNames, unattended, attendedMission, emit)
+		return a.resolveAndRun(ctx, exec, sessionID, missionID, call, toolNames, unattended, attendedMission, emit)
 	}()
 	isError := status != "ok"
 	media := collector.Drain()
@@ -1053,7 +1053,7 @@ func (a *Agent) executeOne(ctx context.Context, exec Executor, sessionID string,
 // feedback tools.Constrained.Execute would eventually give (D-039):
 // an unattended mission can't afford to wait out a 10-minute prompt
 // timeout just to learn the name never existed.
-func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID string, call provider.ToolCall, toolNames map[string]bool, unattended, attendedMission bool, emit func(stream.StreamEvent)) (content, status, code string) {
+func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID, missionID string, call provider.ToolCall, toolNames map[string]bool, unattended, attendedMission bool, emit func(stream.StreamEvent)) (content, status, code string) {
 	if !toolNames[call.Name] {
 		return fmt.Sprintf("unknown tool %q — use one of the tools you were given", call.Name), "error", codeUnknownTool
 	}
@@ -1102,7 +1102,7 @@ func (a *Agent) resolveAndRun(ctx context.Context, exec Executor, sessionID stri
 			release()
 			return "denied: " + res.Rationale + ". This is a hard policy; do not retry the same call.", "denied", codePolicyDenied
 		default: // still DecisionAsk
-			decision := a.askUser(ctx, call, res, attendedMission, emit)
+			decision := a.askUser(ctx, sessionID, missionID, call, res, attendedMission, emit)
 			switch decision {
 			case DecideSession:
 				if err := a.perms.Grant(ctx, sessionID, call.Name, res.Subject, sessionGrantTTL); err != nil {
@@ -1170,8 +1170,9 @@ func classifyToolError(err error) string {
 
 // askUser parks the call: emits a permission_request and blocks for
 // the decision (D-010). Turn durability while parked comes from the
-// relay's periodic pending_state flushes; the prompt itself is
-// in-memory only — a restart drops it, which resolves as a timeout.
+// relay's periodic pending_state flushes; the prompt itself persists
+// through the broker's store (D-118). A prompt the store cannot record
+// is never shown and resolves as a timeout.
 // Whatever the outcome — an explicit answer, a timeout, or ctx
 // cancellation — a permission_resolved event follows so anything
 // tracking the request (persistence, a replay client) learns the
@@ -1185,9 +1186,24 @@ func classifyToolError(err error) string {
 // only the turn's own context ending can end the wait. A chat turn
 // (attendedMission false) keeps the 10-minute timer, since chat has
 // no equivalent pause state to sit in.
-func (a *Agent) askUser(ctx context.Context, call provider.ToolCall, res tools.Resolution, attendedMission bool, emit func(stream.StreamEvent)) string {
-	id, answer := a.broker.Create()
-	defer a.broker.Forget(id)
+func (a *Agent) askUser(ctx context.Context, sessionID, missionID string, call provider.ToolCall, res tools.Resolution, attendedMission bool, emit func(stream.StreamEvent)) string {
+	origin := PermOriginChat
+	if missionID != "" {
+		origin = PermOriginMission
+	}
+	id, answer, err := a.broker.Create(ctx, PendingPermission{
+		SessionID: sessionID, MissionID: missionID, Tool: call.Name, Args: call.Input,
+		Danger: res.Danger.String(), Rationale: res.Rationale, OriginKind: origin,
+	})
+	if err != nil {
+		a.logger.Warn("record permission prompt", "session_id", sessionID, "tool", call.Name, "error", err)
+		return DecideTimeout
+	}
+	defer func() {
+		if err := a.broker.Forget(ctx, id); err != nil {
+			a.logger.Warn("expire permission prompt", "id", id, "error", err)
+		}
+	}()
 
 	emit(stream.StreamEvent{Type: stream.EventPermissionRequest, Permission: &stream.PermissionRequestEvent{
 		ID: id, CallID: call.ID, Tool: call.Name,

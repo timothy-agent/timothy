@@ -24,6 +24,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
+	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
@@ -46,14 +47,20 @@ type Directory interface {
 	Events(ctx context.Context, id string) ([]session.Event, error)
 	Update(ctx context.Context, id string, title *string, archived *bool) error
 	Delete(ctx context.Context, id string) error
-	PendingPermissions(ctx context.Context, sessionIDs []string) ([]session.PendingPermission, error)
 	SetKnowledge(ctx context.Context, id string, names []string) error
 }
 
-// PermissionResolver answers parked permission prompts; the loop's
-// broker satisfies it. Nil disables the endpoint (404).
+// PermissionResolver answers and lists parked permission prompts; the
+// loop's broker satisfies it. Nil disables the endpoint (404).
 type PermissionResolver interface {
-	Resolve(id, decision string) bool
+	Resolve(ctx context.Context, id, decision string) bool
+	Pending(ctx context.Context) ([]loop.PendingPermission, error)
+}
+
+// missionPermissionRecorder records an answered prompt on the mission
+// parked on it; *missions.Store satisfies it.
+type missionPermissionRecorder interface {
+	ResolvePendingPermission(ctx context.Context, permissionID, decision string) (missionID string, ok bool, err error)
 }
 
 // Toolset lists the live tool surface (builtins + connector tools);
@@ -68,6 +75,9 @@ type API struct {
 	svc   *chat.Service
 	dir   Directory
 	perms PermissionResolver
+	// missionPerms clears a mission's pending_permission when a prompt
+	// is answered here; nil when missions are disabled.
+	missionPerms missionPermissionRecorder
 	token string
 	log   *slog.Logger
 
@@ -114,6 +124,9 @@ var memoryRoutePatterns = []string{
 // described" error.
 func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, kbEnrich *kb.Enricher, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, pdfService *pdfgen.Service, caption func(context.Context, string, []byte) string) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates, pdfService: pdfService}
+	if missionStore != nil {
+		a.missionPerms = missionStore
+	}
 	if kbStore != nil {
 		a.kbCollections = kbStore.ListCollections
 	}
@@ -214,6 +227,12 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 }
 
 // handlePermission answers a parked tool call: {decision: once|session|deny}.
+// The id stays answerable after a restart (D-118): with no live turn
+// the decision is recorded on the persisted prompt. A mission prompt
+// also clears the mission's pending_permission. A chat turn does not
+// survive a restart, so a chat answer is recorded (plus a
+// permission_resolved session event) and a once/session answer is
+// redeemed only if a later turn in that session asks the same call.
 func (a *API) handlePermission(w http.ResponseWriter, r *http.Request) {
 	if a.perms == nil {
 		jsonError(w, http.StatusNotFound, "not_found", "permissions are not enabled")
@@ -232,9 +251,16 @@ func (a *API) handlePermission(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", `decision must be "once", "session", or "deny"`)
 		return
 	}
-	if !a.perms.Resolve(r.PathValue("id"), body.Decision) {
+	id := r.PathValue("id")
+	if !a.perms.Resolve(r.Context(), id, body.Decision) {
 		jsonError(w, http.StatusNotFound, "not_found", "unknown or already-answered permission request")
 		return
+	}
+	if a.missionPerms != nil {
+		// Best-effort: the decision already took effect on the prompt.
+		if _, _, err := a.missionPerms.ResolvePendingPermission(r.Context(), id, body.Decision); err != nil {
+			a.log.Warn("permission: record mission answer failed", "id", id, "error", err)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"ok":true}`))
@@ -242,19 +268,19 @@ func (a *API) handlePermission(w http.ResponseWriter, r *http.Request) {
 
 // handlePendingPermissions answers "does anything anywhere need my
 // approval right now" for the global badge/toast — read-only, no side
-// effects. Scoped to chat.Service.ActiveSessions() (the in-memory
-// live-turn registry, not a DB column) so a permission_request whose
-// turn already died without resolving it (crash, abandoned) never
-// shows as pending forever: only currently-active turns are queried.
+// effects. Reads the persisted prompts (D-118), chat and mission alike;
+// the permission sweep expires the ones no turn can still wait on.
 func (a *API) handlePendingPermissions(w http.ResponseWriter, r *http.Request) {
-	active := a.svc.ActiveSessions()
-	pending, err := a.dir.PendingPermissions(r.Context(), active)
-	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "pending_permissions_failed", err.Error())
-		return
+	var pending []loop.PendingPermission
+	if a.perms != nil {
+		var err error
+		if pending, err = a.perms.Pending(r.Context()); err != nil {
+			jsonError(w, http.StatusInternalServerError, "pending_permissions_failed", err.Error())
+			return
+		}
 	}
 	if pending == nil {
-		pending = []session.PendingPermission{}
+		pending = []loop.PendingPermission{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pending": pending})
 }

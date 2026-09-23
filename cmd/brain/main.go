@@ -386,7 +386,7 @@ func main() {
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub, missionScheduler := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, missionResolve, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
 		go missions.RecoverAndSweep(ctx, missionDriver, missionStore, missionWorkSlotMax, missionSandbox, missionSandbox, missionNotifier, gwc,
-			flags.PermissionTimeoutSeconds, flags.AskTimeoutSeconds, broker.Resolve, app.Log)
+			flags.PermissionTimeoutSeconds, flags.AskTimeoutSeconds, broker, app.Log)
 	}
 	// The push/PR adapter (issue #560): built once here so the Deliverer
 	// (saved github destination kind) always has the same push/PR code
@@ -1801,6 +1801,7 @@ func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, wor
 
 	perms := tools.NewPermissions(db, workspace)
 	broker := loop.NewPermBroker()
+	broker.SetStore(loop.NewPGPermStore(db), store, log)
 	agent := loop.NewAgent(gwc, constrained, perms, outputs, tools.NewAudit(db), store, broker, defs, log)
 	// Mission-driven turns (Request.BuiltinsOnly) get this compiled-in
 	// set only: never connector tools or the chat-only mission tools

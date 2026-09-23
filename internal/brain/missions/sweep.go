@@ -240,13 +240,13 @@ func admitWork(ctx context.Context, gate capacityChecker, log *slog.Logger) (adm
 // the same tick (see runWorkSlotSweep). This is the one entry point
 // cmd/brain/main.go needs: it owns the Driver, which carries its own
 // Store reference. globalPermissionTimeout reads the current
-// settings.ValuePermissionTimeoutSeconds value (issue #445); resolveBroker
-// is the live in-memory PermBroker's Resolve, best-effort. nil is valid
-// (a still-running turn just times out on its own permissionTimeout
-// instead of waking early).
-func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, gateway gatewayReadyChecker, globalPermissionTimeout func(context.Context) int, globalAskTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
+// settings.ValuePermissionTimeoutSeconds value (issue #445); broker is
+// the loop's PermBroker, best-effort. nil is valid (a still-running
+// turn just times out on its own permissionTimeout instead of waking
+// early, and persisted prompts are not expired).
+func RecoverAndSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, gateway gatewayReadyChecker, globalPermissionTimeout func(context.Context) int, globalAskTimeout func(context.Context) int, broker permissionBroker, log *slog.Logger) {
 	recoverWorking(ctx, d, store, gateway, log)
-	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, capacity, notify, globalPermissionTimeout, globalAskTimeout, resolveBroker, log)
+	runWorkSlotSweep(ctx, d, store, maxConcurrent, sandbox, capacity, notify, globalPermissionTimeout, globalAskTimeout, broker, log)
 }
 
 // sweepOrphanSandboxes runs on every runWorkSlotSweep tick (previously
@@ -325,7 +325,7 @@ func recoverWorking(ctx context.Context, d *Driver, store *Store, gateway gatewa
 // auto-denies any pending_permission parked past its effective timeout,
 // all on the same tick. Runs until ctx is done; this call blocks, so
 // RecoverAndSweep's caller runs it in its own goroutine.
-func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, globalPermissionTimeout func(context.Context) int, globalAskTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, log *slog.Logger) {
+func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurrent int, sandbox sandboxSweeper, capacity capacityChecker, notify messageNotifier, globalPermissionTimeout func(context.Context) int, globalAskTimeout func(context.Context) int, broker permissionBroker, log *slog.Logger) {
 	ticker := time.NewTicker(workSlotSweepInterval)
 	defer ticker.Stop()
 	for {
@@ -337,7 +337,7 @@ func runWorkSlotSweep(ctx context.Context, d *Driver, store *Store, maxConcurren
 			reDriveStaleWorking(ctx, d, store, log)
 			autoResumeBackoff(ctx, d, store, notify, d.autoResumeBackoffMax, log)
 			autoResumeInfra(ctx, d, store, notify, d.autoResumeInfraMax, log)
-			sweepPermissionTimeouts(ctx, d, store, globalPermissionTimeout, resolveBroker, notify, log)
+			sweepPermissionTimeouts(ctx, d, store, globalPermissionTimeout, broker, notify, log)
 			sweepAskTimeouts(ctx, d, store, globalAskTimeout, notify, log)
 			// D-056: skip the claim entirely this tick if the host can't
 			// afford another working mission — the mission stays idle,
@@ -529,23 +529,36 @@ type permissionTimeoutDriver interface {
 	Drive(ctx context.Context, id string) error
 }
 
+// permissionBroker is the slice of *loop.PermBroker the permission
+// sweep uses.
+type permissionBroker interface {
+	Resolve(ctx context.Context, id, decision string) bool
+	ExpireStale(ctx context.Context) (int64, error)
+}
+
 // sweepPermissionTimeouts auto-denies any mission whose pending_permission
 // has sat unanswered past its effective timeout (issue #445): a
 // deployment that never sets settings.ValuePermissionTimeoutSeconds (or
 // sets it to 0) sees this do nothing, preserving the original park-
 // forever behavior exactly. Resolution goes through
 // Store.ResolvePendingPermissionTimeout, the same store-level deny the
-// API's operator-deny handler ends in, so a restarted process (whose
-// in-memory PermBroker lost every pending id) still gets a durable
-// answer. resolveBroker is a best-effort nudge to also wake a STILL-LIVE
-// worker turn blocked in loop.Agent's askUser immediately rather than
-// waiting out its own longer in-process permissionTimeout; a false/nil
-// result just means the turn was already gone (crash, restart) or
-// already resolved. Either way, Drive picks the mission back up: if a
-// live turn is still running it's claimDriving's own no-op, otherwise
-// this is exactly recoverWorking/reDriveStaleWorking's own rescue path
-// for a 'working' mission whose Drive loop stopped advancing.
-func sweepPermissionTimeouts(ctx context.Context, d permissionTimeoutDriver, store permissionTimeoutStore, globalPermissionTimeout func(context.Context) int, resolveBroker func(id, decision string) bool, notify messageNotifier, log *slog.Logger) {
+// API's operator-deny handler ends in, so a restarted process with no
+// live turn still gets a durable answer. broker.Resolve is a best-effort nudge to also wake a
+// STILL-LIVE worker turn blocked in loop.Agent's askUser immediately
+// (with timeout: nobody answered) and to mark the persisted row
+// timeout; a false result just means the row was already resolved.
+// broker.ExpireStale first expires persisted prompts no turn can still
+// wait on (D-118), so pending_permissions never accumulates. Either
+// way, Drive picks the mission back up: if a live turn is still
+// running it's claimDriving's own no-op, otherwise this is exactly
+// recoverWorking/reDriveStaleWorking's own rescue path for a 'working'
+// mission whose Drive loop stopped advancing.
+func sweepPermissionTimeouts(ctx context.Context, d permissionTimeoutDriver, store permissionTimeoutStore, globalPermissionTimeout func(context.Context) int, broker permissionBroker, notify messageNotifier, log *slog.Logger) {
+	if broker != nil {
+		if _, err := broker.ExpireStale(ctx); err != nil {
+			log.Error("permission timeout sweep: expire stale prompts failed", "error", err)
+		}
+	}
 	if globalPermissionTimeout == nil {
 		return
 	}
@@ -568,8 +581,8 @@ func sweepPermissionTimeouts(ctx context.Context, d permissionTimeoutDriver, sto
 			log.Error("permission timeout sweep: resolve failed", "mission_id", p.MissionID, "error", err)
 			continue
 		}
-		if resolveBroker != nil {
-			resolveBroker(p.PermissionID, loop.DecideDeny) // best-effort: wakes a still-live worker turn immediately
+		if broker != nil {
+			broker.Resolve(ctx, p.PermissionID, loop.DecideTimeout) // best-effort: wakes a still-live worker turn and marks the row timeout
 		}
 		if notify != nil {
 			if err := notify.NotifyMessage(ctx, p.MissionID, "permission_timed_out",

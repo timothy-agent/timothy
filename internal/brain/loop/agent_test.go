@@ -1267,7 +1267,7 @@ func TestAgentInteractiveApprovalPaths(t *testing.T) {
 				}
 				evs = append(evs, ev)
 				if ev.Type == stream.EventPermissionRequest {
-					if !a.broker.Resolve(ev.Permission.ID, decision) {
+					if !a.broker.Resolve(context.Background(), ev.Permission.ID, decision) {
 						t.Fatal("broker did not know the prompt id")
 					}
 				}
@@ -2533,7 +2533,7 @@ func TestParallelSameToolAsksOnce(t *testing.T) {
 			evs = append(evs, ev)
 			if ev.Type == stream.EventPermissionRequest {
 				prompts++
-				if !a.broker.Resolve(ev.Permission.ID, DecideSession) {
+				if !a.broker.Resolve(context.Background(), ev.Permission.ID, DecideSession) {
 					t.Fatal("broker did not know the prompt id")
 				}
 			}
@@ -2589,7 +2589,7 @@ func TestParallelSameToolOnceAnswerReAsks(t *testing.T) {
 			evs = append(evs, ev)
 			if ev.Type == stream.EventPermissionRequest {
 				prompts++
-				if !a.broker.Resolve(ev.Permission.ID, DecideOnce) {
+				if !a.broker.Resolve(context.Background(), ev.Permission.ID, DecideOnce) {
 					t.Fatal("broker did not know the prompt id")
 				}
 			}
@@ -2630,7 +2630,7 @@ func TestAgentAttendedAskStillParks(t *testing.T) {
 			}
 			evs = append(evs, ev)
 			if ev.Type == stream.EventPermissionRequest {
-				if !a.broker.Resolve(ev.Permission.ID, DecideOnce) {
+				if !a.broker.Resolve(context.Background(), ev.Permission.ID, DecideOnce) {
 					t.Fatal("broker did not know the prompt id")
 				}
 			}
@@ -2680,7 +2680,7 @@ func TestAskUserEmitsResolvedOnAnswer(t *testing.T) {
 			evs = append(evs, ev)
 			if ev.Type == stream.EventPermissionRequest {
 				requestID = ev.Permission.ID
-				if !a.broker.Resolve(ev.Permission.ID, DecideOnce) {
+				if !a.broker.Resolve(context.Background(), ev.Permission.ID, DecideOnce) {
 					t.Fatal("broker did not know the prompt id")
 				}
 			}
@@ -2791,7 +2791,7 @@ func TestAskUserAttendedMissionIgnoresLoopTimeout(t *testing.T) {
 		t.Fatalf("resolved before the answer arrived: %+v (loop timeout leaked into an attended mission turn)", ev)
 	default:
 	}
-	if !a.broker.Resolve(requestID, DecideOnce) {
+	if !a.broker.Resolve(context.Background(), requestID, DecideOnce) {
 		t.Fatal("broker no longer knows the prompt id — it must have resolved on its own")
 	}
 	<-drained

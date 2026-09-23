@@ -39,3 +39,24 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_unprocessed_idx ON events (id) WHERE processed_at IS NULL;
 ```
+
+Issue #820: pending_permissions.
+
+```sql
+CREATE TABLE IF NOT EXISTS pending_permissions (
+    id          text PRIMARY KEY,
+    session_id  uuid REFERENCES sessions(id) ON DELETE CASCADE,
+    mission_id  uuid REFERENCES missions(id) ON DELETE CASCADE,
+    tool        text NOT NULL,
+    args        jsonb NOT NULL DEFAULT '{}',
+    danger      text NOT NULL DEFAULT '',
+    rationale   text NOT NULL DEFAULT '',
+    origin_kind text NOT NULL DEFAULT 'chat',
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    resolved_at timestamptz,
+    decision    text,
+    carry_over  boolean NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS pending_permissions_pending_idx
+    ON pending_permissions (created_at) WHERE resolved_at IS NULL;
+```

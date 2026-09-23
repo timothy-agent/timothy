@@ -22,6 +22,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
+	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
@@ -171,51 +172,6 @@ func (d *memDir) SetKnowledge(_ context.Context, id string, names []string) erro
 	m.Knowledge = append([]string(nil), names...)
 	d.metas[id] = m
 	return nil
-}
-
-// PendingPermissions mirrors session.Store's own unresolved-vs-resolved
-// logic over the in-memory event log, scoped to sessionIDs — same
-// contract the real store's SQL enforces (no matching
-// permission_resolved by id).
-func (d *memDir) PendingPermissions(_ context.Context, sessionIDs []string) ([]session.PendingPermission, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	var out []session.PendingPermission
-	for _, id := range sessionIDs {
-		resolved := map[string]bool{}
-		var requests []struct {
-			id string
-			session.PendingPermission
-		}
-		for _, ev := range d.events[id] {
-			switch ev.Kind {
-			case session.KindPermissionResolved:
-				var r session.PermissionResolved
-				if err := json.Unmarshal(ev.Payload, &r); err != nil {
-					return nil, err
-				}
-				resolved[r.ID] = true
-			case session.KindPermissionRequest:
-				var req session.PermissionRequest
-				if err := json.Unmarshal(ev.Payload, &req); err != nil {
-					return nil, err
-				}
-				requests = append(requests, struct {
-					id string
-					session.PendingPermission
-				}{req.ID, session.PendingPermission{
-					SessionID: id, SessionTitle: d.metas[id].Title,
-					Tool: req.Tool, Rationale: req.Rationale, RequestedAt: ev.CreatedAt,
-				}})
-			}
-		}
-		for _, req := range requests {
-			if !resolved[req.id] {
-				out = append(out, req.PendingPermission)
-			}
-		}
-	}
-	return out, nil
 }
 
 // fakeGateway yields a canned event sequence, or fails when err set.
@@ -429,7 +385,9 @@ func TestAdminProxyScopedToUsageRoutes(t *testing.T) {
 
 type fakeResolver struct{ known map[string]string }
 
-func (f *fakeResolver) Resolve(id, decision string) bool {
+func (f *fakeResolver) Pending(context.Context) ([]loop.PendingPermission, error) { return nil, nil }
+
+func (f *fakeResolver) Resolve(_ context.Context, id, decision string) bool {
 	if _, ok := f.known[id]; !ok {
 		return false
 	}

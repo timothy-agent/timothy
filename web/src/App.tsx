@@ -41,7 +41,7 @@ import { cn } from './lib/utils'
 import { useSessions } from './lib/sessions'
 import { usePendingMemories } from './lib/memory'
 import { playAlertSound, unlockAudio } from './lib/alertSound'
-import { newlySeen, toastSessionLabel, usePendingPermissions } from './lib/permissions'
+import { newlySeen, permissionHref, toastSessionLabel, usePendingPermissions } from './lib/permissions'
 import { getNotificationSoundEnabled } from './lib/sound'
 import { getTheme, nextTheme, setTheme, type Theme } from './lib/theme'
 import { Chat } from './pages/Chat'
@@ -413,7 +413,7 @@ function App() {
           duration: Infinity,
           action: {
             label: 'Review',
-            onClick: () => navigate(`/chat/${p.session_id}`),
+            onClick: () => navigate(permissionHref(p)),
           },
         })
       }
@@ -450,7 +450,7 @@ function App() {
         <SidebarProvider className="min-h-dvh">
           <AppSidebar
             pendingMemories={pendingMemories}
-            pendingPermissions={pendingPermissions.length}
+            pendingPermissions={pendingPermissions.filter((p) => p.origin_kind === 'chat').length}
             theme={theme}
             onCycleTheme={cycleTheme}
             onToken={openToken}

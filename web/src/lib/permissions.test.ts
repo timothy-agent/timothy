@@ -11,13 +11,18 @@ vi.mock('./events', () => ({
 
 import { listPendingPermissions } from '../api/client'
 import { subscribeEvents } from './events'
-import { newlySeen, toastSessionLabel, usePendingPermissions } from './permissions'
+import { newlySeen, permissionHref, toastSessionLabel, usePendingPermissions } from './permissions'
 
 const pending: PendingPermission = {
+  id: 'p1',
   session_id: 's1',
   session_title: 'Gmail cleanup',
+  mission_id: '',
   tool: 'gmail_search',
+  args: { query: 'is:unread' },
+  danger: 'safe',
   rationale: 'read the inbox',
+  origin_kind: 'chat',
   requested_at: '2026-08-01T10:00:00Z',
 }
 
@@ -118,5 +123,23 @@ describe('toastSessionLabel', () => {
 
   it('falls back to "Chat" when the title is still empty', () => {
     expect(toastSessionLabel({ ...pending, session_title: '' })).toBe('Chat')
+  })
+
+  it('falls back to "Mission" for an untitled mission prompt', () => {
+    expect(toastSessionLabel({ ...pending, session_title: '', mission_id: 'm1', origin_kind: 'mission' })).toBe('Mission')
+  })
+
+  it('appends a non-safe danger level', () => {
+    expect(toastSessionLabel({ ...pending, danger: 'destructive' })).toBe('Gmail cleanup · destructive')
+  })
+})
+
+describe('permissionHref', () => {
+  it('links a chat prompt to its session', () => {
+    expect(permissionHref(pending)).toBe('/chat/s1')
+  })
+
+  it('links a mission prompt to its mission', () => {
+    expect(permissionHref({ ...pending, mission_id: 'm1', origin_kind: 'mission' })).toBe('/missions/m1')
   })
 })

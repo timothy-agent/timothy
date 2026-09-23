@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -758,6 +759,49 @@ func (s *Store) ResolvePendingPermissionTimeout(ctx context.Context, id, tool st
 		s.hub.Publish(Signal{Kind: "mission", ID: id})
 	}
 	return nil
+}
+
+// ResolvePendingPermission applies an operator's answer to whichever
+// mission is parked on permissionID (D-118): clears pending_permission
+// and appends mission.permission_answered with the decision. ok is
+// false when no mission references the id. The grant itself happens in
+// the loop (a live turn, or the next ask redeeming the carried-over
+// answer); this method records the decision only.
+func (s *Store) ResolvePendingPermission(ctx context.Context, permissionID, decision string) (missionID string, ok bool, err error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", false, fmt.Errorf("missions resolve pending permission: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("missions resolve pending permission begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var tool string
+	err = tx.QueryRow(ctx, `UPDATE missions m SET
+			pending_permission = NULL, updated_at = now()
+		FROM (SELECT id, pending_permission->>'tool' AS tool FROM missions
+			WHERE pending_permission->>'id' = $1 FOR UPDATE) old
+		WHERE m.id = old.id
+		RETURNING m.id, COALESCE(old.tool, '')`, permissionID).Scan(&missionID, &tool)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("missions resolve pending permission: %w", err)
+	}
+	if err := appendEventTx(ctx, tx, missionID, "mission.permission_answered", map[string]any{
+		"tool": tool, "decision": decision,
+	}, "live"); err != nil {
+		return "", false, fmt.Errorf("missions resolve pending permission: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", false, fmt.Errorf("missions resolve pending permission commit: %w", err)
+	}
+	if s.hub != nil {
+		s.hub.Publish(Signal{Kind: "mission", ID: missionID})
+	}
+	return missionID, true, nil
 }
 
 // SetPendingInput records ask_user's park (D-088): a second park kind

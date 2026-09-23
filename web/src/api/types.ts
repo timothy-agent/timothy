@@ -216,12 +216,18 @@ export interface Transcript {
 }
 
 // One unresolved permission ask, from GET /v1/permissions/pending:
-// scoped server-side to sessions with a currently active turn.
+// persisted server-side, so it survives a brain restart. mission_id is
+// empty for a chat prompt.
 export interface PendingPermission {
+  id: string
   session_id: string
   session_title: string
+  mission_id: string
   tool: string
+  args: Record<string, unknown>
+  danger: string
   rationale: string
+  origin_kind: 'chat' | 'mission'
   requested_at: string
 }
 

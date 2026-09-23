@@ -52,5 +52,12 @@ export function newlySeen(
 // still be empty when the first permission_request fires, so the
 // toast must never render the raw empty string as "Untitled session".
 export function toastSessionLabel(p: PendingPermission): string {
-  return p.session_title || 'Chat'
+  const label = p.session_title || (p.mission_id ? 'Mission' : 'Chat')
+  return p.danger && p.danger !== 'safe' ? `${label} · ${p.danger}` : label
+}
+
+// permissionHref is where the toast's Review action goes: the mission
+// page for a mission prompt, else the chat session.
+export function permissionHref(p: PendingPermission): string {
+  return p.mission_id ? `/missions/${p.mission_id}` : `/chat/${p.session_id}`
 }

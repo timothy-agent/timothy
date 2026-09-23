@@ -1652,15 +1652,16 @@ func (h *missionAPI) permission(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", `decision must be "once", "session", or "deny"`)
 		return
 	}
-	if !h.perms.Resolve(m.PendingPermission, body.Decision) {
+	if !h.perms.Resolve(r.Context(), m.PendingPermission, body.Decision) {
 		jsonError(w, http.StatusNotFound, "not_found", "unknown or already-answered permission request")
 		return
 	}
-	// Best-effort: the decision already took effect (Resolve above
-	// unparked the turn); a failure to log it is a missing Timeline
-	// entry, not a wrong mission state, so it must not fail this request.
-	if err := h.store.AppendEvent(r.Context(), m.ID, "mission.permission_answered",
-		map[string]any{"tool": m.PendingPermissionTool, "decision": body.Decision}); err != nil {
+	// Best-effort: the decision already took effect on the prompt (a
+	// live turn unparked, or after a restart the answer carries over to
+	// the re-driven turn's same ask, D-118); a failure here is a missing
+	// Timeline entry, not a wrong mission state, so it must not fail
+	// this request.
+	if _, _, err := h.store.ResolvePendingPermission(r.Context(), m.PendingPermission, body.Decision); err != nil {
 		h.log.Warn("mission: record permission_answered event failed", "mission_id", m.ID, "error", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
