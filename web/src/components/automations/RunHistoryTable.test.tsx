@@ -3,7 +3,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router'
 import { describe, expect, it } from 'vitest'
 import type { AutomationRun } from '../../api/types'
 import { RunHistoryTable } from './RunHistoryTable'
-import { isPendingRun, runDuration } from './runs'
+import { isPendingRun, runDuration, runEventLabel } from './runs'
 import { makeRun, makeTrigger } from './testFixtures'
 
 function renderTable(runs: AutomationRun[]) {
@@ -53,6 +53,19 @@ describe('RunHistoryTable', () => {
     expect(within(row('c')).getByText('run now')).toBeInTheDocument()
   })
 
+  it('shows the event kind and summary for connector and webhook runs', () => {
+    renderTable([
+      makeRun({ id: 'a', event: { kind: 'pr.opened', source: 'connector', repo: 'octo/timothy', number: 123 } }),
+      makeRun({ id: 'b', event: { kind: 'webhook.received', source: 'webhook', scheme: 'github', delivery: 'abcdef1234567890' } }),
+      makeRun({ id: 'c', event: { kind: 'cron.due', source: 'cron', boundary: '2026-07-20T08:00:00Z' } }),
+    ])
+    expect(within(row('a')).getByText('pr.opened')).toBeInTheDocument()
+    expect(within(row('a')).getByText('octo/timothy #123')).toBeInTheDocument()
+    expect(within(row('b')).getByText('webhook')).toBeInTheDocument()
+    expect(within(row('b')).getByText('abcdef12')).toBeInTheDocument()
+    expect(within(row('c')).getByText('cron')).toBeInTheDocument()
+  })
+
   it('opens the mission on row click only when the run has one', () => {
     const router = renderTable([makeRun({ id: 'a', mission_id: 'm1' }), makeRun({ id: 'b', status: 'skipped' })])
     expect(row('b')).not.toHaveAttribute('role')
@@ -85,5 +98,15 @@ describe('run helpers', () => {
       false,
       false,
     ])
+  })
+
+  it('runEventLabel summarizes connector and webhook events only', () => {
+    expect(runEventLabel(makeRun({ event: { kind: 'issue.comment', source: 'connector', repo: 'octo/timothy' } }))).toEqual({
+      kind: 'issue.comment',
+      summary: 'octo/timothy',
+    })
+    expect(runEventLabel(makeRun({ event: { kind: 'webhook.received', source: 'webhook', delivery: 'd1' } }))).toEqual({ kind: 'webhook', summary: 'd1' })
+    expect(runEventLabel(makeRun({ event: { kind: 'run.now', source: 'manual' } }))).toBeUndefined()
+    expect(runEventLabel(makeRun({ event: null }))).toBeUndefined()
   })
 })

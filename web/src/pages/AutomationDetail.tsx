@@ -14,12 +14,14 @@ import {
   putAutomationNote,
   runAutomationNow,
 } from '../api/client'
-import type { AdminAgent, Automation, AutomationNote, AutomationRun, Destination } from '../api/types'
+import type { AdminAgent, Automation, AutomationNote, AutomationRun, AutomationTrigger, Destination } from '../api/types'
 import { NotesDialog } from '../components/automations/NotesDialog'
 import { noteBytes } from '../components/automations/notes'
 import { RunHistoryTable } from '../components/automations/RunHistoryTable'
 import { isPendingRun } from '../components/automations/runs'
+import { draftsFromTriggers, draftsToInput } from '../components/automations/triggerDrafts'
 import { ConfirmDialog } from '../components/timothy/confirm-dialog'
+import { CopyButton } from '../components/timothy/copy-button'
 import { EmptyState } from '../components/timothy/empty-state'
 import { IconButton } from '../components/timothy/icon-button'
 import { PageHeader } from '../components/timothy/page-header'
@@ -33,7 +35,7 @@ import { Switch } from '../components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../components/ui/tooltip'
-import { describeTrigger } from '../lib/cron'
+import { describeTrigger, hookPath } from '../lib/cron'
 import { errText } from '../lib/errors'
 import { euDateTime, humanBytes, money, relativeTime, relativeTimeUntil } from '../lib/format'
 
@@ -61,6 +63,52 @@ function Facts({ rows }: { rows: [string, ReactNode][] }) {
 }
 
 const onOff = (v: boolean) => (v ? 'On' : 'Off')
+
+const triggerDisabledText: Record<string, string> = {
+  auth_failures: 'Disabled after 20 failed signatures',
+  rate_limited: 'Disabled: rate limited',
+}
+
+function TriggerRow({ trigger: t, onReenable }: { trigger: AutomationTrigger; onReenable: () => void }) {
+  const reason = t.state?.disabled_reason
+  const lastFired = t.state?.last_fired_at
+  const lastDelivery = t.state?.last_delivery_at
+  return (
+    <li data-trigger-id={t.id} className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <Badge variant="outline" size="sm">
+          {t.kind.replace('_', ' ')}
+        </Badge>
+        {t.kind !== 'manual' && <span>{describeTrigger(t)}</span>}
+        {t.kind === 'cron' && <span className="font-mono text-xs text-muted-foreground">{t.config.expr}</span>}
+        {!t.enabled && !reason && <span className="text-xs text-muted-foreground">off</span>}
+        {reason && (
+          <>
+            <Badge variant="destructive" size="sm">
+              {triggerDisabledText[reason] ?? `Disabled: ${reason.replace('_', ' ')}`}
+            </Badge>
+            <Button size="xs" variant="outline" onClick={onReenable}>
+              Re-enable
+            </Button>
+          </>
+        )}
+      </div>
+      {t.kind === 'webhook' && (
+        <div className="flex items-center gap-1.5">
+          <code className="font-mono text-xs text-muted-foreground">POST {hookPath(t.id)}</code>
+          <CopyButton value={hookPath(t.id)} label="Copy hook path" />
+        </div>
+      )}
+      {(lastFired || lastDelivery) && (
+        <p className="text-xs text-muted-foreground">
+          {[lastFired && `Last fired ${relativeTime(lastFired)}`, lastDelivery && `Last delivery ${relativeTime(lastDelivery)}`]
+            .filter(Boolean)
+            .join(' · ')}
+        </p>
+      )}
+    </li>
+  )
+}
 
 // AutomationDetail shows one automation: settings, run history and notes.
 export function AutomationDetail() {
@@ -125,6 +173,21 @@ export function AutomationDetail() {
       setAutomation(await patchAutomation(automation.id, { enabled }))
     } catch (err) {
       toast.error('Could not update automation', { description: errText(err) })
+    }
+  }
+
+  // reenableTrigger sends the full trigger set with one trigger back on;
+  // the server clears its disabled_reason.
+  const reenableTrigger = async (triggerId: string) => {
+    if (!automation) return
+    const triggers = draftsToInput(draftsFromTriggers(automation.triggers)).map((t) =>
+      t.id === triggerId ? { ...t, enabled: true } : t,
+    )
+    try {
+      setAutomation(await patchAutomation(automation.id, { triggers }))
+      toast.success('Trigger re-enabled')
+    } catch (err) {
+      toast.error('Could not re-enable trigger', { description: errText(err) })
     }
   }
 
@@ -289,20 +352,9 @@ export function AutomationDetail() {
 
         <TabsContent value="settings" className="mt-8 space-y-6">
           <Panel title="Triggers" description={nextRun ? `Next run ${relativeTimeUntil(nextRun)}` : undefined}>
-            <ul className="space-y-2">
+            <ul className="space-y-3">
               {automation.triggers.map((t) => (
-                <li key={t.id} className="flex items-center gap-2 text-sm">
-                  <Badge variant="outline" size="sm">
-                    {t.kind.replace('_', ' ')}
-                  </Badge>
-                  {t.kind === 'cron' && (
-                    <>
-                      <span>{describeTrigger(t)}</span>
-                      <span className="font-mono text-xs text-muted-foreground">{t.config.expr}</span>
-                    </>
-                  )}
-                  {!t.enabled && <span className="text-xs text-muted-foreground">off</span>}
-                </li>
+                <TriggerRow key={t.id} trigger={t} onReenable={() => void reenableTrigger(t.id)} />
               ))}
             </ul>
           </Panel>

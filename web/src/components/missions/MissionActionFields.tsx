@@ -95,6 +95,7 @@ export function MissionActionFields({
   attachments,
   onAttachmentsChange,
   goalError,
+  goalHint = 'Use {{event.pr_url}} or {{notes.name}} to insert trigger data or notes.',
 }: {
   value: MissionTemplate
   onChange: (t: MissionTemplate) => void
@@ -103,6 +104,7 @@ export function MissionActionFields({
   attachments: PendingAttachment[]
   onAttachmentsChange: (a: PendingAttachment[]) => void
   goalError?: string
+  goalHint?: string
 }) {
   const set = (patch: Partial<MissionTemplate>) => onChange({ ...value, ...patch })
   const coding = value.kind === 'coding'
@@ -113,7 +115,7 @@ export function MissionActionFields({
     <div className="space-y-5">
       <Field
         label="Goal"
-        description="Use {{event.pr_url}} or {{notes.name}} to insert trigger data or notes."
+        description={goalHint}
         error={goalError}
       >
         <Textarea

@@ -1,6 +1,6 @@
 import { Plus, Trash2 } from 'lucide-react'
 
-import type { AutomationTrigger } from '../../api/types'
+import type { AdminConnector, AutomationTrigger } from '../../api/types'
 import { cronPresets, presetFor } from '../../lib/cron'
 import { Field } from '../timothy/field'
 import { IconButton } from '../timothy/icon-button'
@@ -8,26 +8,33 @@ import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Switch } from '../ui/switch'
-import { cronError, defaultCron, maxTriggers, newTriggerDraft, type TriggerDraft } from './triggerDrafts'
+import { ConnectorEventFields, ToolAllowlistField, WebhookFields } from './TriggerFields'
+import { cronError, defaultCron, maxTriggers, newTriggerDraft, triggerError, type TriggerDraft } from './triggerDrafts'
 
 const kindOptions: { value: AutomationTrigger['kind']; label: string; disabled?: boolean }[] = [
   { value: 'cron', label: 'Cron' },
   { value: 'manual', label: 'Manual' },
-  { value: 'webhook', label: 'Webhook (Phase 2)', disabled: true },
-  { value: 'connector_event', label: 'Connector event (Phase 2)', disabled: true },
-  { value: 'channel', label: 'Channel message (Phase 2)', disabled: true },
+  { value: 'connector_event', label: 'Connector event' },
+  { value: 'webhook', label: 'Webhook' },
+  { value: 'channel', label: 'Channel message (Phase 3)', disabled: true },
 ]
 
+const secretMissing = (d: TriggerDraft) => d.kind === 'webhook' && d.credentialRef.trim() === ''
+
 // TriggerList edits one to five triggers. errors holds server messages
-// keyed by draft key.
+// keyed by draft key; connectors feeds the connector event picker.
 export function TriggerList({
   value,
   onChange,
   errors = {},
+  connectors = null,
+  submitted = false,
 }: {
   value: TriggerDraft[]
   onChange: (next: TriggerDraft[]) => void
   errors?: Record<string, string>
+  connectors?: AdminConnector[] | null
+  submitted?: boolean
 }) {
   const update = (key: string, patch: Partial<TriggerDraft>) =>
     onChange(value.map((d) => (d.key === key ? { ...d, ...patch } : d)))
@@ -120,6 +127,27 @@ export function TriggerList({
             {d.kind === 'manual' && (
               <p className="text-sm text-muted-foreground">Runs only when you press Run now.</p>
             )}
+            {d.kind === 'connector_event' && (
+              <ConnectorEventFields draft={d} update={(patch) => update(d.key, patch)} connectors={connectors} />
+            )}
+            {d.kind === 'webhook' && (
+              <WebhookFields
+                draft={d}
+                update={(patch) => update(d.key, patch)}
+                error={submitted && secretMissing(d) ? triggerError(d) : undefined}
+              />
+            )}
+            {errors[d.key] && d.kind !== 'cron' && (
+              <p role="alert" className="text-xs text-destructive">
+                {errors[d.key]}
+              </p>
+            )}
+            {submitted && !errors[d.key] && d.kind !== 'cron' && !secretMissing(d) && triggerError(d) && (
+              <p role="alert" className="text-xs text-destructive">
+                {triggerError(d)}
+              </p>
+            )}
+            <ToolAllowlistField draft={d} update={(patch) => update(d.key, patch)} index={i} />
           </div>
         )
       })}

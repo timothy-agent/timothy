@@ -1308,16 +1308,43 @@ export interface AutomationAction {
   mission: MissionTemplate
 }
 
-// AutomationTrigger is one automation_triggers row; config is
-// { expr } for a cron trigger and {} for a manual one.
+// WebhookFilter passes a delivery when the JSON body value at path equals equals.
+export interface WebhookFilter {
+  path: string
+  equals: string
+}
+
+// AutomationTriggerConfig is a trigger's config, per kind: { expr } for
+// cron, {} for manual, { connector_id, repo, events, labels } for
+// connector_event, { scheme, filters } for webhook.
+export interface AutomationTriggerConfig {
+  expr?: string
+  connector_id?: string
+  repo?: string
+  events?: string[]
+  labels?: string[]
+  scheme?: 'github' | 'generic'
+  filters?: WebhookFilter[]
+}
+
+// AutomationTriggerState is the server-kept trigger state.
+export interface AutomationTriggerState {
+  disabled_reason?: string
+  auth_failures?: string[]
+  last_delivery_at?: string
+  last_fired_at?: string
+}
+
+// AutomationTrigger is one automation_triggers row; credential_ref
+// names a webhook trigger's signing secret.
 export interface AutomationTrigger {
   id: string
   automation_id: string
   kind: 'cron' | 'manual' | 'webhook' | 'connector_event' | 'channel'
-  config: { expr?: string }
+  config: AutomationTriggerConfig
   credential_ref?: string
   tool_allowlist?: string[]
-  state: unknown
+  state: AutomationTriggerState
   enabled: boolean
   created_at: string
   updated_at: string
@@ -1396,7 +1423,7 @@ export interface AutomationTemplate {
   description: string
   icon: string
   action: AutomationAction
-  triggers: { kind: AutomationTrigger['kind']; config: { expr?: string }; enabled?: boolean }[]
+  triggers: { kind: AutomationTrigger['kind']; config: AutomationTriggerConfig; enabled?: boolean }[]
   requires: AutomationRequirement[]
   missing: AutomationRequirement[]
   notes_enabled?: boolean

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cronPresets, describeCron, describeTrigger, isCronShape, presetFor } from './cron'
+import { cronPresets, describeCron, describeTrigger, hookPath, isCronShape, presetFor } from './cron'
 
 describe('presetFor', () => {
   it('round-trips every non-custom preset cron back to its preset value', () => {
@@ -46,5 +46,25 @@ describe('describeTrigger', () => {
   it('names other kinds in plain words', () => {
     expect(describeTrigger({ kind: 'manual', config: {} })).toBe('manual')
     expect(describeTrigger({ kind: 'connector_event', config: {} })).toBe('connector event')
+  })
+})
+
+describe('describeTrigger for event kinds', () => {
+  it('names the repo and events of a connector event', () => {
+    expect(
+      describeTrigger({ kind: 'connector_event', config: { repo: 'octo/timothy', events: ['pr.opened', 'pr.labeled'] } }),
+    ).toBe('GitHub octo/timothy: pr.opened, pr.labeled')
+    expect(describeTrigger({ kind: 'connector_event', config: { repo: 'octo/timothy' } })).toBe('GitHub octo/timothy')
+  })
+
+  it('names the webhook scheme', () => {
+    expect(describeTrigger({ kind: 'webhook', config: { scheme: 'github' } })).toBe('Webhook (github)')
+    expect(describeTrigger({ kind: 'webhook', config: {} })).toBe('webhook')
+  })
+})
+
+describe('hookPath', () => {
+  it('is relative to the brain', () => {
+    expect(hookPath('t9')).toBe('/hooks/t9')
   })
 })

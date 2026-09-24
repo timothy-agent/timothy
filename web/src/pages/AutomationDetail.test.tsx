@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminAgent, Destination } from '../api/types'
-import { agentID, makeAutomation, makeNote, makeRun } from '../components/automations/testFixtures'
+import { agentID, makeAutomation, makeNote, makeRun, makeTrigger } from '../components/automations/testFixtures'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { AutomationDetail, runPollMs } from './AutomationDetail'
 
@@ -172,6 +172,80 @@ describe('AutomationDetail settings tab', () => {
     expect(screen.getByText('Queue behind the active run')).toBeInTheDocument()
     expect(screen.getByText('Max runs per hour').nextElementSibling).toHaveTextContent('4')
     expect(screen.getByText('Expires').nextElementSibling).toHaveTextContent('Never')
+  })
+})
+
+describe('AutomationDetail trigger health', () => {
+  const hook = makeTrigger({
+    id: 't6',
+    kind: 'webhook',
+    config: { scheme: 'github', filters: [] },
+    credential_ref: 'HOOK_KEY',
+    state: { last_delivery_at: '2026-07-20T08:00:00Z', last_fired_at: '2026-07-20T08:00:00Z' },
+  })
+  const connectorID = '0000000c-0000-0000-0000-000000000001'
+  const gh = makeTrigger({
+    id: 't5',
+    kind: 'connector_event',
+    config: { connector_id: connectorID, repo: 'octo/timothy', events: ['pr.opened', 'pr.labeled'], labels: [] },
+  })
+
+  it('shows the hook path with a copy button and the event descriptions', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.assign(navigator, { clipboard: { writeText } })
+    vi.mocked(getAutomation).mockResolvedValue(makeAutomation({ triggers: [gh, hook] }))
+    renderPage()
+    expect(await screen.findByText('GitHub octo/timothy: pr.opened, pr.labeled')).toBeInTheDocument()
+    expect(screen.getByText('Webhook (github)')).toBeInTheDocument()
+    expect(screen.getByText('POST /hooks/t6')).toBeInTheDocument()
+    expect(screen.getByText(/^Last fired .*Last delivery/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Copy hook path' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('/hooks/t6'))
+  })
+
+  it('shows the disabled reason and re-enables with the full trigger set', async () => {
+    const tripped = { ...hook, enabled: false, state: { disabled_reason: 'auth_failures' } }
+    const automation = makeAutomation({ triggers: [gh, tripped] })
+    vi.mocked(getAutomation).mockResolvedValue(automation)
+    vi.mocked(patchAutomation).mockResolvedValue(makeAutomation({ triggers: [gh, { ...hook, state: {} }] }))
+    renderPage()
+    expect(await screen.findByText('Disabled after 20 failed signatures')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Re-enable' }))
+    await waitFor(() => expect(patchAutomation).toHaveBeenCalled())
+    expect(vi.mocked(patchAutomation).mock.calls[0]).toEqual([
+      's1',
+      {
+        triggers: [
+          {
+            id: 't5',
+            kind: 'connector_event',
+            config: { connector_id: connectorID, repo: 'octo/timothy', events: ['pr.opened', 'pr.labeled'] },
+            enabled: true,
+          },
+          { id: 't6', kind: 'webhook', config: { scheme: 'github' }, credential_ref: 'HOOK_KEY', enabled: true },
+        ],
+      },
+    ])
+    expect(toast.success).toHaveBeenCalledWith('Trigger re-enabled')
+    await waitFor(() => expect(screen.queryByText('Disabled after 20 failed signatures')).toBeNull())
+  })
+
+  it('names a rate limited trigger', async () => {
+    vi.mocked(getAutomation).mockResolvedValue(
+      makeAutomation({ triggers: [{ ...hook, enabled: false, state: { disabled_reason: 'rate_limited' } }] }),
+    )
+    renderPage()
+    expect(await screen.findByText('Disabled: rate limited')).toBeInTheDocument()
+  })
+
+  it('toasts a failed re-enable', async () => {
+    vi.mocked(getAutomation).mockResolvedValue(
+      makeAutomation({ triggers: [{ ...hook, enabled: false, state: { disabled_reason: 'auth_failures' } }] }),
+    )
+    vi.mocked(patchAutomation).mockRejectedValue(new Error('boom'))
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Re-enable' }))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not re-enable trigger', { description: 'boom' }))
   })
 })
 

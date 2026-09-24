@@ -3,14 +3,15 @@ import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 
-import { createAutomation, getAutomation, listDestinations, patchAutomation } from '../api/client'
-import type { Automation, AutomationAction, AutomationTemplate, Destination, MissionTemplate } from '../api/types'
+import { createAutomation, getAutomation, listConnectors, listDestinations, patchAutomation } from '../api/client'
+import type { AdminConnector, Automation, AutomationAction, AutomationTemplate, Destination, MissionTemplate } from '../api/types'
 import { useAgents, useRoutes } from '../components/AgentPicker'
 import {
-  cronError,
   draftsFromTriggers,
   draftsToInput,
+  goalHint,
   newTriggerDraft,
+  triggerError,
   type TriggerDraft,
 } from '../components/automations/triggerDrafts'
 import { TriggerList } from '../components/automations/TriggerList'
@@ -122,9 +123,9 @@ function seedDraft(automation: Automation | null, state: EditorLocationState): D
   return base
 }
 
-// badCronIndex reads the trigger index from a server message such as
+// triggerIndex reads the trigger index from a server message such as
 // "triggers[1]: invalid cron expression: ...".
-function badCronIndex(message: string): number {
+function triggerIndex(message: string): number {
   const m = message.match(/triggers\[(\d+)\]/)
   return m ? Number(m[1]) : -1
 }
@@ -178,6 +179,7 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
   const agents = useAgents()
   const routes = useRoutes()
   const [destinations, setDestinations] = useState<Destination[] | null>(null)
+  const [connectors, setConnectors] = useState<AdminConnector[] | null>(null)
   const [draft, setDraft] = useState(initial)
   const [showAdvanced, setShowAdvanced] = useState(
     initial.concurrency !== limitDefaults.concurrency ||
@@ -193,6 +195,7 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
 
   useEffect(() => {
     listDestinations().then(setDestinations, () => setDestinations([]))
+    listConnectors().then(setConnectors, () => setConnectors([]))
   }, [])
 
   // An untouched agent falls back to the default agent.
@@ -215,7 +218,7 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
       draft.mission.goal.trim() === '' ||
       !agentId ||
       !rateOk ||
-      draft.triggers.some((t) => cronError(t)) ||
+      draft.triggers.some((t) => triggerError(t)) ||
       draft.attachments.some((a) => a.uploading)
     if (invalid) return
 
@@ -264,8 +267,11 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
       if (code === 'name_conflict') {
         setNameError('An automation with this name already exists.')
       } else if (code === 'bad_cron') {
-        const target = draft.triggers[badCronIndex(message)] ?? draft.triggers.find((t) => t.kind === 'cron')
+        const target = draft.triggers[triggerIndex(message)] ?? draft.triggers.find((t) => t.kind === 'cron')
         if (target) setTriggerErrors({ [target.key]: message.replace(/^triggers\[\d+\]:\s*/, '') })
+      } else if (code === 'bad_request' && draft.triggers[triggerIndex(message)]) {
+        const target = draft.triggers[triggerIndex(message)]
+        setTriggerErrors({ [target.key]: message.replace(/^triggers\[\d+\]:\s*/, '') })
       } else {
         toast.error(editing ? 'Could not save automation' : 'Could not create automation', { description: errText(err) })
       }
@@ -376,6 +382,8 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
               setTriggerErrors({})
             }}
             errors={triggerErrors}
+            connectors={connectors}
+            submitted={submitted}
           />
         </FieldGroup>
 
@@ -400,6 +408,7 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
             attachments={draft.attachments}
             onAttachmentsChange={(attachments) => set({ attachments })}
             goalError={errors.goal}
+            goalHint={goalHint(draft.triggers)}
           />
         </FieldGroup>
 

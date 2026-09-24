@@ -21,3 +21,20 @@ export function runDuration(run: AutomationRun): string {
 export function isPendingRun(run: AutomationRun): boolean {
   return run.status === 'queued' || run.status === 'starting' || run.status === 'running'
 }
+
+// runEventLabel is the trigger badge and muted summary for a run fired
+// by a connector event ("owner/name #123") or a webhook (the delivery
+// id, first 8 chars); undefined for cron, manual and run now.
+export function runEventLabel(run: AutomationRun): { kind: string; summary: string } | undefined {
+  const ev = (run.event ?? {}) as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' ? v : '')
+  if (ev.source === 'connector' && str(ev.kind)) {
+    const repo = str(ev.repo)
+    const number = typeof ev.number === 'number' && ev.number > 0 ? ` #${ev.number}` : ''
+    return { kind: str(ev.kind), summary: `${repo}${number}`.trim() }
+  }
+  if (ev.source === 'webhook' || ev.kind === 'webhook.received') {
+    return { kind: 'webhook', summary: str(ev.delivery).slice(0, 8) }
+  }
+  return undefined
+}

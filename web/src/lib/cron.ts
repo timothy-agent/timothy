@@ -1,4 +1,4 @@
-import type { AutomationTrigger } from '../api/types'
+import type { AutomationTrigger, AutomationTriggerConfig } from '../api/types'
 
 // cronPresets covers the common recurring shapes the automation form
 // offers directly; 'custom' has no cron value of its own: it means
@@ -38,8 +38,20 @@ export function isCronShape(expr: string): boolean {
   return cronShape.test(expr.trim())
 }
 
-// describeTrigger labels a trigger for a badge: its cron, or its kind.
-export function describeTrigger(t: { kind: AutomationTrigger['kind']; config: { expr?: string } }): string {
+// describeTrigger labels a trigger for a badge: its cron, its repo and
+// events, its webhook scheme, or its kind.
+export function describeTrigger(t: { kind: AutomationTrigger['kind']; config: AutomationTriggerConfig }): string {
   if (t.kind === 'cron') return t.config.expr ? describeCron(t.config.expr) : 'cron'
+  if (t.kind === 'connector_event' && t.config.repo) {
+    const events = t.config.events ?? []
+    return events.length > 0 ? `GitHub ${t.config.repo}: ${events.join(', ')}` : `GitHub ${t.config.repo}`
+  }
+  if (t.kind === 'webhook' && t.config.scheme) return `Webhook (${t.config.scheme})`
   return t.kind.replace('_', ' ')
+}
+
+// hookPath is a webhook trigger's endpoint, relative to the brain; the
+// operator fronts it with a tunnel.
+export function hookPath(triggerId: string): string {
+  return `/hooks/${triggerId}`
 }

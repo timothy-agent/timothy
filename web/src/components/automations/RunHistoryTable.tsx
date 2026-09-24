@@ -6,7 +6,7 @@ import { automationRunStatus } from '../timothy/status'
 import { StatusBadge } from '../timothy/status-badge'
 import { Badge } from '../ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table'
-import { runDuration, runStatusLabel } from './runs'
+import { runDuration, runEventLabel, runStatusLabel } from './runs'
 
 const triggerLabel: Record<AutomationTrigger['kind'], string> = {
   cron: 'cron',
@@ -33,6 +33,7 @@ export function RunHistoryTable({ runs, triggers }: { runs: AutomationRun[]; tri
       <TableBody>
         {runs.map((r) => {
           const kind = triggers.find((t) => t.id === r.trigger_id)?.kind
+          const fired = runEventLabel(r)
           const open = r.mission_id ? () => navigate(`/missions/${r.mission_id}`) : undefined
           const started = r.started_at ?? r.created_at
           return (
@@ -47,9 +48,14 @@ export function RunHistoryTable({ runs, triggers }: { runs: AutomationRun[]; tri
               onKeyDown={open && ((e) => e.key === 'Enter' && open())}
             >
               <TableCell>
-                <Badge variant="outline" size="sm">
-                  {kind ? triggerLabel[kind] : 'run now'}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" size="sm" className={fired ? 'font-mono' : undefined}>
+                    {fired ? fired.kind : kind ? triggerLabel[kind] : 'run now'}
+                  </Badge>
+                  {fired?.summary && (
+                    <span className="truncate font-mono text-xs text-muted-foreground">{fired.summary}</span>
+                  )}
+                </div>
               </TableCell>
               <TableCell>
                 <StatusBadge status={automationRunStatus(r.status)} label={runStatusLabel[r.status]} size="sm" />

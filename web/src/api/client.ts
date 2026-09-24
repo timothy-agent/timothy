@@ -12,6 +12,7 @@ import type {
   AutomationsStats,
   AutomationTemplate,
   AutomationTrigger,
+  AutomationTriggerConfig,
   AvailableModel,
   BudgetLimit,
   BudgetStatus,
@@ -1670,7 +1671,8 @@ export async function exportMessagePDF(
 export interface AutomationTriggerInput {
   id?: string
   kind: AutomationTrigger['kind']
-  config: { expr?: string }
+  config: AutomationTriggerConfig
+  credential_ref?: string
   tool_allowlist?: string[]
   enabled?: boolean
 }

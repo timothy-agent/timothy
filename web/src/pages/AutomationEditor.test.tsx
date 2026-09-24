@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminAgent, AdminRoute, Automation } from '../api/types'
+import type { AdminAgent, AdminConnector, AdminRoute, Automation } from '../api/types'
 import { agentID, makeAutomation, makeTemplate, makeTrigger } from '../components/automations/testFixtures'
 import { TooltipProvider } from '../components/ui/tooltip'
 import { localInputToIso } from '../lib/datetimeLocal'
@@ -12,6 +12,7 @@ vi.mock('../api/client', () => ({
   patchAutomation: vi.fn(),
   getAutomation: vi.fn(),
   listDestinations: vi.fn(),
+  listConnectors: vi.fn(),
   listAgents: vi.fn(),
   listRoutes: vi.fn(),
   uploadAttachment: vi.fn(),
@@ -20,10 +21,28 @@ vi.mock('../api/client', () => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import { toast } from 'sonner'
-import { createAutomation, getAutomation, listAgents, listDestinations, listRoutes, patchAutomation } from '../api/client'
+import {
+  createAutomation,
+  getAutomation,
+  listAgents,
+  listConnectors,
+  listDestinations,
+  listRoutes,
+  patchAutomation,
+} from '../api/client'
 
 const agent = { id: agentID, name: 'briefing', enabled: true, is_default: true } as AdminAgent
 const routes: AdminRoute[] = [{ name: 'careful', strategy: 'ordered', enabled: true, chain: [] }]
+const connectorID = '0000000c-0000-0000-0000-000000000001'
+const github: AdminConnector = {
+  id: connectorID,
+  name: 'gh-main',
+  kind: 'github',
+  config: {},
+  credential_ref: 'GH_PAT',
+  enabled: true,
+  sensitive: false,
+}
 
 function renderAt(path: string, state?: EditorLocationState) {
   const router = createMemoryRouter(
@@ -61,6 +80,7 @@ beforeEach(() => {
   vi.mocked(listAgents).mockResolvedValue([agent])
   vi.mocked(listRoutes).mockResolvedValue(routes)
   vi.mocked(listDestinations).mockResolvedValue([])
+  vi.mocked(listConnectors).mockResolvedValue([github])
   vi.mocked(createAutomation).mockResolvedValue({ id: 'new1' })
 })
 
@@ -268,6 +288,144 @@ describe('AutomationEditor prefill', () => {
       agent_id: other.id,
       action: { kind: 'mission', mission: { goal: 'Summarize my inbox', route: 'careful' } },
     })
+  })
+})
+
+describe('AutomationEditor event triggers', () => {
+  async function fillBasics() {
+    await ready()
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'pr-review' } })
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Review {{event.url}}' } })
+  }
+
+  async function pickKind(name: string) {
+    fireEvent.click(screen.getByLabelText('Kind'))
+    fireEvent.click(await screen.findByRole('option', { name }))
+  }
+
+  it('posts a connector event trigger', async () => {
+    renderAt('/automations/new')
+    await fillBasics()
+    await pickKind('Connector event')
+    fireEvent.click(screen.getByLabelText('Connector'))
+    fireEvent.click(await screen.findByRole('option', { name: 'gh-main' }))
+    fireEvent.change(screen.getByLabelText('Repository'), { target: { value: 'octo/timothy' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /pr\.opened/ }))
+    const labels = screen.getByLabelText('Labels optional')
+    fireEvent.change(labels, { target: { value: 'needs-review' } })
+    fireEvent.keyDown(labels, { key: 'Enter' })
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+
+    await waitFor(() => expect(createAutomation).toHaveBeenCalled())
+    expect(wire(vi.mocked(createAutomation).mock.calls[0][0]).triggers).toEqual([
+      {
+        kind: 'connector_event',
+        config: { connector_id: connectorID, repo: 'octo/timothy', events: ['pr.opened'], labels: ['needs-review'] },
+        enabled: true,
+      },
+    ])
+  })
+
+  it('posts a webhook trigger with its secret name and tool allowlist', async () => {
+    renderAt('/automations/new')
+    await fillBasics()
+    await pickKind('Webhook')
+    fireEvent.click(screen.getByRole('radio', { name: 'Generic' }))
+    fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'HOOK_KEY' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add filter' }))
+    fireEvent.change(screen.getByLabelText('Filter 1 path'), { target: { value: 'action' } })
+    fireEvent.change(screen.getByLabelText('Filter 1 equals'), { target: { value: 'opened' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Tool allowlist, trigger 1' }))
+    const tools = screen.getByLabelText('Tools optional')
+    fireEvent.change(tools, { target: { value: 'search_mail' } })
+    fireEvent.keyDown(tools, { key: 'Enter' })
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+
+    await waitFor(() => expect(createAutomation).toHaveBeenCalled())
+    expect(wire(vi.mocked(createAutomation).mock.calls[0][0]).triggers).toEqual([
+      {
+        kind: 'webhook',
+        config: { scheme: 'generic', filters: [{ path: 'action', equals: 'opened' }] },
+        credential_ref: 'HOOK_KEY',
+        enabled: true,
+        tool_allowlist: ['search_mail'],
+      },
+    ])
+  })
+
+  it('blocks submit on an incomplete event trigger', async () => {
+    renderAt('/automations/new')
+    await fillBasics()
+    await pickKind('Webhook')
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+    expect(await screen.findByText('Enter the signing secret name.')).toBeInTheDocument()
+    expect(createAutomation).not.toHaveBeenCalled()
+  })
+
+  it('shows a server trigger error under the trigger it names', async () => {
+    vi.mocked(createAutomation).mockRejectedValue(
+      apiError('triggers[0]: webhook trigger scheme must be "github" or "generic"', 'bad_request'),
+    )
+    renderAt('/automations/new')
+    await fillBasics()
+    await pickKind('Webhook')
+    fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'HOOK_KEY' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+    const group = screen.getByRole('group', { name: 'Trigger 1' })
+    expect(await within(group).findByText('webhook trigger scheme must be "github" or "generic"')).toBeInTheDocument()
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('switches the goal hint with the trigger kinds', async () => {
+    renderAt('/automations/new')
+    await ready()
+    expect(screen.getByText('Use {{event.pr_url}} or {{notes.name}} to insert trigger data or notes.')).toBeInTheDocument()
+    await pickKind('Connector event')
+    expect(screen.getByText(/\{\{event\.repo\}\}.*\{\{notes\.name\}\}/)).toBeInTheDocument()
+    await pickKind('Webhook')
+    expect(screen.getByText(/\{\{event\.delivery\}\}/)).toBeInTheDocument()
+    expect(screen.queryByText(/\{\{event\.repo\}\}/)).toBeNull()
+  })
+
+  it('loads connector event and webhook triggers and keeps their ids', async () => {
+    const stored = makeAutomation({
+      triggers: [
+        makeTrigger({
+          id: 't5',
+          kind: 'connector_event',
+          config: { connector_id: connectorID, repo: 'octo/timothy', events: ['pr.opened'], labels: [] },
+        }),
+        makeTrigger({
+          id: 't6',
+          kind: 'webhook',
+          config: { scheme: 'github', filters: [{ path: '$.action', equals: 'opened' }] },
+          credential_ref: 'HOOK_KEY',
+          tool_allowlist: ['search_mail'],
+        }),
+      ],
+    })
+    vi.mocked(getAutomation).mockResolvedValue(stored)
+    vi.mocked(patchAutomation).mockResolvedValue(stored)
+    renderAt('/automations/s1/edit')
+    await ready()
+    expect(screen.getByLabelText('Repository')).toHaveValue('octo/timothy')
+    expect(screen.getByRole('checkbox', { name: /pr\.opened/ })).toBeChecked()
+    expect(screen.getByLabelText('Signing secret')).toHaveValue('HOOK_KEY')
+    expect(screen.getByLabelText('Filter 1 path')).toHaveValue('action')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(patchAutomation).toHaveBeenCalled())
+    expect(wire(vi.mocked(patchAutomation).mock.calls[0][1]).triggers).toEqual([
+      { id: 't5', kind: 'connector_event', config: { connector_id: connectorID, repo: 'octo/timothy', events: ['pr.opened'] }, enabled: true },
+      {
+        id: 't6',
+        kind: 'webhook',
+        config: { scheme: 'github', filters: [{ path: 'action', equals: 'opened' }] },
+        credential_ref: 'HOOK_KEY',
+        enabled: true,
+        tool_allowlist: ['search_mail'],
+      },
+    ])
   })
 })
 
