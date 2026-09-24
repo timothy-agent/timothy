@@ -95,24 +95,6 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "valid telegram",
-			//nolint:gosec // G101: a ref NAME, not a credential value.
-			d: Destination{Name: "tg", Kind: "telegram", CredentialRef: "TG_BOT_TOKEN",
-				Config: json.RawMessage(`{"chat_id":"123"}`)},
-			wantErr: false,
-		},
-		{
-			name: "telegram missing chat_id",
-			//nolint:gosec // G101: a ref NAME, not a credential value.
-			d:       Destination{Name: "tg", Kind: "telegram", CredentialRef: "TG_BOT_TOKEN", Config: json.RawMessage(`{}`)},
-			wantErr: true,
-		},
-		{
-			name:    "telegram missing credential_ref",
-			d:       Destination{Name: "tg", Kind: "telegram", Config: json.RawMessage(`{"chat_id":"123"}`)},
-			wantErr: true,
-		},
-		{
 			name:    "valid bitbucket",
 			d:       Destination{Name: "bb", Kind: "bitbucket", Config: json.RawMessage(`{"connector_id":"bb-ok","mode":"push_pr"}`)},
 			wantErr: false,
@@ -146,7 +128,7 @@ func TestValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validate(t.Context(), conns, &tt.d)
+			err := validate(t.Context(), conns, fakeChannels, &tt.d)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -157,8 +139,62 @@ func TestValidate(t *testing.T) {
 func TestValidateEmailNoConnectors(t *testing.T) {
 	d := Destination{Name: "ops-inbox", Kind: "email",
 		Config: json.RawMessage(`{"connector_id":"gmail-ok","to":"ops@example.com"}`)}
-	if err := validate(t.Context(), nil, &d); err == nil {
+	if err := validate(t.Context(), nil, nil, &d); err == nil {
 		t.Fatal("expected error when connectors are disabled")
+	}
+}
+
+// fakeChannels knows one channel of each kind.
+func fakeChannels(_ context.Context, id string) (ChannelRef, error) {
+	kinds := map[string]string{"tg": ChannelTelegram, "sl": ChannelSlack, "em": ChannelEmail, "fax": "fax"}
+	kind, ok := kinds[id]
+	if !ok {
+		return ChannelRef{}, errors.New("channel not found")
+	}
+	//nolint:gosec // G101: ref names, not credential values.
+	return ChannelRef{Kind: kind, CredentialRef: "BOT_REF", ConnectorID: "imap-1"}, nil
+}
+
+func TestValidateChannel(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   string
+		ref      string
+		channels ChannelLookup
+		wantErr  bool
+	}{
+		{name: "telegram", config: `{"channel_id":"tg","chat_id":"-100123"}`},
+		{name: "telegram topic", config: `{"channel_id":"tg","chat_id":"-100123","thread_id":"7"}`},
+		{name: "telegram missing chat_id", config: `{"channel_id":"tg"}`, wantErr: true},
+		{name: "slack", config: `{"channel_id":"sl","chat_id":"C0123"}`},
+		{name: "slack blank chat_id", config: `{"channel_id":"sl","chat_id":"  "}`, wantErr: true},
+		{name: "email", config: `{"channel_id":"em","to":"ops@example.com"}`},
+		{name: "email missing to", config: `{"channel_id":"em","chat_id":"x"}`, wantErr: true},
+		{name: "email two recipients", config: `{"channel_id":"em","to":"a@example.com, b@example.com"}`, wantErr: true},
+		{name: "email display name", config: `{"channel_id":"em","to":"Ops <ops@example.com>"}`, wantErr: true},
+		{name: "missing channel_id", config: `{"chat_id":"1"}`, wantErr: true},
+		{name: "unknown channel", config: `{"channel_id":"nope","chat_id":"1"}`, wantErr: true},
+		{name: "channel kind that cannot deliver", config: `{"channel_id":"fax","chat_id":"1"}`, wantErr: true},
+		{name: "credential_ref rejected", config: `{"channel_id":"tg","chat_id":"1"}`, ref: "BOT_REF", wantErr: true},
+		{name: "malformed config", config: `not json`, wantErr: true},
+		{name: "channels disabled", config: `{"channel_id":"tg","chat_id":"1"}`, channels: nil, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lookup := tt.channels
+			if lookup == nil && tt.name != "channels disabled" {
+				lookup = fakeChannels
+			}
+			d := Destination{Name: "chan", Kind: "channel", CredentialRef: tt.ref, Config: json.RawMessage(tt.config)}
+			if err := validate(t.Context(), nil, lookup, &d); (err != nil) != tt.wantErr {
+				t.Fatalf("validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+	//nolint:gosec // G101: a ref NAME, not a credential value.
+	d := Destination{Name: "tg", Kind: "telegram", CredentialRef: "TG_BOT_TOKEN", Config: json.RawMessage(`{"chat_id":"123"}`)}
+	if err := validate(t.Context(), nil, fakeChannels, &d); err == nil {
+		t.Fatal("the retired telegram kind must be rejected")
 	}
 }
 

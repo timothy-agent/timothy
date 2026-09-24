@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
@@ -22,6 +23,7 @@ const (
 	msgThinking      = "Thinking..."
 	msgNoReply       = "(no reply)"
 	msgWaitingNote   = "\n\nWaiting for your approval in Timothy (web)."
+	msgStarted       = "Started: "
 	failureCap       = 300
 )
 
@@ -160,8 +162,8 @@ func (r *runner) sleep(ctx context.Context, d time.Duration) bool {
 }
 
 // handle runs one item through dedup, addressing, pairing, rate
-// limit, input checks and the conversation queue. Only store failures
-// return an error.
+// limit, input checks, automation triggers and the conversation queue.
+// Only store failures return an error.
 func (r *runner) handle(ctx context.Context, in inbound) error {
 	fresh, err := r.svc.store.MarkInbound(ctx, r.ch.ID, in.DedupID)
 	if err != nil || !fresh {
@@ -253,6 +255,10 @@ func (r *runner) handle(ctx context.Context, in inbound) error {
 			return nil
 		}
 	}
+	trigger, matched, err := r.matchTrigger(ctx, in)
+	if err != nil {
+		return err
+	}
 	if !found {
 		conv, err = r.svc.store.CreateConversation(ctx, Conversation{
 			ChannelID: r.ch.ID, ExternalChatID: key.ChatID, ExternalThreadID: key.ThreadID, ExternalUserID: in.UserID, AgentID: r.ch.AgentID,
@@ -261,11 +267,62 @@ func (r *runner) handle(ctx context.Context, in inbound) error {
 			return err
 		}
 	}
+	if matched {
+		return r.startAutomation(ctx, in, conv, trigger)
+	}
 	select {
 	case r.worker(ctx, conv.ID) <- turnJob{conv: conv, to: key, text: in.Text, attachments: in.Attachments}:
 	default:
 		r.reply(ctx, in, msgQueueFull)
 	}
+	return nil
+}
+
+// matchTrigger returns the first channel trigger in's text fires; more
+// than one match is logged and only the first fires.
+func (r *runner) matchTrigger(ctx context.Context, in inbound) (ChannelTrigger, bool, error) {
+	ts, err := r.svc.channelTriggers(ctx, r.ch.ID)
+	if err != nil {
+		return ChannelTrigger{}, false, err
+	}
+	text := strings.TrimSpace(in.Text)
+	var first ChannelTrigger
+	n := 0
+	for _, t := range ts {
+		if t.Pattern == nil || (t.ChatID != "" && t.ChatID != in.ChatID) || !t.Pattern.MatchString(text) {
+			continue
+		}
+		if n == 0 {
+			first = t
+		}
+		n++
+	}
+	if n > 1 {
+		r.svc.log.Info("channels: message matched several automations, the first fires", "channel_id", r.ch.ID, "matched", n, "automation_id", first.AutomationID)
+	}
+	return first, n > 0, nil
+}
+
+// startAutomation records in as a channel.message event for trigger t
+// instead of a chat turn and confirms the start. A duplicate delivery
+// inserts nothing and stays silent.
+func (r *runner) startAutomation(ctx context.Context, in inbound, conv Conversation, t ChannelTrigger) error {
+	ev, err := events.ChannelMessage(events.ChannelMessagePayload{
+		ChannelID: r.ch.ID, ConversationID: conv.ID, ChatID: in.ChatID, ThreadID: conv.ExternalThreadID, UserID: in.UserID,
+		Sender: in.DisplayName, MessageID: in.MessageID, Text: strings.TrimSpace(in.Text), TriggerID: t.TriggerID,
+	}, in.DedupID)
+	if err != nil {
+		return err
+	}
+	_, inserted, err := r.svc.inbox(ctx, ev)
+	if err != nil || !inserted {
+		return err
+	}
+	if r.svc.kickRuns != nil {
+		r.svc.kickRuns()
+	}
+	r.svc.log.Info("channels: automation triggered", "channel_id", r.ch.ID, "conversation_id", conv.ID, "automation_id", t.AutomationID, "trigger_id", t.TriggerID)
+	r.reply(ctx, in, msgStarted+t.AutomationName)
 	return nil
 }
 

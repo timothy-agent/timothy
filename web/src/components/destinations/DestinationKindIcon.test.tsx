@@ -17,10 +17,9 @@ describe('DestinationKindIcon', () => {
     expect(container.querySelector('.lucide-globe')).toBeInTheDocument()
   })
 
-  it('renders the vendored telegram mark, not a lucide glyph', () => {
-    const { container } = render(<DestinationKindIcon kind="telegram" />)
-    expect(container.querySelector('svg')).toBeInTheDocument()
-    expect(container.querySelector('[class*="lucide-"]')).toBeNull()
+  it('renders the message glyph for a channel destination', () => {
+    const { container } = render(<DestinationKindIcon kind="channel" />)
+    expect(container.querySelector('.lucide-message-square')).toBeInTheDocument()
   })
 
   it('references the github sprite symbol for a github destination', () => {

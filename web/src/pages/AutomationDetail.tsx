@@ -7,6 +7,7 @@ import {
   deleteAutomationNote,
   getAutomation,
   listAgents,
+  listChannels,
   listAutomationNotes,
   listAutomationRuns,
   listDestinations,
@@ -69,7 +70,15 @@ const triggerDisabledText: Record<string, string> = {
   rate_limited: 'Disabled: rate limited',
 }
 
-function TriggerRow({ trigger: t, onReenable }: { trigger: AutomationTrigger; onReenable: () => void }) {
+function TriggerRow({
+  trigger: t,
+  channelNames,
+  onReenable,
+}: {
+  trigger: AutomationTrigger
+  channelNames: Record<string, string>
+  onReenable: () => void
+}) {
   const reason = t.state?.disabled_reason
   const lastFired = t.state?.last_fired_at
   const lastDelivery = t.state?.last_delivery_at
@@ -79,7 +88,7 @@ function TriggerRow({ trigger: t, onReenable }: { trigger: AutomationTrigger; on
         <Badge variant="outline" size="sm">
           {t.kind.replace('_', ' ')}
         </Badge>
-        {t.kind !== 'manual' && <span>{describeTrigger(t)}</span>}
+        {t.kind !== 'manual' && <span>{describeTrigger(t, channelNames)}</span>}
         {t.kind === 'cron' && <span className="font-mono text-xs text-muted-foreground">{t.config.expr}</span>}
         {!t.enabled && !reason && <span className="text-xs text-muted-foreground">off</span>}
         {reason && (
@@ -120,6 +129,7 @@ export function AutomationDetail() {
   const [notes, setNotes] = useState<AutomationNote[]>([])
   const [agents, setAgents] = useState<AdminAgent[]>([])
   const [destinations, setDestinations] = useState<Destination[]>([])
+  const [channelNames, setChannelNames] = useState<Record<string, string>>({})
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState('')
   const [noteDialog, setNoteDialog] = useState<{ note: AutomationNote | null } | null>(null)
@@ -146,6 +156,10 @@ export function AutomationDetail() {
   useEffect(() => {
     listAgents().then(setAgents, () => undefined)
     listDestinations().then(setDestinations, () => undefined)
+    listChannels().then(
+      (rows) => setChannelNames(Object.fromEntries(rows.map((c) => [c.id, c.name]))),
+      () => undefined,
+    )
   }, [])
 
   const pending = runs.some(isPendingRun)
@@ -354,7 +368,7 @@ export function AutomationDetail() {
           <Panel title="Triggers" description={nextRun ? `Next run ${relativeTimeUntil(nextRun)}` : undefined}>
             <ul className="space-y-3">
               {automation.triggers.map((t) => (
-                <TriggerRow key={t.id} trigger={t} onReenable={() => void reenableTrigger(t.id)} />
+                <TriggerRow key={t.id} trigger={t} channelNames={channelNames} onReenable={() => void reenableTrigger(t.id)} />
               ))}
             </ul>
           </Panel>

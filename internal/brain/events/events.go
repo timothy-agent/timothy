@@ -54,6 +54,15 @@ const (
 
 	// MaxWebhookBodyBytes caps the JSON body a webhook event keeps.
 	MaxWebhookBodyBytes = 64 << 10
+
+	// SourceChannel marks events a channel message produced.
+	SourceChannel = "channel"
+	// KindChannelMessage is one paired sender's message that matched a
+	// channel trigger.
+	KindChannelMessage = "channel.message"
+	// MaxChannelTextRunes caps a channel event's text, the channel
+	// input cap.
+	MaxChannelTextRunes = 4000
 	// maxDeliveryBytes caps a delivery id in the dedup key.
 	maxDeliveryBytes = 256
 )
@@ -285,6 +294,50 @@ func DecodeWebhook(ev Event) (WebhookPayload, error) {
 	}
 	if p.TriggerID == "" || p.AutomationID == "" || p.Delivery == "" {
 		return WebhookPayload{}, fmt.Errorf("events: event %d is missing trigger_id, automation_id or delivery", ev.ID)
+	}
+	return p, nil
+}
+
+// ChannelMessagePayload is the payload of a channel.message event.
+// TriggerID is the trigger the channel matched; the dispatcher fires
+// only that one.
+type ChannelMessagePayload struct {
+	ChannelID      string `json:"channel_id"`
+	ConversationID string `json:"conversation_id"`
+	ChatID         string `json:"chat_id"`
+	ThreadID       string `json:"thread_id,omitempty"`
+	UserID         string `json:"user_id"`
+	Sender         string `json:"sender"`
+	MessageID      string `json:"message_id"`
+	Text           string `json:"text"`
+	TriggerID      string `json:"trigger_id"`
+}
+
+// ChannelMessage builds the event for one channel message,
+// deduplicated by channel id and the channel's inbound dedup id. Text
+// is capped at MaxChannelTextRunes.
+func ChannelMessage(p ChannelMessagePayload, dedupID string) (Event, error) {
+	if p.ChannelID == "" || p.TriggerID == "" || dedupID == "" {
+		return Event{}, fmt.Errorf("events: channel event needs a channel id, a trigger id and a dedup id")
+	}
+	if utf8.RuneCountInString(p.Text) > MaxChannelTextRunes {
+		p.Text = string([]rune(p.Text)[:MaxChannelTextRunes])
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return Event{}, fmt.Errorf("events: marshal channel payload: %w", err)
+	}
+	return Event{Source: SourceChannel, Kind: KindChannelMessage, DedupKey: "channel:" + p.ChannelID + ":" + dedupID, Payload: raw}, nil
+}
+
+// DecodeChannelMessage reads a channel.message event's payload.
+func DecodeChannelMessage(ev Event) (ChannelMessagePayload, error) {
+	var p ChannelMessagePayload
+	if err := json.Unmarshal(ev.Payload, &p); err != nil {
+		return ChannelMessagePayload{}, fmt.Errorf("events: decode channel payload of event %d: %w", ev.ID, err)
+	}
+	if p.ChannelID == "" || p.TriggerID == "" {
+		return ChannelMessagePayload{}, fmt.Errorf("events: event %d is missing channel_id or trigger_id", ev.ID)
 	}
 	return p, nil
 }

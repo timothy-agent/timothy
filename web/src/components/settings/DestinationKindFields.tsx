@@ -1,4 +1,4 @@
-import type { AdminConnector } from '../../api/types'
+import type { AdminConnector, Channel } from '../../api/types'
 import {
   COMMIT_STYLE_DEFAULT,
   ON_COMPLETE_NONE,
@@ -17,27 +17,37 @@ export interface DestinationKindValues {
   url: string
   format: 'json' | 'text'
   chatID: string
+  threadID: string
+  channelID: string
   mode: 'push' | 'push_pr'
   branchPattern: string
   commitStyle: string
   createIfMissing: boolean
 }
 
+// chatHint is the chat id hint per channel kind.
+const chatHint: Record<Channel['kind'], string> = {
+  telegram: 'Telegram: the chat id of a group or your own chat',
+  slack: 'Slack: the channel id such as C0123',
+  email: 'Email: the recipient',
+}
+
 // DestinationKindFields renders the labelled fields for one destination
 // kind, shared by DestinationAdd and DestinationEdit so the field set
-// lives once. Every Select is labelled (contract 10.1). Bot token
-// belongs to the caller (Add: new secret; Edit: independent rotation
-// Panel), so telegram only contributes the chat id here.
+// lives once. Every Select is labelled (contract 10.1). A channel
+// destination carries no credential: the channel holds it.
 export function DestinationKindFields({
   kind,
   values,
   setField,
   connectors,
+  channels = [],
 }: {
-  kind: 'email' | 'webhook' | 'telegram' | GitKind
+  kind: 'email' | 'webhook' | 'channel' | GitKind
   values: DestinationKindValues
   setField: <K extends keyof DestinationKindValues>(key: K, value: DestinationKindValues[K]) => void
   connectors: AdminConnector[]
+  channels?: Channel[]
 }) {
   if (kind === 'email') {
     return (
@@ -90,11 +100,55 @@ export function DestinationKindFields({
     )
   }
 
-  if (kind === 'telegram') {
+  if (kind === 'channel') {
+    const picked = channels.find((c) => c.id === values.channelID)
     return (
-      <Field label="Chat ID" description="the numeric chat or channel id the bot posts to">
-        <Input value={values.chatID} onChange={(e) => setField('chatID', e.target.value)} placeholder="123456789" />
-      </Field>
+      <>
+        <Field label="Channel">
+          {(props) => (
+            <Select value={values.channelID} onValueChange={(v) => setField('channelID', v)}>
+              <SelectTrigger id={props.id} className="w-full" aria-label="Channel">
+                <SelectValue placeholder="Choose a channel" />
+              </SelectTrigger>
+              <SelectContent>
+                {channels.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name} ({c.kind})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+        {picked?.kind === 'email' && (
+          <Field label="To" description={chatHint.email}>
+            <Input value={values.to} onChange={(e) => setField('to', e.target.value)} placeholder="ops@example.com" />
+          </Field>
+        )}
+        {picked && picked.kind !== 'email' && (
+          <>
+            <Field label="Chat ID" description={chatHint[picked.kind]}>
+              <Input
+                value={values.chatID}
+                onChange={(e) => setField('chatID', e.target.value)}
+                placeholder={picked.kind === 'slack' ? 'C0123' : '-1001234567890'}
+                className="font-mono"
+              />
+            </Field>
+            <Field
+              label="Thread ID"
+              description={picked.kind === 'slack' ? 'Slack: a thread ts to reply under' : 'Telegram: a forum topic id'}
+              optional
+            >
+              <Input
+                value={values.threadID}
+                onChange={(e) => setField('threadID', e.target.value)}
+                className="font-mono"
+              />
+            </Field>
+          </>
+        )}
+      </>
     )
   }
 

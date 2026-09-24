@@ -47,6 +47,7 @@ type Deliverer struct {
 	// special-cases IsRepoKind instead of a map lookup. One adapter
 	// serves every git provider kind (issue #795).
 	repo     *RepoAdapter
+	channel  *ChannelAdapter // also in adapters; Test runs its connect check
 	webURL   func(ctx context.Context) string
 	location func(ctx context.Context) *time.Location
 	log      *slog.Logger
@@ -54,20 +55,21 @@ type Deliverer struct {
 
 // NewDeliverer builds a Deliverer. webURL resolves the web_base_url
 // setting fresh at delivery time (never cached on the struct) so an
-// operator's later change applies without a restart. email/telegram/
-// repo nil (no google connectors / no secret store / no connectors
+// operator's later change applies without a restart. email/channel/
+// repo nil (no google connectors / no channels / no connectors
 // wired, respectively) leaves that kind unregistered in adapters, so
 // deliverOne's map lookup then reports "no adapter for kind" rather
 // than boxing a nil adapter as a non-nil Adapter (which would panic on
 // first field access inside Deliver). location follows the same
 // fresh-read pattern as webURL; nil (or a nil *time.Location it
 // returns) defaults to UTC.
-func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, telegram *TelegramAdapter, repo *RepoAdapter, webURL func(ctx context.Context) string, location func(ctx context.Context) *time.Location, log *slog.Logger) *Deliverer {
+func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdapter, webhook *WebhookAdapter, channel *ChannelAdapter, repo *RepoAdapter, webURL func(ctx context.Context) string, location func(ctx context.Context) *time.Location, log *slog.Logger) *Deliverer {
 	d := &Deliverer{
 		store:    store,
 		events:   events,
 		adapters: map[string]Adapter{"webhook": webhook},
 		repo:     repo,
+		channel:  channel,
 		webURL:   webURL,
 		location: location,
 		log:      log,
@@ -75,8 +77,8 @@ func NewDeliverer(store destinationStore, events eventRecorder, email *EmailAdap
 	if email != nil {
 		d.adapters["email"] = email
 	}
-	if telegram != nil {
-		d.adapters["telegram"] = telegram
+	if channel != nil {
+		d.adapters["channel"] = channel
 	}
 	return d
 }
@@ -93,7 +95,7 @@ const (
 // Deliver runs delivery for every entry in entries, best-effort per
 // destination: every github-kind entry delivers FIRST, then the
 // mission's generated output is rendered, then every other kind
-// (email/webhook/telegram) delivers, so a message entry listed before
+// (email/webhook/channel) delivers, so a message entry listed before
 // a github entry still gets the fresh branch/PR link (Render's
 // lastPROpenedURL reads the mission.pr_opened event a github delivery
 // above just appended). Recipients get the mission's generated output
@@ -282,7 +284,9 @@ var testPayload = Payload{
 }
 
 // Test sends testPayload through id's real adapter, synchronously, no
-// retry — the Settings "Test send" button's backing call. Unlike
+// retry: the Settings "Test send" button's backing call. A channel
+// destination sends nothing: it checks the channel resolves and
+// connects. Unlike
 // Deliver, this never touches mission_events (there is no mission) and
 // reports its outcome directly to the caller instead of best-effort
 // logging.
@@ -293,6 +297,9 @@ func (d *Deliverer) Test(ctx context.Context, id string) error {
 	}
 	if IsRepoKind(dest.Kind) {
 		return fmt.Errorf("%s destinations have no test send: use the mission's push/pr actions instead", dest.Kind)
+	}
+	if dest.Kind == "channel" && d.channel != nil {
+		return d.channel.Test(ctx, dest.Config)
 	}
 	adapter := d.adapters[dest.Kind]
 	if adapter == nil {

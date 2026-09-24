@@ -46,7 +46,7 @@ type deliverArgs struct {
 }
 
 // Deliver lets the model send a message to one operator-configured
-// destination (email, webhook, or Telegram). list resolves the
+// destination (email, webhook, or a channel). list resolves the
 // destination argument to an id; deliver performs the actual send.
 //
 // Exfiltration guard (Go code, not prompt text): the model can only
@@ -60,7 +60,8 @@ func Deliver(list DeliverLister, deliver DeliverFunc) *tools.Tool {
 		Name:    "deliver",
 		Trusted: true,
 		Description: `Sends a message to one operator-configured destination
-(email, webhook, or Telegram) set up in Settings → Destinations.
+(email, webhook, or a Telegram, Slack or email channel) set up in
+Settings → Destinations.
 
 Use when asked to send/deliver/forward something to a named
 destination ("send this to my telegram", "email the summary to
@@ -77,7 +78,7 @@ Arguments:
 - destination (string, required): the destination's name or id, as
   configured in Settings → Destinations.
 - subject (string, optional): subject line (used by email; prepended
-  to the message body for webhook/Telegram).
+  to the message body for webhook and channel destinations).
 - body (string, required): the message content.
 
 Returns the destination's name and kind on success. On failure,

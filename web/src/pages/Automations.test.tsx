@@ -11,6 +11,7 @@ vi.mock('../api/client', () => ({
   automationsStats: vi.fn(),
   listAutomationTemplates: vi.fn(),
   listAgents: vi.fn(),
+  listChannels: vi.fn(() => Promise.resolve([])),
   patchAutomation: vi.fn(),
   deleteAutomation: vi.fn(),
   runAutomationNow: vi.fn(),

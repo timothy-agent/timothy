@@ -202,7 +202,11 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if destinationStore != nil {
 		destinationKinds = enabledDestinationKinds(destinationStore)
 	}
-	a.registerAutomations(srv.Handle, automationStore, eventStore, eventsKick, destLookup, resolver, location, connectorKinds, destinationKinds, connLookup)
+	var chanLookup channelLookup
+	if channelStore != nil {
+		chanLookup = storeChannelLookup(channelStore)
+	}
+	a.registerAutomations(srv.Handle, automationStore, eventStore, eventsKick, destLookup, resolver, location, connectorKinds, destinationKinds, connLookup, chanLookup)
 	var notifyOperator func(ctx context.Context, kind, message string) error
 	if missionNotifier != nil {
 		notifyOperator = missionNotifier.NotifyOperator

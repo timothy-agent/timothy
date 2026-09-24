@@ -16,7 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/SumonMSelim/timothy/internal/brain/destinations"
+	"github.com/SumonMSelim/timothy/internal/platform/redact"
 )
 
 const (
@@ -65,31 +65,54 @@ func slackError(method, code string, retry time.Duration) *apiError {
 	return &apiError{Service: KindSlack, Method: method, Status: status, Description: code, RetryAfter: retry}
 }
 
-// call POSTs one Web API method as JSON with the token behind ref and
-// decodes the response into out (nil skips).
+// call POSTs one Web API method with the token behind ref.
 func (a *slackAdapter) call(ctx context.Context, ref, method string, body, out any) error {
-	if a.resolve == nil {
+	return NewSlackClient(a.http, a.base, a.resolve, ref).Call(ctx, method, body, out)
+}
+
+// SlackClient calls the Slack Web API with the bot token behind one
+// credential ref; the channel destination shares it. The token only
+// travels in the Authorization header and never leaves unredacted.
+type SlackClient struct {
+	http    *http.Client
+	base    string
+	resolve func(ctx context.Context, ref string) (string, error)
+	ref     string
+}
+
+// NewSlackClient builds a client; an empty base uses the real API.
+func NewSlackClient(client *http.Client, base string, resolve func(ctx context.Context, ref string) (string, error), ref string) *SlackClient {
+	return &SlackClient{http: client, base: cmp.Or(base, defaultSlackBase), resolve: resolve, ref: ref}
+}
+
+// Call POSTs one method and decodes the response into out (nil
+// skips). A url.Values body goes form-encoded, anything else as JSON.
+func (c *SlackClient) Call(ctx context.Context, method string, body, out any) error {
+	if c.resolve == nil {
 		return fmt.Errorf("slack %s: no secret resolver", method)
 	}
-	token, err := a.resolve(ctx, ref)
+	token, err := c.resolve(ctx, c.ref)
 	if err != nil {
 		return fmt.Errorf("slack %s: resolve token: %w", method, err)
 	}
-	payload, err := json.Marshal(body)
-	if err != nil {
+	contentType := "application/json; charset=utf-8"
+	var payload []byte
+	if form, ok := body.(url.Values); ok {
+		contentType, payload = "application/x-www-form-urlencoded", []byte(form.Encode())
+	} else if payload, err = json.Marshal(body); err != nil {
 		return fmt.Errorf("slack %s: marshal: %w", method, err)
 	}
 	cctx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodPost, a.base+"/"+method, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(cctx, http.MethodPost, c.base+"/"+method, bytes.NewReader(payload))
 	if err != nil {
-		return destinations.RedactToken(fmt.Errorf("slack %s: request: %w", method, err), token)
+		return redact.Token(fmt.Errorf("slack %s: request: %w", method, err), token)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json; charset=utf-8")
-	resp, err := a.http.Do(req)
+	req.Header.Set("Content-Type", contentType)
+	resp, err := c.http.Do(req)
 	if err != nil {
-		return destinations.RedactToken(fmt.Errorf("slack %s: %w", method, err), token)
+		return redact.Token(fmt.Errorf("slack %s: %w", method, err), token)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	var retry time.Duration
@@ -104,7 +127,7 @@ func (a *slackAdapter) call(ctx context.Context, ref, method string, body, out a
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return destinations.RedactToken(fmt.Errorf("slack %s: read: %w", method, err), token)
+		return redact.Token(fmt.Errorf("slack %s: read: %w", method, err), token)
 	}
 	var env struct {
 		OK    bool   `json:"ok"`
@@ -114,7 +137,7 @@ func (a *slackAdapter) call(ctx context.Context, ref, method string, body, out a
 		return fmt.Errorf("slack %s: decode: %w", method, err)
 	}
 	if !env.OK {
-		return slackError(method, destinations.RedactToken(errors.New(cmp.Or(env.Error, "unknown_error")), token).Error(), retry)
+		return slackError(method, redact.Token(errors.New(cmp.Or(env.Error, "unknown_error")), token).Error(), retry)
 	}
 	if out == nil {
 		return nil
@@ -123,6 +146,44 @@ func (a *slackAdapter) call(ctx context.Context, ref, method string, body, out a
 		return fmt.Errorf("slack %s: decode result: %w", method, err)
 	}
 	return nil
+}
+
+// UploadFile shares one file in channelID (under threadTS when set)
+// with comment as its message: an upload URL, the bytes, then the
+// completion call.
+func (c *SlackClient) UploadFile(ctx context.Context, channelID, threadTS, name string, data []byte, comment string) error {
+	var up struct {
+		UploadURL string `json:"upload_url"`
+		FileID    string `json:"file_id"`
+	}
+	if err := c.Call(ctx, "files.getUploadURLExternal", url.Values{"filename": {name}, "length": {strconv.Itoa(len(data))}}, &up); err != nil {
+		return err
+	}
+	cctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(cctx, http.MethodPost, up.UploadURL, bytes.NewReader(data))
+	if err != nil {
+		return redact.Token(fmt.Errorf("slack upload: request: %w", err), up.UploadURL)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		// The upload URL is a signed grant; keep it out of logs.
+		return redact.Token(fmt.Errorf("slack upload: %w", err), up.UploadURL)
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<16))
+	_ = resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return &apiError{Service: KindSlack, Method: "upload", Status: resp.StatusCode, Description: http.StatusText(resp.StatusCode)}
+	}
+	done := map[string]any{"files": []map[string]string{{"id": up.FileID, "title": name}}, "channel_id": channelID}
+	if threadTS != "" {
+		done["thread_ts"] = threadTS
+	}
+	if comment != "" {
+		done["initial_comment"] = comment
+	}
+	return c.Call(ctx, "files.completeUploadExternal", done, nil)
 }
 
 func (a *slackAdapter) connect(ctx context.Context) (identity, error) {
@@ -184,7 +245,7 @@ func (a *slackAdapter) dial(ctx context.Context) error {
 	if err != nil {
 		// The URL's query is a connection ticket; keep it out of logs.
 		if u, perr := url.Parse(open.URL); perr == nil && u.RawQuery != "" {
-			err = destinations.RedactToken(err, u.RawQuery)
+			err = redact.Token(err, u.RawQuery)
 		}
 		return fmt.Errorf("slack socket dial: %w", err)
 	}

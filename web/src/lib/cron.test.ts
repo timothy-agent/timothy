@@ -63,6 +63,15 @@ describe('describeTrigger for event kinds', () => {
   })
 })
 
+describe('describeTrigger for channel triggers', () => {
+  it('names the channel and the pattern', () => {
+    const t = { kind: 'channel' as const, config: { channel_id: 'ch1', pattern: '^/run coverage$' } }
+    expect(describeTrigger(t, { ch1: 'ops-bot' })).toBe('Channel ops-bot: /^/run coverage$/')
+    expect(describeTrigger(t)).toBe('Channel: /^/run coverage$/')
+    expect(describeTrigger({ kind: 'channel', config: {} })).toBe('channel')
+  })
+})
+
 describe('hookPath', () => {
   it('is relative to the brain', () => {
     expect(hookPath('t9')).toBe('/hooks/t9')

@@ -7,6 +7,7 @@ import {
   githubConnectorOptions,
   goalHint,
   newTriggerDraft,
+  patternError,
   repoError,
   triggerError,
 } from './triggerDrafts'
@@ -151,5 +152,48 @@ describe('goalHint', () => {
     expect(hook).toContain('{{event.body.<field>}}')
     expect(hook).toContain('{{event.delivery}}')
     expect(hook).not.toContain('{{event.repo}}')
+  })
+})
+
+describe('channel drafts', () => {
+  const channelID = '0000000c-0000-0000-0000-00000000c001'
+  const stored = {
+    id: 't7',
+    kind: 'channel' as const,
+    config: { channel_id: channelID, pattern: '^/run coverage$', chat_id: '-100' },
+    enabled: true,
+  }
+
+  it('loads the config and keeps the id', () => {
+    const [d] = draftsFromTriggers([stored])
+    expect(d).toMatchObject({ id: 't7', kind: 'channel', channelId: channelID, pattern: '^/run coverage$', chatId: '-100' })
+  })
+
+  it('round-trips to the wire shape without a credential_ref', () => {
+    expect(draftsToInput(draftsFromTriggers([stored]))).toEqual([
+      { id: 't7', kind: 'channel', config: { channel_id: channelID, pattern: '^/run coverage$', chat_id: '-100' }, enabled: true },
+    ])
+  })
+
+  it('omits an empty chat id and keeps the pattern as typed', () => {
+    const d = { ...newTriggerDraft(), kind: 'channel' as const, channelId: channelID, pattern: ' ^deploy ', chatId: '  ' }
+    expect(draftsToInput([d])[0].config).toEqual({ channel_id: channelID, pattern: ' ^deploy ' })
+  })
+
+  it('walks channel, pattern and pattern validity in order', () => {
+    const base = { ...newTriggerDraft(), kind: 'channel' as const }
+    expect(triggerError(base)).toBe('Pick a channel.')
+    expect(triggerError({ ...base, channelId: channelID })).toBe('Enter a pattern.')
+    expect(triggerError({ ...base, channelId: channelID, pattern: '(unclosed' })).toBe('Not a valid regular expression.')
+    expect(triggerError({ ...base, channelId: channelID, pattern: 'a'.repeat(201) })).toContain('200 characters')
+    expect(triggerError({ ...base, channelId: channelID, pattern: '(?i)^/run' })).toBeUndefined()
+    expect(patternError({ ...base, pattern: '' })).toBeUndefined()
+  })
+
+  it('adds the channel placeholders to the goal hint', () => {
+    const hint = goalHint([{ ...newTriggerDraft(), kind: 'channel' }])
+    expect(hint).toContain('{{event.text}}')
+    expect(hint).toContain('{{event.sender}}')
+    expect(hint).toContain('{{event.chat_id}}')
   })
 })

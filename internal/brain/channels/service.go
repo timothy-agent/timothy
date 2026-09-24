@@ -5,12 +5,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -28,6 +30,8 @@ const (
 	// parkEvery re-lists parked missions; hub signals are droppable
 	// hints.
 	parkEvery = time.Minute
+	// triggerTTL is how long a channel's trigger list is cached.
+	triggerTTL = 30 * time.Second
 )
 
 // ChatFunc runs one chat turn; production passes chat.Service.Chat.
@@ -70,6 +74,13 @@ type Service struct {
 	parkEvery  time.Duration
 	// mail wires email channels; SetEmail fills its mailbox.
 	mail emailEnv
+	// triggers, inbox and kick start automations from messages;
+	// SetTriggers fills them, nil turns matching off.
+	triggers func(ctx context.Context, channelID string) ([]ChannelTrigger, error)
+	inbox    func(ctx context.Context, ev events.Event) (int64, bool, error)
+	kickRuns func()
+	trigMu   sync.Mutex
+	trigList map[string]cachedTriggers
 
 	reload chan struct{}
 	// enabled is the channels switch Run was given (nil runs always).
@@ -86,6 +97,21 @@ type Service struct {
 	running int // runner count after the last reconcile, -1 before it
 }
 
+// ChannelTrigger is one automation channel trigger a message can fire.
+type ChannelTrigger struct {
+	TriggerID      string
+	AutomationID   string
+	AutomationName string
+	Pattern        *regexp.Regexp
+	// ChatID limits the trigger to one chat when set.
+	ChatID string
+}
+
+type cachedTriggers struct {
+	at   time.Time
+	list []ChannelTrigger
+}
+
 type runnerHandle struct {
 	updatedAt time.Time
 	cancel    context.CancelFunc
@@ -98,7 +124,7 @@ func New(store *Store, chatFn ChatFunc, deps MissionDeps, resolveSecret func(ctx
 		store: store, chat: chatFn, missions: deps, resolveSecret: resolveSecret, http: client, log: log,
 		now: time.Now, retryEvery: retryEvery, parkEvery: parkEvery,
 		reload: make(chan struct{}, 1), runners: map[string]*runnerHandle{}, running: -1,
-		parked: map[string]string{}, skipLogged: map[string]bool{},
+		parked: map[string]string{}, skipLogged: map[string]bool{}, trigList: map[string]cachedTriggers{},
 	}
 	s.mail = emailEnv{store: store, log: log, now: func() time.Time { return s.now() }}
 	store.SetOnChange(func(context.Context) { s.kick() })
@@ -124,6 +150,38 @@ func (s *Service) SetEmail(open func(ctx context.Context, id string) (*connector
 		}
 		return max(poll(ctx), emailPollFloor)
 	}
+}
+
+// SetTriggers lets messages start automations: list returns a
+// channel's triggers (cached triggerTTL), inbox records the matched
+// message (events.Store.AddIfNew) and kick asks the drainer to consume
+// it. Call before Run.
+func (s *Service) SetTriggers(list func(ctx context.Context, channelID string) ([]ChannelTrigger, error),
+	inbox func(ctx context.Context, ev events.Event) (int64, bool, error), kick func()) {
+	s.triggers, s.inbox, s.kickRuns = list, inbox, kick
+}
+
+// channelTriggers returns channel id's triggers from the cache, listing
+// them again once triggerTTL has passed.
+func (s *Service) channelTriggers(ctx context.Context, id string) ([]ChannelTrigger, error) {
+	if s.triggers == nil || s.inbox == nil {
+		return nil, nil
+	}
+	now := s.now()
+	s.trigMu.Lock()
+	c, ok := s.trigList[id]
+	s.trigMu.Unlock()
+	if ok && now.Sub(c.at) < triggerTTL {
+		return c.list, nil
+	}
+	list, err := s.triggers(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	s.trigMu.Lock()
+	s.trigList[id] = cachedTriggers{at: now, list: list}
+	s.trigMu.Unlock()
+	return list, nil
 }
 
 func (s *Service) adapterFor(c Channel) (adapter, error) {

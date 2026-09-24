@@ -186,10 +186,11 @@ func (b *IMAPMailbox) Attachment(ctx context.Context, uid uint32, filename strin
 	return sess.FetchAttachment(ctx, imap.UID(uid), filename)
 }
 
-// Reply sends a plain-text mail to one address, threaded under
-// inReplyTo and references, and returns its generated Message-ID
-// (without angle brackets). Ids that are not well formed are dropped.
-func (b *IMAPMailbox) Reply(ctx context.Context, to, subject, body, inReplyTo string, references []string) (string, error) {
+// Reply sends a plain-text mail with optional file attachments to one
+// address, threaded under inReplyTo and references, and returns its
+// generated Message-ID (without angle brackets). Ids that are not well
+// formed are dropped; empty inReplyTo and references start a thread.
+func (b *IMAPMailbox) Reply(ctx context.Context, to, subject, body, inReplyTo string, references []string, files []MailFile) (string, error) {
 	if err := rejectHeaderInjection(append([]string{to, subject, inReplyTo}, references...)...); err != nil {
 		return "", err
 	}
@@ -217,7 +218,7 @@ func (b *IMAPMailbox) Reply(ctx context.Context, to, subject, body, inReplyTo st
 	if err != nil {
 		return "", err
 	}
-	msg := assembleRFC822(b.Address(), addrs, nil, subject, body, id, inReplyTo, refs)
+	msg := assembleRFC822(b.Address(), addrs, nil, subject, body, id, inReplyTo, refs, files)
 	if err := b.src.send(ctx, b.src.cfg, pw, []string{addrs[0].Address}, msg); err != nil {
 		return "", err
 	}

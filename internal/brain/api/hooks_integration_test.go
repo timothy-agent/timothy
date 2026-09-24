@@ -83,7 +83,7 @@ func newHookHarness(t *testing.T) *hookHarness {
 		}
 		return hookSecret, nil
 	}, notifier.NotifyOperator)
-	a.registerAutomations(m.Handle, h.store, ev, nil, nil, &attachmentResolver{}, nil, nil, nil, nil)
+	a.registerAutomations(m.Handle, h.store, ev, nil, nil, &attachmentResolver{}, nil, nil, nil, nil, nil)
 	h.srv = httptest.NewServer(m)
 	t.Cleanup(h.srv.Close)
 	return h

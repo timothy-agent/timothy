@@ -10,9 +10,9 @@ import (
 
 // Payload is the rendered delivery content, kind-agnostic: adapters
 // format it per their own contract (email HTML, webhook JSON/text,
-// telegram MarkdownV2). Files/OversizeFiles are never serialized —
+// channel MarkdownV2 or mrkdwn). Files/OversizeFiles are never serialized:
 // webhook's JSON body is body+links only, per the plan's kind gate;
-// they carry through only for the email/telegram adapters, which read
+// they carry through only for the email/channel adapters, which read
 // the fields directly rather than through JSON.
 type Payload struct {
 	MissionID string `json:"mission_id"`

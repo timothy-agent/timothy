@@ -12,6 +12,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
+	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
@@ -48,7 +49,7 @@ func TestAutomationsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerAutomations(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	a.registerAutomations(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/automations"},
 		{"POST", "/v1/automations"},
@@ -128,9 +129,12 @@ func TestAutomationCreateRejectsBeforeStore(t *testing.T) {
 		{"webhook trigger without credential_ref", func(b map[string]any) {
 			b["triggers"] = []any{map[string]any{"kind": "webhook", "config": map[string]any{"scheme": "generic"}}}
 		}, "bad_request", "credential_ref"},
-		{"channel trigger", func(b map[string]any) {
+		{"channel trigger without config", func(b map[string]any) {
 			b["triggers"] = []any{map[string]any{"kind": "channel"}}
-		}, "bad_request", "not available yet"},
+		}, "bad_request", "channel trigger config"},
+		{"channel trigger without channels", func(b map[string]any) {
+			b["triggers"] = []any{map[string]any{"kind": "channel", "config": map[string]any{"channel_id": testAgentID, "pattern": "^/run"}}}
+		}, "bad_request", "channels are not enabled"},
 		{"max_concurrent without parallel", func(b map[string]any) { b["max_concurrent"] = 2 }, "bad_request", "parallel"},
 		{"unknown destination", func(b map[string]any) {
 			b["action"] = map[string]any{"kind": "mission", "mission": map[string]any{"goal": "g", "kind": "general", "destination_ids": []string{"d1", "unknown"}}}
@@ -430,6 +434,44 @@ func TestValidateTriggerConnectors(t *testing.T) {
 		t.Errorf("lookup failure: err = %v, want a plain error", err)
 	}
 	if err := (&automationAPI{}).validateTriggerConnectors(t.Context(), trigger("gh")); !errors.As(err, &ve) {
+		t.Errorf("no lookup: err = %v, want a ValidationError", err)
+	}
+}
+
+func TestValidateTriggerChannels(t *testing.T) {
+	const on, off, gone, boom = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222", "33333333-3333-3333-3333-333333333333", "44444444-4444-4444-4444-444444444444"
+	lookup := channelLookup(func(_ context.Context, id string) (bool, error) {
+		switch id {
+		case on:
+			return true, nil
+		case off:
+			return false, nil
+		case boom:
+			return false, errors.New("db down")
+		}
+		return false, channels.ErrNotFound
+	})
+	trigger := func(id string) []automations.Trigger {
+		return []automations.Trigger{{Kind: automations.TriggerChannel, Config: json.RawMessage(`{"channel_id":"` + id + `","pattern":"^/run"}`)}}
+	}
+	h := &automationAPI{channels: lookup}
+	if err := h.validateTriggerConnectors(t.Context(), trigger(on)); err != nil {
+		t.Fatalf("enabled channel: %v", err)
+	}
+	if err := (&automationAPI{}).validateTriggerConnectors(t.Context(), []automations.Trigger{{Kind: automations.TriggerManual}}); err != nil {
+		t.Fatalf("no channel trigger: %v", err)
+	}
+	for _, id := range []string{off, gone} {
+		var ve *automations.ValidationError
+		if err := h.validateTriggerConnectors(t.Context(), trigger(id)); !errors.As(err, &ve) {
+			t.Errorf("%s: err = %v, want a ValidationError", id, err)
+		}
+	}
+	var ve *automations.ValidationError
+	if err := h.validateTriggerConnectors(t.Context(), trigger(boom)); err == nil || errors.As(err, &ve) {
+		t.Errorf("lookup failure: err = %v, want a plain error", err)
+	}
+	if err := (&automationAPI{}).validateTriggerConnectors(t.Context(), trigger(on)); !errors.As(err, &ve) {
 		t.Errorf("no lookup: err = %v, want a ValidationError", err)
 	}
 }

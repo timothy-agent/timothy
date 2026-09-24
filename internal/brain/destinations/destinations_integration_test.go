@@ -54,7 +54,7 @@ func testStore(t *testing.T) *Store {
 		defer func() { _ = conn.Close(cctx) }()
 		_, _ = conn.Exec(cctx, "DELETE FROM destinations WHERE name LIKE $1 || '%'", marker)
 	})
-	return NewStore(pool, nil, log)
+	return NewStore(pool, nil, nil, log)
 }
 
 func TestStoreCRUDIntegration(t *testing.T) {

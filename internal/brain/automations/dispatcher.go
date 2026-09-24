@@ -27,7 +27,7 @@ const (
 )
 
 // Dispatcher is the events consumer that turns cron.due, run.now,
-// webhook and connector events into runs and finalizes runs when their mission ends. All of
+// webhook, connector and channel events into runs and finalizes runs when their mission ends. All of
 // its writes go through the drain transaction.
 type Dispatcher struct {
 	// notify is Notifier.NotifyMessage; an empty mission id is an
@@ -45,7 +45,7 @@ func NewDispatcher(notify func(ctx context.Context, missionID, kind, message str
 func (d *Dispatcher) Name() string { return "automations" }
 
 func (d *Dispatcher) Kinds() []string {
-	return append([]string{events.KindCronDue, events.KindRunNow, events.KindWebhookReceived, events.KindMissionDone, events.KindMissionFailed}, events.ConnectorKinds()...)
+	return append([]string{events.KindCronDue, events.KindRunNow, events.KindWebhookReceived, events.KindChannelMessage, events.KindMissionDone, events.KindMissionFailed}, events.ConnectorKinds()...)
 }
 
 // Handle routes ev to fire or finalize.
@@ -74,6 +74,8 @@ func (d *Dispatcher) Handle(ctx context.Context, tx pgx.Tx, ev events.Event) err
 		trigger := p.TriggerID
 		return d.fire(ctx, tx, ev, p.AutomationID, &trigger, p.TriggerID+"|"+p.Delivery,
 			map[string]any{"kind": ev.Kind, "source": ev.Source, "scheme": p.Scheme, "delivery": p.Delivery, "headers": p.Headers, "body": p.Body})
+	case events.KindChannelMessage:
+		return d.handleChannelMessage(ctx, tx, ev)
 	case events.KindMissionDone, events.KindMissionFailed:
 		p, err := events.DecodeMission(ev)
 		if err != nil {
@@ -137,6 +139,41 @@ func (d *Dispatcher) handleConnectorEvent(ctx context.Context, tx pgx.Tx, ev eve
 		}
 	}
 	return nil
+}
+
+// handleChannelMessage fires the trigger the channel matched, after
+// checking it still matches: one run per message at most.
+func (d *Dispatcher) handleChannelMessage(ctx context.Context, tx pgx.Tx, ev events.Event) error {
+	p, err := events.DecodeChannelMessage(ev)
+	if err != nil {
+		return err
+	}
+	triggers, err := channelTriggers(ctx, tx, p.ChannelID, d.now())
+	if err != nil {
+		return err
+	}
+	for _, t := range triggers {
+		if t.TriggerID != p.TriggerID {
+			continue
+		}
+		re, err := CompileChannelPattern(t.Pattern)
+		if err != nil || !MatchChannel(re, t.ChatID, p.ChatID, p.Text) {
+			break
+		}
+		trigger := t.TriggerID
+		return d.fire(ctx, tx, ev, t.AutomationID, &trigger, trigger+"|"+ev.DedupKey, channelRunEvent(ev, p))
+	}
+	d.log.Info("automations: channel message matches no enabled trigger, skipping", "event_id", ev.ID, "channel_id", p.ChannelID, "trigger_id", p.TriggerID)
+	return nil
+}
+
+// channelRunEvent is a channel run's event, the fields goals
+// interpolate as {{event.*}}.
+func channelRunEvent(ev events.Event, p events.ChannelMessagePayload) map[string]any {
+	return map[string]any{
+		"kind": ev.Kind, "source": ev.Source, "channel_id": p.ChannelID, "conversation_id": p.ConversationID,
+		"chat_id": p.ChatID, "thread_id": p.ThreadID, "user_id": p.UserID, "sender": p.Sender, "text": p.Text,
+	}
 }
 
 // matchConnectorEvent reports whether p passes cfg's connector, repo,

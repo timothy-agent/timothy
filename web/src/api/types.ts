@@ -945,7 +945,7 @@ export interface Mission {
   artifact_refs?: MediaRef[]
   // destinations is the full result-phase delivery list: the union of
   // what repo_url/connector_id above only partially expose, plus every
-  // email/webhook/telegram/kb/github entry. This is the source of
+  // email/webhook/channel/kb/github entry. This is the source of
   // truth for rendering a full destinations list (delivered_at/error
   // status included).
   destinations?: DestinationEntry[]
@@ -957,7 +957,7 @@ export interface Mission {
 // (internal/brain/missions.DestinationEntry, issue #561): the wire
 // shape of one entry in Mission.destinations. destination is 'kb' for
 // a harness-native promotion, or '' for an entry that only names an
-// operator-created destination (email/webhook/telegram/github) via
+// operator-created destination (email/webhook/channel/github) via
 // destination_id -- look up that row's kind/config to know what it is.
 // repo_url/branch/remote_host/pr_url/pr_number are a github entry's own
 // delivery outcome, filled in at push/PR time. delivered_at/error are
@@ -982,7 +982,7 @@ interface DestinationEntry {
 export interface Destination {
   id: string
   name: string
-  kind: 'email' | 'webhook' | 'telegram' | 'github' | 'bitbucket' | 'gitlab'
+  kind: 'email' | 'webhook' | 'channel' | 'github' | 'bitbucket' | 'gitlab'
   config: Record<string, unknown>
   credential_ref: string
   enabled: boolean
@@ -1385,6 +1385,10 @@ export interface AutomationTriggerConfig {
   labels?: string[]
   scheme?: 'github' | 'generic'
   filters?: WebhookFilter[]
+  // channel_id, pattern and chat_id configure a channel trigger.
+  channel_id?: string
+  pattern?: string
+  chat_id?: string
 }
 
 // AutomationTriggerState is the server-kept trigger state.

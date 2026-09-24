@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf16"
 
-	"github.com/SumonMSelim/timothy/internal/brain/destinations"
+	"github.com/SumonMSelim/timothy/internal/platform/redact"
 )
 
 const (
@@ -88,17 +88,17 @@ func (b *botAPI) call(ctx context.Context, method string, body any, out any, tim
 	defer cancel()
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, b.base+"/bot"+token+"/"+method, bytes.NewReader(payload))
 	if err != nil {
-		return destinations.RedactToken(fmt.Errorf("telegram %s: request: %w", method, err), token)
+		return redact.Token(fmt.Errorf("telegram %s: request: %w", method, err), token)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := b.http.Do(req)
 	if err != nil {
-		return destinations.RedactToken(fmt.Errorf("telegram %s: %w", method, err), token)
+		return redact.Token(fmt.Errorf("telegram %s: %w", method, err), token)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return destinations.RedactToken(fmt.Errorf("telegram %s: read: %w", method, err), token)
+		return redact.Token(fmt.Errorf("telegram %s: read: %w", method, err), token)
 	}
 	var env struct {
 		OK          bool            `json:"ok"`
@@ -113,7 +113,7 @@ func (b *botAPI) call(ctx context.Context, method string, body any, out any, tim
 		if desc == "" {
 			desc = http.StatusText(resp.StatusCode)
 		}
-		return &apiError{Method: method, Status: resp.StatusCode, Description: destinations.RedactToken(errors.New(desc), token).Error(),
+		return &apiError{Method: method, Status: resp.StatusCode, Description: redact.Token(errors.New(desc), token).Error(),
 			RetryAfter: time.Duration(env.Parameters.RetryAfter) * time.Second}
 	}
 	if out == nil {

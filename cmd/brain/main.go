@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -442,7 +443,17 @@ func main() {
 			})
 		}
 	}
-	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, repoAdapter, app.Log)
+	// channelService starts below; a channel destination's Test runs
+	// its connect check once it exists.
+	var channelService *channels.Service
+	channelCheck := func(ctx context.Context, id string) error {
+		if channelService == nil {
+			return errors.New("channels are not running")
+		}
+		_, err := channelService.Test(ctx, id)
+		return err
+	}
+	destinationStore, destinationDeliverer := buildDestinations(app.DB, conns, goog, secrets, flags, missionStore, repoAdapter, channelStore, channelHTTP, channelCheck, app.Log)
 	if missionDriver != nil && destinationDeliverer != nil {
 		missionDriver.SetDestinationDeliver(destinationDeliverer.Deliver)
 	}
@@ -967,7 +978,6 @@ func main() {
 	if destinationDeliverer != nil {
 		destinationTest = destinationDeliverer
 	}
-	var channelService *channels.Service
 	if channelStore != nil {
 		channelService = channels.New(channelStore, svc.Chat, channelMissionDeps(broker, missionStore, missionDriver, missionHub, flags.WebBaseURL, app.Log),
 			secrets.Resolve, channelHTTP, app.Log)
@@ -978,6 +988,11 @@ func main() {
 				saveAttachment = attachmentStore.Save
 			}
 			channelService.SetEmail(conns.IMAPMailbox, saveAttachment, flags.EmailPollInterval)
+		}
+		// Channel triggers (issue #831): a matching message becomes a
+		// channel.message event instead of a chat turn.
+		if automationStore != nil && eventStore != nil {
+			channelService.SetTriggers(channelTriggers(automationStore, app.Log), eventStore.AddIfNew, eventsKick)
 		}
 		go channelService.Run(ctx, channelsEnabled)
 	}
@@ -1109,8 +1124,9 @@ func writingSettings(flags *settings.Store) func(context.Context) (string, strin
 // connectors); an email destination's create/update then fails
 // validation with a clear error, same nil-gated shape as
 // api/missions.go's own repo_url-needs-connectors check. secrets nil
-// (no valid master key) leaves telegram unregistered the same way.
-func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, flags *settings.Store, missionStore *missions.Store, repo *destinations.RepoAdapter, log *slog.Logger) (*destinations.Store, *destinations.Deliverer) {
+// (no valid master key, so no channels) leaves the channel kind
+// unregistered the same way.
+func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connectors.Google, secrets *secretstore.Store, flags *settings.Store, missionStore *missions.Store, repo *destinations.RepoAdapter, channelStore *channels.Store, channelHTTP *http.Client, channelCheck func(ctx context.Context, id string) error, log *slog.Logger) (*destinations.Store, *destinations.Deliverer) {
 	if missionStore == nil {
 		return nil, nil
 	}
@@ -1118,7 +1134,11 @@ func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connect
 	if conns != nil {
 		connLookup = destinationConnectorLookup{conns}
 	}
-	store := destinations.NewStore(db, connLookup, log)
+	var channelLookup destinations.ChannelLookup
+	if channelStore != nil {
+		channelLookup = destinationChannelLookup(channelStore)
+	}
+	store := destinations.NewStore(db, connLookup, channelLookup, log)
 	// goog nil (no secret store) leaves Mail nil: EmailAdapter.Deliver
 	// then fails per-delivery with a clear error rather than a create-
 	// time block, matching how an email destination's create itself
@@ -1129,12 +1149,65 @@ func buildDestinations(db *pgpool.Pool, conns *connectors.Manager, goog *connect
 	}
 	// Deliver bounds each POST with its own context timeout.
 	webhook := &destinations.WebhookAdapter{HTTP: &http.Client{Transport: netguard.Guard{Allowed: flags.OutboundHosts}.Transport()}}
-	var telegram *destinations.TelegramAdapter
-	if secrets != nil {
-		telegram = &destinations.TelegramAdapter{ResolveToken: secrets.Resolve}
+	var channel *destinations.ChannelAdapter
+	if channelStore != nil && secrets != nil {
+		channel = &destinations.ChannelAdapter{Lookup: channelLookup, ResolveToken: secrets.Resolve, HTTP: channelHTTP, Check: channelCheck}
+		if conns != nil {
+			channel.SendMail = channelMailSender(conns)
+		}
 	}
-	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, telegram, repo, flags.WebBaseURL, flags.Location, log)
+	deliverer := destinations.NewDeliverer(store, missionStore, email, webhook, channel, repo, flags.WebBaseURL, flags.Location, log)
 	return store, deliverer
+}
+
+// destinationChannelLookup adapts channels.Store.Get to destinations'
+// ChannelRef.
+func destinationChannelLookup(s *channels.Store) destinations.ChannelLookup {
+	return func(ctx context.Context, id string) (destinations.ChannelRef, error) {
+		c, err := s.Get(ctx, id)
+		if err != nil {
+			return destinations.ChannelRef{}, err
+		}
+		return destinations.ChannelRef{Kind: c.Kind, CredentialRef: c.CredentialRef, ConnectorID: c.Config.ConnectorID}, nil
+	}
+}
+
+// channelMailSender sends a channel destination's mail as a new thread
+// from an email channel's imap connector.
+func channelMailSender(conns *connectors.Manager) func(ctx context.Context, connectorID, to, subject, body string, files []destinations.File) error {
+	return func(ctx context.Context, connectorID, to, subject, body string, files []destinations.File) error {
+		box, err := conns.IMAPMailbox(ctx, connectorID)
+		if err != nil {
+			return err
+		}
+		mailFiles := make([]connectors.MailFile, len(files))
+		for i, f := range files {
+			mailFiles[i] = connectors.MailFile{Name: f.Name, Mime: mime.TypeByExtension(path.Ext(f.Name)), Data: f.Data}
+		}
+		_, err = box.Reply(ctx, to, subject, body, "", nil, mailFiles)
+		return err
+	}
+}
+
+// channelTriggers lists a channel's automation triggers with their
+// patterns compiled; a pattern that no longer compiles is skipped.
+func channelTriggers(store *automations.Store, log *slog.Logger) func(ctx context.Context, channelID string) ([]channels.ChannelTrigger, error) {
+	return func(ctx context.Context, channelID string) ([]channels.ChannelTrigger, error) {
+		rows, err := store.ChannelTriggers(ctx, channelID)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]channels.ChannelTrigger, 0, len(rows))
+		for _, r := range rows {
+			re, err := automations.CompileChannelPattern(r.Pattern)
+			if err != nil {
+				log.Warn("channels: trigger pattern does not compile, skipping", "trigger_id", r.TriggerID, "error", err)
+				continue
+			}
+			out = append(out, channels.ChannelTrigger{TriggerID: r.TriggerID, AutomationID: r.AutomationID, AutomationName: r.AutomationName, Pattern: re, ChatID: r.ChatID})
+		}
+		return out, nil
+	}
 }
 
 // destinationMailSender adapts *connectors.Google's attachment type to

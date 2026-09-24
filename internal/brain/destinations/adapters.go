@@ -47,9 +47,9 @@ func classifySendErr(err error) error {
 
 // Adapter delivers one rendered Payload to a destination's config.
 // credentialRef is the destination's stored credential_ref name (never
-// a resolved value) — only TelegramAdapter uses it; email/webhook
-// ignore it (email rides its connector's own auth, webhook has none in
-// this slice).
+// a resolved value); every adapter ignores it: email rides its
+// connector's own auth, webhook has none, a channel's credentials live
+// on the channel row.
 type Adapter interface {
 	Deliver(ctx context.Context, config json.RawMessage, credentialRef string, payload Payload) error
 }

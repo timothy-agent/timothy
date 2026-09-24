@@ -100,3 +100,54 @@ ALTER TABLE channel_conversations ADD COLUMN IF NOT EXISTS state jsonb NOT NULL 
 UPDATE agents SET tools = tools || '["create_mission"]'::jsonb
 WHERE name = 'general' AND tools ? 'followup_mission' AND NOT tools ? 'create_mission';
 ```
+
+Issue #831: channel trigger and channel destination; the telegram
+destination kind is retired. Run in one transaction before the new
+binary boots: it no longer delivers kind telegram and rejects it on
+create. Every telegram destination becomes a disabled telegram channel
+(its name plus " (bot)", a number added on a clash, credential_ref
+copied) and a channel destination on it; ids stay, so mission and
+automation references keep working. The channels are created disabled
+so nothing starts polling a bot token polled elsewhere; enable one in
+Settings > Channels only when this Timothy should receive on that bot.
+The constraint name is destinations_kind_check on the local database;
+confirm it on homelab first with `\d destinations` and adjust the two
+ALTER statements if it differs.
+
+```sql
+BEGIN;
+ALTER TABLE destinations DROP CONSTRAINT destinations_kind_check;
+DO $$
+DECLARE
+    d        record;
+    base     text;
+    name_try text;
+    n        int;
+    chan_id  uuid;
+    moved    int := 0;
+BEGIN
+    FOR d IN SELECT id, name, credential_ref, config FROM destinations WHERE kind = 'telegram' ORDER BY created_at, id LOOP
+        base := left(btrim(d.name), 54);
+        name_try := base || ' (bot)';
+        n := 1;
+        WHILE EXISTS (SELECT 1 FROM channels WHERE lower(btrim(name)) = lower(btrim(name_try))) LOOP
+            n := n + 1;
+            name_try := base || ' (bot ' || n || ')';
+        END LOOP;
+        INSERT INTO channels (name, kind, credential_ref, enabled)
+        VALUES (name_try, 'telegram', d.credential_ref, false)
+        RETURNING id INTO chan_id;
+        UPDATE destinations
+        SET kind = 'channel',
+            config = jsonb_build_object('channel_id', chan_id::text, 'chat_id', d.config->>'chat_id'),
+            credential_ref = '',
+            updated_at = now()
+        WHERE id = d.id;
+        moved := moved + 1;
+    END LOOP;
+    RAISE NOTICE 'issue 831: % telegram destinations moved to channels', moved;
+END $$;
+ALTER TABLE destinations ADD CONSTRAINT destinations_kind_check
+    CHECK (kind IN ('email', 'webhook', 'channel', 'github', 'bitbucket'));
+COMMIT;
+```

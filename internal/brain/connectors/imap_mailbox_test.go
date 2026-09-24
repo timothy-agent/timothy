@@ -1,8 +1,14 @@
 package connectors
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/mail"
 	"strings"
 	"testing"
 
@@ -116,7 +122,7 @@ func TestStripHTML(t *testing.T) {
 func TestIMAPMailboxReplyHeaders(t *testing.T) {
 	t.Parallel()
 	b, sent := testMailbox(t, &fakeIMAPSession{})
-	id, err := b.Reply(t.Context(), "ada@x.com", "Re: plans", "body text", "m3@x.com", []string{"m1@x.com", "bad id", "m3@x.com"})
+	id, err := b.Reply(t.Context(), "ada@x.com", "Re: plans", "body text", "m3@x.com", []string{"m1@x.com", "bad id", "m3@x.com"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,12 +144,72 @@ func TestIMAPMailboxReplyHeaders(t *testing.T) {
 	if !strings.HasSuffix(msg, "\r\n\r\nbody text") {
 		t.Fatalf("body = %q", msg)
 	}
-	other, _ := b.Reply(t.Context(), "ada@x.com", "s", "b", "", nil)
+	other, _ := b.Reply(t.Context(), "ada@x.com", "s", "b", "", nil, nil)
 	if other == id {
 		t.Fatal("message ids repeat")
 	}
 	if strings.Contains(string((*sent)[1].msg), "In-Reply-To") || strings.Contains(string((*sent)[1].msg), "References") {
 		t.Fatalf("unthreaded reply carries thread headers: %s", (*sent)[1].msg)
+	}
+}
+
+func TestIMAPMailboxReplyWithFiles(t *testing.T) {
+	t.Parallel()
+	b, sent := testMailbox(t, &fakeIMAPSession{})
+	big := bytes.Repeat([]byte("0123456789"), 40)
+	files := []MailFile{
+		{Name: "report.pdf", Mime: "application/pdf", Data: []byte("%PDF-1.7")},
+		{Name: "da\"ta\r\nX-Evil: 1.csv", Mime: "text/csv\r\nX-Evil: 1", Data: big},
+	}
+	if _, err := b.Reply(t.Context(), "ada@x.com", "Mission done", "see attached", "", nil, files); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := mail.ReadMessage(bytes.NewReader((*sent)[0].msg))
+	if err != nil {
+		t.Fatalf("parse message: %v", err)
+	}
+	if msg.Header.Get("X-Evil") != "" || msg.Header.Get("In-Reply-To") != "" {
+		t.Fatalf("unexpected headers: %v", msg.Header)
+	}
+	mt, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
+	if err != nil || mt != "multipart/mixed" {
+		t.Fatalf("content type = %q %v", msg.Header.Get("Content-Type"), err)
+	}
+	r := multipart.NewReader(msg.Body, params["boundary"])
+	type part struct{ ct, name, body string }
+	var parts []part
+	for {
+		p, err := r.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("next part: %v", err)
+		}
+		raw, _ := io.ReadAll(p)
+		body := string(raw)
+		if p.Header.Get("Content-Transfer-Encoding") == "base64" {
+			for _, line := range strings.Split(body, "\r\n") {
+				if len(line) > 76 {
+					t.Fatalf("base64 line of %d chars", len(line))
+				}
+			}
+			dec, err := base64.StdEncoding.DecodeString(strings.ReplaceAll(body, "\r\n", ""))
+			if err != nil {
+				t.Fatalf("decode part: %v", err)
+			}
+			body = string(dec)
+		}
+		parts = append(parts, part{p.Header.Get("Content-Type"), p.FileName(), body})
+	}
+	if len(parts) != 3 || parts[0].ct != "text/plain; charset=UTF-8" || parts[0].body != "see attached" {
+		t.Fatalf("parts = %+v", parts)
+	}
+	if parts[1].ct != "application/pdf" || parts[1].name != "report.pdf" || parts[1].body != "%PDF-1.7" {
+		t.Fatalf("pdf part = %+v", parts[1])
+	}
+	if parts[2].ct != "application/octet-stream" || parts[2].body != string(big) || parts[2].name != `da"taX-Evil: 1.csv` {
+		t.Fatalf("csv part = %+v", parts[2])
 	}
 }
 
@@ -157,7 +223,7 @@ func TestIMAPMailboxReplyRejectsHeaderInjection(t *testing.T) {
 		"references":  {"a@x.com", "s", "", "id@x\r\nBcc: evil@x.com"},
 		"two to":      {"a@x.com, b@x.com", "s", "", ""},
 	} {
-		if _, err := b.Reply(t.Context(), call[0], call[1], "body", call[2], []string{call[3]}); err == nil {
+		if _, err := b.Reply(t.Context(), call[0], call[1], "body", call[2], []string{call[3]}, nil); err == nil {
 			t.Errorf("%s: injection accepted", name)
 		}
 	}

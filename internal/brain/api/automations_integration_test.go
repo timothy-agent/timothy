@@ -76,12 +76,12 @@ func newAutomationHarness(t *testing.T) *automationHarness {
 		t.Fatalf("default agent: %v", err)
 	}
 	store := automations.NewStore(pool)
-	dest := destinations.NewStore(pool, nil, log)
+	dest := destinations.NewStore(pool, nil, nil, log)
 	ams, _ := time.LoadLocation("Europe/Amsterdam")
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
 	kicks := &atomic.Int32{}
-	a.registerAutomations(m.Handle, store, events.NewStore(pool), func() { kicks.Add(1) }, dest, &attachmentResolver{}, func(context.Context) *time.Location { return ams }, nil, enabledDestinationKinds(dest), storeConnectorLookup(connectors.NewStore(pool, log)))
+	a.registerAutomations(m.Handle, store, events.NewStore(pool), func() { kicks.Add(1) }, dest, &attachmentResolver{}, func(context.Context) *time.Location { return ams }, nil, enabledDestinationKinds(dest), storeConnectorLookup(connectors.NewStore(pool, log)), nil)
 	a.registerDestinations(m.Handle, dest, ms, store, nil)
 	mh := &missionAPI{store: ms}
 	m.Handle("GET /v1/missions", a.auth(http.HandlerFunc(mh.list)))

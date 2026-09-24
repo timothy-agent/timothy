@@ -153,8 +153,8 @@ func TestOriginMissionID(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
 		`{"automation_id":"a","origin_mission_id":"m1"}`: "m1",
-		`{"automation_id":"a"}`:                           "",
-		`not json`:                                        "",
+		`{"automation_id":"a"}`:                          "",
+		`not json`:                                       "",
 	}
 	for payload, want := range cases {
 		if got := originMissionID(json.RawMessage(payload)); got != want {
@@ -212,7 +212,7 @@ func TestMatchConnectorEvent(t *testing.T) {
 func TestDispatcherKindsIncludeConnectorKinds(t *testing.T) {
 	t.Parallel()
 	kinds := NewDispatcher(nil, slog.New(slog.NewTextHandler(io.Discard, nil))).Kinds()
-	for _, k := range append(events.ConnectorKinds(), events.KindCronDue, events.KindRunNow, events.KindWebhookReceived, events.KindMissionDone, events.KindMissionFailed) {
+	for _, k := range append(events.ConnectorKinds(), events.KindCronDue, events.KindRunNow, events.KindWebhookReceived, events.KindChannelMessage, events.KindMissionDone, events.KindMissionFailed) {
 		if !slices.Contains(kinds, k) {
 			t.Errorf("Kinds() lacks %q", k)
 		}
@@ -241,5 +241,39 @@ func TestHandleRejectsMalformedWebhookEvent(t *testing.T) {
 	ev := events.Event{Source: events.SourceWebhook, Kind: events.KindWebhookReceived, Payload: json.RawMessage(`{"trigger_id":"t"}`)}
 	if err := d.Handle(t.Context(), nil, ev); err == nil {
 		t.Fatal("Handle accepted a webhook event without automation_id and delivery")
+	}
+}
+
+// TestHandleRejectsMalformedChannelEvent: a channel event missing its
+// trigger fails decode before any query, so a nil tx is never touched.
+func TestHandleRejectsMalformedChannelEvent(t *testing.T) {
+	t.Parallel()
+	d := NewDispatcher(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ev := events.Event{Source: events.SourceChannel, Kind: events.KindChannelMessage, Payload: json.RawMessage(`{"channel_id":"c"}`)}
+	if err := d.Handle(t.Context(), nil, ev); err == nil {
+		t.Fatal("Handle accepted a channel event without trigger_id")
+	}
+}
+
+// TestChannelRunEvent pins the run event a channel message produces:
+// the fields {{event.*}} interpolation reads.
+func TestChannelRunEvent(t *testing.T) {
+	t.Parallel()
+	ev := events.Event{Source: events.SourceChannel, Kind: events.KindChannelMessage}
+	p := events.ChannelMessagePayload{ChannelID: "c1", ConversationID: "v1", ChatID: "-100", ThreadID: "5", UserID: "7",
+		Sender: "Ann", MessageID: "9", Text: "/run coverage", TriggerID: "t1"}
+	got := channelRunEvent(ev, p)
+	want := map[string]any{"kind": "channel.message", "source": "channel", "channel_id": "c1", "conversation_id": "v1",
+		"chat_id": "-100", "thread_id": "5", "user_id": "7", "sender": "Ann", "text": "/run coverage"}
+	if len(got) != len(want) {
+		t.Fatalf("run event = %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("run event[%q] = %v, want %v", k, got[k], v)
+		}
+	}
+	if s := Interpolate("{{event.sender}} asked: {{event.text}} in {{event.chat_id}}", got, nil); s != "Ann asked: /run coverage in -100" {
+		t.Fatalf("Interpolate = %q", s)
 	}
 }

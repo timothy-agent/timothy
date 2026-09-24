@@ -2,7 +2,7 @@
 // mirroring connectorPresets.ts's shape for the fixed set of
 // destination kinds.
 export interface DestinationPreset {
-  id: 'email' | 'webhook' | 'telegram' | 'github' | 'bitbucket' | 'gitlab'
+  id: 'email' | 'webhook' | 'channel' | 'github' | 'bitbucket' | 'gitlab'
   name: string
   description: string
 }
@@ -19,9 +19,9 @@ export const destinationPresets: DestinationPreset[] = [
     description: 'POSTs the digest as JSON or plain text',
   },
   {
-    id: 'telegram',
-    name: 'Telegram',
-    description: 'Sends via a bot to a chat',
+    id: 'channel',
+    name: 'Channel',
+    description: 'Sends through a Telegram, Slack or email channel',
   },
   {
     id: 'github',

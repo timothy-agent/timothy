@@ -47,6 +47,8 @@ const (
 	maxAllowlist        = 64
 	maxTriggerLabels    = 10
 	maxWebhookFilters   = 10
+	maxPatternRunes     = 200
+	maxChatIDRunes      = 128
 	// MaxNotes caps notes per automation.
 	MaxNotes = 10
 	// MaxNoteBytes caps one note's content.
@@ -288,6 +290,76 @@ func ConnectorEventIDs(ts []Trigger) []string {
 	return ids
 }
 
+// ChannelConfig is a channel trigger's config: messages on channel
+// ChannelID whose text matches Pattern (RE2, case-insensitive), from
+// chat ChatID when set.
+type ChannelConfig struct {
+	ChannelID string `json:"channel_id"`
+	Pattern   string `json:"pattern"`
+	ChatID    string `json:"chat_id,omitempty"`
+}
+
+// CompileChannelPattern compiles a channel trigger pattern,
+// case-insensitive unless it already sets (?i).
+func CompileChannelPattern(pattern string) (*regexp.Regexp, error) {
+	if !strings.HasPrefix(pattern, "(?i)") {
+		pattern = "(?i)" + pattern
+	}
+	return regexp.Compile(pattern)
+}
+
+// validateChannelConfig checks raw strictly and returns its canonical
+// form: lowercase channel id, trimmed chat id.
+func validateChannelConfig(raw json.RawMessage) (ChannelConfig, error) {
+	var c ChannelConfig
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if len(raw) == 0 || dec.Decode(&c) != nil {
+		return c, errors.New(`channel trigger config must be {"channel_id": "<uuid>", "pattern": "<regex>", "chat_id": "<optional chat id>"}`)
+	}
+	if !isUUID(c.ChannelID) {
+		return c, errors.New("channel trigger channel_id must be a UUID")
+	}
+	c.ChannelID = strings.ToLower(c.ChannelID)
+	if n := utf8.RuneCountInString(c.Pattern); n == 0 || n > maxPatternRunes {
+		return c, fmt.Errorf("channel trigger pattern must be 1 to %d characters", maxPatternRunes)
+	}
+	if _, err := CompileChannelPattern(c.Pattern); err != nil {
+		return c, fmt.Errorf("channel trigger pattern: %w", err)
+	}
+	c.ChatID = strings.TrimSpace(c.ChatID)
+	if utf8.RuneCountInString(c.ChatID) > maxChatIDRunes || strings.ContainsFunc(c.ChatID, unicode.IsControl) {
+		return c, fmt.Errorf("channel trigger chat_id must be at most %d printable characters", maxChatIDRunes)
+	}
+	return c, nil
+}
+
+// MatchChannel reports whether a message in chatID with text passes a
+// channel trigger: the pattern matches and, when set, the chat id is
+// the trigger's.
+func MatchChannel(re *regexp.Regexp, triggerChatID, chatID, text string) bool {
+	return re != nil && (triggerChatID == "" || triggerChatID == chatID) && re.MatchString(text)
+}
+
+// ChannelIDs returns the channel ids the channel triggers in ts name,
+// lowercased, skipping configs that do not parse.
+func ChannelIDs(ts []Trigger) []string {
+	var ids []string
+	for _, t := range ts {
+		if t.Kind != TriggerChannel {
+			continue
+		}
+		var c ChannelConfig
+		if json.Unmarshal(t.Config, &c) != nil || c.ChannelID == "" {
+			continue
+		}
+		if id := strings.ToLower(c.ChannelID); !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // validateName trims name and checks it: 1..64 runes, no control
 // characters. Returns the trimmed name.
 func validateName(name string) (string, error) {
@@ -413,7 +485,11 @@ func validateTrigger(t *Trigger) error {
 			return errors.New("webhook trigger needs credential_ref, the name of the secret holding its signing key")
 		}
 	case TriggerChannel:
-		return fmt.Errorf("trigger kind %q is not available yet", t.Kind)
+		c, err := validateChannelConfig(t.Config)
+		if err != nil {
+			return err
+		}
+		t.Config, _ = json.Marshal(c)
 	default:
 		return fmt.Errorf("unknown trigger kind %q", t.Kind)
 	}

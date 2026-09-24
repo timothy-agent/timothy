@@ -8,6 +8,7 @@ import {
   deleteAutomation,
   listAgents,
   listAutomations,
+  listChannels,
   patchAutomation,
   runAutomationNow,
 } from '../api/client'
@@ -46,6 +47,7 @@ export function Automations() {
   const [automations, setAutomations] = useState<Automation[] | null>(null)
   const [stats, setStats] = useState<AutomationsStats | null>(null)
   const [agents, setAgents] = useState<AdminAgent[]>([])
+  const [channelNames, setChannelNames] = useState<Record<string, string>>({})
   const [confirmDelete, setConfirmDelete] = useState<Automation | null>(null)
 
   const refresh = useCallback(() => {
@@ -60,6 +62,10 @@ export function Automations() {
   useEffect(refresh, [refresh])
   useEffect(() => {
     listAgents().then(setAgents, () => setAgents([]))
+    listChannels().then(
+      (rows) => setChannelNames(Object.fromEntries(rows.map((c) => [c.id, c.name]))),
+      () => undefined,
+    )
   }, [])
 
   const toggle = (au: Automation, enabled: boolean) => {
@@ -159,7 +165,7 @@ export function Automations() {
                         <div className="flex flex-wrap gap-1.5">
                           {au.triggers.map((t) => (
                             <Badge key={t.id} variant={t.enabled ? 'outline' : 'neutral'} size="sm">
-                              {describeTrigger(t)}
+                              {describeTrigger(t, channelNames)}
                             </Badge>
                           ))}
                         </div>

@@ -14,6 +14,7 @@ vi.mock('../api/client', () => ({
   listDestinations: vi.fn(),
   listConnectors: vi.fn(),
   listAgents: vi.fn(),
+  listChannels: vi.fn(() => Promise.resolve([])),
   listRoutes: vi.fn(),
   uploadAttachment: vi.fn(),
 }))

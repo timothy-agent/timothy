@@ -648,7 +648,7 @@ func (d *Driver) SetNameMission(fn func(context.Context, string) string) {
 
 // DestinationDeliver delivers a mission's generated output to its
 // attached destination entries (Mission.Destinations, filtered to
-// email/webhook/telegram kinds by the caller), returning the entries
+// email/webhook/channel kinds by the caller), returning the entries
 // with delivered_at/error updated in place plus an error naming any
 // destination that failed: destinations.Deliverer.Deliver satisfies
 // this signature. Called SYNCHRONOUSLY from the result phase's step
@@ -668,7 +668,7 @@ func (d *Driver) SetDestinationDeliver(fn DestinationDeliver) {
 }
 
 // deliverableEntries filters m.Destinations down to the kinds
-// DestinationDeliver actually delivers: email/webhook/telegram/github,
+// DestinationDeliver actually delivers: email/webhook/channel/github,
 // i.e. every entry naming an operator-owned destinations table row. A
 // "kb" entry is acted on by promoteToKB instead.
 func deliverableEntries(entries []DestinationEntry) []DestinationEntry {

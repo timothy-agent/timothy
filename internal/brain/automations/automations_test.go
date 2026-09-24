@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -102,7 +103,9 @@ func TestValidate(t *testing.T) {
 			a.Triggers[0].ToolAllowlist = []string{"search_web"}
 		}, "", false},
 		{"webhook without config", func(a *Automation) { a.Triggers = []Trigger{webhook(``, "HOOK_SECRET")} }, "webhook trigger config", false},
-		{"webhook unknown key", func(a *Automation) { a.Triggers = []Trigger{webhook(`{"scheme":"generic","secret":"x"}`, "HOOK_SECRET")} }, "webhook trigger config", false},
+		{"webhook unknown key", func(a *Automation) {
+			a.Triggers = []Trigger{webhook(`{"scheme":"generic","secret":"x"}`, "HOOK_SECRET")}
+		}, "webhook trigger config", false},
 		{"webhook no scheme", func(a *Automation) { a.Triggers = []Trigger{webhook(`{}`, "HOOK_SECRET")} }, "scheme", false},
 		{"webhook unknown scheme", func(a *Automation) { a.Triggers = []Trigger{webhook(`{"scheme":"slack"}`, "HOOK_SECRET")} }, "scheme", false},
 		{"webhook without credential_ref", func(a *Automation) { a.Triggers = []Trigger{webhook(`{"scheme":"generic"}`, "")} }, "credential_ref", false},
@@ -123,7 +126,13 @@ func TestValidate(t *testing.T) {
 		{"credential_ref on connector_event", func(a *Automation) {
 			a.Triggers = []Trigger{{Kind: TriggerConnectorEvent, CredentialRef: "X", Config: json.RawMessage(`{"connector_id":"` + agentID + `","repo":"o/r","events":["pr.opened"]}`)}}
 		}, "credential_ref", false},
-		{"channel not yet", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerChannel}} }, "not available yet", false},
+		{"channel", func(a *Automation) {
+			a.Triggers = []Trigger{{Kind: TriggerChannel, Config: json.RawMessage(`{"channel_id":"` + agentID + `","pattern":"^/run coverage$"}`)}}
+		}, "", false},
+		{"channel without config", func(a *Automation) { a.Triggers = []Trigger{{Kind: TriggerChannel}} }, "channel trigger config", false},
+		{"credential_ref on channel", func(a *Automation) {
+			a.Triggers = []Trigger{{Kind: TriggerChannel, CredentialRef: "X", Config: json.RawMessage(`{"channel_id":"` + agentID + `","pattern":"go"}`)}}
+		}, "credential_ref", false},
 		{"unknown trigger kind", func(a *Automation) { a.Triggers = []Trigger{{Kind: "email"}} }, "unknown trigger kind", false},
 		{"empty allowlist entry", func(a *Automation) { a.Triggers[0].ToolAllowlist = []string{"search_web", " "} }, "non-empty", false},
 		{"allowlist too long", func(a *Automation) { a.Triggers[0].ToolAllowlist = make([]string, 65) }, "at most 64", false},
@@ -460,5 +469,93 @@ func TestRecordAuthFailure(t *testing.T) {
 	}
 	if kept, _ = recordAuthFailure(many, now); len(kept) != HookAuthFailureLimit {
 		t.Fatalf("kept %d, want capped at %d", len(kept), HookAuthFailureLimit)
+	}
+}
+
+func TestValidateChannelConfig(t *testing.T) {
+	t.Parallel()
+	const id = "0B8F2F4E-6F1C-4B8A-9D2E-3C4B5A6D7E8F"
+	for _, tc := range []struct {
+		name, config, want, wantErr string
+	}{
+		{"canonical", `{"channel_id":"` + id + `","pattern":"^/run (\\w+)$","chat_id":" -100 "}`,
+			`{"channel_id":"` + strings.ToLower(id) + `","pattern":"^/run (\\w+)$","chat_id":"-100"}`, ""},
+		{"no chat id", `{"channel_id":"` + id + `","pattern":"deploy"}`, `{"channel_id":"` + strings.ToLower(id) + `","pattern":"deploy"}`, ""},
+		{"pattern at the cap", `{"channel_id":"` + id + `","pattern":"` + strings.Repeat("a", 200) + `"}`, "", ""},
+		{"empty", ``, "", "config must be"},
+		{"unknown field", `{"channel_id":"` + id + `","pattern":"x","agent":"y"}`, "", "config must be"},
+		{"missing channel id", `{"pattern":"x"}`, "", "UUID"},
+		{"non-uuid channel", `{"channel_id":"telegram","pattern":"x"}`, "", "UUID"},
+		{"empty pattern", `{"channel_id":"` + id + `","pattern":""}`, "", "1 to 200"},
+		{"pattern too long", `{"channel_id":"` + id + `","pattern":"` + strings.Repeat("a", 201) + `"}`, "", "1 to 200"},
+		{"bad regex", `{"channel_id":"` + id + `","pattern":"(unclosed"}`, "", "pattern"},
+		{"backreference is not RE2", `{"channel_id":"` + id + `","pattern":"(a)\\1"}`, "", "pattern"},
+		{"chat id too long", `{"channel_id":"` + id + `","pattern":"x","chat_id":"` + strings.Repeat("1", 129) + `"}`, "", "chat_id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tr := Trigger{Kind: TriggerChannel, Config: json.RawMessage(tc.config)}
+			err := validateTrigger(&tr)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("validateTrigger = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateTrigger: %v", err)
+			}
+			if tc.want != "" && string(tr.Config) != tc.want {
+				t.Fatalf("config = %s, want %s", tr.Config, tc.want)
+			}
+		})
+	}
+}
+
+func TestMatchChannel(t *testing.T) {
+	t.Parallel()
+	re, err := CompileChannelPattern(`^/run coverage$`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	already, err := CompileChannelPattern(`(?i)^deploy`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name                    string
+		re                      *regexp.Regexp
+		triggerChat, chat, text string
+		want                    bool
+	}{
+		{"exact", re, "", "1", "/run coverage", true},
+		{"case-insensitive", re, "", "1", "/RUN Coverage", true},
+		{"no match", re, "", "1", "/run tests", false},
+		{"substring anchored", re, "", "1", "please /run coverage", false},
+		{"chat filter hit", re, "-100", "-100", "/run coverage", true},
+		{"chat filter miss", re, "-100", "42", "/run coverage", false},
+		{"explicit (?i) kept", already, "", "1", "DEPLOY now", true},
+		{"nil regexp", nil, "", "1", "/run coverage", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := MatchChannel(tc.re, tc.triggerChat, tc.chat, tc.text); got != tc.want {
+				t.Fatalf("MatchChannel = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChannelIDs(t *testing.T) {
+	t.Parallel()
+	const id = "0B8F2F4E-6F1C-4B8A-9D2E-3C4B5A6D7E8F"
+	ts := []Trigger{
+		{Kind: TriggerChannel, Config: json.RawMessage(`{"channel_id":"` + id + `","pattern":"a"}`)},
+		{Kind: TriggerChannel, Config: json.RawMessage(`{"channel_id":"` + strings.ToLower(id) + `","pattern":"b"}`)},
+		{Kind: TriggerChannel, Config: json.RawMessage(`not json`)},
+		{Kind: TriggerManual},
+	}
+	if got := ChannelIDs(ts); len(got) != 1 || got[0] != strings.ToLower(id) {
+		t.Fatalf("ChannelIDs = %v", got)
 	}
 }

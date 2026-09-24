@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/platform/redact"
 )
 
 // telegramTimeout bounds one Telegram Bot API call — same reasoning as
@@ -31,47 +32,34 @@ const telegramMessageLimit = 4096
 // comments for the fuller reasoning).
 type tokenResolver func(ctx context.Context, refName string) (string, error)
 
-// TelegramAdapter sends a destination's payload via the Telegram Bot
-// API: sendMessage for the body (MarkdownV2, truncated to the API's
-// 4096-char cap), sendDocument for each attached file.
-type TelegramAdapter struct {
-	ResolveToken tokenResolver
-	HTTP         *http.Client
+// telegramSender sends a channel destination's payload via the
+// Telegram Bot API: sendMessage for the body (MarkdownV2, chunked to
+// the API's 4096-char cap), sendDocument for each attached file. The
+// bot token comes from the channel row.
+type telegramSender struct {
+	HTTP *http.Client
 	// APIBase overrides the Bot API's base URL for tests; empty uses
 	// the real API.
 	APIBase string
 }
 
-func (a *TelegramAdapter) apiBase() string {
+func (a *telegramSender) apiBase() string {
 	if a.APIBase != "" {
 		return a.APIBase
 	}
 	return "https://api.telegram.org"
 }
 
-func (a *TelegramAdapter) client() *http.Client {
+func (a *telegramSender) client() *http.Client {
 	if a.HTTP != nil {
 		return a.HTTP
 	}
 	return &http.Client{Timeout: telegramTimeout}
 }
 
-func (a *TelegramAdapter) Deliver(ctx context.Context, config json.RawMessage, credentialRef string, payload Payload) error {
-	var cfg TelegramConfig
-	if err := json.Unmarshal(config, &cfg); err != nil {
-		return fmt.Errorf("telegram adapter: config: %w", err)
-	}
-	if a.ResolveToken == nil {
-		return fmt.Errorf("telegram adapter: no token resolver configured")
-	}
-	if credentialRef == "" {
-		return fmt.Errorf("telegram adapter: destination has no credential_ref")
-	}
-	token, err := a.ResolveToken(ctx, credentialRef)
-	if err != nil {
-		return fmt.Errorf("telegram adapter: resolve bot token: %w", err)
-	}
-
+// deliver sends payload to chatID, inside topic threadID when set.
+func (a *telegramSender) deliver(ctx context.Context, token, chatID, threadID string, payload Payload) error {
+	to := tgChat{token: token, chatID: chatID, threadID: threadID}
 	// Recipients want the mission's generated output, not a separate
 	// process digest alongside it — three cases, in priority order:
 	// text artifacts (.md/.txt) render inline as formatted, chunked
@@ -81,8 +69,8 @@ func (a *TelegramAdapter) Deliver(ctx context.Context, config json.RawMessage, c
 	// does the plain completion-line message stand alone.
 	switch {
 	case len(payload.TextArtifacts) > 0:
-		if err := a.sendTextArtifacts(ctx, token, cfg.ChatID, payload); err != nil {
-			return fmt.Errorf("telegram adapter: send text artifacts: %w", err)
+		if err := a.sendTextArtifacts(ctx, to, payload); err != nil {
+			return fmt.Errorf("telegram: send text artifacts: %w", err)
 		}
 	case len(payload.Files) > 0:
 		caption := renderTelegramCaption(payload)
@@ -91,17 +79,20 @@ func (a *TelegramAdapter) Deliver(ctx context.Context, config json.RawMessage, c
 			if i == 0 {
 				c = caption
 			}
-			if err := a.sendDocument(ctx, token, cfg.ChatID, f, c); err != nil {
-				return fmt.Errorf("telegram adapter: send document %s: %w", f.Name, err)
+			if err := a.sendDocument(ctx, to, f, c); err != nil {
+				return fmt.Errorf("telegram: send document %s: %w", f.Name, err)
 			}
 		}
 	default:
-		if err := a.sendTelegramText(ctx, token, cfg.ChatID, payload); err != nil {
-			return fmt.Errorf("telegram adapter: send message: %w", err)
+		if err := a.sendTelegramText(ctx, to, payload); err != nil {
+			return fmt.Errorf("telegram: send message: %w", err)
 		}
 	}
 	return nil
 }
+
+// tgChat is where one delivery goes and the token it goes with.
+type tgChat struct{ token, chatID, threadID string }
 
 // sendTextArtifactSeparator visually separates consecutive text
 // artifacts within the same delivery when there's more than one —
@@ -116,7 +107,7 @@ const sendTextArtifactSeparator = "\n\n---\n\n"
 // date (same content the file-caption path would show), and sends it
 // as one or more sendMessage calls via ChunkMarkdownV2 — never a file
 // attachment, so a digest reads directly in the chat.
-func (a *TelegramAdapter) sendTextArtifacts(ctx context.Context, token, chatID string, payload Payload) error {
+func (a *telegramSender) sendTextArtifacts(ctx context.Context, to tgChat, payload Payload) error {
 	var sourceParts []string
 	for i, ta := range payload.TextArtifacts {
 		if i > 0 {
@@ -135,7 +126,7 @@ func (a *TelegramAdapter) sendTextArtifacts(ctx context.Context, token, chatID s
 	}
 	chunks := ChunkMarkdownV2(full, telegramMessageLimit)
 	for _, chunk := range chunks {
-		if err := a.sendMessage(ctx, token, chatID, chunk); err != nil {
+		if err := a.sendMessage(ctx, to, chunk); err != nil {
 			return err
 		}
 	}
@@ -184,7 +175,7 @@ func renderTelegramCaption(p Payload) string {
 // set it); Subject (the ad-hoc deliver tool's only identifying field)
 // stands in for it when Name is empty, so an ad-hoc send still gets a
 // title instead of renderTelegramCaption's bare "**".
-func (a *TelegramAdapter) sendTelegramText(ctx context.Context, token, chatID string, p Payload) error {
+func (a *telegramSender) sendTelegramText(ctx context.Context, to tgChat, p Payload) error {
 	var header string
 	switch {
 	case p.Name != "":
@@ -210,7 +201,7 @@ func (a *TelegramAdapter) sendTelegramText(ctx context.Context, token, chatID st
 		full = header + "\n\n" + full
 	}
 	for _, chunk := range ChunkMarkdownV2(full, telegramMessageLimit) {
-		if err := a.sendMessage(ctx, token, chatID, chunk); err != nil {
+		if err := a.sendMessage(ctx, to, chunk); err != nil {
 			return err
 		}
 	}
@@ -236,23 +227,32 @@ func escapeMarkdownV2(s string) string {
 	return b.String()
 }
 
-func (a *TelegramAdapter) sendMessage(ctx context.Context, token, chatID, text string) error {
-	body, err := json.Marshal(map[string]any{
-		"chat_id":    chatID,
+func (a *telegramSender) sendMessage(ctx context.Context, to tgChat, text string) error {
+	msg := map[string]any{
+		"chat_id":    to.chatID,
 		"text":       text,
 		"parse_mode": "MarkdownV2",
-	})
+	}
+	if to.threadID != "" {
+		msg["message_thread_id"] = to.threadID
+	}
+	body, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	return a.call(ctx, token, "sendMessage", "application/json", bytes.NewReader(body))
+	return a.call(ctx, to.token, "sendMessage", "application/json", bytes.NewReader(body))
 }
 
-func (a *TelegramAdapter) sendDocument(ctx context.Context, token, chatID string, f File, caption string) error {
+func (a *telegramSender) sendDocument(ctx context.Context, to tgChat, f File, caption string) error {
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	if err := w.WriteField("chat_id", chatID); err != nil {
+	if err := w.WriteField("chat_id", to.chatID); err != nil {
 		return fmt.Errorf("build form: %w", err)
+	}
+	if to.threadID != "" {
+		if err := w.WriteField("message_thread_id", to.threadID); err != nil {
+			return fmt.Errorf("build form: %w", err)
+		}
 	}
 	if caption != "" {
 		if err := w.WriteField("caption", caption); err != nil {
@@ -272,66 +272,41 @@ func (a *TelegramAdapter) sendDocument(ctx context.Context, token, chatID string
 	if err := w.Close(); err != nil {
 		return fmt.Errorf("build form: %w", err)
 	}
-	return a.call(ctx, token, "sendDocument", w.FormDataContentType(), &buf)
+	return a.call(ctx, to.token, "sendDocument", w.FormDataContentType(), &buf)
 }
 
 // call POSTs one Bot API method and treats any non-2xx status or
 // {"ok": false} response body as failure. Every returned error is
-// redacted (RedactToken) before it leaves this function: url embeds
+// redacted (redact.Token) before it leaves this function: url embeds
 // the bot token, and a *url.Error from http.Client.Do carries the full
 // request URL verbatim, so an unredacted error would leak the token
 // into WARN logs.
-func (a *TelegramAdapter) call(ctx context.Context, token, method, contentType string, body io.Reader) error {
+func (a *telegramSender) call(ctx context.Context, token, method, contentType string, body io.Reader) error {
 	cctx, cancel := context.WithTimeout(ctx, telegramTimeout)
 	defer cancel()
 	url := a.apiBase() + "/bot" + token + "/" + method
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, url, body)
 	if err != nil {
-		return RedactToken(fmt.Errorf("request: %w", err), token)
+		return redact.Token(fmt.Errorf("request: %w", err), token)
 	}
 	req.Header.Set("Content-Type", contentType)
 	resp, err := a.client().Do(req)
 	if err != nil {
-		return RedactToken(fmt.Errorf("post: %w", classifySendErr(err)), token)
+		return redact.Token(fmt.Errorf("post: %w", classifySendErr(err)), token)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode >= 300 {
 		// A non-2xx response was definitely processed by Telegram; retrying
 		// a rejection is pointless and a 5xx may still have side effects.
-		return RedactToken(fmt.Errorf("api status %d: %s: %w", resp.StatusCode, string(data), errMaybeDelivered), token)
+		return redact.Token(fmt.Errorf("api status %d: %s: %w", resp.StatusCode, string(data), errMaybeDelivered), token)
 	}
 	var result struct {
 		OK          bool   `json:"ok"`
 		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(data, &result); err == nil && !result.OK {
-		return RedactToken(fmt.Errorf("api error: %s: %w", result.Description, errMaybeDelivered), token)
+		return redact.Token(fmt.Errorf("api error: %s: %w", result.Description, errMaybeDelivered), token)
 	}
 	return nil
 }
-
-// RedactToken rebuilds err with every occurrence of token in its
-// message replaced by "REDACTED". errors.Is(err, errMaybeDelivered)
-// still holds afterwards (wrapped via %w against the already-redacted
-// text, never re-appending the sentinel's own message) since deliver.go's
-// retry loop classifies on the returned error.
-func RedactToken(err error, token string) error {
-	if err == nil || token == "" {
-		return err
-	}
-	msg := strings.ReplaceAll(err.Error(), token, "REDACTED")
-	if errors.Is(err, errMaybeDelivered) {
-		return fmt.Errorf("%w", redactedMaybeDelivered{msg})
-	}
-	return errors.New(msg)
-}
-
-// redactedMaybeDelivered carries a redacted message while still
-// satisfying errors.Is(err, errMaybeDelivered) via Unwrap, needed
-// because the original message (with the token already replaced) must
-// not be reconstructed by re-wrapping errMaybeDelivered's own text.
-type redactedMaybeDelivered struct{ msg string }
-
-func (e redactedMaybeDelivered) Error() string { return e.msg }
-func (e redactedMaybeDelivered) Unwrap() error { return errMaybeDelivered }

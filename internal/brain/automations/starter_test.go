@@ -1,8 +1,11 @@
 package automations
 
 import (
+	"encoding/json"
 	"slices"
 	"testing"
+
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 )
 
 // TestIntersectToolAllowlist pins issue #857's ceiling: a trigger entry
@@ -34,5 +37,27 @@ func TestIntersectToolAllowlist(t *testing.T) {
 	}
 	if got := intersectToolAllowlist([]string{"shell"}, nil); got != nil {
 		t.Fatalf("agent without tools = %v, want nil", got)
+	}
+}
+
+func TestEventConversationID(t *testing.T) {
+	t.Parallel()
+	ev := events.Event{Kind: events.KindChannelMessage, Source: events.SourceChannel}
+	raw, _ := json.Marshal(channelRunEvent(ev, events.ChannelMessagePayload{ChannelID: "c1", ConversationID: "conv-1", Text: "/run"}))
+	cases := []struct {
+		name  string
+		event map[string]any
+		want  string
+	}{
+		{"channel run", runEvent(raw), "conv-1"},
+		{"channel run without conversation", map[string]any{"kind": events.KindChannelMessage}, ""},
+		{"webhook run naming a conversation", map[string]any{"kind": events.KindWebhookReceived, "conversation_id": "conv-2"}, ""},
+		{"non-string id", map[string]any{"kind": events.KindChannelMessage, "conversation_id": 7}, ""},
+		{"empty event", map[string]any{}, ""},
+	}
+	for _, tc := range cases {
+		if got := eventConversationID(tc.event); got != tc.want {
+			t.Errorf("%s: eventConversationID = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

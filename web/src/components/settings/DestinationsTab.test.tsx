@@ -1,13 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminConnector, Destination } from '../../api/types'
+import type { AdminConnector, Channel, Destination } from '../../api/types'
 import { TooltipProvider } from '../ui/tooltip'
 import { DestinationsTab } from './DestinationsTab'
 
 vi.mock('../../api/client', () => ({
   createDestination: vi.fn(),
   deleteDestination: vi.fn(),
+  listChannels: vi.fn(),
   listConnectors: vi.fn(),
   listDestinations: vi.fn(),
   listSecretBackends: vi.fn(),
@@ -22,12 +23,12 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 import {
   createDestination,
   deleteDestination,
+  listChannels,
   listConnectors,
   listDestinations,
   listSecretBackends,
   listSecretRefs,
   patchDestination,
-  setSecret,
   testDestination,
 } from '../../api/client'
 import { toast } from 'sonner'
@@ -43,16 +44,33 @@ const webhookDestination: Destination = {
   updated_at: '2026-01-01T00:00:00Z',
 }
 
-const telegramDestination: Destination = {
+const channelDestination: Destination = {
   id: 'd4',
-  name: 'ops-telegram',
-  kind: 'telegram',
-  config: { chat_id: '123456' },
-  credential_ref: 'OPS_TELEGRAM_TELEGRAM_BOT_TOKEN',
+  name: 'ops-chat',
+  kind: 'channel',
+  config: { channel_id: 'ch1', chat_id: '123456' },
+  credential_ref: '',
   enabled: true,
   created_at: '2026-01-01T00:00:00Z',
   updated_at: '2026-01-01T00:00:00Z',
 }
+
+function channel(id: string, name: string, kind: Channel['kind']): Channel {
+  return {
+    id,
+    name,
+    kind,
+    config: { dispatch: false },
+    credential_ref: kind === 'email' ? '' : 'BOT_REF',
+    agent_id: '',
+    enabled: kind !== 'slack',
+    pairings: { pending: 0, approved: 0, revoked: 0 },
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+  }
+}
+
+const channels = [channel('ch1', 'ops-bot', 'telegram'), channel('ch2', 'team-slack', 'slack'), channel('ch3', 'inbox', 'email')]
 
 const googleConnector: AdminConnector = {
   id: 'c1',
@@ -123,6 +141,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listDestinations).mockResolvedValue([])
   vi.mocked(listConnectors).mockResolvedValue([googleConnector, githubConnector])
+  vi.mocked(listChannels).mockResolvedValue(channels)
   vi.mocked(listSecretBackends).mockResolvedValue([{ backend: 'db', configured: true, default: true }])
   vi.mocked(listSecretRefs).mockResolvedValue([])
 })
@@ -311,63 +330,77 @@ describe('Destinations tab', () => {
     })
   })
 
-  it('adds a telegram destination: writes the bot token secret then creates', async () => {
-    vi.mocked(setSecret).mockResolvedValue()
+  it('offers a Channel tile and no Telegram tile', async () => {
+    renderTab()
+    expect(await screen.findByRole('link', { name: /^Channel/ })).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /^Telegram/ })).toBeNull()
+  })
+
+  it('adds a channel destination on a telegram channel: chat and topic, no credential', async () => {
     vi.mocked(createDestination).mockResolvedValue('d4')
     vi.mocked(testDestination).mockResolvedValue({ ok: true })
     vi.mocked(patchDestination).mockResolvedValue()
 
     renderTab()
-    fireEvent.click(await screen.findByRole('link', { name: /^Telegram/ }))
-    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-telegram' } })
-    fireEvent.change(screen.getByPlaceholderText('123456789'), { target: { value: '123456' } })
-    fireEvent.change(screen.getByPlaceholderText('123456:ABC-DEF...'), { target: { value: 'bot-token-value' } })
+    fireEvent.click(await screen.findByRole('link', { name: /^Channel/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-chat' } })
+    fireEvent.click(await screen.findByText('Choose a channel'))
+    fireEvent.click(await screen.findByRole('option', { name: 'ops-bot (telegram)' }))
+    expect(screen.getByText('Telegram: the chat id of a group or your own chat')).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Chat ID'), { target: { value: ' -100123 ' } })
+    fireEvent.change(screen.getByLabelText(/Thread ID/), { target: { value: '7' } })
     fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
 
-    const addButton = await screen.findByRole('button', { name: 'Add destination' })
-    await waitFor(() => expect((addButton as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.click(addButton)
-
+    expect(await screen.findByText('Channel reachable, ready to add.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Add destination' }))
     await waitFor(() => expect(patchDestination).toHaveBeenCalledWith('d4', { enabled: true }))
-    expect(setSecret).toHaveBeenCalledWith('OPS_TELEGRAM_TELEGRAM_BOT_TOKEN', 'bot-token-value')
     expect(createDestination).toHaveBeenCalledWith({
-      name: 'ops-telegram',
-      kind: 'telegram',
-      config: { chat_id: '123456' },
-      credential_ref: 'OPS_TELEGRAM_TELEGRAM_BOT_TOKEN',
+      name: 'ops-chat',
+      kind: 'channel',
+      config: { channel_id: 'ch1', chat_id: '-100123', thread_id: '7' },
       enabled: false,
     })
   })
 
-  it('reuses an existing credential for a telegram bot token, skipping the secret write', async () => {
-    vi.mocked(listSecretRefs).mockResolvedValue([{ name: 'SHARED_BOT_TOKEN', backend: 'db', referenced_by: [] }])
-    vi.mocked(createDestination).mockResolvedValue('d4')
+  it('adds a channel destination on an email channel with a recipient', async () => {
+    vi.mocked(createDestination).mockResolvedValue('d6')
     vi.mocked(testDestination).mockResolvedValue({ ok: true })
 
     renderTab()
-    fireEvent.click(await screen.findByRole('link', { name: /^Telegram/ }))
-    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'ops-telegram' } })
-    fireEvent.change(screen.getByPlaceholderText('123456789'), { target: { value: '123456' } })
-    fireEvent.click(screen.getByRole('radio', { name: 'Use existing' }))
-    fireEvent.click(await screen.findByLabelText('existing credential'))
-    fireEvent.click(await screen.findByRole('option', { name: 'SHARED_BOT_TOKEN' }))
+    fireEvent.click(await screen.findByRole('link', { name: /^Channel/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'mail-out' } })
+    fireEvent.click(await screen.findByText('Choose a channel'))
+    fireEvent.click(await screen.findByRole('option', { name: 'inbox (email)' }))
+    expect(screen.queryByLabelText('Chat ID')).toBeNull()
+    expect(screen.getByText('Email: the recipient')).toBeTruthy()
+    fireEvent.change(screen.getByPlaceholderText('ops@example.com'), { target: { value: 'ops@example.com' } })
     fireEvent.click(screen.getByRole('button', { name: 'Test send' }))
 
-    await waitFor(() => expect(testDestination).toHaveBeenCalled())
-    expect(setSecret).not.toHaveBeenCalled()
-    expect(createDestination).toHaveBeenCalledWith({
-      name: 'ops-telegram',
-      kind: 'telegram',
-      config: { chat_id: '123456' },
-      credential_ref: 'SHARED_BOT_TOKEN',
-      enabled: false,
-    })
+    await waitFor(() =>
+      expect(createDestination).toHaveBeenCalledWith({
+        name: 'mail-out',
+        kind: 'channel',
+        config: { channel_id: 'ch3', to: 'ops@example.com' },
+        enabled: false,
+      }),
+    )
   })
 
-  it('edits a telegram destination config and rotates its bot token', async () => {
-    vi.mocked(listDestinations).mockResolvedValue([telegramDestination])
+  it('shows the Slack hint and keeps Test send gated until a chat id is set', async () => {
+    renderTab()
+    fireEvent.click(await screen.findByRole('link', { name: /^Channel/ }))
+    fireEvent.change(await screen.findByPlaceholderText('ops-inbox'), { target: { value: 'team' } })
+    fireEvent.click(await screen.findByText('Choose a channel'))
+    fireEvent.click(await screen.findByRole('option', { name: 'team-slack (slack)' }))
+    expect(screen.getByText('Slack: the channel id such as C0123')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Test send' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Chat ID'), { target: { value: 'C0123' } })
+    expect((screen.getByRole('button', { name: 'Test send' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('edits a channel destination config and has no bot token panel', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([channelDestination])
     vi.mocked(patchDestination).mockResolvedValue()
-    vi.mocked(setSecret).mockResolvedValue()
 
     renderTab('/settings/destinations/d4')
 
@@ -375,15 +408,15 @@ describe('Destinations tab', () => {
     fireEvent.change(chatIDInput, { target: { value: '987654' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() =>
-      expect(patchDestination).toHaveBeenCalledWith('d4', { config: { chat_id: '987654' } }),
+      expect(patchDestination).toHaveBeenCalledWith('d4', { config: { channel_id: 'ch1', chat_id: '987654' } }),
     )
+    expect(screen.queryByText('Rotate bot token')).toBeNull()
+  })
 
-    const tokenInput = screen.getByPlaceholderText('123456:ABC-DEF...')
-    expect(tokenInput).toHaveAttribute('type', 'password')
-    fireEvent.change(tokenInput, { target: { value: 'new-token' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save token' }))
-    await waitFor(() => expect(setSecret).toHaveBeenCalledWith('OPS_TELEGRAM_TELEGRAM_BOT_TOKEN', 'new-token'))
-    expect(patchDestination).toHaveBeenCalledWith('d4', { credential_ref: 'OPS_TELEGRAM_TELEGRAM_BOT_TOKEN' })
+  it('summarizes a channel destination card by channel name and chat', async () => {
+    vi.mocked(listDestinations).mockResolvedValue([channelDestination])
+    renderTab()
+    expect(await screen.findByText('ops-bot · chat 123456')).toBeTruthy()
   })
 
   it('stages destination config edits: zero PATCH before Save, one on Save, Cancel discards', async () => {
@@ -462,39 +495,6 @@ describe('Destinations tab', () => {
     expect(await screen.findByText(/Failed: timeout/)).toBeTruthy()
   })
 
-  it('switches the bot token to a different credential and rotates it', async () => {
-    vi.mocked(listDestinations).mockResolvedValue([telegramDestination])
-    vi.mocked(listSecretRefs).mockResolvedValue([
-      { name: 'SHARED_BOT_TOKEN', backend: 'db', referenced_by: [] },
-    ])
-    vi.mocked(setSecret).mockResolvedValue()
-    vi.mocked(patchDestination).mockResolvedValue()
-
-    renderTab(`/settings/destinations/${telegramDestination.id}`)
-    await screen.findByDisplayValue('123456')
-
-    fireEvent.click(screen.getByRole('radio', { name: 'Different credential' }))
-    fireEvent.click(await screen.findByLabelText('existing credential'))
-    fireEvent.click(await screen.findByRole('option', { name: /SHARED_BOT_TOKEN/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save token' }))
-
-    await waitFor(() => expect(patchDestination).toHaveBeenCalledWith('d4', { credential_ref: 'SHARED_BOT_TOKEN' }))
-    expect(setSecret).not.toHaveBeenCalled()
-  })
-
-  it('toasts when rotating the bot token fails', async () => {
-    vi.mocked(listDestinations).mockResolvedValue([telegramDestination])
-    vi.mocked(setSecret).mockRejectedValue(new Error('store unavailable'))
-
-    renderTab(`/settings/destinations/${telegramDestination.id}`)
-    fireEvent.change(await screen.findByPlaceholderText('123456:ABC-DEF...'), { target: { value: 'new-token' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save token' }))
-
-    await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('Could not update bot token', { description: 'store unavailable' }),
-    )
-  })
-
   it('shows a persistent Alert with Retry when saving destination config fails', async () => {
     vi.mocked(listDestinations).mockResolvedValue([webhookDestination])
     vi.mocked(patchDestination).mockRejectedValueOnce(new Error('server unavailable'))
@@ -515,9 +515,10 @@ describe('Destinations tab', () => {
   })
 
   it('every Select and Input in DestinationAdd and DestinationEdit is found by label', async () => {
-    vi.mocked(listDestinations).mockResolvedValue([telegramDestination])
+    vi.mocked(listDestinations).mockResolvedValue([channelDestination])
     renderTab('/settings/destinations/d4')
     expect(await screen.findByLabelText('Chat ID')).toBeTruthy()
+    expect(screen.getByLabelText('Channel')).toBeTruthy()
 
     cleanup()
     renderTab()

@@ -1,34 +1,31 @@
 import { useEffect, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { createDestination, listConnectors, patchDestination, setSecret, testDestination } from '../../api/client'
-import type { AdminConnector } from '../../api/types'
+import { createDestination, listChannels, listConnectors, patchDestination, testDestination } from '../../api/client'
+import type { AdminConnector, Channel } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { Field, FieldGroup, Form, FormActions } from '../timothy/field'
-import { CredentialField, type CredentialMode } from './CredentialRefPicker'
+import { channelDestinationConfig, channelDestinationReady } from './channelDestination'
 import { DestinationKindFields, type DestinationKindValues } from './DestinationKindFields'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
-import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { errText } from '../../lib/errors'
 import { gitKindMeta, isGitKind, type GitKind } from '../../lib/gitKinds'
-import { slugify } from '../../lib/slugify'
 
 const area = settingsArea('destinations')
 
-// DestinationAdd is kind-aware (email vs webhook vs telegram vs github)
+// DestinationAdd is kind-aware (email vs webhook vs channel vs github)
 // and its own page, mirroring ConnectorAdd's shape: the destination row
 // is created (disabled) as part of testing, and a passing test enables
 // it. GitHub has no test-send affordance, so it creates enabled
-// directly.
+// directly. A channel test sends nothing: it checks the channel.
 export function DestinationAdd() {
-  const { kind } = useParams<{ kind: 'email' | 'webhook' | 'telegram' | GitKind }>()
+  const { kind } = useParams<{ kind: 'email' | 'webhook' | 'channel' | GitKind }>()
   const isRepoKind = !!kind && isGitKind(kind)
   const navigate = useNavigate()
-  const defaultBackend = useDefaultSecretBackend()
 
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -42,6 +39,8 @@ export function DestinationAdd() {
     url: '',
     format: 'json',
     chatID: '',
+    threadID: '',
+    channelID: '',
     mode: 'push',
     branchPattern: '',
     commitStyle: '',
@@ -52,10 +51,13 @@ export function DestinationAdd() {
     invalidate()
   }
 
-  // telegram bot token
-  const [botToken, setBotToken] = useState('')
-  const [botTokenMode, setBotTokenMode] = useState<CredentialMode>('new')
-  const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
+  const [channels, setChannels] = useState<Channel[] | null>(null)
+  useEffect(() => {
+    if (kind !== 'channel') return
+    listChannels()
+      .then(setChannels)
+      .catch((err: unknown) => toast.error('Could not load channels', { description: errText(err) }))
+  }, [kind])
 
   useEffect(() => {
     if (kind !== 'email' && !(kind && isGitKind(kind))) return
@@ -65,7 +67,7 @@ export function DestinationAdd() {
       .catch((err: unknown) => toast.error('Could not load connectors', { description: errText(err) }))
   }, [kind])
 
-  if (kind !== 'email' && kind !== 'webhook' && kind !== 'telegram' && !isRepoKind) {
+  if (kind !== 'email' && kind !== 'webhook' && kind !== 'channel' && !isRepoKind) {
     return <Navigate to="/settings/destinations" replace />
   }
 
@@ -74,15 +76,13 @@ export function DestinationAdd() {
     setCreatedID(null)
   }
 
-  const slug = slugify(name)
-  const usingExistingBotToken = botTokenMode === 'existing'
-  const botTokenRef = usingExistingBotToken ? existingBotTokenRef : `${slug.toUpperCase().replace(/-/g, '_')}_TELEGRAM_BOT_TOKEN`
+  const channel = channels?.find((c) => c.id === values.channelID)
 
   const config =
     kind === 'email'
       ? { connector_id: values.connectorID, to: values.to.trim() }
-      : kind === 'telegram'
-        ? { chat_id: values.chatID.trim() }
+      : kind === 'channel'
+        ? channelDestinationConfig(values, channel)
         : isRepoKind
           ? {
               connector_id: values.connectorID,
@@ -97,8 +97,8 @@ export function DestinationAdd() {
     name.trim() !== '' &&
     (kind === 'email'
       ? values.connectorID !== '' && values.to.trim() !== ''
-      : kind === 'telegram'
-        ? values.chatID.trim() !== '' && (usingExistingBotToken ? existingBotTokenRef !== '' : botToken.trim() !== '')
+      : kind === 'channel'
+        ? channelDestinationReady(values, channel)
         : isRepoKind
           ? values.connectorID !== ''
           : values.url.trim() !== '')
@@ -107,14 +107,7 @@ export function DestinationAdd() {
     setBusy(true)
     setTest(null)
     try {
-      if (kind === 'telegram' && !usingExistingBotToken) await setSecret(botTokenRef, botToken.trim())
-      const id = await createDestination({
-        name: name.trim(),
-        kind,
-        config,
-        credential_ref: kind === 'telegram' ? botTokenRef : undefined,
-        enabled: false,
-      })
+      const id = await createDestination({ name: name.trim(), kind, config, enabled: false })
       setCreatedID(id)
       setTest(await testDestination(id))
     } catch (err) {
@@ -166,7 +159,7 @@ export function DestinationAdd() {
         ? 'failed'
         : 'gate'
 
-  const destinationTitle = `Add ${kind === 'email' ? 'Email' : kind === 'telegram' ? 'Telegram' : isRepoKind ? gitKindMeta(kind ?? '').label : 'Webhook'} destination`
+  const destinationTitle = `Add ${kind === 'email' ? 'Email' : kind === 'channel' ? 'Channel' : isRepoKind ? gitKindMeta(kind ?? '').label : 'Webhook'} destination`
 
   return (
     <PageShell width="form">
@@ -193,7 +186,16 @@ export function DestinationAdd() {
             />
           </Field>
 
-          <DestinationKindFields kind={kind} values={values} setField={setField} connectors={connectors ?? []} />
+          <DestinationKindFields
+            kind={kind}
+            values={values}
+            setField={setField}
+            connectors={connectors ?? []}
+            channels={channels ?? []}
+          />
+          {kind === 'channel' && channels && channels.length === 0 && (
+            <p className="-mt-2 text-sm text-muted-foreground">No channels yet, add one under Channels first.</p>
+          )}
           {kind === 'email' && connectors && connectors.length === 0 && (
             <p className="-mt-2 text-sm text-muted-foreground">
               No enabled Google connectors yet - add one under Connectors first.
@@ -205,29 +207,6 @@ export function DestinationAdd() {
             </p>
           )}
 
-          {kind === 'telegram' && (
-            <CredentialField
-              label="Bot token"
-              mode={botTokenMode}
-              onModeChange={(m) => {
-                setBotTokenMode(m)
-                invalidate()
-              }}
-              existingRef={existingBotTokenRef}
-              onExistingRefChange={(v) => {
-                setExistingBotTokenRef(v)
-                invalidate()
-              }}
-              secretValue={botToken}
-              onSecretValueChange={(v) => {
-                setBotToken(v)
-                invalidate()
-              }}
-              secretPlaceholder="123456:ABC-DEF..."
-              defaultBackend={defaultBackend}
-              refName={botTokenRef}
-            />
-          )}
         </FieldGroup>
 
         {!isRepoKind &&
@@ -245,7 +224,9 @@ export function DestinationAdd() {
                 testState === 'testing'
                   ? 'Testing…'
                   : testState === 'ok'
-                    ? 'Test delivery sent, ready to add.'
+                    ? kind === 'channel'
+                      ? 'Channel reachable, ready to add.'
+                      : 'Test delivery sent, ready to add.'
                     : `Test failed: ${test?.error}. The destination was saved disabled, fix and retry.`
               }
               action={

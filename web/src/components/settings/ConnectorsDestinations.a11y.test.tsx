@@ -12,6 +12,7 @@ vi.mock('../../api/client', () => ({
   createDestination: vi.fn(),
   deleteConnector: vi.fn(),
   deleteDestination: vi.fn(),
+  listChannels: vi.fn(() => Promise.resolve([])),
   listConnectors: vi.fn(),
   listDestinations: vi.fn(),
   listSecretBackends: vi.fn(),

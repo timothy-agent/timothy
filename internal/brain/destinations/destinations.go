@@ -1,7 +1,7 @@
 // Package destinations implements operator-created outbound sinks
 // mission results deliver to: email (rides a google connector's Gmail
-// send path), webhook, telegram (Bot API), and github (push/PR through
-// a github connector). Delivery is harness-owned and deterministic
+// send path), webhook, channel (a Telegram, Slack or email channel's
+// transport), and github (push/PR through a github connector). Delivery is harness-owned and deterministic
 // (D-061): the model never supplies or addresses a destination, only
 // ids resolved against this operator-owned table are ever reachable.
 package destinations
@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/mail"
 	"strings"
 	"time"
 	"unicode"
@@ -28,7 +29,7 @@ import (
 type Destination struct {
 	ID            string          `json:"id"`
 	Name          string          `json:"name"`
-	Kind          string          `json:"kind"` // email | webhook | telegram | github
+	Kind          string          `json:"kind"` // email | webhook | channel | github | bitbucket
 	Config        json.RawMessage `json:"config"`
 	CredentialRef string          `json:"credential_ref"`
 	Enabled       bool            `json:"enabled"`
@@ -49,11 +50,35 @@ type WebhookConfig struct {
 	Format string `json:"format"` // json | text
 }
 
-// TelegramConfig is the config shape for kind='telegram'. The bot
-// token lives in Destination.CredentialRef, never here.
-type TelegramConfig struct {
-	ChatID string `json:"chat_id"`
+// ChannelConfig is the config shape for kind='channel': deliver
+// through a channel's transport. The channel row holds the
+// credentials, so Destination.CredentialRef stays empty. ChatID (and
+// ThreadID) address Telegram and Slack channels, To email channels.
+type ChannelConfig struct {
+	ChannelID string `json:"channel_id"`
+	ChatID    string `json:"chat_id,omitempty"`
+	ThreadID  string `json:"thread_id,omitempty"`
+	To        string `json:"to,omitempty"`
 }
+
+// Channel kinds a channel destination delivers through.
+const (
+	ChannelTelegram = "telegram"
+	ChannelSlack    = "slack"
+	ChannelEmail    = "email"
+)
+
+// ChannelRef is the narrow shape destinations needs from a channels
+// row; main fills it from channels.Store.Get. Enabled is left out on
+// purpose: it governs inbound polling only.
+type ChannelRef struct {
+	Kind          string
+	CredentialRef string
+	ConnectorID   string
+}
+
+// ChannelLookup resolves a channel id; nil when channels are off.
+type ChannelLookup func(ctx context.Context, id string) (ChannelRef, error)
 
 // RepoDestinationConfig is the config shape every git provider kind
 // shares: push (or push+PR) a mission's branch through an existing
@@ -123,7 +148,7 @@ var (
 	ErrReferenced = fmt.Errorf("destination is referenced by an active mission")
 )
 
-func validate(ctx context.Context, conns connectorLookup, d *Destination) error {
+func validate(ctx context.Context, conns connectorLookup, channels ChannelLookup, d *Destination) error {
 	name, err := validateName(d.Name)
 	if err != nil {
 		return err
@@ -172,19 +197,46 @@ func validate(ctx context.Context, conns connectorLookup, d *Destination) error 
 		default:
 			return fmt.Errorf(`webhook destination requires config.format to be "json" or "text"`)
 		}
-	case "telegram":
-		var cfg TelegramConfig
-		if err := json.Unmarshal(d.Config, &cfg); err != nil {
-			return fmt.Errorf("telegram config: %w", err)
+	case "channel":
+		return validateChannel(ctx, channels, d)
+	default:
+		return fmt.Errorf("unsupported kind %q (only email, webhook, channel, github, bitbucket in this release)", d.Kind)
+	}
+	return nil
+}
+
+// validateChannel validates a channel destination: the channel must
+// exist, and its kind decides the address fields. A disabled channel is
+// fine: enabled governs inbound polling only, delivery still works.
+func validateChannel(ctx context.Context, channels ChannelLookup, d *Destination) error {
+	var cfg ChannelConfig
+	if err := json.Unmarshal(d.Config, &cfg); err != nil {
+		return fmt.Errorf("channel config: %w", err)
+	}
+	if cfg.ChannelID == "" {
+		return fmt.Errorf("channel destination requires config.channel_id")
+	}
+	if d.CredentialRef != "" {
+		return fmt.Errorf("channel destination must not set credential_ref (the channel holds it)")
+	}
+	if channels == nil {
+		return fmt.Errorf("channel destination requires channels to be enabled")
+	}
+	c, err := channels(ctx, cfg.ChannelID)
+	if err != nil {
+		return fmt.Errorf("config.channel_id: %w", err)
+	}
+	switch c.Kind {
+	case ChannelTelegram, ChannelSlack:
+		if strings.TrimSpace(cfg.ChatID) == "" {
+			return fmt.Errorf("a %s channel destination requires config.chat_id", c.Kind)
 		}
-		if cfg.ChatID == "" {
-			return fmt.Errorf("telegram destination requires config.chat_id")
-		}
-		if d.CredentialRef == "" {
-			return fmt.Errorf("telegram destination requires credential_ref (bot token)")
+	case ChannelEmail:
+		if a, err := mail.ParseAddress(cfg.To); err != nil || a.Address != strings.TrimSpace(cfg.To) {
+			return fmt.Errorf("an email channel destination requires config.to, one email address")
 		}
 	default:
-		return fmt.Errorf("unsupported kind %q (only email, webhook, telegram, github, bitbucket in this release)", d.Kind)
+		return fmt.Errorf("channel kind %q cannot deliver", c.Kind)
 	}
 	return nil
 }
@@ -239,18 +291,20 @@ func hasHTTPScheme(url string) bool {
 
 // Store is the destinations table's CRUD.
 type Store struct {
-	db    *pgpool.Pool
-	log   *slog.Logger
-	conns connectorLookup
+	db       *pgpool.Pool
+	log      *slog.Logger
+	conns    connectorLookup
+	channels ChannelLookup
 }
 
 // NewStore builds a Store; conns resolves a connector_id at
 // create/update time for email destinations. Pass nil when connectors
 // are disabled — any email destination create/update then fails
 // validation with a clear error, same as api/missions.go's own
-// nil-connectors gate.
-func NewStore(db *pgpool.Pool, conns connectorLookup, log *slog.Logger) *Store {
-	return &Store{db: db, log: log, conns: conns}
+// nil-connectors gate. channels resolves a channel destination's
+// channel_id; nil rejects channel destinations the same way.
+func NewStore(db *pgpool.Pool, conns connectorLookup, channels ChannelLookup, log *slog.Logger) *Store {
+	return &Store{db: db, log: log, conns: conns, channels: channels}
 }
 
 const columns = `id, name, kind, config, credential_ref, enabled, created_at, updated_at`
@@ -354,7 +408,7 @@ func (s *Store) RepoPolicy(ctx context.Context, id string) (missions.GitHubPolic
 
 // Create validates and inserts a destination row.
 func (s *Store) Create(ctx context.Context, d Destination) (string, error) {
-	if err := validate(ctx, s.conns, &d); err != nil {
+	if err := validate(ctx, s.conns, s.channels, &d); err != nil {
 		return "", err
 	}
 	db, err := s.db.Get()
@@ -409,7 +463,7 @@ func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
 	if patch.Enabled != nil {
 		after.Enabled = *patch.Enabled
 	}
-	if err := validate(ctx, s.conns, &after); err != nil {
+	if err := validate(ctx, s.conns, s.channels, &after); err != nil {
 		return err
 	}
 

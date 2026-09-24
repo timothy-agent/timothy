@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 
-import { createAutomation, getAutomation, listConnectors, listDestinations, patchAutomation } from '../api/client'
-import type { AdminConnector, Automation, AutomationAction, AutomationTemplate, Destination, MissionTemplate } from '../api/types'
+import { createAutomation, getAutomation, listChannels, listConnectors, listDestinations, patchAutomation } from '../api/client'
+import type { AdminConnector, Automation, AutomationAction, AutomationTemplate, Channel, Destination, MissionTemplate } from '../api/types'
 import { useAgents, useRoutes } from '../components/AgentPicker'
 import {
   draftsFromTriggers,
@@ -180,6 +180,7 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
   const routes = useRoutes()
   const [destinations, setDestinations] = useState<Destination[] | null>(null)
   const [connectors, setConnectors] = useState<AdminConnector[] | null>(null)
+  const [channels, setChannels] = useState<Channel[] | null>(null)
   const [draft, setDraft] = useState(initial)
   const [showAdvanced, setShowAdvanced] = useState(
     initial.concurrency !== limitDefaults.concurrency ||
@@ -196,6 +197,7 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
   useEffect(() => {
     listDestinations().then(setDestinations, () => setDestinations([]))
     listConnectors().then(setConnectors, () => setConnectors([]))
+    listChannels().then(setChannels, () => setChannels([]))
   }, [])
 
   // An untouched agent falls back to the default agent.
@@ -383,6 +385,7 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
             }}
             errors={triggerErrors}
             connectors={connectors}
+            channels={channels}
             submitted={submitted}
           />
         </FieldGroup>

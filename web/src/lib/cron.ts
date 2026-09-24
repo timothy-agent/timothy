@@ -39,14 +39,22 @@ export function isCronShape(expr: string): boolean {
 }
 
 // describeTrigger labels a trigger for a badge: its cron, its repo and
-// events, its webhook scheme, or its kind.
-export function describeTrigger(t: { kind: AutomationTrigger['kind']; config: AutomationTriggerConfig }): string {
+// events, its webhook scheme, its channel and pattern, or its kind.
+// channelNames maps channel ids to names.
+export function describeTrigger(
+  t: { kind: AutomationTrigger['kind']; config: AutomationTriggerConfig },
+  channelNames: Record<string, string> = {},
+): string {
   if (t.kind === 'cron') return t.config.expr ? describeCron(t.config.expr) : 'cron'
   if (t.kind === 'connector_event' && t.config.repo) {
     const events = t.config.events ?? []
     return events.length > 0 ? `GitHub ${t.config.repo}: ${events.join(', ')}` : `GitHub ${t.config.repo}`
   }
   if (t.kind === 'webhook' && t.config.scheme) return `Webhook (${t.config.scheme})`
+  if (t.kind === 'channel' && t.config.pattern) {
+    const name = channelNames[t.config.channel_id ?? '']
+    return `Channel${name ? ` ${name}` : ''}: /${t.config.pattern}/`
+  }
   return t.kind.replace('_', ' ')
 }
 

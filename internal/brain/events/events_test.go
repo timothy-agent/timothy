@@ -312,3 +312,33 @@ func TestWebhookReceived(t *testing.T) {
 		t.Error("DecodeWebhook accepted a payload without automation_id and delivery")
 	}
 }
+
+func TestChannelMessage(t *testing.T) {
+	p := ChannelMessagePayload{ChannelID: "c1", ConversationID: "v1", ChatID: "42", UserID: "7", Sender: "Ann", MessageID: "9",
+		Text: strings.Repeat("é", MaxChannelTextRunes+5), TriggerID: "t1"}
+	ev, err := ChannelMessage(p, "telegram:100")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Source != SourceChannel || ev.Kind != KindChannelMessage || ev.DedupKey != "channel:c1:telegram:100" {
+		t.Fatalf("event = %+v", ev)
+	}
+	got, err := DecodeChannelMessage(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utf8.RuneCountInString(got.Text) != MaxChannelTextRunes || got.ConversationID != "v1" || got.TriggerID != "t1" {
+		t.Fatalf("decoded = %+v (text runes %d)", got, utf8.RuneCountInString(got.Text))
+	}
+	for _, bad := range []ChannelMessagePayload{{TriggerID: "t1"}, {ChannelID: "c1"}} {
+		if _, err := ChannelMessage(bad, "x"); err == nil {
+			t.Fatalf("ChannelMessage(%+v) = nil error", bad)
+		}
+	}
+	if _, err := ChannelMessage(p, ""); err == nil {
+		t.Fatal("ChannelMessage without a dedup id = nil error")
+	}
+	if _, err := DecodeChannelMessage(Event{Payload: json.RawMessage(`{"channel_id":"c1"}`)}); err == nil {
+		t.Fatal("DecodeChannelMessage without trigger_id = nil error")
+	}
+}

@@ -1,7 +1,6 @@
 package destinations
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -35,7 +34,7 @@ func TestEscapeMarkdownV2(t *testing.T) {
 // actually sent (as opposed to renderTelegramText's pre-refactor pure
 // rendering, which no longer exists now that headers/chunking need a
 // live adapter call).
-func sentMessages(t *testing.T, deliver func(a *TelegramAdapter)) []string {
+func sentMessages(t *testing.T, deliver func(a *telegramSender)) []string {
 	t.Helper()
 	var texts []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +46,7 @@ func sentMessages(t *testing.T, deliver func(a *TelegramAdapter)) []string {
 		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
 	defer srv.Close()
-	deliver(&TelegramAdapter{ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"), APIBase: srv.URL})
+	deliver(&telegramSender{APIBase: srv.URL})
 	return texts
 }
 
@@ -57,8 +56,8 @@ func TestSendTelegramTextHeadsWithTitleAndDate(t *testing.T) {
 		t.Fatalf("parse fixture time: %v", err)
 	}
 	p := Payload{Name: "inbox-digest-8h", CompletedAt: completedAt, Body: "# heading\n\n**bold** text."}
-	texts := sentMessages(t, func(a *TelegramAdapter) {
-		if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", p); err != nil {
+	texts := sentMessages(t, func(a *telegramSender) {
+		if err := a.deliver(t.Context(), "secret-token", "123", "", p); err != nil {
 			t.Fatalf("Deliver: %v", err)
 		}
 	})
@@ -82,8 +81,8 @@ func TestSendTelegramTextHeadsWithTitleAndDate(t *testing.T) {
 
 func TestSendTelegramTextUsesSubjectWhenNameEmpty(t *testing.T) {
 	p := Payload{Subject: "Daily digest", Body: "the content"}
-	texts := sentMessages(t, func(a *TelegramAdapter) {
-		if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", p); err != nil {
+	texts := sentMessages(t, func(a *telegramSender) {
+		if err := a.deliver(t.Context(), "secret-token", "123", "", p); err != nil {
 			t.Fatalf("Deliver: %v", err)
 		}
 	})
@@ -97,8 +96,8 @@ func TestSendTelegramTextUsesSubjectWhenNameEmpty(t *testing.T) {
 
 func TestSendTelegramTextIncludesLinksAndOversizeNotice(t *testing.T) {
 	p := Payload{Body: "digest", Links: []string{"https://timothy.example/missions/m1"}, OversizeFiles: []string{"huge.zip"}}
-	texts := sentMessages(t, func(a *TelegramAdapter) {
-		if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", p); err != nil {
+	texts := sentMessages(t, func(a *telegramSender) {
+		if err := a.deliver(t.Context(), "secret-token", "123", "", p); err != nil {
 			t.Fatalf("Deliver: %v", err)
 		}
 	})
@@ -117,8 +116,8 @@ func TestSendTelegramTextChunksLongBody(t *testing.T) {
 	// A body long enough to force ChunkMarkdownV2 into multiple
 	// sendMessage calls rather than a single truncated one.
 	p := Payload{Name: "long-digest", Body: strings.Repeat("line of digest text.\n\n", 400)}
-	texts := sentMessages(t, func(a *TelegramAdapter) {
-		if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", p); err != nil {
+	texts := sentMessages(t, func(a *telegramSender) {
+		if err := a.deliver(t.Context(), "secret-token", "123", "", p); err != nil {
 			t.Fatalf("Deliver: %v", err)
 		}
 	})
@@ -135,23 +134,12 @@ func TestSendTelegramTextChunksLongBody(t *testing.T) {
 	}
 }
 
-// fakeTokenResolver resolves exactly one ref to one value, erroring on
-// anything else.
-func fakeTokenResolver(ref, value string) tokenResolver {
-	return func(_ context.Context, r string) (string, error) {
-		if r != ref {
-			return "", errors.New("unknown ref")
-		}
-		return value, nil
-	}
-}
-
-// TestTelegramAdapterDeliverSendsDocumentOnlyWhenFilesPresent covers
+// TestTelegramSenderSendsDocumentOnlyWhenFilesPresent covers
 // the files-only delivery contract: recipients want the mission's
 // generated output, not a separate text body alongside it. The bold
 // title + completion date go on the first file's caption instead of a
 // standalone sendMessage call.
-func TestTelegramAdapterDeliverSendsDocumentOnlyWhenFilesPresent(t *testing.T) {
+func TestTelegramSenderSendsDocumentOnlyWhenFilesPresent(t *testing.T) {
 	var gotMessages []map[string]any
 	var gotDocuments []map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -177,12 +165,9 @@ func TestTelegramAdapterDeliverSendsDocumentOnlyWhenFilesPresent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &TelegramAdapter{
-		ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"),
-		APIBase:      srv.URL,
-	}
+	a := &telegramSender{APIBase: srv.URL}
 	payload := Payload{Name: "inbox-digest-8h", Body: "Mission complete: inbox-digest-8h", Files: []File{{Name: "out.txt", Data: []byte("data")}}}
-	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", payload)
+	err := a.deliver(t.Context(), "secret-token", "123", "", payload)
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
@@ -200,12 +185,12 @@ func TestTelegramAdapterDeliverSendsDocumentOnlyWhenFilesPresent(t *testing.T) {
 	}
 }
 
-// TestTelegramAdapterDeliverRendersTextArtifactsInline covers the
+// TestTelegramSenderRendersTextArtifactsInline covers the
 // primary case in the priority order: a .md/.txt declared artifact
 // (payload.TextArtifacts) renders as formatted MarkdownV2 sendMessage
 // calls, never a file attachment — even when Files is also non-empty,
 // text artifacts win.
-func TestTelegramAdapterDeliverRendersTextArtifactsInline(t *testing.T) {
+func TestTelegramSenderRendersTextArtifactsInline(t *testing.T) {
 	var gotMessages []map[string]any
 	var gotDocuments []map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -227,10 +212,7 @@ func TestTelegramAdapterDeliverRendersTextArtifactsInline(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &TelegramAdapter{
-		ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"),
-		APIBase:      srv.URL,
-	}
+	a := &telegramSender{APIBase: srv.URL}
 	completedAt, err := time.Parse(time.RFC3339, "2026-08-21T20:30:00Z")
 	if err != nil {
 		t.Fatalf("parse fixture time: %v", err)
@@ -245,7 +227,7 @@ func TestTelegramAdapterDeliverRendersTextArtifactsInline(t *testing.T) {
 		// order, this must never turn into a sendDocument call.
 		Files: []File{{Name: "raw.csv", Data: []byte("a,b")}},
 	}
-	if err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", payload); err != nil {
+	if err := a.deliver(t.Context(), "secret-token", "123", "", payload); err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
 	if len(gotDocuments) != 0 {
@@ -269,10 +251,10 @@ func TestTelegramAdapterDeliverRendersTextArtifactsInline(t *testing.T) {
 	}
 }
 
-// TestTelegramAdapterDeliverSendsMessageWhenNoFiles covers the other
+// TestTelegramSenderSendsMessageWhenNoFiles covers the other
 // leg: a payload with no artifacts still gets its short completion
 // line as a plain sendMessage, since there's no file to caption.
-func TestTelegramAdapterDeliverSendsMessageWhenNoFiles(t *testing.T) {
+func TestTelegramSenderSendsMessageWhenNoFiles(t *testing.T) {
 	var gotMessages []map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
@@ -284,12 +266,9 @@ func TestTelegramAdapterDeliverSendsMessageWhenNoFiles(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	a := &TelegramAdapter{
-		ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"),
-		APIBase:      srv.URL,
-	}
+	a := &telegramSender{APIBase: srv.URL}
 	payload := Payload{Body: "Mission complete: inbox-digest-8h"}
-	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", payload)
+	err := a.deliver(t.Context(), "secret-token", "123", "", payload)
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
@@ -323,50 +302,26 @@ func TestRenderTelegramCaptionOmitsDateWhenZero(t *testing.T) {
 	}
 }
 
-func TestTelegramAdapterDeliverMissingCredentialRef(t *testing.T) {
-	a := &TelegramAdapter{ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token")}
-	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "", Payload{})
-	if err == nil {
-		t.Fatal("expected error for missing credential_ref")
-	}
-}
-
-func TestTelegramAdapterDeliverResolveTokenFails(t *testing.T) {
-	a := &TelegramAdapter{ResolveToken: fakeTokenResolver("OTHER_REF", "secret-token")}
-	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", Payload{})
-	if err == nil {
-		t.Fatal("expected error when the token resolver fails")
-	}
-}
-
-func TestTelegramAdapterDeliverAPIError(t *testing.T) {
+func TestTelegramSenderAPIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":false,"description":"chat not found"}`))
 	}))
 	defer srv.Close()
 
-	a := &TelegramAdapter{ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"), APIBase: srv.URL}
-	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", Payload{Body: "hi"})
+	a := &telegramSender{APIBase: srv.URL}
+	err := a.deliver(t.Context(), "secret-token", "123", "", Payload{Body: "hi"})
 	if err == nil || !strings.Contains(err.Error(), "chat not found") {
 		t.Fatalf("expected api error surfaced, got %v", err)
 	}
 }
 
-func TestTelegramAdapterDeliverBadConfig(t *testing.T) {
-	a := &TelegramAdapter{ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token")}
-	err := a.Deliver(t.Context(), json.RawMessage(`not json`), "TG_BOT_TOKEN", Payload{})
-	if err == nil {
-		t.Fatal("expected error for malformed config")
-	}
-}
-
-// TestTelegramAdapterDeliverNeverLeaksTokenOnTimeout covers the token
+// TestTelegramSenderNeverLeaksTokenOnTimeout covers the token
 // leak: call() builds its request URL with the raw token, and a
 // *url.Error from http.Client.Do embeds that URL verbatim. A server
 // that never responds forces a client timeout so Do returns exactly
 // that shape of error.
-func TestTelegramAdapterDeliverNeverLeaksTokenOnTimeout(t *testing.T) {
+func TestTelegramSenderNeverLeaksTokenOnTimeout(t *testing.T) {
 	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-block
@@ -378,12 +333,8 @@ func TestTelegramAdapterDeliverNeverLeaksTokenOnTimeout(t *testing.T) {
 	defer close(block)
 
 	const token = "123456:super-secret-bot-token"
-	a := &TelegramAdapter{
-		ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", token),
-		APIBase:      srv.URL,
-		HTTP:         &http.Client{Timeout: 50 * time.Millisecond},
-	}
-	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", Payload{Body: "hi"})
+	a := &telegramSender{APIBase: srv.URL, HTTP: &http.Client{Timeout: 50 * time.Millisecond}}
+	err := a.deliver(t.Context(), token, "123", "", Payload{Body: "hi"})
 	if err == nil {
 		t.Fatal("expected a timeout error")
 	}
@@ -395,11 +346,11 @@ func TestTelegramAdapterDeliverNeverLeaksTokenOnTimeout(t *testing.T) {
 	}
 }
 
-// TestTelegramAdapterDeliverNeverLeaksTokenOn500 covers the same
+// TestTelegramSenderNeverLeaksTokenOn500 covers the same
 // redaction requirement on the non-2xx response path, and asserts the
 // response is treated as maybe-delivered (retrying a processed request
 // is pointless and a 5xx may still have side effects).
-func TestTelegramAdapterDeliverNeverLeaksTokenOn500(t *testing.T) {
+func TestTelegramSenderNeverLeaksTokenOn500(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("internal error"))
@@ -407,8 +358,8 @@ func TestTelegramAdapterDeliverNeverLeaksTokenOn500(t *testing.T) {
 	defer srv.Close()
 
 	const token = "123456:super-secret-bot-token"
-	a := &TelegramAdapter{ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", token), APIBase: srv.URL}
-	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", Payload{Body: "hi"})
+	a := &telegramSender{APIBase: srv.URL}
+	err := a.deliver(t.Context(), token, "123", "", Payload{Body: "hi"})
 	if err == nil {
 		t.Fatal("expected an error for a 500 response")
 	}
@@ -420,19 +371,19 @@ func TestTelegramAdapterDeliverNeverLeaksTokenOn500(t *testing.T) {
 	}
 }
 
-// TestTelegramAdapterDeliverDialFailureIsSafeToRetry covers the other
+// TestTelegramSenderDialFailureIsSafeToRetry covers the other
 // leg of classifySendErr: a connection that never got established
 // (dialing a closed port) must NOT be errMaybeDelivered, since nothing
 // left the machine and a retry cannot duplicate anything.
-func TestTelegramAdapterDeliverDialFailureIsSafeToRetry(t *testing.T) {
+func TestTelegramSenderDialFailureIsSafeToRetry(t *testing.T) {
 	// A server that's immediately closed leaves its port refusing
 	// connections, forcing a dial failure rather than any response.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	closedURL := srv.URL
 	srv.Close()
 
-	a := &TelegramAdapter{ResolveToken: fakeTokenResolver("TG_BOT_TOKEN", "secret-token"), APIBase: closedURL}
-	err := a.Deliver(t.Context(), json.RawMessage(`{"chat_id":"123"}`), "TG_BOT_TOKEN", Payload{Body: "hi"})
+	a := &telegramSender{APIBase: closedURL}
+	err := a.deliver(t.Context(), "secret-token", "123", "", Payload{Body: "hi"})
 	if err == nil {
 		t.Fatal("expected an error dialing a closed port")
 	}

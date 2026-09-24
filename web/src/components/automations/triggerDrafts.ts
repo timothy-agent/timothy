@@ -20,12 +20,16 @@ export interface TriggerDraft {
   scheme: WebhookScheme
   filters: WebhookFilter[]
   credentialRef: string
+  channelId: string
+  pattern: string
+  chatId: string
 }
 
 export const maxTriggers = 5
 export const maxLabels = 10
 export const maxFilters = 10
 export const maxAllowlist = 64
+export const maxPattern = 200
 export const defaultCron = cronPresets[0].cron
 
 // connectorEventKinds mirrors events.ConnectorKinds on the server.
@@ -52,6 +56,9 @@ const blankFields = {
   scheme: 'github' as WebhookScheme,
   filters: [] as WebhookFilter[],
   credentialRef: '',
+  channelId: '',
+  pattern: '',
+  chatId: '',
 }
 
 // newTriggerDraft is a fresh daily cron trigger.
@@ -84,6 +91,9 @@ export function draftsFromTriggers(
     scheme: t.config.scheme ?? 'github',
     filters: (t.config.filters ?? []).map((f) => ({ path: f.path.replace(/^\$\./, ''), equals: f.equals })),
     credentialRef: t.credential_ref ?? '',
+    channelId: t.config.channel_id ?? '',
+    pattern: t.config.pattern ?? '',
+    chatId: t.config.chat_id ?? '',
   }))
 }
 
@@ -103,6 +113,8 @@ function configFor(d: TriggerDraft): AutomationTriggerConfig {
         scheme: d.scheme,
         ...(d.filters.length > 0 && { filters: d.filters.map((f) => ({ path: f.path.trim(), equals: f.equals })) }),
       }
+    case 'channel':
+      return { channel_id: d.channelId, pattern: d.pattern, ...(d.chatId.trim() && { chat_id: d.chatId.trim() }) }
     default:
       return {}
   }
@@ -139,6 +151,25 @@ export function filterPathError(path: string): string | undefined {
   return 'Use a dotted path, such as action or pull_request.user.login.'
 }
 
+// channelPattern compiles a channel trigger pattern the way the server
+// matches it (case-insensitive); undefined when JavaScript cannot parse
+// it. The server's RE2 has the final say.
+export function channelPattern(pattern: string): RegExp | undefined {
+  try {
+    return new RegExp(pattern.replace(/^\(\?i\)/, ''), 'i')
+  } catch {
+    return undefined
+  }
+}
+
+// patternError flags a channel pattern the server would reject.
+export function patternError(d: TriggerDraft): string | undefined {
+  if (d.kind !== 'channel' || d.pattern === '') return undefined
+  if (d.pattern.length > maxPattern) return `Keep the pattern under ${maxPattern} characters.`
+  if (!channelPattern(d.pattern)) return 'Not a valid regular expression.'
+  return undefined
+}
+
 // triggerError reports whether a draft is incomplete or malformed, as
 // one message; the fields show their own errors.
 export function triggerError(d: TriggerDraft): string | undefined {
@@ -153,6 +184,11 @@ export function triggerError(d: TriggerDraft): string | undefined {
     if (d.credentialRef.trim() === '') return 'Enter the signing secret name.'
     const bad = d.filters.find((f) => f.path.trim() === '' || filterPathError(f.path))
     if (bad) return 'Fix the filter paths.'
+  }
+  if (d.kind === 'channel') {
+    if (!d.channelId) return 'Pick a channel.'
+    if (d.pattern === '') return 'Enter a pattern.'
+    return patternError(d)
   }
   return undefined
 }
@@ -173,6 +209,9 @@ export function goalHint(drafts: TriggerDraft[]): string {
   }
   if (drafts.some((d) => d.kind === 'webhook')) {
     parts.push('{{event.body.<field>}} or {{event.delivery}} for webhooks')
+  }
+  if (drafts.some((d) => d.kind === 'channel')) {
+    parts.push('{{event.text}}, {{event.sender}} or {{event.chat_id}} for channel messages')
   }
   if (parts.length === 0) return defaultGoalHint
   return `Use ${parts.join(', ')}, and {{notes.name}} for notes.`

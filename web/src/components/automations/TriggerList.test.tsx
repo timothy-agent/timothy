@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { useState } from 'react'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminConnector } from '../../api/types'
+import type { AdminConnector, Channel } from '../../api/types'
 import { TooltipProvider } from '../ui/tooltip'
 import { cronError, draftsFromTriggers, draftsToInput, newTriggerDraft, type TriggerDraft } from './triggerDrafts'
 import { TriggerList } from './TriggerList'
@@ -24,11 +24,13 @@ function Harness({
   initial,
   onChange,
   connectors = [],
+  channels = [],
   submitted,
 }: {
   initial: TriggerDraft[]
   onChange?: (d: TriggerDraft[]) => void
   connectors?: AdminConnector[] | null
+  channels?: Channel[] | null
   submitted?: boolean
 }) {
   const [value, setValue] = useState(initial)
@@ -38,6 +40,7 @@ function Harness({
         <TriggerList
           value={value}
           connectors={connectors}
+          channels={channels}
           submitted={submitted}
           onChange={(next) => {
             setValue(next)
@@ -96,12 +99,42 @@ describe('TriggerList', () => {
     expect(screen.getByText('Runs only when you press Run now.')).toBeInTheDocument()
   })
 
-  it('offers connector event and webhook, and channel disabled', async () => {
+  it('offers connector event, webhook and channel message', async () => {
     render(<Harness initial={[newTriggerDraft()]} />)
     fireEvent.click(screen.getByLabelText('Kind'))
     expect(await screen.findByRole('option', { name: 'Webhook' })).not.toHaveAttribute('data-disabled')
     expect(screen.getByRole('option', { name: 'Connector event' })).not.toHaveAttribute('data-disabled')
-    expect(screen.getByRole('option', { name: 'Channel message (Phase 3)' })).toHaveAttribute('data-disabled')
+    expect(screen.getByRole('option', { name: 'Channel message' })).not.toHaveAttribute('data-disabled')
+  })
+
+  it('edits a channel trigger with a live preview', async () => {
+    const onChange = vi.fn()
+    const ch: Channel = {
+      id: 'ch1', name: 'ops-bot', kind: 'telegram', config: { dispatch: false }, credential_ref: 'BOT', agent_id: '', enabled: true,
+      pairings: { pending: 0, approved: 1, revoked: 0 }, created_at: '', updated_at: '',
+    }
+    render(<Harness initial={[newTriggerDraft()]} onChange={onChange} channels={[ch]} />)
+    await pickKind('Channel message')
+    fireEvent.click(screen.getByLabelText('Channel'))
+    fireEvent.click(await screen.findByRole('option', { name: 'ops-bot (telegram)' }))
+    fireEvent.change(screen.getByLabelText('Pattern'), { target: { value: '^/run coverage$' } })
+    fireEvent.change(screen.getByLabelText(/Chat ID/), { target: { value: '-100' } })
+    fireEvent.change(screen.getByLabelText(/Try a message/), { target: { value: '/RUN coverage' } })
+    expect(screen.getByRole('status')).toHaveTextContent('matches: /RUN coverage')
+    fireEvent.change(screen.getByLabelText(/Try a message/), { target: { value: '/run tests' } })
+    expect(screen.getByRole('status')).toHaveTextContent('no match: /run tests')
+    fireEvent.change(screen.getByLabelText('Pattern'), { target: { value: '(bad' } })
+    expect(screen.getByRole('alert')).toHaveTextContent('Not a valid regular expression.')
+    fireEvent.change(screen.getByLabelText('Pattern'), { target: { value: '^/run coverage$' } })
+    expect(draftsToInput(lastCall(onChange))).toEqual([
+      { kind: 'channel', config: { channel_id: 'ch1', pattern: '^/run coverage$', chat_id: '-100' }, enabled: true },
+    ])
+  })
+
+  it('links to channels when there are none', async () => {
+    render(<Harness initial={[newTriggerDraft()]} channels={[]} />)
+    await pickKind('Channel message')
+    expect(screen.getByRole('link', { name: 'Add a channel first' })).toHaveAttribute('href', '/settings/channels')
   })
 
   it('writes the picked preset into the expression', async () => {

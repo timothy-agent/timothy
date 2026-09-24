@@ -2,12 +2,13 @@ import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
   deleteDestination,
+  listChannels,
   listConnectors,
   listDestinations,
   patchDestination,
   testDestination,
 } from '../../api/client'
-import type { AdminConnector, Destination } from '../../api/types'
+import type { AdminConnector, Channel, Destination } from '../../api/types'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { ConfirmDialog } from '../timothy/confirm-dialog'
@@ -28,6 +29,7 @@ const area = settingsArea('destinations')
 export function DestinationsList() {
   const [destinations, setDestinations] = useState<Destination[]>([])
   const [connectors, setConnectors] = useState<AdminConnector[]>([])
+  const [channels, setChannels] = useState<Channel[]>([])
 
   const refresh = useCallback(() => {
     listDestinations()
@@ -43,6 +45,11 @@ export function DestinationsList() {
       .then(setConnectors)
       .catch(() => {
         // Non-fatal: card summaries just show mode without a connector name.
+      })
+    listChannels()
+      .then(setChannels)
+      .catch(() => {
+        // Non-fatal: channel card summaries just show the chat or recipient.
       })
   }, [])
 
@@ -65,7 +72,7 @@ export function DestinationsList() {
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {destinations.map((d) => (
-                <DestinationCard key={d.id} destination={d} connectors={connectors} onChanged={refresh} />
+                <DestinationCard key={d.id} destination={d} connectors={connectors} channels={channels} onChanged={refresh} />
               ))}
             </div>
           )}
@@ -99,13 +106,23 @@ function githubSummary(destination: Destination, connectors: AdminConnector[]): 
   return connector ? `${mode} via ${connector.name}` : mode
 }
 
+// channelSummary names a channel destination's channel and its chat
+// or recipient.
+function channelSummary(destination: Destination, channels: Channel[]): string {
+  const channel = channels.find((c) => c.id === destination.config.channel_id)
+  const target = destination.config.to ? String(destination.config.to) : `chat ${String(destination.config.chat_id ?? '')}`
+  return channel ? `${channel.name} · ${target}` : target
+}
+
 function DestinationCard({
   destination,
   connectors,
+  channels,
   onChanged,
 }: {
   destination: Destination
   connectors: AdminConnector[]
+  channels: Channel[]
   onChanged: () => void
 }) {
   const [testing, setTesting] = useState(false)
@@ -145,8 +162,8 @@ function DestinationCard({
   const summary =
     destination.kind === 'email'
       ? String(destination.config.to ?? '')
-      : destination.kind === 'telegram'
-        ? `chat ${String(destination.config.chat_id ?? '')}`
+      : destination.kind === 'channel'
+        ? channelSummary(destination, channels)
         : isGitKind(destination.kind)
           ? githubSummary(destination, connectors)
           : String(destination.config.url ?? '')
@@ -162,7 +179,7 @@ function DestinationCard({
           test && (
             <TestStatus
               state={test.ok ? 'ok' : 'failed'}
-              message={test.ok ? 'Test delivery sent' : `Failed: ${test.error}`}
+              message={test.ok ? (destination.kind === 'channel' ? 'Channel reachable' : 'Test delivery sent') : `Failed: ${test.error}`}
             />
           )
         }

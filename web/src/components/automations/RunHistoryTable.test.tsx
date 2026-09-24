@@ -66,6 +66,12 @@ describe('RunHistoryTable', () => {
     expect(within(row('c')).getByText('cron')).toBeInTheDocument()
   })
 
+  it('shows a channel badge with the sender for channel runs', () => {
+    renderTable([makeRun({ id: 'a', event: { kind: 'channel.message', source: 'channel', sender: 'Ada', text: '/run coverage' } })])
+    expect(within(row('a')).getByText('channel')).toBeInTheDocument()
+    expect(within(row('a')).getByText('Ada')).toBeInTheDocument()
+  })
+
   it('opens the mission on row click only when the run has one', () => {
     const router = renderTable([makeRun({ id: 'a', mission_id: 'm1' }), makeRun({ id: 'b', status: 'skipped' })])
     expect(row('b')).not.toHaveAttribute('role')
@@ -100,12 +106,13 @@ describe('run helpers', () => {
     ])
   })
 
-  it('runEventLabel summarizes connector and webhook events only', () => {
+  it('runEventLabel summarizes connector, webhook and channel events only', () => {
     expect(runEventLabel(makeRun({ event: { kind: 'issue.comment', source: 'connector', repo: 'octo/timothy' } }))).toEqual({
       kind: 'issue.comment',
       summary: 'octo/timothy',
     })
     expect(runEventLabel(makeRun({ event: { kind: 'webhook.received', source: 'webhook', delivery: 'd1' } }))).toEqual({ kind: 'webhook', summary: 'd1' })
+    expect(runEventLabel(makeRun({ event: { kind: 'channel.message', source: 'channel', sender: 'Ada' } }))).toEqual({ kind: 'channel', summary: 'Ada' })
     expect(runEventLabel(makeRun({ event: { kind: 'run.now', source: 'manual' } }))).toBeUndefined()
     expect(runEventLabel(makeRun({ event: null }))).toBeUndefined()
   })

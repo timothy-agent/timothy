@@ -491,6 +491,45 @@ func (s *Store) ConnectorEventWatches(ctx context.Context) ([]Watch, error) {
 	return out, nil
 }
 
+// ChannelTrigger is one enabled channel trigger of an enabled,
+// unexpired automation.
+type ChannelTrigger struct {
+	TriggerID      string
+	AutomationID   string
+	AutomationName string
+	Pattern        string
+	ChatID         string
+}
+
+// ChannelTriggers returns the channel triggers on channelID that can
+// fire now, oldest first.
+func (s *Store) ChannelTriggers(ctx context.Context, channelID string) ([]ChannelTrigger, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("automations channel triggers: %w", err)
+	}
+	return channelTriggers(ctx, db, channelID, time.Now())
+}
+
+func channelTriggers(ctx context.Context, q dbtx, channelID string, now time.Time) ([]ChannelTrigger, error) {
+	rows, err := q.Query(ctx, `SELECT t.id, t.automation_id, a.name, t.config->>'pattern', COALESCE(t.config->>'chat_id', '')
+		FROM automation_triggers t JOIN automations a ON a.id = t.automation_id
+		WHERE t.kind = 'channel' AND t.enabled AND a.enabled AND (a.expires_at IS NULL OR a.expires_at > $2)
+			AND lower(t.config->>'channel_id') = lower($1) AND t.config->>'pattern' IS NOT NULL
+		ORDER BY t.created_at, t.id`, channelID, now)
+	if err != nil {
+		return nil, fmt.Errorf("automations channel triggers: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (ChannelTrigger, error) {
+		var c ChannelTrigger
+		return c, row.Scan(&c.TriggerID, &c.AutomationID, &c.AutomationName, &c.Pattern, &c.ChatID)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("automations channel triggers: %w", err)
+	}
+	return out, nil
+}
+
 // DayCount is one sparkline bucket: a local calendar day.
 type DayCount struct {
 	Day       string `json:"day"`

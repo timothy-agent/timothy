@@ -263,6 +263,7 @@ func (s *Starter) createRequest(ctx context.Context, tx pgx.Tx, a Automation, ru
 	tmpl.Goal = Interpolate(tmpl.Goal, event, byName)
 	tmpl.Name = Interpolate(tmpl.Name, event, byName)
 	req := missions.TemplateCreateRequest(tmpl, a.Name, a.AgentID, s.filterDestinationIDs(ctx, tmpl.DestinationIDs), runID)
+	req.ChannelConversationID = eventConversationID(event)
 
 	var sources []missions.SourceEntry
 	if a.Continuity {
@@ -300,6 +301,16 @@ func (s *Starter) createRequest(ctx context.Context, tx pgx.Tx, a Automation, ru
 	}
 	req.Sources = append(sources, req.Sources...)
 	return req, nil
+}
+
+// eventConversationID is the channel conversation a channel run came
+// from, "" for every other run. Its mission reports the outcome there.
+func eventConversationID(event map[string]any) string {
+	if event["kind"] != events.KindChannelMessage {
+		return ""
+	}
+	conv, _ := event["conversation_id"].(string)
+	return conv
 }
 
 // noToolsAllowlist is a mission allowlist that offers no tool beyond

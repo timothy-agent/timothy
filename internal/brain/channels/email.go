@@ -62,7 +62,10 @@ type mailbox struct {
 }
 
 func mailboxOf(b *connectors.IMAPMailbox) mailbox {
-	return mailbox{Address: b.Address(), Newer: b.Newer, LatestUID: b.LatestUID, Attachment: b.Attachment, Reply: b.Reply}
+	return mailbox{Address: b.Address(), Newer: b.Newer, LatestUID: b.LatestUID, Attachment: b.Attachment,
+		Reply: func(ctx context.Context, to, subject, body, inReplyTo string, references []string) (string, error) {
+			return b.Reply(ctx, to, subject, body, inReplyTo, references, nil)
+		}}
 }
 
 // emailEnv is what email adapters need beyond the channel row. A nil

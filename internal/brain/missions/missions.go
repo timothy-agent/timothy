@@ -235,7 +235,7 @@ type Mission struct {
 	SessionID string `json:"-"`
 	// Destinations names every sink this mission's outcome delivers to or
 	// acts on in the result phase's step (issue #480, extended #561):
-	// email/webhook/telegram/github entries name an operator-owned
+	// email/webhook/channel/github entries name an operator-owned
 	// destinations table row (D-061, validated at create time), plus a
 	// "kb" entry (D-081). Never model-decided. Each entry's
 	// delivered_at/error fields are the result step's own delivery-state
@@ -269,7 +269,7 @@ type ArtifactRef struct {
 
 // destinationKind names DestinationEntry.Destination's known values:
 // "kb" is the only harness-native sink with no destinations table
-// row; email/webhook/telegram/github all ride an operator-created
+// row; email/webhook/channel/github all ride an operator-created
 // destinations table row (DestinationID).
 const (
 	DestinationKindKB = "kb"

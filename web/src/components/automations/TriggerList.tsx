@@ -1,6 +1,6 @@
 import { Plus, Trash2 } from 'lucide-react'
 
-import type { AdminConnector, AutomationTrigger } from '../../api/types'
+import type { AdminConnector, AutomationTrigger, Channel } from '../../api/types'
 import { cronPresets, presetFor } from '../../lib/cron'
 import { Field } from '../timothy/field'
 import { IconButton } from '../timothy/icon-button'
@@ -8,32 +8,35 @@ import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Switch } from '../ui/switch'
-import { ConnectorEventFields, ToolAllowlistField, WebhookFields } from './TriggerFields'
+import { ChannelFields, ConnectorEventFields, ToolAllowlistField, WebhookFields } from './TriggerFields'
 import { cronError, defaultCron, maxTriggers, newTriggerDraft, triggerError, type TriggerDraft } from './triggerDrafts'
 
-const kindOptions: { value: AutomationTrigger['kind']; label: string; disabled?: boolean }[] = [
+const kindOptions: { value: AutomationTrigger['kind']; label: string }[] = [
   { value: 'cron', label: 'Cron' },
   { value: 'manual', label: 'Manual' },
   { value: 'connector_event', label: 'Connector event' },
   { value: 'webhook', label: 'Webhook' },
-  { value: 'channel', label: 'Channel message (Phase 3)', disabled: true },
+  { value: 'channel', label: 'Channel message' },
 ]
 
 const secretMissing = (d: TriggerDraft) => d.kind === 'webhook' && d.credentialRef.trim() === ''
 
 // TriggerList edits one to five triggers. errors holds server messages
-// keyed by draft key; connectors feeds the connector event picker.
+// keyed by draft key; connectors feeds the connector event picker and
+// channels the channel picker.
 export function TriggerList({
   value,
   onChange,
   errors = {},
   connectors = null,
+  channels = null,
   submitted = false,
 }: {
   value: TriggerDraft[]
   onChange: (next: TriggerDraft[]) => void
   errors?: Record<string, string>
   connectors?: AdminConnector[] | null
+  channels?: Channel[] | null
   submitted?: boolean
 }) {
   const update = (key: string, patch: Partial<TriggerDraft>) =>
@@ -77,7 +80,7 @@ export function TriggerList({
                     </SelectTrigger>
                     <SelectContent>
                       {kindOptions.map((o) => (
-                        <SelectItem key={o.value} value={o.value} disabled={o.disabled}>
+                        <SelectItem key={o.value} value={o.value}>
                           {o.label}
                         </SelectItem>
                       ))}
@@ -129,6 +132,9 @@ export function TriggerList({
             )}
             {d.kind === 'connector_event' && (
               <ConnectorEventFields draft={d} update={(patch) => update(d.key, patch)} connectors={connectors} />
+            )}
+            {d.kind === 'channel' && (
+              <ChannelFields draft={d} update={(patch) => update(d.key, patch)} channels={channels} />
             )}
             {d.kind === 'webhook' && (
               <WebhookFields

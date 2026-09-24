@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
+	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
@@ -26,13 +27,13 @@ import (
 // (nil waits for its poll) and loc is the operator timezone for stats
 // and next runs. connectorKinds and destinationKinds list the enabled
 // kinds the templates gallery checks (nil means none configured).
-// connectors checks a connector_event trigger's connector (nil rejects
-// any).
-func (a *API) registerAutomations(handle func(pattern string, h http.Handler), store *automations.Store, ev *events.Store, kick func(), destinations destinationLookup, attachments *attachmentResolver, loc func(ctx context.Context) *time.Location, connectorKinds, destinationKinds kindLister, connectors connectorLookup) {
+// connectors checks a connector_event trigger's connector and channels
+// a channel trigger's channel (nil rejects any).
+func (a *API) registerAutomations(handle func(pattern string, h http.Handler), store *automations.Store, ev *events.Store, kick func(), destinations destinationLookup, attachments *attachmentResolver, loc func(ctx context.Context) *time.Location, connectorKinds, destinationKinds kindLister, connectors connectorLookup, channels channelLookup) {
 	if store == nil {
 		return
 	}
-	h := &automationAPI{store: store, events: ev, kick: kick, destinations: destinations, attachments: attachments, loc: loc, connectorKinds: connectorKinds, destinationKinds: destinationKinds, connectors: connectors}
+	h := &automationAPI{store: store, events: ev, kick: kick, destinations: destinations, attachments: attachments, loc: loc, connectorKinds: connectorKinds, destinationKinds: destinationKinds, connectors: connectors, channels: channels}
 	handle("GET /v1/automations", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/automations", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/automations/stats", a.auth(http.HandlerFunc(h.stats)))
@@ -61,6 +62,7 @@ type automationAPI struct {
 	connectorKinds   kindLister
 	destinationKinds kindLister
 	connectors       connectorLookup
+	channels         channelLookup
 }
 
 // kindLister returns the kinds of the enabled rows of one table.
@@ -81,9 +83,53 @@ func storeConnectorLookup(s *connectors.Store) connectorLookup {
 	}
 }
 
+// channelLookup reports whether a channel is enabled; a missing channel
+// is channels.ErrNotFound.
+type channelLookup func(ctx context.Context, id string) (enabled bool, err error)
+
+// storeChannelLookup looks channels up in s.
+func storeChannelLookup(s *channels.Store) channelLookup {
+	return func(ctx context.Context, id string) (bool, error) {
+		c, err := s.Get(ctx, id)
+		if err != nil {
+			return false, err
+		}
+		return c.Enabled, nil
+	}
+}
+
+// validateTriggerChannels rejects a channel trigger whose channel is
+// missing or disabled.
+func (h *automationAPI) validateTriggerChannels(ctx context.Context, ts []automations.Trigger) error {
+	ids := automations.ChannelIDs(ts)
+	if len(ids) == 0 {
+		return nil
+	}
+	if h.channels == nil {
+		return &automations.ValidationError{Err: errors.New("channels are not enabled")}
+	}
+	for _, id := range ids {
+		enabled, err := h.channels(ctx, id)
+		if errors.Is(err, channels.ErrNotFound) {
+			return &automations.ValidationError{Err: fmt.Errorf("unknown channel_id %s", id)}
+		}
+		if err != nil {
+			return fmt.Errorf("channel_id %s: %w", id, err)
+		}
+		if !enabled {
+			return &automations.ValidationError{Err: fmt.Errorf("channel %s is disabled", id)}
+		}
+	}
+	return nil
+}
+
 // validateTriggerConnectors rejects a connector_event trigger whose
-// connector is missing, disabled or not a github connector.
+// connector is missing, disabled or not a github connector, and a
+// channel trigger whose channel is missing or disabled.
 func (h *automationAPI) validateTriggerConnectors(ctx context.Context, ts []automations.Trigger) error {
+	if err := h.validateTriggerChannels(ctx, ts); err != nil {
+		return err
+	}
 	ids := automations.ConnectorEventIDs(ts)
 	if len(ids) == 0 {
 		return nil

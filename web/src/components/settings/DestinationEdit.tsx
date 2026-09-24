@@ -4,13 +4,13 @@ import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   deleteDestination,
+  listChannels,
   listConnectors,
   listDestinations,
   patchDestination,
-  setSecret,
   testDestination,
 } from '../../api/client'
-import type { AdminConnector, Destination } from '../../api/types'
+import type { AdminConnector, Channel, Destination } from '../../api/types'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { Alert, AlertDescription } from '../ui/alert'
@@ -19,11 +19,10 @@ import { FieldGroup, Form, FormActions } from '../timothy/field'
 import { Panel } from '../timothy/panel'
 import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
-import { CredentialField, type CredentialMode } from './CredentialRefPicker'
+import { channelDestinationConfig } from './channelDestination'
 import { DestinationKindFields, type DestinationKindValues } from './DestinationKindFields'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
-import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { useStagedForm } from './useStagedForm'
 import { errText } from '../../lib/errors'
 import { isGitKind } from '../../lib/gitKinds'
@@ -37,6 +36,8 @@ function valuesFrom(destination: Destination): DestinationKindValues {
     url: String(destination.config.url ?? ''),
     format: (destination.config.format as 'json' | 'text') ?? 'json',
     chatID: String(destination.config.chat_id ?? ''),
+    threadID: String(destination.config.thread_id ?? ''),
+    channelID: String(destination.config.channel_id ?? ''),
     mode: (destination.config.mode as 'push' | 'push_pr') ?? 'push',
     branchPattern: String(destination.config.branch_pattern ?? ''),
     commitStyle: String(destination.config.commit_style ?? ''),
@@ -46,9 +47,11 @@ function valuesFrom(destination: Destination): DestinationKindValues {
 
 // buildConfig builds the destination's config PATCH body from the
 // staged kind fields, same shape the old per-kind config builders sent.
-function buildConfig(destination: Destination, values: DestinationKindValues): Record<string, unknown> {
+function buildConfig(destination: Destination, values: DestinationKindValues, channels: Channel[]): Record<string, unknown> {
   if (destination.kind === 'email') return { connector_id: values.connectorID, to: values.to.trim() }
-  if (destination.kind === 'telegram') return { chat_id: values.chatID.trim() }
+  if (destination.kind === 'channel') {
+    return channelDestinationConfig(values, channels.find((c) => c.id === values.channelID))
+  }
   if (isGitKind(destination.kind)) {
     return {
       connector_id: values.connectorID,
@@ -69,6 +72,7 @@ export function DestinationEdit() {
   const { id } = useParams()
   const [destination, setDestination] = useState<Destination | null | undefined>(undefined)
   const [connectors, setConnectors] = useState<AdminConnector[]>([])
+  const [channels, setChannels] = useState<Channel[]>([])
 
   const refresh = useCallback(() => {
     return listDestinations()
@@ -95,6 +99,13 @@ export function DestinationEdit() {
       })
   }, [])
 
+  useEffect(() => {
+    if (destination?.kind !== 'channel') return
+    listChannels()
+      .then(setChannels)
+      .catch((err: unknown) => toast.error('Could not load channels', { description: errText(err) }))
+  }, [destination?.kind])
+
   if (destination === null) return <Navigate to="/settings/destinations" replace />
   if (destination === undefined) return null
 
@@ -103,6 +114,7 @@ export function DestinationEdit() {
       key={destination.id}
       initialDestination={destination}
       connectors={connectors}
+      channels={channels}
       refresh={refresh}
     />
   )
@@ -111,14 +123,15 @@ export function DestinationEdit() {
 function DestinationEditForm({
   initialDestination,
   connectors,
+  channels,
   refresh,
 }: {
   initialDestination: Destination
   connectors: AdminConnector[]
+  channels: Channel[]
   refresh: () => Promise<Destination | null | undefined>
 }) {
   const navigate = useNavigate()
-  const defaultBackend = useDefaultSecretBackend()
 
   const [destination, setDestinationState] = useState(initialDestination)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -131,13 +144,6 @@ function DestinationEditForm({
   const setField = <K extends keyof DestinationKindValues>(key: K, value: DestinationKindValues[K]) =>
     staged.setField(key, value)
 
-  // Rotating the bot token is a separate save from the rest of the
-  // config: it writes credential_ref's value, not config.
-  const [botToken, setBotToken] = useState('')
-  const [botTokenMode, setBotTokenMode] = useState<CredentialMode>('new')
-  const [existingBotTokenRef, setExistingBotTokenRef] = useState('')
-  const [savingToken, setSavingToken] = useState(false)
-
   const doRefresh = useCallback(async () => {
     const refetched = await refresh()
     if (refetched) setDestinationState(refetched)
@@ -148,7 +154,7 @@ function DestinationEditForm({
     setSaving(true)
     setSaveError(null)
     try {
-      const config = buildConfig(destination, staged.values)
+      const config = buildConfig(destination, staged.values, channels)
       await patchDestination(destination.id, { config })
       toast.success('Destination updated')
       const refetched = await doRefresh()
@@ -158,7 +164,7 @@ function DestinationEditForm({
     } finally {
       setSaving(false)
     }
-  }, [destination, doRefresh, staged])
+  }, [channels, destination, doRefresh, staged])
 
   const remove = async () => {
     try {
@@ -187,24 +193,6 @@ function DestinationEditForm({
     patchDestination(destination.id, { enabled })
       .then(() => void doRefresh())
       .catch((err: unknown) => toast.error('Could not update destination', { description: errText(err) }))
-  }
-
-  const usingExistingBotToken = botTokenMode === 'existing'
-
-  const saveBotToken = async () => {
-    setSavingToken(true)
-    try {
-      const ref = usingExistingBotToken ? existingBotTokenRef : destination.credential_ref
-      if (!usingExistingBotToken) await setSecret(ref, botToken.trim())
-      await patchDestination(destination.id, { credential_ref: ref })
-      toast.success('Bot token updated')
-      setBotToken('')
-      void doRefresh()
-    } catch (err) {
-      toast.error('Could not update bot token', { description: errText(err) })
-    } finally {
-      setSavingToken(false)
-    }
   }
 
   return (
@@ -242,7 +230,13 @@ function DestinationEditForm({
         }}
       >
         <FieldGroup>
-          <DestinationKindFields kind={destination.kind} values={staged.values} setField={setField} connectors={connectors} />
+          <DestinationKindFields
+            kind={destination.kind}
+            values={staged.values}
+            setField={setField}
+            connectors={connectors}
+            channels={channels}
+          />
         </FieldGroup>
 
         {saveError && (
@@ -272,7 +266,15 @@ function DestinationEditForm({
             {test || testing ? (
               <TestStatus
                 state={testing ? 'testing' : test?.ok ? 'ok' : 'failed'}
-                message={testing ? 'Sending test delivery…' : test?.ok ? 'Test delivery sent.' : `Failed: ${test?.error}`}
+                message={
+                  testing
+                    ? 'Sending test delivery…'
+                    : test?.ok
+                      ? destination.kind === 'channel'
+                        ? 'Channel reachable.'
+                        : 'Test delivery sent.'
+                      : `Failed: ${test?.error}`
+                }
                 action={
                   !testing && (
                     <Button size="sm" variant="test" onClick={() => void runTest()}>
@@ -292,35 +294,6 @@ function DestinationEditForm({
           </Panel>
         )}
 
-        {destination.kind === 'telegram' && (
-          <Panel title="Rotate bot token">
-            <div className="space-y-3">
-              <CredentialField
-                label="Bot token"
-                mode={botTokenMode}
-                onModeChange={(m) => {
-                  setBotTokenMode(m)
-                  if (m === 'existing' && !existingBotTokenRef) setExistingBotTokenRef(destination.credential_ref)
-                }}
-                existingRef={existingBotTokenRef}
-                onExistingRefChange={setExistingBotTokenRef}
-                secretValue={botToken}
-                onSecretValueChange={setBotToken}
-                secretPlaceholder="123456:ABC-DEF..."
-                defaultBackend={defaultBackend}
-                refName={destination.credential_ref}
-                modeLabels={{ new: 'New token', existing: 'Different credential' }}
-              />
-              <Button
-                size="sm"
-                disabled={savingToken || (usingExistingBotToken ? !existingBotTokenRef : !botToken.trim())}
-                onClick={() => void saveBotToken()}
-              >
-                {savingToken ? 'Saving…' : 'Save token'}
-              </Button>
-            </div>
-          </Panel>
-        )}
       </div>
 
       <ConfirmDialog

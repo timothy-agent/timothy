@@ -2,7 +2,7 @@ import { ChevronRight, Plus, Trash2, X } from 'lucide-react'
 import { useId, useState, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
-import type { AdminConnector } from '../../api/types'
+import type { AdminConnector, Channel } from '../../api/types'
 import { cn } from '../../lib/utils'
 import { Field } from '../timothy/field'
 import { IconButton } from '../timothy/icon-button'
@@ -13,12 +13,15 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/colla
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import {
+  channelPattern,
   connectorEventKinds,
   filterPathError,
   githubConnectorOptions,
   maxAllowlist,
   maxFilters,
   maxLabels,
+  maxPattern,
+  patternError,
   repoError,
   type TriggerDraft,
   type WebhookScheme,
@@ -189,6 +192,84 @@ export function ConnectorEventFields({
           />
         )}
       </Field>
+    </div>
+  )
+}
+
+// ChannelFields edits a channel trigger: the channel, the pattern a
+// paired sender's message must match, with a sample to try it on, and
+// an optional chat.
+export function ChannelFields({
+  draft,
+  update,
+  channels,
+}: {
+  draft: TriggerDraft
+  update: Patch
+  channels: Channel[] | null
+}) {
+  const [sample, setSample] = useState('')
+
+  if (channels !== null && channels.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        <Link to="/settings/channels" className="underline underline-offset-2 hover:text-foreground">
+          Add a channel first
+        </Link>
+      </p>
+    )
+  }
+
+  const re = draft.pattern ? channelPattern(draft.pattern) : undefined
+  const tried = sample.trim()
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-5 sm:grid-cols-2">
+        <Field label="Channel">
+          {(p) => (
+            <Select value={draft.channelId} onValueChange={(channelId) => update({ channelId })}>
+              <SelectTrigger {...p} className="w-full">
+                <SelectValue placeholder={channels === null ? 'Loading channels' : 'Pick a channel'} />
+              </SelectTrigger>
+              <SelectContent>
+                {(channels ?? []).map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name} ({c.kind})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </Field>
+        <Field label="Chat ID" optional description="Only messages from this chat. Empty matches every chat.">
+          <Input
+            value={draft.chatId}
+            onChange={(e) => update({ chatId: e.target.value })}
+            placeholder="-1001234567890"
+            className="font-mono"
+          />
+        </Field>
+      </div>
+      <Field
+        label="Pattern"
+        description={`An RE2 regular expression, case-insensitive, at most ${maxPattern} characters. ^/run coverage$ matches only that message.`}
+        error={patternError(draft)}
+      >
+        <Input
+          value={draft.pattern}
+          onChange={(e) => update({ pattern: e.target.value })}
+          placeholder="^/run coverage$"
+          className="font-mono"
+        />
+      </Field>
+      <Field label="Try a message" optional>
+        <Input value={sample} onChange={(e) => setSample(e.target.value)} placeholder="/run coverage" />
+      </Field>
+      {re && tried && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {re.test(tried) ? 'matches' : 'no match'}: <span className="font-mono">{tried}</span>
+        </p>
+      )}
     </div>
   )
 }

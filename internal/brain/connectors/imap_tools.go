@@ -2,14 +2,17 @@ package connectors
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
+	"mime/multipart"
 	"mime/quotedprintable"
 	"net/mail"
+	"net/textproto"
 	"sort"
 	"strconv"
 	"strings"
@@ -687,13 +690,22 @@ func rejectHeaderInjection(fields ...string) error {
 // String); the SMTP envelope's RCPT TO list is built separately from
 // the bare addresses (see mailSend's Execute).
 func buildRFC822Message(from string, to, cc []*mail.Address, subject, body string) ([]byte, error) {
-	return assembleRFC822(from, to, cc, subject, body, fmt.Sprintf("%d.timothy@%s", time.Now().UnixNano(), addressHost(from)), "", nil), nil
+	return assembleRFC822(from, to, cc, subject, body, fmt.Sprintf("%d.timothy@%s", time.Now().UnixNano(), addressHost(from)), "", nil, nil), nil
+}
+
+// MailFile is one attachment of an outgoing mail.
+type MailFile struct {
+	Name string
+	Mime string
+	Data []byte
 }
 
 // assembleRFC822 writes a plain-text message with the given
 // Message-Id and, when set, In-Reply-To and References (ids without
-// angle brackets). Callers reject header injection first.
-func assembleRFC822(from string, to, cc []*mail.Address, subject, body, messageID, inReplyTo string, references []string) []byte {
+// angle brackets). With files the message is multipart/mixed: the text
+// part, then each file base64-encoded. Callers reject header injection
+// first.
+func assembleRFC822(from string, to, cc []*mail.Address, subject, body, messageID, inReplyTo string, references []string, files []MailFile) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", from)
 	fmt.Fprintf(&b, "To: %s\r\n", joinAddresses(to))
@@ -710,10 +722,47 @@ func assembleRFC822(from string, to, cc []*mail.Address, subject, body, messageI
 		fmt.Fprintf(&b, "References: <%s>\r\n", strings.Join(references, "> <"))
 	}
 	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
-	b.WriteString("\r\n")
-	b.WriteString(body)
+	if len(files) == 0 {
+		b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+		b.WriteString("\r\n")
+		b.WriteString(body)
+		return []byte(b.String())
+	}
+	w := multipart.NewWriter(&b)
+	fmt.Fprintf(&b, "Content-Type: multipart/mixed; boundary=%s\r\n\r\n", w.Boundary())
+	// Writes to a strings.Builder never fail.
+	text, _ := w.CreatePart(textproto.MIMEHeader{"Content-Type": {"text/plain; charset=UTF-8"}})
+	_, _ = text.Write([]byte(body))
+	for _, f := range files {
+		ct := "application/octet-stream"
+		if mt, params, err := mime.ParseMediaType(f.Mime); err == nil {
+			ct = cmp.Or(mime.FormatMediaType(mt, params), ct)
+		}
+		part, _ := w.CreatePart(textproto.MIMEHeader{
+			"Content-Type":              {ct},
+			"Content-Transfer-Encoding": {"base64"},
+			"Content-Disposition":       {cmp.Or(mime.FormatMediaType("attachment", map[string]string{"filename": stripControl(f.Name)}), "attachment")},
+		})
+		enc := base64.StdEncoding.EncodeToString(f.Data)
+		for len(enc) > 76 {
+			_, _ = io.WriteString(part, enc[:76]+"\r\n")
+			enc = enc[76:]
+		}
+		_, _ = io.WriteString(part, enc)
+	}
+	_ = w.Close()
 	return []byte(b.String())
+}
+
+// stripControl drops control characters, so a file name stays one
+// header line.
+func stripControl(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // encodeSubject RFC 2047-encodes subject when it carries any non-ASCII
