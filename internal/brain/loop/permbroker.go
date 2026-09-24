@@ -253,6 +253,21 @@ func (b *PermBroker) Pending(ctx context.Context) ([]PendingPermission, error) {
 	return b.store.Pending(ctx)
 }
 
+// Get returns one unresolved persisted prompt; ok is false without a
+// store or when id is unknown or already answered.
+func (b *PermBroker) Get(ctx context.Context, id string) (PendingPermission, bool, error) {
+	pending, err := b.Pending(ctx)
+	if err != nil {
+		return PendingPermission{}, false, err
+	}
+	for _, p := range pending {
+		if p.ID == id {
+			return p, true, nil
+		}
+	}
+	return PendingPermission{}, false, nil
+}
+
 // ExpireStale marks timeout on persisted prompts no live turn waits on
 // and no future ask can adopt (see PermStore.Expire), then deletes rows
 // resolved more than permRetention ago; chat prompts use the loop's own

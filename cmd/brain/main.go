@@ -281,6 +281,17 @@ func main() {
 		go runSecretResealSweep(ctx, app.DB, secrets, app.Log)
 	}
 
+	// Channels (issue #828): Telegram long polling, so nothing inbound
+	// is exposed. Needs the secret store for bot tokens. The store is
+	// built here so the outcomes consumer and create_mission can use it
+	// before the service starts.
+	var channelStore *channels.Store
+	channelHTTP := &http.Client{Transport: netguard.Guard{Allowed: flags.OutboundHosts}.Transport(), Timeout: 45 * time.Second}
+	channelsEnabled := func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyChannels) }
+	if secrets != nil {
+		channelStore = channels.NewStore(app.DB)
+	}
+
 	conns, goog, msft, markItDownURL := buildConnectors(app.DB, secrets, app.Log)
 	// recordLoadedTool is set to the chat service's recorder once that
 	// exists (below); connectors are built long before it, and a
@@ -511,6 +522,11 @@ func main() {
 			consumers = append(consumers, workflowEngine)
 		}
 		consumers = append(consumers, automations.NewDispatcher(notify, app.Log))
+		if channelStore != nil {
+			consumers = append(consumers, channels.NewOutcomes(channelStore, channels.MissionDeps{
+				Get: missionStore.Get, Events: missionStore.Events, WebBaseURL: flags.WebBaseURL,
+			}, secrets.Resolve, channelHTTP, channelsEnabled, app.Log))
+		}
 		drainer = events.NewDrainer(eventStore, consumers,
 			app.Metrics.NewCounterVec("events_processed_total", "Inbox events handled by kind and result.", "kind", "result"), app.Log)
 		drainer.SetAfterCommit(automationStarter.Kick)
@@ -564,6 +580,7 @@ func main() {
 			builtin.ListMissions(missionAdapter),
 			builtin.GetMission(missionAdapter, missionAdapter),
 			builtin.FollowupMission(missionAdapter, missionFollowUpCreatorAdapter{missionDriver}),
+			builtin.CreateMission(chatMissionCreator(agentReg, missionDriver, missionResolve), chatMissionOrigin(channelStore), flags.WebBaseURL),
 		}
 		if conns != nil && secrets != nil {
 			resolvePushToken := func(ctx context.Context, connectorID string) (string, error) {
@@ -946,15 +963,11 @@ func main() {
 	if destinationDeliverer != nil {
 		destinationTest = destinationDeliverer
 	}
-	// Channels (issue #828): Telegram long polling, so nothing inbound
-	// is exposed. Needs the secret store for bot tokens.
-	var channelStore *channels.Store
 	var channelService *channels.Service
-	if secrets != nil {
-		channelStore = channels.NewStore(app.DB)
-		channelService = channels.New(channelStore, svc.Chat, secrets.Resolve,
-			&http.Client{Transport: netguard.Guard{Allowed: flags.OutboundHosts}.Transport(), Timeout: 45 * time.Second}, app.Log)
-		go channelService.Run(ctx, func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyChannels) })
+	if channelStore != nil {
+		channelService = channels.New(channelStore, svc.Chat, channelMissionDeps(broker, missionStore, missionDriver, missionHub, flags.WebBaseURL, app.Log),
+			secrets.Resolve, channelHTTP, app.Log)
+		go channelService.Run(ctx, channelsEnabled)
 	}
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
@@ -1645,6 +1658,73 @@ func (a missionFollowUpCreatorAdapter) CreateFollowUpMission(ctx context.Context
 			References:         req.Brief.References,
 		},
 	})
+}
+
+// chatMissionCreator backs create_mission: the agent resolves by name,
+// then the same ResolveDefaults and Driver.Create every mission creator
+// runs, with origin chat.
+func chatMissionCreator(agentReg *agents.Store, driver *missions.Driver, resolve missions.ResolveDeps) func(ctx context.Context, req builtin.MissionCreateRequest) (string, error) {
+	return func(ctx context.Context, req builtin.MissionCreateRequest) (string, error) {
+		var agentID string
+		if req.Agent != "" {
+			a, ok := agentReg.Resolve(ctx, req.Agent)
+			if !ok {
+				return "", fmt.Errorf("unknown agent %q", req.Agent)
+			}
+			agentID = a.ID
+		}
+		m, err := missions.ResolveDefaults(ctx, missions.CreateRequest{
+			Goal: req.Goal, Name: req.Name, Kind: req.Kind, AgentID: agentID, Light: req.Light,
+			OriginKind: missions.OriginChat, ChannelConversationID: req.ConversationID,
+		}, resolve)
+		if err != nil {
+			return "", err
+		}
+		return driver.Create(ctx, m)
+	}
+}
+
+// chatMissionOrigin looks up a session's channel conversation; nil
+// without channels.
+func chatMissionOrigin(store *channels.Store) func(ctx context.Context, sessionID string) (string, error) {
+	if store == nil {
+		return nil
+	}
+	return store.ConversationIDForSession
+}
+
+// channelMissionDeps wires permission buttons (always) and mission
+// parks (when missions run) for the channels service. A button answer
+// resolves the broker like POST /v1/permissions/{id}, then records it
+// on the parked mission.
+func channelMissionDeps(broker *loop.PermBroker, store *missions.Store, driver *missions.Driver, hub *missions.Hub, webBaseURL func(context.Context) string, log *slog.Logger) channels.MissionDeps {
+	deps := channels.MissionDeps{
+		PendingPermission: broker.Get,
+		ResolvePermission: func(ctx context.Context, id, decision string) bool {
+			if !broker.Resolve(ctx, id, decision) {
+				return false
+			}
+			if store != nil {
+				if _, _, err := store.ResolvePendingPermission(ctx, id, decision); err != nil {
+					log.Warn("channels: record mission answer failed", "id", id, "error", err)
+				}
+			}
+			return true
+		},
+		WebBaseURL: webBaseURL,
+	}
+	if store != nil && driver != nil {
+		deps.Get = store.Get
+		deps.Events = store.Events
+		deps.ListParked = store.ListParkedForChannels
+		deps.Signal = driver.Signal
+		deps.DecidePlan = driver.DecidePlan
+		deps.AnswerAskUser = driver.AnswerAskUser
+	}
+	if hub != nil {
+		deps.Subscribe = hub.Subscribe
+	}
+	return deps
 }
 
 // credResolveTimeout bounds one credential_ref resolution the delegated

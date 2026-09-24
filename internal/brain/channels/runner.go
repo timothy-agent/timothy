@@ -164,6 +164,9 @@ func (r *telegramRunner) handle(ctx context.Context, u tgUpdate) error {
 	if err != nil || !fresh {
 		return err
 	}
+	if u.CallbackQuery != nil {
+		return r.handleCallback(ctx, u.CallbackQuery)
+	}
 	in, ok := parseUpdate(u, r.me)
 	if !ok || !in.Addressed {
 		return nil
@@ -219,6 +222,16 @@ func (r *telegramRunner) handle(ctx context.Context, u tgUpdate) error {
 	conv, found, err := r.svc.store.ConversationFor(ctx, r.ch.ID, chatID, threadID)
 	if err != nil {
 		return err
+	}
+	if found && in.ReplyToID != 0 {
+		missionID, kind, asked, err := r.svc.store.TakeAsk(ctx, conv.ID, in.ReplyToID)
+		if err != nil {
+			return err
+		}
+		if asked {
+			r.answerAsk(ctx, in, missionID, kind)
+			return nil
+		}
 	}
 	if !found {
 		conv, err = r.svc.store.CreateConversation(ctx, Conversation{
@@ -304,6 +317,8 @@ func (r *telegramRunner) drain(ctx context.Context, j turnJob, msgID int64, even
 	var text strings.Builder
 	var throttle editThrottle
 	waiting := false
+	// buttons maps a permission id to its buttons message.
+	buttons := map[string]int64{}
 	view := func() string {
 		if waiting {
 			return text.String() + msgWaitingNote
@@ -331,8 +346,26 @@ func (r *telegramRunner) drain(ctx context.Context, j turnJob, msgID int64, even
 				if v, ok := throttle.due(view()); ok {
 					r.edit(ctx, j.chatID, msgID, v)
 				}
+				if p := ev.Permission; p != nil && p.ID != "" && r.svc.missions.ResolvePermission != nil {
+					id, err := r.bot.sendButtons(ctx, j.chatID, j.threadID, permText("Timothy", p.Tool, p.Rationale), permKeyboard(p.ID))
+					if err != nil {
+						if ctx.Err() == nil {
+							r.svc.log.Warn("channels: permission buttons failed", "channel_id", r.ch.ID, "conversation_id", j.conv.ID, "error", err)
+						}
+					} else {
+						buttons[p.ID] = id
+					}
+				}
 			case stream.EventPermissionResolved:
 				waiting = false
+				if res := ev.Resolved; res != nil {
+					if id, ok := buttons[res.ID]; ok {
+						delete(buttons, res.ID)
+						if err := r.bot.closeButtons(ctx, j.chatID, id, decisionText(res.Decision)); err != nil && ctx.Err() == nil {
+							r.svc.log.Warn("channels: close buttons failed", "channel_id", r.ch.ID, "error", err)
+						}
+					}
+				}
 			case stream.EventDone:
 				r.finish(ctx, j, msgID, text.String())
 				return text.String()

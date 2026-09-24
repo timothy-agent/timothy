@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
+	"github.com/SumonMSelim/timothy/internal/brain/loop"
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
@@ -20,16 +22,36 @@ const (
 	editEvery = 2 * time.Second
 	// retryEvery re-runs a reconcile that could not list channels.
 	retryEvery = 5 * time.Second
+	// parkEvery re-lists parked missions; hub signals are droppable
+	// hints.
+	parkEvery = time.Minute
 )
 
 // ChatFunc runs one chat turn; production passes chat.Service.Chat.
 type ChatFunc func(ctx context.Context, req chat.Request) (string, <-chan stream.StreamEvent, error)
+
+// MissionDeps are the mission and permission calls buttons, parks and
+// outcomes use. Every field is nil-safe: an unset one disables that
+// feature.
+type MissionDeps struct {
+	Get               func(ctx context.Context, id string) (missions.Mission, error)
+	Events            func(ctx context.Context, id string) ([]missions.Event, error)
+	ListParked        func(ctx context.Context) ([]missions.Mission, error)
+	Signal            func(ctx context.Context, id string, input missions.Input) error
+	DecidePlan        func(ctx context.Context, id string, input missions.Input, feedback string) error
+	AnswerAskUser     func(ctx context.Context, id, answer string) error
+	ResolvePermission func(ctx context.Context, id, decision string) bool
+	PendingPermission func(ctx context.Context, id string) (loop.PendingPermission, bool, error)
+	Subscribe         func(ctx context.Context) <-chan missions.Signal
+	WebBaseURL        func(ctx context.Context) string
+}
 
 // Service runs one adapter per enabled channel and restarts them when
 // channel rows change.
 type Service struct {
 	store         *Store
 	chat          ChatFunc
+	missions      MissionDeps
 	resolveSecret func(ctx context.Context, ref string) (string, error)
 	http          *http.Client
 	log           *slog.Logger
@@ -39,8 +61,17 @@ type Service struct {
 	APIBase    string
 	editEvery  time.Duration
 	retryEvery time.Duration
+	parkEvery  time.Duration
 
 	reload chan struct{}
+	// enabled is the channels switch Run was given (nil runs always).
+	enabled func(context.Context) bool
+
+	// parked maps a mission id to the park key last pushed; skipLogged
+	// marks missions whose push was skipped (disabled channel). Watcher
+	// goroutine only.
+	parked     map[string]string
+	skipLogged map[string]bool
 
 	mu      sync.Mutex
 	runners map[string]*runnerHandle
@@ -54,11 +85,12 @@ type runnerHandle struct {
 }
 
 // New wires the service and subscribes it to store changes.
-func New(store *Store, chatFn ChatFunc, resolveSecret func(ctx context.Context, ref string) (string, error), client *http.Client, log *slog.Logger) *Service {
+func New(store *Store, chatFn ChatFunc, deps MissionDeps, resolveSecret func(ctx context.Context, ref string) (string, error), client *http.Client, log *slog.Logger) *Service {
 	s := &Service{
-		store: store, chat: chatFn, resolveSecret: resolveSecret, http: client, log: log,
-		now: time.Now, editEvery: editEvery, retryEvery: retryEvery,
+		store: store, chat: chatFn, missions: deps, resolveSecret: resolveSecret, http: client, log: log,
+		now: time.Now, editEvery: editEvery, retryEvery: retryEvery, parkEvery: parkEvery,
 		reload: make(chan struct{}, 1), runners: map[string]*runnerHandle{}, running: -1,
+		parked: map[string]string{}, skipLogged: map[string]bool{},
 	}
 	store.SetOnChange(func(context.Context) { s.kick() })
 	return s
@@ -99,6 +131,15 @@ func (s *Service) Test(ctx context.Context, id string) (string, error) {
 // Run reconciles runners until ctx is done. enabled is the channels
 // switch (nil runs always).
 func (s *Service) Run(ctx context.Context, enabled func(context.Context) bool) {
+	s.enabled = enabled
+	if s.missions.Get != nil && (s.missions.Subscribe != nil || s.missions.ListParked != nil) {
+		done := make(chan struct{})
+		defer func() { <-done }()
+		go func() {
+			defer close(done)
+			s.watchParks(ctx)
+		}()
+	}
 	reconcile := time.NewTicker(reconcileEvery)
 	defer reconcile.Stop()
 	sweep := time.NewTicker(sweepEvery)

@@ -19,6 +19,8 @@ const fakeToken = "123456:SECRET-TOKEN"
 type botCall struct {
 	Method string
 	Body   map[string]any
+	// ResultID is the message id a sendMessage returned.
+	ResultID int64
 }
 
 // fakeBot is an httptest Bot API: getUpdates serves scripted batches
@@ -37,6 +39,8 @@ type fakeBot struct {
 	pollsSinceServe int
 	// editErr, when set, fails editMessageText with this description.
 	editErr string
+	// sendStatus, when set, fails sendMessage with this HTTP status.
+	sendStatus int
 }
 
 func newFakeBot(t *testing.T) *fakeBot {
@@ -59,6 +63,7 @@ func (f *fakeBot) serve(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	f.mu.Lock()
 	f.calls = append(f.calls, botCall{Method: method, Body: body})
+	idx := len(f.calls) - 1
 	f.mu.Unlock()
 	switch method {
 	case "getMe":
@@ -86,10 +91,21 @@ func (f *fakeBot) serve(w http.ResponseWriter, r *http.Request) {
 		}
 	case "sendMessage":
 		f.mu.Lock()
+		st := f.sendStatus
 		f.nextID++
 		id := f.nextID
+		if st == 0 {
+			f.calls[idx].ResultID = id
+		}
 		f.mu.Unlock()
+		if st != 0 {
+			w.WriteHeader(st)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error_code": st, "description": "rejected"})
+			return
+		}
 		writeOK(w, map[string]any{"message_id": id})
+	case "answerCallbackQuery":
+		writeOK(w, true)
 	case "editMessageText":
 		f.mu.Lock()
 		e := f.editErr

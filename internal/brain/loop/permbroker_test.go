@@ -297,6 +297,27 @@ func TestPermBrokerForgetMarksTimeoutOnlyWhenPending(t *testing.T) {
 	}
 }
 
+func TestPermBrokerGet(t *testing.T) {
+	if _, ok, err := NewPermBroker().Get(t.Context(), "x"); ok || err != nil {
+		t.Fatalf("Get without a store = %v %v, want not found", ok, err)
+	}
+	store := newFakePermStore()
+	b := NewPermBroker()
+	b.SetStore(store, nil, nil)
+	id, _, _ := b.Create(t.Context(), chatPrompt())
+	p, ok, err := b.Get(t.Context(), id)
+	if err != nil || !ok || p.ID != id || p.SessionID != chatPrompt().SessionID {
+		t.Fatalf("Get pending = %+v %v %v", p, ok, err)
+	}
+	b.Resolve(t.Context(), id, DecideOnce)
+	if _, ok, _ := b.Get(t.Context(), id); ok {
+		t.Fatal("Get returned an answered prompt")
+	}
+	if _, ok, _ := b.Get(t.Context(), "unknown"); ok {
+		t.Fatal("Get returned an unknown id")
+	}
+}
+
 // TestPermBrokerResolveAfterRestartCarriesOver covers D-118: a new
 // broker over the same store (the old one discarded, as on restart)
 // resolves the old id, records a chat session event, and the next ask

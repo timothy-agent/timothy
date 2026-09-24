@@ -37,6 +37,11 @@ export function MissionCard({
               automation
             </Badge>
           )}
+          {mission.channel_conversation_id && (
+            <Badge variant="secondary" size="sm">
+              Telegram
+            </Badge>
+          )}
           {mission.phase === 'plan' && mission.pause_reason === 'approval' && (
             <Badge variant="warning" size="sm">
               needs approval

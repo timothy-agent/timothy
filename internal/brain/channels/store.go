@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -522,6 +524,136 @@ func (s *Store) ConversationFor(ctx context.Context, channelID, chatID, threadID
 		return Conversation{}, false, fmt.Errorf("channels conversation: %w", err)
 	}
 	return c, true, nil
+}
+
+// ConversationByID returns one conversation.
+func (s *Store) ConversationByID(ctx context.Context, id string) (Conversation, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return Conversation{}, fmt.Errorf("channels conversation: %w", err)
+	}
+	c, err := scanConversation(db.QueryRow(ctx, `SELECT `+conversationColumns+` FROM channel_conversations WHERE id = $1`, id))
+	if isNotFound(err) {
+		return Conversation{}, fmt.Errorf("conversation %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return Conversation{}, fmt.Errorf("channels conversation: %w", err)
+	}
+	return c, nil
+}
+
+// ConversationIDForSession returns the channel conversation a session
+// belongs to, "" for a session outside any channel.
+func (s *Store) ConversationIDForSession(ctx context.Context, sessionID string) (string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", fmt.Errorf("channels conversation for session: %w", err)
+	}
+	var id string
+	err = db.QueryRow(ctx, `SELECT COALESCE(channel_conversation_id::text, '') FROM sessions WHERE id = $1`, sessionID).Scan(&id)
+	if isNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("channels conversation for session: %w", err)
+	}
+	return id, nil
+}
+
+// Ask kinds a reply-to answer resolves.
+const (
+	AskUser = "ask_user"
+	AskPlan = "plan"
+)
+
+// pendingAsk is one message a reply answers.
+type pendingAsk struct {
+	MissionID string `json:"mission_id"`
+	Kind      string `json:"kind"`
+}
+
+// convState is the typed channel_conversations.state column.
+type convState struct {
+	Asks map[string]pendingAsk `json:"asks,omitempty"`
+}
+
+// remember records an ask, dropping the oldest (lowest message id)
+// past maxAsks.
+func (st *convState) remember(messageID int64, a pendingAsk) {
+	if st.Asks == nil {
+		st.Asks = map[string]pendingAsk{}
+	}
+	st.Asks[strconv.FormatInt(messageID, 10)] = a
+	for len(st.Asks) > maxAsks {
+		ids := make([]int64, 0, len(st.Asks))
+		for k := range st.Asks {
+			n, _ := strconv.ParseInt(k, 10, 64)
+			ids = append(ids, n)
+		}
+		delete(st.Asks, strconv.FormatInt(slices.Min(ids), 10))
+	}
+}
+
+// take removes and returns the ask of messageID.
+func (st *convState) take(messageID int64) (pendingAsk, bool) {
+	k := strconv.FormatInt(messageID, 10)
+	a, ok := st.Asks[k]
+	if ok {
+		delete(st.Asks, k)
+	}
+	return a, ok
+}
+
+// updateConvState applies fn to a conversation's state under a row
+// lock.
+func (s *Store) updateConvState(ctx context.Context, convID string, fn func(*convState)) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return err
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	var raw []byte
+	if err := tx.QueryRow(ctx, `SELECT state FROM channel_conversations WHERE id = $1 FOR UPDATE`, convID).Scan(&raw); err != nil {
+		if isNotFound(err) {
+			return fmt.Errorf("conversation %s: %w", convID, ErrNotFound)
+		}
+		return err
+	}
+	var st convState
+	_ = json.Unmarshal(raw, &st)
+	fn(&st)
+	out, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE channel_conversations SET state = $2 WHERE id = $1`, convID, out); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// RememberAsk records that a reply to messageID answers a mission's
+// ask_user question or plan gate; at most maxAsks per conversation.
+func (s *Store) RememberAsk(ctx context.Context, convID string, messageID int64, missionID, kind string) error {
+	if err := s.updateConvState(ctx, convID, func(st *convState) {
+		st.remember(messageID, pendingAsk{MissionID: missionID, Kind: kind})
+	}); err != nil {
+		return fmt.Errorf("channels remember ask: %w", err)
+	}
+	return nil
+}
+
+// TakeAsk removes and returns the ask a reply to messageID answers.
+func (s *Store) TakeAsk(ctx context.Context, convID string, messageID int64) (missionID, kind string, ok bool, err error) {
+	var a pendingAsk
+	if err := s.updateConvState(ctx, convID, func(st *convState) { a, ok = st.take(messageID) }); err != nil {
+		return "", "", false, fmt.Errorf("channels take ask: %w", err)
+	}
+	return a.MissionID, a.Kind, ok, nil
 }
 
 // CreateConversation creates the conversation and its session

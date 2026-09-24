@@ -17,6 +17,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
+	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -29,6 +30,7 @@ type channelHarness struct {
 	t     *testing.T
 	mux   *http.ServeMux
 	store *channels.Store
+	pool  *pgpool.Pool
 	tag   string
 }
 
@@ -80,12 +82,12 @@ func newChannelHarness(t *testing.T) *channelHarness {
 		return "", nil, nil
 	}
 	store := channels.NewStore(pool)
-	svc := channels.New(store, noChat, resolve, fake.Client(), log)
+	svc := channels.New(store, noChat, channels.MissionDeps{}, resolve, fake.Client(), log)
 	svc.APIBase = fake.URL
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
 	a.registerChannels(m.Handle, store, svc)
-	return &channelHarness{t: t, mux: m, store: store, tag: tag}
+	return &channelHarness{t: t, mux: m, store: store, pool: pool, tag: tag}
 }
 
 func (h *channelHarness) do(method, path, body string) *httptest.ResponseRecorder {
@@ -250,5 +252,52 @@ func TestChannelsAPITest(t *testing.T) {
 	}
 	if w := h.do("POST", "/v1/channels/00000000-0000-0000-0000-000000000000/test", ""); w.Code != 404 {
 		t.Fatalf("test unknown = %d", w.Code)
+	}
+}
+
+// TestPermissionAPIAndButtonsShareTheBroker is the #829 regression:
+// POST /v1/permissions/{id} still resolves a channel chat prompt, and
+// a prompt the button path (broker.Resolve) answered is 404 on the API.
+func TestPermissionAPIAndButtonsShareTheBroker(t *testing.T) {
+	h := newChannelHarness(t)
+	ctx := t.Context()
+	id := h.create("perm", "GOOD_BOT")
+	conv, err := h.store.CreateConversation(ctx, channels.Conversation{ChannelID: id, ExternalChatID: "77", ExternalUserID: "77"}, "Telegram: Ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := loop.NewPermBroker()
+	broker.SetStore(loop.NewPGPermStore(h.pool), nil, nil)
+	a, _, _ := testAPI(t, "tok", nil)
+	a.perms = broker
+	prompt := func(cmd string) (string, <-chan string) {
+		pid, ch, err := broker.Create(ctx, loop.PendingPermission{SessionID: conv.SessionID, Tool: "shell",
+			Args: json.RawMessage(`{"command":"` + cmd + `"}`), OriginKind: loop.PermOriginChat})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pid, ch
+	}
+
+	web, webCh := prompt("ls")
+	if w := doMux(a, http.MethodPost, "/v1/permissions/"+web, `{"decision":"once"}`); w.Code != http.StatusOK {
+		t.Fatalf("web resolve = %d %s", w.Code, w.Body)
+	}
+	if d := <-webCh; d != loop.DecideOnce {
+		t.Fatalf("web decision = %q", d)
+	}
+	if _, pending, _ := broker.Get(ctx, web); pending {
+		t.Fatal("a web-answered prompt still looks pending to the buttons")
+	}
+
+	button, buttonCh := prompt("pwd")
+	if !broker.Resolve(ctx, button, loop.DecideDeny) {
+		t.Fatal("button resolve failed")
+	}
+	if d := <-buttonCh; d != loop.DecideDeny {
+		t.Fatalf("button decision = %q", d)
+	}
+	if w := doMux(a, http.MethodPost, "/v1/permissions/"+button, `{"decision":"once"}`); w.Code != http.StatusNotFound {
+		t.Fatalf("web answer after the button = %d, want 404", w.Code)
 	}
 }

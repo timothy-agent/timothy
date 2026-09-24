@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
 // fakeMissionStore is an in-memory missionLister + missionEventReader
@@ -599,5 +602,86 @@ func TestFollowupMissionResolvesByQuery(t *testing.T) {
 	}
 	if creator.calls != 1 {
 		t.Fatalf("creator calls = %d, want 1", creator.calls)
+	}
+}
+
+func TestCreateMissionExecute(t *testing.T) {
+	refs := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("https://example.com/%d", i)
+		}
+		return out
+	}
+	tests := []struct {
+		name      string
+		args      map[string]any
+		sessionID string
+		createErr error
+		wantErr   string
+		wantReq   *MissionCreateRequest
+		wantOut   string
+	}{
+		{name: "missing goal", args: map[string]any{"goal": "  "}, wantErr: "goal is required"},
+		{name: "unknown agent", args: map[string]any{"goal": "g", "agent": "ghost"}, createErr: errors.New(`unknown agent "ghost"`), wantErr: `unknown agent "ghost"`},
+		{name: "references cap", args: map[string]any{"goal": "g", "references": refs(11)}, wantErr: "at most 10 references"},
+		{
+			name: "session without conversation", args: map[string]any{"goal": "write a brief", "kind": "general", "light": true, "references": []string{"https://a.example", " ", "note"}},
+			sessionID: "web-session",
+			wantReq:   &MissionCreateRequest{Goal: "write a brief\n\nReferences:\n- https://a.example\n- note", Kind: "general", Light: true, SessionID: "web-session"},
+			wantOut:   "created mission m-1: write a brief\nhttps://timothy.example/missions/m-1",
+		},
+		{
+			name: "channel session", args: map[string]any{"goal": "g", "name": "N", "agent": "research"}, sessionID: "tg-session",
+			wantReq: &MissionCreateRequest{Goal: "g", Name: "N", Agent: "research", SessionID: "tg-session", ConversationID: "conv-1"},
+			wantOut: "created mission m-1: g\nhttps://timothy.example/missions/m-1",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got *MissionCreateRequest
+			create := func(_ context.Context, req MissionCreateRequest) (string, error) {
+				got = &req
+				if tt.createErr != nil {
+					return "", tt.createErr
+				}
+				return "m-1", nil
+			}
+			origin := func(_ context.Context, sessionID string) (string, error) {
+				if sessionID == "tg-session" {
+					return "conv-1", nil
+				}
+				return "", nil
+			}
+			tool := CreateMission(create, origin, func(context.Context) string { return "https://timothy.example/" })
+			raw, _ := json.Marshal(tt.args)
+			out, err := tool.Execute(tools.WithSessionID(context.Background(), tt.sessionID), raw)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if got == nil || *got != *tt.wantReq {
+				t.Fatalf("create request = %+v, want %+v", got, tt.wantReq)
+			}
+			if out != tt.wantOut {
+				t.Fatalf("out = %q, want %q", out, tt.wantOut)
+			}
+		})
+	}
+}
+
+func TestCreateMissionIsGatedAndTrusted(t *testing.T) {
+	tool := CreateMission(func(context.Context, MissionCreateRequest) (string, error) { return "m", nil }, nil, nil)
+	if tool.Name != "create_mission" || !tool.Trusted {
+		t.Fatalf("tool = %s trusted=%v", tool.Name, tool.Trusted)
+	}
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{"goal":"g"}`))
+	if err != nil || out != "created mission m: g" {
+		t.Fatalf("no session, no web base: %q %v", out, err)
 	}
 }

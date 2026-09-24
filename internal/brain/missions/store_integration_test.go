@@ -90,6 +90,44 @@ func sweepMissionsSQL(filter string) string {
 	DELETE FROM sessions WHERE id IN (SELECT session_id FROM ids)`
 }
 
+// TestChannelConversationAndParkedList covers issue #829: the
+// conversation id round-trips, and ListParkedForChannels returns live
+// channel missions waiting on the operator only.
+func TestChannelConversationAndParkedList(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	conv := "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+	parked, err := s.Create(ctx, Mission{Goal: marker + "channel-parked", Kind: "general", Route: "default", ChannelConversationID: conv})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	idle, _ := s.Create(ctx, Mission{Goal: marker + "channel-idle", Kind: "general", Route: "default", ChannelConversationID: conv})
+	plain, _ := s.Create(ctx, Mission{Goal: marker + "channel-none", Kind: "general", Route: "default"})
+	m, err := s.Get(ctx, parked)
+	if err != nil || m.ChannelConversationID != conv {
+		t.Fatalf("Get conversation = %q %v", m.ChannelConversationID, err)
+	}
+	if m, _ := s.Get(ctx, plain); m.ChannelConversationID != "" {
+		t.Fatalf("plain mission conversation = %q", m.ChannelConversationID)
+	}
+	for _, id := range []string{parked, plain} {
+		if err := s.SetPendingInput(ctx, id, PendingInput{Question: "which?", Kind: "open", ProposedDefault: "a"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := s.ListParkedForChannels(ctx)
+	if err != nil {
+		t.Fatalf("ListParkedForChannels: %v", err)
+	}
+	found := map[string]bool{}
+	for _, m := range list {
+		found[m.ID] = true
+	}
+	if !found[parked] || found[idle] || found[plain] {
+		t.Fatalf("parked list: parked=%v idle=%v plain=%v, want only the parked channel mission", found[parked], found[idle], found[plain])
+	}
+}
+
 func TestMissionCRUD(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()

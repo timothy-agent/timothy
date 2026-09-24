@@ -33,7 +33,7 @@ func (s *syncBuffer) String() string {
 func TestRunRetriesWhenChannelsCannotBeListed(t *testing.T) {
 	var logs syncBuffer
 	store := NewStore(pgpool.New(context.Background(), "", nil))
-	svc := New(store, nil, fakeResolve, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	svc := New(store, nil, MissionDeps{}, fakeResolve, nil, slog.New(slog.NewTextHandler(&logs, nil)))
 	svc.retryEvery = 20 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -58,7 +58,7 @@ func TestRunRetriesWhenChannelsCannotBeListed(t *testing.T) {
 func TestReconcileSkipsTheStoreWhenSwitchedOff(t *testing.T) {
 	var logs syncBuffer
 	store := NewStore(pgpool.New(context.Background(), "", nil))
-	svc := New(store, nil, fakeResolve, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	svc := New(store, nil, MissionDeps{}, fakeResolve, nil, slog.New(slog.NewTextHandler(&logs, nil)))
 	off := func(context.Context) bool { return false }
 	if !svc.reconcile(context.Background(), off) {
 		t.Fatal("reconcile with the switch off touched the store")
@@ -71,7 +71,7 @@ func TestReconcileSkipsTheStoreWhenSwitchedOff(t *testing.T) {
 
 func TestStoreChangeKicksReload(t *testing.T) {
 	store := NewStore(pgpool.New(context.Background(), "", nil))
-	svc := New(store, nil, fakeResolve, nil, discardLog())
+	svc := New(store, nil, MissionDeps{}, fakeResolve, nil, discardLog())
 	store.onChange(context.Background())
 	store.onChange(context.Background())
 	select {

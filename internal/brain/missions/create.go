@@ -63,6 +63,10 @@ type CreateRequest struct {
 	// ParentMissionID is set. Unattended nil derives from the origin.
 	OriginKind string
 	Unattended *bool
+
+	// ChannelConversationID is the channel conversation of the chat
+	// session that created the mission, if any.
+	ChannelConversationID string
 }
 
 // ResolveDeps are the lookups ResolveDefaults needs. Every field is
@@ -224,6 +228,7 @@ func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (
 		WorkflowStep:             req.WorkflowStep,
 		OriginKind:               origin,
 		Unattended:               unattended,
+		ChannelConversationID:    req.ChannelConversationID,
 	}
 	// Route gate (D-100, issue #536): every phase axis this flow runs
 	// must have a usable chain entry, else the first turn parks on the

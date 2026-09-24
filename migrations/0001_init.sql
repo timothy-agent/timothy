@@ -491,7 +491,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS agents_name_ci ON agents (lower(btrim(name)));
 INSERT INTO agents (name, description, prompt_overlay, route, skills, tools, is_default)
 SELECT 'general', 'Everyday questions and tasks on a strong all-round chain.', '', 'default',
     '["research-brief", "deep-research", "coding", "email-research"]',
-    '["get_current_time", "convert_time", "calculate", "convert_currency", "search_web", "fetch_url", "remember", "list_missions", "get_mission", "push_mission_branch", "followup_mission", "search_mail", "read_mail", "read_mail_attachment", "send_mail", "list_calendar_events", "create_calendar_event", "share_file", "generate_pdf"]',
+    '["get_current_time", "convert_time", "calculate", "convert_currency", "search_web", "fetch_url", "remember", "list_missions", "get_mission", "push_mission_branch", "followup_mission", "create_mission", "search_mail", "read_mail", "read_mail_attachment", "send_mail", "list_calendar_events", "create_calendar_event", "share_file", "generate_pdf"]',
     NOT EXISTS (SELECT 1 FROM agents WHERE is_default)
 WHERE NOT EXISTS (SELECT 1 FROM agents WHERE name = 'general');
 
@@ -684,6 +684,8 @@ CREATE TABLE IF NOT EXISTS channel_conversations (
     session_id         uuid NOT NULL REFERENCES sessions(id),
     agent_id           uuid REFERENCES agents(id) ON DELETE SET NULL,
     last_message_at    timestamptz,
+    -- Pending reply-to asks: {"asks": {"<message id>": {"mission_id", "kind"}}}.
+    state              jsonb NOT NULL DEFAULT '{}',
     created_at         timestamptz NOT NULL DEFAULT now(),
     UNIQUE (channel_id, external_chat_id, external_thread_id)
 );
@@ -792,6 +794,9 @@ CREATE TABLE IF NOT EXISTS missions (
     pending_permission    jsonb,
     -- Automation run that started this mission, if any.
     automation_run_id     uuid REFERENCES automation_runs(id) ON DELETE SET NULL,
+    -- Channel conversation a chat-created mission reports back to (no
+    -- FK, same as sessions.channel_conversation_id).
+    channel_conversation_id uuid,
     -- Tools the mission may be offered, from its automation trigger's
     -- tool_allowlist intersected with the agent's Tools. NULL means
     -- unrestricted (issue #857).

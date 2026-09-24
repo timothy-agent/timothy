@@ -94,7 +94,8 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	discover_notes, replan_used, automation_run_id, session_id, harness, review_harness, environment,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow,
-	review_findings, rework_rounds, has_plan, executor_session_policy, harness_retries, origin_kind, unattended, tool_allowlist`
+	review_findings, rework_rounds, has_plan, executor_session_policy, harness_retries, origin_kind, unattended, tool_allowlist,
+	COALESCE(channel_conversation_id::text, '')`
 
 // pendingPermissionRow is pending_permission's jsonb shape in the
 // missions table: bundles the five columns the API's flat
@@ -181,7 +182,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
 		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds, &m.HasPlan, &m.ExecutorSessionPolicy, &m.HarnessRetries,
-		&m.OriginKind, &m.Unattended, &m.ToolAllowlist, &failureReason); err != nil {
+		&m.OriginKind, &m.Unattended, &m.ToolAllowlist, &m.ChannelConversationID, &failureReason); err != nil {
 		return Mission{}, err
 	}
 	m.Flow = parseFlow(flow)
@@ -269,7 +270,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
 		&pendingInputRaw, &m.AsksUsed, &flow, &reviewFindingsRaw, &m.ReworkRounds, &m.HasPlan, &m.ExecutorSessionPolicy, &m.HarnessRetries,
-		&m.OriginKind, &m.Unattended, &m.ToolAllowlist); err != nil {
+		&m.OriginKind, &m.Unattended, &m.ToolAllowlist, &m.ChannelConversationID); err != nil {
 		return Mission{}, err
 	}
 	m.Flow = parseFlow(flow)
@@ -379,9 +380,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 		origin = OriginAPI
 	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness, executor_session_policy, automation_run_id, origin_kind, unattended, tool_allowlist)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30, $31, $32, NULLIF($33, '')::uuid, $34, $35, $36) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, s.maxIterationsFor(ctx, m.MaxIterations), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy, m.AutomationRunID, origin, m.Unattended, toolAllowlist,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness, executor_session_policy, automation_run_id, origin_kind, unattended, tool_allowlist, channel_conversation_id)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30, $31, $32, NULLIF($33, '')::uuid, $34, $35, $36, NULLIF($37, '')::uuid) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, s.maxIterationsFor(ctx, m.MaxIterations), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy, m.AutomationRunID, origin, m.Unattended, toolAllowlist, m.ChannelConversationID,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -513,6 +514,33 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) 
 		m, err := scanMissionWithFailureReason(rows)
 		if err != nil {
 			return nil, fmt.Errorf("missions list: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// ListParkedForChannels returns live missions with a channel
+// conversation that wait on the operator: a pending permission or
+// ask_user, or status waiting_for_input or paused (issue #829).
+func (s *Store) ListParkedForChannels(ctx context.Context) ([]Mission, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("missions list parked: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT `+missionColumns+` FROM missions
+		WHERE channel_conversation_id IS NOT NULL AND phase NOT IN ('done', 'failed')
+		  AND (pending_permission IS NOT NULL OR pending_input IS NOT NULL OR status IN ('waiting_for_input', 'paused'))
+		ORDER BY updated_at`)
+	if err != nil {
+		return nil, fmt.Errorf("missions list parked: %w", err)
+	}
+	defer rows.Close()
+	out := []Mission{}
+	for rows.Next() {
+		m, err := scanMission(rows)
+		if err != nil {
+			return nil, fmt.Errorf("missions list parked: %w", err)
 		}
 		out = append(out, m)
 	}

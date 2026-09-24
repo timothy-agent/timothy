@@ -241,6 +241,19 @@ func TestResolveDefaultsOrigin(t *testing.T) {
 	}
 }
 
+// TestResolveDefaultsChannelConversation: a chat create carries its
+// channel conversation onto the mission; other creates leave it empty.
+func TestResolveDefaultsChannelConversation(t *testing.T) {
+	t.Parallel()
+	m, err := ResolveDefaults(context.Background(), CreateRequest{Kind: KindGeneral, OriginKind: OriginChat, ChannelConversationID: "c1"}, ResolveDeps{})
+	if err != nil || m.ChannelConversationID != "c1" || m.OriginKind != OriginChat || m.Unattended {
+		t.Fatalf("chat create = %+v %v", m, err)
+	}
+	if m, _ := ResolveDefaults(context.Background(), CreateRequest{Kind: KindGeneral}, ResolveDeps{}); m.ChannelConversationID != "" {
+		t.Fatalf("api create conversation = %q, want empty", m.ChannelConversationID)
+	}
+}
+
 // TestResolveDefaultsOriginValidates: a resolved mission passes
 // ValidateCreate for every known origin and fails for an unknown one.
 func TestResolveDefaultsOriginValidates(t *testing.T) {

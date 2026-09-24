@@ -29,6 +29,16 @@ const (
 	// is the tail shown while a reply streams.
 	messageLimit = 4096
 	streamWindow = 4000
+	// maxAsks caps remembered reply-to asks per conversation.
+	maxAsks = 20
+	// maxAskButtons caps the option buttons of one ask.
+	maxAskButtons = 8
+	// digestCap caps an outcome digest or plan summary in a message.
+	digestCap = 1500
+	// rationaleCap caps a permission rationale in a buttons message.
+	rationaleCap = 300
+	// callbackDataLimit is Telegram's callback_data cap in bytes.
+	callbackDataLimit = 64
 )
 
 // limiter is a per-key token bucket: senderRate tokens refilled

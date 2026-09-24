@@ -121,7 +121,7 @@ func (b *botAPI) getUpdates(ctx context.Context, offset int64) ([]tgUpdate, erro
 	err := b.call(ctx, "getUpdates", map[string]any{
 		"offset":          offset,
 		"timeout":         pollTimeout,
-		"allowed_updates": []string{"message"},
+		"allowed_updates": []string{"message", "callback_query"},
 	}, &updates, (pollTimeout+15)*time.Second)
 	return updates, err
 }
@@ -130,17 +130,55 @@ func (b *botAPI) getUpdates(ctx context.Context, offset int64) ([]tgUpdate, erro
 // break MarkdownV2) and returns the new message id.
 func (b *botAPI) sendMessage(ctx context.Context, chatID int64, threadID int64, text string, silent bool) (int64, error) {
 	body := map[string]any{"chat_id": chatID, "text": text}
-	if threadID != 0 {
-		body["message_thread_id"] = threadID
-	}
 	if silent {
 		body["disable_notification"] = true
+	}
+	return b.send(ctx, threadID, body)
+}
+
+// tgButton is one inline keyboard button.
+type tgButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
+// sendButtons sends plain text with an inline keyboard.
+func (b *botAPI) sendButtons(ctx context.Context, chatID, threadID int64, text string, keyboard [][]tgButton) (int64, error) {
+	body := map[string]any{"chat_id": chatID, "text": text}
+	if len(keyboard) > 0 {
+		body["reply_markup"] = map[string]any{"inline_keyboard": keyboard}
+	}
+	return b.send(ctx, threadID, body)
+}
+
+func (b *botAPI) send(ctx context.Context, threadID int64, body map[string]any) (int64, error) {
+	if threadID != 0 {
+		body["message_thread_id"] = threadID
 	}
 	var msg struct {
 		MessageID int64 `json:"message_id"`
 	}
 	err := b.call(ctx, "sendMessage", body, &msg, callTimeout)
 	return msg.MessageID, err
+}
+
+// closeButtons replaces a buttons message's text and removes its
+// keyboard; "message is not modified" counts as success.
+func (b *botAPI) closeButtons(ctx context.Context, chatID, messageID int64, text string) error {
+	err := b.call(ctx, "editMessageText", map[string]any{
+		"chat_id": chatID, "message_id": messageID, "text": text,
+		"reply_markup": map[string]any{"inline_keyboard": [][]tgButton{}},
+	}, nil, callTimeout)
+	var ae *apiError
+	if errors.As(err, &ae) && strings.Contains(ae.Description, "message is not modified") {
+		return nil
+	}
+	return err
+}
+
+// answerCallbackQuery stops the button spinner with a short notice.
+func (b *botAPI) answerCallbackQuery(ctx context.Context, id, text string) error {
+	return b.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": id, "text": text}, nil, callTimeout)
 }
 
 // editMessageText replaces a sent message's text; "message is not
@@ -155,8 +193,17 @@ func (b *botAPI) editMessageText(ctx context.Context, chatID, messageID int64, t
 }
 
 type tgUpdate struct {
-	UpdateID int64      `json:"update_id"`
-	Message  *tgMessage `json:"message"`
+	UpdateID      int64            `json:"update_id"`
+	Message       *tgMessage       `json:"message"`
+	CallbackQuery *tgCallbackQuery `json:"callback_query"`
+}
+
+// tgCallbackQuery is an inline button press.
+type tgCallbackQuery struct {
+	ID      string     `json:"id"`
+	From    *tgUser    `json:"from"`
+	Message *tgMessage `json:"message"`
+	Data    string     `json:"data"`
 }
 
 type tgMessage struct {
@@ -203,6 +250,8 @@ type inbound struct {
 	// mention or reply to the bot.
 	Addressed bool
 	Text      string
+	// ReplyToID is the message this one replies to, 0 for none.
+	ReplyToID int64
 }
 
 // parseUpdate turns an update into an inbound message; ok is false
@@ -226,6 +275,9 @@ func parseUpdate(u tgUpdate, bot botIdentity) (inbound, bool) {
 	}
 	if !in.Private {
 		in.ThreadID = m.MessageThreadID
+	}
+	if m.ReplyTo != nil {
+		in.ReplyToID = m.ReplyTo.MessageID
 	}
 	in.Addressed = in.Private || mentionsBot(in.Text, entities, bot) ||
 		(m.ReplyTo != nil && m.ReplyTo.From != nil && m.ReplyTo.From.IsBot && (bot.ID == 0 || m.ReplyTo.From.ID == bot.ID))

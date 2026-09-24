@@ -906,6 +906,9 @@ export interface Mission {
   // marks a mission nobody is watching (permission asks deny at once).
   origin_kind?: 'api' | 'automation' | 'workflow' | 'chat' | 'followup'
   unattended?: boolean
+  // channel_conversation_id names the channel chat (Telegram) a
+  // chat-created mission reports back to.
+  channel_conversation_id?: string
   // parent_mission_id names the terminal mission this one follows up
   // on: absent for an ordinary mission.
   parent_mission_id?: string

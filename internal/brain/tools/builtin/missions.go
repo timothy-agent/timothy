@@ -554,3 +554,122 @@ recorded"]}}
 		},
 	}
 }
+
+// MissionCreateRequest is one create_mission call, a local struct for
+// the same import-cycle reason MissionRecord is one. Goal already
+// carries the references block.
+type MissionCreateRequest struct {
+	Goal           string
+	Name           string
+	Kind           string
+	Agent          string
+	Light          bool
+	SessionID      string
+	ConversationID string
+}
+
+// missionCreateFunc creates a mission and returns its id; main adapts
+// missions.ResolveDefaults plus Driver.Create.
+type missionCreateFunc func(ctx context.Context, req MissionCreateRequest) (string, error)
+
+// missionOriginLookup returns the channel conversation of a chat
+// session, "" for a session outside any channel.
+type missionOriginLookup func(ctx context.Context, sessionID string) (string, error)
+
+const missionReferencesMax = 10
+
+type createMissionArgs struct {
+	Goal       string   `json:"goal"`
+	Name       string   `json:"name"`
+	Kind       string   `json:"kind"`
+	Agent      string   `json:"agent"`
+	Light      bool     `json:"light"`
+	References []string `json:"references"`
+}
+
+// CreateMission is permission-GATED like FollowupMission: left out of
+// the exempt map so every call parks on an explicit approval. The
+// mission carries the calling session's channel conversation, so its
+// parks and outcome report back to that chat. originFor and webBaseURL
+// may be nil.
+func CreateMission(create missionCreateFunc, originFor missionOriginLookup, webBaseURL func(context.Context) string) *tools.Tool {
+	return &tools.Tool{
+		Name:    "create_mission",
+		Trusted: true,
+		Description: `Starts a NEW mission: a long-running unit of work the harness drives through discover, plan, build and prove. Requires explicit human approval every time: this tool is never auto-approved.
+
+Use it when the user asks for work bigger than one chat turn (a report, a
+research brief, a code change). A mission started from a channel chat
+(Telegram) reports its questions, plan approval and outcome back to that
+chat.
+
+Arguments:
+- goal (string, required): what the mission must achieve.
+- name (string, optional): a short display name.
+- kind (string, optional): "coding" or "general"; classified from the goal when omitted.
+- agent (string, optional): agent name to run the mission as; the default agent when omitted.
+- light (bool, optional): a single-turn general mission with no plan or review.
+- references (string[], optional): URLs or notes the mission should read, max 10.
+
+Example: {"goal": "write a one-page brief on EU AI Act obligations for small SaaS teams", "references": ["https://artificialintelligenceact.eu"]}
+→ creates the mission, returns its id.`,
+		InputSchema: json.RawMessage(`{
+			"type": "object",
+			"properties": {
+				"goal": {"type": "string", "description": "What the mission must achieve"},
+				"name": {"type": "string", "description": "Short display name"},
+				"kind": {"type": "string", "enum": ["coding", "general"], "description": "Mission kind; classified from the goal when omitted"},
+				"agent": {"type": "string", "description": "Agent name to run the mission as"},
+				"light": {"type": "boolean", "description": "Single-turn general mission without plan or review"},
+				"references": {"type": "array", "items": {"type": "string"}, "description": "URLs or notes to read, max 10"}
+			},
+			"required": ["goal"],
+			"additionalProperties": false
+		}`),
+		Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
+			var args createMissionArgs
+			if err := json.Unmarshal(raw, &args); err != nil {
+				return "", fmt.Errorf("invalid arguments: %w", err)
+			}
+			goal := strings.TrimSpace(args.Goal)
+			if goal == "" {
+				return "", fmt.Errorf("goal is required")
+			}
+			if len(args.References) > missionReferencesMax {
+				return "", fmt.Errorf("at most %d references", missionReferencesMax)
+			}
+			var refs []string
+			for _, r := range args.References {
+				if r = strings.TrimSpace(r); r != "" {
+					refs = append(refs, "- "+r)
+				}
+			}
+			fullGoal := goal
+			if len(refs) > 0 {
+				fullGoal += "\n\nReferences:\n" + strings.Join(refs, "\n")
+			}
+			req := MissionCreateRequest{
+				Goal: fullGoal, Name: strings.TrimSpace(args.Name), Kind: args.Kind, Agent: strings.TrimSpace(args.Agent),
+				Light: args.Light, SessionID: tools.SessionIDFromContext(ctx),
+			}
+			if originFor != nil && req.SessionID != "" {
+				conv, err := originFor(ctx, req.SessionID)
+				if err != nil {
+					return "", fmt.Errorf("look up chat origin: %w", err)
+				}
+				req.ConversationID = conv
+			}
+			id, err := create(ctx, req)
+			if err != nil {
+				return "", fmt.Errorf("create mission: %w", err)
+			}
+			out := fmt.Sprintf("created mission %s: %s", id, goal)
+			if webBaseURL != nil {
+				if base := strings.TrimRight(webBaseURL(ctx), "/"); base != "" {
+					out += "\n" + base + "/missions/" + id
+				}
+			}
+			return out, nil
+		},
+	}
+}

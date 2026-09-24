@@ -294,7 +294,7 @@ func (c *fakeChat) count() int {
 
 func startService(t *testing.T, s *Store, f *fakeBot, fc *fakeChat) (stop func()) {
 	t.Helper()
-	svc := New(s, fc.chat, fakeResolve, f.srv.Client(), discardLog())
+	svc := New(s, fc.chat, MissionDeps{}, fakeResolve, f.srv.Client(), discardLog())
 	svc.APIBase = f.srv.URL
 	svc.editEvery = 20 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())

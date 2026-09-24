@@ -87,3 +87,16 @@ CREATE TABLE IF NOT EXISTS channel_inbound (
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS origin_kind text NOT NULL DEFAULT 'web' CHECK (origin_kind IN ('web','api','mission','channel'));
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS channel_conversation_id uuid;
 ```
+
+Issue #829: channel approvals, mission parks and reply to origin.
+Additive, run before the new binary boots; it reads
+missions.channel_conversation_id on every mission load. The last
+statement lists create_mission on the seeded general agent next to
+followup_mission.
+
+```sql
+ALTER TABLE missions ADD COLUMN IF NOT EXISTS channel_conversation_id uuid;
+ALTER TABLE channel_conversations ADD COLUMN IF NOT EXISTS state jsonb NOT NULL DEFAULT '{}';
+UPDATE agents SET tools = tools || '["create_mission"]'::jsonb
+WHERE name = 'general' AND tools ? 'followup_mission' AND NOT tools ? 'create_mission';
+```

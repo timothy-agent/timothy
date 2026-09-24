@@ -206,6 +206,18 @@ describe('MissionCard automation badge', () => {
   })
 })
 
+describe('MissionCard channel badge', () => {
+  it('shows a Telegram badge when channel_conversation_id is set', () => {
+    renderCard({ ...baseMission, origin_kind: 'chat', channel_conversation_id: 'c1' })
+    expect(screen.getByText('Telegram')).toBeInTheDocument()
+  })
+
+  it('omits the Telegram badge for a mission outside any channel', () => {
+    renderCard({ ...baseMission, origin_kind: 'chat' })
+    expect(screen.queryByText('Telegram')).not.toBeInTheDocument()
+  })
+})
+
 describe('MissionCard pause message', () => {
   it('shows the pause message when set', () => {
     renderCard({ ...baseMission, pause_message: 'Waiting on budget approval' })

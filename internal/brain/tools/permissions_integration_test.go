@@ -76,6 +76,20 @@ func TestResolvePushMissionBranchAsksWithoutGrant(t *testing.T) {
 	}
 }
 
+// TestResolveCreateMissionAsksWithoutGrant: create_mission is absent
+// from the exempt map like followup_mission, so every call asks.
+func TestResolveCreateMissionAsksWithoutGrant(t *testing.T) {
+	p, sid := integrationPermissions(t)
+
+	res, err := p.Resolve(t.Context(), sid, "create_mission", json.RawMessage(`{"goal":"g"}`))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Decision != DecisionAsk {
+		t.Fatalf("res = %+v, want ask", res)
+	}
+}
+
 func TestResolveSessionGrantAllows(t *testing.T) {
 	p, sid := integrationPermissions(t)
 

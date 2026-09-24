@@ -211,6 +211,9 @@ type Mission struct {
 	// Unattended marks a mission nobody is watching: permission asks
 	// deny immediately and ask_user has budget 0. Set once at create.
 	Unattended bool `json:"unattended"`
+	// ChannelConversationID names the channel conversation a
+	// chat-created mission pushes parks and outcomes to (issue #829).
+	ChannelConversationID string `json:"channel_conversation_id,omitempty"`
 	// ParentMissionID names the terminal mission this one follows up on
 	// (api/missions.go's create) — empty for an ordinary mission.
 	ParentMissionID string `json:"parent_mission_id,omitempty"`
