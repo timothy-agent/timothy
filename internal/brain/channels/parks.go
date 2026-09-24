@@ -175,7 +175,7 @@ func (s *Service) pushPark(ctx context.Context, m missions.Mission) {
 		s.skipOnce(m.ID, "unsupported channel", err)
 		return
 	}
-	msgID, err := ad.send(ctx, conversationTarget(conv), p.Text, p.Keyboard, false)
+	msgID, err := s.sendButtons(ctx, ad, conv.ID, conversationTarget(conv), p.Text, p.Keyboard)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.log.Warn("channels: push park failed", "channel_id", ch.ID, "mission_id", m.ID, "error", err)

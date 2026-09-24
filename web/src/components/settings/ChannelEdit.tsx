@@ -2,8 +2,8 @@ import { Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { deleteChannel, getChannel, listAgents, patchChannel, setSecret, testChannel } from '../../api/client'
-import type { AdminAgent, Channel } from '../../api/types'
+import { deleteChannel, getChannel, listAgents, listConnectors, patchChannel, setSecret, testChannel } from '../../api/client'
+import type { AdminAgent, AdminConnector, Channel, ChannelPatch } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Switch } from '../ui/switch'
@@ -15,6 +15,8 @@ import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { ChannelAgentSelect } from './ChannelAgentSelect'
 import { channelAgentPatch, channelAgentValue } from './channelAgent'
+import { emailConnectors } from './channelEmail'
+import { ChannelEmailFields } from './ChannelEmailFields'
 import { ChannelPairings } from './ChannelPairings'
 import { CredentialField, type CredentialMode } from './CredentialRefPicker'
 import { settingsArea } from './settingsAreas'
@@ -28,10 +30,17 @@ const area = settingsArea('channels')
 interface ChannelValues {
   name: string
   agent: string
+  connectorID: string
+  fromAllow: string[]
 }
 
 function valuesFrom(channel: Channel): ChannelValues {
-  return { name: channel.name, agent: channelAgentValue(channel) }
+  return {
+    name: channel.name,
+    agent: channelAgentValue(channel),
+    connectorID: channel.config.connector_id ?? '',
+    fromAllow: channel.config.from_allow ?? [],
+  }
 }
 
 // ChannelEdit loads the channel, then mounts the form keyed by id so the
@@ -81,9 +90,19 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
   const [appTokenMode, setAppTokenMode] = useState<CredentialMode>('new')
   const [existingAppRef, setExistingAppRef] = useState('')
   const [savingAppToken, setSavingAppToken] = useState(false)
+  const [connectors, setConnectors] = useState<AdminConnector[] | null>(null)
   const slack = channel.kind === 'slack'
+  const email = channel.kind === 'email'
   const service = slack ? 'Slack' : 'Telegram'
   const staged = useStagedForm<ChannelValues>(valuesFrom(initial))
+  const emailIncomplete = email && (staged.values.connectorID === '' || staged.values.fromAllow.length === 0)
+
+  useEffect(() => {
+    if (!email) return
+    listConnectors()
+      .then((rows) => setConnectors(emailConnectors(rows)))
+      .catch((err: unknown) => toast.error('Could not load connectors', { description: errText(err) }))
+  }, [email])
 
   useEffect(() => {
     listAgents()
@@ -103,7 +122,10 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
     setSaving(true)
     setSaveError(null)
     try {
-      const updated = await patchChannel(channel.id, { name: staged.values.name.trim(), ...channelAgentPatch(staged.values.agent) })
+      const { agent_id, config } = channelAgentPatch(staged.values.agent)
+      const patch: ChannelPatch = { name: staged.values.name.trim(), agent_id, config }
+      if (email) patch.config = { ...config, connector_id: staged.values.connectorID, from_allow: staged.values.fromAllow }
+      const updated = await patchChannel(channel.id, patch)
       setChannel(updated)
       staged.rebase(valuesFrom(updated))
       toast.success('Channel updated')
@@ -125,7 +147,7 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
     setTest(null)
     try {
       const res = await testChannel(channel.id)
-      setTest({ ok: true, message: `Connected as @${res.bot_username}.` })
+      setTest({ ok: true, message: email ? `Connected to ${res.bot_username}.` : `Connected as @${res.bot_username}.` })
       void doRefresh()
     } catch (err) {
       setTest({ ok: false, message: `Failed: ${errText(err)}` })
@@ -181,7 +203,11 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
     <PageShell width="form">
       <PageHeader
         title={channel.name}
-        description={channel.config.bot_username ? `${channel.kind} · @${channel.config.bot_username}` : channel.kind}
+        description={
+          channel.config.bot_username
+            ? `${channel.kind} · ${email ? '' : '@'}${channel.config.bot_username}`
+            : channel.kind
+        }
         breadcrumbs={[
           { label: 'Settings', href: '/settings' },
           { label: area.label, href: '/settings/channels' },
@@ -201,7 +227,9 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
           <p className="text-sm text-muted-foreground">
             {slack
               ? 'Disabled channels close their Slack connection; messages sent meanwhile are not answered.'
-              : 'Disabled channels stop polling; messages sent meanwhile wait at Telegram.'}
+              : email
+                ? 'Disabled channels stop polling; mail that arrives meanwhile is read when re-enabled.'
+                : 'Disabled channels stop polling; messages sent meanwhile wait at Telegram.'}
           </p>
         </div>
         <Switch checked={channel.enabled} onCheckedChange={toggleEnabled} aria-label={`${channel.name} enabled`} />
@@ -220,6 +248,15 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
           <Field label="Agent" description="who answers new conversations">
             <ChannelAgentSelect value={staged.values.agent} onChange={(v) => staged.setField('agent', v)} agents={agents} />
           </Field>
+          {email && (
+            <ChannelEmailFields
+              connectors={connectors}
+              connectorID={staged.values.connectorID}
+              onConnectorChange={(v) => staged.setField('connectorID', v)}
+              fromAllow={staged.values.fromAllow}
+              onFromAllowChange={(v) => staged.setField('fromAllow', v)}
+            />
+          )}
         </FieldGroup>
         {saveError && (
           <Alert tone="destructive">
@@ -230,7 +267,10 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
           <Button type="button" variant="outline" disabled={saving} onClick={staged.reset}>
             Cancel
           </Button>
-          <Button type="submit" disabled={!staged.dirty || saving || staged.values.name.trim() === ''}>
+          <Button
+            type="submit"
+            disabled={!staged.dirty || saving || staged.values.name.trim() === '' || emailIncomplete}
+          >
             Save
           </Button>
         </FormActions>
@@ -254,7 +294,9 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
             />
           ) : (
             <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-              <span className="min-w-0 flex-1 font-medium">Checks the bot token with {service}.</span>
+              <span className="min-w-0 flex-1 font-medium">
+                {email ? 'Checks the mailbox with its IMAP connector.' : `Checks the bot token with ${service}.`}
+              </span>
               <Button size="sm" variant="test" onClick={() => void runTest()}>
                 Test connection
               </Button>
@@ -262,33 +304,35 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
           )}
         </Panel>
 
-        <Panel title="Rotate bot token">
-          <div className="space-y-3">
-            <CredentialField
-              label="Bot token"
-              mode={tokenMode}
-              onModeChange={(m) => {
-                setTokenMode(m)
-                if (m === 'existing' && !existingRef) setExistingRef(channel.credential_ref)
-              }}
-              existingRef={existingRef}
-              onExistingRefChange={setExistingRef}
-              secretValue={token}
-              onSecretValueChange={setToken}
-              secretPlaceholder={slack ? 'xoxb-...' : '123456:ABC-DEF...'}
-              defaultBackend={defaultBackend}
-              refName={channel.credential_ref}
-              modeLabels={{ new: 'New token', existing: 'Different credential' }}
-            />
-            <Button
-              size="sm"
-              disabled={savingToken || (usingExisting ? !existingRef : !token.trim())}
-              onClick={() => void saveToken()}
-            >
-              {savingToken ? 'Saving…' : 'Save token'}
-            </Button>
-          </div>
-        </Panel>
+        {!email && (
+          <Panel title="Rotate bot token">
+            <div className="space-y-3">
+              <CredentialField
+                label="Bot token"
+                mode={tokenMode}
+                onModeChange={(m) => {
+                  setTokenMode(m)
+                  if (m === 'existing' && !existingRef) setExistingRef(channel.credential_ref)
+                }}
+                existingRef={existingRef}
+                onExistingRefChange={setExistingRef}
+                secretValue={token}
+                onSecretValueChange={setToken}
+                secretPlaceholder={slack ? 'xoxb-...' : '123456:ABC-DEF...'}
+                defaultBackend={defaultBackend}
+                refName={channel.credential_ref}
+                modeLabels={{ new: 'New token', existing: 'Different credential' }}
+              />
+              <Button
+                size="sm"
+                disabled={savingToken || (usingExisting ? !existingRef : !token.trim())}
+                onClick={() => void saveToken()}
+              >
+                {savingToken ? 'Saving…' : 'Save token'}
+              </Button>
+            </div>
+          </Panel>
+        )}
 
         {slack && (
           <Panel title="Rotate app token">

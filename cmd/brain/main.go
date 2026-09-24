@@ -523,9 +523,13 @@ func main() {
 		}
 		consumers = append(consumers, automations.NewDispatcher(notify, app.Log))
 		if channelStore != nil {
-			consumers = append(consumers, channels.NewOutcomes(channelStore, channels.MissionDeps{
+			outcomes := channels.NewOutcomes(channelStore, channels.MissionDeps{
 				Get: missionStore.Get, Events: missionStore.Events, WebBaseURL: flags.WebBaseURL,
-			}, secrets.Resolve, channelHTTP, channelsEnabled, app.Log))
+			}, secrets.Resolve, channelHTTP, channelsEnabled, app.Log)
+			if conns != nil {
+				outcomes.SetEmail(conns.IMAPMailbox)
+			}
+			consumers = append(consumers, outcomes)
 		}
 		drainer = events.NewDrainer(eventStore, consumers,
 			app.Metrics.NewCounterVec("events_processed_total", "Inbox events handled by kind and result.", "kind", "result"), app.Log)
@@ -967,6 +971,14 @@ func main() {
 	if channelStore != nil {
 		channelService = channels.New(channelStore, svc.Chat, channelMissionDeps(broker, missionStore, missionDriver, missionHub, flags.WebBaseURL, app.Log),
 			secrets.Resolve, channelHTTP, app.Log)
+		// Email channels (issue #830) read an imap connector's mailbox.
+		if conns != nil {
+			var saveAttachment func(ctx context.Context, r io.Reader) (attachments.Attachment, error)
+			if attachmentStore != nil {
+				saveAttachment = attachmentStore.Save
+			}
+			channelService.SetEmail(conns.IMAPMailbox, saveAttachment, flags.EmailPollInterval)
+		}
 		go channelService.Run(ctx, channelsEnabled)
 	}
 	api.Register(app.Server, svc, store, broker,

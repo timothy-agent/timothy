@@ -1,4 +1,5 @@
-// Package channels connects external chat surfaces (Telegram, Slack) to
+// Package channels connects external chat surfaces (Telegram, Slack,
+// email) to
 // chat sessions: pairing of external senders, conversation to session
 // mapping, per-conversation serialization and streamed replies
 // (issues #828, #830). Every ceiling lives in Go before any model call.
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/mail"
 	"regexp"
 	"slices"
 	"strconv"
@@ -37,6 +39,7 @@ const (
 const (
 	KindTelegram = "telegram"
 	KindSlack    = "slack"
+	KindEmail    = "email"
 )
 
 // Sentinel errors the HTTP layer maps onto status codes.
@@ -52,6 +55,14 @@ var (
 // never a pasted secret.
 var credentialRefPattern = regexp.MustCompile(`^[A-Za-z0-9_./-]{1,128}$`)
 
+var (
+	connectorIDPattern = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
+	domainPattern      = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
+)
+
+// maxFromAllow caps an email channel's sender allowlist.
+const maxFromAllow = 50
+
 // Config is the typed channels.config column.
 type Config struct {
 	// Dispatch picks an agent per message when the channel has none.
@@ -61,6 +72,12 @@ type Config struct {
 	// AppTokenRef names the Slack app-level token (Socket Mode); the
 	// bot token is credential_ref.
 	AppTokenRef string `json:"app_token_ref,omitempty"`
+	// ConnectorID names the email channel's imap connector, which holds
+	// the mailbox password.
+	ConnectorID string `json:"connector_id,omitempty"`
+	// FromAllow lists the senders an email channel reads: full
+	// addresses or @domain suffixes, lowercased.
+	FromAllow []string `json:"from_allow,omitempty"`
 }
 
 // PairingCounts tallies a channel's senders by status.
@@ -136,6 +153,8 @@ type Patch struct {
 	Enabled       *bool
 	Dispatch      *bool
 	AppTokenRef   *string
+	ConnectorID   *string
+	FromAllow     *[]string
 }
 
 // Store is the channel tables' Postgres access. onChange fires after
@@ -190,6 +209,42 @@ func validateAppTokenRef(ref string) error {
 	return nil
 }
 
+func validateConnectorID(id string) error {
+	if !connectorIDPattern.MatchString(id) {
+		return invalid("config.connector_id is required for email and must be an imap connector id")
+	}
+	return nil
+}
+
+// normalizeFromAllow lowercases, trims and dedups an email allowlist:
+// 1 to maxFromAllow entries, each a full address or an @domain suffix.
+func normalizeFromAllow(in []string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, e := range in {
+		e = strings.ToLower(strings.TrimSpace(e))
+		if e == "" || seen[e] {
+			continue
+		}
+		if strings.HasPrefix(e, "@") {
+			if !domainPattern.MatchString(e[1:]) {
+				return nil, invalid("config.from_allow entry " + strconv.Quote(e) + " is not an @domain")
+			}
+		} else if a, err := mail.ParseAddress(e); err != nil || a.Address != e || strings.Count(e, "@") != 1 {
+			return nil, invalid("config.from_allow entry " + strconv.Quote(e) + " is not an email address")
+		}
+		seen[e] = true
+		out = append(out, e)
+	}
+	if len(out) == 0 {
+		return nil, invalid("config.from_allow needs at least one address or @domain")
+	}
+	if len(out) > maxFromAllow {
+		return nil, invalid(fmt.Sprintf("config.from_allow allows at most %d entries", maxFromAllow))
+	}
+	return out, nil
+}
+
 // Validate normalizes and checks c for create.
 func Validate(c *Channel) error {
 	name, err := validateName(c.Name)
@@ -197,6 +252,9 @@ func Validate(c *Channel) error {
 		return err
 	}
 	c.Name = name
+	if c.Kind != KindEmail && (c.Config.ConnectorID != "" || len(c.Config.FromAllow) > 0) {
+		return invalid("config.connector_id and config.from_allow are for email channels only")
+	}
 	switch c.Kind {
 	case KindTelegram:
 		if c.Config.AppTokenRef != "" {
@@ -206,6 +264,22 @@ func Validate(c *Channel) error {
 		if err := validateAppTokenRef(c.Config.AppTokenRef); err != nil {
 			return err
 		}
+	case KindEmail:
+		if c.Config.AppTokenRef != "" {
+			return invalid("config.app_token_ref is for slack channels only")
+		}
+		if c.CredentialRef != "" {
+			return invalid("credential_ref must be empty for email; the imap connector holds the password")
+		}
+		if err := validateConnectorID(c.Config.ConnectorID); err != nil {
+			return err
+		}
+		allow, err := normalizeFromAllow(c.Config.FromAllow)
+		if err != nil {
+			return err
+		}
+		c.Config.FromAllow = allow
+		return nil
 	default:
 		return fmt.Errorf("%w: %q", ErrKindUnavailable, c.Kind)
 	}
@@ -328,6 +402,21 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 			return err
 		}
 	}
+	if p.ConnectorID != nil {
+		if err := validateConnectorID(*p.ConnectorID); err != nil {
+			return err
+		}
+	}
+	var fromAllow *string
+	if p.FromAllow != nil {
+		allow, err := normalizeFromAllow(*p.FromAllow)
+		if err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(allow)
+		v := string(raw)
+		fromAllow = &v
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("channels patch: %w", err)
@@ -355,15 +444,23 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 	if p.AppTokenRef != nil && kind != KindSlack {
 		return invalid("config.app_token_ref is for slack channels only")
 	}
+	if (p.ConnectorID != nil || p.FromAllow != nil) && kind != KindEmail {
+		return invalid("config.connector_id and config.from_allow are for email channels only")
+	}
+	if p.CredentialRef != nil && kind == KindEmail {
+		return invalid("credential_ref must be empty for email; the imap connector holds the password")
+	}
 	if _, err := tx.Exec(ctx, `UPDATE channels SET
 			name = COALESCE($2, name),
 			credential_ref = COALESCE($3, credential_ref),
 			agent_id = CASE WHEN $4::text IS NULL THEN agent_id ELSE NULLIF($4, '')::uuid END,
 			enabled = COALESCE($5, enabled),
 			config = CASE WHEN $6::text IS NULL THEN config ELSE jsonb_set(config, '{dispatch}', $6::jsonb) END
-				|| CASE WHEN $7::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('app_token_ref', $7::text) END,
+				|| CASE WHEN $7::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('app_token_ref', $7::text) END
+				|| CASE WHEN $8::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('connector_id', $8::text) END
+				|| CASE WHEN $9::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('from_allow', $9::jsonb) END,
 			updated_at = now()
-		WHERE id = $1`, id, p.Name, p.CredentialRef, p.AgentID, p.Enabled, dispatch, p.AppTokenRef); err != nil {
+		WHERE id = $1`, id, p.Name, p.CredentialRef, p.AgentID, p.Enabled, dispatch, p.AppTokenRef, p.ConnectorID, fromAllow); err != nil {
 		return mapWriteErr("patch", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -619,9 +716,27 @@ type pendingAsk struct {
 	Kind      string `json:"kind"`
 }
 
+// pendingButton is one button of an email message; a reply whose
+// first line is Text presses it.
+type pendingButton struct {
+	Text string `json:"text"`
+	Data string `json:"data"`
+}
+
 // convState is the typed channel_conversations.state column.
 type convState struct {
 	Asks map[string]pendingAsk `json:"asks,omitempty"`
+	// Buttons holds the buttons of messages sent to transports without
+	// them, by message id.
+	Buttons map[string][]pendingButton `json:"buttons,omitempty"`
+	// Email threading: the original subject, the last inbound
+	// Message-ID and its references, the reply address and the last
+	// outgoing Message-ID.
+	Subject        string   `json:"subject,omitempty"`
+	LastMessageID  string   `json:"last_message_id,omitempty"`
+	References     []string `json:"references,omitempty"`
+	ReplyTo        string   `json:"reply_to,omitempty"`
+	LastOutgoingID string   `json:"last_outgoing_id,omitempty"`
 }
 
 // remember records an ask, dropping the oldest past maxAsks. Message
@@ -638,6 +753,44 @@ func (st *convState) remember(messageID string, a pendingAsk) {
 		})
 		delete(st.Asks, oldest)
 	}
+}
+
+// rememberButtons records a message's buttons, dropping an arbitrary
+// entry past maxAsks (email ids carry no order).
+func (st *convState) rememberButtons(messageID string, buttons [][]button) {
+	if st.Buttons == nil {
+		st.Buttons = map[string][]pendingButton{}
+	}
+	var flat []pendingButton
+	for _, row := range buttons {
+		for _, b := range row {
+			flat = append(flat, pendingButton(b))
+		}
+	}
+	st.Buttons[messageID] = flat
+	for k := range st.Buttons {
+		if len(st.Buttons) <= maxAsks {
+			break
+		}
+		if k != messageID {
+			delete(st.Buttons, k)
+		}
+	}
+}
+
+// takeButton returns the data of messageID's button whose text is
+// reply's first line (case-insensitive) and forgets the message's
+// buttons.
+func (st *convState) takeButton(messageID, reply string) (string, bool) {
+	line, _, _ := strings.Cut(strings.TrimSpace(reply), "\n")
+	line = strings.TrimSpace(line)
+	for _, b := range st.Buttons[messageID] {
+		if strings.EqualFold(line, b.Text) {
+			delete(st.Buttons, messageID)
+			return b.Data, true
+		}
+	}
+	return "", false
 }
 
 // take removes and returns the ask of messageID.
@@ -699,6 +852,58 @@ func (s *Store) TakeAsk(ctx context.Context, convID, messageID string) (missionI
 		return "", "", false, fmt.Errorf("channels take ask: %w", err)
 	}
 	return a.MissionID, a.Kind, ok, nil
+}
+
+// RememberButtons records the buttons of a message sent as text, so a
+// reply naming one presses it.
+func (s *Store) RememberButtons(ctx context.Context, convID, messageID string, buttons [][]button) error {
+	if err := s.updateConvState(ctx, convID, func(st *convState) { st.rememberButtons(messageID, buttons) }); err != nil {
+		return fmt.Errorf("channels remember buttons: %w", err)
+	}
+	return nil
+}
+
+// TakeButton returns the data of the button a reply to messageID
+// names, forgetting that message's buttons.
+func (s *Store) TakeButton(ctx context.Context, convID, messageID, reply string) (string, bool, error) {
+	var data string
+	var ok bool
+	if err := s.updateConvState(ctx, convID, func(st *convState) { data, ok = st.takeButton(messageID, reply) }); err != nil {
+		return "", false, fmt.Errorf("channels take button: %w", err)
+	}
+	return data, ok, nil
+}
+
+// mailThread is where an email conversation's next reply goes.
+type mailThread struct {
+	To, Subject, MessageID string
+	References             []string
+}
+
+// emailThread reads a conversation's email threading state.
+func (s *Store) emailThread(ctx context.Context, conv Conversation) (mailThread, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return mailThread{}, fmt.Errorf("channels email thread: %w", err)
+	}
+	var raw []byte
+	if err := db.QueryRow(ctx, `SELECT state FROM channel_conversations WHERE id = $1`, conv.ID).Scan(&raw); err != nil {
+		return mailThread{}, fmt.Errorf("channels email thread: %w", err)
+	}
+	var st convState
+	_ = json.Unmarshal(raw, &st)
+	return mailThread{To: cmp.Or(st.ReplyTo, conv.ExternalUserID), Subject: st.Subject, MessageID: st.LastMessageID, References: st.References}, nil
+}
+
+// saveEmailThread records the thread a reply went to and its
+// Message-ID.
+func (s *Store) saveEmailThread(ctx context.Context, convID string, th mailThread, outgoingID string) error {
+	if err := s.updateConvState(ctx, convID, func(st *convState) {
+		st.ReplyTo, st.Subject, st.LastMessageID, st.References, st.LastOutgoingID = th.To, th.Subject, th.MessageID, th.References, outgoingID
+	}); err != nil {
+		return fmt.Errorf("channels save email thread: %w", err)
+	}
+	return nil
 }
 
 // CreateConversation creates the conversation and its session

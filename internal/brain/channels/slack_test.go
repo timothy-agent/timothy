@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func TestParseEnvelope(t *testing.T) {
 					t.Fatalf("press = %+v, want %+v", g.Press, w.Press)
 				}
 				g.Press, w.Press = nil, nil
-				if g != w {
+				if !reflect.DeepEqual(g, w) {
 					t.Fatalf("item = %+v, want %+v", g, w)
 				}
 			}
@@ -349,17 +350,31 @@ func TestDecodeState(t *testing.T) {
 }
 
 func TestNewAdapter(t *testing.T) {
-	tg, err := newAdapter(Channel{Kind: KindTelegram, CredentialRef: "T"}, nil, nil, "", "")
-	if err != nil || tg.(*telegramAdapter).api.base != defaultAPIBase || tg.caps().MessageLimit != messageLimit || tg.caps().EditEvery != editEvery {
+	tg, err := newAdapter(Channel{Kind: KindTelegram, CredentialRef: "T"}, nil, nil, "", "", nil)
+	if err != nil || tg.(*telegramAdapter).api.base != defaultAPIBase || tg.caps().MessageLimit != messageLimit || tg.caps().EditEvery != editEvery ||
+		!tg.caps().Edits || !tg.caps().Buttons {
 		t.Fatalf("telegram adapter = %+v %v", tg, err)
 	}
-	sl, err := newAdapter(Channel{Kind: KindSlack, CredentialRef: "B", Config: Config{AppTokenRef: "A"}}, nil, nil, "", "")
+	sl, err := newAdapter(Channel{Kind: KindSlack, CredentialRef: "B", Config: Config{AppTokenRef: "A"}}, nil, nil, "", "", nil)
 	s := sl.(*slackAdapter)
-	if err != nil || s.base != defaultSlackBase || s.botRef != "B" || s.appRef != "A" || sl.caps().MessageLimit != slackMessageLimit || sl.caps().EditEvery != slackEditEvery {
+	if err != nil || s.base != defaultSlackBase || s.botRef != "B" || s.appRef != "A" || sl.caps().MessageLimit != slackMessageLimit || sl.caps().EditEvery != slackEditEvery ||
+		!sl.caps().Edits || !sl.caps().Buttons {
 		t.Fatalf("slack adapter = %+v %v", sl, err)
 	}
-	if _, err := newAdapter(Channel{Kind: "email"}, nil, nil, "", ""); !errors.Is(err, ErrKindUnavailable) {
-		t.Fatalf("email adapter = %v", err)
+	if _, err := newAdapter(Channel{Kind: KindEmail}, nil, nil, "", "", nil); !errors.Is(err, ErrKindUnavailable) {
+		t.Fatalf("email adapter without a mailbox = %v", err)
+	}
+	if _, err := newAdapter(Channel{Kind: KindEmail}, nil, nil, "", "", &emailEnv{}); !errors.Is(err, ErrKindUnavailable) {
+		t.Fatalf("email adapter with an empty env = %v", err)
+	}
+	env := &emailEnv{mailbox: func(context.Context, string) (mailbox, error) { return mailbox{}, nil }}
+	em, err := newAdapter(Channel{ID: "c1", Kind: KindEmail, Config: Config{ConnectorID: "x", FromAllow: []string{"a@b.co"}}}, nil, nil, "", "", env)
+	e, ok := em.(*emailAdapter)
+	if err != nil || !ok || e.connectorID != "x" || e.channelID != "c1" || em.caps() != (capabilities{MessageLimit: emailMessageLimit}) {
+		t.Fatalf("email adapter = %+v %v", em, err)
+	}
+	if _, err := newAdapter(Channel{Kind: "fax"}, nil, nil, "", "", env); !errors.Is(err, ErrKindUnavailable) {
+		t.Fatalf("unknown kind = %v", err)
 	}
 }
 

@@ -34,9 +34,10 @@ const (
 
 // turnJob is one queued message of a conversation.
 type turnJob struct {
-	conv Conversation
-	to   target
-	text string
+	conv        Conversation
+	to          target
+	text        string
+	attachments []chat.AttachmentRef
 }
 
 // runner receives from one channel's adapter and runs its inbound
@@ -219,7 +220,7 @@ func (r *runner) handle(ctx context.Context, in inbound) error {
 		}
 		return nil
 	}
-	if strings.TrimSpace(in.Text) == "" {
+	if strings.TrimSpace(in.Text) == "" && len(in.Attachments) == 0 {
 		r.reply(ctx, in, msgTextOnly)
 		return nil
 	}
@@ -231,6 +232,16 @@ func (r *runner) handle(ctx context.Context, in inbound) error {
 	conv, found, err := r.svc.store.ConversationFor(ctx, r.ch.ID, key.ChatID, key.ThreadID)
 	if err != nil {
 		return err
+	}
+	if found && in.ReplyToID != "" && !r.ad.caps().Buttons {
+		data, pressed, err := r.svc.store.TakeButton(ctx, conv.ID, in.ReplyToID, in.Text)
+		if err != nil {
+			return err
+		}
+		if pressed {
+			in.Press = &press{Data: data, MessageID: in.ReplyToID}
+			return r.handlePress(ctx, in)
+		}
 	}
 	if found && in.ReplyToID != "" {
 		missionID, kind, asked, err := r.svc.store.TakeAsk(ctx, conv.ID, in.ReplyToID)
@@ -251,7 +262,7 @@ func (r *runner) handle(ctx context.Context, in inbound) error {
 		}
 	}
 	select {
-	case r.worker(ctx, conv.ID) <- turnJob{conv: conv, to: key, text: in.Text}:
+	case r.worker(ctx, conv.ID) <- turnJob{conv: conv, to: key, text: in.Text, attachments: in.Attachments}:
 	default:
 		r.reply(ctx, in, msgQueueFull)
 	}
@@ -288,25 +299,31 @@ func (r *runner) worker(ctx context.Context, convID string) chan turnJob {
 }
 
 // turn posts a placeholder, runs the chat turn and streams it into
-// the placeholder.
+// the placeholder. Without edits there is no placeholder: the final
+// reply is sent once.
 func (r *runner) turn(ctx context.Context, j turnJob) {
 	start := r.svc.now()
-	msgID, err := r.ad.send(ctx, j.to, msgThinking, nil, true)
-	if err != nil {
-		if ctx.Err() == nil {
-			r.svc.log.Warn("channels: placeholder failed", "channel_id", r.ch.ID, "conversation_id", j.conv.ID, "error", err)
+	edits := r.ad.caps().Edits
+	var msgID string
+	if edits {
+		id, err := r.ad.send(ctx, j.to, msgThinking, nil, true)
+		if err != nil {
+			if ctx.Err() == nil {
+				r.svc.log.Warn("channels: placeholder failed", "channel_id", r.ch.ID, "conversation_id", j.conv.ID, "error", err)
+			}
+			return
 		}
-		return
+		msgID = id
 	}
 	agent := j.conv.AgentID
 	if agent == "" && r.ch.Config.Dispatch {
 		agent = chat.AutoAgent
 	}
 	var reply string
-	_, events, err := r.svc.chat(ctx, chat.Request{SessionID: j.conv.SessionID, Message: j.text, Agent: agent})
+	_, events, err := r.svc.chat(ctx, chat.Request{SessionID: j.conv.SessionID, Message: j.text, Agent: agent, Attachments: j.attachments})
 	if err != nil {
-		r.edit(ctx, j.to, msgID, failureText(err.Error()))
-	} else {
+		r.show(ctx, j, msgID, failureText(err.Error()))
+	} else if edits {
 		every := r.svc.editEvery
 		if every == 0 {
 			every = r.ad.caps().EditEvery
@@ -314,6 +331,8 @@ func (r *runner) turn(ctx context.Context, j turnJob) {
 		ticker := time.NewTicker(every)
 		reply = r.drain(ctx, j, msgID, events, ticker.C)
 		ticker.Stop()
+	} else {
+		reply = r.drain(ctx, j, "", events, nil)
 	}
 	if err := r.svc.store.TouchConversation(ctx, j.conv.ID, r.svc.now()); err != nil && ctx.Err() == nil {
 		r.svc.log.Warn("channels: touch conversation failed", "conversation_id", j.conv.ID, "error", err)
@@ -324,8 +343,9 @@ func (r *runner) turn(ctx context.Context, j turnJob) {
 
 // drain consumes a turn's stream: text accumulates, each tick edits
 // the placeholder when the view changed, a permission ask appends a
-// note, and the terminal event renders the final reply. It returns
-// the reply text.
+// note, and the terminal event renders the final reply. msgID "" means
+// no placeholder: nothing is edited and the final reply is sent. It
+// returns the reply text.
 func (r *runner) drain(ctx context.Context, j turnJob, msgID string, events <-chan stream.StreamEvent, tick <-chan time.Time) string {
 	var text strings.Builder
 	throttle := editThrottle{window: streamWindowFor(r.ad.caps().MessageLimit)}
@@ -356,11 +376,11 @@ func (r *runner) drain(ctx context.Context, j turnJob, msgID string, events <-ch
 				text.WriteString(ev.Text)
 			case stream.EventPermissionRequest:
 				waiting = true
-				if v, ok := throttle.due(view()); ok {
+				if v, ok := throttle.due(view()); ok && msgID != "" {
 					r.edit(ctx, j.to, msgID, v)
 				}
 				if p := ev.Permission; p != nil && p.ID != "" && r.svc.missions.ResolvePermission != nil {
-					id, err := r.ad.send(ctx, j.to, permText("Timothy", p.Tool, p.Rationale), permKeyboard(p.ID), false)
+					id, err := r.svc.sendButtons(ctx, r.ad, j.conv.ID, j.to, permText("Timothy", p.Tool, p.Rationale), permKeyboard(p.ID))
 					if err != nil {
 						if ctx.Err() == nil {
 							r.svc.log.Warn("channels: permission buttons failed", "channel_id", r.ch.ID, "conversation_id", j.conv.ID, "error", err)
@@ -387,7 +407,7 @@ func (r *runner) drain(ctx context.Context, j turnJob, msgID string, events <-ch
 				if ev.Err != nil && ev.Err.Message != "" {
 					msg = ev.Err.Message
 				}
-				r.edit(ctx, j.to, msgID, failureText(msg))
+				r.show(ctx, j, msgID, failureText(msg))
 				return text.String()
 			}
 		}
@@ -395,20 +415,35 @@ func (r *runner) drain(ctx context.Context, j turnJob, msgID string, events <-ch
 }
 
 // finish replaces the placeholder with the first chunk of the reply
-// and sends the rest as new messages.
+// and sends the rest as new messages; without a placeholder every
+// chunk is sent.
 func (r *runner) finish(ctx context.Context, j turnJob, msgID string, text string) {
 	if strings.TrimSpace(text) == "" {
 		text = msgNoReply
 	}
 	chunks := chunkReply(text, r.ad.caps().MessageLimit)
-	r.edit(ctx, j.to, msgID, chunks[0])
-	for _, c := range chunks[1:] {
+	if msgID != "" {
+		r.edit(ctx, j.to, msgID, chunks[0])
+		chunks = chunks[1:]
+	}
+	for _, c := range chunks {
 		if _, err := r.ad.send(ctx, j.to, c, nil, false); err != nil {
 			if ctx.Err() == nil {
 				r.svc.log.Warn("channels: send chunk failed", "channel_id", r.ch.ID, "conversation_id", j.conv.ID, "error", err)
 			}
 			return
 		}
+	}
+}
+
+// show puts text in the placeholder, or sends it when there is none.
+func (r *runner) show(ctx context.Context, j turnJob, msgID, text string) {
+	if msgID != "" {
+		r.edit(ctx, j.to, msgID, text)
+		return
+	}
+	if _, err := r.ad.send(ctx, j.to, text, nil, false); err != nil && ctx.Err() == nil {
+		r.svc.log.Warn("channels: send failed", "channel_id", r.ch.ID, "conversation_id", j.conv.ID, "error", err)
 	}
 }
 

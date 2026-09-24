@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
@@ -26,13 +27,21 @@ type Outcomes struct {
 	// for tests.
 	APIBase      string
 	SlackAPIBase string
+	// mail wires email channels; SetEmail fills its mailbox.
+	mail emailEnv
 }
 
 // NewOutcomes wires the consumer; deps.Get is required, Events and
 // WebBaseURL are optional. enabled is the channels switch (nil sends
 // always).
 func NewOutcomes(store *Store, deps MissionDeps, resolveSecret func(ctx context.Context, ref string) (string, error), client *http.Client, enabled func(context.Context) bool, log *slog.Logger) *Outcomes {
-	return &Outcomes{store: store, deps: deps, resolve: resolveSecret, http: client, enabled: enabled, log: log}
+	return &Outcomes{store: store, deps: deps, resolve: resolveSecret, http: client, enabled: enabled, log: log,
+		mail: emailEnv{store: store, log: log}}
+}
+
+// SetEmail lets outcomes reach email channels through open.
+func (o *Outcomes) SetEmail(open func(ctx context.Context, id string) (*connectors.IMAPMailbox, error)) {
+	o.mail.mailbox = openMailbox(open)
 }
 
 func (*Outcomes) Name() string { return "channels" }
@@ -77,7 +86,7 @@ func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error 
 		o.log.Info("channels: outcome not sent, channel disabled", "channel_id", ch.ID, "mission_id", m.ID)
 		return nil
 	}
-	ad, err := newAdapter(ch, o.http, o.resolve, o.APIBase, o.SlackAPIBase)
+	ad, err := newAdapter(ch, o.http, o.resolve, o.APIBase, o.SlackAPIBase, &o.mail)
 	if err != nil {
 		o.log.Warn("channels: outcome channel unsupported", "channel_id", ch.ID, "error", err)
 		return nil
@@ -102,6 +111,10 @@ func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error 
 	}
 	text := outcomeText(m, terminal, reason, missions.OutcomeDigest(m, evs, terminal, reason), base)
 	if _, err := ad.send(ctx, conversationTarget(conv), text, nil, false); err != nil {
+		if errors.Is(err, errMailBudget) {
+			o.log.Warn("channels: outcome dropped, mail budget spent", "channel_id", ch.ID, "mission_id", m.ID)
+			return nil
+		}
 		if st := apiStatus(err); st >= 400 && st < 500 && st != http.StatusTooManyRequests {
 			o.log.Warn("channels: outcome rejected", "channel_id", ch.ID, "kind", ch.Kind, "mission_id", m.ID, "error", err)
 			return nil

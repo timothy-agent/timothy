@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { Mail } from 'lucide-react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import { deleteChannel, listAgents, listChannels, patchChannel, testChannel } from '../../api/client'
 import type { AdminAgent, Channel } from '../../api/types'
@@ -19,6 +20,12 @@ import { TestStatus } from './TestStatus'
 import { errText } from '../../lib/errors'
 
 const area = settingsArea('channels')
+
+function channelTile(kind: Channel['kind']): ReactNode {
+  if (kind === 'slack') return <SlackIcon className="size-9" />
+  if (kind === 'email') return <Mail className="size-9" />
+  return <TelegramIcon className="size-9" />
+}
 
 export function ChannelsList() {
   const [channels, setChannels] = useState<Channel[]>([])
@@ -50,8 +57,9 @@ export function ChannelsList() {
         <section className="space-y-4">
           <SectionHeader title={channels.length > 0 ? `Your channels · ${channels.length}` : 'Your channels'} />
           <p className="-mt-2 max-w-2xl text-sm text-muted-foreground">
-            Timothy polls Telegram and holds a Socket Mode connection to Slack, so nothing inbound needs
-            exposing. Unknown senders get a pairing prompt and never reach a model until you approve them here.
+            Timothy polls Telegram, holds a Socket Mode connection to Slack and polls email inboxes over IMAP, so
+            nothing inbound needs exposing. Unknown senders get a pairing prompt and never reach a model until you
+            approve them here.
           </p>
           {channels.length === 0 ? (
             <EmptyState title="No channels yet" description="Add one below." />
@@ -79,6 +87,12 @@ export function ChannelsList() {
               description="Chat with Timothy through a Slack app."
               tile={<SlackIcon className="size-9" />}
             />
+            <AddPresetTile
+              to="/settings/channels/new?kind=email"
+              title="Email"
+              description="Chat with Timothy by email over an IMAP connector."
+              tile={<Mail className="size-9" />}
+            />
           </div>
         </section>
       </div>
@@ -102,7 +116,8 @@ function ChannelCard({ channel, agents, onChanged }: { channel: Channel; agents:
     setTest(null)
     try {
       const res = await testChannel(channel.id)
-      setTest({ ok: true, message: `Connected as @${res.bot_username}` })
+      const who = channel.kind === 'email' ? `to ${res.bot_username}` : `as @${res.bot_username}`
+      setTest({ ok: true, message: `Connected ${who}` })
       onChanged()
     } catch (err) {
       setTest({ ok: false, message: `Failed: ${errText(err)}` })
@@ -129,7 +144,7 @@ function ChannelCard({ channel, agents, onChanged }: { channel: Channel; agents:
       <EntityCard
         to={`/settings/channels/${channel.id}`}
         title={channel.name}
-        tile={channel.kind === 'slack' ? <SlackIcon className="size-9" /> : <TelegramIcon className="size-9" />}
+        tile={channelTile(channel.kind)}
         badges={
           <Badge variant="outline" size="sm">
             {channel.kind}
@@ -139,7 +154,7 @@ function ChannelCard({ channel, agents, onChanged }: { channel: Channel; agents:
           <div className="space-y-1 text-xs text-muted-foreground">
             <div className="truncate">
               {channel.config.bot_username ? (
-                <span className="font-mono">@{channel.config.bot_username}</span>
+                <span className="font-mono">{`${channel.kind === 'email' ? '' : '@'}${channel.config.bot_username}`}</span>
               ) : (
                 'Not tested yet'
               )}

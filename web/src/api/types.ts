@@ -990,14 +990,17 @@ export interface Destination {
   updated_at: string
 }
 
-// Channel is one chat surface (issues #828, #830): a Telegram bot or a
-// Slack app. credential_ref names the bot token secret, never its
-// value; Slack also names its app-level token in config.app_token_ref.
+// Channel is one chat surface (issues #828, #830): a Telegram bot, a
+// Slack app or an email mailbox. credential_ref names the bot token
+// secret, never its value; Slack also names its app-level token in
+// config.app_token_ref. Email has no credential_ref: config.connector_id
+// names the IMAP connector holding the password, config.from_allow the
+// senders it reads, and bot_username is the mailbox address.
 export interface Channel {
   id: string
   name: string
   kind: 'telegram' | 'slack' | 'email'
-  config: { dispatch: boolean; bot_username?: string; app_token_ref?: string }
+  config: ChannelConfig
   credential_ref: string
   agent_id: string
   enabled: boolean
@@ -1019,12 +1022,20 @@ export interface ChannelPairing {
   updated_at: string
 }
 
+export interface ChannelConfig {
+  dispatch: boolean
+  bot_username?: string
+  app_token_ref?: string
+  connector_id?: string
+  from_allow?: string[]
+}
+
 export interface ChannelInput {
   name: string
   kind: Channel['kind']
   credential_ref: string
   agent_id?: string
-  config?: { dispatch?: boolean; app_token_ref?: string }
+  config?: Partial<Omit<ChannelConfig, 'bot_username'>>
   enabled?: boolean
 }
 
@@ -1033,7 +1044,7 @@ export interface ChannelPatch {
   credential_ref?: string
   agent_id?: string | null
   enabled?: boolean
-  config?: { dispatch?: boolean; app_token_ref?: string }
+  config?: Partial<Omit<ChannelConfig, 'bot_username'>>
 }
 
 // GitHubDestinationConfig is the config shape for a 'github' kind

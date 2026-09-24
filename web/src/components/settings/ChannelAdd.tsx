@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
-import { createChannel, listAgents, patchChannel, setSecret, testChannel } from '../../api/client'
-import type { AdminAgent, Channel } from '../../api/types'
+import { createChannel, listAgents, listConnectors, patchChannel, setSecret, testChannel } from '../../api/client'
+import type { AdminAgent, AdminConnector, Channel } from '../../api/types'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
@@ -11,6 +11,8 @@ import { PageShell } from '../timothy/page-shell'
 import { Field, FieldGroup, Form, FormActions } from '../timothy/field'
 import { ChannelAgentSelect } from './ChannelAgentSelect'
 import { channelAgentPatch, DEFAULT_AGENT } from './channelAgent'
+import { emailConnectors } from './channelEmail'
+import { ChannelEmailFields } from './ChannelEmailFields'
 import { CredentialField, type CredentialMode } from './CredentialRefPicker'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
@@ -24,14 +26,18 @@ const title = 'New channel'
 // ChannelAdd creates the channel disabled while testing its bot token;
 // a passing test enables it on Add, same flow as DestinationAdd. A
 // retry after a failed test updates the saved row instead of creating
-// a second one. Slack also needs its app-level token for Socket Mode.
+// a second one. Slack also needs its app-level token for Socket Mode;
+// email needs an IMAP connector with SMTP and a sender allowlist.
 export function ChannelAdd() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const defaultBackend = useDefaultSecretBackend()
   const [agents, setAgents] = useState<AdminAgent[]>([])
   const [name, setName] = useState('')
-  const [kind, setKind] = useState<Channel['kind']>(params.get('kind') === 'slack' ? 'slack' : 'telegram')
+  const [kind, setKind] = useState<Channel['kind']>(() => {
+    const k = params.get('kind')
+    return k === 'slack' || k === 'email' ? k : 'telegram'
+  })
   const [agent, setAgent] = useState(DEFAULT_AGENT)
   const [token, setToken] = useState('')
   const [tokenMode, setTokenMode] = useState<CredentialMode>('new')
@@ -39,6 +45,9 @@ export function ChannelAdd() {
   const [appToken, setAppToken] = useState('')
   const [appTokenMode, setAppTokenMode] = useState<CredentialMode>('new')
   const [existingAppRef, setExistingAppRef] = useState('')
+  const [connectors, setConnectors] = useState<AdminConnector[] | null>(null)
+  const [connectorID, setConnectorID] = useState('')
+  const [fromAllow, setFromAllow] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [createdID, setCreatedID] = useState<string | null>(null)
   const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null)
@@ -49,16 +58,29 @@ export function ChannelAdd() {
       .catch((err: unknown) => toast.error('Could not load agents', { description: errText(err) }))
   }, [])
 
+  const email = kind === 'email'
+  useEffect(() => {
+    if (!email || connectors) return
+    listConnectors()
+      .then((rows) => {
+        const usable = emailConnectors(rows)
+        setConnectors(usable)
+        setConnectorID((id) => id || (usable[0]?.id ?? ''))
+      })
+      .catch((err: unknown) => toast.error('Could not load connectors', { description: errText(err) }))
+  }, [email, connectors])
+
   const slack = kind === 'slack'
   const slug = slugify(name).toUpperCase().replace(/-/g, '_')
   const usingExisting = tokenMode === 'existing'
   const tokenRef = usingExisting ? existingRef : `${slug}_CHANNEL_BOT_TOKEN`
   const usingExistingApp = appTokenMode === 'existing'
   const appTokenRef = usingExistingApp ? existingAppRef : `${slug}_CHANNEL_APP_TOKEN`
-  const canTest =
-    name.trim() !== '' &&
-    (usingExisting ? existingRef !== '' : token.trim() !== '') &&
-    (!slack || (usingExistingApp ? existingAppRef !== '' : appToken.trim() !== ''))
+  const canTest = email
+    ? name.trim() !== '' && connectorID !== '' && fromAllow.length > 0
+    : name.trim() !== '' &&
+      (usingExisting ? existingRef !== '' : token.trim() !== '') &&
+      (!slack || (usingExistingApp ? existingAppRef !== '' : appToken.trim() !== ''))
 
   const edit = <T,>(set: (v: T) => void) => (v: T) => {
     set(v)
@@ -69,18 +91,22 @@ export function ChannelAdd() {
     setBusy(true)
     setTest(null)
     try {
-      if (!usingExisting) await setSecret(tokenRef, token.trim())
+      if (!email && !usingExisting) await setSecret(tokenRef, token.trim())
       if (slack && !usingExistingApp) await setSecret(appTokenRef, appToken.trim())
       const { agent_id, config: agentConfig } = channelAgentPatch(agent)
-      const config = slack ? { ...agentConfig, app_token_ref: appTokenRef } : agentConfig
+      const config = slack
+        ? { ...agentConfig, app_token_ref: appTokenRef }
+        : email
+          ? { ...agentConfig, connector_id: connectorID, from_allow: fromAllow }
+          : agentConfig
       let id = createdID
       if (id) {
-        await patchChannel(id, { name: name.trim(), credential_ref: tokenRef, agent_id, config })
+        await patchChannel(id, { name: name.trim(), ...(email ? {} : { credential_ref: tokenRef }), agent_id, config })
       } else {
         id = await createChannel({
           name: name.trim(),
           kind,
-          credential_ref: tokenRef,
+          credential_ref: email ? '' : tokenRef,
           agent_id: agent_id ?? undefined,
           config,
           enabled: false,
@@ -88,7 +114,8 @@ export function ChannelAdd() {
         setCreatedID(id)
       }
       const res = await testChannel(id)
-      setTest({ ok: true, message: `Connected as @${res.bot_username}, ready to add.` })
+      const who = email ? `to ${res.bot_username}` : `as @${res.bot_username}`
+      setTest({ ok: true, message: `Connected ${who}, ready to add.` })
     } catch (err) {
       setTest({ ok: false, message: `Test failed: ${errText(err)}. Fix and retry.` })
     } finally {
@@ -114,7 +141,9 @@ export function ChannelAdd() {
     <PageShell width="form">
       <PageHeader
         title={title}
-        description={slack ? 'Slack app, Socket Mode' : 'Telegram bot, long polling'}
+        description={
+          slack ? 'Slack app, Socket Mode' : email ? 'Email over an IMAP connector, polled' : 'Telegram bot, long polling'
+        }
         breadcrumbs={[
           { label: 'Settings', href: '/settings' },
           { label: area.label, href: '/settings/channels' },
@@ -127,7 +156,7 @@ export function ChannelAdd() {
             <Input
               value={name}
               onChange={(e) => edit(setName)(e.target.value)}
-              placeholder={slack ? 'my-slack' : 'my-telegram'}
+              placeholder={slack ? 'my-slack' : email ? 'my-email' : 'my-telegram'}
             />
           </Field>
           <Field label="Kind" description={createdID ? 'fixed once tested' : undefined}>
@@ -138,24 +167,32 @@ export function ChannelAdd() {
               <SelectContent>
                 <SelectItem value="telegram">Telegram</SelectItem>
                 <SelectItem value="slack">Slack</SelectItem>
-                <SelectItem value="email" disabled>
-                  Email (coming later)
-                </SelectItem>
+                <SelectItem value="email">Email</SelectItem>
               </SelectContent>
             </Select>
           </Field>
-          <CredentialField
-            label="Bot token"
-            mode={tokenMode}
-            onModeChange={edit(setTokenMode)}
-            existingRef={existingRef}
-            onExistingRefChange={edit(setExistingRef)}
-            secretValue={token}
-            onSecretValueChange={edit(setToken)}
-            secretPlaceholder={slack ? 'xoxb-...' : '123456:ABC-DEF...'}
-            defaultBackend={defaultBackend}
-            refName={tokenRef}
-          />
+          {email ? (
+            <ChannelEmailFields
+              connectors={connectors}
+              connectorID={connectorID}
+              onConnectorChange={edit(setConnectorID)}
+              fromAllow={fromAllow}
+              onFromAllowChange={edit(setFromAllow)}
+            />
+          ) : (
+            <CredentialField
+              label="Bot token"
+              mode={tokenMode}
+              onModeChange={edit(setTokenMode)}
+              existingRef={existingRef}
+              onExistingRefChange={edit(setExistingRef)}
+              secretValue={token}
+              onSecretValueChange={edit(setToken)}
+              secretPlaceholder={slack ? 'xoxb-...' : '123456:ABC-DEF...'}
+              defaultBackend={defaultBackend}
+              refName={tokenRef}
+            />
+          )}
           {slack && (
             <CredentialField
               label="App token"
@@ -187,6 +224,12 @@ export function ChannelAdd() {
                 messages tab; install the app to your workspace and paste its bot token (xoxb) as the Bot token.
               </p>
             </div>
+          ) : email ? (
+            <p className="text-sm text-muted-foreground">
+              Timothy polls the connector&apos;s inbox and replies over its SMTP server, so nothing inbound needs
+              exposing. Use a mailbox of its own: mail from that address is ignored. Senders off the allowlist are
+              dropped unread; allowed senders still pair before they reach a model.
+            </p>
           ) : (
             <p className="text-sm text-muted-foreground">
               Timothy long-polls Telegram for this bot, so nothing inbound needs exposing. Create the bot with

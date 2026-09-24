@@ -235,7 +235,7 @@ func (a *slackAdapter) edit(ctx context.Context, to target, messageID, text stri
 func (*slackAdapter) answerPress(context.Context, string, string) error { return nil }
 
 func (*slackAdapter) caps() capabilities {
-	return capabilities{MessageLimit: slackMessageLimit, EditEvery: slackEditEvery}
+	return capabilities{Edits: true, Buttons: true, MessageLimit: slackMessageLimit, EditEvery: slackEditEvery}
 }
 
 // slackBlocks renders text plus buttons as one plain_text section and

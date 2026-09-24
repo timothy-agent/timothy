@@ -264,7 +264,7 @@ func (t *telegramAdapter) answerPress(ctx context.Context, pressID, text string)
 }
 
 func (*telegramAdapter) caps() capabilities {
-	return capabilities{MessageLimit: messageLimit, EditEvery: editEvery}
+	return capabilities{Edits: true, Buttons: true, MessageLimit: messageLimit, EditEvery: editEvery}
 }
 
 // tgTarget parses a target's numeric chat and thread ids.

@@ -220,7 +220,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 		destAutomationRefs = automationStore
 	}
 	a.registerDestinations(srv.Handle, destinationStore, destRefs, destAutomationRefs, destinationTest)
-	a.registerChannels(srv.Handle, channelStore, channelService)
+	a.registerChannels(srv.Handle, channelStore, channelService, connLookup)
 	// Same nil-box guard as connLister above: a nil *workflows.Engine
 	// boxed straight into workflowStarter would be a non-nil interface
 	// value, breaking registerWorkflows' engine == nil gate on

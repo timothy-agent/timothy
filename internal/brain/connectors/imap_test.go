@@ -34,6 +34,9 @@ type fakeIMAPSession struct {
 		ct  string
 	}
 	fetchErr error
+	// uids and latest back UIDsAfter and LatestUID.
+	uids   []imap.UID
+	latest imap.UID
 
 	closed     bool
 	closeCount int
@@ -76,6 +79,18 @@ func (f *fakeIMAPSession) FetchAttachment(_ context.Context, uid imap.UID, filen
 	}
 	return a.raw, a.ct, nil
 }
+
+func (f *fakeIMAPSession) UIDsAfter(_ context.Context, uid imap.UID) ([]imap.UID, error) {
+	var out []imap.UID
+	for _, u := range f.uids {
+		if u > uid {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeIMAPSession) LatestUID(context.Context) (imap.UID, error) { return f.latest, nil }
 
 func (f *fakeIMAPSession) Close() error {
 	f.mu.Lock()

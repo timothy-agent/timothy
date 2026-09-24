@@ -14,7 +14,7 @@ func TestChannelsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerChannels(m.Handle, nil, nil)
+	a.registerChannels(m.Handle, nil, nil, nil)
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/channels"},
 		{"POST", "/v1/channels"},
@@ -40,7 +40,7 @@ func TestChannelsRejectBadBodiesBeforeTheStore(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerChannels(m.Handle, channels.NewStore(nil), nil)
+	a.registerChannels(m.Handle, channels.NewStore(nil), nil, nil)
 	for _, tc := range []struct{ method, path, body string }{
 		{"POST", "/v1/channels", `{"name":"x","kind":"telegram","credential_ref":"T","token":"leak"}`},
 		{"POST", "/v1/channels", `{"name":"x","kind":"telegram","credential_ref":"T","config":{"dispatch":true,"extra":1}}`},

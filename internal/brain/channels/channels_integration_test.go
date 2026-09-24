@@ -86,8 +86,11 @@ func TestStoreChannelCRUD(t *testing.T) {
 	if _, err := s.Create(ctx, Channel{Name: " " + strings.ToUpper(tag) + "BOT ", Kind: KindTelegram, CredentialRef: "X"}); !errors.Is(err, ErrNameConflict) {
 		t.Fatalf("duplicate name = %v, want ErrNameConflict", err)
 	}
-	if _, err := s.Create(ctx, Channel{Name: tag + "email", Kind: "email", CredentialRef: "X"}); !errors.Is(err, ErrKindUnavailable) {
-		t.Fatalf("email = %v, want ErrKindUnavailable", err)
+	if _, err := s.Create(ctx, Channel{Name: tag + "fax", Kind: "fax", CredentialRef: "X"}); !errors.Is(err, ErrKindUnavailable) {
+		t.Fatalf("fax = %v, want ErrKindUnavailable", err)
+	}
+	if _, err := s.Create(ctx, Channel{Name: tag + "email", Kind: KindEmail, CredentialRef: "X"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("email with a credential_ref = %v, want ErrInvalid", err)
 	}
 	if _, err := s.Create(ctx, Channel{Name: tag + "slack", Kind: KindSlack, CredentialRef: "X"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("slack without app token = %v, want ErrInvalid", err)

@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminAgent, Channel, ChannelPairing } from '../../api/types'
+import type { AdminAgent, AdminConnector, Channel, ChannelPairing } from '../../api/types'
 import { TooltipProvider } from '../ui/tooltip'
 import { ChannelsTab } from './ChannelsTab'
 
@@ -13,6 +13,7 @@ vi.mock('../../api/client', () => ({
   listAgents: vi.fn(),
   listChannelPairings: vi.fn(),
   listChannels: vi.fn(),
+  listConnectors: vi.fn(),
   listSecretBackends: vi.fn(),
   listSecretRefs: vi.fn(),
   patchChannel: vi.fn(),
@@ -31,6 +32,7 @@ import {
   listAgents,
   listChannelPairings,
   listChannels,
+  listConnectors,
   listSecretBackends,
   listSecretRefs,
   patchChannel,
@@ -61,6 +63,28 @@ const channel: Channel = {
   pairings: { pending: 1, approved: 2, revoked: 0 },
   created_at: '2026-09-24T00:00:00Z',
   updated_at: '2026-09-24T00:00:00Z',
+}
+
+function imapConnector(over: Partial<AdminConnector>): AdminConnector {
+  return {
+    id: 'k1',
+    name: 'mailbox',
+    kind: 'imap',
+    config: { host: 'imap.example.com', username: 'timothy@example.com', smtp_host: 'smtp.example.com' },
+    credential_ref: 'MAILBOX_IMAP_PASSWORD',
+    enabled: true,
+    sensitive: false,
+    ...over,
+  }
+}
+
+const emailChannel: Channel = {
+  ...channel,
+  id: 'c3',
+  name: 'inbox',
+  kind: 'email',
+  credential_ref: '',
+  config: { dispatch: false, bot_username: 'timothy@example.com', connector_id: 'k1', from_allow: ['ada@x.com', '@team.org'] },
 }
 
 function pairing(over: Partial<ChannelPairing>): ChannelPairing {
@@ -97,6 +121,7 @@ beforeEach(() => {
   vi.mocked(listSecretRefs).mockResolvedValue([])
   vi.mocked(listChannelPairings).mockResolvedValue([])
   vi.mocked(getChannel).mockResolvedValue(channel)
+  vi.mocked(listConnectors).mockResolvedValue([])
 })
 
 describe('Channels settings', () => {
@@ -287,5 +312,77 @@ describe('Channels settings', () => {
   it('shows the empty pairings state', async () => {
     renderTab('/settings/channels/c1')
     expect(await screen.findByText('No one has messaged this bot yet')).toBeTruthy()
+  })
+
+  it('offers an Email add tile', async () => {
+    renderTab()
+    expect((await screen.findByRole('link', { name: 'Email' })).getAttribute('href')).toBe('/settings/channels/new?kind=email')
+  })
+
+  it('adds an email channel: picks the SMTP-capable IMAP connector, no token, allowlist in config', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([
+      imapConnector({ id: 'k0', name: 'no-smtp', config: { host: 'h', username: 'u' } }),
+      imapConnector({}),
+      imapConnector({ id: 'k2', name: 'off', enabled: false }),
+      imapConnector({ id: 'g1', name: 'gmail', kind: 'google' }),
+    ])
+    vi.mocked(createChannel).mockResolvedValue('c8')
+    vi.mocked(testChannel).mockResolvedValue({ ok: true, bot_username: 'timothy@example.com' })
+    vi.mocked(patchChannel).mockResolvedValue(emailChannel)
+    renderTab('/settings/channels/new?kind=email')
+
+    fireEvent.change(await screen.findByPlaceholderText('my-email'), { target: { value: 'Inbox' } })
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'IMAP connector' }).textContent).toBe('mailbox'))
+    expect(screen.queryByLabelText('Bot token')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Test connection' }) as HTMLButtonElement).disabled).toBe(true)
+    const allow = screen.getByLabelText('From allowlist')
+    fireEvent.change(allow, { target: { value: 'Ada@X.com, @team.org' } })
+    fireEvent.keyDown(allow, { key: 'Enter' })
+    expect(screen.getByRole('button', { name: 'Remove sender ada@x.com' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    expect(await screen.findByText('Connected to timothy@example.com, ready to add.')).toBeTruthy()
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(createChannel).toHaveBeenCalledWith({
+      name: 'Inbox',
+      kind: 'email',
+      credential_ref: '',
+      agent_id: undefined,
+      config: { dispatch: false, connector_id: 'k1', from_allow: ['ada@x.com', '@team.org'] },
+      enabled: false,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    await waitFor(() => expect(patchChannel).toHaveBeenCalledWith('c8', { enabled: true }))
+  })
+
+  it('points to connectors when no IMAP connector can reply', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([imapConnector({ config: { host: 'h', username: 'u' } })])
+    renderTab('/settings/channels/new?kind=email')
+    const link = await screen.findByRole('link', { name: 'Add an IMAP connector with SMTP first' })
+    expect(link.getAttribute('href')).toBe('/settings/connectors')
+    fireEvent.change(screen.getByPlaceholderText('my-email'), { target: { value: 'Inbox' } })
+    expect((screen.getByRole('button', { name: 'Test connection' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('edits an email channel allowlist on the manage page', async () => {
+    vi.mocked(getChannel).mockResolvedValue(emailChannel)
+    vi.mocked(listConnectors).mockResolvedValue([imapConnector({})])
+    vi.mocked(patchChannel).mockResolvedValue(emailChannel)
+    renderTab('/settings/channels/c3')
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove sender @team.org' }))
+    const allow = screen.getByLabelText('From allowlist')
+    fireEvent.change(allow, { target: { value: 'bob@y.org' } })
+    fireEvent.keyDown(allow, { key: 'Enter' })
+    expect(screen.queryByText('Rotate bot token')).toBeNull()
+    expect(screen.getByText('Checks the mailbox with its IMAP connector.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(patchChannel).toHaveBeenCalledWith('c3', {
+        name: 'inbox',
+        agent_id: 'a1',
+        config: { dispatch: false, connector_id: 'k1', from_allow: ['ada@x.com', 'bob@y.org'] },
+      }),
+    )
   })
 })

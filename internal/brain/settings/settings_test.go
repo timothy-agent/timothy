@@ -171,3 +171,23 @@ func TestGitHubPollIntervalDefault(t *testing.T) {
 		t.Fatal("ValueGitHubPollSeconds missing from knownValueKeys or nonNegativeIntKeys")
 	}
 }
+
+// TestEmailPollIntervalFloor pins the email channel's 60 s default and
+// 30 s floor, and the key's registration as a non-negative integer.
+func TestEmailPollIntervalFloor(t *testing.T) {
+	s := degradedStore(t)
+	if got := s.EmailPollInterval(context.Background()); got != DefaultEmailPollSeconds*time.Second {
+		t.Fatalf("EmailPollInterval() = %v, want %ds", got, DefaultEmailPollSeconds)
+	}
+	for v, want := range map[string]time.Duration{"0": 60 * time.Second, "5": 30 * time.Second, "30": 30 * time.Second, "90": 90 * time.Second, "junk": 60 * time.Second} {
+		s.mu.Lock()
+		s.flags, s.values, s.fetched = map[string]bool{}, map[string]string{ValueEmailPollSeconds: v}, time.Now()
+		s.mu.Unlock()
+		if got := s.EmailPollInterval(context.Background()); got != want {
+			t.Errorf("EmailPollInterval(%q) = %v, want %v", v, got, want)
+		}
+	}
+	if !knownValueKeys[ValueEmailPollSeconds] || !nonNegativeIntKeys[ValueEmailPollSeconds] {
+		t.Fatal("ValueEmailPollSeconds missing from knownValueKeys or nonNegativeIntKeys")
+	}
+}

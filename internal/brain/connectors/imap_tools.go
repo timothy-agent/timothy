@@ -46,6 +46,7 @@ type imapMessageSummary struct {
 type imapAttachment struct {
 	Filename    string
 	ContentType string
+	Size        int
 }
 
 // imapMessage is one read_mail result: headers, body text, and
@@ -53,7 +54,16 @@ type imapAttachment struct {
 type imapMessage struct {
 	From, To, Date, Subject string
 	Body                    string
-	Attachments             []imapAttachment
+	// BodyHTML marks a Body taken from a text/html part.
+	BodyHTML    bool
+	Attachments []imapAttachment
+	// Threading and sender fields for the email channel; ids are
+	// without angle brackets.
+	MessageID   string
+	InReplyTo   string
+	References  []string
+	FromAddress string
+	FromName    string
 }
 
 // imapSession is the minimal IMAP session surface the tools need,
@@ -69,6 +79,10 @@ type imapSession interface {
 	// FetchAttachment returns one attachment's raw bytes and content
 	// type by UID and filename.
 	FetchAttachment(ctx context.Context, uid imap.UID, filename string) ([]byte, string, error)
+	// UIDsAfter returns the UIDs above uid, ascending.
+	UIDsAfter(ctx context.Context, uid imap.UID) ([]imap.UID, error)
+	// LatestUID returns the highest UID in use, 0 for an empty mailbox.
+	LatestUID(ctx context.Context) (imap.UID, error)
 	Close() error
 }
 
@@ -76,6 +90,8 @@ type imapSession interface {
 // with INBOX already SELECTed read-only.
 type imapConn struct {
 	client *imapclient.Client
+	// uidNext is SELECT's UIDNEXT, 0 when the server sent none.
+	uidNext imap.UID
 }
 
 func (s *imapConn) Search(ctx context.Context, words []string, max int) ([]imapMessageSummary, error) {
@@ -258,6 +274,39 @@ func (s *imapConn) FetchAttachment(_ context.Context, uid imap.UID, filename str
 	return findIMAPAttachment(msgs[0].BodySection[0].Bytes, filename)
 }
 
+func (s *imapConn) UIDsAfter(_ context.Context, uid imap.UID) ([]imap.UID, error) {
+	// Stop 0 is "*"; a range past the last UID still matches the last
+	// message, so the result is filtered.
+	criteria := &imap.SearchCriteria{UID: []imap.UIDSet{{imap.UIDRange{Start: uid + 1, Stop: 0}}}}
+	data, err := s.client.UIDSearch(criteria, nil).Wait()
+	if err != nil {
+		return nil, fmt.Errorf("imap search: %w", err)
+	}
+	var out []imap.UID
+	for _, u := range data.AllUIDs() {
+		if u > uid {
+			out = append(out, u)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out, nil
+}
+
+func (s *imapConn) LatestUID(_ context.Context) (imap.UID, error) {
+	if s.uidNext > 0 {
+		return s.uidNext - 1, nil
+	}
+	data, err := s.client.UIDSearch(&imap.SearchCriteria{}, nil).Wait()
+	if err != nil {
+		return 0, fmt.Errorf("imap search: %w", err)
+	}
+	var latest imap.UID
+	for _, u := range data.AllUIDs() {
+		latest = max(latest, u)
+	}
+	return latest, nil
+}
+
 func (s *imapConn) Close() error {
 	if err := s.client.Logout().Wait(); err != nil {
 		_ = s.client.Close()
@@ -300,7 +349,13 @@ func parseIMAPMessageBytes(raw []byte) (imapMessage, error) {
 	out := imapMessage{}
 	if from, _ := r.Header.AddressList("From"); len(from) > 0 {
 		out.From = joinAddresses(from)
+		out.FromAddress, out.FromName = from[0].Address, from[0].Name
 	}
+	out.MessageID, _ = r.Header.MessageID()
+	if ids, _ := r.Header.MsgIDList("In-Reply-To"); len(ids) > 0 {
+		out.InReplyTo = ids[0]
+	}
+	out.References, _ = r.Header.MsgIDList("References")
 	if to, _ := r.Header.AddressList("To"); len(to) > 0 {
 		out.To = joinAddresses(to)
 	}
@@ -323,7 +378,8 @@ func parseIMAPMessageBytes(raw []byte) (imapMessage, error) {
 			filename, _ := h.Filename()
 			ct, _, _ := h.ContentType()
 			if filename != "" {
-				out.Attachments = append(out.Attachments, imapAttachment{Filename: filename, ContentType: ct})
+				n, _ := io.Copy(io.Discard, part.Body)
+				out.Attachments = append(out.Attachments, imapAttachment{Filename: filename, ContentType: ct, Size: int(n)})
 			}
 		case *emmail.InlineHeader:
 			ct, _, _ := h.ContentType()
@@ -335,8 +391,8 @@ func parseIMAPMessageBytes(raw []byte) (imapMessage, error) {
 			}
 		}
 	}
-	if out.Body == "" {
-		out.Body = htmlBody
+	if out.Body == "" && htmlBody != "" {
+		out.Body, out.BodyHTML = htmlBody, true
 	}
 	return out, nil
 }
@@ -631,6 +687,13 @@ func rejectHeaderInjection(fields ...string) error {
 // String); the SMTP envelope's RCPT TO list is built separately from
 // the bare addresses (see mailSend's Execute).
 func buildRFC822Message(from string, to, cc []*mail.Address, subject, body string) ([]byte, error) {
+	return assembleRFC822(from, to, cc, subject, body, fmt.Sprintf("%d.timothy@%s", time.Now().UnixNano(), addressHost(from)), "", nil), nil
+}
+
+// assembleRFC822 writes a plain-text message with the given
+// Message-Id and, when set, In-Reply-To and References (ids without
+// angle brackets). Callers reject header injection first.
+func assembleRFC822(from string, to, cc []*mail.Address, subject, body, messageID, inReplyTo string, references []string) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "From: %s\r\n", from)
 	fmt.Fprintf(&b, "To: %s\r\n", joinAddresses(to))
@@ -639,12 +702,18 @@ func buildRFC822Message(from string, to, cc []*mail.Address, subject, body strin
 	}
 	fmt.Fprintf(&b, "Subject: %s\r\n", encodeSubject(subject))
 	fmt.Fprintf(&b, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
-	fmt.Fprintf(&b, "Message-Id: <%d.timothy@%s>\r\n", time.Now().UnixNano(), addressHost(from))
+	fmt.Fprintf(&b, "Message-Id: <%s>\r\n", messageID)
+	if inReplyTo != "" {
+		fmt.Fprintf(&b, "In-Reply-To: <%s>\r\n", inReplyTo)
+	}
+	if len(references) > 0 {
+		fmt.Fprintf(&b, "References: <%s>\r\n", strings.Join(references, "> <"))
+	}
 	b.WriteString("MIME-Version: 1.0\r\n")
 	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
 	b.WriteString("\r\n")
 	b.WriteString(body)
-	return []byte(b.String()), nil
+	return []byte(b.String())
 }
 
 // encodeSubject RFC 2047-encodes subject when it carries any non-ASCII

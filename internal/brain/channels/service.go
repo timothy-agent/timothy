@@ -2,12 +2,15 @@ package channels
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -65,6 +68,8 @@ type Service struct {
 	editEvery  time.Duration
 	retryEvery time.Duration
 	parkEvery  time.Duration
+	// mail wires email channels; SetEmail fills its mailbox.
+	mail emailEnv
 
 	reload chan struct{}
 	// enabled is the channels switch Run was given (nil runs always).
@@ -95,6 +100,7 @@ func New(store *Store, chatFn ChatFunc, deps MissionDeps, resolveSecret func(ctx
 		reload: make(chan struct{}, 1), runners: map[string]*runnerHandle{}, running: -1,
 		parked: map[string]string{}, skipLogged: map[string]bool{},
 	}
+	s.mail = emailEnv{store: store, log: log, now: func() time.Time { return s.now() }}
 	store.SetOnChange(func(context.Context) { s.kick() })
 	return s
 }
@@ -106,12 +112,44 @@ func (s *Service) kick() {
 	}
 }
 
-func (s *Service) adapterFor(c Channel) (adapter, error) {
-	return newAdapter(c, s.http, s.resolveSecret, s.APIBase, s.SlackAPIBase)
+// SetEmail enables email channels: open returns an imap connector's
+// mailbox, save stores attachments (nil skips them) and poll is the
+// inbox poll interval (floored at 30 s). Call before Run.
+func (s *Service) SetEmail(open func(ctx context.Context, id string) (*connectors.IMAPMailbox, error),
+	save func(ctx context.Context, r io.Reader) (attachments.Attachment, error), poll func(ctx context.Context) time.Duration) {
+	s.mail.mailbox, s.mail.save = openMailbox(open), save
+	s.mail.poll = func(ctx context.Context) time.Duration {
+		if poll == nil {
+			return emailPollDefault
+		}
+		return max(poll(ctx), emailPollFloor)
+	}
 }
 
-// Test checks the channel's bot token (Telegram getMe, Slack
-// auth.test), records the username and returns it.
+func (s *Service) adapterFor(c Channel) (adapter, error) {
+	return newAdapter(c, s.http, s.resolveSecret, s.APIBase, s.SlackAPIBase, &s.mail)
+}
+
+// sendButtons sends text with buttons, rendering them as a reply hint
+// on transports without buttons and remembering them on conversation
+// convID so a reply presses one.
+func (s *Service) sendButtons(ctx context.Context, ad adapter, convID string, to target, text string, buttons [][]button) (string, error) {
+	if len(buttons) == 0 || ad.caps().Buttons {
+		return ad.send(ctx, to, text, buttons, false)
+	}
+	id, err := ad.send(ctx, to, text+buttonsText(buttons), nil, false)
+	if err != nil || convID == "" {
+		return id, err
+	}
+	if err := s.store.RememberButtons(ctx, convID, id, buttons); err != nil {
+		s.log.Warn("channels: remember buttons failed", "conversation_id", convID, "error", err)
+	}
+	return id, nil
+}
+
+// Test checks the channel's credentials (Telegram getMe, Slack
+// auth.test, the email mailbox's INBOX), records the username (the
+// mailbox address for email) and returns it.
 func (s *Service) Test(ctx context.Context, id string) (string, error) {
 	c, err := s.store.Get(ctx, id)
 	if err != nil {
@@ -188,7 +226,7 @@ func (s *Service) reconcile(ctx context.Context, enabled func(context.Context) b
 			return false
 		}
 		for _, c := range rows {
-			if c.Enabled && (c.Kind == KindTelegram || c.Kind == KindSlack) {
+			if c.Enabled && (c.Kind == KindTelegram || c.Kind == KindSlack || c.Kind == KindEmail) {
 				want[c.ID] = c
 			}
 		}

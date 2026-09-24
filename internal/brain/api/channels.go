@@ -2,21 +2,25 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 )
 
 // registerChannels mounts the channels surface (issues #828, #830); a nil
 // store leaves it unmounted and a nil service leaves the test endpoint
-// unmounted.
-func (a *API) registerChannels(handle func(pattern string, h http.Handler), store *channels.Store, svc *channels.Service) {
+// unmounted. conns checks an email channel's connector; nil refuses
+// email channels.
+func (a *API) registerChannels(handle func(pattern string, h http.Handler), store *channels.Store, svc *channels.Service, conns connectorLookup) {
 	if store == nil {
 		return
 	}
-	h := &channelAPI{store: store, svc: svc}
+	h := &channelAPI{store: store, svc: svc, conns: conns}
 	handle("GET /v1/channels", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/channels", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/channels/{id}", a.auth(http.HandlerFunc(h.get)))
@@ -33,6 +37,27 @@ func (a *API) registerChannels(handle func(pattern string, h http.Handler), stor
 type channelAPI struct {
 	store *channels.Store
 	svc   *channels.Service
+	conns connectorLookup
+}
+
+// checkEmailConnector rejects an email channel connector that is
+// missing, disabled or not an imap connector.
+func (h *channelAPI) checkEmailConnector(ctx context.Context, id string) error {
+	if h.conns == nil {
+		return fmt.Errorf("%w: connectors are not enabled", channels.ErrInvalid)
+	}
+	kind, enabled, err := h.conns(ctx, id)
+	switch {
+	case errors.Is(err, connectors.ErrNotFound):
+		return fmt.Errorf("%w: unknown connector_id %s", channels.ErrInvalid, id)
+	case err != nil:
+		return fmt.Errorf("connector_id %s: %w", id, err)
+	case kind != "imap":
+		return fmt.Errorf("%w: connector %s is kind %s, not imap", channels.ErrInvalid, id, kind)
+	case !enabled:
+		return fmt.Errorf("%w: connector %s is disabled", channels.ErrInvalid, id)
+	}
+	return nil
 }
 
 func failChannel(w http.ResponseWriter, err error) {
@@ -51,8 +76,10 @@ func failChannel(w http.ResponseWriter, err error) {
 }
 
 type channelConfigInput struct {
-	Dispatch    *bool   `json:"dispatch"`
-	AppTokenRef *string `json:"app_token_ref"`
+	Dispatch    *bool     `json:"dispatch"`
+	AppTokenRef *string   `json:"app_token_ref"`
+	ConnectorID *string   `json:"connector_id"`
+	FromAllow   *[]string `json:"from_allow"`
 }
 
 type createChannelRequest struct {
@@ -104,6 +131,22 @@ func (h *channelAPI) create(w http.ResponseWriter, r *http.Request) {
 	if req.Config != nil && req.Config.AppTokenRef != nil {
 		c.Config.AppTokenRef = *req.Config.AppTokenRef
 	}
+	if req.Config != nil && req.Config.ConnectorID != nil {
+		c.Config.ConnectorID = *req.Config.ConnectorID
+	}
+	if req.Config != nil && req.Config.FromAllow != nil {
+		c.Config.FromAllow = *req.Config.FromAllow
+	}
+	if c.Kind == channels.KindEmail {
+		if err := channels.Validate(&c); err != nil {
+			failChannel(w, err)
+			return
+		}
+		if err := h.checkEmailConnector(r.Context(), c.Config.ConnectorID); err != nil {
+			failChannel(w, err)
+			return
+		}
+	}
 	if req.Enabled != nil {
 		c.Enabled = *req.Enabled
 	}
@@ -124,6 +167,13 @@ func (h *channelAPI) patch(w http.ResponseWriter, r *http.Request) {
 	p := channels.Patch{Name: req.Name, CredentialRef: req.CredentialRef, Enabled: req.Enabled}
 	if req.Config != nil {
 		p.Dispatch, p.AppTokenRef = req.Config.Dispatch, req.Config.AppTokenRef
+		p.ConnectorID, p.FromAllow = req.Config.ConnectorID, req.Config.FromAllow
+		if p.ConnectorID != nil {
+			if err := h.checkEmailConnector(r.Context(), *p.ConnectorID); err != nil {
+				failChannel(w, err)
+				return
+			}
+		}
 	}
 	if req.AgentID != nil {
 		agent := ""
@@ -150,7 +200,7 @@ func (h *channelAPI) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// test checks the channel's bot token with its transport.
+// test checks the channel's credentials with its transport.
 func (h *channelAPI) test(w http.ResponseWriter, r *http.Request) {
 	username, err := h.svc.Test(r.Context(), r.PathValue("id"))
 	if errors.Is(err, channels.ErrNotFound) {

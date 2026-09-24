@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/brain/chat"
 )
 
-// adapter is one chat transport; telegram and slack implement it.
+// adapter is one chat transport; telegram, slack and email implement
+// it.
 type adapter interface {
 	// connect verifies the credentials and returns the bot identity.
 	connect(ctx context.Context) (identity, error)
@@ -27,6 +30,14 @@ type adapter interface {
 
 // capabilities are a transport's reply limits.
 type capabilities struct {
+	// Edits is false for transports whose messages cannot change: the
+	// runner sends no placeholder and no streaming edits, only the
+	// final reply.
+	Edits bool
+	// Buttons is false for transports without inline buttons: the
+	// runner renders them as a reply hint and a reply naming one
+	// presses it.
+	Buttons bool
 	// MessageLimit caps one message in UTF-16 units.
 	MessageLimit int
 	// EditEvery is the streaming edit cadence.
@@ -63,7 +74,9 @@ type inbound struct {
 	Text        string
 	// ReplyToID is the message this one replies to, "" for none.
 	ReplyToID string
-	Press     *press
+	// Attachments are stored files the message carried (email).
+	Attachments []chat.AttachmentRef
+	Press       *press
 }
 
 // press is a button press. ID closes it via answerPress; MessageID is
@@ -94,14 +107,17 @@ func kindLabel(kind string) string {
 	switch kind {
 	case KindSlack:
 		return "Slack"
+	case KindEmail:
+		return "Email"
 	default:
 		return "Telegram"
 	}
 }
 
 // newAdapter builds the transport of channel c. The API bases are test
-// overrides; empty uses the real APIs.
-func newAdapter(c Channel, client *http.Client, resolve func(ctx context.Context, ref string) (string, error), telegramBase, slackBase string) (adapter, error) {
+// overrides; empty uses the real APIs. mail wires email channels; nil
+// or without a mailbox leaves them unavailable.
+func newAdapter(c Channel, client *http.Client, resolve func(ctx context.Context, ref string) (string, error), telegramBase, slackBase string, mail *emailEnv) (adapter, error) {
 	switch c.Kind {
 	case KindTelegram:
 		if telegramBase == "" {
@@ -113,6 +129,10 @@ func newAdapter(c Channel, client *http.Client, resolve func(ctx context.Context
 			slackBase = defaultSlackBase
 		}
 		return &slackAdapter{http: client, base: slackBase, resolve: resolve, botRef: c.CredentialRef, appRef: c.Config.AppTokenRef}, nil
+	case KindEmail:
+		if mail != nil && mail.mailbox != nil {
+			return newEmailAdapter(c, *mail), nil
+		}
 	}
 	return nil, fmt.Errorf("%w: %q", ErrKindUnavailable, c.Kind)
 }

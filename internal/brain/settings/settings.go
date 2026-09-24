@@ -192,11 +192,22 @@ const (
 	// seconds (issue #826); "" or "0" defers to DefaultGitHubPollSeconds.
 	// The poller enforces its own 30 s floor.
 	ValueGitHubPollSeconds = "github_poll_seconds"
+	// ValueEmailPollSeconds is the email channel's inbox poll interval
+	// in seconds (issue #830); "" or "0" defers to
+	// DefaultEmailPollSeconds, values under MinEmailPollSeconds floor.
+	ValueEmailPollSeconds = "email_poll_seconds"
 )
 
 // DefaultGitHubPollSeconds is the GitHub event poller's interval when
 // ValueGitHubPollSeconds is unset.
 const DefaultGitHubPollSeconds = 60
+
+// DefaultEmailPollSeconds and MinEmailPollSeconds are the email
+// channel's poll interval default and floor.
+const (
+	DefaultEmailPollSeconds = 60
+	MinEmailPollSeconds     = 30
+)
 
 // Mission ceiling defaults, used when the matching setting is unset.
 const (
@@ -250,7 +261,7 @@ var knownValueKeys = map[string]bool{
 	ValueMissionDefaultMaxIterations: true, ValueMissionBackoffFailures: true,
 	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
-	ValueOutboundHostAllowlist: true, ValueGitHubPollSeconds: true,
+	ValueOutboundHostAllowlist: true, ValueGitHubPollSeconds: true, ValueEmailPollSeconds: true,
 }
 
 // nonNegativeIntKeys are the settings whose value must parse as an
@@ -263,7 +274,7 @@ var nonNegativeIntKeys = map[string]bool{
 	ValueMissionDefaultMaxIterations: true, ValueMissionBackoffFailures: true,
 	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
-	ValueGitHubPollSeconds: true,
+	ValueGitHubPollSeconds: true, ValueEmailPollSeconds: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -449,6 +460,17 @@ func (s *Store) GitHubPollInterval(ctx context.Context) time.Duration {
 		n = DefaultGitHubPollSeconds
 	}
 	return time.Duration(n) * time.Second
+}
+
+// EmailPollInterval is the email channel's poll interval: unset or 0
+// is DefaultEmailPollSeconds, anything lower floors at
+// MinEmailPollSeconds.
+func (s *Store) EmailPollInterval(ctx context.Context) time.Duration {
+	n := s.nonNegativeInt(ctx, ValueEmailPollSeconds, DefaultEmailPollSeconds)
+	if n == 0 {
+		n = DefaultEmailPollSeconds
+	}
+	return time.Duration(max(n, MinEmailPollSeconds)) * time.Second
 }
 
 // nonNegativeInt reads key as an integer >= 0, falling back to def when

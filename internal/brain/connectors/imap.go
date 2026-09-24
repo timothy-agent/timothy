@@ -221,11 +221,12 @@ func (s *imapSource) realDial(ctx context.Context) (imapSession, error) {
 		_ = client.Close()
 		return nil, fmt.Errorf("imap login: %w", err)
 	}
-	if _, err := client.Select("INBOX", &imap.SelectOptions{ReadOnly: true}).Wait(); err != nil {
+	sel, err := client.Select("INBOX", &imap.SelectOptions{ReadOnly: true}).Wait()
+	if err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("imap select INBOX: %w", err)
 	}
-	return &imapConn{client: client}, nil
+	return &imapConn{client: client, uidNext: sel.UIDNext}, nil
 }
 
 // realSMTPSend sends a fully-built RFC822 message via SMTP to

@@ -17,6 +17,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
@@ -25,6 +26,26 @@ import (
 )
 
 const fakeBotID = "42:API-TEST-TOKEN"
+
+// Connector ids the email channel lookup knows.
+const (
+	imapConnID     = "11111111-1111-1111-1111-111111111111"
+	imapOffConnID  = "22222222-2222-2222-2222-222222222222"
+	githubConnID   = "33333333-3333-3333-3333-333333333333"
+	missingConnID  = "44444444-4444-4444-4444-444444444444"
+)
+
+func fakeConnectorLookup(_ context.Context, id string) (string, bool, error) {
+	switch id {
+	case imapConnID:
+		return "imap", true, nil
+	case imapOffConnID:
+		return "imap", false, nil
+	case githubConnID:
+		return "github", true, nil
+	}
+	return "", false, fmt.Errorf("connector %s: %w", id, connectors.ErrNotFound)
+}
 
 type channelHarness struct {
 	t     *testing.T
@@ -86,7 +107,7 @@ func newChannelHarness(t *testing.T) *channelHarness {
 	svc.APIBase = fake.URL
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerChannels(m.Handle, store, svc)
+	a.registerChannels(m.Handle, store, svc, fakeConnectorLookup)
 	return &channelHarness{t: t, mux: m, store: store, pool: pool, tag: tag}
 }
 
@@ -121,8 +142,8 @@ func TestChannelsAPICRUD(t *testing.T) {
 	h := newChannelHarness(t)
 	id := h.create("bot", "GOOD_BOT")
 
-	if w := h.do("POST", "/v1/channels", fmt.Sprintf(`{"name":%q,"kind":"email","credential_ref":"X"}`, h.tag+"email")); w.Code != 400 || !strings.Contains(w.Body.String(), "not_available") {
-		t.Fatalf("email = %d %s", w.Code, w.Body.String())
+	if w := h.do("POST", "/v1/channels", fmt.Sprintf(`{"name":%q,"kind":"fax","credential_ref":"X"}`, h.tag+"fax")); w.Code != 400 || !strings.Contains(w.Body.String(), "not_available") {
+		t.Fatalf("fax = %d %s", w.Code, w.Body.String())
 	}
 	if w := h.do("POST", "/v1/channels", fmt.Sprintf(`{"name":%q,"kind":"slack","credential_ref":"X"}`, h.tag+"slack")); w.Code != 400 || !strings.Contains(w.Body.String(), "app_token_ref") {
 		t.Fatalf("slack without app token = %d %s", w.Code, w.Body.String())
@@ -302,5 +323,53 @@ func TestPermissionAPIAndButtonsShareTheBroker(t *testing.T) {
 	}
 	if w := doMux(a, http.MethodPost, "/v1/permissions/"+button, `{"decision":"once"}`); w.Code != http.StatusNotFound {
 		t.Fatalf("web answer after the button = %d, want 404", w.Code)
+	}
+}
+
+// TestChannelsAPIEmail: an email channel needs an enabled imap
+// connector and an allowlist, carries no credential_ref, and its
+// allowlist and connector patch.
+func TestChannelsAPIEmail(t *testing.T) {
+	h := newChannelHarness(t)
+	body := func(name, connID, allow string) string {
+		return fmt.Sprintf(`{"name":%q,"kind":"email","config":{"connector_id":%q,"from_allow":%s}}`, h.tag+name, connID, allow)
+	}
+	for name, tc := range map[string]struct{ body, want string }{
+		"unknown connector":  {body("m1", missingConnID, `["a@x.com"]`), "unknown connector_id"},
+		"disabled connector": {body("m2", imapOffConnID, `["a@x.com"]`), "disabled"},
+		"github connector":   {body("m3", githubConnID, `["a@x.com"]`), "not imap"},
+		"empty allowlist":    {body("m4", imapConnID, `[]`), "from_allow"},
+		"bad entry":          {body("m5", imapConnID, `["not an address"]`), "from_allow"},
+		"credential_ref":     {fmt.Sprintf(`{"name":%q,"kind":"email","credential_ref":"X","config":{"connector_id":%q,"from_allow":["a@x.com"]}}`, h.tag+"m6", imapConnID), "credential_ref must be empty"},
+	} {
+		if w := h.do("POST", "/v1/channels", tc.body); w.Code != 400 || !strings.Contains(w.Body.String(), tc.want) {
+			t.Errorf("%s = %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	w := h.do("POST", "/v1/channels", body("mail", imapConnID, `[" Ada@X.com ","@Example.COM","ada@x.com"]`))
+	if w.Code != 201 {
+		t.Fatalf("create = %d %s", w.Code, w.Body.String())
+	}
+	var out struct{ ID string }
+	h.decode(w, &out)
+	var c channels.Channel
+	h.decode(h.do("GET", "/v1/channels/"+out.ID, ""), &c)
+	if c.Kind != channels.KindEmail || c.CredentialRef != "" || c.Config.ConnectorID != imapConnID || strings.Join(c.Config.FromAllow, ",") != "ada@x.com,@example.com" {
+		t.Fatalf("email channel = %+v", c)
+	}
+	w = h.do("PATCH", "/v1/channels/"+out.ID, `{"config":{"from_allow":["bob@y.org"]}}`)
+	h.decode(w, &c)
+	if w.Code != 200 || strings.Join(c.Config.FromAllow, ",") != "bob@y.org" || c.Config.ConnectorID != imapConnID {
+		t.Fatalf("patch allowlist = %d %+v", w.Code, c)
+	}
+	if w := h.do("PATCH", "/v1/channels/"+out.ID, fmt.Sprintf(`{"config":{"connector_id":%q}}`, githubConnID)); w.Code != 400 {
+		t.Fatalf("patch to a github connector = %d %s", w.Code, w.Body.String())
+	}
+	if w := h.do("PATCH", "/v1/channels/"+out.ID, `{"credential_ref":"X"}`); w.Code != 400 {
+		t.Fatalf("patch credential_ref = %d %s", w.Code, w.Body.String())
+	}
+	tg := h.create("tg", "GOOD_BOT")
+	if w := h.do("PATCH", "/v1/channels/"+tg, `{"config":{"from_allow":["a@x.com"]}}`); w.Code != 400 {
+		t.Fatalf("allowlist on telegram = %d %s", w.Code, w.Body.String())
 	}
 }
