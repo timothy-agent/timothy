@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react'
 import { Navigate, Route, Routes, useParams } from 'react-router'
 import { AgentsTab } from '../components/settings/AgentsTab'
+import { ChannelsTab } from '../components/settings/ChannelsTab'
 import { ConnectorsTab } from '../components/settings/ConnectorsTab'
 import { CredentialsTab } from '../components/settings/CredentialsTab'
 import { DestinationsTab } from '../components/settings/DestinationsTab'
@@ -25,6 +26,7 @@ const areaComponents: Record<SettingsAreaKey, ComponentType> = {
   secrets: SecretsTab,
   credentials: CredentialsTab,
   destinations: DestinationsTab,
+  channels: ChannelsTab,
   features: FeaturesTab,
 }
 

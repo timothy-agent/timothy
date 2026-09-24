@@ -40,6 +40,9 @@ const (
 	// me" (D-034 follow-up): the composer's "Auto" choice, resolved
 	// through candidates+classify before the normal agent lookup.
 	autoAgentName = "auto"
+	// AutoAgent exports the sentinel for callers outside the API, such
+	// as channels with dispatch on.
+	AutoAgent = autoAgentName
 	// turnTimeout ceils a detached turn's lifetime (see Chat/Retry's
 	// turnCtx): must exceed loop's permissionTimeout (10m) so a parked
 	// permission ask can't be killed by the ceiling out from under it.

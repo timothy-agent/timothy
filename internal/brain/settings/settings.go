@@ -39,11 +39,14 @@ const (
 	// its repository. Default on; off leaves the PR body at goal and
 	// units only.
 	KeyPRAttribution = "pr_attribution_enabled"
+	// KeyChannels gates the channel adapters (Telegram long polling).
+	// Default on; off stops every runner within a minute.
+	KeyChannels = "channels_enabled"
 )
 
 var knownKeys = map[string]bool{
 	KeyTools: true, KeyMemoryExtraction: true, KeyCompaction: true, KeyAutomations: true,
-	KeyKBImageCaptioning: true, KeyKBLocalOCR: true, KeyPRAttribution: true,
+	KeyKBImageCaptioning: true, KeyKBLocalOCR: true, KeyPRAttribution: true, KeyChannels: true,
 }
 
 // knownKeysOff lists switches from knownKeys whose absent-row default is

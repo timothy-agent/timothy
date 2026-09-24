@@ -277,7 +277,7 @@ func (a *TelegramAdapter) sendDocument(ctx context.Context, token, chatID string
 
 // call POSTs one Bot API method and treats any non-2xx status or
 // {"ok": false} response body as failure. Every returned error is
-// redacted (redactToken) before it leaves this function: url embeds
+// redacted (RedactToken) before it leaves this function: url embeds
 // the bot token, and a *url.Error from http.Client.Do carries the full
 // request URL verbatim, so an unredacted error would leak the token
 // into WARN logs.
@@ -287,36 +287,36 @@ func (a *TelegramAdapter) call(ctx context.Context, token, method, contentType s
 	url := a.apiBase() + "/bot" + token + "/" + method
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, url, body)
 	if err != nil {
-		return redactToken(fmt.Errorf("request: %w", err), token)
+		return RedactToken(fmt.Errorf("request: %w", err), token)
 	}
 	req.Header.Set("Content-Type", contentType)
 	resp, err := a.client().Do(req)
 	if err != nil {
-		return redactToken(fmt.Errorf("post: %w", classifySendErr(err)), token)
+		return RedactToken(fmt.Errorf("post: %w", classifySendErr(err)), token)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode >= 300 {
 		// A non-2xx response was definitely processed by Telegram; retrying
 		// a rejection is pointless and a 5xx may still have side effects.
-		return redactToken(fmt.Errorf("api status %d: %s: %w", resp.StatusCode, string(data), errMaybeDelivered), token)
+		return RedactToken(fmt.Errorf("api status %d: %s: %w", resp.StatusCode, string(data), errMaybeDelivered), token)
 	}
 	var result struct {
 		OK          bool   `json:"ok"`
 		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(data, &result); err == nil && !result.OK {
-		return redactToken(fmt.Errorf("api error: %s: %w", result.Description, errMaybeDelivered), token)
+		return RedactToken(fmt.Errorf("api error: %s: %w", result.Description, errMaybeDelivered), token)
 	}
 	return nil
 }
 
-// redactToken rebuilds err with every occurrence of token in its
+// RedactToken rebuilds err with every occurrence of token in its
 // message replaced by "REDACTED". errors.Is(err, errMaybeDelivered)
 // still holds afterwards (wrapped via %w against the already-redacted
 // text, never re-appending the sentinel's own message) since deliver.go's
 // retry loop classifies on the returned error.
-func redactToken(err error, token string) error {
+func RedactToken(err error, token string) error {
 	if err == nil || token == "" {
 		return err
 	}

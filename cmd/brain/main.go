@@ -24,6 +24,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/api"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
+	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
@@ -945,10 +946,20 @@ func main() {
 	if destinationDeliverer != nil {
 		destinationTest = destinationDeliverer
 	}
+	// Channels (issue #828): Telegram long polling, so nothing inbound
+	// is exposed. Needs the secret store for bot tokens.
+	var channelStore *channels.Store
+	var channelService *channels.Service
+	if secrets != nil {
+		channelStore = channels.NewStore(app.DB)
+		channelService = channels.New(channelStore, svc.Chat, secrets.Resolve,
+			&http.Client{Transport: netguard.Guard{Allowed: flags.OutboundHosts}.Transport(), Timeout: 45 * time.Second}, app.Log)
+		go channelService.Run(ctx, func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyChannels) })
+	}
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

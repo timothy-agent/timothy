@@ -22,6 +22,10 @@ import type {
   CatalogPriceQuery,
   CatalogSyncStatus,
   ChainEntry,
+  Channel,
+  ChannelInput,
+  ChannelPairing,
+  ChannelPatch,
   ChatEvent,
   ChatRequest,
   Destination,
@@ -1134,6 +1138,49 @@ export async function testDestination(id: string): Promise<{ ok: boolean; error?
   return request<{ ok: boolean; error?: string }>(`/v1/admin/destinations/${id}/test`, {
     method: 'POST',
   })
+}
+
+// --- channels (chat surfaces, issue #828) ---
+
+export async function listChannels(): Promise<Channel[]> {
+  const { channels } = await request<{ channels: Channel[] }>('/v1/channels')
+  return channels ?? []
+}
+
+export async function getChannel(id: string): Promise<Channel> {
+  return request<Channel>(`/v1/channels/${id}`)
+}
+
+export async function createChannel(input: ChannelInput): Promise<string> {
+  const { id } = await request<{ id: string }>('/v1/channels', { method: 'POST', body: JSON.stringify(input) })
+  return id
+}
+
+export async function patchChannel(id: string, patch: ChannelPatch): Promise<Channel> {
+  return request<Channel>(`/v1/channels/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
+export async function deleteChannel(id: string): Promise<void> {
+  await request<void>(`/v1/channels/${id}`, { method: 'DELETE' })
+}
+
+// testChannel checks the bot token with Telegram's getMe; a failure
+// throws with the API's message.
+export async function testChannel(id: string): Promise<{ ok: boolean; bot_username: string }> {
+  return request<{ ok: boolean; bot_username: string }>(`/v1/channels/${id}/test`, { method: 'POST' })
+}
+
+export async function listChannelPairings(id: string): Promise<ChannelPairing[]> {
+  const { pairings } = await request<{ pairings: ChannelPairing[] }>(`/v1/channels/${id}/pairings`)
+  return pairings ?? []
+}
+
+export async function approveChannelPairing(id: string, externalUserID: string): Promise<void> {
+  await request<void>(`/v1/channels/${id}/pairings/${encodeURIComponent(externalUserID)}/approve`, { method: 'POST' })
+}
+
+export async function revokeChannelPairing(id: string, externalUserID: string): Promise<void> {
+  await request<void>(`/v1/channels/${id}/pairings/${encodeURIComponent(externalUserID)}/revoke`, { method: 'POST' })
 }
 
 export async function listRoutes(): Promise<AdminRoute[]> {

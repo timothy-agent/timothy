@@ -191,7 +191,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- Session-scoped knowledge: kb_collection names the user pinned to
     -- this session (composer # mentions); unioned with the serving
     -- agent's own knowledge list per turn.
-    knowledge  jsonb NOT NULL DEFAULT '[]'
+    knowledge  jsonb NOT NULL DEFAULT '[]',
+    -- Where the session started; channel sessions point back at their
+    -- channel_conversations row (no FK: the conversation references
+    -- the session).
+    origin_kind text NOT NULL DEFAULT 'web' CHECK (origin_kind IN ('web','api','mission','channel')),
+    channel_conversation_id uuid
 );
 
 CREATE TABLE IF NOT EXISTS session_events (
@@ -636,6 +641,59 @@ CREATE TABLE IF NOT EXISTS github_poll_cursors (
     next_poll_at  timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (connector_id, repo)
+);
+
+-- Channels (issue #828, internal/brain/channels): chat surfaces such as
+-- a Telegram bot. state holds adapter cursors ({"update_offset": N}).
+CREATE TABLE IF NOT EXISTS channels (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name           text NOT NULL,
+    kind           text NOT NULL CHECK (kind IN ('telegram','slack','email')),
+    config         jsonb NOT NULL DEFAULT '{}',
+    credential_ref text,
+    agent_id       uuid REFERENCES agents(id) ON DELETE SET NULL,
+    state          jsonb NOT NULL DEFAULT '{}',
+    enabled        boolean NOT NULL DEFAULT true,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS channels_name_ci ON channels (lower(btrim(name)));
+
+-- One row per external sender. code is the pending pairing code, kept
+-- in clear for the Channels page; single use, 10 minute lifetime.
+CREATE TABLE IF NOT EXISTS channel_pairings (
+    channel_id       uuid NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    external_user_id text NOT NULL,
+    display_name     text NOT NULL DEFAULT '',
+    status           text NOT NULL CHECK (status IN ('pending','approved','revoked')),
+    code             text,
+    code_expires_at  timestamptz,
+    last_prompt_at   timestamptz,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (channel_id, external_user_id)
+);
+
+-- Maps one external chat (and thread) to one session.
+CREATE TABLE IF NOT EXISTS channel_conversations (
+    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    channel_id         uuid NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    external_chat_id   text NOT NULL,
+    external_thread_id text NOT NULL DEFAULT '',
+    external_user_id   text NOT NULL,
+    session_id         uuid NOT NULL REFERENCES sessions(id),
+    agent_id           uuid REFERENCES agents(id) ON DELETE SET NULL,
+    last_message_at    timestamptz,
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (channel_id, external_chat_id, external_thread_id)
+);
+
+-- Inbound dedup by external message id; swept after 7 days.
+CREATE TABLE IF NOT EXISTS channel_inbound (
+    channel_id          uuid NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    external_message_id text NOT NULL,
+    received_at         timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (channel_id, external_message_id)
 );
 
 -- Missions are long-running, agent-driven units of work distinct from

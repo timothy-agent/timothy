@@ -40,6 +40,11 @@ export const settingsAreas = [
     description: 'Where mission results get delivered: email, webhook.',
   },
   {
+    key: 'channels',
+    label: 'Channels',
+    description: 'Talk to Timothy from chat apps like Telegram, with the same agents and memory.',
+  },
+  {
     key: 'features',
     label: 'Features',
     description: 'Feature switches and defaults: changes serve immediately, no restarts.',

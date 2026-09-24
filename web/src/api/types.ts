@@ -987,6 +987,51 @@ export interface Destination {
   updated_at: string
 }
 
+// Channel is one chat surface (issue #828): a Telegram bot today.
+// credential_ref names the bot token secret, never its value.
+export interface Channel {
+  id: string
+  name: string
+  kind: 'telegram' | 'slack' | 'email'
+  config: { dispatch: boolean; bot_username?: string }
+  credential_ref: string
+  agent_id: string
+  enabled: boolean
+  pairings: { pending: number; approved: number; revoked: number }
+  created_at: string
+  updated_at: string
+}
+
+// ChannelPairing is one external sender; pending rows carry the code
+// the operator can read out to them.
+export interface ChannelPairing {
+  channel_id: string
+  external_user_id: string
+  display_name: string
+  status: 'pending' | 'approved' | 'revoked'
+  code?: string
+  code_expires_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ChannelInput {
+  name: string
+  kind: Channel['kind']
+  credential_ref: string
+  agent_id?: string
+  config?: { dispatch?: boolean }
+  enabled?: boolean
+}
+
+export interface ChannelPatch {
+  name?: string
+  credential_ref?: string
+  agent_id?: string | null
+  enabled?: boolean
+  config?: { dispatch?: boolean }
+}
+
 // GitHubDestinationConfig is the config shape for a 'github' kind
 // Destination (issue #560): the token comes from connector_id's own
 // credential, so credential_ref stays empty for this kind.

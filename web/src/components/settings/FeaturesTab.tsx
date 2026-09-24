@@ -73,6 +73,10 @@ const featureCopy: Record<string, { label: string; description: string }> = {
     label: 'KB local OCR',
     description: 'On: with no vision route bound, images in ingested documents get their text read locally by tesseract instead of no description at all. Free, no gateway tokens.',
   },
+  channels_enabled: {
+    label: 'Channels',
+    description: 'Off: chat channels such as Telegram stop polling for messages within a minute.',
+  },
   pr_attribution_enabled: {
     label: 'PR attribution',
     description: 'On: pull requests Timothy opens end with a line crediting Timothy Agent and linking to its repository.',

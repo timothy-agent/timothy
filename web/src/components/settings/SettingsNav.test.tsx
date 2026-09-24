@@ -23,11 +23,11 @@ function renderNav(initialEntry = '/settings/providers') {
 }
 
 describe('SettingsNav desktop', () => {
-  it('renders a nav named Settings with eight links, current one marked', () => {
+  it('renders a nav named Settings with nine links, current one marked', () => {
     renderNav()
     const nav = screen.getByRole('navigation', { name: 'Settings' })
     const links = screen.getAllByRole('link')
-    expect(links).toHaveLength(8)
+    expect(links).toHaveLength(9)
 
     const current = links.find((l) => l.getAttribute('aria-current') === 'page')
     expect(current?.textContent).toBe('Providers')
