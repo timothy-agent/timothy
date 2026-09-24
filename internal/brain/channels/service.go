@@ -18,7 +18,7 @@ const (
 	// change notifications.
 	reconcileEvery = time.Minute
 	sweepEvery     = time.Hour
-	// editEvery is the streaming edit cadence.
+	// editEvery is Telegram's streaming edit cadence.
 	editEvery = 2 * time.Second
 	// retryEvery re-runs a reconcile that could not list channels.
 	retryEvery = 5 * time.Second
@@ -56,9 +56,12 @@ type Service struct {
 	http          *http.Client
 	log           *slog.Logger
 	now           func() time.Time
-	// APIBase overrides the Bot API base URL for tests; empty uses the
-	// real API.
-	APIBase    string
+	// APIBase and SlackAPIBase override the transport API base URLs
+	// for tests; empty uses the real APIs.
+	APIBase      string
+	SlackAPIBase string
+	// editEvery overrides the adapter's edit cadence for tests; 0 uses
+	// the adapter's.
 	editEvery  time.Duration
 	retryEvery time.Duration
 	parkEvery  time.Duration
@@ -88,7 +91,7 @@ type runnerHandle struct {
 func New(store *Store, chatFn ChatFunc, deps MissionDeps, resolveSecret func(ctx context.Context, ref string) (string, error), client *http.Client, log *slog.Logger) *Service {
 	s := &Service{
 		store: store, chat: chatFn, missions: deps, resolveSecret: resolveSecret, http: client, log: log,
-		now: time.Now, editEvery: editEvery, retryEvery: retryEvery, parkEvery: parkEvery,
+		now: time.Now, retryEvery: retryEvery, parkEvery: parkEvery,
 		reload: make(chan struct{}, 1), runners: map[string]*runnerHandle{}, running: -1,
 		parked: map[string]string{}, skipLogged: map[string]bool{},
 	}
@@ -103,22 +106,22 @@ func (s *Service) kick() {
 	}
 }
 
-func (s *Service) bot(credentialRef string) *botAPI {
-	base := s.APIBase
-	if base == "" {
-		base = defaultAPIBase
-	}
-	return &botAPI{http: s.http, base: base, resolve: s.resolveSecret, ref: credentialRef}
+func (s *Service) adapterFor(c Channel) (adapter, error) {
+	return newAdapter(c, s.http, s.resolveSecret, s.APIBase, s.SlackAPIBase)
 }
 
-// Test calls getMe with the channel's token, records the username and
-// returns it.
+// Test checks the channel's bot token (Telegram getMe, Slack
+// auth.test), records the username and returns it.
 func (s *Service) Test(ctx context.Context, id string) (string, error) {
 	c, err := s.store.Get(ctx, id)
 	if err != nil {
 		return "", err
 	}
-	me, err := s.bot(c.CredentialRef).getMe(ctx)
+	ad, err := s.adapterFor(c)
+	if err != nil {
+		return "", err
+	}
+	me, err := ad.connect(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -172,8 +175,8 @@ func (s *Service) Run(ctx context.Context, enabled func(context.Context) bool) {
 }
 
 // reconcile stops runners whose channel is gone, disabled or changed
-// and starts runners for enabled telegram channels. It returns false
-// when the channels could not be listed.
+// and starts runners for enabled channels. It returns false when the
+// channels could not be listed.
 func (s *Service) reconcile(ctx context.Context, enabled func(context.Context) bool) bool {
 	want := map[string]Channel{}
 	if enabled == nil || enabled(ctx) {
@@ -185,7 +188,7 @@ func (s *Service) reconcile(ctx context.Context, enabled func(context.Context) b
 			return false
 		}
 		for _, c := range rows {
-			if c.Enabled && c.Kind == KindTelegram {
+			if c.Enabled && (c.Kind == KindTelegram || c.Kind == KindSlack) {
 				want[c.ID] = c
 			}
 		}
@@ -205,9 +208,13 @@ func (s *Service) reconcile(ctx context.Context, enabled func(context.Context) b
 		if _, ok := s.runners[id]; ok {
 			continue
 		}
+		ad, err := s.adapterFor(c)
+		if err != nil {
+			continue
+		}
 		rctx, cancel := context.WithCancel(ctx)
 		h := &runnerHandle{updatedAt: c.UpdatedAt, cancel: cancel, done: make(chan struct{})}
-		r := newTelegramRunner(s, c)
+		r := newRunner(s, c, ad)
 		go func() {
 			defer close(h.done)
 			r.run(rctx)

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { deleteChannel, listAgents, listChannels, patchChannel, testChannel } from '../../api/client'
 import type { AdminAgent, Channel } from '../../api/types'
+import { SlackIcon } from '../icons/SlackIcon'
 import { TelegramIcon } from '../icons/TelegramIcon'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -49,8 +50,8 @@ export function ChannelsList() {
         <section className="space-y-4">
           <SectionHeader title={channels.length > 0 ? `Your channels · ${channels.length}` : 'Your channels'} />
           <p className="-mt-2 max-w-2xl text-sm text-muted-foreground">
-            Timothy polls each bot for messages, so nothing inbound needs exposing. Unknown senders get a
-            pairing prompt and never reach a model until you approve them here.
+            Timothy polls Telegram and holds a Socket Mode connection to Slack, so nothing inbound needs
+            exposing. Unknown senders get a pairing prompt and never reach a model until you approve them here.
           </p>
           {channels.length === 0 ? (
             <EmptyState title="No channels yet" description="Add one below." />
@@ -71,6 +72,12 @@ export function ChannelsList() {
               title="Telegram"
               description="Chat with Timothy through a Telegram bot."
               tile={<TelegramIcon className="size-9" />}
+            />
+            <AddPresetTile
+              to="/settings/channels/new?kind=slack"
+              title="Slack"
+              description="Chat with Timothy through a Slack app."
+              tile={<SlackIcon className="size-9" />}
             />
           </div>
         </section>
@@ -122,7 +129,7 @@ function ChannelCard({ channel, agents, onChanged }: { channel: Channel; agents:
       <EntityCard
         to={`/settings/channels/${channel.id}`}
         title={channel.name}
-        tile={<TelegramIcon className="size-9" />}
+        tile={channel.kind === 'slack' ? <SlackIcon className="size-9" /> : <TelegramIcon className="size-9" />}
         badges={
           <Badge variant="outline" size="sm">
             {channel.kind}

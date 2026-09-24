@@ -108,11 +108,11 @@ func parseCallback(data string) (callback, bool) {
 }
 
 // permKeyboard is the three decision buttons of a permission prompt.
-func permKeyboard(id string) [][]tgButton {
-	return [][]tgButton{{
-		{Text: "Allow once", CallbackData: permCallback(id, loop.DecideOnce)},
-		{Text: "Allow session", CallbackData: permCallback(id, loop.DecideSession)},
-		{Text: "Deny", CallbackData: permCallback(id, loop.DecideDeny)},
+func permKeyboard(id string) [][]button {
+	return [][]button{{
+		{Text: "Allow once", Data: permCallback(id, loop.DecideOnce)},
+		{Text: "Allow session", Data: permCallback(id, loop.DecideSession)},
+		{Text: "Deny", Data: permCallback(id, loop.DecideDeny)},
 	}}
 }
 
@@ -163,26 +163,17 @@ func authorizeCallback(p Pairing, conv Conversation, found bool, ownerSession, o
 	return msgNotYours
 }
 
-// callbackKey is the conversation key of the chat a button sits in.
-func callbackKey(m *tgMessage) (chatID, threadID string) {
-	private := m.Chat.Type == "private"
-	var thread int64
-	if !private {
-		thread = m.MessageThreadID
-	}
-	return conversationKey(inbound{ChatID: m.Chat.ID, ThreadID: thread, Private: private})
-}
-
-// handleCallback runs one button press through pairing, conversation
+// handlePress runs one button press through pairing, conversation
 // ownership and dispatch. Every press is answered once. Only store
 // failures return an error.
-func (r *telegramRunner) handleCallback(ctx context.Context, q *tgCallbackQuery) error {
+func (r *runner) handlePress(ctx context.Context, in inbound) error {
+	q := in.Press
 	answer := func(text string) {
-		if err := r.bot.answerCallbackQuery(ctx, q.ID, capRunes(text, answerCap)); err != nil && ctx.Err() == nil {
+		if err := r.ad.answerPress(ctx, q.ID, capRunes(text, answerCap)); err != nil && ctx.Err() == nil {
 			r.svc.log.Warn("channels: answer callback failed", "channel_id", r.ch.ID, "error", err)
 		}
 	}
-	if q.From == nil || q.From.IsBot || q.Message == nil {
+	if in.UserID == "" {
 		answer("")
 		return nil
 	}
@@ -192,8 +183,7 @@ func (r *telegramRunner) handleCallback(ctx context.Context, q *tgCallbackQuery)
 		return nil
 	}
 	now := r.svc.now()
-	userID := strconv.FormatInt(q.From.ID, 10)
-	p, _, err := r.svc.store.EnsurePairing(ctx, r.ch.ID, userID, displayName(*q.From), now)
+	p, _, err := r.svc.store.EnsurePairing(ctx, r.ch.ID, in.UserID, in.DisplayName, now)
 	if err != nil {
 		return err
 	}
@@ -201,12 +191,12 @@ func (r *telegramRunner) handleCallback(ctx context.Context, q *tgCallbackQuery)
 		answer(msgNotPaired)
 		return nil
 	}
-	if ok, _ := r.limits.allow(r.ch.ID+":"+userID, now); !ok {
+	if ok, _ := r.limits.allow(r.ch.ID+":"+in.UserID, now); !ok {
 		answer(msgSlowDown)
 		return nil
 	}
-	chatID, threadID := callbackKey(q.Message)
-	conv, found, err := r.svc.store.ConversationFor(ctx, r.ch.ID, chatID, threadID)
+	key := conversationKey(in)
+	conv, found, err := r.svc.store.ConversationFor(ctx, r.ch.ID, key.ChatID, key.ThreadID)
 	if err != nil {
 		return err
 	}
@@ -215,14 +205,14 @@ func (r *telegramRunner) handleCallback(ctx context.Context, q *tgCallbackQuery)
 		return nil
 	}
 	if cb.Kind == cbPermission {
-		r.pressPermission(ctx, q, cb, p, conv, answer)
+		r.pressPermission(ctx, in, cb, p, conv, answer)
 	} else {
-		r.pressMission(ctx, q, cb, p, conv, answer)
+		r.pressMission(ctx, in, cb, p, conv, answer)
 	}
 	return nil
 }
 
-func (r *telegramRunner) pressPermission(ctx context.Context, q *tgCallbackQuery, cb callback, p Pairing, conv Conversation, answer func(string)) {
+func (r *runner) pressPermission(ctx context.Context, in inbound, cb callback, p Pairing, conv Conversation, answer func(string)) {
 	deps := r.svc.missions
 	if deps.PendingPermission == nil || deps.ResolvePermission == nil {
 		answer(msgUnavailable)
@@ -255,12 +245,12 @@ func (r *telegramRunner) pressPermission(ctx context.Context, q *tgCallbackQuery
 	}
 	text := decisionText(cb.Action)
 	answer(text)
-	if err := r.bot.closeButtons(ctx, q.Message.Chat.ID, q.Message.MessageID, text); err != nil && ctx.Err() == nil {
+	if err := r.ad.edit(ctx, conversationKey(in), in.Press.MessageID, text, nil); err != nil && ctx.Err() == nil {
 		r.svc.log.Warn("channels: close buttons failed", "channel_id", r.ch.ID, "error", err)
 	}
 }
 
-func (r *telegramRunner) pressMission(ctx context.Context, q *tgCallbackQuery, cb callback, p Pairing, conv Conversation, answer func(string)) {
+func (r *runner) pressMission(ctx context.Context, in inbound, cb callback, p Pairing, conv Conversation, answer func(string)) {
 	deps := r.svc.missions
 	if deps.Get == nil || deps.Signal == nil || deps.DecidePlan == nil || deps.AnswerAskUser == nil {
 		answer(msgUnavailable)
@@ -300,16 +290,16 @@ func (r *telegramRunner) pressMission(ctx context.Context, q *tgCallbackQuery, c
 	}
 	answer(done)
 	text := done
-	if q.Message.Text != "" {
-		text = q.Message.Text + "\n\n" + done
+	if in.Press.MessageText != "" {
+		text = in.Press.MessageText + "\n\n" + done
 	}
-	if err := r.bot.closeButtons(ctx, q.Message.Chat.ID, q.Message.MessageID, capRunes(text, messageLimit/2)); err != nil && ctx.Err() == nil {
+	if err := r.ad.edit(ctx, conversationKey(in), in.Press.MessageID, capRunes(text, r.ad.caps().MessageLimit/2), nil); err != nil && ctx.Err() == nil {
 		r.svc.log.Warn("channels: close buttons failed", "channel_id", r.ch.ID, "error", err)
 	}
 }
 
 // answerAsk sends a reply-to answer to the mission that asked.
-func (r *telegramRunner) answerAsk(ctx context.Context, in inbound, missionID, kind string) {
+func (r *runner) answerAsk(ctx context.Context, in inbound, missionID, kind string) {
 	deps := r.svc.missions
 	var err error
 	switch {

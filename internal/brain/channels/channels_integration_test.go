@@ -86,8 +86,11 @@ func TestStoreChannelCRUD(t *testing.T) {
 	if _, err := s.Create(ctx, Channel{Name: " " + strings.ToUpper(tag) + "BOT ", Kind: KindTelegram, CredentialRef: "X"}); !errors.Is(err, ErrNameConflict) {
 		t.Fatalf("duplicate name = %v, want ErrNameConflict", err)
 	}
-	if _, err := s.Create(ctx, Channel{Name: tag + "slack", Kind: "slack", CredentialRef: "X"}); !errors.Is(err, ErrKindUnavailable) {
-		t.Fatalf("slack = %v, want ErrKindUnavailable", err)
+	if _, err := s.Create(ctx, Channel{Name: tag + "email", Kind: "email", CredentialRef: "X"}); !errors.Is(err, ErrKindUnavailable) {
+		t.Fatalf("email = %v, want ErrKindUnavailable", err)
+	}
+	if _, err := s.Create(ctx, Channel{Name: tag + "slack", Kind: KindSlack, CredentialRef: "X"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("slack without app token = %v, want ErrInvalid", err)
 	}
 	if _, err := s.Create(ctx, Channel{Name: tag + "noref", Kind: KindTelegram}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("missing credential_ref = %v, want ErrInvalid", err)
@@ -130,14 +133,14 @@ func TestStoreChannelCRUD(t *testing.T) {
 	if err := s.SetBotUsername(ctx, id, "timothy_test_bot"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetState(ctx, id, State{UpdateOffset: 42}); err != nil {
+	if err := s.SetState(ctx, id, State{Cursor: "42"}); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := s.Get(ctx, id)
 	if after.Config.BotUsername != "timothy_test_bot" || !after.Config.Dispatch || !after.UpdatedAt.Equal(before.UpdatedAt) {
 		t.Fatalf("username/state must not bump updated_at: %+v", after)
 	}
-	if st, err := s.GetState(ctx, id); err != nil || st.UpdateOffset != 42 {
+	if st, err := s.GetState(ctx, id); err != nil || st.Cursor != "42" {
 		t.Fatalf("state = %+v %v", st, err)
 	}
 	if c.Pairings != (PairingCounts{}) {
@@ -334,8 +337,8 @@ func TestRunnerPairingThenChat(t *testing.T) {
 	if fc.count() != 0 {
 		t.Fatalf("unpaired sender reached the model %d times", fc.count())
 	}
-	if st, _ := s.GetState(ctx, id); st.UpdateOffset != 2 {
-		t.Fatalf("offset after batch = %d, want 2", st.UpdateOffset)
+	if st, _ := s.GetState(ctx, id); st.Cursor != "2" {
+		t.Fatalf("offset after batch = %q, want 2", st.Cursor)
 	}
 	pairings, _ := s.ListPairings(ctx, id)
 	if len(pairings) != 1 || pairings[0].Status != StatusPending || !looksLikeCode(pairings[0].Code) {

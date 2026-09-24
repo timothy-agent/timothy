@@ -78,7 +78,7 @@ export function ChannelPairings({ channelID }: { channelID: string }) {
           <TableHeader>
             <TableRow>
               <TableHead>Name</TableHead>
-              <TableHead>Telegram id</TableHead>
+              <TableHead>User id</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Code</TableHead>
               <TableHead>

@@ -9,7 +9,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
 )
 
-// registerChannels mounts the channels surface (issue #828); a nil
+// registerChannels mounts the channels surface (issues #828, #830); a nil
 // store leaves it unmounted and a nil service leaves the test endpoint
 // unmounted.
 func (a *API) registerChannels(handle func(pattern string, h http.Handler), store *channels.Store, svc *channels.Service) {
@@ -51,7 +51,8 @@ func failChannel(w http.ResponseWriter, err error) {
 }
 
 type channelConfigInput struct {
-	Dispatch *bool `json:"dispatch"`
+	Dispatch    *bool   `json:"dispatch"`
+	AppTokenRef *string `json:"app_token_ref"`
 }
 
 type createChannelRequest struct {
@@ -100,6 +101,9 @@ func (h *channelAPI) create(w http.ResponseWriter, r *http.Request) {
 	if req.Config != nil && req.Config.Dispatch != nil {
 		c.Config.Dispatch = *req.Config.Dispatch
 	}
+	if req.Config != nil && req.Config.AppTokenRef != nil {
+		c.Config.AppTokenRef = *req.Config.AppTokenRef
+	}
 	if req.Enabled != nil {
 		c.Enabled = *req.Enabled
 	}
@@ -119,7 +123,7 @@ func (h *channelAPI) patch(w http.ResponseWriter, r *http.Request) {
 	}
 	p := channels.Patch{Name: req.Name, CredentialRef: req.CredentialRef, Enabled: req.Enabled}
 	if req.Config != nil {
-		p.Dispatch = req.Config.Dispatch
+		p.Dispatch, p.AppTokenRef = req.Config.Dispatch, req.Config.AppTokenRef
 	}
 	if req.AgentID != nil {
 		agent := ""
@@ -146,7 +150,7 @@ func (h *channelAPI) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// test calls the Bot API's getMe with the channel's token.
+// test checks the channel's bot token with its transport.
 func (h *channelAPI) test(w http.ResponseWriter, r *http.Request) {
 	username, err := h.svc.Test(r.Context(), r.PathValue("id"))
 	if errors.Is(err, channels.ErrNotFound) {

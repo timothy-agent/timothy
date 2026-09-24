@@ -2,7 +2,6 @@ package channels
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,20 +34,19 @@ const (
 
 // turnJob is one queued message of a conversation.
 type turnJob struct {
-	conv     Conversation
-	chatID   int64
-	threadID int64
-	text     string
+	conv Conversation
+	to   target
+	text string
 }
 
-// telegramRunner long-polls one Telegram channel and runs its inbound
-// pipeline. The poll loop is single-goroutine; turns run on one worker
-// per conversation.
-type telegramRunner struct {
+// runner receives from one channel's adapter and runs its inbound
+// pipeline. The receive loop is single-goroutine; turns run on one
+// worker per conversation.
+type runner struct {
 	svc    *Service
 	ch     Channel
-	bot    *botAPI
-	me     botIdentity
+	ad     adapter
+	me     identity
 	limits *limiter
 
 	workers map[string]chan turnJob
@@ -59,14 +57,14 @@ type telegramRunner struct {
 	lastAuthLog    time.Time
 }
 
-func newTelegramRunner(s *Service, c Channel) *telegramRunner {
-	return &telegramRunner{svc: s, ch: c, bot: s.bot(c.CredentialRef), limits: newLimiter(), workers: map[string]chan turnJob{}}
+func newRunner(s *Service, c Channel, ad adapter) *runner {
+	return &runner{svc: s, ch: c, ad: ad, limits: newLimiter(), workers: map[string]chan turnJob{}}
 }
 
-func (r *telegramRunner) run(ctx context.Context) {
+func (r *runner) run(ctx context.Context) {
 	defer r.wg.Wait()
 	for {
-		me, err := r.bot.getMe(ctx)
+		me, err := r.ad.connect(ctx)
 		if err == nil {
 			r.me, r.backoff = me, 0
 			break
@@ -75,11 +73,11 @@ func (r *telegramRunner) run(ctx context.Context) {
 			return
 		}
 	}
-	var offset int64
+	var cursor string
 	for {
 		st, err := r.svc.store.GetState(ctx, r.ch.ID)
 		if err == nil {
-			offset = st.UpdateOffset
+			cursor = st.Cursor
 			break
 		}
 		if !r.sleep(ctx, r.pause(ctx, err)) {
@@ -87,7 +85,7 @@ func (r *telegramRunner) run(ctx context.Context) {
 		}
 	}
 	for ctx.Err() == nil {
-		updates, err := r.bot.getUpdates(ctx, offset)
+		items, next, err := r.ad.receive(ctx, cursor)
 		if err != nil {
 			if !r.sleep(ctx, r.pause(ctx, err)) {
 				return
@@ -95,34 +93,35 @@ func (r *telegramRunner) run(ctx context.Context) {
 			continue
 		}
 		r.backoff, r.conflictLogged = 0, false
-		next, failed := r.handleBatch(ctx, updates, offset)
-		if next != offset {
-			if err := r.svc.store.SetState(ctx, r.ch.ID, State{UpdateOffset: next}); err != nil && ctx.Err() == nil {
-				r.svc.log.Warn("channels: save offset failed", "channel_id", r.ch.ID, "error", err)
+		if failed := r.handleBatch(ctx, items); failed != nil {
+			// The cursor stays put so the batch is received again;
+			// dedup skips what was handled.
+			if !r.sleep(ctx, r.pause(ctx, failed)) {
+				return
 			}
-			offset = next
+			continue
 		}
-		if failed != nil && !r.sleep(ctx, r.pause(ctx, failed)) {
-			return
+		if next != cursor {
+			if err := r.svc.store.SetState(ctx, r.ch.ID, State{Cursor: next}); err != nil && ctx.Err() == nil {
+				r.svc.log.Warn("channels: save cursor failed", "channel_id", r.ch.ID, "error", err)
+			}
+			cursor = next
 		}
 	}
 }
 
-// handleBatch handles updates in order and returns the offset after
-// the last fully handled one; a store failure stops the batch so the
-// rest is fetched again (dedup makes that safe).
-func (r *telegramRunner) handleBatch(ctx context.Context, updates []tgUpdate, offset int64) (int64, error) {
-	for _, u := range updates {
-		if err := r.handle(ctx, u); err != nil {
-			return offset, err
+// handleBatch handles items in order; a store failure stops the batch.
+func (r *runner) handleBatch(ctx context.Context, items []inbound) error {
+	for _, in := range items {
+		if err := r.handle(ctx, in); err != nil {
+			return err
 		}
-		offset = u.UpdateID + 1
 	}
-	return offset, nil
+	return nil
 }
 
 // pause logs err and returns how long to wait before the next call.
-func (r *telegramRunner) pause(ctx context.Context, err error) time.Duration {
+func (r *runner) pause(ctx context.Context, err error) time.Duration {
 	if ctx.Err() != nil {
 		return 0
 	}
@@ -142,10 +141,13 @@ func (r *telegramRunner) pause(ctx context.Context, err error) time.Duration {
 		r.svc.log.Warn("channels: poll failed", "channel_id", r.ch.ID, "error", err)
 	}
 	r.backoff = min(max(r.backoff*2, minBackoff), maxBackoff)
+	if wait := retryAfter(err); wait > r.backoff {
+		return min(wait, maxBackoff)
+	}
 	return r.backoff
 }
 
-func (r *telegramRunner) sleep(ctx context.Context, d time.Duration) bool {
+func (r *runner) sleep(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
 	select {
@@ -156,19 +158,26 @@ func (r *telegramRunner) sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// handle runs one update through dedup, addressing, pairing, rate
+// handle runs one item through dedup, addressing, pairing, rate
 // limit, input checks and the conversation queue. Only store failures
 // return an error.
-func (r *telegramRunner) handle(ctx context.Context, u tgUpdate) error {
-	fresh, err := r.svc.store.MarkInbound(ctx, r.ch.ID, "telegram:"+strconv.FormatInt(u.UpdateID, 10))
+func (r *runner) handle(ctx context.Context, in inbound) error {
+	fresh, err := r.svc.store.MarkInbound(ctx, r.ch.ID, in.DedupID)
 	if err != nil || !fresh {
 		return err
 	}
-	if u.CallbackQuery != nil {
-		return r.handleCallback(ctx, u.CallbackQuery)
+	if in.Press != nil {
+		return r.handlePress(ctx, in)
 	}
-	in, ok := parseUpdate(u, r.me)
-	if !ok || !in.Addressed {
+	if !in.Addressed && in.MaybeThread {
+		key := conversationKey(in)
+		_, found, err := r.svc.store.ConversationFor(ctx, r.ch.ID, key.ChatID, key.ThreadID)
+		if err != nil {
+			return err
+		}
+		in.Addressed = found
+	}
+	if !in.Addressed {
 		return nil
 	}
 	now := r.svc.now()
@@ -218,12 +227,12 @@ func (r *telegramRunner) handle(ctx context.Context, u tgUpdate) error {
 		r.reply(ctx, in, msgTooLong)
 		return nil
 	}
-	chatID, threadID := conversationKey(in)
-	conv, found, err := r.svc.store.ConversationFor(ctx, r.ch.ID, chatID, threadID)
+	key := conversationKey(in)
+	conv, found, err := r.svc.store.ConversationFor(ctx, r.ch.ID, key.ChatID, key.ThreadID)
 	if err != nil {
 		return err
 	}
-	if found && in.ReplyToID != 0 {
+	if found && in.ReplyToID != "" {
 		missionID, kind, asked, err := r.svc.store.TakeAsk(ctx, conv.ID, in.ReplyToID)
 		if err != nil {
 			return err
@@ -235,29 +244,29 @@ func (r *telegramRunner) handle(ctx context.Context, u tgUpdate) error {
 	}
 	if !found {
 		conv, err = r.svc.store.CreateConversation(ctx, Conversation{
-			ChannelID: r.ch.ID, ExternalChatID: chatID, ExternalThreadID: threadID, ExternalUserID: in.UserID, AgentID: r.ch.AgentID,
-		}, "Telegram: "+in.DisplayName)
+			ChannelID: r.ch.ID, ExternalChatID: key.ChatID, ExternalThreadID: key.ThreadID, ExternalUserID: in.UserID, AgentID: r.ch.AgentID,
+		}, kindLabel(r.ch.Kind)+": "+in.DisplayName)
 		if err != nil {
 			return err
 		}
 	}
 	select {
-	case r.worker(ctx, conv.ID) <- turnJob{conv: conv, chatID: in.ChatID, threadID: in.ThreadID, text: in.Text}:
+	case r.worker(ctx, conv.ID) <- turnJob{conv: conv, to: key, text: in.Text}:
 	default:
 		r.reply(ctx, in, msgQueueFull)
 	}
 	return nil
 }
 
-func (r *telegramRunner) reply(ctx context.Context, in inbound, text string) {
-	if _, err := r.bot.sendMessage(ctx, in.ChatID, in.ThreadID, text, false); err != nil && ctx.Err() == nil {
+func (r *runner) reply(ctx context.Context, in inbound, text string) {
+	if _, err := r.ad.send(ctx, conversationKey(in), text, nil, false); err != nil && ctx.Err() == nil {
 		r.svc.log.Warn("channels: reply failed", "channel_id", r.ch.ID, "error", err)
 	}
 }
 
 // worker returns the queue of a conversation, starting its goroutine
 // on first use.
-func (r *telegramRunner) worker(ctx context.Context, convID string) chan turnJob {
+func (r *runner) worker(ctx context.Context, convID string) chan turnJob {
 	if q, ok := r.workers[convID]; ok {
 		return q
 	}
@@ -280,9 +289,9 @@ func (r *telegramRunner) worker(ctx context.Context, convID string) chan turnJob
 
 // turn posts a placeholder, runs the chat turn and streams it into
 // the placeholder.
-func (r *telegramRunner) turn(ctx context.Context, j turnJob) {
+func (r *runner) turn(ctx context.Context, j turnJob) {
 	start := r.svc.now()
-	msgID, err := r.bot.sendMessage(ctx, j.chatID, j.threadID, msgThinking, true)
+	msgID, err := r.ad.send(ctx, j.to, msgThinking, nil, true)
 	if err != nil {
 		if ctx.Err() == nil {
 			r.svc.log.Warn("channels: placeholder failed", "channel_id", r.ch.ID, "conversation_id", j.conv.ID, "error", err)
@@ -296,9 +305,13 @@ func (r *telegramRunner) turn(ctx context.Context, j turnJob) {
 	var reply string
 	_, events, err := r.svc.chat(ctx, chat.Request{SessionID: j.conv.SessionID, Message: j.text, Agent: agent})
 	if err != nil {
-		r.edit(ctx, j.chatID, msgID, failureText(err.Error()))
+		r.edit(ctx, j.to, msgID, failureText(err.Error()))
 	} else {
-		ticker := time.NewTicker(r.svc.editEvery)
+		every := r.svc.editEvery
+		if every == 0 {
+			every = r.ad.caps().EditEvery
+		}
+		ticker := time.NewTicker(every)
 		reply = r.drain(ctx, j, msgID, events, ticker.C)
 		ticker.Stop()
 	}
@@ -313,12 +326,12 @@ func (r *telegramRunner) turn(ctx context.Context, j turnJob) {
 // the placeholder when the view changed, a permission ask appends a
 // note, and the terminal event renders the final reply. It returns
 // the reply text.
-func (r *telegramRunner) drain(ctx context.Context, j turnJob, msgID int64, events <-chan stream.StreamEvent, tick <-chan time.Time) string {
+func (r *runner) drain(ctx context.Context, j turnJob, msgID string, events <-chan stream.StreamEvent, tick <-chan time.Time) string {
 	var text strings.Builder
-	var throttle editThrottle
+	throttle := editThrottle{window: streamWindowFor(r.ad.caps().MessageLimit)}
 	waiting := false
 	// buttons maps a permission id to its buttons message.
-	buttons := map[string]int64{}
+	buttons := map[string]string{}
 	view := func() string {
 		if waiting {
 			return text.String() + msgWaitingNote
@@ -331,7 +344,7 @@ func (r *telegramRunner) drain(ctx context.Context, j turnJob, msgID int64, even
 			return text.String()
 		case <-tick:
 			if v, ok := throttle.due(view()); ok {
-				r.edit(ctx, j.chatID, msgID, v)
+				r.edit(ctx, j.to, msgID, v)
 			}
 		case ev, open := <-events:
 			if !open {
@@ -344,10 +357,10 @@ func (r *telegramRunner) drain(ctx context.Context, j turnJob, msgID int64, even
 			case stream.EventPermissionRequest:
 				waiting = true
 				if v, ok := throttle.due(view()); ok {
-					r.edit(ctx, j.chatID, msgID, v)
+					r.edit(ctx, j.to, msgID, v)
 				}
 				if p := ev.Permission; p != nil && p.ID != "" && r.svc.missions.ResolvePermission != nil {
-					id, err := r.bot.sendButtons(ctx, j.chatID, j.threadID, permText("Timothy", p.Tool, p.Rationale), permKeyboard(p.ID))
+					id, err := r.ad.send(ctx, j.to, permText("Timothy", p.Tool, p.Rationale), permKeyboard(p.ID), false)
 					if err != nil {
 						if ctx.Err() == nil {
 							r.svc.log.Warn("channels: permission buttons failed", "channel_id", r.ch.ID, "conversation_id", j.conv.ID, "error", err)
@@ -361,7 +374,7 @@ func (r *telegramRunner) drain(ctx context.Context, j turnJob, msgID int64, even
 				if res := ev.Resolved; res != nil {
 					if id, ok := buttons[res.ID]; ok {
 						delete(buttons, res.ID)
-						if err := r.bot.closeButtons(ctx, j.chatID, id, decisionText(res.Decision)); err != nil && ctx.Err() == nil {
+						if err := r.ad.edit(ctx, j.to, id, decisionText(res.Decision), nil); err != nil && ctx.Err() == nil {
 							r.svc.log.Warn("channels: close buttons failed", "channel_id", r.ch.ID, "error", err)
 						}
 					}
@@ -374,7 +387,7 @@ func (r *telegramRunner) drain(ctx context.Context, j turnJob, msgID int64, even
 				if ev.Err != nil && ev.Err.Message != "" {
 					msg = ev.Err.Message
 				}
-				r.edit(ctx, j.chatID, msgID, failureText(msg))
+				r.edit(ctx, j.to, msgID, failureText(msg))
 				return text.String()
 			}
 		}
@@ -383,14 +396,14 @@ func (r *telegramRunner) drain(ctx context.Context, j turnJob, msgID int64, even
 
 // finish replaces the placeholder with the first chunk of the reply
 // and sends the rest as new messages.
-func (r *telegramRunner) finish(ctx context.Context, j turnJob, msgID int64, text string) {
+func (r *runner) finish(ctx context.Context, j turnJob, msgID string, text string) {
 	if strings.TrimSpace(text) == "" {
 		text = msgNoReply
 	}
-	chunks := chunkReply(text, messageLimit)
-	r.edit(ctx, j.chatID, msgID, chunks[0])
+	chunks := chunkReply(text, r.ad.caps().MessageLimit)
+	r.edit(ctx, j.to, msgID, chunks[0])
 	for _, c := range chunks[1:] {
-		if _, err := r.bot.sendMessage(ctx, j.chatID, j.threadID, c, false); err != nil {
+		if _, err := r.ad.send(ctx, j.to, c, nil, false); err != nil {
 			if ctx.Err() == nil {
 				r.svc.log.Warn("channels: send chunk failed", "channel_id", r.ch.ID, "conversation_id", j.conv.ID, "error", err)
 			}
@@ -399,8 +412,8 @@ func (r *telegramRunner) finish(ctx context.Context, j turnJob, msgID int64, tex
 	}
 }
 
-func (r *telegramRunner) edit(ctx context.Context, chatID, msgID int64, text string) {
-	if err := r.bot.editMessageText(ctx, chatID, msgID, text); err != nil && ctx.Err() == nil {
+func (r *runner) edit(ctx context.Context, to target, msgID string, text string) {
+	if err := r.ad.edit(ctx, to, msgID, text, nil); err != nil && ctx.Err() == nil {
 		r.svc.log.Warn("channels: edit failed", "channel_id", r.ch.ID, "error", err)
 	}
 }

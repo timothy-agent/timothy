@@ -91,15 +91,15 @@ func TestConversationKey(t *testing.T) {
 		in         inbound
 		chat, thrd string
 	}{
-		{"private", inbound{ChatID: 42, Private: true, ThreadID: 7}, "42", ""},
-		{"group without topic", inbound{ChatID: -100, Addressed: true}, "-100", ""},
-		{"group topic", inbound{ChatID: -100, ThreadID: 7, Addressed: true}, "-100", "7"},
+		{"private", inbound{ChatID: "42", Private: true, ThreadID: "7"}, "42", ""},
+		{"group without topic", inbound{ChatID: "-100", Addressed: true}, "-100", ""},
+		{"group topic", inbound{ChatID: "-100", ThreadID: "7", Addressed: true}, "-100", "7"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, th := conversationKey(tt.in)
-			if c != tt.chat || th != tt.thrd {
-				t.Fatalf("conversationKey = %q,%q want %q,%q", c, th, tt.chat, tt.thrd)
+			k := conversationKey(tt.in)
+			if k.ChatID != tt.chat || k.ThreadID != tt.thrd {
+				t.Fatalf("conversationKey = %q,%q want %q,%q", k.ChatID, k.ThreadID, tt.chat, tt.thrd)
 			}
 		})
 	}
@@ -114,26 +114,26 @@ func TestParseUpdate(t *testing.T) {
 		ok        bool
 		text      string
 		addressed bool
-		thread    int64
+		thread    string
 	}{
-		{"private text", tgUpdate{UpdateID: 1, Message: &tgMessage{From: user, Chat: tgChat{ID: 5, Type: "private"}, Text: "hi"}}, true, "hi", true, 0},
-		{"private caption", tgUpdate{UpdateID: 2, Message: &tgMessage{From: user, Chat: tgChat{ID: 5, Type: "private"}, Caption: "look"}}, true, "look", true, 0},
-		{"private photo without caption", tgUpdate{UpdateID: 3, Message: &tgMessage{From: user, Chat: tgChat{ID: 5, Type: "private"}}}, true, "", true, 0},
-		{"no message", tgUpdate{UpdateID: 4}, false, "", false, 0},
-		{"bot sender", tgUpdate{UpdateID: 5, Message: &tgMessage{From: &tgUser{ID: 6, IsBot: true}, Chat: tgChat{ID: 6, Type: "private"}, Text: "x"}}, false, "", false, 0},
-		{"group unaddressed", tgUpdate{UpdateID: 6, Message: &tgMessage{From: user, Chat: tgChat{ID: -1, Type: "group"}, Text: "hello all"}}, true, "hello all", false, 0},
+		{"private text", tgUpdate{UpdateID: 1, Message: &tgMessage{From: user, Chat: tgChat{ID: 5, Type: "private"}, Text: "hi"}}, true, "hi", true, ""},
+		{"private caption", tgUpdate{UpdateID: 2, Message: &tgMessage{From: user, Chat: tgChat{ID: 5, Type: "private"}, Caption: "look"}}, true, "look", true, ""},
+		{"private photo without caption", tgUpdate{UpdateID: 3, Message: &tgMessage{From: user, Chat: tgChat{ID: 5, Type: "private"}}}, true, "", true, ""},
+		{"no message", tgUpdate{UpdateID: 4}, false, "", false, ""},
+		{"bot sender", tgUpdate{UpdateID: 5, Message: &tgMessage{From: &tgUser{ID: 6, IsBot: true}, Chat: tgChat{ID: 6, Type: "private"}, Text: "x"}}, false, "", false, ""},
+		{"group unaddressed", tgUpdate{UpdateID: 6, Message: &tgMessage{From: user, Chat: tgChat{ID: -1, Type: "group"}, Text: "hello all"}}, true, "hello all", false, ""},
 		{"group mention", tgUpdate{UpdateID: 7, Message: &tgMessage{From: user, Chat: tgChat{ID: -1, Type: "supergroup"}, MessageThreadID: 12,
-			Text: "héllo @Timothy_Test_Bot", Entities: []tgEntity{{Type: "mention", Offset: 6, Length: 17}}}}, true, "héllo @Timothy_Test_Bot", true, 12},
+			Text: "héllo @Timothy_Test_Bot", Entities: []tgEntity{{Type: "mention", Offset: 6, Length: 17}}}}, true, "héllo @Timothy_Test_Bot", true, "12"},
 		{"group mention of another bot", tgUpdate{UpdateID: 8, Message: &tgMessage{From: user, Chat: tgChat{ID: -1, Type: "group"},
-			Text: "@other_bot hi", Entities: []tgEntity{{Type: "mention", Offset: 0, Length: 10}}}}, true, "@other_bot hi", false, 0},
+			Text: "@other_bot hi", Entities: []tgEntity{{Type: "mention", Offset: 0, Length: 10}}}}, true, "@other_bot hi", false, ""},
 		{"group text_mention", tgUpdate{UpdateID: 9, Message: &tgMessage{From: user, Chat: tgChat{ID: -1, Type: "group"},
-			Text: "Timothy hi", Entities: []tgEntity{{Type: "text_mention", Offset: 0, Length: 7, User: &tgUser{ID: 999}}}}}, true, "Timothy hi", true, 0},
+			Text: "Timothy hi", Entities: []tgEntity{{Type: "text_mention", Offset: 0, Length: 7, User: &tgUser{ID: 999}}}}}, true, "Timothy hi", true, ""},
 		{"group reply to bot", tgUpdate{UpdateID: 10, Message: &tgMessage{From: user, Chat: tgChat{ID: -1, Type: "group"}, Text: "and?",
-			ReplyTo: &tgMessage{From: &tgUser{ID: 999, IsBot: true}}}}, true, "and?", true, 0},
+			ReplyTo: &tgMessage{From: &tgUser{ID: 999, IsBot: true}}}}, true, "and?", true, ""},
 		{"group reply to another bot", tgUpdate{UpdateID: 11, Message: &tgMessage{From: user, Chat: tgChat{ID: -1, Type: "group"}, Text: "and?",
-			ReplyTo: &tgMessage{From: &tgUser{ID: 1000, IsBot: true}}}}, true, "and?", false, 0},
+			ReplyTo: &tgMessage{From: &tgUser{ID: 1000, IsBot: true}}}}, true, "and?", false, ""},
 		{"caption mention", tgUpdate{UpdateID: 12, Message: &tgMessage{From: user, Chat: tgChat{ID: -1, Type: "group"},
-			Caption: "@timothy_test_bot see", CaptionEntities: []tgEntity{{Type: "mention", Offset: 0, Length: 17}}}}, true, "@timothy_test_bot see", true, 0},
+			Caption: "@timothy_test_bot see", CaptionEntities: []tgEntity{{Type: "mention", Offset: 0, Length: 17}}}}, true, "@timothy_test_bot see", true, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestParseUpdate(t *testing.T) {
 				return
 			}
 			if in.Text != tt.text || in.Addressed != tt.addressed || in.ThreadID != tt.thread {
-				t.Fatalf("parsed text=%q addressed=%v thread=%d, want %q %v %d", in.Text, in.Addressed, in.ThreadID, tt.text, tt.addressed, tt.thread)
+				t.Fatalf("parsed text=%q addressed=%v thread=%q, want %q %v %q", in.Text, in.Addressed, in.ThreadID, tt.text, tt.addressed, tt.thread)
 			}
 			if in.UserID != "5" || in.DisplayName != "Ada L" {
 				t.Fatalf("sender = %q %q", in.UserID, in.DisplayName)
@@ -244,18 +244,18 @@ func TestBotAPIRedactsToken(t *testing.T) {
 func TestEditIgnoresNotModified(t *testing.T) {
 	f := newFakeBot(t)
 	f.editErr = "Bad Request: message is not modified: specified new message content is exactly the same"
-	if err := f.api().editMessageText(context.Background(), 1, 2, "x"); err != nil {
+	if err := f.api().editMessageText(context.Background(), 1, 2, "x", nil); err != nil {
 		t.Fatalf("not modified = %v, want nil", err)
 	}
 	f.editErr = "Bad Request: message to edit not found"
-	if err := f.api().editMessageText(context.Background(), 1, 2, "x"); err == nil {
+	if err := f.api().editMessageText(context.Background(), 1, 2, "x", nil); err == nil {
 		t.Fatal("other edit errors must surface")
 	}
 }
 
-func testRunner(f *fakeBot) *telegramRunner {
+func testRunner(f *fakeBot) *runner {
 	s := &Service{log: discardLog(), now: time.Now, editEvery: time.Hour}
-	return &telegramRunner{svc: s, ch: Channel{ID: "c1"}, bot: f.api(), limits: newLimiter(), workers: map[string]chan turnJob{}}
+	return newRunner(s, Channel{ID: "c1", Kind: KindTelegram}, &telegramAdapter{api: f.api()})
 }
 
 func editTexts(f *fakeBot) []string {
@@ -272,7 +272,7 @@ func TestDrainEditsOnTicksAndFinalizes(t *testing.T) {
 	events := make(chan stream.StreamEvent)
 	tick := make(chan time.Time)
 	done := make(chan string)
-	go func() { done <- r.drain(context.Background(), turnJob{chatID: 7}, 55, events, tick) }()
+	go func() { done <- r.drain(context.Background(), turnJob{to: target{ChatID: "7"}}, "55", events, tick) }()
 
 	events <- stream.StreamEvent{Type: stream.EventChunk, Text: "Hel"}
 	tick <- time.Now()
@@ -304,7 +304,7 @@ func TestDrainSplitsLongFinalReply(t *testing.T) {
 	para := strings.Repeat("p", 3000)
 	events <- stream.StreamEvent{Type: stream.EventChunk, Text: para + "\n\n" + para}
 	events <- stream.StreamEvent{Type: stream.EventDone}
-	r.drain(context.Background(), turnJob{chatID: 7}, 55, events, nil)
+	r.drain(context.Background(), turnJob{to: target{ChatID: "7"}}, "55", events, nil)
 	if got := editTexts(f); len(got) != 1 || got[0] != para {
 		t.Fatalf("placeholder edit = %d edits", len(got))
 	}
@@ -320,7 +320,7 @@ func TestDrainRendersError(t *testing.T) {
 	events := make(chan stream.StreamEvent, 2)
 	events <- stream.StreamEvent{Type: stream.EventChunk, Text: "partial"}
 	events <- stream.StreamEvent{Type: stream.EventError, Err: &stream.StreamError{Message: strings.Repeat("e", 400)}}
-	r.drain(context.Background(), turnJob{chatID: 7}, 55, events, nil)
+	r.drain(context.Background(), turnJob{to: target{ChatID: "7"}}, "55", events, nil)
 	got := editTexts(f)
 	if len(got) != 1 || got[0] != "Something went wrong: "+strings.Repeat("e", failureCap) {
 		t.Fatalf("error edit = %q", got)
@@ -332,7 +332,7 @@ func TestDrainEmptyReplyAndClosedStream(t *testing.T) {
 	r := testRunner(f)
 	events := make(chan stream.StreamEvent)
 	close(events)
-	r.drain(context.Background(), turnJob{chatID: 7}, 55, events, nil)
+	r.drain(context.Background(), turnJob{to: target{ChatID: "7"}}, "55", events, nil)
 	if got := editTexts(f); len(got) != 1 || got[0] != msgNoReply {
 		t.Fatalf("closed stream edit = %q", got)
 	}

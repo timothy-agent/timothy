@@ -1,14 +1,16 @@
-// Package channels connects external chat surfaces (Telegram first) to
+// Package channels connects external chat surfaces (Telegram, Slack) to
 // chat sessions: pairing of external senders, conversation to session
 // mapping, per-conversation serialization and streamed replies
-// (issue #828). Every ceiling lives in Go before any model call.
+// (issues #828, #830). Every ceiling lives in Go before any model call.
 package channels
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -31,8 +33,11 @@ const (
 	StatusRevoked  = "revoked"
 )
 
-// KindTelegram is the only kind this slice runs.
-const KindTelegram = "telegram"
+// Channel kinds this slice runs.
+const (
+	KindTelegram = "telegram"
+	KindSlack    = "slack"
+)
 
 // Sentinel errors the HTTP layer maps onto status codes.
 var (
@@ -53,6 +58,9 @@ type Config struct {
 	Dispatch bool `json:"dispatch"`
 	// BotUsername is set by the test endpoint, display only.
 	BotUsername string `json:"bot_username,omitempty"`
+	// AppTokenRef names the Slack app-level token (Socket Mode); the
+	// bot token is credential_ref.
+	AppTokenRef string `json:"app_token_ref,omitempty"`
 }
 
 // PairingCounts tallies a channel's senders by status.
@@ -100,9 +108,24 @@ type Conversation struct {
 	AgentID          string
 }
 
-// State is the typed channels.state column.
+// State is the typed channels.state column: the adapter's receive
+// cursor (Telegram's next update offset; Slack keeps none).
 type State struct {
-	UpdateOffset int64 `json:"update_offset"`
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// decodeState reads a state column. Rows written before #830 hold
+// {"update_offset": N}; that loads as the cursor.
+func decodeState(raw []byte) State {
+	var st struct {
+		Cursor       string `json:"cursor"`
+		UpdateOffset int64  `json:"update_offset"`
+	}
+	_ = json.Unmarshal(raw, &st)
+	if st.Cursor == "" && st.UpdateOffset != 0 {
+		st.Cursor = strconv.FormatInt(st.UpdateOffset, 10)
+	}
+	return State{Cursor: st.Cursor}
 }
 
 // Patch is a partial channel update. AgentID "" clears the agent.
@@ -112,6 +135,7 @@ type Patch struct {
 	AgentID       *string
 	Enabled       *bool
 	Dispatch      *bool
+	AppTokenRef   *string
 }
 
 // Store is the channel tables' Postgres access. onChange fires after
@@ -159,6 +183,13 @@ func validateCredentialRef(ref string) error {
 	return nil
 }
 
+func validateAppTokenRef(ref string) error {
+	if !credentialRefPattern.MatchString(ref) {
+		return invalid("config.app_token_ref is required for slack and must be a secret name, never a secret value")
+	}
+	return nil
+}
+
 // Validate normalizes and checks c for create.
 func Validate(c *Channel) error {
 	name, err := validateName(c.Name)
@@ -166,7 +197,16 @@ func Validate(c *Channel) error {
 		return err
 	}
 	c.Name = name
-	if c.Kind != KindTelegram {
+	switch c.Kind {
+	case KindTelegram:
+		if c.Config.AppTokenRef != "" {
+			return invalid("config.app_token_ref is for slack channels only")
+		}
+	case KindSlack:
+		if err := validateAppTokenRef(c.Config.AppTokenRef); err != nil {
+			return err
+		}
+	default:
 		return fmt.Errorf("%w: %q", ErrKindUnavailable, c.Kind)
 	}
 	return validateCredentialRef(c.CredentialRef)
@@ -283,6 +323,11 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 			return err
 		}
 	}
+	if p.AppTokenRef != nil {
+		if err := validateAppTokenRef(*p.AppTokenRef); err != nil {
+			return err
+		}
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("channels patch: %w", err)
@@ -300,21 +345,25 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 		return fmt.Errorf("channels patch: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	var exists bool
-	if err := tx.QueryRow(ctx, `SELECT true FROM channels WHERE id = $1 FOR UPDATE`, id).Scan(&exists); err != nil {
+	var kind string
+	if err := tx.QueryRow(ctx, `SELECT kind FROM channels WHERE id = $1 FOR UPDATE`, id).Scan(&kind); err != nil {
 		if isNotFound(err) {
 			return fmt.Errorf("channel %s: %w", id, ErrNotFound)
 		}
 		return fmt.Errorf("channels patch: %w", err)
+	}
+	if p.AppTokenRef != nil && kind != KindSlack {
+		return invalid("config.app_token_ref is for slack channels only")
 	}
 	if _, err := tx.Exec(ctx, `UPDATE channels SET
 			name = COALESCE($2, name),
 			credential_ref = COALESCE($3, credential_ref),
 			agent_id = CASE WHEN $4::text IS NULL THEN agent_id ELSE NULLIF($4, '')::uuid END,
 			enabled = COALESCE($5, enabled),
-			config = CASE WHEN $6::text IS NULL THEN config ELSE jsonb_set(config, '{dispatch}', $6::jsonb) END,
+			config = CASE WHEN $6::text IS NULL THEN config ELSE jsonb_set(config, '{dispatch}', $6::jsonb) END
+				|| CASE WHEN $7::text IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('app_token_ref', $7::text) END,
 			updated_at = now()
-		WHERE id = $1`, id, p.Name, p.CredentialRef, p.AgentID, p.Enabled, dispatch); err != nil {
+		WHERE id = $1`, id, p.Name, p.CredentialRef, p.AgentID, p.Enabled, dispatch, p.AppTokenRef); err != nil {
 		return mapWriteErr("patch", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -369,9 +418,7 @@ func (s *Store) GetState(ctx context.Context, id string) (State, error) {
 		}
 		return State{}, fmt.Errorf("channels state: %w", err)
 	}
-	var st State
-	_ = json.Unmarshal(raw, &st)
-	return st, nil
+	return decodeState(raw), nil
 }
 
 // SetState writes a channel's adapter state without touching
@@ -577,29 +624,27 @@ type convState struct {
 	Asks map[string]pendingAsk `json:"asks,omitempty"`
 }
 
-// remember records an ask, dropping the oldest (lowest message id)
-// past maxAsks.
-func (st *convState) remember(messageID int64, a pendingAsk) {
+// remember records an ask, dropping the oldest past maxAsks. Message
+// ids order by length then text: Telegram's integers and Slack's
+// fixed-width timestamps both sort that way.
+func (st *convState) remember(messageID string, a pendingAsk) {
 	if st.Asks == nil {
 		st.Asks = map[string]pendingAsk{}
 	}
-	st.Asks[strconv.FormatInt(messageID, 10)] = a
+	st.Asks[messageID] = a
 	for len(st.Asks) > maxAsks {
-		ids := make([]int64, 0, len(st.Asks))
-		for k := range st.Asks {
-			n, _ := strconv.ParseInt(k, 10, 64)
-			ids = append(ids, n)
-		}
-		delete(st.Asks, strconv.FormatInt(slices.Min(ids), 10))
+		oldest := slices.MinFunc(slices.Collect(maps.Keys(st.Asks)), func(a, b string) int {
+			return cmp.Or(cmp.Compare(len(a), len(b)), cmp.Compare(a, b))
+		})
+		delete(st.Asks, oldest)
 	}
 }
 
 // take removes and returns the ask of messageID.
-func (st *convState) take(messageID int64) (pendingAsk, bool) {
-	k := strconv.FormatInt(messageID, 10)
-	a, ok := st.Asks[k]
+func (st *convState) take(messageID string) (pendingAsk, bool) {
+	a, ok := st.Asks[messageID]
 	if ok {
-		delete(st.Asks, k)
+		delete(st.Asks, messageID)
 	}
 	return a, ok
 }
@@ -638,7 +683,7 @@ func (s *Store) updateConvState(ctx context.Context, convID string, fn func(*con
 
 // RememberAsk records that a reply to messageID answers a mission's
 // ask_user question or plan gate; at most maxAsks per conversation.
-func (s *Store) RememberAsk(ctx context.Context, convID string, messageID int64, missionID, kind string) error {
+func (s *Store) RememberAsk(ctx context.Context, convID, messageID, missionID, kind string) error {
 	if err := s.updateConvState(ctx, convID, func(st *convState) {
 		st.remember(messageID, pendingAsk{MissionID: missionID, Kind: kind})
 	}); err != nil {
@@ -648,7 +693,7 @@ func (s *Store) RememberAsk(ctx context.Context, convID string, messageID int64,
 }
 
 // TakeAsk removes and returns the ask a reply to messageID answers.
-func (s *Store) TakeAsk(ctx context.Context, convID string, messageID int64) (missionID, kind string, ok bool, err error) {
+func (s *Store) TakeAsk(ctx context.Context, convID, messageID string) (missionID, kind string, ok bool, err error) {
 	var a pendingAsk
 	if err := s.updateConvState(ctx, convID, func(st *convState) { a, ok = st.take(messageID) }); err != nil {
 		return "", "", false, fmt.Errorf("channels take ask: %w", err)

@@ -100,10 +100,11 @@ beforeEach(() => {
 })
 
 describe('Channels settings', () => {
-  it('shows the empty state and the Telegram add tile', async () => {
+  it('shows the empty state and the Telegram and Slack add tiles', async () => {
     renderTab()
     expect(await screen.findByText('No channels yet')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Telegram' }).getAttribute('href')).toBe('/settings/channels/new')
+    expect(screen.getByRole('link', { name: 'Slack' }).getAttribute('href')).toBe('/settings/channels/new?kind=slack')
   })
 
   it('lists a channel with its bot, agent and pairing counts', async () => {
@@ -186,6 +187,65 @@ describe('Channels settings', () => {
       agent_id: null,
       config: { dispatch: false },
     })
+  })
+
+  it('adds a Slack channel: writes both tokens and sends the app token ref', async () => {
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(createChannel).mockResolvedValue('c7')
+    vi.mocked(testChannel).mockResolvedValue({ ok: true, bot_username: 'timothy' })
+    vi.mocked(patchChannel).mockResolvedValue(channel)
+    renderTab('/settings/channels/new?kind=slack')
+
+    fireEvent.change(await screen.findByPlaceholderText('my-slack'), { target: { value: 'Team Slack' } })
+    expect(screen.getByText(/connects to Slack over Socket Mode/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Bot token'), { target: { value: 'xoxb-1' } })
+    const test = screen.getByRole('button', { name: 'Test connection' }) as HTMLButtonElement
+    expect(test.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('App token'), { target: { value: 'xapp-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+
+    expect(await screen.findByText(/Connected as @timothy/)).toBeTruthy()
+    expect(setSecret).toHaveBeenCalledWith('TEAM_SLACK_CHANNEL_BOT_TOKEN', 'xoxb-1')
+    expect(setSecret).toHaveBeenCalledWith('TEAM_SLACK_CHANNEL_APP_TOKEN', 'xapp-1')
+    expect(createChannel).toHaveBeenCalledWith({
+      name: 'Team Slack',
+      kind: 'slack',
+      credential_ref: 'TEAM_SLACK_CHANNEL_BOT_TOKEN',
+      agent_id: undefined,
+      config: { dispatch: false, app_token_ref: 'TEAM_SLACK_CHANNEL_APP_TOKEN' },
+      enabled: false,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Add channel' }))
+    await waitFor(() => expect(patchChannel).toHaveBeenCalledWith('c7', { enabled: true }))
+  })
+
+  it('rotates a Slack app token on the manage page', async () => {
+    const slackChannel: Channel = {
+      ...channel,
+      id: 'c2',
+      name: 'team-slack',
+      kind: 'slack',
+      credential_ref: 'TEAM_SLACK_CHANNEL_BOT_TOKEN',
+      config: { dispatch: false, bot_username: 'timothy', app_token_ref: 'TEAM_SLACK_CHANNEL_APP_TOKEN' },
+    }
+    vi.mocked(getChannel).mockResolvedValue(slackChannel)
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(patchChannel).mockResolvedValue(slackChannel)
+    renderTab('/settings/channels/c2')
+
+    fireEvent.change(await screen.findByLabelText('App token'), { target: { value: 'xapp-new' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save app token' }))
+    await waitFor(() =>
+      expect(patchChannel).toHaveBeenCalledWith('c2', { config: { app_token_ref: 'TEAM_SLACK_CHANNEL_APP_TOKEN' } }),
+    )
+    expect(setSecret).toHaveBeenCalledWith('TEAM_SLACK_CHANNEL_APP_TOKEN', 'xapp-new')
+    expect(screen.getByText('Checks the bot token with Slack.')).toBeTruthy()
+  })
+
+  it('shows no app token panel for a Telegram channel', async () => {
+    renderTab('/settings/channels/c1')
+    expect(await screen.findByText('Rotate bot token')).toBeTruthy()
+    expect(screen.queryByText('Rotate app token')).toBeNull()
   })
 
   it('shows a pending code with its expiry and approves or revokes senders', async () => {

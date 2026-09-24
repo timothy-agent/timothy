@@ -25,10 +25,12 @@ const (
 	// prompts to one sender.
 	codeTTL     = 10 * time.Minute
 	promptEvery = 10 * time.Minute
-	// messageLimit is Telegram's text cap in UTF-16 units; streamWindow
-	// is the tail shown while a reply streams.
-	messageLimit = 4096
-	streamWindow = 4000
+	// messageLimit is Telegram's text cap in UTF-16 units;
+	// slackMessageLimit keeps Slack text inside a section block's 3000.
+	// streamWindow is the tail shown while a reply streams.
+	messageLimit      = 4096
+	slackMessageLimit = 3000
+	streamWindow      = 4000
 	// maxAsks caps remembered reply-to asks per conversation.
 	maxAsks = 20
 	// maxAskButtons caps the option buttons of one ask.
@@ -138,8 +140,15 @@ func tgLen(s string) int { return len(utf16.Encode([]rune(s))) }
 
 // streamingView is the text shown while a reply streams: the whole
 // text, or "..." plus its last streamWindow units.
-func streamingView(text string) string {
-	if tgLen(text) <= streamWindow {
+func streamingView(text string) string { return tailView(text, streamWindow) }
+
+// streamWindowFor fits the streaming tail plus "..." under an
+// adapter's message limit.
+func streamWindowFor(limit int) int { return min(streamWindow, limit-3) }
+
+// tailView is text, or "..." plus its last window units.
+func tailView(text string, window int) string {
+	if tgLen(text) <= window {
 		return text
 	}
 	runes := []rune(text)
@@ -147,7 +156,7 @@ func streamingView(text string) string {
 	i := len(runes)
 	for i > 0 {
 		w := len(utf16.Encode(runes[i-1 : i]))
-		if n+w > streamWindow {
+		if n+w > window {
 			break
 		}
 		n += w
@@ -194,11 +203,17 @@ func chunkReply(text string, limit int) []string {
 // only when the view changed since the last edit.
 type editThrottle struct {
 	sent string
+	// window is the streaming tail size; 0 uses streamWindow.
+	window int
 }
 
 // due returns the view to send for text, or false when unchanged.
 func (t *editThrottle) due(text string) (string, bool) {
-	view := streamingView(text)
+	window := t.window
+	if window == 0 {
+		window = streamWindow
+	}
+	view := tailView(text, window)
 	if view == t.sent || strings.TrimSpace(view) == "" {
 		return "", false
 	}

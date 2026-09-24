@@ -644,7 +644,7 @@ CREATE TABLE IF NOT EXISTS github_poll_cursors (
 );
 
 -- Channels (issue #828, internal/brain/channels): chat surfaces such as
--- a Telegram bot. state holds adapter cursors ({"update_offset": N}).
+-- a Telegram bot or a Slack app. state holds the adapter cursor ({"cursor": "..."}).
 CREATE TABLE IF NOT EXISTS channels (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name           text NOT NULL,

@@ -5,6 +5,7 @@ package channels
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -455,18 +456,18 @@ func TestConversationAsksAndSessionLookup(t *testing.T) {
 	id := createChannel(t, s, runTag()+"asks")
 	conv := pairedConversation(t, s, id, "77")
 	for i := int64(1); i <= maxAsks+2; i++ {
-		if err := s.RememberAsk(ctx, conv.ID, i, "m", AskUser); err != nil {
+		if err := s.RememberAsk(ctx, conv.ID, strconv.FormatInt(i, 10), "m", AskUser); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, _, ok, _ := s.TakeAsk(ctx, conv.ID, 1); ok {
+	if _, _, ok, _ := s.TakeAsk(ctx, conv.ID, "1"); ok {
 		t.Fatal("the oldest ask survived the cap")
 	}
-	mid, kind, ok, err := s.TakeAsk(ctx, conv.ID, 5)
+	mid, kind, ok, err := s.TakeAsk(ctx, conv.ID, "5")
 	if err != nil || !ok || mid != "m" || kind != AskUser {
 		t.Fatalf("take = %q %q %v %v", mid, kind, ok, err)
 	}
-	if _, _, ok, _ := s.TakeAsk(ctx, conv.ID, 5); ok {
+	if _, _, ok, _ := s.TakeAsk(ctx, conv.ID, "5"); ok {
 		t.Fatal("an ask was taken twice")
 	}
 	got, err := s.ConversationByID(ctx, conv.ID)

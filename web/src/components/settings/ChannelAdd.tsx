@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { createChannel, listAgents, patchChannel, setSecret, testChannel } from '../../api/client'
 import type { AdminAgent, Channel } from '../../api/types'
@@ -24,17 +24,21 @@ const title = 'New channel'
 // ChannelAdd creates the channel disabled while testing its bot token;
 // a passing test enables it on Add, same flow as DestinationAdd. A
 // retry after a failed test updates the saved row instead of creating
-// a second one.
+// a second one. Slack also needs its app-level token for Socket Mode.
 export function ChannelAdd() {
   const navigate = useNavigate()
+  const [params] = useSearchParams()
   const defaultBackend = useDefaultSecretBackend()
   const [agents, setAgents] = useState<AdminAgent[]>([])
   const [name, setName] = useState('')
-  const [kind, setKind] = useState<Channel['kind']>('telegram')
+  const [kind, setKind] = useState<Channel['kind']>(params.get('kind') === 'slack' ? 'slack' : 'telegram')
   const [agent, setAgent] = useState(DEFAULT_AGENT)
   const [token, setToken] = useState('')
   const [tokenMode, setTokenMode] = useState<CredentialMode>('new')
   const [existingRef, setExistingRef] = useState('')
+  const [appToken, setAppToken] = useState('')
+  const [appTokenMode, setAppTokenMode] = useState<CredentialMode>('new')
+  const [existingAppRef, setExistingAppRef] = useState('')
   const [busy, setBusy] = useState(false)
   const [createdID, setCreatedID] = useState<string | null>(null)
   const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null)
@@ -45,9 +49,16 @@ export function ChannelAdd() {
       .catch((err: unknown) => toast.error('Could not load agents', { description: errText(err) }))
   }, [])
 
+  const slack = kind === 'slack'
+  const slug = slugify(name).toUpperCase().replace(/-/g, '_')
   const usingExisting = tokenMode === 'existing'
-  const tokenRef = usingExisting ? existingRef : `${slugify(name).toUpperCase().replace(/-/g, '_')}_CHANNEL_BOT_TOKEN`
-  const canTest = name.trim() !== '' && (usingExisting ? existingRef !== '' : token.trim() !== '')
+  const tokenRef = usingExisting ? existingRef : `${slug}_CHANNEL_BOT_TOKEN`
+  const usingExistingApp = appTokenMode === 'existing'
+  const appTokenRef = usingExistingApp ? existingAppRef : `${slug}_CHANNEL_APP_TOKEN`
+  const canTest =
+    name.trim() !== '' &&
+    (usingExisting ? existingRef !== '' : token.trim() !== '') &&
+    (!slack || (usingExistingApp ? existingAppRef !== '' : appToken.trim() !== ''))
 
   const edit = <T,>(set: (v: T) => void) => (v: T) => {
     set(v)
@@ -59,7 +70,9 @@ export function ChannelAdd() {
     setTest(null)
     try {
       if (!usingExisting) await setSecret(tokenRef, token.trim())
-      const { agent_id, config } = channelAgentPatch(agent)
+      if (slack && !usingExistingApp) await setSecret(appTokenRef, appToken.trim())
+      const { agent_id, config: agentConfig } = channelAgentPatch(agent)
+      const config = slack ? { ...agentConfig, app_token_ref: appTokenRef } : agentConfig
       let id = createdID
       if (id) {
         await patchChannel(id, { name: name.trim(), credential_ref: tokenRef, agent_id, config })
@@ -101,7 +114,7 @@ export function ChannelAdd() {
     <PageShell width="form">
       <PageHeader
         title={title}
-        description="Telegram bot, long polling"
+        description={slack ? 'Slack app, Socket Mode' : 'Telegram bot, long polling'}
         breadcrumbs={[
           { label: 'Settings', href: '/settings' },
           { label: area.label, href: '/settings/channels' },
@@ -111,18 +124,20 @@ export function ChannelAdd() {
       <Form onSubmit={(e) => e.preventDefault()}>
         <FieldGroup>
           <Field label="Name" description="unique">
-            <Input value={name} onChange={(e) => edit(setName)(e.target.value)} placeholder="my-telegram" />
+            <Input
+              value={name}
+              onChange={(e) => edit(setName)(e.target.value)}
+              placeholder={slack ? 'my-slack' : 'my-telegram'}
+            />
           </Field>
-          <Field label="Kind">
-            <Select value={kind} onValueChange={(v) => edit(setKind)(v as Channel['kind'])}>
+          <Field label="Kind" description={createdID ? 'fixed once tested' : undefined}>
+            <Select value={kind} disabled={createdID !== null} onValueChange={(v) => edit(setKind)(v as Channel['kind'])}>
               <SelectTrigger className="w-full" aria-label="Kind">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="telegram">Telegram</SelectItem>
-                <SelectItem value="slack" disabled>
-                  Slack (coming later)
-                </SelectItem>
+                <SelectItem value="slack">Slack</SelectItem>
                 <SelectItem value="email" disabled>
                   Email (coming later)
                 </SelectItem>
@@ -137,17 +152,47 @@ export function ChannelAdd() {
             onExistingRefChange={edit(setExistingRef)}
             secretValue={token}
             onSecretValueChange={edit(setToken)}
-            secretPlaceholder="123456:ABC-DEF..."
+            secretPlaceholder={slack ? 'xoxb-...' : '123456:ABC-DEF...'}
             defaultBackend={defaultBackend}
             refName={tokenRef}
           />
+          {slack && (
+            <CredentialField
+              label="App token"
+              mode={appTokenMode}
+              onModeChange={edit(setAppTokenMode)}
+              existingRef={existingAppRef}
+              onExistingRefChange={edit(setExistingAppRef)}
+              secretValue={appToken}
+              onSecretValueChange={edit(setAppToken)}
+              secretPlaceholder="xapp-..."
+              defaultBackend={defaultBackend}
+              refName={appTokenRef}
+            />
+          )}
           <Field label="Agent" description="who answers new conversations">
             <ChannelAgentSelect value={agent} onChange={edit(setAgent)} agents={agents} />
           </Field>
-          <p className="text-sm text-muted-foreground">
-            Timothy long-polls Telegram for this bot, so nothing inbound needs exposing. Create the bot with
-            @BotFather and paste its token here.
-          </p>
+          {slack ? (
+            <div className="space-y-2 text-sm text-muted-foreground">
+              <p>
+                Timothy connects to Slack over Socket Mode, so nothing inbound needs exposing. Create a Slack app,
+                turn on Socket Mode and make an app-level token with <code>connections:write</code> (the App token).
+              </p>
+              <p>
+                Add the bot scopes <code>app_mentions:read</code>, <code>chat:write</code>, <code>im:history</code>,{' '}
+                <code>channels:history</code>, <code>groups:history</code> and <code>mpim:history</code>; subscribe to
+                the bot events <code>message.im</code>, <code>app_mention</code>, <code>message.channels</code>,{' '}
+                <code>message.groups</code> and <code>message.mpim</code>; enable Interactivity and the App Home
+                messages tab; install the app to your workspace and paste its bot token (xoxb) as the Bot token.
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Timothy long-polls Telegram for this bot, so nothing inbound needs exposing. Create the bot with
+              @BotFather and paste its token here.
+            </p>
+          )}
         </FieldGroup>
 
         {test || busy ? (

@@ -3,6 +3,7 @@ package channels
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -89,11 +90,11 @@ func TestAuthorizeCallback(t *testing.T) {
 	}
 }
 
-func buttonData(kb [][]tgButton) []string {
+func buttonData(kb [][]button) []string {
 	var out []string
 	for _, row := range kb {
 		for _, b := range row {
-			out = append(out, b.CallbackData)
+			out = append(out, b.Data)
 		}
 	}
 	return out
@@ -221,19 +222,19 @@ func TestOutcomeText(t *testing.T) {
 func TestConvStateAsks(t *testing.T) {
 	var st convState
 	for i := int64(1); i <= maxAsks+5; i++ {
-		st.remember(i*10, pendingAsk{MissionID: "m", Kind: AskUser})
+		st.remember(strconv.FormatInt(i*10, 10), pendingAsk{MissionID: "m", Kind: AskUser})
 	}
 	if len(st.Asks) != maxAsks {
 		t.Fatalf("remembered %d asks, want the cap %d", len(st.Asks), maxAsks)
 	}
-	if _, ok := st.take(50); ok {
+	if _, ok := st.take("50"); ok {
 		t.Fatal("an ask past the cap (oldest) survived")
 	}
-	a, ok := st.take(60)
+	a, ok := st.take("60")
 	if !ok || a.MissionID != "m" || a.Kind != AskUser {
 		t.Fatalf("take = %+v %v", a, ok)
 	}
-	if _, ok := st.take(60); ok {
+	if _, ok := st.take("60"); ok {
 		t.Fatal("an ask was taken twice")
 	}
 	raw, _ := json.Marshal(st)
@@ -252,7 +253,7 @@ func TestDrainSendsAndClosesPermissionButtons(t *testing.T) {
 	events <- stream.StreamEvent{Type: stream.EventPermissionResolved, Resolved: &stream.PermissionResolvedEvent{ID: testPermID, Decision: "session"}}
 	events <- stream.StreamEvent{Type: stream.EventChunk, Text: "ok"}
 	events <- stream.StreamEvent{Type: stream.EventDone}
-	r.drain(context.Background(), turnJob{chatID: 7, threadID: 3}, 55, events, nil)
+	r.drain(context.Background(), turnJob{to: target{ChatID: "7", ThreadID: "3"}}, "55", events, nil)
 	sends := f.callsOf("sendMessage")
 	if len(sends) != 1 || sends[0].Body["text"] != "Timothy wants to run shell: list files" || sends[0].Body["message_thread_id"].(float64) != 3 {
 		t.Fatalf("buttons message = %+v", sends)
@@ -278,7 +279,7 @@ func TestDrainSkipsButtonsWithoutResolver(t *testing.T) {
 	events := make(chan stream.StreamEvent, 2)
 	events <- stream.StreamEvent{Type: stream.EventPermissionRequest, Permission: &stream.PermissionRequestEvent{ID: testPermID, Tool: "shell"}}
 	events <- stream.StreamEvent{Type: stream.EventDone}
-	r.drain(context.Background(), turnJob{chatID: 7}, 55, events, nil)
+	r.drain(context.Background(), turnJob{to: target{ChatID: "7"}}, "55", events, nil)
 	if n := len(f.callsOf("sendMessage")); n != 0 {
 		t.Fatalf("sent %d messages without a permission resolver", n)
 	}

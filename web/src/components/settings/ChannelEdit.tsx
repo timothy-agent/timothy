@@ -77,6 +77,12 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
   const [tokenMode, setTokenMode] = useState<CredentialMode>('new')
   const [existingRef, setExistingRef] = useState('')
   const [savingToken, setSavingToken] = useState(false)
+  const [appToken, setAppToken] = useState('')
+  const [appTokenMode, setAppTokenMode] = useState<CredentialMode>('new')
+  const [existingAppRef, setExistingAppRef] = useState('')
+  const [savingAppToken, setSavingAppToken] = useState(false)
+  const slack = channel.kind === 'slack'
+  const service = slack ? 'Slack' : 'Telegram'
   const staged = useStagedForm<ChannelValues>(valuesFrom(initial))
 
   useEffect(() => {
@@ -144,6 +150,22 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
     }
   }
 
+  const usingExistingApp = appTokenMode === 'existing'
+  const saveAppToken = async () => {
+    setSavingAppToken(true)
+    try {
+      const ref = usingExistingApp ? existingAppRef : (channel.config.app_token_ref ?? '')
+      if (!usingExistingApp) await setSecret(ref, appToken.trim())
+      setChannel(await patchChannel(channel.id, { config: { app_token_ref: ref } }))
+      setAppToken('')
+      toast.success('App token updated')
+    } catch (err) {
+      toast.error('Could not update app token', { description: errText(err) })
+    } finally {
+      setSavingAppToken(false)
+    }
+  }
+
   const remove = async () => {
     try {
       await deleteChannel(channel.id)
@@ -176,7 +198,11 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
       <div className="mb-8 flex items-center justify-between gap-4 rounded-md border border-border p-4">
         <div className="min-w-0">
           <div className="text-sm font-medium">Enabled</div>
-          <p className="text-sm text-muted-foreground">Disabled channels stop polling; messages sent meanwhile wait at Telegram.</p>
+          <p className="text-sm text-muted-foreground">
+            {slack
+              ? 'Disabled channels close their Slack connection; messages sent meanwhile are not answered.'
+              : 'Disabled channels stop polling; messages sent meanwhile wait at Telegram.'}
+          </p>
         </div>
         <Switch checked={channel.enabled} onCheckedChange={toggleEnabled} aria-label={`${channel.name} enabled`} />
       </div>
@@ -228,7 +254,7 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
             />
           ) : (
             <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
-              <span className="min-w-0 flex-1 font-medium">Checks the bot token with Telegram.</span>
+              <span className="min-w-0 flex-1 font-medium">Checks the bot token with {service}.</span>
               <Button size="sm" variant="test" onClick={() => void runTest()}>
                 Test connection
               </Button>
@@ -249,7 +275,7 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
               onExistingRefChange={setExistingRef}
               secretValue={token}
               onSecretValueChange={setToken}
-              secretPlaceholder="123456:ABC-DEF..."
+              secretPlaceholder={slack ? 'xoxb-...' : '123456:ABC-DEF...'}
               defaultBackend={defaultBackend}
               refName={channel.credential_ref}
               modeLabels={{ new: 'New token', existing: 'Different credential' }}
@@ -263,6 +289,36 @@ function ChannelEditForm({ initial, refresh }: { initial: Channel; refresh: () =
             </Button>
           </div>
         </Panel>
+
+        {slack && (
+          <Panel title="Rotate app token">
+            <div className="space-y-3">
+              <CredentialField
+                label="App token"
+                mode={appTokenMode}
+                onModeChange={(m) => {
+                  setAppTokenMode(m)
+                  if (m === 'existing' && !existingAppRef) setExistingAppRef(channel.config.app_token_ref ?? '')
+                }}
+                existingRef={existingAppRef}
+                onExistingRefChange={setExistingAppRef}
+                secretValue={appToken}
+                onSecretValueChange={setAppToken}
+                secretPlaceholder="xapp-..."
+                defaultBackend={defaultBackend}
+                refName={channel.config.app_token_ref ?? ''}
+                modeLabels={{ new: 'New token', existing: 'Different credential' }}
+              />
+              <Button
+                size="sm"
+                disabled={savingAppToken || (usingExistingApp ? !existingAppRef : !appToken.trim())}
+                onClick={() => void saveAppToken()}
+              >
+                {savingAppToken ? 'Saving…' : 'Save app token'}
+              </Button>
+            </div>
+          </Panel>
+        )}
       </div>
 
       <ConfirmDialog

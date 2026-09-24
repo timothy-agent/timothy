@@ -22,8 +22,10 @@ type Outcomes struct {
 	http    *http.Client
 	enabled func(context.Context) bool
 	log     *slog.Logger
-	// APIBase overrides the Bot API base URL for tests.
-	APIBase string
+	// APIBase and SlackAPIBase override the transport API base URLs
+	// for tests.
+	APIBase      string
+	SlackAPIBase string
 }
 
 // NewOutcomes wires the consumer; deps.Get is required, Events and
@@ -37,7 +39,7 @@ func (*Outcomes) Name() string { return "channels" }
 
 func (*Outcomes) Kinds() []string { return []string{events.KindMissionDone, events.KindMissionFailed} }
 
-// Handle sends one outcome message. A Bot API 4xx (chat gone, bot
+// Handle sends one outcome message. A transport 4xx (chat gone, bot
 // blocked) logs and returns nil; transport failures and 429 return the
 // error so the drainer retries.
 func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error {
@@ -75,9 +77,9 @@ func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error 
 		o.log.Info("channels: outcome not sent, channel disabled", "channel_id", ch.ID, "mission_id", m.ID)
 		return nil
 	}
-	chatID, threadID, err := conversationTarget(conv)
+	ad, err := newAdapter(ch, o.http, o.resolve, o.APIBase, o.SlackAPIBase)
 	if err != nil {
-		o.log.Warn("channels: outcome bad chat id", "conversation_id", conv.ID, "error", err)
+		o.log.Warn("channels: outcome channel unsupported", "channel_id", ch.ID, "error", err)
 		return nil
 	}
 	reason := p.Reason
@@ -99,14 +101,9 @@ func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error 
 		base = o.deps.WebBaseURL(ctx)
 	}
 	text := outcomeText(m, terminal, reason, missions.OutcomeDigest(m, evs, terminal, reason), base)
-	api := o.APIBase
-	if api == "" {
-		api = defaultAPIBase
-	}
-	bot := &botAPI{http: o.http, base: api, resolve: o.resolve, ref: ch.CredentialRef}
-	if _, err := bot.sendMessage(ctx, chatID, threadID, text, false); err != nil {
+	if _, err := ad.send(ctx, conversationTarget(conv), text, nil, false); err != nil {
 		if st := apiStatus(err); st >= 400 && st < 500 && st != http.StatusTooManyRequests {
-			o.log.Warn("channels: outcome rejected by telegram", "channel_id", ch.ID, "mission_id", m.ID, "error", err)
+			o.log.Warn("channels: outcome rejected", "channel_id", ch.ID, "kind", ch.Kind, "mission_id", m.ID, "error", err)
 			return nil
 		}
 		return err

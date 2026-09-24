@@ -121,8 +121,11 @@ func TestChannelsAPICRUD(t *testing.T) {
 	h := newChannelHarness(t)
 	id := h.create("bot", "GOOD_BOT")
 
-	if w := h.do("POST", "/v1/channels", fmt.Sprintf(`{"name":%q,"kind":"slack","credential_ref":"X"}`, h.tag+"slack")); w.Code != 400 || !strings.Contains(w.Body.String(), "not_available") {
-		t.Fatalf("slack = %d %s", w.Code, w.Body.String())
+	if w := h.do("POST", "/v1/channels", fmt.Sprintf(`{"name":%q,"kind":"email","credential_ref":"X"}`, h.tag+"email")); w.Code != 400 || !strings.Contains(w.Body.String(), "not_available") {
+		t.Fatalf("email = %d %s", w.Code, w.Body.String())
+	}
+	if w := h.do("POST", "/v1/channels", fmt.Sprintf(`{"name":%q,"kind":"slack","credential_ref":"X"}`, h.tag+"slack")); w.Code != 400 || !strings.Contains(w.Body.String(), "app_token_ref") {
+		t.Fatalf("slack without app token = %d %s", w.Code, w.Body.String())
 	}
 	if w := h.do("POST", "/v1/channels", fmt.Sprintf(`{"name":%q,"kind":"telegram"}`, h.tag+"noref")); w.Code != 400 {
 		t.Fatalf("missing credential_ref = %d %s", w.Code, w.Body.String())

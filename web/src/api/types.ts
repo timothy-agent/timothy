@@ -990,13 +990,14 @@ export interface Destination {
   updated_at: string
 }
 
-// Channel is one chat surface (issue #828): a Telegram bot today.
-// credential_ref names the bot token secret, never its value.
+// Channel is one chat surface (issues #828, #830): a Telegram bot or a
+// Slack app. credential_ref names the bot token secret, never its
+// value; Slack also names its app-level token in config.app_token_ref.
 export interface Channel {
   id: string
   name: string
   kind: 'telegram' | 'slack' | 'email'
-  config: { dispatch: boolean; bot_username?: string }
+  config: { dispatch: boolean; bot_username?: string; app_token_ref?: string }
   credential_ref: string
   agent_id: string
   enabled: boolean
@@ -1023,7 +1024,7 @@ export interface ChannelInput {
   kind: Channel['kind']
   credential_ref: string
   agent_id?: string
-  config?: { dispatch?: boolean }
+  config?: { dispatch?: boolean; app_token_ref?: string }
   enabled?: boolean
 }
 
@@ -1032,7 +1033,7 @@ export interface ChannelPatch {
   credential_ref?: string
   agent_id?: string | null
   enabled?: boolean
-  config?: { dispatch?: boolean }
+  config?: { dispatch?: boolean; app_token_ref?: string }
 }
 
 // GitHubDestinationConfig is the config shape for a 'github' kind

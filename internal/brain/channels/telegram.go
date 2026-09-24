@@ -24,22 +24,39 @@ const (
 	callTimeout = 30 * time.Second
 )
 
-// apiError is a Bot API rejection: the HTTP status (Telegram mirrors
-// it in error_code) and its description, token-redacted.
+// apiError is a transport API rejection: the HTTP status (Telegram
+// mirrors it in error_code; Slack errors are mapped onto one) and the
+// description, token-redacted.
 type apiError struct {
+	// Service is "telegram" or "slack"; empty reads as telegram.
+	Service     string
 	Method      string
 	Status      int
 	Description string
+	// RetryAfter is the server's rate limit wait, 0 when unknown.
+	RetryAfter time.Duration
 }
 
 func (e *apiError) Error() string {
-	return fmt.Sprintf("telegram %s: status %d: %s", e.Method, e.Status, e.Description)
+	svc := e.Service
+	if svc == "" {
+		svc = KindTelegram
+	}
+	return fmt.Sprintf("%s %s: status %d: %s", svc, e.Method, e.Status, e.Description)
 }
 
 func apiStatus(err error) int {
 	var ae *apiError
 	if errors.As(err, &ae) {
 		return ae.Status
+	}
+	return 0
+}
+
+func retryAfter(err error) time.Duration {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		return ae.RetryAfter
 	}
 	return 0
 }
@@ -87,13 +104,17 @@ func (b *botAPI) call(ctx context.Context, method string, body any, out any, tim
 		OK          bool            `json:"ok"`
 		Result      json.RawMessage `json:"result"`
 		Description string          `json:"description"`
+		Parameters  struct {
+			RetryAfter int `json:"retry_after"`
+		} `json:"parameters"`
 	}
 	if jerr := json.Unmarshal(data, &env); jerr != nil || resp.StatusCode >= 300 || !env.OK {
 		desc := env.Description
 		if desc == "" {
 			desc = http.StatusText(resp.StatusCode)
 		}
-		return &apiError{Method: method, Status: resp.StatusCode, Description: destinations.RedactToken(errors.New(desc), token).Error()}
+		return &apiError{Method: method, Status: resp.StatusCode, Description: destinations.RedactToken(errors.New(desc), token).Error(),
+			RetryAfter: time.Duration(env.Parameters.RetryAfter) * time.Second}
 	}
 	if out == nil {
 		return nil
@@ -127,31 +148,16 @@ func (b *botAPI) getUpdates(ctx context.Context, offset int64) ([]tgUpdate, erro
 }
 
 // sendMessage sends plain text (no parse_mode: model output would
-// break MarkdownV2) and returns the new message id.
-func (b *botAPI) sendMessage(ctx context.Context, chatID int64, threadID int64, text string, silent bool) (int64, error) {
+// break MarkdownV2) with an optional inline keyboard and returns the
+// new message id.
+func (b *botAPI) sendMessage(ctx context.Context, chatID, threadID int64, text string, keyboard [][]tgButton, silent bool) (int64, error) {
 	body := map[string]any{"chat_id": chatID, "text": text}
 	if silent {
 		body["disable_notification"] = true
 	}
-	return b.send(ctx, threadID, body)
-}
-
-// tgButton is one inline keyboard button.
-type tgButton struct {
-	Text         string `json:"text"`
-	CallbackData string `json:"callback_data"`
-}
-
-// sendButtons sends plain text with an inline keyboard.
-func (b *botAPI) sendButtons(ctx context.Context, chatID, threadID int64, text string, keyboard [][]tgButton) (int64, error) {
-	body := map[string]any{"chat_id": chatID, "text": text}
 	if len(keyboard) > 0 {
 		body["reply_markup"] = map[string]any{"inline_keyboard": keyboard}
 	}
-	return b.send(ctx, threadID, body)
-}
-
-func (b *botAPI) send(ctx context.Context, threadID int64, body map[string]any) (int64, error) {
 	if threadID != 0 {
 		body["message_thread_id"] = threadID
 	}
@@ -162,12 +168,26 @@ func (b *botAPI) send(ctx context.Context, threadID int64, body map[string]any) 
 	return msg.MessageID, err
 }
 
-// closeButtons replaces a buttons message's text and removes its
-// keyboard; "message is not modified" counts as success.
-func (b *botAPI) closeButtons(ctx context.Context, chatID, messageID int64, text string) error {
+// tgButton is one inline keyboard button.
+type tgButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}
+
+// answerCallbackQuery stops the button spinner with a short notice.
+func (b *botAPI) answerCallbackQuery(ctx context.Context, id, text string) error {
+	return b.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": id, "text": text}, nil, callTimeout)
+}
+
+// editMessageText replaces a sent message's text and keyboard (empty
+// removes it); "message is not modified" counts as success.
+func (b *botAPI) editMessageText(ctx context.Context, chatID, messageID int64, text string, keyboard [][]tgButton) error {
+	if keyboard == nil {
+		keyboard = [][]tgButton{}
+	}
 	err := b.call(ctx, "editMessageText", map[string]any{
 		"chat_id": chatID, "message_id": messageID, "text": text,
-		"reply_markup": map[string]any{"inline_keyboard": [][]tgButton{}},
+		"reply_markup": map[string]any{"inline_keyboard": keyboard},
 	}, nil, callTimeout)
 	var ae *apiError
 	if errors.As(err, &ae) && strings.Contains(ae.Description, "message is not modified") {
@@ -176,20 +196,104 @@ func (b *botAPI) closeButtons(ctx context.Context, chatID, messageID int64, text
 	return err
 }
 
-// answerCallbackQuery stops the button spinner with a short notice.
-func (b *botAPI) answerCallbackQuery(ctx context.Context, id, text string) error {
-	return b.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": id, "text": text}, nil, callTimeout)
+// telegramAdapter is the Bot API transport: long polling, update
+// offsets as the cursor.
+type telegramAdapter struct {
+	api *botAPI
+	me  botIdentity
 }
 
-// editMessageText replaces a sent message's text; "message is not
-// modified" counts as success.
-func (b *botAPI) editMessageText(ctx context.Context, chatID, messageID int64, text string) error {
-	err := b.call(ctx, "editMessageText", map[string]any{"chat_id": chatID, "message_id": messageID, "text": text}, nil, callTimeout)
-	var ae *apiError
-	if errors.As(err, &ae) && strings.Contains(ae.Description, "message is not modified") {
+func (t *telegramAdapter) connect(ctx context.Context) (identity, error) {
+	me, err := t.api.getMe(ctx)
+	if err != nil {
+		return identity{}, err
+	}
+	t.me = me
+	return identity{ID: strconv.FormatInt(me.ID, 10), Username: me.Username}, nil
+}
+
+func (t *telegramAdapter) receive(ctx context.Context, cursor string) ([]inbound, string, error) {
+	var offset int64
+	if cursor != "" {
+		n, err := strconv.ParseInt(cursor, 10, 64)
+		if err != nil {
+			return nil, cursor, fmt.Errorf("telegram cursor %q: %w", cursor, err)
+		}
+		offset = n
+	}
+	updates, err := t.api.getUpdates(ctx, offset)
+	if err != nil || len(updates) == 0 {
+		return nil, cursor, err
+	}
+	items := make([]inbound, 0, len(updates))
+	for _, u := range updates {
+		if in, ok := parseUpdate(u, t.me); ok {
+			items = append(items, in)
+		}
+		offset = u.UpdateID + 1
+	}
+	return items, strconv.FormatInt(offset, 10), nil
+}
+
+func (t *telegramAdapter) send(ctx context.Context, to target, text string, buttons [][]button, silent bool) (string, error) {
+	chatID, threadID, err := tgTarget(to)
+	if err != nil {
+		return "", err
+	}
+	id, err := t.api.sendMessage(ctx, chatID, threadID, text, tgKeyboard(buttons), silent)
+	if err != nil {
+		return "", err
+	}
+	return strconv.FormatInt(id, 10), nil
+}
+
+func (t *telegramAdapter) edit(ctx context.Context, to target, messageID, text string, buttons [][]button) error {
+	chatID, _, err := tgTarget(to)
+	if err != nil {
+		return err
+	}
+	msgID, err := strconv.ParseInt(messageID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("telegram message id %q: %w", messageID, err)
+	}
+	return t.api.editMessageText(ctx, chatID, msgID, text, tgKeyboard(buttons))
+}
+
+func (t *telegramAdapter) answerPress(ctx context.Context, pressID, text string) error {
+	return t.api.answerCallbackQuery(ctx, pressID, text)
+}
+
+func (*telegramAdapter) caps() capabilities {
+	return capabilities{MessageLimit: messageLimit, EditEvery: editEvery}
+}
+
+// tgTarget parses a target's numeric chat and thread ids.
+func tgTarget(to target) (chatID, threadID int64, err error) {
+	chatID, err = strconv.ParseInt(to.ChatID, 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("telegram chat id %q: %w", to.ChatID, err)
+	}
+	if to.ThreadID != "" {
+		if threadID, err = strconv.ParseInt(to.ThreadID, 10, 64); err != nil {
+			return 0, 0, fmt.Errorf("telegram thread id %q: %w", to.ThreadID, err)
+		}
+	}
+	return chatID, threadID, nil
+}
+
+func tgKeyboard(buttons [][]button) [][]tgButton {
+	if buttons == nil {
 		return nil
 	}
-	return err
+	out := make([][]tgButton, 0, len(buttons))
+	for _, row := range buttons {
+		r := make([]tgButton, 0, len(row))
+		for _, b := range row {
+			r = append(r, tgButton{Text: b.Text, CallbackData: b.Data})
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 type tgUpdate struct {
@@ -238,34 +342,35 @@ type tgEntity struct {
 	User   *tgUser `json:"user"`
 }
 
-// inbound is one parsed message the pipeline acts on.
-type inbound struct {
-	UpdateID    int64
-	UserID      string
-	DisplayName string
-	ChatID      int64
-	ThreadID    int64
-	Private     bool
-	// Addressed is true for private chats and for group messages that
-	// mention or reply to the bot.
-	Addressed bool
-	Text      string
-	// ReplyToID is the message this one replies to, 0 for none.
-	ReplyToID int64
-}
-
-// parseUpdate turns an update into an inbound message; ok is false
-// for updates without a human sender message.
+// parseUpdate turns an update into an inbound item; ok is false for
+// updates without a human sender message or a button press.
 func parseUpdate(u tgUpdate, bot botIdentity) (inbound, bool) {
+	dedup := "telegram:" + strconv.FormatInt(u.UpdateID, 10)
+	if q := u.CallbackQuery; q != nil {
+		in := inbound{DedupID: dedup, Press: &press{ID: q.ID, Data: q.Data}}
+		// A press without a human sender or message keeps UserID empty;
+		// the runner only closes it.
+		if q.From == nil || q.From.IsBot || q.Message == nil {
+			return in, true
+		}
+		in.UserID, in.DisplayName = strconv.FormatInt(q.From.ID, 10), displayName(*q.From)
+		in.ChatID, in.Private = strconv.FormatInt(q.Message.Chat.ID, 10), q.Message.Chat.Type == "private"
+		if !in.Private && q.Message.MessageThreadID != 0 {
+			in.ThreadID = strconv.FormatInt(q.Message.MessageThreadID, 10)
+		}
+		in.Press.MessageID, in.Press.MessageText = strconv.FormatInt(q.Message.MessageID, 10), q.Message.Text
+		return in, true
+	}
 	m := u.Message
 	if m == nil || m.From == nil || m.From.IsBot {
 		return inbound{}, false
 	}
 	in := inbound{
-		UpdateID:    u.UpdateID,
+		DedupID:     dedup,
+		MessageID:   strconv.FormatInt(m.MessageID, 10),
 		UserID:      strconv.FormatInt(m.From.ID, 10),
 		DisplayName: displayName(*m.From),
-		ChatID:      m.Chat.ID,
+		ChatID:      strconv.FormatInt(m.Chat.ID, 10),
 		Private:     m.Chat.Type == "private",
 		Text:        m.Text,
 	}
@@ -273,11 +378,11 @@ func parseUpdate(u tgUpdate, bot botIdentity) (inbound, bool) {
 	if in.Text == "" {
 		in.Text, entities = m.Caption, m.CaptionEntities
 	}
-	if !in.Private {
-		in.ThreadID = m.MessageThreadID
+	if !in.Private && m.MessageThreadID != 0 {
+		in.ThreadID = strconv.FormatInt(m.MessageThreadID, 10)
 	}
 	if m.ReplyTo != nil {
-		in.ReplyToID = m.ReplyTo.MessageID
+		in.ReplyToID = strconv.FormatInt(m.ReplyTo.MessageID, 10)
 	}
 	in.Addressed = in.Private || mentionsBot(in.Text, entities, bot) ||
 		(m.ReplyTo != nil && m.ReplyTo.From != nil && m.ReplyTo.From.IsBot && (bot.ID == 0 || m.ReplyTo.From.ID == bot.ID))
@@ -315,14 +420,4 @@ func mentionsBot(text string, entities []tgEntity, bot botIdentity) bool {
 		}
 	}
 	return false
-}
-
-// conversationKey derives the external chat and thread a message maps
-// to: private chats by chat id, group topics by thread id.
-func conversationKey(in inbound) (chatID, threadID string) {
-	chatID = strconv.FormatInt(in.ChatID, 10)
-	if !in.Private && in.ThreadID != 0 {
-		threadID = strconv.FormatInt(in.ThreadID, 10)
-	}
-	return chatID, threadID
 }

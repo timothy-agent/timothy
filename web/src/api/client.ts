@@ -1164,8 +1164,8 @@ export async function deleteChannel(id: string): Promise<void> {
   await request<void>(`/v1/channels/${id}`, { method: 'DELETE' })
 }
 
-// testChannel checks the bot token with Telegram's getMe; a failure
-// throws with the API's message.
+// testChannel checks the bot token (Telegram getMe, Slack auth.test);
+// a failure throws with the API's message.
 export async function testChannel(id: string): Promise<{ ok: boolean; bot_username: string }> {
   return request<{ ok: boolean; bot_username: string }>(`/v1/channels/${id}/test`, { method: 'POST' })
 }

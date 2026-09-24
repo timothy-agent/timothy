@@ -3,7 +3,6 @@ package channels
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,7 +14,7 @@ type park struct {
 	// Key identifies the park; a mission is pushed once per key.
 	Key      string
 	Text     string
-	Keyboard [][]tgButton
+	Keyboard [][]button
 	// AskKind, when set, remembers the message so a reply answers it.
 	AskKind string
 }
@@ -45,7 +44,7 @@ func renderPark(m missions.Mission) (park, bool) {
 			if i == maxAskButtons {
 				break
 			}
-			p.Keyboard = append(p.Keyboard, []tgButton{{Text: capRunes(o, 60), CallbackData: askCallback(m.ID, i)}})
+			p.Keyboard = append(p.Keyboard, []button{{Text: capRunes(o, 60), Data: askCallback(m.ID, i)}})
 		}
 		if len(p.Keyboard) == 0 {
 			text += "\n\n" + msgReplyHint
@@ -57,9 +56,9 @@ func renderPark(m missions.Mission) (park, bool) {
 		return park{
 			Key:  "plan:" + m.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			Text: "Mission " + title + " has a plan ready\n\n" + planSummary(m.Plan) + "\n\n" + msgReplanHint,
-			Keyboard: [][]tgButton{{
-				{Text: "Approve", CallbackData: missionCallback(m.ID, actPlanApprove)},
-				{Text: "Replan", CallbackData: missionCallback(m.ID, actPlanReplan)},
+			Keyboard: [][]button{{
+				{Text: "Approve", Data: missionCallback(m.ID, actPlanApprove)},
+				{Text: "Replan", Data: missionCallback(m.ID, actPlanReplan)},
 			}},
 			AskKind: AskPlan,
 		}, true
@@ -71,9 +70,9 @@ func renderPark(m missions.Mission) (park, bool) {
 		return park{
 			Key:  "paused:" + m.UpdatedAt.UTC().Format(time.RFC3339Nano),
 			Text: "Mission " + title + " paused: " + capRunes(reason, failureCap),
-			Keyboard: [][]tgButton{{
-				{Text: "Resume", CallbackData: missionCallback(m.ID, actResume)},
-				{Text: "Cancel", CallbackData: missionCallback(m.ID, actCancel)},
+			Keyboard: [][]button{{
+				{Text: "Resume", Data: missionCallback(m.ID, actResume)},
+				{Text: "Cancel", Data: missionCallback(m.ID, actCancel)},
 			}},
 		}, true
 	}
@@ -171,12 +170,12 @@ func (s *Service) pushPark(ctx context.Context, m missions.Mission) {
 		s.skipOnce(m.ID, "channel disabled", nil)
 		return
 	}
-	chatID, threadID, err := conversationTarget(conv)
+	ad, err := s.adapterFor(ch)
 	if err != nil {
-		s.skipOnce(m.ID, "bad chat id", err)
+		s.skipOnce(m.ID, "unsupported channel", err)
 		return
 	}
-	msgID, err := s.bot(ch.CredentialRef).sendButtons(ctx, chatID, threadID, p.Text, p.Keyboard)
+	msgID, err := ad.send(ctx, conversationTarget(conv), p.Text, p.Keyboard, false)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.log.Warn("channels: push park failed", "channel_id", ch.ID, "mission_id", m.ID, "error", err)
@@ -204,16 +203,4 @@ func (s *Service) skipOnce(missionID, why string, err error) {
 		return
 	}
 	s.log.Info("channels: park not pushed", "mission_id", missionID, "reason", why)
-}
-
-// conversationTarget parses a conversation's Telegram chat and thread.
-func conversationTarget(c Conversation) (chatID, threadID int64, err error) {
-	chatID, err = strconv.ParseInt(c.ExternalChatID, 10, 64)
-	if err != nil {
-		return 0, 0, err
-	}
-	if c.ExternalThreadID != "" {
-		threadID, err = strconv.ParseInt(c.ExternalThreadID, 10, 64)
-	}
-	return chatID, threadID, err
 }
