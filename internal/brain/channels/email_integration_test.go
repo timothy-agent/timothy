@@ -118,6 +118,38 @@ func TestEmailOffAllowlistCreatesNothing(t *testing.T) {
 	}
 }
 
+// TestEmailAutomatedMailDropped: an autoresponse or list mail from an
+// allowlisted sender, paired or not, gets no reply, turn or pairing; a
+// normal mail after it still gets its turn.
+func TestEmailAutomatedMailDropped(t *testing.T) {
+	s, pool := testStore(t)
+	id := createEmailChannel(t, s, runTag()+"auto", "@x.com")
+	approveSender(t, s, id, "ada@x.com")
+	f := newFakeMail(0)
+	fc := &fakeChat{}
+	stop := startEmail(t, s, id, f, fc.chat, MissionDeps{}, nil)
+	defer stop()
+	waitCursor(t, s, id, "0")
+
+	f.add(connectors.MailMessage{MessageID: "v1@x.com", FromAddress: "ada@x.com", Subject: "Out of office", Text: "away", AutoSubmitted: "auto-replied"})
+	f.add(connectors.MailMessage{MessageID: "v2@x.com", FromAddress: "bob@x.com", Subject: "Out of office", Text: "away", AutoSubmitted: "Auto-Replied; owner=bob"})
+	f.add(connectors.MailMessage{MessageID: "l1@x.com", FromAddress: "list@x.com", Subject: "Digest", Text: "news", ListID: "<team.x.com>"})
+	waitCursor(t, s, id, "3")
+	time.Sleep(100 * time.Millisecond)
+	if fc.count() != 0 || len(f.sentMails()) != 0 {
+		t.Fatalf("automated mail reached the model %d times, sent %d", fc.count(), len(f.sentMails()))
+	}
+	if n := countRows(t, pool, "channel_pairings", id); n != 1 {
+		t.Fatalf("channel_pairings rows = %d, want only the approved sender", n)
+	}
+
+	f.add(connectors.MailMessage{MessageID: "n1@x.com", FromAddress: "ada@x.com", Subject: "Plans", Text: "hello", AutoSubmitted: "no"})
+	waitFor(t, "the turn", func() bool { return fc.count() == 1 && len(f.sentMails()) == 1 })
+	if fc.reqs[0].Message != "hello" || f.sentMails()[0].InReplyTo != "n1@x.com" {
+		t.Fatalf("turn = %q reply = %+v", fc.reqs[0].Message, f.sentMails()[0])
+	}
+}
+
 // TestEmailPairingThenTurn: a new allowlisted sender gets one pairing
 // prompt threaded under their mail and no model call; once approved,
 // their reply runs one turn answered by one mail, no placeholder, with

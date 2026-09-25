@@ -67,6 +67,8 @@ type imapMessage struct {
 	References  []string
 	FromAddress string
 	FromName    string
+	// Raw automated-mail headers for the email channel's drop rule.
+	AutoSubmitted, Precedence, ListID string
 }
 
 // imapSession is the minimal IMAP session surface the tools need,
@@ -366,6 +368,9 @@ func parseIMAPMessageBytes(raw []byte) (imapMessage, error) {
 		out.Date = d.Format(time.RFC3339)
 	}
 	out.Subject, _ = r.Header.Subject()
+	out.AutoSubmitted = r.Header.Get("Auto-Submitted")
+	out.Precedence = r.Header.Get("Precedence")
+	out.ListID = r.Header.Get("List-Id")
 
 	var htmlBody string
 	for {
