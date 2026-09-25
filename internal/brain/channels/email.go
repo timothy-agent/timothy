@@ -192,8 +192,8 @@ func (a *emailAdapter) wait(ctx context.Context) error {
 
 // receive polls INBOX for mail above the cursor UID. First sight (no
 // cursor) stores the latest UID and returns nothing: no backfill.
-// Mail from the mailbox itself or from senders off the allowlist is
-// dropped before the pipeline.
+// Mail from the mailbox itself, automated mail, and mail from senders
+// off the allowlist is dropped before the pipeline.
 func (a *emailAdapter) receive(ctx context.Context, cursor string) ([]inbound, string, error) {
 	if err := a.wait(ctx); err != nil {
 		return nil, cursor, err
@@ -226,6 +226,12 @@ func (a *emailAdapter) receive(ctx context.Context, cursor string) ([]inbound, s
 		if from == "" || from == own {
 			continue
 		}
+		if h := automatedHeader(m); h != "" {
+			if a.env.log != nil {
+				a.env.log.Info("channels: automated email dropped", "channel_id", a.channelID, "header", h)
+			}
+			continue
+		}
 		if !fromAllowed(a.allow, from) {
 			a.logDropped(from)
 			continue
@@ -240,6 +246,23 @@ func (a *emailAdapter) receive(ctx context.Context, cursor string) ([]inbound, s
 		items = append(items, in)
 	}
 	return items, strconv.FormatUint(uint64(next), 10), nil
+}
+
+// automatedHeader names the header marking m as an autoresponse or
+// list mail (RFC 3834, RFC 2369), or returns "".
+func automatedHeader(m connectors.MailMessage) string {
+	auto, _, _ := strings.Cut(m.AutoSubmitted, ";")
+	if auto = strings.TrimSpace(auto); auto != "" && !strings.EqualFold(auto, "no") {
+		return "Auto-Submitted"
+	}
+	switch strings.ToLower(strings.TrimSpace(m.Precedence)) {
+	case "bulk", "list", "junk":
+		return "Precedence"
+	}
+	if strings.TrimSpace(m.ListID) != "" {
+		return "List-Id"
+	}
+	return ""
 }
 
 // saveAttachments stores up to maxMailAttachments attachments of at

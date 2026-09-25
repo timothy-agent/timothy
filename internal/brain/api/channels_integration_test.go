@@ -27,6 +27,12 @@ import (
 
 const fakeBotID = "42:API-TEST-TOKEN"
 
+// Slack tokens the fake accepts for auth.test and apps.connections.open.
+const (
+	fakeSlackBot = "xoxb-API-TEST-BOT" // #nosec G101
+	fakeSlackApp = "xapp-API-TEST-APP" // #nosec G101
+)
+
 // Connector ids the email channel lookup knows.
 const (
 	imapConnID     = "11111111-1111-1111-1111-111111111111"
@@ -84,6 +90,15 @@ func newChannelHarness(t *testing.T) *channelHarness {
 		_, _ = db.Exec(cctx, `DELETE FROM channels WHERE name LIKE $1 || '%'`, tag)
 	})
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if method, ok := strings.CutPrefix(r.URL.Path, "/slack/"); ok {
+			want := map[string]string{"auth.test": fakeSlackBot, "apps.connections.open": fakeSlackApp}[method]
+			if r.Header.Get("Authorization") != "Bearer "+want {
+				_, _ = io.WriteString(w, `{"ok":false,"error":"invalid_auth"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"ok":true,"user_id":"UBOT","user":"api_slack_bot","url":"wss://unused.invalid/ws"}`)
+			return
+		}
 		if r.URL.Path != "/bot"+fakeBotID+"/getMe" {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = io.WriteString(w, `{"ok":false,"error_code":401,"description":"Unauthorized"}`)
@@ -93,8 +108,13 @@ func newChannelHarness(t *testing.T) *channelHarness {
 	}))
 	t.Cleanup(fake.Close)
 	resolve := func(_ context.Context, ref string) (string, error) {
-		if ref == "GOOD_BOT" {
+		switch ref {
+		case "GOOD_BOT":
 			return fakeBotID, nil
+		case "SLACK_BOT":
+			return fakeSlackBot, nil
+		case "SLACK_APP":
+			return fakeSlackApp, nil
 		}
 		return "wrong-token", nil
 	}
@@ -105,6 +125,7 @@ func newChannelHarness(t *testing.T) *channelHarness {
 	store := channels.NewStore(pool)
 	svc := channels.New(store, noChat, channels.MissionDeps{}, resolve, fake.Client(), log)
 	svc.APIBase = fake.URL
+	svc.SlackAPIBase = fake.URL + "/slack"
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
 	a.registerChannels(m.Handle, store, svc, fakeConnectorLookup)
@@ -276,6 +297,37 @@ func TestChannelsAPITest(t *testing.T) {
 	}
 	if w := h.do("POST", "/v1/channels/00000000-0000-0000-0000-000000000000/test", ""); w.Code != 404 {
 		t.Fatalf("test unknown = %d", w.Code)
+	}
+}
+
+// TestChannelsAPITestSlackTokens: Slack Test checks both tokens and a
+// 502 names the one that failed.
+func TestChannelsAPITestSlackTokens(t *testing.T) {
+	h := newChannelHarness(t)
+	create := func(name, botRef, appRef string) string {
+		w := h.do("POST", "/v1/channels", fmt.Sprintf(`{"name":%q,"kind":"slack","credential_ref":%q,"config":{"app_token_ref":%q}}`, h.tag+name, botRef, appRef))
+		if w.Code != 201 {
+			t.Fatalf("create %s = %d %s", name, w.Code, w.Body.String())
+		}
+		var out struct{ ID string }
+		h.decode(w, &out)
+		return out.ID
+	}
+	good := create("slack-good", "SLACK_BOT", "SLACK_APP")
+	badApp := create("slack-bad-app", "SLACK_BOT", "BAD_APP")
+	badBot := create("slack-bad-bot", "BAD_BOT", "SLACK_APP")
+
+	if w := h.do("POST", "/v1/channels/"+good+"/test", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"bot_username":"api_slack_bot"`) {
+		t.Fatalf("test good = %d %s", w.Code, w.Body.String())
+	}
+	w := h.do("POST", "/v1/channels/"+badApp+"/test", "")
+	if body := w.Body.String(); w.Code != 502 || !strings.Contains(body, "test_failed") || !strings.Contains(body, "slack app token") ||
+		!strings.Contains(body, "apps.connections.open") || strings.Contains(body, "wrong-token") || strings.Contains(body, fakeSlackBot) {
+		t.Fatalf("test bad app token = %d %s", w.Code, body)
+	}
+	w = h.do("POST", "/v1/channels/"+badBot+"/test", "")
+	if body := w.Body.String(); w.Code != 502 || !strings.Contains(body, "slack bot token") || strings.Contains(body, "slack app token") || strings.Contains(body, "wrong-token") {
+		t.Fatalf("test bad bot token = %d %s", w.Code, body)
 	}
 }
 

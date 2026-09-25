@@ -152,8 +152,15 @@ func TestSlackStoreConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	name, err := svc.Test(ctx, id)
-	if err != nil || name != "timothy" || len(f.callsOf("auth.test")) != 1 {
-		t.Fatalf("Test = %q %v", name, err)
+	if err != nil || name != "timothy" || len(f.callsOf("auth.test")) != 1 || f.openCount() != 1 || f.conns != 0 {
+		t.Fatalf("Test = %q %v opens %d conns %d", name, err, f.openCount(), f.conns)
+	}
+	wrongApp := "SLACK_BOT"
+	if err := s.Patch(ctx, id, Patch{AppTokenRef: &wrongApp}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Test(ctx, id); err == nil || !strings.Contains(err.Error(), "slack app token") || strings.Contains(err.Error(), fakeBotToken) {
+		t.Fatalf("Test with wrong app token = %v", err)
 	}
 	if c, _ = s.Get(ctx, id); c.Config.BotUsername != "timothy" {
 		t.Fatalf("bot username = %q", c.Config.BotUsername)

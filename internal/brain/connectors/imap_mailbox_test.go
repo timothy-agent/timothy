@@ -56,6 +56,29 @@ func TestParseIMAPMessageBytesThreadHeaders(t *testing.T) {
 	}
 }
 
+func TestParseIMAPMessageBytesAutomatedHeaders(t *testing.T) {
+	t.Parallel()
+	raw := "From: Ada <ada@x.com>\r\n" +
+		"Subject: Out of office\r\n" +
+		"Auto-Submitted: Auto-Replied; owner-email=ada@x.com\r\n" +
+		"Precedence: bulk\r\n" +
+		"List-Id: Team <team.x.com>\r\n" +
+		"Content-Type: text/plain\r\n" +
+		"\r\n" +
+		"away\r\n"
+	m, err := parseIMAPMessageBytes([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.AutoSubmitted != "Auto-Replied; owner-email=ada@x.com" || m.Precedence != "bulk" || m.ListID != "Team <team.x.com>" {
+		t.Fatalf("headers = %q %q %q", m.AutoSubmitted, m.Precedence, m.ListID)
+	}
+	plain, _ := parseIMAPMessageBytes([]byte(rfc822Threaded))
+	if plain.AutoSubmitted != "" || plain.Precedence != "" || plain.ListID != "" {
+		t.Fatalf("absent headers = %q %q %q", plain.AutoSubmitted, plain.Precedence, plain.ListID)
+	}
+}
+
 func testMailbox(t *testing.T, sess *fakeIMAPSession) (*IMAPMailbox, *[]sentMessage) {
 	t.Helper()
 	src, sent := testIMAPSource(t, imapRow("smtp.example.com"), sess)
@@ -68,7 +91,8 @@ func TestIMAPMailboxNewer(t *testing.T) {
 		uids: []imap.UID{3, 5, 7, 9},
 		messages: map[imap.UID]imapMessage{
 			5: {MessageID: "a@x", FromAddress: "a@x.com", Subject: "hi", Body: "<p>Hello</p><script>x()</script><p>there</p>", BodyHTML: true,
-				Attachments: []imapAttachment{{Filename: "f.txt", ContentType: "text/plain", Size: 4}}},
+				Attachments:   []imapAttachment{{Filename: "f.txt", ContentType: "text/plain", Size: 4}},
+				AutoSubmitted: "auto-replied", Precedence: "list", ListID: "<l.x.com>"},
 		},
 	}
 	b, _ := testMailbox(t, sess)
@@ -79,7 +103,8 @@ func TestIMAPMailboxNewer(t *testing.T) {
 	if len(got) != 2 || got[0].UID != 5 || got[1].UID != 7 {
 		t.Fatalf("Newer = %+v, want UIDs 5 and 7", got)
 	}
-	if got[0].Text != "Hello\nthere" || got[0].MessageID != "a@x" || len(got[0].Attachments) != 1 || got[0].Attachments[0].Size != 4 {
+	if got[0].Text != "Hello\nthere" || got[0].MessageID != "a@x" || len(got[0].Attachments) != 1 || got[0].Attachments[0].Size != 4 ||
+		got[0].AutoSubmitted != "auto-replied" || got[0].Precedence != "list" || got[0].ListID != "<l.x.com>" {
 		t.Fatalf("message = %+v", got[0])
 	}
 	if got[1].FromAddress != "" || got[1].MessageID != "" {

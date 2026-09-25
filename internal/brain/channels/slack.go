@@ -198,6 +198,19 @@ func (a *slackAdapter) connect(ctx context.Context) (identity, error) {
 	return identity{ID: me.UserID, Username: me.User}, nil
 }
 
+// verify is Test's check: auth.test with the bot token, then
+// apps.connections.open with the app token, without dialing the socket.
+func (a *slackAdapter) verify(ctx context.Context) (identity, error) {
+	me, err := a.connect(ctx)
+	if err != nil {
+		return identity{}, fmt.Errorf("slack bot token: %w", err)
+	}
+	if err := a.call(ctx, a.appRef, "apps.connections.open", map[string]any{}, nil); err != nil {
+		return identity{}, fmt.Errorf("slack app token: %w", err)
+	}
+	return me, nil
+}
+
 // receive reads one envelope, dialing first when no socket is open.
 // Every envelope is acked before it is parsed so Slack never
 // redelivers; a disconnect envelope or a read error drops the socket
