@@ -327,6 +327,43 @@ func TestSlackConnectAndDialRedactsTicket(t *testing.T) {
 	}
 }
 
+func TestSlackVerifyNamesFailingToken(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name, botRef, appRef, want, notWant string
+	}{
+		{"both good", "SLACK_BOT", "SLACK_APP", "", ""},
+		{"bad bot token", "SLACK_APP", "SLACK_APP", "slack bot token: slack auth.test", fakeAppToken},
+		{"bad app token", "SLACK_BOT", "SLACK_BOT", "slack app token: slack apps.connections.open", fakeBotToken},
+		{"missing app secret", "SLACK_BOT", "MISSING", "slack app token: slack apps.connections.open: resolve token", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFakeSlack(t)
+			a := f.adapter()
+			a.botRef, a.appRef = tt.botRef, tt.appRef
+			me, err := a.verify(ctx)
+			if tt.want == "" {
+				if err != nil || me != (identity{ID: fakeBotUser, Username: "timothy"}) || f.openCount() != 1 {
+					t.Fatalf("verify = %+v %v opens %d", me, err, f.openCount())
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tt.want) || (tt.notWant != "" && strings.Contains(err.Error(), tt.notWant)) {
+				t.Fatalf("verify err = %v, want %q", err, tt.want)
+			}
+			if tt.name == "bad app token" && apiStatus(err) != http.StatusUnauthorized {
+				t.Fatalf("bad app token status = %d", apiStatus(err))
+			}
+			// Test must never open the socket.
+			f.mu.Lock()
+			conns := f.conns
+			f.mu.Unlock()
+			if conns != 0 || a.conn != nil {
+				t.Fatalf("verify dialed the socket: conns %d", conns)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

@@ -206,8 +206,8 @@ func (s *Service) sendButtons(ctx context.Context, ad adapter, convID string, to
 }
 
 // Test checks the channel's credentials (Telegram getMe, Slack
-// auth.test, the email mailbox's INBOX), records the username (the
-// mailbox address for email) and returns it.
+// auth.test plus apps.connections.open, the email mailbox's INBOX),
+// records the username (the mailbox address for email) and returns it.
 func (s *Service) Test(ctx context.Context, id string) (string, error) {
 	c, err := s.store.Get(ctx, id)
 	if err != nil {
@@ -217,7 +217,11 @@ func (s *Service) Test(ctx context.Context, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	me, err := ad.connect(ctx)
+	connect := ad.connect
+	if sa, ok := ad.(*slackAdapter); ok {
+		connect = sa.verify
+	}
+	me, err := connect(ctx)
 	if err != nil {
 		return "", err
 	}
