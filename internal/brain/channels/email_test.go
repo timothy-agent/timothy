@@ -275,6 +275,57 @@ func TestEmailReceiveFilters(t *testing.T) {
 	}
 }
 
+func TestAutomatedHeader(t *testing.T) {
+	cases := []struct {
+		name string
+		m    connectors.MailMessage
+		want string
+	}{
+		{"absent", connectors.MailMessage{}, ""},
+		{"auto-replied", connectors.MailMessage{AutoSubmitted: "auto-replied"}, "Auto-Submitted"},
+		{"auto-generated", connectors.MailMessage{AutoSubmitted: "Auto-Generated"}, "Auto-Submitted"},
+		{"auto with params", connectors.MailMessage{AutoSubmitted: "auto-replied; owner-email=a@x.com"}, "Auto-Submitted"},
+		{"no", connectors.MailMessage{AutoSubmitted: "no"}, ""},
+		{"No with params", connectors.MailMessage{AutoSubmitted: " No ; x=y"}, ""},
+		{"bulk", connectors.MailMessage{Precedence: "bulk"}, "Precedence"},
+		{"list", connectors.MailMessage{Precedence: "List"}, "Precedence"},
+		{"junk", connectors.MailMessage{Precedence: " junk "}, "Precedence"},
+		{"first-class precedence", connectors.MailMessage{Precedence: "first-class"}, ""},
+		{"List-Id", connectors.MailMessage{ListID: "Team <team.x.com>"}, "List-Id"},
+	}
+	for _, c := range cases {
+		if got := automatedHeader(c.m); got != c.want {
+			t.Errorf("%s: automatedHeader = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestEmailReceiveDropsAutomatedMail(t *testing.T) {
+	var logs syncBuffer
+	f := newFakeMail(0)
+	f.add(connectors.MailMessage{MessageID: "v1@x", FromAddress: "ada@x.com", Subject: "Out of office", Text: "away", AutoSubmitted: "auto-replied"})
+	f.add(connectors.MailMessage{MessageID: "l1@x", FromAddress: "ada@x.com", Subject: "Digest", Text: "news", Precedence: "bulk"})
+	f.add(connectors.MailMessage{MessageID: "l2@x", FromAddress: "ada@x.com", Subject: "Digest", Text: "news", ListID: "<team.x.com>"})
+	f.add(connectors.MailMessage{MessageID: "m1@x", FromAddress: "ada@x.com", Subject: "Plans", Text: "hello", AutoSubmitted: "no"})
+	a := emailTestAdapter(f, []string{"ada@x.com"}, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	items, next, err := a.receive(t.Context(), "0")
+	if err != nil || next != "4" || len(items) != 1 || items[0].ChatID != "m1@x" {
+		t.Fatalf("receive = %+v %q %v, want only m1@x and cursor 4", items, next, err)
+	}
+	if _, ok := a.thread("v1@x"); ok {
+		t.Fatal("automated mail remembered as a thread")
+	}
+	out := logs.String()
+	for _, h := range []string{"header=Auto-Submitted", "header=Precedence", "header=List-Id"} {
+		if !strings.Contains(out, h) {
+			t.Fatalf("drop log missing %s: %s", h, out)
+		}
+	}
+	if strings.Count(out, "channel_id=c1") != 3 || strings.Contains(out, "ada") || strings.Contains(out, "Out of office") || strings.Contains(out, "Digest") {
+		t.Fatalf("drop log = %s", out)
+	}
+}
+
 func TestEmailReceiveAttachmentCap(t *testing.T) {
 	f := newFakeMail(0)
 	var atts []connectors.MailAttachment

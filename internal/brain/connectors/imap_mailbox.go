@@ -35,6 +35,8 @@ type MailMessage struct {
 	Date        string
 	Text        string
 	Attachments []MailAttachment
+	// Raw Auto-Submitted, Precedence and List-Id header values.
+	AutoSubmitted, Precedence, ListID string
 }
 
 // IMAPMailbox reads an imap connector's INBOX and replies over its
@@ -126,6 +128,7 @@ func (b *IMAPMailbox) mailMessage(ctx context.Context, uid uint32, m imapMessage
 	out := MailMessage{
 		UID: uid, MessageID: m.MessageID, InReplyTo: m.InReplyTo, References: m.References,
 		FromAddress: m.FromAddress, FromName: m.FromName, Subject: m.Subject, Date: m.Date, Text: text,
+		AutoSubmitted: m.AutoSubmitted, Precedence: m.Precedence, ListID: m.ListID,
 	}
 	for _, a := range m.Attachments {
 		out.Attachments = append(out.Attachments, MailAttachment(a))
