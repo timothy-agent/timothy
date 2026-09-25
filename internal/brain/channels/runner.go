@@ -255,6 +255,12 @@ func (r *runner) handle(ctx context.Context, in inbound) error {
 			return nil
 		}
 	}
+	if found && in.ReplyToID == "" && !in.Private && r.ch.Kind == KindSlack {
+		answered, err := r.answerThreadAsk(ctx, in, conv)
+		if err != nil || answered {
+			return err
+		}
+	}
 	trigger, matched, err := r.matchTrigger(ctx, in)
 	if err != nil {
 		return err

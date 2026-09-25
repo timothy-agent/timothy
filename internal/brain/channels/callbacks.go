@@ -317,3 +317,28 @@ func (r *runner) answerAsk(ctx context.Context, in inbound, missionID, kind stri
 	}
 	r.reply(ctx, in, msgSentToMission)
 }
+
+// answerThreadAsk answers the newest pending ask_user question of a
+// Slack thread with in's text, dropping stale asks; false means none.
+func (r *runner) answerThreadAsk(ctx context.Context, in inbound, conv Conversation) (bool, error) {
+	deps := r.svc.missions
+	if deps.Get == nil || deps.AnswerAskUser == nil {
+		return false, nil
+	}
+	for {
+		missionID, ok, err := r.svc.store.TakeNewestAsk(ctx, conv.ID, AskUser)
+		if err != nil || !ok {
+			return false, err
+		}
+		m, err := deps.Get(ctx, missionID)
+		if err != nil || m.Phase.Terminal() || m.PendingInput == nil || len(m.PendingInput.Options) > 0 {
+			continue
+		}
+		if err := deps.AnswerAskUser(ctx, m.ID, in.Text); err != nil {
+			r.reply(ctx, in, "Could not send: "+capRunes(err.Error(), failureCap))
+			return true, nil
+		}
+		r.reply(ctx, in, "Sent to mission "+missions.PRTitle(m)+": "+capRunes(m.PendingInput.Question, rationaleCap))
+		return true, nil
+	}
+}

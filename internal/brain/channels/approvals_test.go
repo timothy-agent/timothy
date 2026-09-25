@@ -244,6 +244,32 @@ func TestConvStateAsks(t *testing.T) {
 	}
 }
 
+func TestConvStateTakeNewest(t *testing.T) {
+	var st convState
+	st.remember("1700000000.000009", pendingAsk{MissionID: "old", Kind: AskUser})
+	st.remember("1700000000.000012", pendingAsk{MissionID: "new", Kind: AskUser})
+	st.remember("1700000000.000020", pendingAsk{MissionID: "plan", Kind: AskPlan})
+	st.remember("1700000000.000010", pendingAsk{MissionID: "mid", Kind: AskUser})
+	var got []string
+	for {
+		a, ok := st.takeNewest(AskUser)
+		if !ok {
+			break
+		}
+		got = append(got, a.MissionID)
+	}
+	if strings.Join(got, ",") != "new,mid,old" {
+		t.Fatalf("takeNewest order = %v, want new,mid,old", got)
+	}
+	if _, ok := st.Asks["1700000000.000020"]; !ok || len(st.Asks) != 1 {
+		t.Fatalf("plan ask taken by free text: %+v", st.Asks)
+	}
+	var empty convState
+	if _, ok := empty.takeNewest(AskUser); ok {
+		t.Fatal("takeNewest on no asks = ok")
+	}
+}
+
 func TestDrainSendsAndClosesPermissionButtons(t *testing.T) {
 	f := newFakeBot(t)
 	r := testRunner(f)

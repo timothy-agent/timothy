@@ -15,6 +15,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
@@ -352,6 +353,143 @@ func TestSlackPressResolvesPermission(t *testing.T) {
 	})
 	if _, pending, _ := broker.Get(ctx, pid); pending {
 		t.Fatal("prompt still pending after the press")
+	}
+}
+
+// slackPost waits for the chat.postMessage whose text is text.
+func slackPost(t *testing.T, f *fakeSlack, text string) slackCall {
+	t.Helper()
+	var post slackCall
+	waitFor(t, "post "+text, func() bool {
+		for _, c := range f.callsOf("chat.postMessage") {
+			if c.Body["text"] == text {
+				post = c
+				return true
+			}
+		}
+		return false
+	})
+	return post
+}
+
+// TestSlackThreadReplyAnswersAsk: open asks parked in a channel thread
+// are answered newest first by plain thread replies of the paired
+// sender, never starting a turn; an unpaired reply answers nothing and
+// a reply with no ask left starts a turn.
+func TestSlackThreadReplyAnswersAsk(t *testing.T) {
+	s, pool := testStore(t)
+	ctx := t.Context()
+	ms, hub := missionFixtures(t, pool)
+	id := createSlackChannel(t, s, runTag()+"threadask")
+	approveSender(t, s, id, "U77")
+	conv, err := s.CreateConversation(ctx, Conversation{ChannelID: id, ExternalChatID: "C1", ExternalThreadID: "60.1", ExternalUserID: "U77"}, "Slack: Ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	questions := map[string]string{"Thread one": "What name?", "Thread two": "Which color?"}
+	mids := map[string]string{}
+	for name, q := range questions {
+		mid, err := ms.Create(ctx, missions.Mission{Goal: marker + name, Name: name, Kind: "general", Route: "default", ChannelConversationID: conv.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ms.SetPendingInput(ctx, mid, missions.PendingInput{Question: q, Kind: "open"}); err != nil {
+			t.Fatal(err)
+		}
+		mids[name] = mid
+	}
+	f := newFakeSlack(t)
+	fc := &fakeChat{}
+	asks := &askRecorder{}
+	stop := startSlack(t, s, f, fc.chat, missionDeps(ms, hub, asks))
+	defer stop()
+
+	one := slackPost(t, f, "Mission Thread one asks: What name?\n\n"+msgReplyHint)
+	two := slackPost(t, f, "Mission Thread two asks: Which color?\n\n"+msgReplyHint)
+	if one.Body["thread_ts"] != "60.1" || two.Body["thread_ts"] != "60.1" {
+		t.Fatalf("parks not in the thread: %v %v", one.Body, two.Body)
+	}
+	newest, older := "Thread two", "Thread one"
+	if compareMessageIDs(one.TS, two.TS) > 0 {
+		newest, older = older, newest
+	}
+
+	f.push(t, eventEnvelope("a1", channelEvent("message", "U88", "not mine", "60.4", "60.1")))
+	slackPost(t, f, slackEscape(msgPairingPrompt))
+	f.waitAcked(t, "a1")
+	if len(asks.got()) != 0 {
+		t.Fatalf("an unpaired reply answered: %v", asks.got())
+	}
+
+	f.push(t, eventEnvelope("a2", channelEvent("message", "U77", "call it Nova", "60.5", "60.1")))
+	waitFor(t, "the first answer", func() bool { return len(asks.got()) == 1 })
+	if got := asks.got()[0]; got != [2]string{mids[newest], "call it Nova"} {
+		t.Fatalf("first answer = %v, want the newest ask %s", got, newest)
+	}
+	confirm := slackPost(t, f, "Sent to mission "+newest+": "+questions[newest])
+	if confirm.Body["thread_ts"] != "60.1" {
+		t.Fatalf("confirmation not in the thread: %v", confirm.Body)
+	}
+
+	f.push(t, eventEnvelope("a3", channelEvent("message", "U77", "green", "60.6", "60.1")))
+	waitFor(t, "the second answer", func() bool { return len(asks.got()) == 2 })
+	if got := asks.got()[1]; got != [2]string{mids[older], "green"} {
+		t.Fatalf("second answer = %v, want %s", got, older)
+	}
+	slackPost(t, f, "Sent to mission "+older+": "+questions[older])
+	if fc.count() != 0 {
+		t.Fatalf("an ask answer reached the chat %d times", fc.count())
+	}
+
+	f.push(t, eventEnvelope("a4", channelEvent("message", "U77", "thanks", "60.7", "60.1")))
+	waitFor(t, "the ordinary reply turn", func() bool { return fc.count() == 1 })
+	if len(asks.got()) != 2 || fc.reqs[0].Message != "thanks" || fc.reqs[0].SessionID != conv.SessionID {
+		t.Fatalf("asks %v, chat %+v", asks.got(), fc.reqs)
+	}
+}
+
+// TestSlackDMAskReplyTo: in a DM a plain message with an ask pending
+// starts a turn; a thread reply under the park answers it.
+func TestSlackDMAskReplyTo(t *testing.T) {
+	s, pool := testStore(t)
+	ctx := t.Context()
+	ms, hub := missionFixtures(t, pool)
+	id := createSlackChannel(t, s, runTag()+"dmask")
+	approveSender(t, s, id, "U77")
+	conv, err := s.CreateConversation(ctx, Conversation{ChannelID: id, ExternalChatID: "DU77", ExternalUserID: "U77"}, "Slack: Ada")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mid, err := ms.Create(ctx, missions.Mission{Goal: marker + "dm ask", Name: "DM ask", Kind: "general", Route: "default", ChannelConversationID: conv.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ms.SetPendingInput(ctx, mid, missions.PendingInput{Question: "What name?", Kind: "open"}); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeSlack(t)
+	fc := &fakeChat{}
+	asks := &askRecorder{}
+	stop := startSlack(t, s, f, fc.chat, missionDeps(ms, hub, asks))
+	defer stop()
+
+	park := slackPost(t, f, "Mission DM ask asks: What name?\n\n"+msgReplyHint)
+	f.push(t, eventEnvelope("d1", dmEvent("U77", "hello", "70.1")))
+	waitFor(t, "the DM turn", func() bool { return fc.count() == 1 })
+	if len(asks.got()) != 0 {
+		t.Fatalf("a plain DM answered the ask: %v", asks.got())
+	}
+
+	reply := dmEvent("U77", "call it Nova", "70.2")
+	reply["thread_ts"] = park.TS
+	f.push(t, eventEnvelope("d2", reply))
+	waitFor(t, "the reply-to answer", func() bool { return len(asks.got()) == 1 })
+	if got := asks.got()[0]; got != [2]string{mid, "call it Nova"} {
+		t.Fatalf("AnswerAskUser = %v", got)
+	}
+	slackPost(t, f, msgSentToMission)
+	if fc.count() != 1 {
+		t.Fatalf("the reply-to answer reached the chat: %d turns", fc.count())
 	}
 }
 

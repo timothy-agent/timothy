@@ -748,11 +748,27 @@ func (st *convState) remember(messageID string, a pendingAsk) {
 	}
 	st.Asks[messageID] = a
 	for len(st.Asks) > maxAsks {
-		oldest := slices.MinFunc(slices.Collect(maps.Keys(st.Asks)), func(a, b string) int {
-			return cmp.Or(cmp.Compare(len(a), len(b)), cmp.Compare(a, b))
-		})
-		delete(st.Asks, oldest)
+		delete(st.Asks, slices.MinFunc(slices.Collect(maps.Keys(st.Asks)), compareMessageIDs))
 	}
+}
+
+// compareMessageIDs orders message ids by length then text.
+func compareMessageIDs(a, b string) int {
+	return cmp.Or(cmp.Compare(len(a), len(b)), cmp.Compare(a, b))
+}
+
+// takeNewest removes and returns the newest ask of kind.
+func (st *convState) takeNewest(kind string) (pendingAsk, bool) {
+	var newest string
+	for id, a := range st.Asks {
+		if a.Kind == kind && (newest == "" || compareMessageIDs(id, newest) > 0) {
+			newest = id
+		}
+	}
+	if newest == "" {
+		return pendingAsk{}, false
+	}
+	return st.take(newest)
 }
 
 // rememberButtons records a message's buttons, dropping an arbitrary
@@ -852,6 +868,16 @@ func (s *Store) TakeAsk(ctx context.Context, convID, messageID string) (missionI
 		return "", "", false, fmt.Errorf("channels take ask: %w", err)
 	}
 	return a.MissionID, a.Kind, ok, nil
+}
+
+// TakeNewestAsk removes and returns the newest ask of kind in a
+// conversation, for replies that name no message.
+func (s *Store) TakeNewestAsk(ctx context.Context, convID, kind string) (missionID string, ok bool, err error) {
+	var a pendingAsk
+	if err := s.updateConvState(ctx, convID, func(st *convState) { a, ok = st.takeNewest(kind) }); err != nil {
+		return "", false, fmt.Errorf("channels take newest ask: %w", err)
+	}
+	return a.MissionID, ok, nil
 }
 
 // RememberButtons records the buttons of a message sent as text, so a
