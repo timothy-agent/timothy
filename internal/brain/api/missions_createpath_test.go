@@ -94,6 +94,20 @@ func TestCreatePathGolden(t *testing.T) {
 			if !reflect.DeepEqual(got[0], got[3]) {
 				t.Fatalf("follow-up resolved differently:\napi %+v\nfu  %+v", got[0], got[3])
 			}
+			// An API create naming only goal and parent_mission_id
+			// resolves to the same mission as the chat follow-up
+			// (issue #923).
+			chatFU, err := missions.ResolveDefaults(context.Background(), fuReq, deps)
+			if err != nil {
+				t.Fatalf("ResolveDefaults chat follow-up: %v", err)
+			}
+			apiFU, err := missions.ResolveDefaults(context.Background(), missions.InheritParent(createMissionRequest{Goal: goal}.createRequest(parent.ID, nil), parent), deps)
+			if err != nil {
+				t.Fatalf("ResolveDefaults api follow-up: %v", err)
+			}
+			if !reflect.DeepEqual(chatFU, apiFU) {
+				t.Fatalf("api follow-up resolved differently:\nchat %+v\napi  %+v", chatFU, apiFU)
+			}
 			if got[0].ReviewRoute != tc.wantReview || got[0].MaxIterations != 6 || got[0].BudgetCurrency != "USD" {
 				t.Fatalf("resolved = %+v, want review_route %q, max 6, USD", got[0], tc.wantReview)
 			}

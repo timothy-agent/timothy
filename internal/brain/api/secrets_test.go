@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/brain/automations"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -58,6 +59,40 @@ func (f *fakeDestinationLister) List(context.Context) ([]destinations.Destinatio
 	return f.rows, f.err
 }
 
+// fakeAutomationLister stubs automations.Store's List for the same
+// reason; no DB needed to test the merge/guard logic.
+type fakeAutomationLister struct {
+	rows []automations.Automation
+	err  error
+}
+
+func (f *fakeAutomationLister) List(context.Context) ([]automations.Automation, error) {
+	return f.rows, f.err
+}
+
+// listSecrets GETs the directory and returns referents by ref name.
+func listSecrets(t *testing.T, m *http.ServeMux) map[string][]referenceInfo {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body)
+	}
+	var body struct {
+		Secrets []secretRefEntry `json:"secrets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	out := map[string][]referenceInfo{}
+	for _, e := range body.Secrets {
+		out[e.RefName] = e.ReferencedBy
+	}
+	return out
+}
+
 func TestListSecretsMergesProviderAndConnectorReferents(t *testing.T) {
 	t.Parallel()
 	a := &API{token: "tok", log: discard()}
@@ -72,7 +107,7 @@ func TestListSecretsMergesProviderAndConnectorReferents(t *testing.T) {
 		{Name: "no-cred", CredentialRef: ""},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -130,7 +165,7 @@ func TestListSecretsPropagatesGatewayFailure(t *testing.T) {
 	gw := &fakeGatewaySecrets{listErr: errors.New("gateway down")}
 	conns := &fakeConnectorLister{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -155,7 +190,7 @@ func TestListSecretsCountsGoogleClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_id":"x.apps.googleusercontent.com","client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -195,7 +230,7 @@ func TestDeleteSecretRefusesGoogleClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/GMAIL_GOOGLE_CLIENT_SECRET", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -223,7 +258,7 @@ func TestListSecretsCountsMicrosoftClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_id":"x","client_secret_ref":"OUTLOOK_MICROSOFT_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -263,7 +298,7 @@ func TestDeleteSecretRefusesMicrosoftClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_secret_ref":"OUTLOOK_MICROSOFT_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/OUTLOOK_MICROSOFT_CLIENT_SECRET", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -286,7 +321,7 @@ func TestDeleteSecretRefusesWhenConnectorReferencesIt(t *testing.T) {
 		{Name: "github-mcp", CredentialRef: "GITHUB_PAT"},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/GITHUB_PAT", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -316,7 +351,7 @@ func TestDeleteSecretForwardsOrphanedRefToGateway(t *testing.T) {
 	gw := &fakeGatewaySecrets{}
 	conns := &fakeConnectorLister{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/ORPHAN_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -341,7 +376,7 @@ func TestDeleteSecretPropagatesGatewayInUseRefusal(t *testing.T) {
 	gw := &fakeGatewaySecrets{deleteErr: errors.New("SOME_KEY is referenced by provider(s) [openai]: in use"), deleteCode: http.StatusConflict}
 	conns := &fakeConnectorLister{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/SOME_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -362,7 +397,7 @@ func TestSecretsRoutesCoexistWithAdminProxy(t *testing.T) {
 	a := &API{token: "tok", log: discard()}
 	m := http.NewServeMux()
 	a.registerAdmin(m.Handle, http.NotFoundHandler())
-	a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, &fakeConnectorLister{}, nil)
+	a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, &fakeConnectorLister{}, nil, nil)
 }
 
 // TestRegisterSecretsMountsWithoutConnectors pins that a nil connector
@@ -374,7 +409,7 @@ func TestRegisterSecretsMountsWithoutConnectors(t *testing.T) {
 	a := &API{token: "tok", log: discard()}
 	gw := &fakeGatewaySecrets{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, nil)
+	a.registerSecrets(m.Handle, gw, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/SOME_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -393,7 +428,7 @@ func TestRegisterSecretsUnmountedWithoutGatewayOrConnectors(t *testing.T) {
 	t.Parallel()
 	a := &API{token: "tok", log: discard()}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, nil, nil, nil)
+	a.registerSecrets(m.Handle, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -419,7 +454,7 @@ func TestListSecretsIncludesDestinationReferent(t *testing.T) {
 		{Name: "webhook-sink", Kind: "webhook", CredentialRef: ""},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, dests)
+	a.registerSecrets(m.Handle, gw, nil, dests, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -456,7 +491,7 @@ func TestDeleteSecretRefusesWhenDestinationReferencesIt(t *testing.T) {
 		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_DEST_REF"}, //nolint:gosec // ref name, not a secret value
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, dests)
+	a.registerSecrets(m.Handle, gw, nil, dests, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/TELEGRAM_DEST_REF", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -494,7 +529,7 @@ func TestListSecretsSkipsDestinationsWithoutCredentialRef(t *testing.T) {
 		{Name: "email-out", Kind: "email", CredentialRef: ""},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, dests)
+	a.registerSecrets(m.Handle, gw, nil, dests, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -512,5 +547,161 @@ func TestListSecretsSkipsDestinationsWithoutCredentialRef(t *testing.T) {
 	}
 	if len(body.Secrets) != 1 || len(body.Secrets[0].ReferencedBy) != 0 {
 		t.Fatalf("secrets = %+v, want ORPHAN_KEY with empty referenced_by", body.Secrets)
+	}
+}
+
+// TestListSecretsIncludesAutomationTriggerReferent pins that a webhook
+// trigger's signing secret never looks orphaned, including on a
+// disabled automation, while non-webhook triggers contribute nothing.
+func TestListSecretsIncludesAutomationTriggerReferent(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{
+		{RefName: "HOOK_KEY"}, {RefName: "OTHER_HOOK_KEY"}, {RefName: "ORPHAN_KEY"},
+	}}
+	autos := &fakeAutomationLister{rows: []automations.Automation{
+		{Name: "pr-review", Enabled: true, Triggers: []automations.Trigger{
+			{Kind: automations.TriggerWebhook, CredentialRef: "HOOK_KEY", Enabled: true},
+			{Kind: automations.TriggerCron, Enabled: true},
+		}},
+		{Name: "old-hook", Enabled: false, Triggers: []automations.Trigger{
+			{Kind: automations.TriggerWebhook, CredentialRef: "OTHER_HOOK_KEY", Enabled: false}, //nolint:gosec // ref name, not a secret value
+		}},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+
+	got := listSecrets(t, m)
+	cases := map[string][]referenceInfo{
+		"HOOK_KEY":       {{Kind: "automation", Name: "pr-review", Role: "credential"}},
+		"OTHER_HOOK_KEY": {{Kind: "automation", Name: "old-hook", Role: "credential"}},
+		"ORPHAN_KEY":     {},
+	}
+	for ref, want := range cases {
+		if len(got[ref]) != len(want) {
+			t.Fatalf("%s referenced_by = %+v, want %+v", ref, got[ref], want)
+		}
+		for i := range want {
+			if got[ref][i] != want[i] {
+				t.Fatalf("%s referenced_by = %+v, want %+v", ref, got[ref], want)
+			}
+		}
+	}
+}
+
+// TestListSecretsAutomationReferentDeduped pins one referent per
+// automation even when several of its webhook triggers share a ref.
+func TestListSecretsAutomationReferentDeduped(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{{RefName: "HOOK_KEY"}}}
+	autos := &fakeAutomationLister{rows: []automations.Automation{
+		{Name: "multi", Triggers: []automations.Trigger{
+			{Kind: automations.TriggerWebhook, CredentialRef: "HOOK_KEY"},
+			{Kind: automations.TriggerWebhook, CredentialRef: "HOOK_KEY"},
+		}},
+		{Name: "second", Triggers: []automations.Trigger{
+			{Kind: automations.TriggerWebhook, CredentialRef: "HOOK_KEY"},
+		}},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+
+	got := listSecrets(t, m)["HOOK_KEY"]
+	want := []referenceInfo{
+		{Kind: "automation", Name: "multi", Role: "credential"},
+		{Kind: "automation", Name: "second", Role: "credential"},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("HOOK_KEY referenced_by = %+v, want %+v", got, want)
+	}
+}
+
+// TestDeleteSecretRefusesWhenAutomationTriggerReferencesIt mirrors the
+// destination guard: an automation-only reference refuses deletion
+// without ever asking the gateway.
+func TestDeleteSecretRefusesWhenAutomationTriggerReferencesIt(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{}
+	autos := &fakeAutomationLister{rows: []automations.Automation{
+		{Name: "pr-review", Triggers: []automations.Trigger{
+			{Kind: automations.TriggerWebhook, CredentialRef: "HOOK_KEY"},
+		}},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/HOOK_KEY", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", w.Code)
+	}
+	if gw.deletedRef != "" {
+		t.Fatalf("gateway DeleteSecret called with %q, want never called", gw.deletedRef)
+	}
+	var body struct {
+		Error   string `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Error != "in_use" || !strings.Contains(body.Message, "automation(s) pr-review") {
+		t.Fatalf("body = %+v, want in_use naming automation pr-review", body)
+	}
+}
+
+// TestDeleteSecretForwardsWhenOnlyCronTriggers pins that non-webhook
+// triggers never block deletion.
+func TestDeleteSecretForwardsWhenOnlyCronTriggers(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{}
+	autos := &fakeAutomationLister{rows: []automations.Automation{
+		{Name: "nightly", Triggers: []automations.Trigger{{Kind: automations.TriggerCron}}},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/HOOK_KEY", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent || gw.deletedRef != "HOOK_KEY" {
+		t.Fatalf("status = %d deleted = %q, want 204 forwarded to gateway", w.Code, gw.deletedRef)
+	}
+}
+
+// TestListSecretsAutomationListerError surfaces a failed automation
+// lookup as 500 instead of a directory with missing referents; DELETE
+// fails the same way instead of forwarding.
+func TestListSecretsAutomationListerError(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{{RefName: "HOOK_KEY"}}}
+	autos := &fakeAutomationLister{err: errors.New("db down")}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		path := "/v1/admin/secrets"
+		if method == http.MethodDelete {
+			path += "/HOOK_KEY"
+		}
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "automations_failed") {
+			t.Fatalf("%s status = %d body = %s, want 500 automations_failed", method, w.Code, w.Body)
+		}
+	}
+	if gw.deletedRef != "" {
+		t.Fatalf("gateway DeleteSecret called with %q, want never called", gw.deletedRef)
 	}
 }

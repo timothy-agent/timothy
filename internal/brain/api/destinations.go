@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
@@ -41,7 +42,7 @@ func (a *API) registerDestinations(handle func(pattern string, h http.Handler), 
 	if store == nil {
 		return
 	}
-	h := &destinationAPI{store: store, refs: refs, automationRefs: automationRefs, tester: tester}
+	h := &destinationAPI{store: store, refs: refs, automationRefs: automationRefs, tester: tester, log: a.log}
 	handle("GET /v1/admin/destinations", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/admin/destinations", a.auth(http.HandlerFunc(h.create)))
 	handle("PATCH /v1/admin/destinations/{id}", a.auth(http.HandlerFunc(h.patch)))
@@ -54,16 +55,19 @@ type destinationAPI struct {
 	refs           destinationRefs
 	automationRefs destinationAutomationRefs
 	tester         destinationTester
+	log            *slog.Logger
 }
 
-func failDestination(w http.ResponseWriter, err error) {
+func failDestination(w http.ResponseWriter, log *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, destinations.ErrNotFound):
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, destinations.ErrReferenced):
 		jsonError(w, http.StatusConflict, "referenced", err.Error())
-	default:
+	case errors.Is(err, destinations.ErrInvalid):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+	default:
+		failInternal(w, log, "destination", err)
 	}
 }
 
@@ -84,7 +88,7 @@ func (h *destinationAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.store.Create(r.Context(), d)
 	if err != nil {
-		failDestination(w, err)
+		failDestination(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id})
@@ -97,7 +101,7 @@ func (h *destinationAPI) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.Patch(r.Context(), r.PathValue("id"), patch); err != nil {
-		failDestination(w, err)
+		failDestination(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -109,7 +113,7 @@ func (h *destinationAPI) patch(w http.ResponseWriter, r *http.Request) {
 // disabled automations never block deletion.
 func (h *destinationAPI) delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.Delete(r.Context(), r.PathValue("id"), h.refs, h.automationRefs); err != nil {
-		failDestination(w, err)
+		failDestination(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -126,7 +130,7 @@ func (h *destinationAPI) test(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.tester.Test(r.Context(), r.PathValue("id")); err != nil {
 		if errors.Is(err, destinations.ErrNotFound) {
-			failDestination(w, err)
+			failDestination(w, h.log, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})

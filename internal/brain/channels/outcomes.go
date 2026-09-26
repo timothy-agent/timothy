@@ -14,6 +14,21 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
 
+// outcomeRepliedKind marks that a mission's outcome already reached
+// its channel conversation.
+const outcomeRepliedKind = "mission.outcome_replied"
+
+// alreadyReplied reports whether evs carries an outcomeRepliedKind
+// record.
+func alreadyReplied(evs []missions.Event) bool {
+	for _, ev := range evs {
+		if ev.Kind == outcomeRepliedKind {
+			return true
+		}
+	}
+	return false
+}
+
 // Outcomes is the events consumer that reports a channel mission's
 // done or failed outcome to its conversation.
 type Outcomes struct {
@@ -31,8 +46,9 @@ type Outcomes struct {
 	mail emailEnv
 }
 
-// NewOutcomes wires the consumer; deps.Get is required, Events and
-// WebBaseURL are optional. enabled is the channels switch (nil sends
+// NewOutcomes wires the consumer; deps.Get is required, Events,
+// AppendEvent and WebBaseURL are optional (without both Events and
+// AppendEvent a redelivered event replies again). enabled is the channels switch (nil sends
 // always).
 func NewOutcomes(store *Store, deps MissionDeps, resolveSecret func(ctx context.Context, ref string) (string, error), client *http.Client, enabled func(context.Context) bool, log *slog.Logger) *Outcomes {
 	return &Outcomes{store: store, deps: deps, resolve: resolveSecret, http: client, enabled: enabled, log: log,
@@ -48,9 +64,12 @@ func (*Outcomes) Name() string { return "channels" }
 
 func (*Outcomes) Kinds() []string { return []string{events.KindMissionDone, events.KindMissionFailed} }
 
-// Handle sends one outcome message. A transport 4xx (chat gone, bot
-// blocked) logs and returns nil; transport failures and 429 return the
-// error so the drainer retries.
+// Handle sends one outcome message, then records outcomeRepliedKind
+// so a redelivered event sends nothing. The marker is appended after
+// the send and outside the drain tx, like NotifyConsumer: a crash in
+// between risks a duplicate, never a lost reply. A transport 4xx (chat
+// gone, bot blocked) logs and returns nil; transport failures and 429
+// return the error so the drainer retries.
 func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error {
 	p, err := events.DecodeMission(ev)
 	if err != nil {
@@ -64,6 +83,15 @@ func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error 
 		return err
 	}
 	if m.ChannelConversationID == "" {
+		return nil
+	}
+	var evs []missions.Event
+	if o.deps.Events != nil {
+		if evs, err = o.deps.Events(ctx, m.ID); err != nil {
+			return err
+		}
+	}
+	if alreadyReplied(evs) {
 		return nil
 	}
 	conv, err := o.store.ConversationByID(ctx, m.ChannelConversationID)
@@ -99,12 +127,6 @@ func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error 
 	if ev.Kind == events.KindMissionFailed {
 		terminal = missions.PhaseFailed
 	}
-	var evs []missions.Event
-	if o.deps.Events != nil {
-		if evs, err = o.deps.Events(ctx, m.ID); err != nil {
-			o.log.Warn("channels: outcome events failed", "mission_id", m.ID, "error", err)
-		}
-	}
 	base := ""
 	if o.deps.WebBaseURL != nil {
 		base = o.deps.WebBaseURL(ctx)
@@ -120,6 +142,11 @@ func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error 
 			return nil
 		}
 		return err
+	}
+	if o.deps.AppendEvent != nil {
+		if err := o.deps.AppendEvent(ctx, m.ID, outcomeRepliedKind, map[string]any{"kind": ev.Kind, "channel_id": ch.ID}); err != nil {
+			return err
+		}
 	}
 	o.log.Info("channels: outcome sent", "channel_id", ch.ID, "conversation_id", conv.ID, "mission_id", m.ID, "kind", ev.Kind)
 	return nil

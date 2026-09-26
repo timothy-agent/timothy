@@ -18,12 +18,10 @@ import (
 
 const webhookTimeout = 10 * time.Second
 
-// Notifier fires ONLY on actionable transitions (waiting_for_input,
-// paused) and only exactly on the transition INTO that state;
-// re-kicking an already-paused mission stays silent. Terminal
-// transitions (done, error) notify through NotifyConsumer instead
-// (D-117, issue #843), off the durable events inbox rather than
-// synchronously here.
+// Notifier writes notification rows and fans them out to the webhook.
+// Every mission transition notification (done, error, paused,
+// waiting_for_input) rides the durable events inbox and reaches it
+// through NotifyConsumer (D-117, issues #843 and #922).
 type Notifier struct {
 	db         *pgpool.Pool
 	webhookURL string // NOTIFY_WEBHOOK_URL; empty disables fan-out, inbox row still always written
@@ -43,19 +41,18 @@ func NewNotifier(db *pgpool.Pool, webhookURL string, transport http.RoundTripper
 }
 
 // SetHub wires the push-notification hub; nil (the default) makes
-// OnTransition's publish a no-op, same nil-safe convention as
+// the publish a no-op, same nil-safe convention as
 // Store.SetHub.
 func (n *Notifier) SetHub(hub *Hub) {
 	n.hub = hub
 }
 
-// isActionableTransition is the pure classification Driver's
-// before/after Status pair goes through: only these two destination
-// states are actionable, and only when the mission just arrived there
-// this call (a repeat Advance on an already-paused mission reports the
-// SAME before/after, so it's silent by construction). Terminal states
-// (done, error) are handled by NotifyConsumer off the events inbox, not
-// here (D-117, issue #843).
+// isActionableTransition classifies a before/after Status pair: only
+// these two destination states are actionable, and only when the
+// mission just arrived there (a repeat Advance on an already-paused
+// mission reports the SAME before/after, so it's silent by
+// construction). ApplyTransition uses it to write the actionable
+// events row (issue #922); terminal states have their own event.
 func isActionableTransition(before, after Status) (kind string, ok bool) {
 	if before == after {
 		return "", false
@@ -91,29 +88,6 @@ func composeMessage(kind, title, reason string) string {
 	default:
 		return fmt.Sprintf("Mission - %s is now %s", title, kind)
 	}
-}
-
-// OnTransition is called by Driver after ApplyTransition succeeds, with
-// the mission (for its title), the before/after Status, and the
-// mission.failed event's reason (e.g. "cancelled") when relevant, read
-// from the same Transition.Events the driver already has in hand
-// rather than a second query. Only waiting_for_input/paused stay
-// synchronous here; terminal transitions notify through the events
-// inbox instead (D-117, issue #843). Durable channel: a notifications
-// row is always written for a qualifying transition. Best-effort
-// fan-out: webhook POST of a generic JSON
-// payload; failure only logs, never blocks or loses the notification.
-func (n *Notifier) OnTransition(ctx context.Context, m Mission, before, after Status, reason string) error {
-	kind, ok := isActionableTransition(before, after)
-	if !ok {
-		return nil
-	}
-	message := composeMessage(kind, PRTitle(m), reason)
-	if err := n.sendOncePerMission(ctx, m.ID, kind, message); err != nil {
-		return fmt.Errorf("notify: %w", err)
-	}
-	n.fanOut(ctx, m.ID, kind, message)
-	return nil
 }
 
 // sendOncePerMission dedupes by "already has an unread notification of
@@ -177,12 +151,10 @@ func (n *Notifier) fanOut(ctx context.Context, missionID, kind, message string) 
 	}
 }
 
-// NotifyMessage fires a notification for an event OnTransition's own
-// before/after Status classification doesn't cover — used by the
-// driver's on_complete auto-fire hook (fireOnComplete) to surface a
-// failed automatic push/PR, the same durable-inbox-row-plus-best-effort-
-// webhook shape OnTransition itself uses. An empty missionID is
-// NotifyOperator.
+// NotifyMessage writes a notification row (at most one unread per
+// mission and kind) plus a best-effort webhook fan-out. NotifyConsumer
+// sends transition notifications through it; other callers surface
+// events no transition covers. An empty missionID is NotifyOperator.
 func (n *Notifier) NotifyMessage(ctx context.Context, missionID, kind, message string) error {
 	if missionID == "" {
 		return n.NotifyOperator(ctx, kind, message)

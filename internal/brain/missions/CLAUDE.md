@@ -46,7 +46,11 @@ CLAUDE.md so other work does not pay for it every session.
   accept `attach` (parent workspace files, copied into the child
   workspace by the provisioner before discover and recorded as "pdf"
   sources with `MissionID` set) and `brief` (a "brief" source rendered
-  as referenced context).
+  as referenced context). The HTTP create path with `parent_mission_id`
+  runs `InheritParent` (issue #923): a non-empty body field wins, an
+  empty one inherits the parent's value, destinations never inherit,
+  and a kind override skips the kind-bound fields (environment,
+  executor_session_policy, repo source, flow).
 - Mission attachments (issue #359): PDF/text converted via markitdown,
   images captioned via the vision route (`chat.CaptionImageOverGateway`),
   audio transcribed via the whisper sidecar, all ONCE at create (prompt-
@@ -230,4 +234,12 @@ CLAUDE.md so other work does not pay for it every session.
   error is a tool error the planner sees in-turn, and the harness-retry
   cap stays the backstop for a planner that never resubmits a usable
   plan.
+- Mission notifications ride the events inbox (D-117, issues #843 and
+  #922): `ApplyTransition` commits a `mission.done`/`mission.failed`
+  row on a terminal phase and a `mission.paused`/
+  `mission.waiting_for_input` row on arriving at that status, and
+  `NotifyConsumer` sends them. The driver never notifies directly; it
+  only kicks the drainer. Terminal sends are once per mission,
+  actionable ones once per events row (`mission.notified` marker with
+  the row's dedup key).
 - `make canary` is the regression gate for any harness change.

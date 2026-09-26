@@ -415,6 +415,27 @@ func (s *Store) Get(ctx context.Context, id string) (Mission, error) {
 	return m, nil
 }
 
+// WorkflowChild returns the id of the first mission workflow run runID
+// spawned from parentMissionID, or "" when there is none. An empty
+// parentMissionID matches the run's parentless entry mission.
+func (s *Store) WorkflowChild(ctx context.Context, runID, parentMissionID string) (string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", fmt.Errorf("missions workflow child: %w", err)
+	}
+	var id string
+	err = db.QueryRow(ctx, `SELECT id::text FROM missions
+		WHERE workflow_run_id = $1 AND parent_mission_id IS NOT DISTINCT FROM NULLIF($2, '')::uuid
+		ORDER BY created_at, id LIMIT 1`, runID, parentMissionID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("missions workflow child of run %s: %w", runID, err)
+	}
+	return id, nil
+}
+
 // Delete permanently removes a terminal mission: its row (mission_events
 // and notifications cascade via FK, migrations 0025/0027) plus every
 // other trace this package owns. This is NOT a violation of the
@@ -1237,11 +1258,11 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
 	var (
-		currentPhase, workflowRunID, originKind string
-		unattended                              bool
+		currentPhase, currentStatus, workflowRunID, originKind string
+		unattended                                             bool
 	)
-	if err := tx.QueryRow(ctx, `SELECT phase, COALESCE(workflow_run_id::text, ''), origin_kind, unattended
-		FROM missions WHERE id = $1 FOR UPDATE`, id).Scan(&currentPhase, &workflowRunID, &originKind, &unattended); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT phase, status, COALESCE(workflow_run_id::text, ''), origin_kind, unattended
+		FROM missions WHERE id = $1 FOR UPDATE`, id).Scan(&currentPhase, &currentStatus, &workflowRunID, &originKind, &unattended); err != nil {
 		if err == pgx.ErrNoRows {
 			return fmt.Errorf("mission %s: %w", id, ErrNotFound)
 		}
@@ -1327,6 +1348,20 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 	if t.Next.Phase.Terminal() {
 		ev, err := events.MissionTerminal(events.MissionPayload{
 			MissionID: id, Phase: string(t.Next.Phase), Reason: failedReason(t.Events),
+			WorkflowRunID: workflowRunID, OriginKind: originKind, Unattended: unattended,
+		})
+		if err != nil {
+			return fmt.Errorf("missions apply transition: %w", err)
+		}
+		if err := s.events.Insert(ctx, tx, ev); err != nil {
+			return fmt.Errorf("missions apply transition: %w", err)
+		}
+	}
+	// Issue #922: arriving at paused or waiting_for_input rides the
+	// inbox the same way, so its notification survives a crash.
+	if status, ok := isActionableTransition(Status(currentStatus), t.Next.Status); ok {
+		ev, err := events.MissionActionable(events.MissionPayload{
+			MissionID: id, Phase: string(t.Next.Phase), Status: status,
 			WorkflowRunID: workflowRunID, OriginKind: originKind, Unattended: unattended,
 		})
 		if err != nil {

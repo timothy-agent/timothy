@@ -3,11 +3,13 @@ package channels
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -216,6 +218,78 @@ func TestOutcomeText(t *testing.T) {
 				t.Fatalf("outcomeText = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAlreadyReplied(t *testing.T) {
+	tests := []struct {
+		name string
+		evs  []missions.Event
+		want bool
+	}{
+		{"no events", nil, false},
+		{"other kinds", []missions.Event{{Kind: "mission.done"}, {Kind: "mission.notified"}}, false},
+		{"marker", []missions.Event{{Kind: "mission.done"}, {Kind: outcomeRepliedKind}}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := alreadyReplied(tt.evs); got != tt.want {
+				t.Fatalf("alreadyReplied = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestOutcomesHandleSkipsWhenAlreadyReplied: a marker short-circuits
+// before any store or adapter call (the unconnected pool would fail
+// the conversation lookup) and appends nothing.
+func TestOutcomesHandleSkipsWhenAlreadyReplied(t *testing.T) {
+	store := NewStore(pgpool.New(context.Background(), "", nil))
+	appended := 0
+	deps := MissionDeps{
+		Get: func(context.Context, string) (missions.Mission, error) {
+			return missions.Mission{ID: testMissionID, ChannelConversationID: "conv"}, nil
+		},
+		Events: func(context.Context, string) ([]missions.Event, error) {
+			return []missions.Event{{Kind: outcomeRepliedKind}}, nil
+		},
+		AppendEvent: func(context.Context, string, string, map[string]any) error {
+			appended++
+			return nil
+		},
+	}
+	o := NewOutcomes(store, deps, fakeResolve, nil, nil, discardLog())
+	ev, err := events.MissionTerminal(events.MissionPayload{MissionID: testMissionID, Phase: "done"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Handle(context.Background(), nil, ev); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	if appended != 0 {
+		t.Fatalf("appended %d markers, want 0", appended)
+	}
+}
+
+// TestOutcomesHandleEventsErrorRetries: without the events the marker
+// cannot be checked, so the drainer must retry.
+func TestOutcomesHandleEventsErrorRetries(t *testing.T) {
+	store := NewStore(pgpool.New(context.Background(), "", nil))
+	deps := MissionDeps{
+		Get: func(context.Context, string) (missions.Mission, error) {
+			return missions.Mission{ID: testMissionID, ChannelConversationID: "conv"}, nil
+		},
+		Events: func(context.Context, string) ([]missions.Event, error) {
+			return nil, errors.New("db down")
+		},
+	}
+	o := NewOutcomes(store, deps, fakeResolve, nil, nil, discardLog())
+	ev, err := events.MissionTerminal(events.MissionPayload{MissionID: testMissionID, Phase: "done"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Handle(context.Background(), nil, ev); err == nil {
+		t.Fatal("Handle = nil, want the events error")
 	}
 }
 

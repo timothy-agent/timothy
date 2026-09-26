@@ -392,7 +392,7 @@ func fakeSandboxExec(ctx context.Context, missionID, environment, workdir, comma
 }
 
 func testDriver(store driverStore, runner Runner) *Driver {
-	d := NewDriver(store, runner, nil, nil, nil, nil, fakeSandboxExec, nil, slog.Default())
+	d := NewDriver(store, runner, nil, nil, nil, fakeSandboxExec, nil, slog.Default())
 	d.retryDelayFn = func(int) time.Duration { return 0 } // tests drive worker_failed rounds back-to-back; no real sleeps
 	return d
 }
@@ -520,7 +520,7 @@ func TestDriverDiscoverRecreatesSandboxOnEnvironmentChange(t *testing.T) {
 		},
 		plans: []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
-	d := NewDriver(store, runner, nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, remover, slog.Default())
+	d := NewDriver(store, runner, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, remover, slog.Default())
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
@@ -550,7 +550,7 @@ func TestDriverDiscoverLeavesSandboxWhenEnvironmentUnchanged(t *testing.T) {
 		discoverNotes: []string{"nothing to report"},
 		plans:         []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
-	d := NewDriver(store, runner, nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, remover, slog.Default())
+	d := NewDriver(store, runner, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, remover, slog.Default())
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
@@ -585,7 +585,7 @@ func TestDriverProvisionDetectsEnvironmentFromRepoMarkers(t *testing.T) {
 	})
 	workspace := NewWorkspace(t.TempDir(), nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 	d.SetCloneTokenResolver(func(context.Context, string) (string, error) { return "dummy-token", nil })
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -1620,7 +1620,7 @@ func TestDriverReworkUntouchedEvent(t *testing.T) {
 			})
 			runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
 			workspace := NewWorkspace(root, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-			d := NewDriver(store, runner, workspace, nil, nil, nil, fakeSandboxExec, nil, slog.Default())
+			d := NewDriver(store, runner, workspace, nil, nil, fakeSandboxExec, nil, slog.Default())
 			// The "worker's" change lands before the turn ends; the driver
 			// diffs against the pre-turn HEAD, so this is what it sees.
 			if err := os.WriteFile(filepath.Join(wt, tc.touch), []byte("package x\n"), 0o600); err != nil {
@@ -1684,7 +1684,7 @@ func TestDriverRetryNeverRollsBack(t *testing.T) {
 			})
 			runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{tc.verdict}}
 			workspace := NewWorkspace(root, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-			d := NewDriver(store, runner, workspace, nil, nil, nil, fakeSandboxExec, nil, slog.Default())
+			d := NewDriver(store, runner, workspace, nil, nil, fakeSandboxExec, nil, slog.Default())
 			edited := filepath.Join(wt, "x.go")
 			if err := os.WriteFile(edited, []byte("package x\n"), 0o600); err != nil {
 				t.Fatal(err)
@@ -2108,7 +2108,7 @@ func (f *fakeGranter) callsSnapshot() []struct{ sessionID, tool, pattern string 
 func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
 	store := newFakeStore()
 	granter := &fakeGranter{}
-	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
 	id, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Route: "route-x", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, AutoApproveTools: true})
 	if err != nil {
@@ -2130,7 +2130,7 @@ func TestDriverCreateGrantsShellAutoApproveWhenEnabled(t *testing.T) {
 func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
 	store := newFakeStore()
 	granter := &fakeGranter{}
-	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
 	if _, err := d.Create(context.Background(), Mission{Goal: "test", Kind: "general", Route: "route-x", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, AutoApproveTools: false}); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -2147,7 +2147,7 @@ func TestDriverCreateSkipsGrantWhenAutoApproveDisabled(t *testing.T) {
 func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
 	store := newFakeStore()
 	granter := &fakeGranter{}
-	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 	d.SetAgentResolver(func(ctx context.Context, agentID string) (AgentDefaults, bool) {
 		if agentID != "briefing-agent" {
 			return AgentDefaults{}, false
@@ -2185,7 +2185,7 @@ func TestDriverCreateGrantsApprovalAllowlist(t *testing.T) {
 func TestDriverCreateSkipsAllowlistGrantWhenAgentUnresolved(t *testing.T) {
 	store := newFakeStore()
 	granter := &fakeGranter{}
-	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+	d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 	d.SetAgentResolver(func(ctx context.Context, agentID string) (AgentDefaults, bool) {
 		return AgentDefaults{}, false
 	})
@@ -2259,7 +2259,7 @@ func TestDriverSignalResumeRegrantsSession(t *testing.T) {
 	})
 	granter := &fakeGranter{}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+	d := NewDriver(store, runner, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 	d.SetAgentResolver(func(ctx context.Context, agentID string) (AgentDefaults, bool) {
 		if agentID != "briefing-agent" {
 			return AgentDefaults{}, false
@@ -2310,7 +2310,7 @@ func TestDriverSignalResumeGuardsMissingSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	d := NewDriver(store, &scriptedRunner{}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+	d := NewDriver(store, &scriptedRunner{}, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 
 	// The exact guard Signal applies before calling grantSessionDefaults
 	// — checked directly since Signal's own goroutine would otherwise go
@@ -2344,7 +2344,7 @@ func TestDriverAdvanceLazilyProvisionsBareMission(t *testing.T) {
 	wsRoot := t.TempDir()
 	workspace := NewWorkspace(wsRoot, nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, granter, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, sessions, granter, nil, nil, slog.Default())
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
@@ -2383,7 +2383,7 @@ func TestDriverProvisionUsesDestinationBranchPatternOverSettings(t *testing.T) {
 	wsRoot := t.TempDir()
 	workspace := NewWorkspace(wsRoot, nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, sessions, &fakeGranter{}, nil, nil, slog.Default())
 	d.SetGitBranchPattern(func(context.Context) string { return "settings/{slug}" })
 	d.SetGitHubPolicyResolver(func(ctx context.Context, id string) (GitHubPolicy, bool, error) {
 		if id == "gh-dest-1" {
@@ -2413,7 +2413,7 @@ func TestDriverProvisionFallsBackToSettingsBranchPattern(t *testing.T) {
 	wsRoot := t.TempDir()
 	workspace := NewWorkspace(wsRoot, nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, sessions, &fakeGranter{}, nil, nil, slog.Default())
 	d.SetGitBranchPattern(func(context.Context) string { return "settings/{slug}" })
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -2438,7 +2438,7 @@ func TestDriverProvisionFallsBackToDefaultBranchPattern(t *testing.T) {
 	wsRoot := t.TempDir()
 	workspace := NewWorkspace(wsRoot, nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, sessions, &fakeGranter{}, nil, nil, slog.Default())
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
@@ -2461,7 +2461,7 @@ func TestDriverProvisionNamesMissionBeforeBranch(t *testing.T) {
 	sessions := &fakeSessionCreator{}
 	workspace := NewWorkspace(t.TempDir(), nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, sessions, &fakeGranter{}, nil, nil, slog.Default())
 	calls := 0
 	d.SetNameMission(func(context.Context, string) string { calls++; return "Login Bug Fix" })
 
@@ -2491,7 +2491,7 @@ func TestDriverProvisionFallsBackToGoalSlugWhenNamingFails(t *testing.T) {
 	sessions := &fakeSessionCreator{}
 	workspace := NewWorkspace(t.TempDir(), nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, sessions, &fakeGranter{}, nil, nil, slog.Default())
 	d.SetNameMission(func(context.Context, string) string { return "" })
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -2538,7 +2538,7 @@ func TestDriverProvisionThreadsSigningKeyFromIdentityResolver(t *testing.T) {
 	wsRoot := t.TempDir()
 	workspace := NewWorkspace(wsRoot, nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, sessions, &fakeGranter{}, nil, nil, slog.Default())
 	d.SetCloneTokenResolver(func(context.Context, string) (string, error) { return "dummy-token", nil })
 	d.SetCloneIdentityResolver(func(context.Context, string) (ResolvedIdentity, error) {
 		return ResolvedIdentity{Name: "conn-bot", Email: "conn-bot@example.com", Login: "conn-bot", SigningKey: privatePEM}, nil
@@ -2592,7 +2592,7 @@ func TestDriverProvisionsOnceUnderConcurrentAdvance(t *testing.T) {
 	sessions := &blockingSessionCreator{entered: make(chan struct{}), release: make(chan struct{})}
 	workspace := NewWorkspace(t.TempDir(), nil, slog.Default())
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, workspace, nil, sessions, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, sessions, &fakeGranter{}, nil, nil, slog.Default())
 
 	var id string
 	var createErr error
@@ -2710,7 +2710,7 @@ func TestDriverAdvanceSkipsProvisioningWhenAlreadyProvisioned(t *testing.T) {
 	granter := &fakeGranter{}
 	sessions := &fakeSessionCreator{}
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
-	d := NewDriver(store, runner, nil, nil, sessions, granter, nil, nil, slog.Default())
+	d := NewDriver(store, runner, nil, sessions, granter, nil, nil, slog.Default())
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
@@ -2748,7 +2748,7 @@ func TestDriverAdvancePausesInsteadOfErroringOnProvisioningFailure(t *testing.T)
 	granter := &fakeGranter{}
 	sessions := &fakeSessionCreator{}
 	runner := &scriptedRunner{}
-	d := NewDriver(store, runner, workspace, nil, sessions, granter, nil, nil, slog.Default())
+	d := NewDriver(store, runner, workspace, sessions, granter, nil, nil, slog.Default())
 
 	canContinue, err := d.Advance(context.Background(), "m1")
 	if err != nil {
@@ -2873,7 +2873,7 @@ func TestDriverCitationCheckSkippedForCodingMission(t *testing.T) {
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, fakeSandboxExec, nil, log)
 	d.retryDelayFn = func(int) time.Duration { return 0 }
 
 	driveN(t, d, "m1", 3) // build -> prove -> result -> done
@@ -3026,7 +3026,7 @@ func TestDriverCodingVerifyFailureRetriesBeforeReview(t *testing.T) {
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, fakeSandboxExec, nil, log)
 	d.retryDelayFn = func(int) time.Duration { return 0 }
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -3301,7 +3301,7 @@ func TestDriverCodingMissionsAlwaysReview(t *testing.T) {
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, fakeSandboxExec, nil, log)
 	d.retryDelayFn = func(int) time.Duration { return 0 }
 
 	driveN(t, d, "m1", 3)
@@ -3701,7 +3701,7 @@ func TestDriverAdvanceDiscardsTurnOnConcurrentTerminal(t *testing.T) {
 	store.applyTransitionErr = ErrTerminal
 	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
 	remover := &fakeSandboxRemover{}
-	d := NewDriver(store, runner, nil, nil, nil, nil, fakeSandboxExec, remover, slog.Default())
+	d := NewDriver(store, runner, nil, nil, nil, fakeSandboxExec, remover, slog.Default())
 
 	cont, err := d.Advance(context.Background(), "m1")
 	if err != nil {
@@ -3871,7 +3871,7 @@ func TestDriverReviewPacketScopedDiffAndGate(t *testing.T) {
 		{Title: "docs changed", File: "docs/notes.md", Evidence: "+# notes"},
 	}}}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, fakeSandboxExec, nil, log)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
@@ -3956,7 +3956,7 @@ func TestDriverFindingsOnlyReReview(t *testing.T) {
 		},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, fakeSandboxExec, nil, log)
 
 	// Round 1: the full packet; F1 opens and HEAD is recorded.
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -4055,7 +4055,7 @@ func TestDriverOpenFindingsWithoutReviewCommitUseFullPacket(t *testing.T) {
 	})
 	runner := &scriptedRunner{reviewVerdicts: []ReviewVerdict{{Approved: true}}}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, fakeSandboxExec, nil, log)
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
@@ -4086,7 +4086,7 @@ func TestDriverTwoUnitPlanReviewsOnce(t *testing.T) {
 		reviewVerdicts: []ReviewVerdict{{Approved: true}},
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, nil, fakeSandboxExec, nil, log)
+	d := NewDriver(store, runner, NewWorkspace("", nil, log), nil, nil, fakeSandboxExec, nil, log)
 
 	writeWorktreeFile(t, wt, "a.md", "a\n")
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -4626,7 +4626,7 @@ func TestDriverCreateGrantsAutomationTools(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newFakeStore()
 			granter := &fakeGranter{}
-			d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
+			d := NewDriver(store, &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}, nil, &fakeSessionCreator{}, granter, nil, nil, slog.Default())
 			d.SetAutomationGrants(func(_ context.Context, m Mission) []string {
 				if m.AutomationRunID == "" {
 					return nil

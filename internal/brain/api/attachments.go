@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
@@ -15,16 +16,17 @@ func (a *API) registerAttachments(handle func(pattern string, h http.Handler), s
 	if store == nil {
 		return
 	}
-	h := &attachmentAPI{store: store}
+	h := &attachmentAPI{store: store, log: a.log}
 	handle("POST /v1/attachments", a.auth(http.HandlerFunc(h.upload)))
 	handle("GET /v1/attachments/{id}", a.auth(http.HandlerFunc(h.download)))
 }
 
 type attachmentAPI struct {
 	store *attachments.Store
+	log   *slog.Logger
 }
 
-func failAttachment(w http.ResponseWriter, err error) {
+func failAttachment(w http.ResponseWriter, log *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, attachments.ErrNotFound):
 		jsonError(w, http.StatusNotFound, "not_found", "attachment not found")
@@ -33,7 +35,7 @@ func failAttachment(w http.ResponseWriter, err error) {
 	case errors.Is(err, attachments.ErrTooLarge):
 		jsonError(w, http.StatusBadRequest, "too_large", err.Error())
 	default:
-		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		failInternal(w, log, "attachment", err)
 	}
 }
 
@@ -62,7 +64,7 @@ func (h *attachmentAPI) upload(w http.ResponseWriter, r *http.Request) {
 
 	att, err := h.store.Save(r.Context(), file)
 	if err != nil {
-		failAttachment(w, err)
+		failAttachment(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, attachmentView{ID: att.ID, Mime: att.Mime, SizeBytes: att.SizeBytes})
@@ -75,7 +77,7 @@ func (h *attachmentAPI) upload(w http.ResponseWriter, r *http.Request) {
 func (h *attachmentAPI) download(w http.ResponseWriter, r *http.Request) {
 	f, att, err := h.store.Open(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failAttachment(w, err)
+		failAttachment(w, h.log, err)
 		return
 	}
 	defer func() { _ = f.Close() }()

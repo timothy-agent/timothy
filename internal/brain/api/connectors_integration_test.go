@@ -76,8 +76,8 @@ func TestConnectorsRepoEndpoints(t *testing.T) {
 		prev := src.listReposFn
 		src.listReposFn = func(context.Context) ([]gitprovider.Repo, error) { return nil, errors.New("upstream 500") }
 		t.Cleanup(func() { src.listReposFn = prev })
-		if w := do("GET", "/v1/admin/connectors/"+id+"/repos", ""); w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body)
+		if w := do("GET", "/v1/admin/connectors/"+id+"/repos", ""); w.Code != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502: %s", w.Code, w.Body)
 		}
 	})
 
@@ -105,8 +105,8 @@ func TestConnectorsRepoEndpoints(t *testing.T) {
 	})
 
 	t.Run("create error", func(t *testing.T) {
-		if w := do("POST", "/v1/admin/connectors/"+id+"/repos", `{"name":"taken"}`); w.Code != http.StatusBadRequest {
-			t.Fatalf("status = %d, want 400: %s", w.Code, w.Body)
+		if w := do("POST", "/v1/admin/connectors/"+id+"/repos", `{"name":"taken"}`); w.Code != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502: %s", w.Code, w.Body)
 		}
 	})
 }

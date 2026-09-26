@@ -281,11 +281,7 @@ func failMission(w http.ResponseWriter, log *slog.Logger, err error) {
 	case errors.Is(err, missions.ErrInvalidMission):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
-		if log == nil {
-			log = slog.Default()
-		}
-		log.Error("mission request failed", "error", err)
-		jsonError(w, http.StatusInternalServerError, "internal_error", "internal error")
+		failInternal(w, log, "mission", err)
 	}
 }
 
@@ -520,7 +516,9 @@ type createMissionRequest struct {
 	// named mission must already be terminal (done/failed). Its
 	// outcome digest (missions.OutcomeDigest) is snapshotted onto this
 	// mission's ParentContext at create time, and its branch, when
-	// reachable, becomes this mission's worktree base.
+	// reachable, becomes this mission's worktree base. Every field this
+	// body leaves empty inherits the parent's value (missions.InheritParent,
+	// issue #923); a non-empty field wins. Destinations never inherit.
 	ParentMissionID string `json:"parent_mission_id"`
 	// Attachments name already-uploaded documents, images, or audio
 	// clips (POST /v1/attachments) to attach at create time: converted
@@ -718,9 +716,10 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		sourceKind = c.Kind
 	}
 	var parentMissionID string
+	var parent *missions.Mission
 	var parentSource *missions.SourceEntry
 	if req.ParentMissionID != "" {
-		parent, err := h.store.Get(r.Context(), req.ParentMissionID)
+		p, err := h.store.Get(r.Context(), req.ParentMissionID)
 		if err != nil {
 			// Store.Get wraps any row-level failure (bad uuid, missing
 			// row) as ErrNotFound — same "can't tell degraded-store
@@ -729,7 +728,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "bad_request", "parent mission not found")
 			return
 		}
-		if !parent.Phase.Terminal() {
+		if !p.Phase.Terminal() {
 			jsonError(w, http.StatusConflict, "parent_not_terminal", "parent mission is not finished")
 			return
 		}
@@ -738,11 +737,9 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
 			return
 		}
-		parentMissionID = parent.ID
-		parentSource = &missions.SourceEntry{
-			Source: missions.SourceKindMission, ID: missions.ParentLineageID, MissionID: parent.ID,
-			Digest: missions.OutcomeDigest(parent, events, parent.Phase, parent.FailureReason),
-		}
+		parentMissionID, parent = p.ID, &p
+		lineage := missions.LineageSource(p, events)
+		parentSource = &lineage
 	}
 	pdfSources, err := h.attachments.Resolve(r.Context(), req.Attachments)
 	if err != nil {
@@ -779,9 +776,15 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		}
 		sources = append(sources, missions.SourceEntry{Source: sourceKind, ConnectorID: req.ConnectorID, RepoURL: repoURL})
 	}
-	// Kind, harness, agent, route, flow and budget defaults plus the
-	// D-100 route gate are the shared create path (issue #816).
-	m, err := missions.ResolveDefaults(r.Context(), req.createRequest(parentMissionID, sources), h.resolveDeps())
+	// A follow-up inherits the parent's settings wherever the body leaves
+	// a field empty, same as a chat follow-up (issue #923). Kind,
+	// harness, agent, route, flow and budget defaults plus the D-100
+	// route gate are the shared create path (issue #816).
+	cr := req.createRequest(parentMissionID, sources)
+	if parent != nil {
+		cr = missions.InheritParent(cr, *parent)
+	}
+	m, err := missions.ResolveDefaults(r.Context(), cr, h.resolveDeps())
 	if err != nil {
 		var unusable *missions.RouteUnusableError
 		if errors.As(err, &unusable) {

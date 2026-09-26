@@ -155,14 +155,14 @@ func (h *kbAPI) resolveCollection(ctx context.Context, title, markdownText strin
 	return id, nil
 }
 
-func failKB(w http.ResponseWriter, err error) {
+func failKB(w http.ResponseWriter, log *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, kb.ErrNotFound):
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, kb.ErrInUse):
 		jsonError(w, http.StatusConflict, "in_use", err.Error())
 	default:
-		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		failInternal(w, log, "kb", err)
 	}
 }
 
@@ -216,7 +216,7 @@ func (h *kbAPI) createCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.store.CreateCollection(r.Context(), req.Name, req.Description, retrievalWeight)
 	if err != nil {
-		failKB(w, err)
+		failKB(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
@@ -225,7 +225,7 @@ func (h *kbAPI) createCollection(w http.ResponseWriter, r *http.Request) {
 func (h *kbAPI) getCollection(w http.ResponseWriter, r *http.Request) {
 	c, err := h.store.GetCollection(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failKB(w, err)
+		failKB(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
@@ -257,12 +257,12 @@ func (h *kbAPI) updateCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.UpdateCollection(r.Context(), r.PathValue("id"), req.Name, req.Description, req.RetrievalWeight); err != nil {
-		failKB(w, err)
+		failKB(w, h.log, err)
 		return
 	}
 	c, err := h.store.GetCollection(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failKB(w, err)
+		failKB(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
@@ -270,7 +270,7 @@ func (h *kbAPI) updateCollection(w http.ResponseWriter, r *http.Request) {
 
 func (h *kbAPI) deleteCollection(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.DeleteCollection(r.Context(), r.PathValue("id")); err != nil {
-		failKB(w, err)
+		failKB(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -422,7 +422,7 @@ func (h *kbAPI) finishIngest(w http.ResponseWriter, r *http.Request, collectionI
 func (h *kbAPI) uploadDocument(w http.ResponseWriter, r *http.Request) {
 	collectionID := r.PathValue("id")
 	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
-		failKB(w, err)
+		failKB(w, h.log, err)
 		return
 	}
 	up, ok := h.decodeUpload(w, r)
@@ -549,7 +549,7 @@ func (h *kbAPI) refreshOrCreate(w http.ResponseWriter, r *http.Request, resolveC
 		jsonError(w, http.StatusInternalServerError, "kb_failed", err.Error())
 	default:
 		if err := h.store.ReplaceDocumentContent(r.Context(), existing.ID, title, markdownText, size, moveTo); err != nil {
-			failKB(w, err)
+			failKB(w, h.log, err)
 			return
 		}
 		doc, err := h.store.GetDocument(r.Context(), existing.ID)
@@ -569,7 +569,7 @@ func (h *kbAPI) refreshOrCreate(w http.ResponseWriter, r *http.Request, resolveC
 func (h *kbAPI) addDocumentFromURL(w http.ResponseWriter, r *http.Request) {
 	collectionID := r.PathValue("id")
 	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
-		failKB(w, err)
+		failKB(w, h.log, err)
 		return
 	}
 	var req kbURLRequest
@@ -676,7 +676,7 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 	collectionID := strings.TrimSpace(req.CollectionID)
 	if collectionID != "" {
 		if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
-			failKB(w, err)
+			failKB(w, h.log, err)
 			return
 		}
 	}
@@ -726,7 +726,7 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 		// it. startIngest's memoryd call deletes the old chunks before
 		// writing the new set (same as reingestDocument).
 		if err := h.store.ReplaceDocumentContent(r.Context(), existing.ID, title, markdownText, int64(len(markdownText)), collectionID); err != nil {
-			failKB(w, err)
+			failKB(w, h.log, err)
 			return
 		}
 		doc, err := h.store.GetDocument(r.Context(), existing.ID)
@@ -871,7 +871,7 @@ func (h *kbAPI) startIngest(docID, title string) {
 
 func (h *kbAPI) deleteDocument(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.DeleteDocument(r.Context(), r.PathValue("id")); err != nil {
-		failKB(w, err)
+		failKB(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -884,7 +884,7 @@ func (h *kbAPI) reingestDocument(w http.ResponseWriter, r *http.Request) {
 	docID := r.PathValue("id")
 	doc, err := h.store.GetDocument(r.Context(), docID)
 	if err != nil {
-		failKB(w, err)
+		failKB(w, h.log, err)
 		return
 	}
 	if strings.TrimSpace(doc.Markdown) == "" {

@@ -539,7 +539,7 @@ func main() {
 		consumers = append(consumers, automations.NewDispatcher(notify, app.Log))
 		if channelStore != nil {
 			outcomes := channels.NewOutcomes(channelStore, channels.MissionDeps{
-				Get: missionStore.Get, Events: missionStore.Events, WebBaseURL: flags.WebBaseURL,
+				Get: missionStore.Get, Events: missionStore.Events, AppendEvent: missionStore.AppendEvent, WebBaseURL: flags.WebBaseURL,
 			}, secrets.Resolve, channelHTTP, channelsEnabled, app.Log)
 			if conns != nil {
 				outcomes.SetEmail(conns.IMAPMailbox)
@@ -1481,7 +1481,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// Postgres directly), so a fresh instance behaves identically. Used
 	// only to pre-authorize a mission's hidden session at creation.
 	perms := tools.NewPermissions(db, toolWorkspaceRoot)
-	driver := missions.NewDriver(store, runner, workspace, notifier, sessions, perms, sandboxMgr.Exec, sandboxMgr, log)
+	driver := missions.NewDriver(store, runner, workspace, sessions, perms, sandboxMgr.Exec, sandboxMgr, log)
 	driver.SetFXRates(fxStore)
 	driver.SetAutomationGrants(automations.MissionGrants(noteStore, log))
 	driver.SetCapacityGate(sandboxMgr)

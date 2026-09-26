@@ -18,6 +18,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -393,5 +394,39 @@ func TestHookDisabledAutomation(t *testing.T) {
 	body := `{"action":"opened"}`
 	if code, out := h.post(triggerID, body, githubHeaders(body, h.tag+"off")); code != http.StatusNotFound || out["error"] != "not_found" {
 		t.Fatalf("disabled automation = %d %v, want 404", code, out)
+	}
+}
+
+// TestSecretsDirectoryGuardsWebhookTriggerRef runs the credentials
+// directory over the real automations store: a webhook trigger's
+// credential_ref lists its automation and cannot be deleted.
+func TestSecretsDirectoryGuardsWebhookTriggerRef(t *testing.T) {
+	h := newHookHarness(t)
+	h.create("secret-ref", `{"scheme":"generic"}`)
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{{RefName: "ITEST_HOOK_KEY"}}}
+	a, _, _ := testAPI(t, "tok", nil)
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, nil, h.store)
+
+	want := referenceInfo{Kind: "automation", Name: h.tag + "secret-ref", Role: "credential"}
+	found := false
+	for _, ref := range listSecrets(t, m)["ITEST_HOOK_KEY"] {
+		if ref == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("ITEST_HOOK_KEY referents missing %+v", want)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/ITEST_HOOK_KEY", nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), h.tag+"secret-ref") {
+		t.Fatalf("delete = %d %s, want 409 naming the automation", w.Code, w.Body)
+	}
+	if gw.deletedRef != "" {
+		t.Fatalf("gateway DeleteSecret called with %q, want never called", gw.deletedRef)
 	}
 }

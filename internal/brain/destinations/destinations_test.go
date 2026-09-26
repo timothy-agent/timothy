@@ -223,6 +223,36 @@ func (f fakeAutomationRefs) NameReferencingDestination(context.Context, string) 
 	return f.name, f.referenced, f.err
 }
 
+// TestCreateWrapsValidationInErrInvalid covers each validate branch
+// through Create: every rejection wraps ErrInvalid before the db is
+// touched, so the API answers 400 rather than 500.
+func TestCreateWrapsValidationInErrInvalid(t *testing.T) {
+	t.Parallel()
+	conns := fakeConns{rows: map[string]Connector{
+		"gmail-ok": {Kind: "google", Enabled: true},
+		"mcp-conn": {Kind: "mcp", Enabled: true},
+	}}
+	s := &Store{conns: conns, channels: fakeChannels}
+	for _, tt := range []struct {
+		name string
+		d    Destination
+	}{
+		{"blank name", Destination{Name: " ", Kind: "webhook"}},
+		{"email connector not google-kind", Destination{Name: "e", Kind: "email", Config: json.RawMessage(`{"connector_id":"mcp-conn","to":"a@example.com"}`)}},
+		{"webhook bad url", Destination{Name: "w", Kind: "webhook", Config: json.RawMessage(`{"url":"ftp://x","format":"json"}`)}},
+		{"channel missing chat_id", Destination{Name: "c", Kind: "channel", Config: json.RawMessage(`{"channel_id":"tg"}`)}},
+		{"repo kind missing connector_id", Destination{Name: "g", Kind: "github", Config: json.RawMessage(`{}`)}},
+		{"unknown kind", Destination{Name: "x", Kind: "whatsapp", Config: json.RawMessage(`{}`)}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := s.Create(t.Context(), tt.d)
+			if !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Create() = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
 func TestDeleteReferenceGuards(t *testing.T) {
 	t.Parallel()
 
