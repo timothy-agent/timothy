@@ -136,6 +136,13 @@ func PlanTool() *tools.Tool {
 			"required": []
 		}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			// issue #844: a schema error must reach the planner as a tool
+			// error in-turn, not surface only after the turn ends. Decode
+			// only: parsePlan's other gates (infeasible reason, sandbox
+			// probe) still run post-turn via acceptPlan.
+			if _, err := decodePlanStrict(string(args)); err != nil {
+				return "", err
+			}
 			return "plan recorded", nil
 		},
 	}
