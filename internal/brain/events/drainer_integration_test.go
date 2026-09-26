@@ -410,6 +410,40 @@ func TestDrainSkipsWhileAnotherDrainerHoldsTheLock(t *testing.T) {
 	}
 }
 
+func TestHoldDrainLockFencesOtherDrainers(t *testing.T) {
+	s := testStore(t)
+	src := testSource(t)
+	conn, err := pgx.Connect(t.Context(), os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	if err := HoldDrainLock(t.Context(), conn); err != nil {
+		t.Fatalf("HoldDrainLock: %v", err)
+	}
+	// Inserted after the lock: no drainer anywhere can have claimed it.
+	id := insertEvents(t, s, src, "fenced")[0]
+
+	rec := &recorder{}
+	n, err := drain(t, s, src, NewDrainer(s, []Consumer{rec}, nil, testLog()))
+	if err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if n != 0 || len(rec.seen) != 0 {
+		t.Fatalf("fenced drain handled %d events (%v), want 0", n, rec.seen)
+	}
+	if r := readEvent(t, s, id); r.processed || r.attempts != 0 {
+		t.Fatalf("event = %+v, want untouched", r)
+	}
+	var held bool
+	if err := conn.QueryRow(t.Context(), `SELECT pg_advisory_unlock($1)`, int64(drainLockKey)).Scan(&held); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	if !held {
+		t.Fatal("conn did not hold the drain lock at session level")
+	}
+}
+
 func TestSweepDeletesOnlyOldProcessedEvents(t *testing.T) {
 	s := testStore(t)
 	src := testSource(t)

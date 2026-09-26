@@ -67,10 +67,10 @@ func TestDispatchChannelMessage(t *testing.T) {
 		return ev
 	}
 	ev := msg(coverageTrigger, "/RUN coverage", "1")
-	if _, inserted, err := h.events.AddIfNew(ctx, ev); err != nil || !inserted {
-		t.Fatalf("AddIfNew = %v %v", inserted, err)
+	if !h.addEventIfNew(ev) {
+		t.Fatal("first delivery was not inserted")
 	}
-	if _, inserted, _ := h.events.AddIfNew(ctx, ev); inserted {
+	if h.addEventIfNew(ev) {
 		t.Fatal("duplicate delivery inserted a second event")
 	}
 	h.drain()
