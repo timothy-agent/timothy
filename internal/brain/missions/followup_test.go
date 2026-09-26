@@ -24,7 +24,7 @@ func followUpBlockedRunner() *scriptedRunner {
 func TestCreateFollowUpRejectsNonTerminalParent(t *testing.T) {
 	store := newFakeStore()
 	store.put("parent", Mission{ID: "parent", Goal: "do the thing", Kind: "general", Phase: PhaseBuild, Status: StatusWorking})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "do more"})
 	if err == nil {
@@ -39,7 +39,7 @@ func TestCreateFollowUpRejectsNonTerminalParent(t *testing.T) {
 // refused with a clear error.
 func TestCreateFollowUpUnknownParent(t *testing.T) {
 	store := newFakeStore()
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	_, err := d.CreateFollowUp(context.Background(), "does-not-exist", FollowUpOptions{Goal: "do more"})
 	if err == nil {
@@ -66,7 +66,7 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 			{DestinationID: "dest-1"},
 		},
 	})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 	// PromptOverlay now comes from the agent's current defaults, not the
 	// parent's snapshot (ResolveDefaults' own precedence).
 	d.SetResolveDeps(ResolveDeps{
@@ -122,7 +122,7 @@ func TestCreateFollowUpResolvesDefaults(t *testing.T) {
 		ID: "parent", Goal: "fix the login bug", Kind: "coding", Phase: PhaseDone, Status: StatusDone,
 		AgentID: "agent-1", MaxIterations: 9, Harness: "claude-cli", ReviewHarness: "codex-cli",
 	})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 	d.SetResolveDeps(ResolveDeps{
 		Agent: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
 			if agentID == "agent-1" {
@@ -168,7 +168,7 @@ func TestCreateFollowUpRouteGate(t *testing.T) {
 		ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone,
 		Route: "dead",
 	})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 	d.SetResolveDeps(ResolveDeps{ResolveRoute: resolveFixture})
 
 	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "ship more"})
@@ -188,7 +188,7 @@ func TestCreateFollowUpRouteGate(t *testing.T) {
 func TestCreateFollowUpAllowsFailedParent(t *testing.T) {
 	store := newFakeStore()
 	store.put("parent", Mission{ID: "parent", Goal: "attempt one", Kind: "general", Phase: PhaseFailed, Status: StatusError})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	id, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "attempt two"})
 	if err != nil {
@@ -208,7 +208,7 @@ func TestCreateFollowUpAllowsFailedParent(t *testing.T) {
 func TestCreateFollowUpGoalOnly(t *testing.T) {
 	store := newFakeStore()
 	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	id, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "ship more"})
 	if err != nil {
@@ -234,7 +234,7 @@ func TestCreateFollowUpGoalOnly(t *testing.T) {
 func TestCreateFollowUpBriefRendersAsReferencedContext(t *testing.T) {
 	store := newFakeStore()
 	store.put("parent", Mission{ID: "parent", Goal: "rank the ideas", Kind: "general", Phase: PhaseDone, Status: StatusDone})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	brief := Brief{
 		Objective:          "build the ranked idea",
@@ -284,7 +284,7 @@ func TestCreateFollowUpAttachCarriesParentFiles(t *testing.T) {
 		Workspace:    ws,
 		ArtifactRefs: []ArtifactRef{{ID: "att-1", Mime: "text/markdown", Name: "ideas.md"}},
 	})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	id, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{
 		Goal: "build it", Attach: []string{"ideas.md", "sub/notes.txt", " ideas.md "},
@@ -335,7 +335,7 @@ func TestCreateFollowUpAttachRejectsBadPaths(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := newFakeStore()
 			store.put("parent", Mission{ID: "parent", Goal: "rank the ideas", Kind: "general", Phase: PhaseDone, Status: StatusDone, Workspace: ws})
-			d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+			d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 			_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "build it", Attach: tc.attach})
 			if err == nil {
@@ -359,7 +359,7 @@ func TestCreateFollowUpAttachRejectsBadPaths(t *testing.T) {
 func TestCreateFollowUpRejectsEmptyGoal(t *testing.T) {
 	store := newFakeStore()
 	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "   "})
 	if err == nil || !strings.Contains(err.Error(), "goal is required") {
@@ -372,7 +372,7 @@ func TestCreateFollowUpRejectsEmptyGoal(t *testing.T) {
 func TestCreateFollowUpAttachNeedsParentWorkspace(t *testing.T) {
 	store := newFakeStore()
 	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "build it", Attach: []string{"ideas.md"}})
 	if err == nil || !strings.Contains(err.Error(), "no workspace") {
@@ -397,7 +397,7 @@ func TestCreateFollowUpAttachRejectsSymlinkEscape(t *testing.T) {
 	}
 	store := newFakeStore()
 	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone, Workspace: ws})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "build it", Attach: []string{"link.md"}})
 	if err == nil || !strings.Contains(err.Error(), "outside the parent mission's workspace") {
@@ -413,7 +413,7 @@ func TestCreateFollowUpAttachBinaryFile(t *testing.T) {
 	writeAttachFile(t, ws, "blob.bin", "\x00\x01\x02binary")
 	store := newFakeStore()
 	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone, Workspace: ws})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	id, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "build it", Attach: []string{"blob.bin"}})
 	if err != nil {
@@ -435,7 +435,7 @@ func TestCreateFollowUpAttachRejectsOversizeFile(t *testing.T) {
 	}
 	store := newFakeStore()
 	store.put("parent", Mission{ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone, Workspace: ws})
-	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
 
 	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "build it", Attach: []string{"big.md"}})
 	if err == nil || !strings.Contains(err.Error(), "larger than") {

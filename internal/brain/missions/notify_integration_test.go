@@ -14,89 +14,43 @@ func testNotifier(t *testing.T, store *Store) *Notifier {
 	return NewNotifier(store.db, "", nil, store.log)
 }
 
-func TestOnTransitionWritesNotificationOnActionableTransition(t *testing.T) {
+// TestNotifyConsumerWritesActionableNotification replaces the
+// synchronous OnTransition path (issue #922): a transition into paused
+// reaches the inbox through the drained events row, unread.
+func TestNotifyConsumerWritesActionableNotification(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	n := testNotifier(t, store)
 
-	goal := marker + "notify-1"
-	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
+	id, err := store.Create(ctx, Mission{Goal: marker + "notify-1", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-
-	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusPaused, ""); err != nil {
-		t.Fatalf("OnTransition: %v", err)
+	if err := store.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseBuild, Status: StatusPaused, MaxIterations: 8}}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
 	}
-	notes, err := n.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	found := false
-	for _, note := range notes {
-		if note.MissionID == id {
-			found = true
-			if note.Kind != "paused" || note.Read {
-				t.Fatalf("notification = %+v, want kind=paused unread", note)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("OnTransition on an actionable transition did not write a notification")
+	drainMissionOnly(t, store, id)
+	notes := notificationRows(t, store, id)
+	if len(notes) != 1 || notes[0].Kind != "paused" || notes[0].Read {
+		t.Fatalf("notifications = %+v, want one unread kind=paused", notes)
 	}
 }
 
-// TestOnTransitionSilentOnTerminal confirms OnTransition writes no
-// notification for a transition into done/error: NotifyConsumer sends
-// those off the events inbox instead (D-117, issue #843).
-func TestOnTransitionSilentOnTerminal(t *testing.T) {
+// TestNotifyConsumerSilentOnNonActionable: a transition into working
+// commits no actionable event, so a drain writes no notification.
+func TestNotifyConsumerSilentOnNonActionable(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	n := testNotifier(t, store)
 
-	goal := marker + "notify-terminal"
-	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
+	id, err := store.Create(ctx, Mission{Goal: marker + "notify-2", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusDone, ""); err != nil {
-		t.Fatalf("OnTransition (done): %v", err)
+	if err := store.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8}}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
 	}
-	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusError, ""); err != nil {
-		t.Fatalf("OnTransition (error): %v", err)
-	}
-	notes, err := n.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	for _, note := range notes {
-		if note.MissionID == id {
-			t.Fatalf("OnTransition into a terminal state wrote a notification: %+v", note)
-		}
-	}
-}
-
-func TestOnTransitionSilentOnNonActionable(t *testing.T) {
-	store := testStore(t)
-	ctx := context.Background()
-	n := testNotifier(t, store)
-
-	goal := marker + "notify-2"
-	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusIdle, StatusWorking, ""); err != nil {
-		t.Fatalf("OnTransition: %v", err)
-	}
-	notes, err := n.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	for _, note := range notes {
-		if note.MissionID == id {
-			t.Fatalf("non-actionable transition wrote a notification: %+v", note)
-		}
+	drainMissionOnly(t, store, id)
+	if notes := notificationRows(t, store, id); len(notes) != 0 {
+		t.Fatalf("non-actionable transition wrote notifications: %+v", notes)
 	}
 }
 
@@ -114,8 +68,8 @@ func TestSendOncePerMissionDedupes(t *testing.T) {
 	// A worker re-asking permission every command still produces
 	// exactly ONE inbox row, not one per re-ask.
 	for i := 0; i < 3; i++ {
-		if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusWaitingForInput, ""); err != nil {
-			t.Fatalf("OnTransition[%d]: %v", i, err)
+		if err := n.NotifyMessage(ctx, id, string(StatusWaitingForInput), composeMessage(string(StatusWaitingForInput), goal, "")); err != nil {
+			t.Fatalf("NotifyMessage[%d]: %v", i, err)
 		}
 	}
 	notes, err := n.List(ctx)
@@ -143,8 +97,8 @@ func TestClearMissionMarksUnreadRowsRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusPaused, ""); err != nil {
-		t.Fatalf("OnTransition: %v", err)
+	if err := n.NotifyMessage(ctx, id, string(StatusPaused), composeMessage(string(StatusPaused), goal, "")); err != nil {
+		t.Fatalf("NotifyMessage: %v", err)
 	}
 	if err := n.ClearMission(ctx, id); err != nil {
 		t.Fatalf("ClearMission: %v", err)
@@ -161,9 +115,7 @@ func TestClearMissionMarksUnreadRowsRead(t *testing.T) {
 
 	// A NEW notification for the same mission after clearing is not
 	// suppressed by the dedup logic (the prior one is read, so the
-	// NOT EXISTS ... AND NOT read guard doesn't see it). done is a
-	// terminal state; OnTransition no longer fires on it (NotifyConsumer
-	// does), so this exercises NotifyMessage directly instead.
+	// NOT EXISTS ... AND NOT read guard doesn't see it).
 	if err := n.NotifyMessage(ctx, id, "done", composeMessage("done", goal, "")); err != nil {
 		t.Fatalf("NotifyMessage after clear: %v", err)
 	}
@@ -192,8 +144,8 @@ func TestMarkRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusPaused, ""); err != nil {
-		t.Fatalf("OnTransition: %v", err)
+	if err := n.NotifyMessage(ctx, id, string(StatusPaused), composeMessage(string(StatusPaused), goal, "")); err != nil {
+		t.Fatalf("NotifyMessage: %v", err)
 	}
 	notes, err := n.List(ctx)
 	if err != nil {

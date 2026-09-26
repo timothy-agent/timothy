@@ -230,4 +230,12 @@ CLAUDE.md so other work does not pay for it every session.
   error is a tool error the planner sees in-turn, and the harness-retry
   cap stays the backstop for a planner that never resubmits a usable
   plan.
+- Mission notifications ride the events inbox (D-117, issues #843 and
+  #922): `ApplyTransition` commits a `mission.done`/`mission.failed`
+  row on a terminal phase and a `mission.paused`/
+  `mission.waiting_for_input` row on arriving at that status, and
+  `NotifyConsumer` sends them. The driver never notifies directly; it
+  only kicks the drainer. Terminal sends are once per mission,
+  actionable ones once per events row (`mission.notified` marker with
+  the row's dedup key).
 - `make canary` is the regression gate for any harness change.
