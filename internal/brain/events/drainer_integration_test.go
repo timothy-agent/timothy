@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
@@ -45,6 +46,40 @@ func testStore(t *testing.T) *Store {
 	}
 	if err := migrate.Run(ctx, db, migrations.FS, log); err != nil {
 		t.Fatalf("migrate: %v", err)
+	}
+	return NewStore(pool)
+}
+
+// fencedStore returns a store on a single-connection pool whose session
+// holds the drain lock for the test (issue #937). Drains through it
+// re-enter the lock while a live drainer, or a drainer on any other
+// store, skips. Call it before inserting the events it should drain.
+func fencedStore(t *testing.T) *Store {
+	t.Helper()
+	u, err := url.Parse(os.Getenv("DATABASE_URL"))
+	if err != nil || u.Scheme == "" {
+		t.Fatalf("DATABASE_URL is not a URL: %v", err)
+	}
+	q := u.Query()
+	q.Set("pool_max_conns", "1")
+	u.RawQuery = q.Encode()
+	pool := pgpool.New(t.Context(), u.String(), testLog())
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	if err := pool.WaitHealthy(ctx); err != nil {
+		t.Fatalf("fence WaitHealthy: %v", err)
+	}
+	db, err := pool.Get()
+	if err != nil {
+		t.Fatalf("fence Get: %v", err)
+	}
+	conn, err := db.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("fence acquire: %v", err)
+	}
+	defer conn.Release()
+	if err := HoldDrainLock(t.Context(), conn.Conn()); err != nil {
+		t.Fatalf("fence: %v", err)
 	}
 	return NewStore(pool)
 }
@@ -185,10 +220,11 @@ func (r *recorder) Handle(ctx context.Context, tx pgx.Tx, ev Event) error {
 
 func TestDrainDeadLettersPermanentFailureAndKeepsOrder(t *testing.T) {
 	s := testStore(t)
+	fs := fencedStore(t)
 	src := testSource(t)
 	ids := insertEvents(t, s, src, "one", "two", "three")
 	rec := &recorder{fail: map[string]bool{"two": true}}
-	d := NewDrainer(s, []Consumer{rec}, nil, testLog())
+	d := NewDrainer(fs, []Consumer{rec}, nil, testLog())
 
 	for i := range maxAttempts {
 		if _, err := drain(t, s, src, d); err != nil {
@@ -282,12 +318,13 @@ func (w okWriter) Handle(ctx context.Context, tx pgx.Tx, ev Event) error {
 
 func TestDrainSavepointRollsBackFailedConsumerWrites(t *testing.T) {
 	s := testStore(t)
+	fs := fencedStore(t)
 	src := testSource(t)
 	table := scratchTable(t, s)
 	db, _ := s.db.Get()
 	failing := insertEvents(t, s, src, "savepoint-fail")[0]
 
-	if _, err := drain(t, s, src, NewDrainer(s, []Consumer{scratchWriter{table}}, nil, testLog())); err != nil {
+	if _, err := drain(t, s, src, NewDrainer(fs, []Consumer{scratchWriter{table}}, nil, testLog())); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	var n int
@@ -307,7 +344,7 @@ func TestDrainSavepointRollsBackFailedConsumerWrites(t *testing.T) {
 		t.Fatalf("settle: %v", err)
 	}
 	ok := insertEvents(t, s, src, "savepoint-ok")[0]
-	if _, err := drain(t, s, src, NewDrainer(s, []Consumer{okWriter{table}}, nil, testLog())); err != nil {
+	if _, err := drain(t, s, src, NewDrainer(fs, []Consumer{okWriter{table}}, nil, testLog())); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	if err := db.QueryRow(t.Context(), `SELECT count(*) FROM `+table+` WHERE event_id = $1`, ok).Scan(&n); err != nil {
@@ -320,6 +357,7 @@ func TestDrainSavepointRollsBackFailedConsumerWrites(t *testing.T) {
 
 func TestDrainFailureDoesNotAbortBatch(t *testing.T) {
 	s := testStore(t)
+	fs := fencedStore(t)
 	src := testSource(t)
 	table := scratchTable(t, s)
 	ids := insertEvents(t, s, src, "batch-a", "batch-b")
@@ -332,7 +370,7 @@ func TestDrainFailureDoesNotAbortBatch(t *testing.T) {
 		}
 		return nil
 	})
-	if _, err := drain(t, s, src, NewDrainer(s, []Consumer{bad}, nil, testLog())); err != nil {
+	if _, err := drain(t, s, src, NewDrainer(fs, []Consumer{bad}, nil, testLog())); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	if r := readEvent(t, s, ids[0]); r.processed || r.lastError == nil {
@@ -353,6 +391,7 @@ func (f consumerFunc) Handle(ctx context.Context, tx pgx.Tx, ev Event) error {
 
 func TestDrainPanicIsRecordedAsError(t *testing.T) {
 	s := testStore(t)
+	fs := fencedStore(t)
 	src := testSource(t)
 	id := insertEvents(t, s, src, "panic")[0]
 	p := consumerFunc(func(ctx context.Context, tx pgx.Tx, ev Event) error {
@@ -361,7 +400,7 @@ func TestDrainPanicIsRecordedAsError(t *testing.T) {
 		}
 		return nil
 	})
-	if _, err := drain(t, s, src, NewDrainer(s, []Consumer{p}, nil, testLog())); err != nil {
+	if _, err := drain(t, s, src, NewDrainer(fs, []Consumer{p}, nil, testLog())); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	r := readEvent(t, s, id)
@@ -372,21 +411,11 @@ func TestDrainPanicIsRecordedAsError(t *testing.T) {
 
 func TestDrainSkipsWhileAnotherDrainerHoldsTheLock(t *testing.T) {
 	s := testStore(t)
+	fs := fencedStore(t)
 	src := testSource(t)
 	id := insertEvents(t, s, src, "locked")[0]
-	conn, err := pgx.Connect(t.Context(), os.Getenv("DATABASE_URL"))
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer func() { _ = conn.Close(context.Background()) }()
-	holder, err := conn.Begin(t.Context())
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	if _, err := holder.Exec(t.Context(), `SELECT pg_advisory_xact_lock($1)`, int64(drainLockKey)); err != nil {
-		t.Fatalf("lock: %v", err)
-	}
 
+	// fs's session holds the lock, so a drain on another session skips.
 	rec := &recorder{}
 	n, err := drain(t, s, src, NewDrainer(s, []Consumer{rec}, nil, testLog()))
 	if err != nil {
@@ -399,14 +428,46 @@ func TestDrainSkipsWhileAnotherDrainerHoldsTheLock(t *testing.T) {
 		t.Fatalf("event = %+v, want untouched", r)
 	}
 
-	if err := holder.Rollback(t.Context()); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-	if _, err := drain(t, s, src, NewDrainer(s, []Consumer{rec}, nil, testLog())); err != nil {
+	// The holder's session takes the lock and drains.
+	if _, err := drain(t, s, src, NewDrainer(fs, []Consumer{rec}, nil, testLog())); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	if r := readEvent(t, s, id); !r.processed {
-		t.Fatalf("event = %+v, want processed once the lock is free", r)
+		t.Fatalf("event = %+v, want processed by the lock holder", r)
+	}
+}
+
+func TestHoldDrainLockFencesOtherDrainers(t *testing.T) {
+	s := testStore(t)
+	src := testSource(t)
+	conn, err := pgx.Connect(t.Context(), os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+	if err := HoldDrainLock(t.Context(), conn); err != nil {
+		t.Fatalf("HoldDrainLock: %v", err)
+	}
+	// Inserted after the lock: no drainer anywhere can have claimed it.
+	id := insertEvents(t, s, src, "fenced")[0]
+
+	rec := &recorder{}
+	n, err := drain(t, s, src, NewDrainer(s, []Consumer{rec}, nil, testLog()))
+	if err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if n != 0 || len(rec.seen) != 0 {
+		t.Fatalf("fenced drain handled %d events (%v), want 0", n, rec.seen)
+	}
+	if r := readEvent(t, s, id); r.processed || r.attempts != 0 {
+		t.Fatalf("event = %+v, want untouched", r)
+	}
+	var held bool
+	if err := conn.QueryRow(t.Context(), `SELECT pg_advisory_unlock($1)`, int64(drainLockKey)).Scan(&held); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	if !held {
+		t.Fatal("conn did not hold the drain lock at session level")
 	}
 }
 
@@ -442,6 +503,7 @@ func TestSweepDeletesOnlyOldProcessedEvents(t *testing.T) {
 
 func TestRunDrainsAtStartup(t *testing.T) {
 	s := testStore(t)
+	fs := fencedStore(t)
 	src := testSource(t)
 	id := insertEvents(t, s, src, "boot")[0]
 	release := guardOthers(t, s, src)
@@ -449,7 +511,7 @@ func TestRunDrainsAtStartup(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
-		NewDrainer(s, []Consumer{&recorder{}}, nil, testLog()).Run(ctx)
+		NewDrainer(fs, []Consumer{&recorder{}}, nil, testLog()).Run(ctx)
 		close(done)
 	}()
 	defer func() { cancel(); <-done }()
@@ -469,6 +531,7 @@ func TestRunDrainsAtStartup(t *testing.T) {
 // 60s does not abort the batch; the pooled connection keeps 60s after.
 func TestDrainRaisesIdleTimeoutForTheBatch(t *testing.T) {
 	s := testStore(t)
+	fs := fencedStore(t)
 	src := testSource(t)
 	id := insertEvents(t, s, src, "idle")[0]
 	const query = `SELECT setting FROM pg_settings WHERE name = 'idle_in_transaction_session_timeout'`
@@ -476,7 +539,7 @@ func TestDrainRaisesIdleTimeoutForTheBatch(t *testing.T) {
 	c := consumerFunc(func(ctx context.Context, tx pgx.Tx, ev Event) error {
 		return tx.QueryRow(ctx, query).Scan(&inside)
 	})
-	if _, err := drain(t, s, src, NewDrainer(s, []Consumer{c}, nil, testLog())); err != nil {
+	if _, err := drain(t, s, src, NewDrainer(fs, []Consumer{c}, nil, testLog())); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
 	if want := strconv.FormatInt(drainIdleTimeout.Milliseconds(), 10); inside != want {
@@ -485,7 +548,7 @@ func TestDrainRaisesIdleTimeoutForTheBatch(t *testing.T) {
 	if r := readEvent(t, s, id); !r.processed {
 		t.Fatalf("event = %+v, want processed", r)
 	}
-	db, _ := s.db.Get()
+	db, _ := fs.db.Get()
 	var after string
 	if err := db.QueryRow(t.Context(), query).Scan(&after); err != nil {
 		t.Fatalf("read setting: %v", err)
@@ -497,8 +560,9 @@ func TestDrainRaisesIdleTimeoutForTheBatch(t *testing.T) {
 
 func TestDrainRunsAfterCommitOnlyForANonEmptyBatch(t *testing.T) {
 	s := testStore(t)
+	fs := fencedStore(t)
 	src := testSource(t)
-	d := NewDrainer(s, []Consumer{&recorder{}}, nil, testLog())
+	d := NewDrainer(fs, []Consumer{&recorder{}}, nil, testLog())
 	calls := 0
 	d.SetAfterCommit(func() { calls++ })
 	if _, err := drain(t, s, src, d); err != nil {
