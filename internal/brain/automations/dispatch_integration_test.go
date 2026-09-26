@@ -31,7 +31,8 @@ import (
 // events go straight to Dispatcher.Handle, recorded as processed in the
 // same tx; cron events drain through the harness's own lock-free drain;
 // and every starting run of this test carries a start_attempt_at of
-// fenceStart, which the live starter's real clock never reaches.
+// fenceStart, which the live starter's real clock never reaches. Ticks
+// and starter passes touch only this test's triggers and runs (#937).
 type dispatchHarness struct {
 	t        *testing.T
 	pool     *pgpool.Pool
@@ -181,12 +182,34 @@ func (h *dispatchHarness) inTx(fn func(ctx context.Context, tx pgx.Tx) error) {
 	}
 }
 
-// tick runs the ticker at the clock under the harness's tick lock.
+// tick runs this test's enabled cron triggers through the ticker at
+// the clock under the harness's tick lock. The query is tickTriggers'
+// scoped to the tag, so other automations' triggers never fire.
 func (h *dispatchHarness) tick() {
 	h.t.Helper()
 	h.inTx(func(ctx context.Context, tx pgx.Tx) error {
-		_, err := h.ticker.tickTriggers(ctx, tx, h.clock, h.loc)
-		return err
+		rows, err := tx.Query(ctx, `SELECT t.id, t.automation_id, t.config, t.state, a.created_at
+			FROM automation_triggers t JOIN automations a ON a.id = t.automation_id
+			WHERE t.kind = 'cron' AND t.enabled AND a.enabled AND (a.expires_at IS NULL OR a.expires_at > $1)
+				AND a.name LIKE $2 || '%'
+			ORDER BY t.created_at, t.id`, h.clock, h.tag)
+		if err != nil {
+			return fmt.Errorf("query triggers: %w", err)
+		}
+		triggers, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (cronTrigger, error) {
+			var c cronTrigger
+			err := r.Scan(&c.id, &c.automationID, &c.config, &c.state, &c.automationCreatedAt)
+			return c, err
+		})
+		if err != nil {
+			return fmt.Errorf("scan triggers: %w", err)
+		}
+		for _, c := range triggers {
+			if _, err := h.ticker.tickTrigger(ctx, tx, c, h.clock, h.loc); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -223,9 +246,25 @@ func (h *dispatchHarness) drain() {
 	})
 }
 
+// pass runs a starter pass while a guard tx row-locks every other
+// starting run, so the pass's SKIP LOCKED claim sees only this test's.
 func (h *dispatchHarness) pass() int {
 	h.t.Helper()
-	n, err := h.starter.Pass(h.t.Context())
+	ctx := h.t.Context()
+	db, err := h.pool.Get()
+	if err != nil {
+		h.t.Fatalf("pool: %v", err)
+	}
+	guard, err := db.Begin(ctx)
+	if err != nil {
+		h.t.Fatalf("guard begin: %v", err)
+	}
+	defer func() { _ = guard.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := guard.Exec(ctx, `SELECT id FROM automation_runs WHERE status = 'starting' AND mission_id IS NULL
+		AND automation_id NOT IN (SELECT id FROM automations WHERE name LIKE $1 || '%') FOR NO KEY UPDATE SKIP LOCKED`, h.tag); err != nil {
+		h.t.Fatalf("guard lock: %v", err)
+	}
+	n, err := h.starter.Pass(ctx)
 	if err != nil {
 		h.t.Fatalf("starter Pass: %v", err)
 	}
@@ -729,5 +768,76 @@ func TestDispatchNoBacklogGrowth(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestHarnessTouchesOnlyItsOwnRows seeds an enabled cron automation and
+// a starting run outside the harness tag, both due at the harness
+// clock, and drives the harness past them (issue #937).
+func TestHarnessTouchesOnlyItsOwnRows(t *testing.T) {
+	h := newDispatchHarness(t)
+	foreign := fmt.Sprintf("itest-foreign-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		for _, sql := range []string{
+			`DELETE FROM events WHERE payload->>'automation_id' IN (SELECT id::text FROM automations WHERE name = $1)`,
+			`DELETE FROM automations WHERE name = $1`,
+		} {
+			if _, err := conn.Exec(ctx, sql, foreign); err != nil {
+				t.Errorf("cleanup %q: %v", sql, err)
+			}
+		}
+	})
+	foreignID, err := h.store.Create(t.Context(), Automation{
+		Name: foreign, AgentID: h.agentID,
+		Action:      Action{Kind: ActionMission, Mission: &missions.MissionTemplate{Goal: foreign + " goal", Kind: missions.KindGeneral, Light: true}},
+		Concurrency: ConcurrencySkip, MaxConcurrent: 1, MaxRunsPerHour: 6, Enabled: true,
+		Triggers: []Trigger{{Kind: TriggerCron, Config: json.RawMessage(`{"expr":"* * * * *"}`), Enabled: true}},
+	})
+	if err != nil {
+		t.Fatalf("create foreign automation: %v", err)
+	}
+	h.anchor(foreignID, dispatchBase.Add(-time.Minute))
+	// Oldest starting run, fenced from the live starter but due for the
+	// harness starter.
+	old := dispatchBase.Add(-2 * time.Hour)
+	foreignRun, _, err := h.store.CreateRun(t.Context(), nil, Run{AutomationID: foreignID, DedupKey: foreign, Status: RunStarting,
+		Event: json.RawMessage(`{"start_attempt_at":"` + fenceStart + `"}`), CreatedAt: old, StartedAt: &old})
+	if err != nil {
+		t.Fatalf("create foreign run: %v", err)
+	}
+	snapshot := func() string {
+		db, _ := h.pool.Get()
+		var state, status, event string
+		var n int
+		var linked bool
+		if err := db.QueryRow(t.Context(), `SELECT t.state::text, r.status, r.event::text, r.mission_id IS NOT NULL,
+				(SELECT count(*) FROM events WHERE payload->>'automation_id' = t.automation_id::text)
+			FROM automation_triggers t, automation_runs r WHERE t.automation_id = $1 AND r.id = $2`, foreignID, foreignRun).
+			Scan(&state, &status, &event, &linked, &n); err != nil {
+			t.Fatalf("foreign snapshot: %v", err)
+		}
+		return fmt.Sprintf("state=%s status=%s event=%s linked=%v events=%d", state, status, event, linked, n)
+	}
+	before := snapshot()
+
+	id := h.create("own-rows", "* * * * *", ConcurrencySkip, 1, 6)
+	h.anchor(id, dispatchBase.Add(-time.Minute))
+	h.clock = dispatchBase.Add(5 * time.Second)
+	h.tick()
+	h.drain()
+	if n := h.pass(); n != 1 {
+		t.Fatalf("starter pass handled %d runs, want only this test's 1", n)
+	}
+	h.wantStatuses(id, RunRunning)
+	if after := snapshot(); after != before {
+		t.Fatalf("foreign rows changed:\nbefore %s\nafter  %s", before, after)
 	}
 }
