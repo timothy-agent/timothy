@@ -48,7 +48,9 @@ CLAUDE.md so other work does not pay for it every session.
   sources with `MissionID` set) and `brief` (a "brief" source rendered
   as referenced context). The HTTP create path with `parent_mission_id`
   runs `InheritParent` (issue #923): a non-empty body field wins, an
-  empty one inherits the parent's value, destinations never inherit.
+  empty one inherits the parent's value, destinations never inherit,
+  and a kind override skips the kind-bound fields (environment,
+  executor_session_policy, repo source, flow).
 - Mission attachments (issue #359): PDF/text converted via markitdown,
   images captioned via the vision route (`chat.CaptionImageOverGateway`),
   audio transcribed via the whisper sidecar, all ONCE at create (prompt-

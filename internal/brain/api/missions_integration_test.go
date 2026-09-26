@@ -875,6 +875,13 @@ func TestMissionsCreateFollowUpInheritsParentSettings(t *testing.T) {
 	if explicit.PlanRoute != "itest-plan" || explicit.Kind != missions.KindCoding {
 		t.Fatalf("unset fields should still inherit: %+v", explicit)
 	}
+
+	// A kind override drops the coding-only fields instead of 400ing.
+	general := post(`{"goal":"itest-api-mission inherit general","kind":"general","parent_mission_id":"` + parentID + `"}`)
+	if general.Kind != missions.KindGeneral || general.Harness != "" || general.ExecutorSessionPolicy != "" ||
+		general.Route != "itest-route" || general.MaxIterations != 7 {
+		t.Fatalf("kind override: %+v", general)
+	}
 }
 
 // TestMissionsCreateFollowUpUnknownParent covers the 400 path with a

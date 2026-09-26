@@ -135,9 +135,16 @@ func FollowUpCreateRequest(parent Mission, goal string, sources []SourceEntry) C
 // and ResolveDefaults then fills whatever is still unset. Destinations
 // always come from req, never the parent (D-061). Light or an explicit
 // Flow replaces the parent's flow. The parent's repo source is carried
-// when req.Sources has none.
+// when req.Sources has none. When req names a kind other than the
+// parent's, the kind-bound fields ValidateCreate checks (environment,
+// executor_session_policy, repo source, flow) are not inherited;
+// harness needs no guard since ResolveHarness drops it off coding.
 func InheritParent(req CreateRequest, parent Mission) CreateRequest {
 	out := FollowUpCreateRequest(parent, req.Goal, req.Sources)
+	kindChanged := req.Kind != "" && req.Kind != parent.Kind
+	if kindChanged {
+		out.Environment, out.ExecutorSessionPolicy, out.Flow = "", "", ""
+	}
 	str := func(dst *string, v string) {
 		if v != "" {
 			*dst = v
@@ -191,7 +198,7 @@ func InheritParent(req CreateRequest, parent Mission) CreateRequest {
 	if req.Light || req.Flow != "" {
 		out.Light, out.Flow = req.Light, req.Flow
 	}
-	if !slices.ContainsFunc(req.Sources, func(e SourceEntry) bool { return gitprovider.IsKind(e.Source) }) {
+	if !kindChanged && !slices.ContainsFunc(req.Sources, func(e SourceEntry) bool { return gitprovider.IsKind(e.Source) }) {
 		if repo, ok := parent.repoSource(); ok {
 			out.Sources = append(slices.Clone(req.Sources), repo)
 		}

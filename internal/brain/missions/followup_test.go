@@ -622,3 +622,76 @@ func TestInheritParentBodyRepoWins(t *testing.T) {
 		t.Fatalf("Sources = %+v, want only the request's repo", got.Sources)
 	}
 }
+
+// validateInherited resolves an inherited request and runs ValidateCreate
+// over it, the checks an API create would hit.
+func validateInherited(t *testing.T, req CreateRequest) Mission {
+	t.Helper()
+	deps := ResolveDeps{RouteForRole: func(context.Context, string) string { return "default" }}
+	m, err := ResolveDefaults(context.Background(), req, deps)
+	if err != nil {
+		t.Fatalf("ResolveDefaults: %v", err)
+	}
+	if err := ValidateCreate(context.Background(), m, ValidateDeps{}); err != nil {
+		t.Fatalf("ValidateCreate: %v (mission %+v)", err, m)
+	}
+	return m
+}
+
+// TestInheritParentGeneralBodyUnderCodingParent proves a kind=general
+// follow-up of a coding parent drops the coding-only fields instead of
+// failing validation, and keeps the rest.
+func TestInheritParentGeneralBodyUnderCodingParent(t *testing.T) {
+	parent := inheritParentFixture()
+	req := InheritParent(CreateRequest{Goal: "write the release notes", Kind: KindGeneral}, parent)
+	if req.Environment != "" || req.ExecutorSessionPolicy != "" || req.Flow != "" {
+		t.Fatalf("kind-bound fields inherited: env=%q policy=%q flow=%q", req.Environment, req.ExecutorSessionPolicy, req.Flow)
+	}
+	for _, e := range req.Sources {
+		if e.Source == SourceKindGitHub {
+			t.Fatalf("parent repo source inherited across a kind change: %+v", e)
+		}
+	}
+	m := validateInherited(t, req)
+	if m.Kind != KindGeneral || m.Harness != "" || m.Flow != FlowFull {
+		t.Fatalf("resolved kind=%q harness=%q flow=%q, want general, none, full", m.Kind, m.Harness, m.Flow)
+	}
+	if m.Route != "route-a" || m.PlanRoute != "route-c" || m.MaxIterations != 12 || m.BudgetCurrency != "EUR" {
+		t.Fatalf("kind-neutral settings lost: %+v", m)
+	}
+}
+
+// TestInheritParentCodingBodyUnderLightGeneralParent proves a
+// kind=coding follow-up of a light general parent does not inherit the
+// light flow.
+func TestInheritParentCodingBodyUnderLightGeneralParent(t *testing.T) {
+	parent := Mission{ID: "parent", Goal: "summarize", Kind: KindGeneral, Flow: FlowLight, Phase: PhaseDone, Route: "route-a", MaxIterations: 4}
+	req := InheritParent(CreateRequest{Goal: "build the tool", Kind: KindCoding}, parent)
+	m := validateInherited(t, req)
+	if m.Kind != KindCoding || m.Flow != FlowFull || m.Route != "route-a" || m.MaxIterations != 4 {
+		t.Fatalf("resolved %+v, want coding, full flow, inherited route and max_iterations", m)
+	}
+}
+
+// TestInheritParentSameKindInheritsKindBoundFields proves an explicit
+// kind equal to the parent's still inherits everything.
+func TestInheritParentSameKindInheritsKindBoundFields(t *testing.T) {
+	parent := inheritParentFixture()
+	lineage := SourceEntry{Source: SourceKindMission, ID: ParentLineageID, MissionID: parent.ID}
+	got := InheritParent(CreateRequest{Goal: "g", Kind: KindCoding, Sources: []SourceEntry{lineage}}, parent)
+	want := InheritParent(CreateRequest{Goal: "g", Sources: []SourceEntry{lineage}}, parent)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("same-kind request =\n%+v\nwant\n%+v", got, want)
+	}
+	validateInherited(t, got)
+}
+
+// TestInheritParentKindChangeExplicitFieldsStillWin proves the kind
+// guard only skips inheritance: body values still apply.
+func TestInheritParentKindChangeExplicitFieldsStillWin(t *testing.T) {
+	parent := Mission{ID: "parent", Kind: KindGeneral, Flow: FlowLight, Phase: PhaseDone}
+	got := InheritParent(CreateRequest{Goal: "g", Kind: KindCoding, Environment: "go", ExecutorSessionPolicy: SessionPolicyFresh}, parent)
+	if got.Environment != "go" || got.ExecutorSessionPolicy != SessionPolicyFresh {
+		t.Fatalf("explicit fields lost across a kind change: %+v", got)
+	}
+}
