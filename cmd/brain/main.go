@@ -539,7 +539,7 @@ func main() {
 		consumers = append(consumers, automations.NewDispatcher(notify, app.Log))
 		if channelStore != nil {
 			outcomes := channels.NewOutcomes(channelStore, channels.MissionDeps{
-				Get: missionStore.Get, Events: missionStore.Events, WebBaseURL: flags.WebBaseURL,
+				Get: missionStore.Get, Events: missionStore.Events, AppendEvent: missionStore.AppendEvent, WebBaseURL: flags.WebBaseURL,
 			}, secrets.Resolve, channelHTTP, channelsEnabled, app.Log)
 			if conns != nil {
 				outcomes.SetEmail(conns.IMAPMailbox)

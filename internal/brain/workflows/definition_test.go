@@ -1,6 +1,9 @@
 package workflows
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func validDefinition() Definition {
 	return Definition{
@@ -124,14 +127,14 @@ func TestValidateKeepsLowerMaxIterations(t *testing.T) {
 }
 
 func TestParseDefinitionRejectsInvalidJSON(t *testing.T) {
-	if _, err := ParseDefinition([]byte(`{not json`)); err == nil {
-		t.Fatal("ParseDefinition() = nil, want error for invalid JSON")
+	if _, err := ParseDefinition([]byte(`{not json`)); !errors.Is(err, ErrInvalidDefinition) {
+		t.Fatalf("ParseDefinition() = %v, want ErrInvalidDefinition for invalid JSON", err)
 	}
 }
 
 func TestParseDefinitionRejectsInvalidDefinition(t *testing.T) {
-	if _, err := ParseDefinition([]byte(`{"entry":"nope","steps":{}}`)); err == nil {
-		t.Fatal("ParseDefinition() = nil, want error for invalid definition")
+	if _, err := ParseDefinition([]byte(`{"entry":"nope","steps":{}}`)); !errors.Is(err, ErrInvalidDefinition) {
+		t.Fatalf("ParseDefinition() = %v, want ErrInvalidDefinition for invalid definition", err)
 	}
 }
 

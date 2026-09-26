@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/brain/workflows"
@@ -23,7 +24,7 @@ func (a *API) registerWorkflows(handle func(pattern string, h http.Handler), sto
 	if store == nil {
 		return
 	}
-	h := &workflowAPI{store: store, engine: engine}
+	h := &workflowAPI{store: store, engine: engine, log: a.log}
 	handle("GET /v1/admin/workflows", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/admin/workflows", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/admin/workflows/{id}", a.auth(http.HandlerFunc(h.get)))
@@ -36,16 +37,21 @@ func (a *API) registerWorkflows(handle func(pattern string, h http.Handler), sto
 type workflowAPI struct {
 	store  *workflows.Store
 	engine workflowStarter
+	log    *slog.Logger
 }
 
-func failWorkflow(w http.ResponseWriter, err error) {
+func failWorkflow(w http.ResponseWriter, log *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, workflows.ErrNotFound):
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, workflows.ErrDuplicate):
 		jsonError(w, http.StatusConflict, "duplicate", err.Error())
-	default:
+	case errors.Is(err, workflows.ErrInvalidDefinition):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+	case errors.Is(err, workflows.ErrDisabled):
+		jsonError(w, http.StatusConflict, "disabled", err.Error())
+	default:
+		failInternal(w, log, "workflow", err)
 	}
 }
 
@@ -61,7 +67,7 @@ func (h *workflowAPI) list(w http.ResponseWriter, r *http.Request) {
 func (h *workflowAPI) get(w http.ResponseWriter, r *http.Request) {
 	wf, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failWorkflow(w, err)
+		failWorkflow(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, wf)
@@ -84,7 +90,7 @@ func (h *workflowAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.store.Create(r.Context(), req.Name, req.Definition)
 	if err != nil {
-		failWorkflow(w, err)
+		failWorkflow(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id})
@@ -102,7 +108,7 @@ func (h *workflowAPI) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.Update(r.Context(), r.PathValue("id"), req.Definition, req.Enabled); err != nil {
-		failWorkflow(w, err)
+		failWorkflow(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -126,7 +132,7 @@ func (h *workflowAPI) startRun(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.engine.StartRun(r.Context(), r.PathValue("id"), req.Context)
 	if err != nil {
-		failWorkflow(w, err)
+		failWorkflow(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id})
@@ -144,7 +150,7 @@ func (h *workflowAPI) listRuns(w http.ResponseWriter, r *http.Request) {
 func (h *workflowAPI) getRun(w http.ResponseWriter, r *http.Request) {
 	run, err := h.store.GetRun(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failWorkflow(w, err)
+		failWorkflow(w, h.log, err)
 		return
 	}
 	events, err := h.store.RunEvents(r.Context(), r.PathValue("id"))
