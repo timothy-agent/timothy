@@ -15,3 +15,12 @@ ALTER TABLE missions ADD CONSTRAINT missions_agent_id_fkey
     FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE SET NULL;
 COMMIT;
 ```
+
+Issue #931: index missions.workflow_run_id, which the workflow engine's
+step-mission adopt lookup (`WorkflowChild`) and the boot recovery of
+runs without an entry mission filter on. Additive, safe any time before
+deploy.
+
+```sql
+CREATE INDEX IF NOT EXISTS missions_workflow_run_idx ON missions (workflow_run_id) WHERE workflow_run_id IS NOT NULL;
+```
