@@ -155,7 +155,12 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if destinationStore != nil {
 		destLister = destinationStore
 	}
-	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister)
+	// Same nil-box guard for *automations.Store.
+	var autoLister automationLister
+	if automationStore != nil {
+		autoLister = automationStore
+	}
+	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister, autoLister)
 	a.registerSettings(srv.Handle, flags, whisperURL, pdfService != nil)
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog, msft, secrets)
