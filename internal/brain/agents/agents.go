@@ -514,7 +514,7 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 }
 
 // inUseErr reports whether err is a foreign key violation (23503) and,
-// if so, wraps it as ErrInUse naming the referencing table — a
+// if so, wraps it as ErrInUse naming the referencing table, as a
 // catch-all for any reference the checks above didn't already name.
 func inUseErr(err error) (bool, error) {
 	var pgErr *pgconn.PgError
