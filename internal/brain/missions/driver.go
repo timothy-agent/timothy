@@ -27,6 +27,9 @@ const driveTimeBound = 4 * time.Hour
 // notifier is the transition-notification hook Driver calls after
 // every successful ApplyTransition; notify.go's Notifier satisfies it
 // (added in M3). nil is valid — M2 has no notifications wired yet.
+// Only waiting_for_input/paused fire here; terminal transitions
+// (done, error) notify through NotifyConsumer off the events inbox
+// instead (D-117, issue #843).
 type notifier interface {
 	OnTransition(ctx context.Context, m Mission, before, after Status, reason string) error
 }

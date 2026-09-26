@@ -19,8 +19,11 @@ import (
 const webhookTimeout = 10 * time.Second
 
 // Notifier fires ONLY on actionable transitions (waiting_for_input,
-// paused, done, error) and only exactly on the transition INTO that
-// state — re-kicking an already-paused mission stays silent.
+// paused) and only exactly on the transition INTO that state —
+// re-kicking an already-paused mission stays silent. Terminal
+// transitions (done, error) notify through NotifyConsumer instead
+// (D-117, issue #843), off the durable events inbox rather than
+// synchronously here.
 type Notifier struct {
 	db         *pgpool.Pool
 	webhookURL string // NOTIFY_WEBHOOK_URL; empty disables fan-out, inbox row still always written
@@ -47,16 +50,18 @@ func (n *Notifier) SetHub(hub *Hub) {
 }
 
 // isActionableTransition is the pure classification Driver's
-// before/after Status pair goes through: only these four destination
+// before/after Status pair goes through: only these two destination
 // states are actionable, and only when the mission just arrived there
 // this call (a repeat Advance on an already-paused mission reports the
-// SAME before/after, so it's silent by construction).
+// SAME before/after, so it's silent by construction). Terminal states
+// (done, error) are handled by NotifyConsumer off the events inbox, not
+// here (D-117, issue #843).
 func isActionableTransition(before, after Status) (kind string, ok bool) {
 	if before == after {
 		return "", false
 	}
 	switch after {
-	case StatusWaitingForInput, StatusPaused, StatusDone, StatusError:
+	case StatusWaitingForInput, StatusPaused:
 		return string(after), true
 	default:
 		return "", false
@@ -89,12 +94,14 @@ func composeMessage(kind, title, reason string) string {
 }
 
 // OnTransition is called by Driver after ApplyTransition succeeds, with
-// the mission (for its title), the before/after Status, and — only
-// populated on a transition into StatusError — the mission.failed
-// event's reason (e.g. "cancelled"), read from the same Transition.Events
-// the driver already has in hand rather than a second query. Durable
-// channel: a notifications row is always written for a qualifying
-// transition. Best-effort fan-out: webhook POST of a generic JSON
+// the mission (for its title), the before/after Status, and the
+// mission.failed event's reason (e.g. "cancelled") when relevant, read
+// from the same Transition.Events the driver already has in hand
+// rather than a second query. Only waiting_for_input/paused stay
+// synchronous here; terminal transitions notify through the events
+// inbox instead (D-117, issue #843). Durable channel: a notifications
+// row is always written for a qualifying transition. Best-effort
+// fan-out: webhook POST of a generic JSON
 // payload; failure only logs, never blocks or loses the notification.
 func (n *Notifier) OnTransition(ctx context.Context, m Mission, before, after Status, reason string) error {
 	kind, ok := isActionableTransition(before, after)
