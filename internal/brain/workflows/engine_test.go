@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -26,6 +27,13 @@ type fakeEngineStore struct {
 	runs      map[string]Run
 	events    map[string][]RunEvent
 	seq       map[string]int64
+	// failNextApply, when set, fails the next ApplyRunTransition and clears.
+	failNextApply error
+	// failAfterApply, when set, applies the next ApplyRunTransition, then
+	// returns it and clears: a commit whose result was lost.
+	failAfterApply error
+	// linked reports whether a mission links to a run; nil means none.
+	linked func(runID string) bool
 }
 
 func newFakeEngineStore() *fakeEngineStore {
@@ -58,7 +66,7 @@ func (f *fakeEngineStore) CreateRun(ctx context.Context, workflowID, currentStep
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	id := fmt.Sprintf("run-%d", len(f.runs)+1)
-	f.runs[id] = Run{ID: id, WorkflowID: workflowID, Status: "running", CurrentStep: currentStep, Context: runContext}
+	f.runs[id] = Run{ID: id, WorkflowID: workflowID, Status: "running", CurrentStep: currentStep, Context: runContext, CreatedAt: time.Now()}
 	return id, nil
 }
 
@@ -75,6 +83,10 @@ func (f *fakeEngineStore) GetRun(ctx context.Context, id string) (Run, error) {
 func (f *fakeEngineStore) ApplyRunTransition(ctx context.Context, id string, t RunTransition) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.failNextApply; err != nil {
+		f.failNextApply = nil
+		return err
+	}
 	r, ok := f.runs[id]
 	if !ok {
 		return ErrNotFound
@@ -86,7 +98,24 @@ func (f *fakeEngineStore) ApplyRunTransition(ctx context.Context, id string, t R
 		payload, _ := json.Marshal(ev.Payload)
 		f.events[id] = append(f.events[id], RunEvent{RunID: id, Seq: f.seq[id], Kind: ev.Kind, Payload: payload})
 	}
+	if err := f.failAfterApply; err != nil {
+		f.failAfterApply = nil
+		return err
+	}
 	return nil
+}
+
+func (f *fakeEngineStore) RunsWithoutMissions(ctx context.Context, cutoff time.Time) ([]Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []Run
+	for _, r := range f.runs {
+		if r.Status == "running" && r.CreatedAt.Before(cutoff) && (f.linked == nil || !f.linked(r.ID)) {
+			out = append(out, r)
+		}
+	}
+	slices.SortFunc(out, func(a, b Run) int { return strings.Compare(a.ID, b.ID) })
+	return out, nil
 }
 
 func (f *fakeEngineStore) CountEdgeFirings(ctx context.Context, runID, from, on, to string) (int, error) {
@@ -157,6 +186,17 @@ func (f *fakeSpawner) Get(ctx context.Context, id string) (missions.Mission, err
 		}
 	}
 	return missions.Mission{}, missions.ErrNotFound
+}
+
+func (f *fakeSpawner) WorkflowChild(ctx context.Context, runID, parentMissionID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.missions {
+		if m.WorkflowRunID == runID && m.ParentMissionID == parentMissionID {
+			return m.ID, nil
+		}
+	}
+	return "", nil
 }
 
 func (f *fakeSpawner) last() missions.Mission {
@@ -690,6 +730,204 @@ func TestOnMissionTerminalSelfLoopRedeliveryIsNoOp(t *testing.T) {
 	}
 }
 
+// edgeTakenPayloads returns the decoded edge.taken payloads of runID.
+func edgeTakenPayloads(t *testing.T, store *fakeEngineStore, runID string) []map[string]any {
+	t.Helper()
+	evs, _ := store.RunEvents(context.Background(), runID)
+	var out []map[string]any
+	for _, ev := range evs {
+		if ev.Kind != "edge.taken" {
+			continue
+		}
+		var p map[string]any
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			t.Fatalf("decode edge.taken: %v", err)
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// TestOnMissionTerminalRecordFailureReturnsError covers issue #842: a
+// failed edge.taken record after the spawn returns an error so the
+// drainer retries, instead of leaving the run stuck on the old step.
+func TestOnMissionTerminalRecordFailureReturnsError(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	runID, _ := e.StartRun(context.Background(), "wf1", nil)
+	coder := spawner.last()
+	coder.Phase = missions.PhaseDone
+	store.failNextApply = errors.New("connection reset")
+	if err := e.OnMissionTerminal(context.Background(), coder); err == nil {
+		t.Fatal("OnMissionTerminal = nil, want the record error so the drainer retries")
+	}
+	if spawner.count() != 2 {
+		t.Fatalf("spawned missions = %d, want 2 (coder + qa)", spawner.count())
+	}
+	run, _ := store.GetRun(context.Background(), runID)
+	if run.Status != "running" || run.CurrentStep != "coder" {
+		t.Fatalf("run = %s/%s, want running/coder until the record lands", run.Status, run.CurrentStep)
+	}
+}
+
+// TestOnMissionTerminalRetryAfterRecordFailureAdoptsChild: the retry
+// after a failed record adopts the qa mission and advances the run.
+func TestOnMissionTerminalRetryAfterRecordFailureAdoptsChild(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	runID, _ := e.StartRun(context.Background(), "wf1", nil)
+	coder := spawner.last()
+	coder.Phase = missions.PhaseDone
+	store.failNextApply = errors.New("connection reset")
+	_ = e.OnMissionTerminal(context.Background(), coder)
+	qaID := spawner.last().ID
+
+	if err := e.OnMissionTerminal(context.Background(), coder); err != nil {
+		t.Fatalf("retry OnMissionTerminal: %v", err)
+	}
+	if spawner.count() != 2 {
+		t.Fatalf("spawned missions = %d, want 2 (retry adopts qa)", spawner.count())
+	}
+	run, _ := store.GetRun(context.Background(), runID)
+	if run.Status != "running" || run.CurrentStep != "qa" {
+		t.Fatalf("run = %s/%s, want running/qa", run.Status, run.CurrentStep)
+	}
+	edges := edgeTakenPayloads(t, store, runID)
+	if len(edges) != 1 || edges[0]["spawned_mission_id"] != qaID {
+		t.Fatalf("edge.taken payloads = %v, want one with spawned_mission_id %s", edges, qaID)
+	}
+}
+
+// TestOnMissionTerminalRedeliveryAfterCrashBetweenSpawnAndRecordSpawnsNothing:
+// a qa mission committed before a crash, with no edge.taken, is adopted
+// by the redelivered terminal event.
+func TestOnMissionTerminalRedeliveryAfterCrashBetweenSpawnAndRecordSpawnsNothing(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	runID, _ := e.StartRun(context.Background(), "wf1", nil)
+	coder := spawner.last()
+	coder.Phase = missions.PhaseDone
+	qaID, _ := spawner.Create(context.Background(), missions.Mission{WorkflowRunID: runID, WorkflowStep: "qa", ParentMissionID: coder.ID})
+
+	if err := e.OnMissionTerminal(context.Background(), coder); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
+	if spawner.count() != 2 {
+		t.Fatalf("spawned missions = %d, want 2 (no second qa)", spawner.count())
+	}
+	run, _ := store.GetRun(context.Background(), runID)
+	if run.CurrentStep != "qa" {
+		t.Fatalf("run step = %s, want qa", run.CurrentStep)
+	}
+	edges := edgeTakenPayloads(t, store, runID)
+	if len(edges) != 1 || edges[0]["spawned_mission_id"] != qaID {
+		t.Fatalf("edge.taken payloads = %v, want spawned_mission_id %s", edges, qaID)
+	}
+}
+
+// TestOnMissionTerminalSelfLoopAdoptsPerParent: on a self-loop each
+// iteration's child is keyed by its own parent, so a retry adopts the
+// right mission and a new iteration still spawns.
+func TestOnMissionTerminalSelfLoopAdoptsPerParent(t *testing.T) {
+	def := Definition{
+		Entry: "coder",
+		Steps: map[string]Step{"coder": {Goal: "write code", Kind: "coding"}},
+		Edges: []Edge{{From: "coder", On: "mission.done", To: "coder", MaxIterations: 5}},
+	}
+	_ = def.Validate()
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", def, true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	runID, _ := e.StartRun(context.Background(), "wf1", nil)
+	first := spawner.last()
+	first.Phase = missions.PhaseDone
+	if err := e.OnMissionTerminal(context.Background(), first); err != nil {
+		t.Fatalf("first OnMissionTerminal: %v", err)
+	}
+	second := spawner.last()
+	second.Phase = missions.PhaseDone
+	store.failNextApply = errors.New("connection reset")
+	if err := e.OnMissionTerminal(context.Background(), second); err == nil {
+		t.Fatal("second OnMissionTerminal = nil, want record error")
+	}
+	third := spawner.last()
+	if third.ParentMissionID != second.ID {
+		t.Fatalf("third mission parent = %q, want %q", third.ParentMissionID, second.ID)
+	}
+	if err := e.OnMissionTerminal(context.Background(), second); err != nil {
+		t.Fatalf("retry OnMissionTerminal: %v", err)
+	}
+	if spawner.count() != 3 {
+		t.Fatalf("spawned missions = %d, want 3", spawner.count())
+	}
+	edges := edgeTakenPayloads(t, store, runID)
+	if len(edges) != 2 || edges[0]["spawned_mission_id"] != second.ID || edges[1]["spawned_mission_id"] != third.ID {
+		t.Fatalf("edge.taken payloads = %v, want spawned %s then %s", edges, second.ID, third.ID)
+	}
+}
+
+// TestOnMissionTerminalEdgeTakenPayloadCarriesSpawnedMissionID: the
+// edge.taken record names both the terminal and the spawned mission.
+func TestOnMissionTerminalEdgeTakenPayloadCarriesSpawnedMissionID(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+
+	runID, _ := e.StartRun(context.Background(), "wf1", nil)
+	coder := spawner.last()
+	coder.Phase = missions.PhaseDone
+	if err := e.OnMissionTerminal(context.Background(), coder); err != nil {
+		t.Fatalf("OnMissionTerminal: %v", err)
+	}
+	edges := edgeTakenPayloads(t, store, runID)
+	if len(edges) != 1 {
+		t.Fatalf("edge.taken payloads = %v, want 1", edges)
+	}
+	if edges[0]["mission_id"] != coder.ID || edges[0]["spawned_mission_id"] != spawner.last().ID {
+		t.Fatalf("edge.taken payload = %v, want mission_id %s spawned_mission_id %s", edges[0], coder.ID, spawner.last().ID)
+	}
+}
+
+// TestStartRunAdoptsExistingEntryMission: an entry mission already
+// linked to the run is adopted instead of spawning a second one.
+func TestStartRunAdoptsExistingEntryMission(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	// The fake store names the first run "run-1".
+	if _, err := spawner.Create(context.Background(), missions.Mission{WorkflowRunID: "run-1", WorkflowStep: "coder"}); err != nil {
+		t.Fatalf("seed entry mission: %v", err)
+	}
+	e := testEngine(store, spawner)
+
+	runID, err := e.StartRun(context.Background(), "wf1", nil)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if runID != "run-1" {
+		t.Fatalf("runID = %s, want run-1", runID)
+	}
+	if spawner.count() != 1 {
+		t.Fatalf("spawned missions = %d, want 1 (entry adopted)", spawner.count())
+	}
+	run, _ := store.GetRun(context.Background(), runID)
+	if run.Status != "running" || run.CurrentStep != "coder" {
+		t.Fatalf("run = %s/%s, want running/coder", run.Status, run.CurrentStep)
+	}
+}
+
 func TestOnMissionTerminalIgnoresMissionFromAnotherStep(t *testing.T) {
 	store := newFakeEngineStore()
 	store.putWorkflow("wf1", coderQADefinition(), true)
@@ -792,5 +1030,247 @@ func TestHandleSkipsDeletedStepMission(t *testing.T) {
 	}
 	if got := len(spawner.missions); got != 0 {
 		t.Fatalf("spawned missions = %d, want 0", got)
+	}
+}
+
+// countKind counts runID's run events of kind.
+func countKind(store *fakeEngineStore, runID, kind string) int {
+	n := 0
+	for _, k := range store.eventKinds(runID) {
+		if k == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// TestRunTransitionFailureReturnsErrorAndRetryAppliesOnce covers issue
+// #931: a failed pause, fail or end transition returns an error from
+// Handle so the drainer retries, and neither a failure before the
+// commit nor a commit whose result was lost applies it twice.
+func TestRunTransitionFailureReturnsErrorAndRetryAppliesOnce(t *testing.T) {
+	type setup struct {
+		mission    missions.Mission
+		wantStatus string
+		wantKind   string
+	}
+	cases := []struct {
+		name    string
+		prepare func(store *fakeEngineStore, runID string) setup
+	}{
+		{"pause on no matching edge", func(store *fakeEngineStore, runID string) setup {
+			return setup{missions.Mission{WorkflowRunID: runID, WorkflowStep: "coder", Phase: missions.PhaseFailed}, "paused", "run.paused"}
+		}},
+		{"fail on cap exceeded", func(store *fakeEngineStore, runID string) setup {
+			for range 5 {
+				payload, _ := json.Marshal(map[string]any{"from": "coder", "on": "mission.done", "to": "qa", "mission_id": "earlier"})
+				store.seq[runID]++
+				store.events[runID] = append(store.events[runID], RunEvent{RunID: runID, Seq: store.seq[runID], Kind: "edge.taken", Payload: payload})
+			}
+			return setup{missions.Mission{WorkflowRunID: runID, WorkflowStep: "coder", Phase: missions.PhaseDone}, "failed", "run.cap_exceeded"}
+		}},
+		{"end on edge to end", func(store *fakeEngineStore, runID string) setup {
+			run := store.runs[runID]
+			run.CurrentStep = "qa"
+			store.runs[runID] = run
+			return setup{missions.Mission{WorkflowRunID: runID, WorkflowStep: "qa", Phase: missions.PhaseDone}, "done", "run.done"}
+		}},
+	}
+	for _, tc := range cases {
+		for _, afterCommit := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/after_commit=%v", tc.name, afterCommit), func(t *testing.T) {
+				store := newFakeEngineStore()
+				store.putWorkflow("wf1", coderQADefinition(), true)
+				spawner := &fakeSpawner{}
+				e := testEngine(store, spawner)
+				runID, err := e.StartRun(context.Background(), "wf1", nil)
+				if err != nil {
+					t.Fatalf("StartRun: %v", err)
+				}
+				s := tc.prepare(store, runID)
+				s.mission.ID = "terminal-mission"
+				spawner.mu.Lock()
+				spawner.missions = append(spawner.missions, s.mission)
+				spawner.mu.Unlock()
+				spawned := spawner.count()
+				ev := terminalEvent(t, events.MissionPayload{MissionID: s.mission.ID, Phase: string(s.mission.Phase), WorkflowRunID: runID})
+
+				if afterCommit {
+					store.failAfterApply = errors.New("connection reset")
+				} else {
+					store.failNextApply = errors.New("connection reset")
+				}
+				if err := e.Handle(context.Background(), nil, ev); err == nil {
+					t.Fatal("Handle = nil, want the transition error so the drainer retries")
+				}
+				run, _ := store.GetRun(context.Background(), runID)
+				wantAfterFailure, wantEvents := "running", 0
+				if afterCommit {
+					wantAfterFailure, wantEvents = s.wantStatus, 1
+				}
+				if run.Status != wantAfterFailure || countKind(store, runID, s.wantKind) != wantEvents {
+					t.Fatalf("after failure: status %s, %s events %d, want %s, %d", run.Status, s.wantKind, countKind(store, runID, s.wantKind), wantAfterFailure, wantEvents)
+				}
+
+				for attempt := 1; attempt <= 2; attempt++ {
+					if err := e.Handle(context.Background(), nil, ev); err != nil {
+						t.Fatalf("retry %d: Handle: %v", attempt, err)
+					}
+				}
+				run, _ = store.GetRun(context.Background(), runID)
+				if run.Status != s.wantStatus || countKind(store, runID, s.wantKind) != 1 {
+					t.Fatalf("after retries: status %s, %s events %d, want %s, 1", run.Status, s.wantKind, countKind(store, runID, s.wantKind), s.wantStatus)
+				}
+				if spawner.count() != spawned {
+					t.Fatalf("spawned missions = %d, want %d (no spawn on these paths)", spawner.count(), spawned)
+				}
+			})
+		}
+	}
+}
+
+// TestOnMissionTerminalSpawnFailureThenPauseFailureRetries: a failed
+// spawn whose pause also fails returns an error; the retry spawns the
+// step once and advances the run.
+func TestOnMissionTerminalSpawnFailureThenPauseFailureRetries(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+	runID, _ := e.StartRun(context.Background(), "wf1", nil)
+	coder := spawner.last()
+	coder.Phase = missions.PhaseDone
+
+	spawner.createErr = errors.New("create failed")
+	store.failNextApply = errors.New("connection reset")
+	if err := e.OnMissionTerminal(context.Background(), coder); err == nil {
+		t.Fatal("OnMissionTerminal = nil, want the pause error")
+	}
+	if run, _ := store.GetRun(context.Background(), runID); run.Status != "running" || run.CurrentStep != "coder" {
+		t.Fatalf("run = %s/%s, want running/coder", run.Status, run.CurrentStep)
+	}
+
+	spawner.createErr = nil
+	if err := e.OnMissionTerminal(context.Background(), coder); err != nil {
+		t.Fatalf("retry OnMissionTerminal: %v", err)
+	}
+	if spawner.count() != 2 {
+		t.Fatalf("spawned missions = %d, want 2 (coder + qa)", spawner.count())
+	}
+	if run, _ := store.GetRun(context.Background(), runID); run.Status != "running" || run.CurrentStep != "qa" {
+		t.Fatalf("run = %s/%s, want running/qa", run.Status, run.CurrentStep)
+	}
+}
+
+// TestStartRunSpawnFailureReturnsPauseError: when the entry spawn and
+// its pause both fail, StartRun reports both and the run stays running
+// for boot recovery.
+func TestStartRunSpawnFailureReturnsPauseError(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{createErr: errors.New("create failed")}
+	store.failNextApply = errors.New("connection reset")
+	e := testEngine(store, spawner)
+
+	runID, err := e.StartRun(context.Background(), "wf1", nil)
+	if err == nil || !strings.Contains(err.Error(), "create failed") || !strings.Contains(err.Error(), "connection reset") {
+		t.Fatalf("StartRun error = %v, want spawn and pause errors", err)
+	}
+	if run, _ := store.GetRun(context.Background(), runID); run.Status != "running" {
+		t.Fatalf("run status = %s, want running", run.Status)
+	}
+}
+
+// TestRecoverRunsWithoutEntry covers issue #931: a running run with no
+// mission (crash between CreateRun and the entry spawn) gets its entry
+// mission once; a second sweep spawns nothing, and runs with a mission,
+// runs no longer running, and runs newer than the cutoff are left alone.
+func TestRecoverRunsWithoutEntry(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	store.linked = func(runID string) bool {
+		id, _ := spawner.WorkflowChild(context.Background(), runID, "")
+		return id != ""
+	}
+	e := testEngine(store, spawner)
+	ctx := context.Background()
+
+	orphan, _ := store.CreateRun(ctx, "wf1", "coder", map[string]string{"K": "v"})
+	withEntry, err := e.StartRun(ctx, "wf1", nil)
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	paused, _ := store.CreateRun(ctx, "wf1", "coder", nil)
+	_ = store.ApplyRunTransition(ctx, paused, RunTransition{Status: "paused", CurrentStep: "coder"})
+	cutoff := time.Now().Add(time.Millisecond)
+	newer, _ := store.CreateRun(ctx, "wf1", "coder", nil)
+	run := store.runs[newer]
+	run.CreatedAt = cutoff.Add(time.Second)
+	store.runs[newer] = run
+
+	n, err := e.RecoverRunsWithoutEntry(ctx, cutoff)
+	if err != nil || n != 1 {
+		t.Fatalf("RecoverRunsWithoutEntry = %d, %v, want 1, nil", n, err)
+	}
+	if spawner.count() != 2 {
+		t.Fatalf("spawned missions = %d, want 2 (StartRun entry + recovered entry)", spawner.count())
+	}
+	m := spawner.last()
+	if m.WorkflowRunID != orphan || m.WorkflowStep != "coder" || m.ParentMissionID != "" || m.Goal != "write the code" {
+		t.Fatalf("recovered mission = %+v, want entry of %s", m, orphan)
+	}
+	for _, id := range []string{paused, newer} {
+		if got, _ := spawner.WorkflowChild(ctx, id, ""); got != "" {
+			t.Fatalf("run %s got mission %s, want untouched", id, got)
+		}
+	}
+	if got, _ := spawner.WorkflowChild(ctx, withEntry, ""); got != "mission-1" {
+		t.Fatalf("run with entry has mission %q, want its original mission-1", got)
+	}
+
+	n, err = e.RecoverRunsWithoutEntry(ctx, cutoff)
+	if err != nil || n != 0 || spawner.count() != 2 {
+		t.Fatalf("second sweep = %d, %v, spawned %d, want 0, nil, 2", n, err, spawner.count())
+	}
+}
+
+// TestRecoverRunsWithoutEntryPausesOnSpawnFailure: a recovery spawn that
+// fails pauses the run with a reason and is reported.
+func TestRecoverRunsWithoutEntryPausesOnSpawnFailure(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{createErr: errors.New("create failed")}
+	e := testEngine(store, spawner)
+	ctx := context.Background()
+	runID, _ := store.CreateRun(ctx, "wf1", "coder", nil)
+
+	n, err := e.RecoverRunsWithoutEntry(ctx, time.Now().Add(time.Second))
+	if err == nil || n != 0 {
+		t.Fatalf("RecoverRunsWithoutEntry = %d, %v, want 0 and the spawn error", n, err)
+	}
+	if run, _ := store.GetRun(ctx, runID); run.Status != "paused" || countKind(store, runID, "run.paused") != 1 {
+		t.Fatalf("run = %s, events %v, want paused with one run.paused", run.Status, store.eventKinds(runID))
+	}
+}
+
+// TestRecoverRunsWithoutEntryPausesOnUnknownStep: a run whose step left
+// the definition is paused instead of spawning.
+func TestRecoverRunsWithoutEntryPausesOnUnknownStep(t *testing.T) {
+	store := newFakeEngineStore()
+	store.putWorkflow("wf1", coderQADefinition(), true)
+	spawner := &fakeSpawner{}
+	e := testEngine(store, spawner)
+	ctx := context.Background()
+	runID, _ := store.CreateRun(ctx, "wf1", "renamed", nil)
+
+	if _, err := e.RecoverRunsWithoutEntry(ctx, time.Now().Add(time.Second)); err == nil {
+		t.Fatal("RecoverRunsWithoutEntry = nil, want unknown step error")
+	}
+	if spawner.count() != 0 {
+		t.Fatalf("spawned missions = %d, want 0", spawner.count())
+	}
+	if run, _ := store.GetRun(ctx, runID); run.Status != "paused" {
+		t.Fatalf("run status = %s, want paused", run.Status)
 	}
 }

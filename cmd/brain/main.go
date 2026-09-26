@@ -121,6 +121,8 @@ func main() {
 	if *healthcheck {
 		os.Exit(service.ProbeHealth(defaultPort))
 	}
+	// Runs created before this instant belong to a previous process.
+	bootTime := time.Now()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -906,6 +908,24 @@ func main() {
 		if githubPoller != nil {
 			go githubPoller.Run(ctx)
 		}
+	}
+	// Issue #931: a crash between CreateRun and the entry spawn leaves a
+	// running run with no mission; give each its entry mission once.
+	if workflowEngine != nil {
+		go func() {
+			wctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := app.DB.WaitHealthy(wctx); err != nil {
+				app.Log.Warn("workflow run recovery skipped: database not ready", "error", err)
+				return
+			}
+			n, err := workflowEngine.RecoverRunsWithoutEntry(ctx, bootTime)
+			if err != nil {
+				app.Log.Warn("workflow run recovery failed", "recovered", n, "error", err)
+			} else if n > 0 {
+				app.Log.Info("workflow run recovery", "recovered", n)
+			}
+		}()
 	}
 
 	// search_kb: nil-safe wiring, same shape as memory retrieve/extract

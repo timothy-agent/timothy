@@ -1006,6 +1006,7 @@ CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);
 -- "which missions are actively occupying a slot," cheaply.
 CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (phase) WHERE phase NOT IN ('done', 'failed');
 CREATE INDEX IF NOT EXISTS missions_automation_run_idx ON missions (automation_run_id) WHERE automation_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS missions_workflow_run_idx ON missions (workflow_run_id) WHERE workflow_run_id IS NOT NULL;
 
 -- automation_runs.mission_id and missions.automation_run_id reference
 -- each other, so this foreign key lands once missions exists.
