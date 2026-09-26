@@ -10,14 +10,19 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
+	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/workflows"
+	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
 // errPGDriver is a wrapped Postgres error whose text must never reach
@@ -179,6 +184,7 @@ func TestFailAutomation(t *testing.T) {
 		{"attachment 400", attachErr(http.StatusBadRequest, "too many attachments (max 5)"), 400, "bad_request"},
 		{"attachment 404", attachErr(http.StatusNotFound, "attachment not found"), 404, "bad_request"},
 		{"attachment 500", attachErr(http.StatusInternalServerError, "db down"), 500, "internal_error"},
+		{"wrapped attachment 400", fmt.Errorf("resolve: %w", attachErr(http.StatusBadRequest, "too many attachments (max 5)")), 400, "bad_request"},
 		{"driver error", errPGDriver, 500, "internal_error"},
 		{"canceled", fmt.Errorf("automations list: %w", context.Canceled), 500, "internal_error"},
 		{"deadline", fmt.Errorf("automations get: %w", context.DeadlineExceeded), 500, "internal_error"},
@@ -221,4 +227,76 @@ func TestSecretsListerFailureIsGeneric(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFailAgent(t *testing.T) {
+	t.Parallel()
+	runFailCases(t, failAgent, []failCase{
+		{"not found", fmt.Errorf("agent x: %w", agents.ErrNotFound), 404, "not_found"},
+		{"in use", fmt.Errorf("agent is used by automation(s) x: %w", agents.ErrInUse), 409, "in_use"},
+		{"name conflict", agents.ErrNameConflict, 409, "name_conflict"},
+		{"invalid", fmt.Errorf("%w: name is required", agents.ErrInvalid), 400, "bad_request"},
+		{"driver error", errPGDriver, 500, "internal_error"},
+		{"canceled", fmt.Errorf("agents patch: %w", context.Canceled), 500, "internal_error"},
+		{"deadline", fmt.Errorf("agents list: %w", context.DeadlineExceeded), 500, "internal_error"},
+		{"other", errors.New("db down"), 500, "internal_error"},
+	})
+}
+
+func TestAttachmentErrorStatusUnwraps(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"bare", attachErr(http.StatusNotFound, "attachment not found"), 404},
+		{"wrapped", fmt.Errorf("resolve: %w", attachErr(http.StatusBadRequest, "too many")), 400},
+		{"other", errors.New("db down"), 500},
+	} {
+		if got := attachmentErrorStatus(tt.err); got != tt.want {
+			t.Fatalf("%s: attachmentErrorStatus = %d, want %d", tt.name, got, tt.want)
+		}
+	}
+}
+
+// failListDir is a memDir whose List fails with a driver error.
+type failListDir struct{ *memDir }
+
+func (failListDir) List(context.Context, string, time.Time, string) ([]session.Meta, error) {
+	return nil, errPGDriver
+}
+
+// TestListFailureBodyIsGeneric samples the swapped session and mission
+// 500s: the code stays and the body is generic.
+func TestListFailureBodyIsGeneric(t *testing.T) {
+	t.Parallel()
+	check := func(t *testing.T, w *httptest.ResponseRecorder, code string) {
+		t.Helper()
+		body := w.Body.String()
+		if w.Code != 500 || !strings.Contains(body, `"error":"`+code+`"`) || !strings.Contains(body, `"message":"internal error"`) {
+			t.Fatalf("got %d %s, want 500 %s with the generic message", w.Code, body, code)
+		}
+		if strings.Contains(body, "null value") || strings.Contains(body, "postgres://") {
+			t.Fatalf("body leaked internal text: %s", body)
+		}
+	}
+
+	t.Run("sessions list", func(t *testing.T) {
+		a, dir, _ := testAPI(t, "tok", nil)
+		a.dir = failListDir{dir}
+		check(t, do(a, a.handleList, "GET", "/v1/sessions", "Bearer tok", ""), "list_failed")
+	})
+
+	t.Run("missions list", func(t *testing.T) {
+		a, _, _ := testAPI(t, "tok", nil)
+		store := missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard())
+		m := mux(a)
+		a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		req := httptest.NewRequest("GET", "/v1/missions", nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		check(t, w, "missions_failed")
+	})
 }

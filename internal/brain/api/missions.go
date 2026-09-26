@@ -320,7 +320,7 @@ func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.store.List(r.Context(), filter)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "missions_failed", err.Error())
+		failInternalCode(w, h.log, "missions_failed", "mission", err)
 		return
 	}
 	for i := range rows {
@@ -731,7 +731,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		}
 		events, err := h.store.Events(r.Context(), req.ParentMissionID)
 		if err != nil {
-			jsonError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			failInternalCode(w, h.log, "internal_error", "mission", err)
 			return
 		}
 		parentMissionID = parent.ID
@@ -742,7 +742,11 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	pdfSources, err := h.attachments.Resolve(r.Context(), req.Attachments)
 	if err != nil {
-		jsonError(w, attachmentErrorStatus(err), "bad_request", err.Error())
+		if status := attachmentErrorStatus(err); status < http.StatusInternalServerError {
+			jsonError(w, status, "bad_request", err.Error())
+		} else {
+			failInternal(w, h.log, "mission", err)
+		}
 		return
 	}
 	refSources, err := h.resolveReferenceSources(r.Context(), req.References)
@@ -1787,7 +1791,7 @@ func (h *missionAPI) files(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, truncated, err := missions.ListFiles(m.WorkRoot(), declaredArtifacts(m.Plan))
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "files_failed", err.Error())
+		failInternalCode(w, h.log, "files_failed", "mission", err)
 		return
 	}
 	if entries == nil {
@@ -1877,7 +1881,8 @@ func (h *missionAPI) exportPDF(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, errExportTooLarge):
 			status, code = http.StatusRequestEntityTooLarge, "too_large"
 		default:
-			status, code = http.StatusInternalServerError, "export_failed"
+			failInternalCode(w, h.log, "export_failed", "mission", err)
+			return
 		}
 		jsonError(w, status, code, err.Error())
 		return
@@ -1934,7 +1939,7 @@ func (h *missionAPI) promoteKB(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "bad_request", "unknown collection_id")
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, "promote_failed", err.Error())
+		failInternalCode(w, h.log, "promote_failed", "mission", err)
 		return
 	}
 	if len(m.ArtifactRefs) == 0 {
@@ -2357,7 +2362,7 @@ func (h *missionAPI) notifications(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.notifier.List(r.Context())
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "notifications_failed", err.Error())
+		failInternalCode(w, h.log, "notifications_failed", "mission", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"notifications": rows})
@@ -2369,7 +2374,7 @@ func (h *missionAPI) markRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.notifier.MarkRead(r.Context(), r.PathValue("id")); err != nil {
-		jsonError(w, http.StatusInternalServerError, "mark_read_failed", err.Error())
+		failInternalCode(w, h.log, "mark_read_failed", "mission", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

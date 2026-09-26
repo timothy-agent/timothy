@@ -250,12 +250,12 @@ func TestAgentMissionColumns(t *testing.T) {
 
 	// An unregistered harness name is rejected on create and on patch;
 	// empty stays valid (inherit).
-	if _, err := s.Create(ctx, Agent{Name: marker + "bad-harness", Enabled: true, Harness: "not-a-harness"}); err == nil {
-		t.Fatal("Create with unknown harness accepted")
+	if _, err := s.Create(ctx, Agent{Name: marker + "bad-harness", Enabled: true, Harness: "not-a-harness"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create with unknown harness = %v, want ErrInvalid", err)
 	}
 	badHarness := "not-a-harness"
-	if err := s.Patch(ctx, id, Patch{Harness: &badHarness}); err == nil {
-		t.Fatal("Patch with unknown harness accepted")
+	if err := s.Patch(ctx, id, Patch{Harness: &badHarness}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Patch with unknown harness = %v, want ErrInvalid", err)
 	}
 	emptyHarness := ""
 	if err := s.Patch(ctx, id, Patch{Harness: &emptyHarness}); err != nil {
