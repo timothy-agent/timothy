@@ -244,6 +244,29 @@ func TestValidateRejectsBadInput(t *testing.T) {
 	}
 }
 
+// TestStoreWrapsValidationInErrInvalid: Create and Patch rejections
+// wrap ErrInvalid before the db is touched, so the API answers 400.
+func TestStoreWrapsValidationInErrInvalid(t *testing.T) {
+	t.Parallel()
+	s := &Store{}
+	if _, err := s.Create(t.Context(), Connector{Name: "x", Kind: "smtp"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create(unknown kind) = %v, want ErrInvalid", err)
+	}
+	if _, err := s.Create(t.Context(), Connector{Name: " ", Kind: "mcp"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create(blank name) = %v, want ErrInvalid", err)
+	}
+	blank, badRef, badCfg := " ", "sk-abc def", json.RawMessage("{not json")
+	for name, p := range map[string]Patch{
+		"blank name":         {Name: &blank},
+		"secret-looking ref": {CredentialRef: &badRef},
+		"invalid config":     {Config: &badCfg},
+	} {
+		if err := s.Patch(t.Context(), "id", p); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("Patch(%s) = %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
 func isReady(m *Manager) bool {
 	select {
 	case <-m.Ready():

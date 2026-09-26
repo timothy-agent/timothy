@@ -60,6 +60,24 @@ func testStore(t *testing.T) *Store {
 	return NewStore(pool, log)
 }
 
+// cleanupExec runs sql on a fresh connection when the test ends; the
+// store's pool dies with t.Context before cleanups run.
+func cleanupExec(t *testing.T, sql string, args ...any) {
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		if _, err := conn.Exec(ctx, sql, args...); err != nil {
+			t.Errorf("cleanup %q: %v", sql, err)
+		}
+	})
+}
+
 // execer is the shared Exec surface between a pool connection and a
 // one-shot pgx.Conn: lets sweep run identically at setup (via the
 // pool) and teardown (via a fresh connection, since the pool dies with
@@ -81,7 +99,7 @@ func sweep(ctx context.Context, db execer) {
 func sweepMissionsSQL(filter string) string {
 	return `WITH gone AS (
 		DELETE FROM missions WHERE ` + filter + ` RETURNING id, session_id
-	), ev AS (DELETE FROM events WHERE source = 'mission' AND dedup_key IN (SELECT id::text FROM gone)),
+	), ev AS (DELETE FROM events WHERE source = 'mission' AND payload->>'mission_id' IN (SELECT id::text FROM gone)),
 	ids AS (SELECT session_id FROM gone WHERE session_id IS NOT NULL),
 	g AS (DELETE FROM session_grants WHERE session_id IN (SELECT session_id FROM ids)),
 	a AS (DELETE FROM tool_audit WHERE session_id IN (SELECT session_id FROM ids)),
@@ -363,6 +381,70 @@ func TestMissionParentLineageRoundTrips(t *testing.T) {
 	}
 	if child.ParentContext() == "" {
 		t.Fatal("ParentContext() after parent delete = empty, want the snapshot to survive (it's independent of the FK)")
+	}
+}
+
+// TestWorkflowChild covers issue #842's adopt lookup: a run's child is
+// keyed by parent, an empty parent matches the parentless entry, and a
+// parent with no child (or another run) yields "".
+func TestWorkflowChild(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var wfID, runID, otherRunID string
+	if err := db.QueryRow(ctx, `INSERT INTO workflows (name) VALUES ($1) RETURNING id::text`, marker+"workflow-child "+t.Name()).Scan(&wfID); err != nil {
+		t.Fatalf("insert workflow: %v", err)
+	}
+	for _, id := range []*string{&runID, &otherRunID} {
+		if err := db.QueryRow(ctx, `INSERT INTO workflow_runs (workflow_id) VALUES ($1) RETURNING id::text`, wfID).Scan(id); err != nil {
+			t.Fatalf("insert run: %v", err)
+		}
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(cctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Logf("cleanup skipped: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, sweepMissionsSQL("workflow_run_id IN (SELECT id FROM workflow_runs WHERE workflow_id = $1)"), wfID)
+		_, _ = conn.Exec(cctx, `DELETE FROM workflow_runs WHERE workflow_id = $1`, wfID)
+		_, _ = conn.Exec(cctx, `DELETE FROM workflows WHERE id = $1`, wfID)
+	})
+
+	create := func(runID, step, parent string) string {
+		t.Helper()
+		id, err := s.Create(ctx, Mission{Goal: marker + "workflow child " + step, Kind: "general", WorkflowRunID: runID, WorkflowStep: step, ParentMissionID: parent})
+		if err != nil {
+			t.Fatalf("Create %s: %v", step, err)
+		}
+		return id
+	}
+	entry := create(runID, "build", "")
+	review := create(runID, "review", entry)
+	create(otherRunID, "review", entry)
+
+	cases := []struct {
+		name, runID, parent, want string
+	}{
+		{"entry", runID, "", entry},
+		{"child of entry", runID, entry, review},
+		{"no child yet", runID, review, ""},
+		{"run without missions", otherRunID, review, ""},
+	}
+	for _, tc := range cases {
+		got, err := s.WorkflowChild(ctx, tc.runID, tc.parent)
+		if err != nil {
+			t.Fatalf("%s: WorkflowChild: %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%s: WorkflowChild = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }
 

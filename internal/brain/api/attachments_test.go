@@ -122,11 +122,11 @@ func TestAttachmentsUploadReachesStore(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
-	// A degraded pool surfaces as failAttachment's default 400 mapping
-	// (matches the "bad_request" fallback for a non-sentinel error) —
-	// proving the request passed multipart parsing and reached Save.
-	if w.Code != 400 {
-		t.Fatalf("upload against a degraded store = %d, want 400 (reached the store)", w.Code)
+	// A degraded pool surfaces as failAttachment's default 500 mapping
+	// for a non-sentinel error, proving the request passed multipart
+	// parsing and reached Save.
+	if w.Code != 500 {
+		t.Fatalf("upload against a degraded store = %d, want 500 (reached the store)", w.Code)
 	}
 }
 
@@ -142,9 +142,9 @@ func TestAttachmentsDownloadUnknownID(t *testing.T) {
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
 	// Degraded store: Get fails before ErrNotFound can even be
-	// distinguished, so this also lands on the generic 400 mapping —
+	// distinguished, so this also lands on the generic 500 mapping,
 	// same "reached the store" proof as the upload test above.
-	if w.Code != 400 {
-		t.Fatalf("download against a degraded store = %d, want 400 (reached the store)", w.Code)
+	if w.Code != 500 {
+		t.Fatalf("download against a degraded store = %d, want 500 (reached the store)", w.Code)
 	}
 }
