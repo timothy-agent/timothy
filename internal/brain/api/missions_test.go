@@ -237,7 +237,7 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 
 	post := func(codingExecutorDefault func(context.Context) string, body string) int {
 		m := mux(a)
@@ -296,7 +296,7 @@ func TestMissionsCreateValidatesReviewHarness(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 
 	post := func(body string) (int, string) {
@@ -336,7 +336,7 @@ func TestMissionsCreateValidatesLight(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 
 	post := func(classify func(context.Context, string) (string, error), body string) int {
 		m := mux(a)
@@ -374,7 +374,7 @@ func TestMissionsCreateFlowNormalization(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 
 	post := func(body string) (int, string) {
@@ -440,7 +440,7 @@ func TestMissionsCreateValidatesRepoURL(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	connStore := connectors.NewStore(pool, discard())
 	conns := connectors.NewManager(connStore, nil, discard())
 
@@ -496,7 +496,7 @@ func TestMissionsCreateRejectsUnknownFields(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 
 	post := func(body string) (int, string) {
 		m := mux(a)
@@ -543,7 +543,7 @@ func TestMissionsCreateValidatesParentMission(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
@@ -614,7 +614,7 @@ func TestMissionsCreateAttachmentsValidation(t *testing.T) {
 	t.Parallel()
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 
 	fa := &fakeMissionAttachments{
 		byID: map[string]attachments.Attachment{
@@ -750,7 +750,7 @@ func TestMissionsCreateReferencesValidation(t *testing.T) {
 	t.Parallel()
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 
 	post := func(t *testing.T, body string) (int, string) {
 		t.Helper()
@@ -1094,7 +1094,7 @@ func TestMissionsResumeMalformedBodyRejected(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
@@ -1117,7 +1117,7 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
@@ -1148,7 +1148,7 @@ func TestMissionsNoteMalformedOrEmptyBodyRejected(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
@@ -1297,7 +1297,7 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -1337,7 +1337,7 @@ func TestMissionsCreateHasPlan(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -1367,7 +1367,7 @@ func TestMissionsCreateValidatesOriginKind(t *testing.T) {
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)

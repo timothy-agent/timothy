@@ -281,7 +281,7 @@ func TestNotifyConsumerRedeliveryNotifiesOnceViaDrainer(t *testing.T) {
 
 // TestTerminalMissionNotifiesExactlyOnce covers the full path: a
 // Signal(InputCancel) transition to failed writes zero notification
-// rows synchronously (OnTransition no longer handles terminal states),
+// rows synchronously (the driver sends no notification itself),
 // and two drains of the mission.failed event send exactly one
 // notification, with cancelled wording.
 func TestTerminalMissionNotifiesExactlyOnce(t *testing.T) {
@@ -297,7 +297,7 @@ func TestTerminalMissionNotifiesExactlyOnce(t *testing.T) {
 	}
 
 	notify := &Notifier{db: s.db, log: log}
-	d := NewDriver(s, nil, nil, notify, nil, nil, nil, nil, log)
+	d := NewDriver(s, nil, nil, nil, nil, nil, nil, log)
 	if err := d.Signal(ctx, id, InputCancel); err != nil {
 		t.Fatalf("Signal cancel: %v", err)
 	}
@@ -354,7 +354,7 @@ func TestMemoryConsumerRedeliveryExtractsOnce(t *testing.T) {
 		t.Fatalf("settle other events: %v", err)
 	}
 
-	d := NewDriver(s, nil, nil, nil, nil, nil, nil, nil, log)
+	d := NewDriver(s, nil, nil, nil, nil, nil, nil, log)
 	var calls atomic.Int32
 	d.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) { calls.Add(1) })
 	drainer := events.NewDrainer(events.NewStore(s.db), []events.Consumer{NewMemoryConsumer(d)}, nil, log)
@@ -389,5 +389,174 @@ func TestMemoryConsumerRedeliveryExtractsOnce(t *testing.T) {
 	}
 	if !processed || lastError != nil {
 		t.Fatalf("event processed=%v last_error=%v, want processed cleanly", processed, lastError)
+	}
+}
+
+// actionableRows returns missionID's mission.paused and
+// mission.waiting_for_input inbox rows, oldest first.
+func actionableRows(t *testing.T, s *Store, missionID string) []inboxRow {
+	t.Helper()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	rows, err := db.Query(t.Context(), `SELECT kind, payload FROM events
+		WHERE source = 'mission' AND payload->>'mission_id' = $1 AND kind IN ($2, $3) ORDER BY id`,
+		missionID, events.KindMissionPaused, events.KindMissionWaitingForInput)
+	if err != nil {
+		t.Fatalf("query events: %v", err)
+	}
+	defer rows.Close()
+	var out []inboxRow
+	for rows.Next() {
+		var r inboxRow
+		var raw []byte
+		if err := rows.Scan(&r.kind, &raw); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		_ = json.Unmarshal(raw, &r.payload)
+		out = append(out, r)
+	}
+	return out
+}
+
+// drainMissionOnly settles every other pending event, then drains
+// missionID's events through the notify consumer.
+func drainMissionOnly(t *testing.T, s *Store, missionID string) {
+	t.Helper()
+	db, _ := s.db.Get()
+	if _, err := db.Exec(t.Context(), `UPDATE events SET processed_at = now()
+		WHERE processed_at IS NULL AND NOT (source = 'mission' AND payload->>'mission_id' = $1)`, missionID); err != nil {
+		t.Fatalf("settle other events: %v", err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	notify := &Notifier{db: s.db, log: log}
+	drainer := events.NewDrainer(events.NewStore(s.db), []events.Consumer{NewNotifyConsumer(s, notify.NotifyMessage, log)}, nil, log)
+	if _, err := drainer.Drain(t.Context()); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+}
+
+// TestApplyTransitionPausedInsertsInboxEvent covers the issue #922
+// producer: arriving at paused or waiting_for_input commits one inbox
+// row with the status, staying there commits none.
+func TestApplyTransitionPausedInsertsInboxEvent(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	id, err := s.Create(ctx, Mission{Goal: marker + "events-paused", Kind: "general", OriginKind: OriginAutomation, Unattended: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step := func(status Status) {
+		t.Helper()
+		if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseBuild, Status: status, MaxIterations: 8}}); err != nil {
+			t.Fatalf("ApplyTransition (%s): %v", status, err)
+		}
+	}
+	step(StatusWorking)
+	if got := actionableRows(t, s, id); len(got) != 0 {
+		t.Fatalf("events after working = %+v, want none", got)
+	}
+	step(StatusPaused)
+	got := actionableRows(t, s, id)
+	if len(got) != 1 || got[0].kind != events.KindMissionPaused {
+		t.Fatalf("events after paused = %+v, want one mission.paused", got)
+	}
+	p := got[0].payload
+	if p["mission_id"] != id || p["status"] != "paused" || p["phase"] != "build" || p["origin_kind"] != OriginAutomation || p["unattended"] != true {
+		t.Fatalf("payload = %+v", p)
+	}
+	step(StatusPaused)
+	if got := actionableRows(t, s, id); len(got) != 1 {
+		t.Fatalf("events after paused -> paused = %+v, want still one", got)
+	}
+	step(StatusWorking)
+	step(StatusWaitingForInput)
+	got = actionableRows(t, s, id)
+	if len(got) != 2 || got[1].kind != events.KindMissionWaitingForInput || got[1].payload["status"] != "waiting_for_input" {
+		t.Fatalf("events after waiting_for_input = %+v, want a mission.waiting_for_input second", got)
+	}
+	if len(inboxRows(t, s, id)) != 0 {
+		t.Fatal("actionable events reused the terminal dedup key")
+	}
+}
+
+// TestPausedMissionNotifiesAfterCrash: the pause commits its inbox row
+// and the process dies before any notification. A later drain sends
+// exactly one, and redelivering the same row sends none.
+func TestPausedMissionNotifiesAfterCrash(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	id, err := s.Create(ctx, Mission{Goal: marker + "events-paused-crash", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseBuild, Status: StatusPaused, MaxIterations: 8}}); err != nil {
+		t.Fatalf("ApplyTransition: %v", err)
+	}
+	if n := notificationRows(t, s, id); len(n) != 0 {
+		t.Fatalf("notifications before any drain = %+v, want none", n)
+	}
+
+	drainMissionOnly(t, s, id)
+	notes := notificationRows(t, s, id)
+	if len(notes) != 1 || notes[0].Kind != "paused" || !strings.Contains(notes[0].Message, "is paused") {
+		t.Fatalf("notifications after drain = %+v, want one kind=paused", notes)
+	}
+	// Read, so only the marker can stop a second row.
+	if err := (&Notifier{db: s.db}).MarkRead(ctx, notes[0].ID); err != nil {
+		t.Fatalf("MarkRead: %v", err)
+	}
+	db, _ := s.db.Get()
+	if _, err := db.Exec(ctx, `UPDATE events SET processed_at = NULL WHERE source = 'mission' AND payload->>'mission_id' = $1`, id); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	drainMissionOnly(t, s, id)
+	if notes := notificationRows(t, s, id); len(notes) != 1 {
+		t.Fatalf("notifications after redelivery = %+v, want still 1", notes)
+	}
+}
+
+// TestWaitingForInputThenResumeThenPauseNotifiesTwice: two separate
+// actionable arrivals are two notifications, each with its own marker.
+func TestWaitingForInputThenResumeThenPauseNotifiesTwice(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	id, err := s.Create(ctx, Mission{Goal: marker + "events-wait-pause", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	step := func(status Status) {
+		t.Helper()
+		if err := s.ApplyTransition(ctx, id, Transition{Next: StepState{Phase: PhaseBuild, Status: status, MaxIterations: 8}}); err != nil {
+			t.Fatalf("ApplyTransition (%s): %v", status, err)
+		}
+	}
+	step(StatusWaitingForInput)
+	drainMissionOnly(t, s, id)
+	step(StatusWorking)
+	step(StatusPaused)
+	drainMissionOnly(t, s, id)
+
+	notes := notificationRows(t, s, id)
+	kinds := map[string]int{}
+	for _, n := range notes {
+		kinds[n.Kind]++
+	}
+	if len(notes) != 2 || kinds["waiting_for_input"] != 1 || kinds["paused"] != 1 {
+		t.Fatalf("notifications = %+v, want one waiting_for_input and one paused", notes)
+	}
+	evs, err := s.Events(ctx, id)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	markers := 0
+	for _, ev := range evs {
+		if ev.Kind == notifiedKind {
+			markers++
+		}
+	}
+	if markers != 2 {
+		t.Fatalf("mission.notified markers = %d, want 2", markers)
 	}
 }

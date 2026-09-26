@@ -24,16 +24,6 @@ import (
 // left idle.
 const driveTimeBound = 4 * time.Hour
 
-// notifier is the transition-notification hook Driver calls after
-// every successful ApplyTransition; notify.go's Notifier satisfies it
-// (added in M3). nil is valid — M2 has no notifications wired yet.
-// Only waiting_for_input/paused fire here; terminal transitions
-// (done, error) notify through NotifyConsumer off the events inbox
-// instead (D-117, issue #843).
-type notifier interface {
-	OnTransition(ctx context.Context, m Mission, before, after Status, reason string) error
-}
-
 // sessionCreator opens the hidden, non-chat-facing session every
 // mission runs its worker/reviewer/planner turns under —
 // *session.Store satisfies it. loop.Agent's tool-call bookkeeping
@@ -114,7 +104,6 @@ type Driver struct {
 	store     driverStore
 	runner    Runner
 	workspace *Workspace
-	notify    notifier
 	sessions  sessionCreator
 	perms     sessionGranter
 	log       *slog.Logger
@@ -239,8 +228,8 @@ type Driver struct {
 	// artifact-path resolution, both out of missions' reach.
 	artifactCopy ArtifactCopy
 
-	// kickEvents asks the events drainer to run now after a terminal
-	// transition committed its events row (D-117); nil waits for the
+	// kickEvents asks the events drainer to run now after a terminal or
+	// actionable transition committed its events row (D-117); nil waits for the
 	// drainer's own tick.
 	kickEvents func()
 
@@ -282,9 +271,9 @@ type Driver struct {
 	driving   map[string]bool
 }
 
-func NewDriver(store driverStore, runner Runner, workspace *Workspace, notify notifier, sessions sessionCreator, perms sessionGranter, sandboxExec sandboxExec, sandboxRemove sandboxRemover, log *slog.Logger) *Driver {
+func NewDriver(store driverStore, runner Runner, workspace *Workspace, sessions sessionCreator, perms sessionGranter, sandboxExec sandboxExec, sandboxRemove sandboxRemover, log *slog.Logger) *Driver {
 	return &Driver{
-		store: store, runner: runner, workspace: workspace, notify: notify, sessions: sessions, perms: perms, log: log,
+		store: store, runner: runner, workspace: workspace, sessions: sessions, perms: perms, log: log,
 		sandboxExec: sandboxExec, sandboxRemove: sandboxRemove,
 		provision:    provisioner{store: store, workspace: workspace, sessions: sessions, perms: perms, log: log},
 		budget:       budgetProjector{log: log},
@@ -897,6 +886,15 @@ func (d *Driver) runTerminalHooks(id string) {
 	}
 }
 
+// kickIfActionable kicks the drainer after a transition into paused or
+// waiting_for_input committed its events row (issue #922), so the
+// notification does not wait for the drainer's tick.
+func (d *Driver) kickIfActionable(before, after Status) {
+	if _, ok := isActionableTransition(before, after); ok && d.kickEvents != nil {
+		d.kickEvents()
+	}
+}
+
 // removeSandbox best-effort tears down a mission's sandbox container in
 // the background — a slow or unreachable daemon must never block the
 // terminal state transition (or the notify that follows it), only log
@@ -1146,11 +1144,7 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	if t.Next.Phase.Terminal() {
 		d.runTerminalHooks(id)
 	}
-	if d.notify != nil {
-		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
-			d.log.Warn("driver: notify failed", "mission_id", id, "error", err)
-		}
-	}
+	d.kickIfActionable(before, t.Next.Status)
 	// D-064: a worker_failed retry that stays working (mission.retry, not
 	// a pause/fail) paces the next Advance instead of spinning back-to-back
 	// against a failing model at ~1/sec until the backoff pause. Only this
@@ -1233,11 +1227,7 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 	if t.Next.Phase.Terminal() {
 		d.runTerminalHooks(id)
 	}
-	if d.notify != nil {
-		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
-			d.log.Warn("driver: notify failed", "mission_id", id, "error", err)
-		}
-	}
+	d.kickIfActionable(before, t.Next.Status)
 	if input == InputResume {
 		// A mission blocked long enough (backoff retries, or genuinely
 		// waiting_for_input) can outlive its hidden session's
@@ -1338,11 +1328,7 @@ func (d *Driver) DecidePlan(ctx context.Context, id string, input Input, feedbac
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 		return fmt.Errorf("driver: decide plan: apply transition: %w", err)
 	}
-	if d.notify != nil {
-		if err := d.notify.OnTransition(ctx, m, before, t.Next.Status, failedReason(t.Events)); err != nil {
-			d.log.Warn("driver: notify failed", "mission_id", id, "error", err)
-		}
-	}
+	d.kickIfActionable(before, t.Next.Status)
 	go func() { //nolint:gosec // G118: deliberate, the mission must outlive the HTTP request that decided it, driveTimeBound is Drive's own cap
 		if err := d.Drive(context.Background(), id); err != nil {
 			d.log.Error("driver: post-plan-decision drive failed", "mission_id", id, "error", err)
