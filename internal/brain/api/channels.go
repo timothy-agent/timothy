@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
@@ -20,7 +21,7 @@ func (a *API) registerChannels(handle func(pattern string, h http.Handler), stor
 	if store == nil {
 		return
 	}
-	h := &channelAPI{store: store, svc: svc, conns: conns}
+	h := &channelAPI{store: store, svc: svc, conns: conns, log: a.log}
 	handle("GET /v1/channels", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/channels", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/channels/{id}", a.auth(http.HandlerFunc(h.get)))
@@ -38,6 +39,7 @@ type channelAPI struct {
 	store *channels.Store
 	svc   *channels.Service
 	conns connectorLookup
+	log   *slog.Logger
 }
 
 // checkEmailConnector rejects an email channel connector that is
@@ -60,7 +62,7 @@ func (h *channelAPI) checkEmailConnector(ctx context.Context, id string) error {
 	return nil
 }
 
-func failChannel(w http.ResponseWriter, err error) {
+func failChannel(w http.ResponseWriter, log *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, channels.ErrNotFound):
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
@@ -71,7 +73,7 @@ func failChannel(w http.ResponseWriter, err error) {
 	case errors.Is(err, channels.ErrInvalid), errors.Is(err, channels.ErrUnknownAgent):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
-		jsonError(w, http.StatusInternalServerError, "channels_failed", err.Error())
+		failInternal(w, log, "channel", err)
 	}
 }
 
@@ -103,7 +105,7 @@ type patchChannelRequest struct {
 func (h *channelAPI) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.store.List(r.Context())
 	if err != nil {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"channels": rows})
@@ -112,7 +114,7 @@ func (h *channelAPI) list(w http.ResponseWriter, r *http.Request) {
 func (h *channelAPI) get(w http.ResponseWriter, r *http.Request) {
 	c, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
@@ -139,11 +141,11 @@ func (h *channelAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.Kind == channels.KindEmail {
 		if err := channels.Validate(&c); err != nil {
-			failChannel(w, err)
+			failChannel(w, h.log, err)
 			return
 		}
 		if err := h.checkEmailConnector(r.Context(), c.Config.ConnectorID); err != nil {
-			failChannel(w, err)
+			failChannel(w, h.log, err)
 			return
 		}
 	}
@@ -152,7 +154,7 @@ func (h *channelAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.store.Create(r.Context(), c)
 	if err != nil {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
@@ -170,7 +172,7 @@ func (h *channelAPI) patch(w http.ResponseWriter, r *http.Request) {
 		p.ConnectorID, p.FromAllow = req.Config.ConnectorID, req.Config.FromAllow
 		if p.ConnectorID != nil {
 			if err := h.checkEmailConnector(r.Context(), *p.ConnectorID); err != nil {
-				failChannel(w, err)
+				failChannel(w, h.log, err)
 				return
 			}
 		}
@@ -186,7 +188,7 @@ func (h *channelAPI) patch(w http.ResponseWriter, r *http.Request) {
 		p.AgentID = &agent
 	}
 	if err := h.store.Patch(r.Context(), r.PathValue("id"), p); err != nil {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	h.get(w, r)
@@ -194,7 +196,7 @@ func (h *channelAPI) patch(w http.ResponseWriter, r *http.Request) {
 
 func (h *channelAPI) delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.Delete(r.Context(), r.PathValue("id")); err != nil {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -204,7 +206,7 @@ func (h *channelAPI) delete(w http.ResponseWriter, r *http.Request) {
 func (h *channelAPI) test(w http.ResponseWriter, r *http.Request) {
 	username, err := h.svc.Test(r.Context(), r.PathValue("id"))
 	if errors.Is(err, channels.ErrNotFound) {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	if err != nil {
@@ -217,12 +219,12 @@ func (h *channelAPI) test(w http.ResponseWriter, r *http.Request) {
 func (h *channelAPI) pairings(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := h.store.Get(r.Context(), id); err != nil {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	rows, err := h.store.ListPairings(r.Context(), id)
 	if err != nil {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"pairings": rows})
@@ -230,7 +232,7 @@ func (h *channelAPI) pairings(w http.ResponseWriter, r *http.Request) {
 
 func (h *channelAPI) approve(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.Approve(r.Context(), r.PathValue("id"), r.PathValue("external_user_id")); err != nil {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -238,7 +240,7 @@ func (h *channelAPI) approve(w http.ResponseWriter, r *http.Request) {
 
 func (h *channelAPI) revoke(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.Revoke(r.Context(), r.PathValue("id"), r.PathValue("external_user_id")); err != nil {
-		failChannel(w, err)
+		failChannel(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

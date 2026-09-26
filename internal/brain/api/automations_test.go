@@ -392,7 +392,10 @@ func TestAutomationTemplatesLookupError(t *testing.T) {
 		if w.Code != 500 {
 			t.Fatalf("templates with a failing lookup = %d, want 500", w.Code)
 		}
-		assertErrorBody(t, w, "automations_failed", "db down")
+		assertErrorBody(t, w, "internal_error", "internal error")
+		if strings.Contains(w.Body.String(), "db down") {
+			t.Fatalf("templates body leaked the store error: %s", w.Body.String())
+		}
 	}
 }
 

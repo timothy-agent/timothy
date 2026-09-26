@@ -124,7 +124,7 @@ func failConnector(w http.ResponseWriter, log *slog.Logger, err error) {
 func (h *connectorAPI) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.mgr.Store().List(r.Context())
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "connectors_failed", err.Error())
+		failInternalCode(w, h.log, "connectors_failed", "connector", err)
 		return
 	}
 	// D-115: config.headers carries Authorization/x-api-key values for

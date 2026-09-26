@@ -372,11 +372,16 @@ func jsonError(w http.ResponseWriter, status int, code, msg string) {
 // message, so driver text never reaches the client. log nil falls back
 // to slog.Default().
 func failInternal(w http.ResponseWriter, log *slog.Logger, what string, err error) {
+	failInternalCode(w, log, "internal_error", what, err)
+}
+
+// failInternalCode is failInternal with a caller-chosen error code.
+func failInternalCode(w http.ResponseWriter, log *slog.Logger, code, what string, err error) {
 	if log == nil {
 		log = slog.Default()
 	}
 	log.Error(what+" request failed", "error", err)
-	jsonError(w, http.StatusInternalServerError, "internal_error", "internal error")
+	jsonError(w, http.StatusInternalServerError, code, "internal error")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

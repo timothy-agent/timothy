@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
+	"github.com/SumonMSelim/timothy/internal/brain/automations"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/workflows"
@@ -147,4 +149,76 @@ func TestFailWorkflow(t *testing.T) {
 		{"driver error", errPGDriver, 500, "internal_error"},
 		{"other", errors.New("db down"), 500, "internal_error"},
 	})
+}
+
+func TestFailInternalCode(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	w := httptest.NewRecorder()
+	failInternalCode(w, slog.New(slog.NewTextHandler(&buf, nil)), "kb_failed", "kb", errPGDriver)
+	if w.Code != 500 || !strings.Contains(w.Body.String(), `"error":"kb_failed"`) || !strings.Contains(w.Body.String(), `"message":"internal error"`) {
+		t.Fatalf("failInternalCode = %d %s, want 500 kb_failed with the generic message", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "null value") {
+		t.Fatalf("failInternalCode body leaked driver text: %s", w.Body.String())
+	}
+	if !strings.Contains(buf.String(), "kb request failed") || !strings.Contains(buf.String(), "23502") {
+		t.Fatalf("failInternalCode log = %q, want the prefix and the underlying error", buf.String())
+	}
+}
+
+func TestFailAutomation(t *testing.T) {
+	t.Parallel()
+	runFailCases(t, failAutomation, []failCase{
+		{"not found", fmt.Errorf("automation x: %w", automations.ErrNotFound), 404, "not_found"},
+		{"name conflict", automations.ErrNameConflict, 409, "name_conflict"},
+		{"note limit", automations.ErrNoteLimit, 409, "note_limit"},
+		{"bad cron", fmt.Errorf("%w: bad field", automations.ErrBadCron), 400, "bad_cron"},
+		{"unknown agent", automations.ErrUnknownAgent, 400, "bad_request"},
+		{"validation", &automations.ValidationError{Err: errors.New("name is required")}, 400, "bad_request"},
+		{"attachment 400", attachErr(http.StatusBadRequest, "too many attachments (max 5)"), 400, "bad_request"},
+		{"attachment 404", attachErr(http.StatusNotFound, "attachment not found"), 404, "bad_request"},
+		{"attachment 500", attachErr(http.StatusInternalServerError, "db down"), 500, "internal_error"},
+		{"driver error", errPGDriver, 500, "internal_error"},
+		{"canceled", fmt.Errorf("automations list: %w", context.Canceled), 500, "internal_error"},
+		{"deadline", fmt.Errorf("automations get: %w", context.DeadlineExceeded), 500, "internal_error"},
+		{"other", errors.New("db down"), 500, "internal_error"},
+	})
+}
+
+// TestSecretsListerFailureIsGeneric pins the list-path 500s: the code
+// stays, the body is generic, the error is logged.
+func TestSecretsListerFailureIsGeneric(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name, method, path, code string
+		conns                    connectorLister
+		dests                    destinationLister
+	}{
+		{"list connectors", http.MethodGet, "/v1/admin/secrets", "connectors_failed", &fakeConnectorLister{err: errPGDriver}, &fakeDestinationLister{}},
+		{"list destinations", http.MethodGet, "/v1/admin/secrets", "destinations_failed", &fakeConnectorLister{}, &fakeDestinationLister{err: errPGDriver}},
+		{"delete connectors", http.MethodDelete, "/v1/admin/secrets/X", "connectors_failed", &fakeConnectorLister{err: errPGDriver}, &fakeDestinationLister{}},
+		{"delete destinations", http.MethodDelete, "/v1/admin/secrets/X", "destinations_failed", &fakeConnectorLister{}, &fakeDestinationLister{err: errPGDriver}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			a := &API{token: "tok", log: slog.New(slog.NewTextHandler(&buf, nil))}
+			m := http.NewServeMux()
+			a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, tt.conns, tt.dests)
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req.Header.Set("Authorization", "Bearer tok")
+			w := httptest.NewRecorder()
+			m.ServeHTTP(w, req)
+			body := w.Body.String()
+			if w.Code != 500 || !strings.Contains(body, `"error":"`+tt.code+`"`) || !strings.Contains(body, `"message":"internal error"`) {
+				t.Fatalf("%s %s = %d %s, want 500 %s with the generic message", tt.method, tt.path, w.Code, body, tt.code)
+			}
+			if strings.Contains(body, "null value") {
+				t.Fatalf("body leaked driver text: %s", body)
+			}
+			if !strings.Contains(buf.String(), "request failed") || !strings.Contains(buf.String(), "23502") {
+				t.Fatalf("log = %q, want the underlying error", buf.String())
+			}
+		})
+	}
 }

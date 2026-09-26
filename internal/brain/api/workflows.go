@@ -58,7 +58,7 @@ func failWorkflow(w http.ResponseWriter, log *slog.Logger, err error) {
 func (h *workflowAPI) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.store.List(r.Context())
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "workflows_failed", err.Error())
+		failInternalCode(w, h.log, "workflows_failed", "workflow", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"workflows": rows})
@@ -141,7 +141,7 @@ func (h *workflowAPI) startRun(w http.ResponseWriter, r *http.Request) {
 func (h *workflowAPI) listRuns(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.store.ListRuns(r.Context(), r.PathValue("id"))
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "workflows_failed", err.Error())
+		failInternalCode(w, h.log, "workflows_failed", "workflow", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": rows})
@@ -155,7 +155,7 @@ func (h *workflowAPI) getRun(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := h.store.RunEvents(r.Context(), r.PathValue("id"))
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "workflows_failed", err.Error())
+		failInternalCode(w, h.log, "workflows_failed", "workflow", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"run": run, "events": events})
