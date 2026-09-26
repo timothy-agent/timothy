@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -20,7 +22,56 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/gateway/router"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
+	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// TestFailMission covers failMission's error-to-response mapping
+// (issue #845): every sentinel case keeps its own status/code, only
+// ErrInvalidMission is a 400 with the validation message intact, and
+// everything else (a raw store/driver error, including a Postgres
+// constraint violation) is a generic 500 that never echoes the
+// driver's own text; it is logged server-side instead (the regression this
+// issue covers: a NOT NULL violation used to leak as a 400).
+func TestFailMission(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name string
+		err  error
+		want int
+		code string
+	}{
+		{"invalid mission", fmt.Errorf("%w: goal is required", missions.ErrInvalidMission), 400, "bad_request"},
+		{
+			"pgconn constraint violation never leaks driver text",
+			fmt.Errorf("driver: create: missions create: %w", &pgconn.PgError{Code: "23502", Message: `null value in column "x" violates not-null constraint`}),
+			500, "internal_error",
+		},
+		{"generic store error", errors.New("db down"), 500, "internal_error"},
+		{"not found", fmt.Errorf("x: %w", missions.ErrNotFound), 404, "not_found"},
+		{"branch conflict", missions.ErrBranchConflict, 409, "branch_conflict"},
+		{"terminal", missions.ErrTerminal, 409, "already_finished"},
+		{"not paused", missions.ErrNotPaused, 409, "not_paused"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			log := slog.New(slog.NewTextHandler(&buf, nil))
+			w := httptest.NewRecorder()
+			failMission(w, log, tt.err)
+			if w.Code != tt.want || !strings.Contains(w.Body.String(), `"error":"`+tt.code+`"`) {
+				t.Fatalf("failMission(%v) = %d %s, want %d %s", tt.err, w.Code, w.Body.String(), tt.want, tt.code)
+			}
+			body := w.Body.String()
+			if strings.Contains(body, "null value") || strings.Contains(body, "SQLSTATE") {
+				t.Fatalf("failMission(%v) body leaked driver text: %s", tt.err, body)
+			}
+			if tt.want == 500 {
+				if !strings.Contains(buf.String(), "23502") && strings.Contains(tt.err.Error(), "23502") {
+					t.Fatalf("failMission(%v) did not log the underlying error: %s", tt.err, buf.String())
+				}
+			}
+		})
+	}
+}
 
 func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
@@ -115,7 +166,7 @@ func TestMissionsListFilterValidation(t *testing.T) {
 // TestMissionsDeleteReachesStore confirms DELETE /v1/missions/{id} is
 // wired to Store.Delete: against a never-connecting pool the request
 // still passes routing/auth and reaches the store call, which fails
-// closed as failMission's default 400 (the same generic-error mapping
+// closed as failMission's default 500 (the same generic-error mapping
 // every other mission handler falls back to for an unrecognized
 // error) — never a 404/409, which would mean the id path or the
 // not-terminal check short-circuited before the store was even called.
@@ -134,8 +185,8 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
-	if w.Code != 400 {
-		t.Fatalf("DELETE against a degraded store = %d, want 400 (reached the store, generic failure)", w.Code)
+	if w.Code != 500 {
+		t.Fatalf("DELETE against a degraded store = %d, want 500 (reached the store, generic failure)", w.Code)
 	}
 }
 
@@ -168,16 +219,19 @@ func TestMissionsExportPDFNotEnabled(t *testing.T) {
 	}
 }
 
-// TestMissionsCreateValidatesHarness covers D-051's create() gate:
-// harness is only valid on kind=coding, "native" normalizes to "" (the
-// stored value), an unknown harness 400s, and a coding request that
-// omits harness picks up the settings-configured default via the seam
-// — all BEFORE the store is ever reached. A request that fails this
-// validation never reaches Driver.Create; the two "passed validation"
-// cases below reach it against a degraded pool, which surfaces as
-// failMission's generic 400 too (see TestMissionsDeleteReachesStore) —
-// distinguished instead by asserting the codingExecutorDefault seam was
-// (or wasn't) invoked, the one observable difference at this layer.
+// TestMissionsCreateValidatesHarness covers D-051's create()/normalize
+// path: harness on kind=general is silently dropped to "" rather than
+// rejected (ResolveHarness, D-051's rejection itself lives in
+// ValidateCreate, not wired here), "native" normalizes to "" (the
+// stored value), and a coding request that omits harness picks up the
+// settings-configured default via the seam. This test wires no
+// ValidateDeps, so every case here reaches the degraded store, a
+// generic 500 (failMission's default, see TestMissionsDeleteReachesStore)
+// and the harness/kind combination itself is distinguished instead by
+// asserting the codingExecutorDefault seam was (or wasn't) invoked, the
+// one observable difference at this layer. The unknown-harness and
+// coding-only rejections ValidateCreate performs are covered directly
+// in internal/brain/missions/validate_test.go.
 func TestMissionsCreateValidatesHarness(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
@@ -195,28 +249,26 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 		return w.Code
 	}
 
-	if code := post(nil, `{"goal":"g","kind":"general","harness":"claude-cli"}`); code != 400 {
-		t.Fatalf("harness on kind=general = %d, want 400", code)
+	if code := post(nil, `{"goal":"g","kind":"general","harness":"claude-cli"}`); code != 500 {
+		t.Fatalf("harness on kind=general = %d, want 500 (reached degraded store)", code)
 	}
-	if code := post(nil, `{"goal":"g","kind":"coding","harness":"not-a-real-harness"}`); code != 400 {
-		t.Fatalf("unknown harness = %d, want 400", code)
+	if code := post(nil, `{"goal":"g","kind":"coding","harness":"not-a-real-harness"}`); code != 500 {
+		t.Fatalf("unknown harness = %d, want 500 (reached degraded store)", code)
 	}
-	// "native" normalizes to "" and passes validation, reaching the
-	// (degraded) store — same generic 400 failMission maps every
-	// unrecognized store error to.
-	if code := post(nil, `{"goal":"g","kind":"coding","harness":"native"}`); code != 400 {
-		t.Fatalf("harness=native = %d, want 400 (passed validation, reached degraded store)", code)
+	// "native" normalizes to "" and reaches the (degraded) store: the same
+	// generic 500 failMission maps every unrecognized store error to.
+	if code := post(nil, `{"goal":"g","kind":"coding","harness":"native"}`); code != 500 {
+		t.Fatalf("harness=native = %d, want 500 (reached degraded store)", code)
 	}
-	// A registered harness on kind=coding passes validation too.
-	if code := post(nil, `{"goal":"g","kind":"coding","harness":"claude-cli"}`); code != 400 {
-		t.Fatalf("harness=claude-cli = %d, want 400 (passed validation, reached degraded store)", code)
+	if code := post(nil, `{"goal":"g","kind":"coding","harness":"claude-cli"}`); code != 500 {
+		t.Fatalf("harness=claude-cli = %d, want 500 (reached degraded store)", code)
 	}
 	// Omitted harness on kind=coding applies the settings default via
 	// the seam.
 	defaultCalled := false
 	defaulted := func(context.Context) string { defaultCalled = true; return "claude-cli" }
-	if code := post(defaulted, `{"goal":"g","kind":"coding"}`); code != 400 {
-		t.Fatalf("omitted harness with a settings default = %d, want 400 (passed validation)", code)
+	if code := post(defaulted, `{"goal":"g","kind":"coding"}`); code != 500 {
+		t.Fatalf("omitted harness with a settings default = %d, want 500 (passed validation)", code)
 	}
 	if !defaultCalled {
 		t.Fatal("codingExecutorDefault seam not invoked for a kind=coding request with omitted harness")
@@ -225,8 +277,8 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 	// all; general missions must stay native regardless of the setting.
 	generalCalled := false
 	trackedDefault := func(context.Context) string { generalCalled = true; return "claude-cli" }
-	if code := post(trackedDefault, `{"goal":"g","kind":"general"}`); code != 400 {
-		t.Fatalf("general with omitted harness = %d, want 400 (reached degraded store)", code)
+	if code := post(trackedDefault, `{"goal":"g","kind":"general"}`); code != 500 {
+		t.Fatalf("general with omitted harness = %d, want 500 (reached degraded store)", code)
 	}
 	if generalCalled {
 		t.Fatal("codingExecutorDefault seam invoked for a kind=general request")
@@ -235,11 +287,10 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 
 // TestMissionsCreateValidatesReviewHarness covers issue #582's create()
 // gate: an unknown review_harness 400s before the store is reached,
-// while "native" (normalized to "") and a registered harness pass
-// validation and reach the degraded store (same generic 400 shape and
-// the same distinguishing trick as TestMissionsCreateValidatesHarness:
-// the store error surfaces as failMission's generic 400 too, so the
-// body text is what tells the two apart).
+// while "native" (normalized to "") and a registered harness pass that
+// check and then 400 anyway on ValidateCreate's own route-required
+// check (this test wires no route), distinguished only by the body not
+// naming review_harness.
 func TestMissionsCreateValidatesReviewHarness(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
@@ -269,17 +320,17 @@ func TestMissionsCreateValidatesReviewHarness(t *testing.T) {
 	} {
 		code, resp := post(body)
 		if code != 400 || strings.Contains(resp, "review_harness") {
-			t.Fatalf("%s = %d %q, want 400 from the degraded store, not a review_harness validation error", body, code, resp)
+			t.Fatalf("%s = %d %q, want 400 from route-required, not a review_harness validation error", body, code, resp)
 		}
 	}
 }
 
-// TestMissionsCreateValidatesLight covers light's create() gate
-// (D-069): rejected outright on an explicit kind=coding, and rejected
-// when kind is omitted and classifies as coding — light never overrides
-// a coding classification. light+general passes validation (reaching
-// the degraded store, same 400-for-a-different-reason shape
-// TestMissionsCreateValidatesHarness documents).
+// TestMissionsCreateValidatesLight covers light's create()/normalize
+// path (D-069): light+coding is not rejected here (that gate lives in
+// ValidateCreate, not wired in this test), so every case below reaches
+// the degraded store, same generic 500 shape TestMissionsCreateValidatesHarness
+// documents. The light+coding rejection itself is covered directly in
+// internal/brain/missions/validate_test.go.
 func TestMissionsCreateValidatesLight(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
@@ -297,16 +348,15 @@ func TestMissionsCreateValidatesLight(t *testing.T) {
 		return w.Code
 	}
 
-	if code := post(nil, `{"goal":"g","kind":"coding","light":true}`); code != 400 {
-		t.Fatalf("light on explicit kind=coding = %d, want 400", code)
+	if code := post(nil, `{"goal":"g","kind":"coding","light":true}`); code != 500 {
+		t.Fatalf("light on explicit kind=coding = %d, want 500 (reached degraded store)", code)
 	}
 	codingClassify := func(context.Context, string) (string, error) { return "coding", nil }
-	if code := post(codingClassify, `{"goal":"g","light":true}`); code != 400 {
-		t.Fatalf("light with omitted kind classified as coding = %d, want 400", code)
+	if code := post(codingClassify, `{"goal":"g","light":true}`); code != 500 {
+		t.Fatalf("light with omitted kind classified as coding = %d, want 500 (reached degraded store)", code)
 	}
-	// light+general passes validation, reaching the degraded store.
-	if code := post(nil, `{"goal":"g","kind":"general","light":true}`); code != 400 {
-		t.Fatalf("light+general = %d, want 400 (passed validation, reached degraded store)", code)
+	if code := post(nil, `{"goal":"g","kind":"general","light":true}`); code != 500 {
+		t.Fatalf("light+general = %d, want 500 (reached degraded store)", code)
 	}
 }
 
@@ -315,9 +365,10 @@ func TestMissionsCreateValidatesLight(t *testing.T) {
 // exactly as before this field existed, flow=light always implies
 // light=true so every existing D-069 code path keeps keying off the
 // light column, and an invalid flow/kind/light combination is
-// rejected by ValidateCreate (wired via SetValidateDeps here so a
-// validation rejection is distinguishable from the generic degraded-
-// store 400, same pattern as TestMissionsCreateValidatesGitStrategy).
+// rejected by ValidateCreate (wired via SetValidateDeps here). Every
+// "passes validation" case below still 400s: ValidateCreate's own
+// route-required check (validate.go) fires first since this test wires
+// no route, same reasoning as TestMissionsCreateHasPlan.
 func TestMissionsCreateFlowNormalization(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
@@ -337,29 +388,29 @@ func TestMissionsCreateFlowNormalization(t *testing.T) {
 		return w.Code, string(b)
 	}
 
-	// Omitted flow, light omitted: normalizes to "full", passes
-	// validation, reaches the degraded store (generic 400, no "flow"
-	// mention).
+	// Omitted flow, light omitted: normalizes to "full", passes flow
+	// validation, then 400s on ValidateCreate's own route-required check
+	// (no "flow" mention).
 	if code, body := post(`{"goal":"g","kind":"general"}`); code != 400 || strings.Contains(body, "flow") {
-		t.Fatalf("omitted flow/light: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+		t.Fatalf("omitted flow/light: code=%d body=%q, want 400 from route-required, not flow validation", code, body)
 	}
 	// Omitted flow, light=true: normalizes to flow="light", satisfying
-	// its own light=true requirement, passes validation.
+	// its own light=true requirement, passes flow validation.
 	if code, body := post(`{"goal":"g","kind":"general","light":true}`); code != 400 || strings.Contains(body, "flow") {
-		t.Fatalf("omitted flow, light=true: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+		t.Fatalf("omitted flow, light=true: code=%d body=%q, want 400 from route-required, not flow validation", code, body)
 	}
 	// Explicit flow=light with light omitted: normalization sets
-	// light=true to match, passes validation.
+	// light=true to match, passes flow validation.
 	if code, body := post(`{"goal":"g","kind":"general","flow":"light"}`); code != 400 || strings.Contains(body, "flow") {
-		t.Fatalf("flow=light, light omitted: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+		t.Fatalf("flow=light, light omitted: code=%d body=%q, want 400 from route-required, not flow validation", code, body)
 	}
 	// Explicit flow=no_prove / discover_build on kind=general both
-	// pass validation.
+	// pass flow validation.
 	if code, body := post(`{"goal":"g","kind":"general","flow":"no_prove"}`); code != 400 || strings.Contains(body, "flow") {
-		t.Fatalf("flow=no_prove on general: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+		t.Fatalf("flow=no_prove on general: code=%d body=%q, want 400 from route-required, not flow validation", code, body)
 	}
 	if code, body := post(`{"goal":"g","kind":"general","flow":"discover_build"}`); code != 400 || strings.Contains(body, "flow") {
-		t.Fatalf("flow=discover_build on general: code=%d body=%q, want a generic 400 (passed validation)", code, body)
+		t.Fatalf("flow=discover_build on general: code=%d body=%q, want 400 from route-required, not flow validation", code, body)
 	}
 	// Unknown flow value is rejected by ValidateCreate before Driver.Create
 	// ever touches the degraded store.
@@ -409,8 +460,12 @@ func TestMissionsCreateValidatesRepoURL(t *testing.T) {
 	if code := post(`{"goal":"g","kind":"coding","repo_url":"https://github.com/o/r"}`); code != 400 {
 		t.Fatalf("repo_url without connector_id = %d, want 400", code)
 	}
-	if code := post(`{"goal":"g","kind":"coding","connector_id":"1"}`); code != 400 {
-		t.Fatalf("connector_id without repo_url = %d, want 400", code)
+	// connector_id without repo_url has no direct gate in create() itself
+	// (only ValidateCreate rejects that combination, and this test wires
+	// no ValidateDeps), so it passes straight through to the degraded
+	// store, now a generic 500 (issue #845).
+	if code := post(`{"goal":"g","kind":"coding","connector_id":"1"}`); code != 500 {
+		t.Fatalf("connector_id without repo_url = %d, want 500 (reached degraded store)", code)
 	}
 	// connector_id names no real row against a degraded connectors
 	// store — the same "unknown connector_id" 400 an unresolvable id
@@ -650,36 +705,36 @@ func TestMissionsCreateAttachmentsValidation(t *testing.T) {
 
 	// The remaining cases exercise the resolver past all its own 400
 	// paths, so the fake pool has no live database, and create() itself
-	// then fails past validation; asserting the failure is the
-	// (unrelated) store error confirms the attachment cleared
-	// validation.
+	// then fails past validation; asserting a generic 500 with the raw
+	// driver text absent confirms the attachment cleared validation
+	// without leaking the (unrelated) store error (issue #845).
 	t.Run("text/plain attachment accepted with markitdown configured", func(t *testing.T) {
 		code, body := post(t, fa, md.URL, "", nil, `{"goal":"g","kind":"general","attachments":[{"id":"txt1"}]}`)
-		if code != 400 || !strings.Contains(body, "database unavailable") {
-			t.Fatalf("code=%d body=%q, want a store error (validation passed)", code, body)
+		if code != 500 || strings.Contains(body, "database unavailable") {
+			t.Fatalf("code=%d body=%q, want a generic 500 (validation passed, no leaked driver text)", code, body)
 		}
 	})
 
 	t.Run("text-only attachment succeeds with no markitdownURL configured", func(t *testing.T) {
 		code, body := post(t, fa, "", "", nil, `{"goal":"g","kind":"general","attachments":[{"id":"txt1"}]}`)
-		if code != 400 || !strings.Contains(body, "database unavailable") {
-			t.Fatalf("code=%d body=%q, want a store error (text attachments don't need the sidecar)", code, body)
+		if code != 500 || strings.Contains(body, "database unavailable") {
+			t.Fatalf("code=%d body=%q, want a generic 500 (text attachments don't need the sidecar)", code, body)
 		}
 	})
 
 	t.Run("image attachment captioned succeeds", func(t *testing.T) {
 		caption := func(context.Context, string, []byte) string { return "a description" }
 		code, body := post(t, fa, md.URL, "", caption, `{"goal":"g","kind":"general","attachments":[{"id":"img1"}]}`)
-		if code != 400 || !strings.Contains(body, "database unavailable") {
-			t.Fatalf("code=%d body=%q, want a store error (validation passed)", code, body)
+		if code != 500 || strings.Contains(body, "database unavailable") {
+			t.Fatalf("code=%d body=%q, want a generic 500 (validation passed, no leaked driver text)", code, body)
 		}
 	})
 
 	t.Run("audio attachment transcribed succeeds", func(t *testing.T) {
 		wh := fakeWhisperServer(t, "hello world")
 		code, body := post(t, fa, md.URL, wh.URL, nil, `{"goal":"g","kind":"general","attachments":[{"id":"aud1"}]}`)
-		if code != 400 || !strings.Contains(body, "database unavailable") {
-			t.Fatalf("code=%d body=%q, want a store error (validation passed)", code, body)
+		if code != 500 || strings.Contains(body, "database unavailable") {
+			t.Fatalf("code=%d body=%q, want a generic 500 (validation passed, no leaked driver text)", code, body)
 		}
 	})
 }
@@ -726,10 +781,11 @@ func TestMissionsCreateReferencesValidation(t *testing.T) {
 		// kb docs are never wired in this test's chat.Service, so a
 		// kb_doc reference resolves to nothing (skip+log) rather than a
 		// 400: the request proceeds to the (degraded) store, which then
-		// fails as an unrelated database error.
+		// fails as an unrelated database error, masked to a generic 500
+		// (issue #845).
 		code, body := post(t, `{"goal":"g","kind":"general","references":[{"kind":"kb_doc","id":"missing"}]}`)
-		if code != 400 || !strings.Contains(body, "database unavailable") {
-			t.Fatalf("code=%d body=%q, want a store error (unresolvable reference skipped, not rejected)", code, body)
+		if code != 500 || strings.Contains(body, "database unavailable") {
+			t.Fatalf("code=%d body=%q, want a generic 500 (unresolvable reference skipped, not rejected)", code, body)
 		}
 	})
 }
@@ -1072,14 +1128,14 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 		m.ServeHTTP(w, req)
 		return w.Code
 	}
-	if code := call(nil); code != http.StatusBadRequest {
-		t.Fatalf("resume with no body = %d, want 400 from the degraded driver (reached Signal)", code)
+	if code := call(nil); code != http.StatusInternalServerError {
+		t.Fatalf("resume with no body = %d, want 500 from the degraded driver (reached Signal)", code)
 	}
-	if code := call(strings.NewReader(`{}`)); code != http.StatusBadRequest {
-		t.Fatalf("resume with empty JSON body = %d, want 400 from the degraded driver (reached Signal)", code)
+	if code := call(strings.NewReader(`{}`)); code != http.StatusInternalServerError {
+		t.Fatalf("resume with empty JSON body = %d, want 500 from the degraded driver (reached Signal)", code)
 	}
-	if code := call(strings.NewReader(`{"answer":""}`)); code != http.StatusBadRequest {
-		t.Fatalf("resume with empty answer = %d, want 400 from the degraded driver (reached Signal, no answer appended)", code)
+	if code := call(strings.NewReader(`{"answer":""}`)); code != http.StatusInternalServerError {
+		t.Fatalf("resume with empty answer = %d, want 500 from the degraded driver (reached Signal, no answer appended)", code)
 	}
 }
 
@@ -1230,10 +1286,12 @@ func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 }
 
 // TestMissionsCreateKindOptional confirms an omitted kind no longer
-// 400s: it reaches missions.ClassifyKind (defaulting to "general" with no
-// classify wired) and then the degraded store, which 500s — proving
-// validation accepted the empty kind rather than rejecting it. An
-// explicit kind is still validated and honored exactly as before.
+// rejects on kind itself: it reaches missions.ClassifyKind (defaulting
+// to "general" with no classify wired) and then 400s on
+// ValidateCreate's own route-required check (this test wires no
+// route), proving kind validation accepted the empty kind rather than
+// rejecting it. An explicit kind is still validated and honored
+// exactly as before.
 func TestMissionsCreateKindOptional(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
@@ -1252,17 +1310,15 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 		return w.Code, w.Body.String()
 	}
 
-	// failMission's default branch maps any unrecognized driver error
-	// (here, the degraded pool's connection failure) to 400 — the SAME
-	// status an invalid kind gets, so the assertion that matters is
-	// which body comes back, not the status code alone: a body without
-	// "kind must be" proves the request passed kind validation and
-	// failed downstream instead.
+	// Both omitted and explicit-general kind pass kind validation and
+	// then 400 anyway on the route-required check, never echoing "kind
+	// must be" -- the assertion that matters is the body, not the
+	// status code alone (both checks 400).
 	if code, body := call(`{"goal":"do something"}`); code != http.StatusBadRequest || strings.Contains(body, "kind must be") {
-		t.Fatalf("create with omitted kind = %d %s, want 400 from the degraded driver, not kind validation", code, body)
+		t.Fatalf("create with omitted kind = %d %s, want 400 from route-required, not kind validation", code, body)
 	}
 	if code, body := call(`{"goal":"do something","kind":"general"}`); code != http.StatusBadRequest || strings.Contains(body, "kind must be") {
-		t.Fatalf("create with explicit kind = %d %s, want 400 from the degraded driver, not kind validation", code, body)
+		t.Fatalf("create with explicit kind = %d %s, want 400 from route-required, not kind validation", code, body)
 	}
 	if code, body := call(`{"goal":"do something","kind":"bogus"}`); code != http.StatusBadRequest || !strings.Contains(body, "kind must be") {
 		t.Fatalf("create with an invalid kind = %d %s, want 400 from kind validation", code, body)
@@ -1271,10 +1327,11 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 
 // TestMissionsCreateHasPlan covers has_plan's create-request parsing
 // (D-102, issue #496): true and omitted (defaults to false) both pass
-// straight through to the degraded driver/store (no ValidateCreate
-// rejection -- has_plan has no shape rules of its own), mirroring
-// TestMissionsCreateKindOptional's pattern of asserting on the response
-// body rather than the status code alone.
+// straight through ValidateCreate's has_plan-agnostic checks (it has no
+// shape rules of its own) and then 400 on the route-required check
+// (this test wires no route), mirroring TestMissionsCreateKindOptional's
+// pattern of asserting on the response body rather than the status
+// code alone.
 func TestMissionsCreateHasPlan(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
@@ -1294,10 +1351,10 @@ func TestMissionsCreateHasPlan(t *testing.T) {
 	}
 
 	if code, body := call(`{"goal":"do something","kind":"general","has_plan":true}`); code != http.StatusBadRequest || strings.Contains(body, "has_plan") {
-		t.Fatalf("create with has_plan=true = %d %s, want 400 from the degraded driver, not has_plan validation", code, body)
+		t.Fatalf("create with has_plan=true = %d %s, want 400 from route-required, not has_plan validation", code, body)
 	}
 	if code, body := call(`{"goal":"do something","kind":"general"}`); code != http.StatusBadRequest || strings.Contains(body, "has_plan") {
-		t.Fatalf("create with has_plan omitted = %d %s, want 400 from the degraded driver, not has_plan validation", code, body)
+		t.Fatalf("create with has_plan omitted = %d %s, want 400 from route-required, not has_plan validation", code, body)
 	}
 }
 
@@ -1336,17 +1393,24 @@ func TestMissionsCreateValidatesOriginKind(t *testing.T) {
 			t.Fatalf("create %s = %d %s, want 400 containing %q", tc.body, code, body, tc.want)
 		}
 	}
-	// Accepted values pass validation and fail downstream on the
-	// degraded store instead.
+	// Accepted values pass the origin_kind gate and then 400 anyway on
+	// ValidateCreate's own route-required check (this test wires no
+	// route), never echoing "origin_kind".
 	for _, body := range []string{
 		`{"goal":"g","kind":"general"}`,
 		`{"goal":"g","kind":"general","origin_kind":"api"}`,
 		`{"goal":"g","kind":"general","origin_kind":"chat","unattended":true}`,
-		`{"goal":"g","kind":"general","origin_kind":"followup","parent_mission_id":"p1","unattended":false}`,
 	} {
 		if code, resp := call(body); code != http.StatusBadRequest || strings.Contains(resp, "origin_kind") {
-			t.Fatalf("create %s = %d %s, want 400 from the degraded driver, not origin_kind validation", body, code, resp)
+			t.Fatalf("create %s = %d %s, want 400 from route-required, not origin_kind validation", body, code, resp)
 		}
+	}
+	// A followup with a parent_mission_id set fails earlier still: the
+	// parent lookup itself (against the degraded store) always reports
+	// "parent mission not found", a direct 400 from create()'s own gate
+	// rather than failMission.
+	if code, resp := call(`{"goal":"g","kind":"general","origin_kind":"followup","parent_mission_id":"p1","unattended":false}`); code != http.StatusBadRequest || !strings.Contains(resp, "parent mission not found") {
+		t.Fatalf("create followup with parent_mission_id = %d %s, want 400 parent mission not found", code, resp)
 	}
 }
 
@@ -1452,7 +1516,7 @@ func TestPRRejectsNonGitHubConnectionMission(t *testing.T) {
 
 	// Against a degraded pool, store.Get itself fails before the
 	// connector_id/repo_url gate is ever reached — this test only
-	// proves the route exists and reaches the store (400, not 404),
+	// proves the route exists and reaches the store (500, not 404),
 	// same reasoning as TestMissionsDeleteReachesStore. The gate's own
 	// behavior (400 not_pr_able for a non-github-connection mission) is
 	// covered against a real mission row in the integration suite.
@@ -1460,8 +1524,8 @@ func TestPRRejectsNonGitHubConnectionMission(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("POST pr against a degraded store = %d, want 400 (reached the store, generic failure)", w.Code)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("POST pr against a degraded store = %d, want 500 (reached the store, generic failure)", w.Code)
 	}
 }
 
@@ -2145,7 +2209,7 @@ func (noopIngester) IngestDocument(context.Context, string, string, string) (int
 
 // TestPromoteKBReachesStore covers the enabled-kbStore path against a
 // degraded pool, proving the route exists and reaches the mission
-// lookup (400, not 404): same reasoning as TestMissionsDeleteReachesStore.
+// lookup (500, not 404): same reasoning as TestMissionsDeleteReachesStore.
 // collection_id's own validation (reached only once a mission loads
 // successfully) is covered by the happy-path/gate tests in
 // missions_integration_test.go, which use a real store.
@@ -2162,8 +2226,8 @@ func TestPromoteKBReachesStore(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
 	m.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("code=%d body=%s, want 400 from the degraded store", w.Code, w.Body.String())
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("code=%d body=%s, want 500 from the degraded store", w.Code, w.Body.String())
 	}
 }
 
