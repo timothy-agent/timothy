@@ -95,11 +95,42 @@ func (s *Store) ParentLineage(ctx context.Context, parentID string) (SourceEntry
 	return LineageSource(parent, events), nil
 }
 
+// FollowUpCreateRequest maps a terminal parent onto a CreateRequest
+// continuing it: same shape as TemplateCreateRequest/StepCreateRequest,
+// so a follow-up passes through the same ResolveDefaults path (D-100
+// route gate, agent defaults) as every other mission-create caller.
+// Pins (RouteModel/PlanRouteModel/ReviewRouteModel) name an entry
+// inside a route, so they carry over with the routes above; dropping
+// them would silently demote a follow-up to the chain's first usable
+// entry. Deliberately NOT copied from parent: Destinations (push
+// consent, destination_ids, and kb promotion are per-mission human
+// choices, D-061, operator addresses outputs per mission), pdf sources
+// (a follow-up's own documents, not the parent's, beyond the files the
+// caller explicitly asked to carry over).
+func FollowUpCreateRequest(parent Mission, goal string, sources []SourceEntry) CreateRequest {
+	autoApproveTools, autoApprovePlan := parent.AutoApproveTools, parent.AutoApprovePlan
+	return CreateRequest{
+		Goal: goal, Kind: parent.Kind, AgentID: parent.AgentID,
+		Route: parent.Route, ReviewRoute: parent.ReviewRoute, PlanRoute: parent.PlanRoute,
+		EscalationRoute: parent.EscalationRoute,
+		RouteModel:      parent.RouteModel, PlanRouteModel: parent.PlanRouteModel, ReviewRouteModel: parent.ReviewRouteModel,
+		MaxIterations: parent.MaxIterations, BudgetAmount: parent.BudgetAmount, BudgetCurrency: parent.BudgetCurrency,
+		AutoApproveTools: &autoApproveTools, AutoApprovePlan: &autoApprovePlan,
+		Harness: parent.Harness, ReviewHarness: parent.ReviewHarness, Environment: parent.Environment,
+		Flow:            string(parent.Flow),
+		ParentMissionID: parent.ID, Sources: sources,
+		OriginKind: OriginFollowup,
+	}
+}
+
 // CreateFollowUp spawns a new mission continuing a terminal parent —
 // the driver-layer counterpart of api/missions.go's create handler's
 // own ParentMissionID branch, reused by builtin.FollowupMission so a
 // chat-triggered follow-up can never diverge in behavior from one
-// created through the mission-create API.
+// created through the mission-create API. Routed through
+// ResolveDefaults like every other create path: the agent's current
+// overlay/route/harness apply (not the parent's snapshot), and a
+// carried route must still clear the D-100 usable-route gate.
 func (d *Driver) CreateFollowUp(ctx context.Context, parentID string, opts FollowUpOptions) (string, error) {
 	goal := strings.TrimSpace(opts.Goal)
 	if goal == "" {
@@ -131,27 +162,11 @@ func (d *Driver) CreateFollowUp(ctx context.Context, parentID string, opts Follo
 	}
 	sources = append(sources, attachments...)
 
-	child := Mission{
-		Goal: goal, Kind: parent.Kind, AgentID: parent.AgentID,
-		Route: parent.Route, ReviewRoute: parent.ReviewRoute, PlanRoute: parent.PlanRoute,
-		EscalationRoute: parent.EscalationRoute, MaxIterations: parent.MaxIterations,
-		// Pins name an entry inside a route, so they carry over with the
-		// routes above; dropping them would silently demote a follow-up
-		// to the chain's first usable entry.
-		RouteModel: parent.RouteModel, PlanRouteModel: parent.PlanRouteModel,
-		ReviewRouteModel: parent.ReviewRouteModel,
-		BudgetAmount:     parent.BudgetAmount, BudgetCurrency: parent.BudgetCurrency,
-		AutoApproveTools: parent.AutoApproveTools, AutoApprovePlan: parent.AutoApprovePlan, PromptOverlay: parent.PromptOverlay,
-		Harness: parent.Harness, Environment: parent.Environment,
-		Flow: parent.Flow, ParentMissionID: parent.ID, Sources: sources,
-		OriginKind: OriginFollowup,
-		// Deliberately NOT copied from parent: Destinations (push consent,
-		// destination_ids, and kb promotion are per-mission human choices,
-		// D-061, operator addresses outputs per mission), pdf sources (a
-		// follow-up's own documents, not the parent's, beyond the files
-		// the caller explicitly asked to carry over).
+	m, err := ResolveDefaults(ctx, FollowUpCreateRequest(parent, goal, sources), d.resolveDeps)
+	if err != nil {
+		return "", fmt.Errorf("create follow-up: %w", err)
 	}
-	id, err := d.Create(ctx, child)
+	id, err := d.Create(ctx, m)
 	if err != nil {
 		return "", fmt.Errorf("create follow-up: %w", err)
 	}
