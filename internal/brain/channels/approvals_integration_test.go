@@ -553,8 +553,9 @@ func TestOutcomesSendFailureWritesNoMarker(t *testing.T) {
 	if err := x.o.Handle(ctx, nil, terminalEvent(t, mid, "done", "")); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if n := len(sendTexts(x.f)); n != 1 {
-		t.Fatalf("successful sends = %d, want 1", n)
+	sends := x.f.callsOf("sendMessage")
+	if len(sends) != 2 || sends[0].ResultID != 0 || sends[1].ResultID == 0 {
+		t.Fatalf("sendMessage calls = %+v, want one rejected then one accepted", sends)
 	}
 	if n := len(x.markers(t, mid)); n != 1 {
 		t.Fatalf("markers after retry = %d, want 1", n)
