@@ -1,9 +1,11 @@
-import { ChevronRight, Plus, Trash2, X } from 'lucide-react'
+import { ChevronRight, Eye, EyeOff, Plus, Trash2, X } from 'lucide-react'
 import { useId, useState, type ComponentProps } from 'react'
 import { Link } from 'react-router'
 
 import type { AdminConnector, Channel } from '../../api/types'
 import { cn } from '../../lib/utils'
+import { CredentialModeToggle, ExistingCredentialSelect } from '../settings/CredentialRefPicker'
+import { secretDestination } from '../settings/util'
 import { Field } from '../timothy/field'
 import { IconButton } from '../timothy/icon-button'
 import { SegmentedControl } from '../timothy/segmented-control'
@@ -275,8 +277,20 @@ export function ChannelFields({
 }
 
 // WebhookFields edits a webhook trigger: signature scheme, signing
-// secret name and body filters.
-export function WebhookFields({ draft, update, error }: { draft: TriggerDraft; update: Patch; error?: string }) {
+// secret (new or existing) and body filters. secretBackend names where
+// a new secret's value ends up, for the destination caption.
+export function WebhookFields({
+  draft,
+  update,
+  error,
+  secretBackend,
+}: {
+  draft: TriggerDraft
+  update: Patch
+  error?: string
+  secretBackend: string
+}) {
+  const [revealed, setRevealed] = useState(false)
   const setFilter = (i: number, patch: Partial<{ path: string; equals: string }>) =>
     update({ filters: draft.filters.map((f, j) => (j === i ? { ...f, ...patch } : f)) })
 
@@ -295,19 +309,63 @@ export function WebhookFields({ draft, update, error }: { draft: TriggerDraft; u
           ]}
         />
       </div>
-      <Field
-        label="Signing secret"
-        description="The name of the stored secret that holds the signing key, such as HOOK_SIGNING_KEY."
-        error={error}
-      >
-        <Input
-          value={draft.credentialRef}
-          onChange={(e) => update({ credentialRef: e.target.value })}
-          placeholder="HOOK_SIGNING_KEY"
-          className="font-mono"
-          autoComplete="off"
-        />
-      </Field>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-foreground">Signing secret</span>
+          <CredentialModeToggle
+            mode={draft.secretMode}
+            onChange={(secretMode) => update({ secretMode, secretValue: '' })}
+            labels={{ new: 'New secret', existing: 'Existing' }}
+          />
+        </div>
+        {draft.secretMode === 'new' ? (
+          <>
+            <Field
+              label="Secret name"
+              description="The name of the stored secret that holds the signing key, such as HOOK_SIGNING_KEY."
+              error={error}
+            >
+              <Input
+                value={draft.credentialRef}
+                onChange={(e) => update({ credentialRef: e.target.value })}
+                placeholder="HOOK_SIGNING_KEY"
+                className="font-mono"
+                autoComplete="off"
+                aria-label="Signing secret"
+              />
+            </Field>
+            <div className="space-y-1.5">
+              <div className="flex gap-2">
+                <Input
+                  type={revealed ? 'text' : 'password'}
+                  value={draft.secretValue}
+                  onChange={(e) => update({ secretValue: e.target.value })}
+                  placeholder="Paste the signing key"
+                  aria-label="Signing key"
+                  autoComplete="off"
+                />
+                <IconButton
+                  label={revealed ? 'Hide token' : 'Show token'}
+                  icon={revealed ? EyeOff : Eye}
+                  variant="outline"
+                  tooltip={false}
+                  onClick={() => setRevealed((v) => !v)}
+                />
+              </div>
+              <p className="text-sm text-muted-foreground">{secretDestination(secretBackend, draft.credentialRef)}</p>
+            </div>
+          </>
+        ) : (
+          <Field label="Stored secret" error={error}>
+            <ExistingCredentialSelect
+              value={draft.credentialRef}
+              onChange={(credentialRef) => update({ credentialRef })}
+              keepValue
+              placeholder="choose a stored secret"
+            />
+          </Field>
+        )}
+      </div>
       <div className="space-y-2">
         <p className="text-sm font-medium">Filters</p>
         <p className="text-sm text-muted-foreground">A delivery runs only when every filter matches its JSON body.</p>

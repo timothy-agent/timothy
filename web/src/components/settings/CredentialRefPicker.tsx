@@ -30,7 +30,7 @@ function managedRoleSuffix(ref: SecretRefEntry): string | null {
 
 // ModeToggle is the segmented "New credential" / "Use existing"
 // control shared by every form offering credential reuse.
-function CredentialModeToggle({
+export function CredentialModeToggle({
   mode,
   onChange,
   labels,
@@ -64,15 +64,21 @@ export function ExistingCredentialSelect({
   value,
   onChange,
   placeholder = 'choose a stored credential',
+  keepValue = false,
 }: {
   value: string
   onChange: (refName: string) => void
   placeholder?: string
+  // keepValue keeps a value that is not (yet) in the fetched refs
+  // selectable, labeled "(not stored)", instead of showing it blank.
+  keepValue?: boolean
 }) {
   const [refs, setRefs] = useState<SecretRefEntry[]>([])
   useEffect(() => {
     listSecretRefs().then(setRefs, () => undefined)
   }, [])
+
+  const unknown = keepValue && value !== '' && !refs.some((r) => r.name === value)
 
   return (
     <Select value={value} onValueChange={onChange}>
@@ -80,6 +86,7 @@ export function ExistingCredentialSelect({
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
+        {unknown && <SelectItem value={value}>{value} (not stored)</SelectItem>}
         {refs.map((r) => {
           const managedSuffix = managedRoleSuffix(r)
           return (

@@ -9,7 +9,15 @@ import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Switch } from '../ui/switch'
 import { ChannelFields, ConnectorEventFields, ToolAllowlistField, WebhookFields } from './TriggerFields'
-import { cronError, defaultCron, maxTriggers, newTriggerDraft, triggerError, type TriggerDraft } from './triggerDrafts'
+import {
+  cronError,
+  defaultCron,
+  maxTriggers,
+  newTriggerDraft,
+  secretFieldError,
+  triggerError,
+  type TriggerDraft,
+} from './triggerDrafts'
 
 const kindOptions: { value: AutomationTrigger['kind']; label: string }[] = [
   { value: 'cron', label: 'Cron' },
@@ -19,11 +27,10 @@ const kindOptions: { value: AutomationTrigger['kind']; label: string }[] = [
   { value: 'channel', label: 'Channel message' },
 ]
 
-const secretMissing = (d: TriggerDraft) => d.kind === 'webhook' && d.credentialRef.trim() === ''
-
 // TriggerList edits one to five triggers. errors holds server messages
 // keyed by draft key; connectors feeds the connector event picker and
-// channels the channel picker.
+// channels the channel picker. secretBackend names where a new
+// webhook secret's value ends up.
 export function TriggerList({
   value,
   onChange,
@@ -31,6 +38,7 @@ export function TriggerList({
   connectors = null,
   channels = null,
   submitted = false,
+  secretBackend = 'db',
 }: {
   value: TriggerDraft[]
   onChange: (next: TriggerDraft[]) => void
@@ -38,6 +46,7 @@ export function TriggerList({
   connectors?: AdminConnector[] | null
   channels?: Channel[] | null
   submitted?: boolean
+  secretBackend?: string
 }) {
   const update = (key: string, patch: Partial<TriggerDraft>) =>
     onChange(value.map((d) => (d.key === key ? { ...d, ...patch } : d)))
@@ -140,7 +149,8 @@ export function TriggerList({
               <WebhookFields
                 draft={d}
                 update={(patch) => update(d.key, patch)}
-                error={submitted && secretMissing(d) ? triggerError(d) : undefined}
+                error={submitted ? secretFieldError(d) : undefined}
+                secretBackend={secretBackend}
               />
             )}
             {errors[d.key] && d.kind !== 'cron' && (
@@ -148,11 +158,15 @@ export function TriggerList({
                 {errors[d.key]}
               </p>
             )}
-            {submitted && !errors[d.key] && d.kind !== 'cron' && !secretMissing(d) && triggerError(d) && (
-              <p role="alert" className="text-xs text-destructive">
-                {triggerError(d)}
-              </p>
-            )}
+            {submitted &&
+              !errors[d.key] &&
+              d.kind !== 'cron' &&
+              !(d.kind === 'webhook' && secretFieldError(d)) &&
+              triggerError(d) && (
+                <p role="alert" className="text-xs text-destructive">
+                  {triggerError(d)}
+                </p>
+              )}
             <ToolAllowlistField draft={d} update={(patch) => update(d.key, patch)} index={i} />
           </div>
         )

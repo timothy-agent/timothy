@@ -20,6 +20,10 @@ export interface TriggerDraft {
   scheme: WebhookScheme
   filters: WebhookFilter[]
   credentialRef: string
+  // secretMode/secretValue are webhook-only: 'new' names and pastes a
+  // secret to write on save, 'existing' just picks a stored name.
+  secretMode: 'new' | 'existing'
+  secretValue: string
   channelId: string
   pattern: string
   chatId: string
@@ -44,6 +48,8 @@ export const connectorEventKinds = [
 
 const repoShape = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/
 const filterPathShape = /^(\$\.)?[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/
+// secretNameShape mirrors the server's stored-secret name rule.
+export const secretNameShape = /^[A-Za-z0-9_./-]{1,128}$/
 
 let seq = 0
 const nextKey = () => `trigger-${++seq}`
@@ -56,6 +62,8 @@ const blankFields = {
   scheme: 'github' as WebhookScheme,
   filters: [] as WebhookFilter[],
   credentialRef: '',
+  secretMode: 'new' as const,
+  secretValue: '',
   channelId: '',
   pattern: '',
   chatId: '',
@@ -91,6 +99,8 @@ export function draftsFromTriggers(
     scheme: t.config.scheme ?? 'github',
     filters: (t.config.filters ?? []).map((f) => ({ path: f.path.replace(/^\$\./, ''), equals: f.equals })),
     credentialRef: t.credential_ref ?? '',
+    secretMode: t.credential_ref ? 'existing' : 'new',
+    secretValue: '',
     channelId: t.config.channel_id ?? '',
     pattern: t.config.pattern ?? '',
     chatId: t.config.chat_id ?? '',
@@ -121,7 +131,8 @@ function configFor(d: TriggerDraft): AutomationTriggerConfig {
 }
 
 // draftsToInput builds the wire triggers; manual triggers carry no
-// config and only webhook triggers carry a credential_ref.
+// config and only webhook triggers carry a credential_ref. secretValue
+// never goes on the wire: the caller writes it via setSecret first.
 export function draftsToInput(drafts: TriggerDraft[]): AutomationTriggerInput[] {
   return drafts.map((d) => ({
     ...(d.id && { id: d.id }),
@@ -170,6 +181,20 @@ export function patternError(d: TriggerDraft): string | undefined {
   return undefined
 }
 
+// secretFieldError flags a webhook draft's secret name/value, mode
+// aware: 'new' needs a valid name and a pasted key, 'existing' needs a
+// picked stored name.
+export function secretFieldError(d: TriggerDraft): string | undefined {
+  if (d.secretMode === 'existing') {
+    return d.credentialRef.trim() === '' ? 'Pick a stored secret.' : undefined
+  }
+  const name = d.credentialRef.trim()
+  if (name === '') return 'Enter the signing secret name.'
+  if (!secretNameShape.test(name)) return 'Use letters, digits, _ . / or -.'
+  if (d.secretValue.trim() === '') return 'Paste the signing key.'
+  return undefined
+}
+
 // triggerError reports whether a draft is incomplete or malformed, as
 // one message; the fields show their own errors.
 export function triggerError(d: TriggerDraft): string | undefined {
@@ -181,7 +206,8 @@ export function triggerError(d: TriggerDraft): string | undefined {
     if (d.events.length === 0) return 'Pick at least one event.'
   }
   if (d.kind === 'webhook') {
-    if (d.credentialRef.trim() === '') return 'Enter the signing secret name.'
+    const secretErr = secretFieldError(d)
+    if (secretErr) return secretErr
     const bad = d.filters.find((f) => f.path.trim() === '' || filterPathError(f.path))
     if (bad) return 'Fix the filter paths.'
   }
@@ -191,6 +217,21 @@ export function triggerError(d: TriggerDraft): string | undefined {
     return patternError(d)
   }
   return undefined
+}
+
+// pendingSecrets lists the new-mode webhook secrets a submit must
+// write before the automation POST, deduped by name (last write wins),
+// values trimmed so a pasted trailing newline never joins the key.
+export function pendingSecrets(drafts: TriggerDraft[]): { name: string; value: string }[] {
+  const byName = new Map<string, string>()
+  for (const d of drafts) {
+    if (d.kind !== 'webhook' || d.secretMode !== 'new') continue
+    const name = d.credentialRef.trim()
+    const value = d.secretValue.trim()
+    if (name === '' || value === '') continue
+    byName.set(name, value)
+  }
+  return Array.from(byName, ([name, value]) => ({ name, value }))
 }
 
 // githubConnectorOptions lists enabled github connectors, plus the
