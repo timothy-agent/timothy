@@ -810,7 +810,7 @@ func (d *Driver) SetValidateDeps(deps ValidateDeps) {
 }
 
 // SetResolveDeps wires the lookups CreateFollowUp's ResolveDefaults
-// call needs — a setter for the same reason SetValidateDeps is:
+// call needs; a setter for the same reason SetValidateDeps is:
 // cmd/brain/main.go builds the gateway route resolver and agent
 // resolver after the Driver. Unset (the default) leaves every field
 // nil, so ResolveDefaults just skips those resolution steps.
