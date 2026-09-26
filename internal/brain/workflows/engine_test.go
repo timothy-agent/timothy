@@ -278,8 +278,8 @@ func TestStartRunRefusesDisabledWorkflow(t *testing.T) {
 	spawner := &fakeSpawner{}
 	e := testEngine(store, spawner)
 
-	if _, err := e.StartRun(context.Background(), "wf1", nil); err == nil {
-		t.Fatal("StartRun() = nil, want error for disabled workflow")
+	if _, err := e.StartRun(context.Background(), "wf1", nil); !errors.Is(err, ErrDisabled) {
+		t.Fatalf("StartRun() = %v, want ErrDisabled", err)
 	}
 	if spawner.count() != 0 {
 		t.Fatalf("spawned missions = %d, want 0", spawner.count())

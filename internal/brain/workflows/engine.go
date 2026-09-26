@@ -79,7 +79,7 @@ func (e *Engine) StartRun(ctx context.Context, workflowID string, runContext map
 		return "", fmt.Errorf("workflows start run: %w", err)
 	}
 	if !wf.Enabled {
-		return "", fmt.Errorf("workflow %s is disabled", workflowID)
+		return "", fmt.Errorf("workflow %s: %w", workflowID, ErrDisabled)
 	}
 	def, err := ParseDefinition(wf.Definition)
 	if err != nil {

@@ -104,6 +104,8 @@ func validate(c *Connector) error {
 var (
 	ErrNotFound    = fmt.Errorf("not found")
 	ErrUnsupported = fmt.Errorf("unsupported")
+	// ErrInvalid wraps every Create/Patch validation rejection.
+	ErrInvalid = errors.New("invalid connector")
 )
 
 // Store is the connectors table's CRUD, audited like the gateway's
@@ -162,7 +164,7 @@ func (s *Store) Get(ctx context.Context, id string) (Connector, error) {
 // Create inserts a connector, audits, and fires the change hook.
 func (s *Store) Create(ctx context.Context, c Connector) (string, error) {
 	if err := validate(&c); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	db, err := s.db.Get()
 	if err != nil {
@@ -177,6 +179,9 @@ func (s *Store) Create(ctx context.Context, c Connector) (string, error) {
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		c.Name, c.Kind, cfg, c.CredentialRef, c.Enabled, c.Sensitive).Scan(&id)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return "", ErrNameConflict
+		}
 		return "", fmt.Errorf("connectors create: %w", err)
 	}
 	s.audit(ctx, "create", id, nil, c)
@@ -204,14 +209,14 @@ var ErrNameConflict = fmt.Errorf("a connector with this name already exists")
 func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
 	if patch.Name != nil {
 		if _, err := validateName(*patch.Name); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 	}
 	if patch.CredentialRef != nil && !credentialRefPattern.MatchString(*patch.CredentialRef) {
-		return fmt.Errorf("credential_ref must be a name or path, never a secret value")
+		return fmt.Errorf("%w: credential_ref must be a name or path, never a secret value", ErrInvalid)
 	}
 	if patch.Config != nil && len(*patch.Config) > 0 && !json.Valid(*patch.Config) {
-		return fmt.Errorf("config must be a JSON object")
+		return fmt.Errorf("%w: config must be a JSON object", ErrInvalid)
 	}
 
 	db, err := s.db.Get()

@@ -113,10 +113,10 @@ func (d *Definition) Validate() error {
 func ParseDefinition(raw json.RawMessage) (Definition, error) {
 	var d Definition
 	if err := json.Unmarshal(raw, &d); err != nil {
-		return Definition{}, fmt.Errorf("parse definition: %w", err)
+		return Definition{}, fmt.Errorf("%w: parse: %w", ErrInvalidDefinition, err)
 	}
 	if err := d.Validate(); err != nil {
-		return Definition{}, fmt.Errorf("invalid definition: %w", err)
+		return Definition{}, fmt.Errorf("%w: %w", ErrInvalidDefinition, err)
 	}
 	return d, nil
 }

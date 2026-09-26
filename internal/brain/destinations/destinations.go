@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -146,6 +147,8 @@ var (
 	// ErrReferenced guards Delete: a destination referenced by any
 	// non-terminal mission cannot be removed out from under it.
 	ErrReferenced = fmt.Errorf("destination is referenced by an active mission")
+	// ErrInvalid wraps every Create/Patch validation rejection.
+	ErrInvalid = errors.New("invalid destination")
 )
 
 func validate(ctx context.Context, conns connectorLookup, channels ChannelLookup, d *Destination) error {
@@ -409,7 +412,7 @@ func (s *Store) RepoPolicy(ctx context.Context, id string) (missions.GitHubPolic
 // Create validates and inserts a destination row.
 func (s *Store) Create(ctx context.Context, d Destination) (string, error) {
 	if err := validate(ctx, s.conns, s.channels, &d); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	db, err := s.db.Get()
 	if err != nil {
@@ -424,9 +427,17 @@ func (s *Store) Create(ctx context.Context, d Destination) (string, error) {
 		VALUES ($1, $2, $3, $4, $5) RETURNING id`,
 		d.Name, d.Kind, cfg, d.CredentialRef, d.Enabled).Scan(&id)
 	if err != nil {
+		if isUniqueViolation(err) {
+			return "", fmt.Errorf("%w: a destination with this name already exists", ErrInvalid)
+		}
 		return "", fmt.Errorf("destinations create: %w", err)
 	}
 	return id, nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // Patch applies a partial update. Name and kind are immutable — a
@@ -464,7 +475,7 @@ func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
 		after.Enabled = *patch.Enabled
 	}
 	if err := validate(ctx, s.conns, s.channels, &after); err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 
 	if _, err := tx.Exec(ctx, `UPDATE destinations SET config = $2, credential_ref = $3,
