@@ -424,6 +424,30 @@ func finalizeRun(ctx context.Context, tx pgx.Tx, runID, automationID, missionID 
 	return name, false, promoteQueued(ctx, tx, automationID, concurrency, maxConcurrent, now)
 }
 
+// releaseSlot promotes a queued run of automationID when the automation
+// still exists and is enabled: used by a skip that frees a concurrency
+// slot without going through finalizeRun's done/failed bookkeeping
+// (issue #865). Locks the automation row same as finalizeRun does, so
+// the two never race each other's view of active/queued runs. A
+// deleted automation is a silent no-op.
+func releaseSlot(ctx context.Context, tx pgx.Tx, automationID string, now time.Time) error {
+	var enabled bool
+	var concurrency string
+	var maxConcurrent int
+	err := tx.QueryRow(ctx, `SELECT enabled, concurrency, max_concurrent FROM automations WHERE id = $1 FOR UPDATE`,
+		automationID).Scan(&enabled, &concurrency, &maxConcurrent)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("automations: release slot: lock automation: %w", err)
+	}
+	if !enabled {
+		return nil
+	}
+	return promoteQueued(ctx, tx, automationID, concurrency, maxConcurrent, now)
+}
+
 // promoteQueued starts the newest queued run when active runs are under
 // the automation's cap and supersedes older queued ones. It is the only
 // way a queued run leaves the queue.

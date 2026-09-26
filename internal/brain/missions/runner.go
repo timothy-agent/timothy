@@ -2269,6 +2269,29 @@ var allowlistPassTools = []string{
 	askUserToolName, "retrieve_output", "load_skill",
 }
 
+// delegatedWorkerTools are the tools a delegated CLI's own shell/edit
+// surface stands in for: a tool_allowlist can only be honored by a
+// delegated harness when it grants both (D-119, issue #865). The CLI
+// has no per-tool gate of its own, so anything narrower than this
+// cannot be enforced short of not running the harness at all.
+var delegatedWorkerTools = []string{"shell", "write_file"}
+
+// delegatedAllowlistGap reports which of delegatedWorkerTools m's
+// tool_allowlist excludes: nil when m has no allowlist (unrestricted,
+// always compatible) or every entry is present.
+func (m Mission) delegatedAllowlistGap() []string {
+	if m.ToolAllowlist == nil {
+		return nil
+	}
+	var gap []string
+	for _, name := range delegatedWorkerTools {
+		if !m.allowsTool(name) {
+			gap = append(gap, name)
+		}
+	}
+	return gap
+}
+
 // allowsTool reports whether m's tool_allowlist lets a turn offer name.
 // nil allows every tool; entries match like agent allowlists
 // (tools.ToolMatches).
