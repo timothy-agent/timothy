@@ -135,6 +135,11 @@ describe('pendingSecrets', () => {
     expect(pendingSecrets([a, b, existing, empty])).toEqual([{ name: 'HOOK_KEY', value: 'k3y2' }])
   })
 
+  it('trims pasted whitespace from the key', () => {
+    const d = { ...newTriggerDraft(), kind: 'webhook' as const, credentialRef: 'HOOK_KEY', secretValue: '  k3y\n' }
+    expect(pendingSecrets([d])).toEqual([{ name: 'HOOK_KEY', value: 'k3y' }])
+  })
+
   it('ignores non-webhook and blank-name drafts', () => {
     expect(pendingSecrets([newTriggerDraft(), { ...newTriggerDraft(), kind: 'connector_event' as const }])).toEqual([])
   })

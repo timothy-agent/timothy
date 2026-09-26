@@ -220,14 +220,16 @@ export function triggerError(d: TriggerDraft): string | undefined {
 }
 
 // pendingSecrets lists the new-mode webhook secrets a submit must
-// write before the automation POST, deduped by name (last write wins).
+// write before the automation POST, deduped by name (last write wins),
+// values trimmed so a pasted trailing newline never joins the key.
 export function pendingSecrets(drafts: TriggerDraft[]): { name: string; value: string }[] {
   const byName = new Map<string, string>()
   for (const d of drafts) {
     if (d.kind !== 'webhook' || d.secretMode !== 'new') continue
     const name = d.credentialRef.trim()
-    if (name === '' || d.secretValue === '') continue
-    byName.set(name, d.secretValue)
+    const value = d.secretValue.trim()
+    if (name === '' || value === '') continue
+    byName.set(name, value)
   }
   return Array.from(byName, ([name, value]) => ({ name, value }))
 }
