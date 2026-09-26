@@ -155,7 +155,12 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if destinationStore != nil {
 		destLister = destinationStore
 	}
-	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister)
+	// Same nil-box guard for *automations.Store.
+	var autoLister automationLister
+	if automationStore != nil {
+		autoLister = automationStore
+	}
+	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister, autoLister)
 	a.registerSettings(srv.Handle, flags, whisperURL, pdfService != nil)
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog, msft, secrets)
@@ -366,6 +371,17 @@ func jsonError(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "message": msg})
+}
+
+// failInternal logs err server-side and answers 500 with a generic
+// message, so driver text never reaches the client. log nil falls back
+// to slog.Default().
+func failInternal(w http.ResponseWriter, log *slog.Logger, what string, err error) {
+	if log == nil {
+		log = slog.Default()
+	}
+	log.Error(what+" request failed", "error", err)
+	jsonError(w, http.StatusInternalServerError, "internal_error", "internal error")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
