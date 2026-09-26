@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/SumonMSelim/timothy/internal/brain/automations"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -137,9 +138,16 @@ type destinationLister interface {
 	List(ctx context.Context) ([]destinations.Destination, error)
 }
 
+// automationLister is the slice of automations.Store the directory
+// needs; *automations.Store satisfies it. Includes disabled
+// automations and triggers: they still own their credential_ref.
+type automationLister interface {
+	List(ctx context.Context) ([]automations.Automation, error)
+}
+
 // secretRefEntry is the credentials panel's per-ref shape: the
 // gateway's directory metadata plus every referent (provider,
-// connector, or destination) across both services, merged here because
+// connector, destination, or automation) across both services, merged here because
 // neither service alone can see both tables. Never a value. System
 // marks a configured secret backend's own bootstrap credential (passed
 // straight through from the gateway); the panel hides the delete
@@ -154,7 +162,7 @@ type secretRefEntry struct {
 }
 
 type referenceInfo struct {
-	Kind string `json:"kind"` // "provider" | "connector" | "destination"
+	Kind string `json:"kind"` // "provider" | "connector" | "destination" | "automation"
 	Name string `json:"name"`
 	// Role distinguishes what the ref is used for, so the frontend can
 	// refuse manual picks of machine-managed refs: "credential" (a
@@ -167,9 +175,10 @@ type referenceInfo struct {
 
 // registerSecrets mounts brain's own credentials-directory endpoints.
 // GET assembles the gateway's per-ref provider referents with brain's
-// own connector and destination referents (independent DBs, no new
-// cross-service dependency; see admin_test.go for the design note).
-// DELETE checks connector and destination references itself before
+// own connector, destination, and automation referents (independent
+// DBs, no new cross-service dependency; see admin_test.go for the
+// design note). DELETE checks connector, destination, and automation
+// references itself before
 // forwarding to the gateway, which independently refuses on provider
 // references; each service stays authoritative for the referents it
 // owns. nil gw leaves the surface unmounted; nil conns (connectors
@@ -177,12 +186,13 @@ type referenceInfo struct {
 // connector-reference guard, because DELETE has no proxied fallback
 // (see adminRoutePatterns) and the gateway's own provider guard still
 // applies. nil dests (destinations disabled) is the same: skips the
-// destination referents and the delete guard.
-func (a *API) registerSecrets(handle func(pattern string, h http.Handler), gw GatewaySecrets, conns connectorLister, dests destinationLister) {
+// destination referents and the delete guard. nil autos (automations
+// disabled) likewise skips the automation referents and guard.
+func (a *API) registerSecrets(handle func(pattern string, h http.Handler), gw GatewaySecrets, conns connectorLister, dests destinationLister, autos automationLister) {
 	if gw == nil {
 		return
 	}
-	h := &secretsAPI{gw: gw, connectors: conns, destinations: dests}
+	h := &secretsAPI{gw: gw, connectors: conns, destinations: dests, automations: autos}
 	handle("GET /v1/admin/secrets", a.auth(http.HandlerFunc(h.list)))
 	handle("DELETE /v1/admin/secrets/{ref_name}", a.auth(http.HandlerFunc(h.delete)))
 }
@@ -191,6 +201,7 @@ type secretsAPI struct {
 	gw           GatewaySecrets
 	connectors   connectorLister
 	destinations destinationLister
+	automations  automationLister
 }
 
 // connectorRefs maps every stored secret ref name to the connector
@@ -242,6 +253,31 @@ func destinationCredentialRefs(ctx context.Context, store destinationLister) (ma
 	return out, nil
 }
 
+// automationTriggerCredentialRefs maps every stored secret ref name to
+// the automations whose webhook trigger names it as credential_ref
+// (the signing secret), one referent per automation and ref.
+func automationTriggerCredentialRefs(ctx context.Context, store automationLister) (map[string][]referenceInfo, error) {
+	if store == nil {
+		return map[string][]referenceInfo{}, nil
+	}
+	rows, err := store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]referenceInfo{}
+	for _, a := range rows {
+		seen := map[string]bool{}
+		for _, t := range a.Triggers {
+			if t.Kind != automations.TriggerWebhook || t.CredentialRef == "" || seen[t.CredentialRef] {
+				continue
+			}
+			seen[t.CredentialRef] = true
+			out[t.CredentialRef] = append(out[t.CredentialRef], referenceInfo{Kind: "automation", Name: a.Name, Role: "credential"})
+		}
+	}
+	return out, nil
+}
+
 func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 	refs, err := h.gw.ListSecrets(r.Context())
 	if err != nil {
@@ -258,6 +294,11 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "destinations_failed", err.Error())
 		return
 	}
+	byAutomation, err := automationTriggerCredentialRefs(r.Context(), h.automations)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "automations_failed", err.Error())
+		return
+	}
 
 	out := make([]secretRefEntry, len(refs))
 	for i, ref := range refs {
@@ -269,6 +310,7 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 		}
 		referents = append(referents, byConnector[ref.RefName]...)
 		referents = append(referents, byDestination[ref.RefName]...)
+		referents = append(referents, byAutomation[ref.RefName]...)
 		out[i] = secretRefEntry{
 			RefName: ref.RefName, Backend: ref.Backend, CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt,
 			ReferencedBy: referents, System: ref.System,
@@ -277,9 +319,9 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"secrets": out})
 }
 
-// delete refuses (409) while any connector or destination still names
-// ref_name as its credential_ref, without ever asking the gateway; a
-// connector/destination-only reference is brain's own domain.
+// delete refuses (409) while any connector, destination, or automation
+// webhook trigger still names ref_name as its credential_ref, without
+// ever asking the gateway; those references are brain's own domain.
 // Otherwise it forwards to the gateway, which independently refuses on
 // provider references.
 func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
@@ -310,6 +352,20 @@ func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonError(w, http.StatusConflict, "in_use",
 			refName+" is referenced by destination(s) "+joinNames(names))
+		return
+	}
+	byAutomation, err := automationTriggerCredentialRefs(r.Context(), h.automations)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "automations_failed", err.Error())
+		return
+	}
+	if refs := byAutomation[refName]; len(refs) > 0 {
+		names := make([]string, len(refs))
+		for i, ref := range refs {
+			names[i] = ref.Name
+		}
+		jsonError(w, http.StatusConflict, "in_use",
+			refName+" is referenced by automation(s) "+joinNames(names))
 		return
 	}
 	status, err := h.gw.DeleteSecret(r.Context(), refName)

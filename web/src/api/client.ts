@@ -788,17 +788,18 @@ export async function migrateAllSecrets(backend: string): Promise<SecretMigratio
   return results ?? []
 }
 
-// SecretReference is one provider or connector naming a credential ref
-// as its credential_ref: the credentials panel's used-by chips.
+// SecretReference is one provider, connector, destination, or
+// automation webhook trigger naming a credential ref as its
+// credential_ref: the credentials panel's used-by chips.
 interface SecretReference {
-  kind: 'provider' | 'connector'
+  kind: 'provider' | 'connector' | 'destination' | 'automation'
   name: string
   role: 'credential' | 'oauth_tokens' | 'signing_key' | 'client_secret'
 }
 
 // SecretRefEntry is one stored secret's directory entry: name,
-// timestamps (when the row has them), and every referent across both
-// providers and connectors. Never a value: the credentials panel is a
+// timestamps (when the row has them), and every referent across
+// providers, connectors, destinations, and automations. Never a value: the credentials panel is a
 // directory, not a vault viewer. system marks a configured secret
 // backend's own bootstrap credential (e.g. the vault token): the
 // gateway refuses to delete these regardless, but the panel hides the
