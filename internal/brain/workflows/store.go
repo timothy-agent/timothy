@@ -19,6 +19,10 @@ import (
 var (
 	ErrNotFound  = errors.New("not found")
 	ErrDuplicate = errors.New("a workflow with this name already exists")
+	// ErrInvalidDefinition wraps every ParseDefinition rejection.
+	ErrInvalidDefinition = errors.New("invalid definition")
+	// ErrDisabled refuses StartRun on a disabled workflow.
+	ErrDisabled = errors.New("workflow is disabled")
 )
 
 // Workflow is the API/DB shape of one workflows row.

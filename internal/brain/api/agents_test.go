@@ -16,7 +16,7 @@ import (
 func TestFailAgentMapsAutomationInUseTo409(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
-	failAgent(w, fmt.Errorf("agent is used by automation(s) daily-digest, weekly-report: %w", agents.ErrInUse))
+	failAgent(w, discard(), fmt.Errorf("agent is used by automation(s) daily-digest, weekly-report: %w", agents.ErrInUse))
 	if w.Code != 409 {
 		t.Fatalf("status = %d, want 409", w.Code)
 	}
@@ -31,7 +31,7 @@ func TestFailAgentHidesSQLState(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()
 	pgErr := &pgconn.PgError{Code: "23503", TableName: "missions"}
-	failAgent(w, fmt.Errorf("agent delete: %w", pgErr))
+	failAgent(w, discard(), fmt.Errorf("agent delete: %w", pgErr))
 	if w.Code != 500 {
 		t.Fatalf("status = %d, want 500", w.Code)
 	}
@@ -39,10 +39,10 @@ func TestFailAgentHidesSQLState(t *testing.T) {
 	if strings.Contains(body, "SQLSTATE") || strings.Contains(body, "23503") {
 		t.Fatalf("body leaked SQLSTATE: %s", body)
 	}
-	assertErrorBody(t, w, "internal_error", "agent store error")
+	assertErrorBody(t, w, "internal_error", "internal error")
 
 	w = httptest.NewRecorder()
-	failAgent(w, fmt.Errorf("agent is used by automation(s) x: %w", agents.ErrInUse))
+	failAgent(w, discard(), fmt.Errorf("agent is used by automation(s) x: %w", agents.ErrInUse))
 	if w.Code != 409 {
 		t.Fatalf("ErrInUse status = %d, want 409", w.Code)
 	}

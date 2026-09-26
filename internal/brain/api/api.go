@@ -303,7 +303,7 @@ func (a *API) handlePendingPermissions(w http.ResponseWriter, r *http.Request) {
 	if a.perms != nil {
 		var err error
 		if pending, err = a.perms.Pending(r.Context()); err != nil {
-			jsonError(w, http.StatusInternalServerError, "pending_permissions_failed", err.Error())
+			failInternalCode(w, a.log, "pending_permissions_failed", "session", err)
 			return
 		}
 	}
@@ -368,6 +368,22 @@ func jsonError(w http.ResponseWriter, status int, code, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "message": msg})
 }
 
+// failInternal logs err server-side and answers 500 with a generic
+// message, so driver text never reaches the client. log nil falls back
+// to slog.Default().
+func failInternal(w http.ResponseWriter, log *slog.Logger, what string, err error) {
+	failInternalCode(w, log, "internal_error", what, err)
+}
+
+// failInternalCode is failInternal with a caller-chosen error code.
+func failInternalCode(w http.ResponseWriter, log *slog.Logger, code, what string, err error) {
+	if log == nil {
+		log = slog.Default()
+	}
+	log.Error(what+" request failed", "error", err)
+	jsonError(w, http.StatusInternalServerError, code, "internal error")
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -398,7 +414,7 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	sessions, err := a.dir.List(r.Context(), r.URL.Query().Get("query"), before, beforeID)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		failInternalCode(w, a.log, "list_failed", "session", err)
 		return
 	}
 	if sessions == nil {
@@ -417,7 +433,7 @@ func (a *API) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.dir.Create(r.Context(), req.Title)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "create_failed", err.Error())
+		failInternalCode(w, a.log, "create_failed", "session", err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
@@ -435,17 +451,17 @@ func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusNotFound, "not_found", "no such session")
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		failInternalCode(w, a.log, "get_failed", "session", err)
 		return
 	}
 	events, err := a.dir.Events(r.Context(), id)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "events_failed", err.Error())
+		failInternalCode(w, a.log, "events_failed", "session", err)
 		return
 	}
 	items, err := session.UITranscript(events)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "projection_failed", err.Error())
+		failInternalCode(w, a.log, "projection_failed", "session", err)
 		return
 	}
 	if items == nil {
@@ -488,7 +504,7 @@ func (a *API) handleUpdate(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusNotFound, "not_found", "no such session")
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, "update_failed", err.Error())
+		failInternalCode(w, a.log, "update_failed", "session", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -545,7 +561,7 @@ func (a *API) handleSetKnowledge(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusNotFound, "not_found", "no such session")
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, "set_knowledge_failed", err.Error())
+		failInternalCode(w, a.log, "set_knowledge_failed", "session", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -568,7 +584,7 @@ func (a *API) handleDelete(w http.ResponseWriter, r *http.Request) {
 		case strings.Contains(err.Error(), "not found"):
 			jsonError(w, http.StatusNotFound, "not_found", "no such session")
 		default:
-			jsonError(w, http.StatusInternalServerError, "delete_failed", err.Error())
+			failInternalCode(w, a.log, "delete_failed", "session", err)
 		}
 		return
 	}
@@ -597,7 +613,7 @@ func (a *API) handleMessages(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusNotFound, "not_found", "no such session")
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		failInternalCode(w, a.log, "get_failed", "session", err)
 		return
 	}
 	a.streamTurn(w, r, func(ctx context.Context) (string, <-chan stream.StreamEvent, error) {
@@ -640,7 +656,7 @@ func (a *API) handleRetry(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusNotFound, "not_found", "no such session")
 			return
 		}
-		jsonError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		failInternalCode(w, a.log, "get_failed", "session", err)
 		return
 	}
 	a.streamTurn(w, r, func(ctx context.Context) (string, <-chan stream.StreamEvent, error) {

@@ -3,9 +3,8 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
-
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 )
@@ -17,7 +16,7 @@ func (a *API) registerAgents(handle func(pattern string, h http.Handler), reg *a
 	if reg == nil {
 		return
 	}
-	h := &agentAPI{reg: reg}
+	h := &agentAPI{reg: reg, log: a.log}
 	handle("GET /v1/admin/agents", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/admin/agents", a.auth(http.HandlerFunc(h.create)))
 	handle("PATCH /v1/admin/agents/{id}", a.auth(http.HandlerFunc(h.patch)))
@@ -27,9 +26,10 @@ func (a *API) registerAgents(handle func(pattern string, h http.Handler), reg *a
 
 type agentAPI struct {
 	reg *agents.Store
+	log *slog.Logger
 }
 
-func failAgent(w http.ResponseWriter, err error) {
+func failAgent(w http.ResponseWriter, log *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, agents.ErrNotFound):
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
@@ -37,23 +37,17 @@ func failAgent(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusConflict, "in_use", err.Error())
 	case errors.Is(err, agents.ErrNameConflict):
 		jsonError(w, http.StatusConflict, "name_conflict", err.Error())
-	default:
-		// A raw pg error would leak the SQLSTATE and table internals; the
-		// agents store wraps every case it recognizes as one of the
-		// sentinels above, so anything else is unexpected (issue #846).
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			jsonError(w, http.StatusInternalServerError, "internal_error", "agent store error")
-			return
-		}
+	case errors.Is(err, agents.ErrInvalid):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+	default:
+		failInternal(w, log, "agent", err)
 	}
 }
 
 func (h *agentAPI) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.reg.List(r.Context())
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "agents_failed", err.Error())
+		failInternalCode(w, h.log, "agents_failed", "agent", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"agents": rows})
@@ -67,7 +61,7 @@ func (h *agentAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.reg.Create(r.Context(), a)
 	if err != nil {
-		failAgent(w, err)
+		failAgent(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
@@ -80,7 +74,7 @@ func (h *agentAPI) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.reg.Patch(r.Context(), r.PathValue("id"), p); err != nil {
-		failAgent(w, err)
+		failAgent(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -88,7 +82,7 @@ func (h *agentAPI) patch(w http.ResponseWriter, r *http.Request) {
 
 func (h *agentAPI) setDefault(w http.ResponseWriter, r *http.Request) {
 	if err := h.reg.SetDefault(r.Context(), r.PathValue("id")); err != nil {
-		failAgent(w, err)
+		failAgent(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -96,7 +90,7 @@ func (h *agentAPI) setDefault(w http.ResponseWriter, r *http.Request) {
 
 func (h *agentAPI) delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.reg.Delete(r.Context(), r.PathValue("id")); err != nil {
-		failAgent(w, err)
+		failAgent(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

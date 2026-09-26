@@ -96,6 +96,8 @@ var (
 	ErrNotFound     = errors.New("not found")
 	ErrInUse        = errors.New("in use")
 	ErrNameConflict = errors.New("an agent with this name already exists")
+	// ErrInvalid wraps every Create/Patch/SetDefault validation rejection.
+	ErrInvalid = errors.New("invalid agent")
 )
 
 const cacheTTL = 10 * time.Second
@@ -277,11 +279,11 @@ func (s *Store) invalidate() {
 func (s *Store) Create(ctx context.Context, a Agent) (string, error) {
 	name, err := validateName(a.Name)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	a.Name = name
 	if err := validateHarness(a.Harness); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	db, err := s.db.Get()
 	if err != nil {
@@ -332,13 +334,13 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 	if p.Name != nil {
 		name, err := validateName(*p.Name)
 		if err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		p.Name = &name
 	}
 	if p.Harness != nil {
 		if err := validateHarness(*p.Harness); err != nil {
-			return err
+			return fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 	}
 	db, err := s.db.Get()
@@ -380,7 +382,7 @@ func (s *Store) Patch(ctx context.Context, id string, p Patch) error {
 	}
 	if p.Enabled != nil {
 		if !*p.Enabled && before.IsDefault {
-			return fmt.Errorf("the default agent cannot be disabled; set another default first")
+			return fmt.Errorf("%w: the default agent cannot be disabled; set another default first", ErrInvalid)
 		}
 		after.Enabled = *p.Enabled
 	}
@@ -434,7 +436,7 @@ func (s *Store) SetDefault(ctx context.Context, id string) error {
 		return fmt.Errorf("agent %s: %w", id, ErrNotFound)
 	}
 	if !enabled {
-		return fmt.Errorf("a disabled agent cannot be the default")
+		return fmt.Errorf("%w: a disabled agent cannot be the default", ErrInvalid)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE agents SET is_default = false WHERE is_default`); err != nil {
 		return fmt.Errorf("agents default: %w", err)

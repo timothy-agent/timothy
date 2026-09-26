@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -23,7 +24,7 @@ func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mg
 	if mgr == nil {
 		return
 	}
-	h := &connectorAPI{mgr: mgr, goog: goog, msft: msft, secrets: secrets}
+	h := &connectorAPI{mgr: mgr, goog: goog, msft: msft, secrets: secrets, log: a.log}
 	handle("GET /v1/admin/connectors", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/admin/connectors", a.auth(http.HandlerFunc(h.create)))
 	handle("PATCH /v1/admin/connectors/{id}", a.auth(http.HandlerFunc(h.patch)))
@@ -46,6 +47,7 @@ type connectorAPI struct {
 	goog    *connectors.Google
 	msft    *connectors.Microsoft
 	secrets *secretstore.Store
+	log     *slog.Logger
 }
 
 // oauthStart begins the OAuth dance and returns the URL the browser
@@ -54,7 +56,7 @@ type connectorAPI struct {
 func (h *connectorAPI) oauthStart(w http.ResponseWriter, r *http.Request) {
 	c, err := h.mgr.Store().Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failConnector(w, err)
+		failConnector(w, h.log, err)
 		return
 	}
 	var authURL string
@@ -67,7 +69,7 @@ func (h *connectorAPI) oauthStart(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("connector kind %s has no oauth dance: %w", c.Kind, connectors.ErrUnsupported)
 	}
 	if err != nil {
-		failConnector(w, err)
+		failConnector(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"url": authURL})
@@ -103,8 +105,8 @@ func (h *connectorAPI) oauthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 // failConnector maps the package's sentinel errors onto HTTP statuses;
-// everything else is the caller's input.
-func failConnector(w http.ResponseWriter, err error) {
+// anything unmatched is a server failure, logged and returned as 500.
+func failConnector(w http.ResponseWriter, log *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, connectors.ErrNotFound):
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
@@ -112,15 +114,17 @@ func failConnector(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusUnprocessableEntity, "unsupported", err.Error())
 	case errors.Is(err, connectors.ErrNameConflict):
 		jsonError(w, http.StatusConflict, "name_conflict", err.Error())
-	default:
+	case errors.Is(err, connectors.ErrInvalid):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+	default:
+		failInternal(w, log, "connector", err)
 	}
 }
 
 func (h *connectorAPI) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.mgr.Store().List(r.Context())
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "connectors_failed", err.Error())
+		failInternalCode(w, h.log, "connectors_failed", "connector", err)
 		return
 	}
 	// D-115: config.headers carries Authorization/x-api-key values for
@@ -157,7 +161,7 @@ func (h *connectorAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.mgr.Store().Create(r.Context(), c)
 	if err != nil {
-		failConnector(w, err)
+		failConnector(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"id": id})
@@ -172,7 +176,7 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 	if patch.Config != nil {
 		existing, err := h.mgr.Store().Get(r.Context(), r.PathValue("id"))
 		if err != nil {
-			failConnector(w, err)
+			failConnector(w, h.log, err)
 			return
 		}
 		// The form read its config back from list, where header values
@@ -203,7 +207,7 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.mgr.Store().Patch(r.Context(), r.PathValue("id"), patch); err != nil {
-		failConnector(w, err)
+		failConnector(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -252,20 +256,18 @@ func (h *connectorAPI) ensureRepoSigningKey(ctx context.Context, credentialRef s
 
 // listRepos serves GET /v1/admin/connectors/{id}/repos: every repo the
 // connector's PAT can see, for the mission-create repo picker.
-// Non-github-kind (or unbuildable) connectors 400/422 via failConnector
-// (ErrUnsupported maps to 422 there — kept as 400 here since a picker
-// asking a non-github connector for repos is caller error, not an
-// infra condition).
+// Non-git-kind (or unbuildable) connectors 422 via failConnector; an
+// upstream provider error is a 502 carrying the provider's text.
 func (h *connectorAPI) listRepos(w http.ResponseWriter, r *http.Request) {
 	gc, closeFn, err := h.mgr.GitClient(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failConnector(w, err)
+		failConnector(w, h.log, err)
 		return
 	}
 	defer closeFn()
 	repos, err := gc.ListRepos(r.Context())
 	if err != nil {
-		failConnector(w, err)
+		failUpstream(w, h.log, err)
 		return
 	}
 	if repos == nil {
@@ -292,21 +294,32 @@ func (h *connectorAPI) createRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	gc, closeFn, err := h.mgr.GitClient(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failConnector(w, err)
+		failConnector(w, h.log, err)
 		return
 	}
 	defer closeFn()
 	repo, err := gc.CreateRepo(r.Context(), req.Name, req.Private)
 	if err != nil {
-		failConnector(w, err)
+		failUpstream(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, repo)
 }
 
+// failUpstream answers a git provider call's error: connector sentinels
+// keep their failConnector mapping, anything else is the provider's
+// failure, a 502 with its text.
+func failUpstream(w http.ResponseWriter, log *slog.Logger, err error) {
+	if errors.Is(err, connectors.ErrNotFound) || errors.Is(err, connectors.ErrUnsupported) {
+		failConnector(w, log, err)
+		return
+	}
+	jsonError(w, http.StatusBadGateway, "upstream_error", err.Error())
+}
+
 func (h *connectorAPI) delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.mgr.Store().Delete(r.Context(), r.PathValue("id")); err != nil {
-		failConnector(w, err)
+		failConnector(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -332,7 +345,7 @@ func (h *connectorAPI) test(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, out)
 	case errors.Is(err, connectors.ErrNotFound), errors.Is(err, connectors.ErrUnsupported):
-		failConnector(w, err)
+		failConnector(w, h.log, err)
 	default:
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 	}
