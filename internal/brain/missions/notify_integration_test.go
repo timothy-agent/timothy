@@ -87,50 +87,127 @@ func TestSendOncePerMissionDedupes(t *testing.T) {
 	}
 }
 
-func TestClearMissionMarksUnreadRowsRead(t *testing.T) {
-	store := testStore(t)
-	ctx := context.Background()
-	n := testNotifier(t, store)
+// stepStatus applies a build-phase transition to status.
+func stepStatus(t *testing.T, store *Store, id string, status Status) {
+	t.Helper()
+	if err := store.ApplyTransition(context.Background(), id, Transition{Next: StepState{Phase: PhaseBuild, Status: status, MaxIterations: 8}}); err != nil {
+		t.Fatalf("ApplyTransition (%s): %v", status, err)
+	}
+}
 
-	goal := marker + "notify-4"
-	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
+// countNotes returns (read, unread) notification counts of kind.
+func countNotes(notes []Notification, kind string) (read, unread int) {
+	for _, n := range notes {
+		if n.Kind != kind {
+			continue
+		}
+		if n.Read {
+			read++
+		} else {
+			unread++
+		}
+	}
+	return read, unread
+}
+
+// TestResumeClearsPausedNotification: pause, resume, pause writes two
+// notifications without the operator reading the first (issue #935).
+func TestResumeClearsPausedNotification(t *testing.T) {
+	store := testStore(t)
+	id, err := store.Create(context.Background(), Mission{Goal: marker + "notify-4", Kind: "general"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := n.NotifyMessage(ctx, id, string(StatusPaused), composeMessage(string(StatusPaused), goal, "")); err != nil {
-		t.Fatalf("NotifyMessage: %v", err)
+	stepStatus(t, store, id, StatusPaused)
+	drainMissionOnly(t, store, id)
+	if read, unread := countNotes(notificationRows(t, store, id), "paused"); read != 0 || unread != 1 {
+		t.Fatalf("after first pause: read=%d unread=%d, want 0/1", read, unread)
 	}
-	if err := n.ClearMission(ctx, id); err != nil {
-		t.Fatalf("ClearMission: %v", err)
+	stepStatus(t, store, id, StatusIdle)
+	if read, unread := countNotes(notificationRows(t, store, id), "paused"); read != 1 || unread != 0 {
+		t.Fatalf("after resume: read=%d unread=%d, want 1/0", read, unread)
 	}
-	notes, err := n.List(ctx)
-	if err != nil {
-		t.Fatalf("List: %v", err)
+	stepStatus(t, store, id, StatusWorking)
+	stepStatus(t, store, id, StatusPaused)
+	drainMissionOnly(t, store, id)
+	if read, unread := countNotes(notificationRows(t, store, id), "paused"); read != 1 || unread != 1 {
+		t.Fatalf("after second pause: read=%d unread=%d, want 1/1", read, unread)
 	}
-	for _, note := range notes {
-		if note.MissionID == id && !note.Read {
-			t.Fatalf("ClearMission did not mark the notification read: %+v", note)
-		}
-	}
+}
 
-	// A NEW notification for the same mission after clearing is not
-	// suppressed by the dedup logic (the prior one is read, so the
-	// NOT EXISTS ... AND NOT read guard doesn't see it).
-	if err := n.NotifyMessage(ctx, id, "done", composeMessage("done", goal, "")); err != nil {
-		t.Fatalf("NotifyMessage after clear: %v", err)
+// TestResumeFromWaitingClearsNotification covers both ways out of
+// waiting_for_input: a transition and Store.AnswerPendingInput.
+func TestResumeFromWaitingClearsNotification(t *testing.T) {
+	tests := []struct {
+		name   string
+		resume func(t *testing.T, store *Store, id string)
+	}{
+		{"transition", func(t *testing.T, store *Store, id string) { stepStatus(t, store, id, StatusIdle) }},
+		{"answer", func(t *testing.T, store *Store, id string) {
+			if err := store.AnswerPendingInput(context.Background(), id, "mission.input_answered", map[string]any{"answer": "yes"}); err != nil {
+				t.Fatalf("AnswerPendingInput: %v", err)
+			}
+		}},
 	}
-	notes, err = n.List(ctx)
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := testStore(t)
+			id, err := store.Create(context.Background(), Mission{Goal: fmt.Sprintf("%snotify-waiting-%d", marker, i), Kind: "general"})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			stepStatus(t, store, id, StatusWaitingForInput)
+			drainMissionOnly(t, store, id)
+			if _, unread := countNotes(notificationRows(t, store, id), "waiting_for_input"); unread != 1 {
+				t.Fatalf("unread waiting_for_input before resume = %d, want 1", unread)
+			}
+			tt.resume(t, store, id)
+			if read, unread := countNotes(notificationRows(t, store, id), "waiting_for_input"); read != 1 || unread != 0 {
+				t.Fatalf("after resume: read=%d unread=%d, want 1/0", read, unread)
+			}
+		})
+	}
+}
+
+// TestTerminalNotificationUnaffectedByClear: a paused mission that
+// fails clears its paused row and still gets an unread terminal row.
+func TestTerminalNotificationUnaffectedByClear(t *testing.T) {
+	store := testStore(t)
+	id, err := store.Create(context.Background(), Mission{Goal: marker + "notify-terminal", Kind: "general"})
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf("Create: %v", err)
 	}
-	unreadDone := false
-	for _, note := range notes {
-		if note.MissionID == id && note.Kind == "done" && !note.Read {
-			unreadDone = true
-		}
+	stepStatus(t, store, id, StatusPaused)
+	drainMissionOnly(t, store, id)
+	if err := store.ApplyTransition(context.Background(), id, Transition{
+		Next:   StepState{Phase: PhaseFailed, Status: StatusError, MaxIterations: 8},
+		Events: []EventDraft{{Kind: "mission.failed", Payload: map[string]any{}}},
+	}); err != nil {
+		t.Fatalf("ApplyTransition (failed): %v", err)
 	}
-	if !unreadDone {
-		t.Fatal("a fresh actionable transition after ClearMission did not write a new unread notification")
+	drainMissionOnly(t, store, id)
+	notes := notificationRows(t, store, id)
+	if read, unread := countNotes(notes, "paused"); read != 1 || unread != 0 {
+		t.Fatalf("paused after failure: read=%d unread=%d, want 1/0", read, unread)
+	}
+	if read, unread := countNotes(notes, "error"); read != 0 || unread != 1 {
+		t.Fatalf("error notification: read=%d unread=%d, want 0/1", read, unread)
+	}
+}
+
+// TestLatePausedEventAfterResumeWritesNothing: a pause drained only
+// after the resume leaves no unread row behind (issue #935).
+func TestLatePausedEventAfterResumeWritesNothing(t *testing.T) {
+	store := testStore(t)
+	id, err := store.Create(context.Background(), Mission{Goal: marker + "notify-late", Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	stepStatus(t, store, id, StatusPaused)
+	stepStatus(t, store, id, StatusIdle)
+	drainMissionOnly(t, store, id)
+	if notes := notificationRows(t, store, id); len(notes) != 0 {
+		t.Fatalf("notifications = %+v, want none", notes)
 	}
 }
 

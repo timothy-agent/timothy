@@ -127,6 +127,12 @@ func (c NotifyConsumer) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) e
 	if err != nil {
 		return fmt.Errorf("notify: load mission: %w", err)
 	}
+	// A mission that left the state before the drain ran needs no
+	// notification: its resume already cleared the inbox, and a late row
+	// would stay unread and mute the next pause (issue #935).
+	if actionable && m.Status != status {
+		return nil
+	}
 	evs, err := c.store.Events(ctx, p.MissionID)
 	if err != nil {
 		return fmt.Errorf("notify: load events: %w", err)

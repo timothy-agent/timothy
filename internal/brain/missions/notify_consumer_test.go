@@ -325,13 +325,14 @@ func TestNotifyConsumerActionableSendErrorWritesNoMarker(t *testing.T) {
 // the two event families never stand in for each other.
 func TestNotifyConsumerPausedMarkerDoesNotSuppressTerminal(t *testing.T) {
 	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Phase: PhaseFailed, Status: StatusError})
+	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Phase: PhaseBuild, Status: StatusPaused})
 	rec := &recordingNotify{}
 	c := NewNotifyConsumer(store, rec.fn(), discardLog)
 
 	if err := c.Handle(context.Background(), nil, actionableEvent(t, "m1", StatusPaused)); err != nil {
 		t.Fatalf("Handle paused: %v", err)
 	}
+	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Phase: PhaseFailed, Status: StatusError})
 	if err := consumeNotify(t, store, rec.fn(), "m1", "failed", ""); err != nil {
 		t.Fatalf("consume failed: %v", err)
 	}
@@ -339,11 +340,45 @@ func TestNotifyConsumerPausedMarkerDoesNotSuppressTerminal(t *testing.T) {
 		t.Fatalf("notify calls = %d, want 2 (paused then failed)", got)
 	}
 	// And a terminal marker does not suppress a later actionable event.
+	store.put("m1", Mission{ID: "m1", Goal: "add a widget", Phase: PhaseBuild, Status: StatusWaitingForInput})
 	if err := c.Handle(context.Background(), nil, actionableEvent(t, "m1", StatusWaitingForInput)); err != nil {
 		t.Fatalf("Handle waiting: %v", err)
 	}
 	if got := rec.count(); got != 3 {
 		t.Fatalf("notify calls = %d, want 3", got)
+	}
+}
+
+// TestNotifyConsumerSkipsActionableAfterStateLeft: a pause resolved
+// before the drain ran sends nothing and writes no marker, so no unread
+// row outlives the resume (issue #935). Terminal events do not check.
+func TestNotifyConsumerSkipsActionableAfterStateLeft(t *testing.T) {
+	tests := []struct {
+		name  string
+		event Status
+		now   Status
+	}{
+		{"paused then resumed", StatusPaused, StatusIdle},
+		{"paused then working", StatusPaused, StatusWorking},
+		{"waiting then answered", StatusWaitingForInput, StatusIdle},
+		{"waiting then paused", StatusWaitingForInput, StatusPaused},
+		{"paused then failed", StatusPaused, StatusError},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.put("m1", Mission{ID: "m1", Goal: "add a widget", Phase: PhaseBuild, Status: tt.now})
+			rec := &recordingNotify{}
+			if err := NewNotifyConsumer(store, rec.fn(), discardLog).Handle(context.Background(), nil, actionableEvent(t, "m1", tt.event)); err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			if got := rec.count(); got != 0 {
+				t.Fatalf("notify calls = %d, want 0", got)
+			}
+			if got := notifiedMarkers(t, store, "m1"); got != 0 {
+				t.Fatalf("mission.notified markers = %d, want 0", got)
+			}
+		})
 	}
 }
 

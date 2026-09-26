@@ -237,5 +237,9 @@ CLAUDE.md so other work does not pay for it every session.
   `NotifyConsumer` sends them. The driver never notifies directly; it
   only kicks the drainer. Terminal sends are once per mission,
   actionable ones once per events row (`mission.notified` marker with
-  the row's dedup key).
+  the row's dedup key). Leaving paused or waiting_for_input
+  (`ApplyTransition`, `AnswerPendingInput`) marks the mission's unread
+  paused/waiting rows read in the same tx, and the consumer skips an
+  actionable event whose mission already left that status, so the next
+  pause notifies again (issue #935).
 - `make canary` is the regression gate for any harness change.

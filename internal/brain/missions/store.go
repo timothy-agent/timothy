@@ -988,6 +988,9 @@ func (s *Store) AnswerPendingInput(ctx context.Context, id, eventKind string, pa
 	if err := appendEventTx(ctx, tx, id, eventKind, payload, "live"); err != nil {
 		return fmt.Errorf("missions answer pending input: %w", err)
 	}
+	if err := clearActionableNotificationsTx(ctx, tx, id); err != nil {
+		return fmt.Errorf("missions answer pending input: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("missions answer pending input commit: %w", err)
 	}
@@ -1333,6 +1336,11 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 			return fmt.Errorf("missions apply transition: %w", err)
 		}
 		if err := s.events.Insert(ctx, tx, ev); err != nil {
+			return fmt.Errorf("missions apply transition: %w", err)
+		}
+	}
+	if leftActionable(Status(currentStatus), t.Next.Status) {
+		if err := clearActionableNotificationsTx(ctx, tx, id); err != nil {
 			return fmt.Errorf("missions apply transition: %w", err)
 		}
 	}
