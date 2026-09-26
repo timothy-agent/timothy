@@ -219,56 +219,56 @@ func TestMissionsExportPDFNotEnabled(t *testing.T) {
 	}
 }
 
-// TestMissionsCreateValidatesHarness covers D-051's create()/normalize
-// path: harness on kind=general is silently dropped to "" rather than
-// rejected (ResolveHarness, D-051's rejection itself lives in
-// ValidateCreate, not wired here), "native" normalizes to "" (the
-// stored value), and a coding request that omits harness picks up the
-// settings-configured default via the seam. This test wires no
-// ValidateDeps, so every case here reaches the degraded store, a
-// generic 500 (failMission's default, see TestMissionsDeleteReachesStore)
-// and the harness/kind combination itself is distinguished instead by
-// asserting the codingExecutorDefault seam was (or wasn't) invoked, the
-// one observable difference at this layer. The unknown-harness and
-// coding-only rejections ValidateCreate performs are covered directly
-// in internal/brain/missions/validate_test.go.
+// TestMissionsCreateValidatesHarness covers D-051 through ValidateCreate
+// (zero ValidateDeps, no route wired): an unknown harness on kind=coding
+// 400s naming the harness. Every valid combination passes the harness
+// checks and then 400s on route-required: harness on kind=general is
+// dropped before validation (ResolveHarness), "native" normalizes to "",
+// a registered harness is accepted, and a coding request that omits
+// harness picks up the settings default via the codingExecutorDefault
+// seam, which kind=general never calls.
 func TestMissionsCreateValidatesHarness(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver.SetValidateDeps(missions.ValidateDeps{})
 
-	post := func(codingExecutorDefault func(context.Context) string, body string) int {
+	post := func(codingExecutorDefault func(context.Context) string, body string) (int, string) {
 		m := mux(a)
 		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
 		m.ServeHTTP(w, req)
-		return w.Code
+		return w.Code, w.Body.String()
+	}
+	// passedHarness reports a 400 from route-required, meaning every
+	// harness check before it passed.
+	passedHarness := func(code int, body string) bool {
+		return code == 400 && strings.Contains(body, "route is required") && !strings.Contains(body, "harness")
 	}
 
-	if code := post(nil, `{"goal":"g","kind":"general","harness":"claude-cli"}`); code != 500 {
-		t.Fatalf("harness on kind=general = %d, want 500 (reached degraded store)", code)
+	code, body := post(nil, `{"goal":"g","kind":"coding","harness":"not-a-real-harness"}`)
+	if code != 400 || !strings.Contains(body, "unknown harness") {
+		t.Fatalf("unknown harness = %d %q, want 400 naming the harness", code, body)
 	}
-	if code := post(nil, `{"goal":"g","kind":"coding","harness":"not-a-real-harness"}`); code != 500 {
-		t.Fatalf("unknown harness = %d, want 500 (reached degraded store)", code)
-	}
-	// "native" normalizes to "" and reaches the (degraded) store: the same
-	// generic 500 failMission maps every unrecognized store error to.
-	if code := post(nil, `{"goal":"g","kind":"coding","harness":"native"}`); code != 500 {
-		t.Fatalf("harness=native = %d, want 500 (reached degraded store)", code)
-	}
-	if code := post(nil, `{"goal":"g","kind":"coding","harness":"claude-cli"}`); code != 500 {
-		t.Fatalf("harness=claude-cli = %d, want 500 (reached degraded store)", code)
+	for _, req := range []string{
+		`{"goal":"g","kind":"general","harness":"claude-cli"}`,
+		`{"goal":"g","kind":"coding","harness":"native"}`,
+		`{"goal":"g","kind":"coding","harness":"claude-cli"}`,
+	} {
+		if code, body := post(nil, req); !passedHarness(code, body) {
+			t.Fatalf("%s = %d %q, want 400 from route-required, not a harness error", req, code, body)
+		}
 	}
 	// Omitted harness on kind=coding applies the settings default via
 	// the seam.
 	defaultCalled := false
 	defaulted := func(context.Context) string { defaultCalled = true; return "claude-cli" }
-	if code := post(defaulted, `{"goal":"g","kind":"coding"}`); code != 500 {
-		t.Fatalf("omitted harness with a settings default = %d, want 500 (passed validation)", code)
+	if code, body := post(defaulted, `{"goal":"g","kind":"coding"}`); !passedHarness(code, body) {
+		t.Fatalf("omitted harness with a settings default = %d %q, want 400 from route-required", code, body)
 	}
 	if !defaultCalled {
 		t.Fatal("codingExecutorDefault seam not invoked for a kind=coding request with omitted harness")
@@ -277,8 +277,8 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 	// all; general missions must stay native regardless of the setting.
 	generalCalled := false
 	trackedDefault := func(context.Context) string { generalCalled = true; return "claude-cli" }
-	if code := post(trackedDefault, `{"goal":"g","kind":"general"}`); code != 500 {
-		t.Fatalf("general with omitted harness = %d, want 500 (reached degraded store)", code)
+	if code, body := post(trackedDefault, `{"goal":"g","kind":"general"}`); !passedHarness(code, body) {
+		t.Fatalf("general with omitted harness = %d %q, want 400 from route-required", code, body)
 	}
 	if generalCalled {
 		t.Fatal("codingExecutorDefault seam invoked for a kind=general request")
@@ -325,38 +325,41 @@ func TestMissionsCreateValidatesReviewHarness(t *testing.T) {
 	}
 }
 
-// TestMissionsCreateValidatesLight covers light's create()/normalize
-// path (D-069): light+coding is not rejected here (that gate lives in
-// ValidateCreate, not wired in this test), so every case below reaches
-// the degraded store, same generic 500 shape TestMissionsCreateValidatesHarness
-// documents. The light+coding rejection itself is covered directly in
-// internal/brain/missions/validate_test.go.
+// TestMissionsCreateValidatesLight covers D-069 through ValidateCreate
+// (zero ValidateDeps, no route wired): light on kind=coding, explicit or
+// classified, 400s because coding missions must run the full flow, while
+// light on kind=general passes that check and 400s on route-required.
 func TestMissionsCreateValidatesLight(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver.SetValidateDeps(missions.ValidateDeps{})
 
-	post := func(classify func(context.Context, string) (string, error), body string) int {
+	post := func(classify func(context.Context, string) (string, error), body string) (int, string) {
 		m := mux(a)
 		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
 		m.ServeHTTP(w, req)
-		return w.Code
+		return w.Code, w.Body.String()
 	}
+	// The handler JSON-encodes the message, so the quotes around full
+	// arrive escaped.
+	const codingFull = `flow must be \"full\" for kind=coding`
 
-	if code := post(nil, `{"goal":"g","kind":"coding","light":true}`); code != 500 {
-		t.Fatalf("light on explicit kind=coding = %d, want 500 (reached degraded store)", code)
+	if code, body := post(nil, `{"goal":"g","kind":"coding","light":true}`); code != 400 || !strings.Contains(body, codingFull) {
+		t.Fatalf("light on explicit kind=coding = %d %q, want 400 %s", code, body, codingFull)
 	}
 	codingClassify := func(context.Context, string) (string, error) { return "coding", nil }
-	if code := post(codingClassify, `{"goal":"g","light":true}`); code != 500 {
-		t.Fatalf("light with omitted kind classified as coding = %d, want 500 (reached degraded store)", code)
+	if code, body := post(codingClassify, `{"goal":"g","light":true}`); code != 400 || !strings.Contains(body, codingFull) {
+		t.Fatalf("light with omitted kind classified as coding = %d %q, want 400 %s", code, body, codingFull)
 	}
-	if code := post(nil, `{"goal":"g","kind":"general","light":true}`); code != 500 {
-		t.Fatalf("light+general = %d, want 500 (reached degraded store)", code)
+	code, body := post(nil, `{"goal":"g","kind":"general","light":true}`)
+	if code != 400 || !strings.Contains(body, "route is required") || strings.Contains(body, "flow") || strings.Contains(body, "light") {
+		t.Fatalf("light+general = %d %q, want 400 from route-required, not a flow error", code, body)
 	}
 }
 
