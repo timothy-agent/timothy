@@ -43,6 +43,7 @@ type ChatFunc func(ctx context.Context, req chat.Request) (string, <-chan stream
 type MissionDeps struct {
 	Get               func(ctx context.Context, id string) (missions.Mission, error)
 	Events            func(ctx context.Context, id string) ([]missions.Event, error)
+	AppendEvent       func(ctx context.Context, id, kind string, payload map[string]any) error
 	ListParked        func(ctx context.Context) ([]missions.Mission, error)
 	Signal            func(ctx context.Context, id string, input missions.Input) error
 	DecidePlan        func(ctx context.Context, id string, input missions.Input, feedback string) error
