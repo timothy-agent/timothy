@@ -248,6 +248,32 @@ func (s *Store) ListRuns(ctx context.Context, workflowID string) ([]Run, error) 
 	return out, rows.Err()
 }
 
+// RunsWithoutMissions returns running runs created before cutoff that
+// no mission links to, oldest first.
+func (s *Store) RunsWithoutMissions(ctx context.Context, cutoff time.Time) ([]Run, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("workflows runs without missions: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT `+runColumns+` FROM workflow_runs r
+		WHERE r.status = 'running' AND r.created_at < $1
+		AND NOT EXISTS (SELECT 1 FROM missions m WHERE m.workflow_run_id = r.id)
+		ORDER BY r.created_at, r.id`, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("workflows runs without missions: %w", err)
+	}
+	defer rows.Close()
+	out := []Run{}
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, fmt.Errorf("workflows runs without missions: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // RunTransition is the ApplyRunTransition writer's input: the run's new
 // status/current_step plus any events to append in the same
 // transaction — same shape as missions.Transition.

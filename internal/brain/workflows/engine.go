@@ -2,8 +2,10 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 )
@@ -18,6 +20,7 @@ type engineStore interface {
 	ApplyRunTransition(ctx context.Context, id string, t RunTransition) error
 	CountEdgeFirings(ctx context.Context, runID, from, on, to string) (int, error)
 	RunEvents(ctx context.Context, runID string) ([]RunEvent, error)
+	RunsWithoutMissions(ctx context.Context, cutoff time.Time) ([]Run, error)
 }
 
 // missionSpawner is the narrow slice of *missions.Driver the engine
@@ -70,9 +73,8 @@ func (e *Engine) SetResolveDeps(deps missions.ResolveDeps) {
 
 // StartRun creates a new run for workflowID and spawns the entry step's
 // mission. runContext seeds {{context.KEY}} interpolation for every
-// step in this run. An entry mission already linked to the run is
-// adopted, never created twice. Nothing re-drives StartRun for an
-// existing run today, so this only keeps the entry spawn safe to retry.
+// step in this run. RecoverRunsWithoutEntry re-drives the entry spawn
+// when a crash lands between CreateRun and the spawn.
 func (e *Engine) StartRun(ctx context.Context, workflowID string, runContext map[string]string) (string, error) {
 	wf, err := e.store.Get(ctx, workflowID)
 	if err != nil {
@@ -89,19 +91,70 @@ func (e *Engine) StartRun(ctx context.Context, workflowID string, runContext map
 	if err != nil {
 		return "", fmt.Errorf("workflows start run: %w", err)
 	}
+	if err := e.spawnEntry(ctx, runID, def.Entry, def.Steps[def.Entry], runContext); err != nil {
+		return runID, fmt.Errorf("workflows start run: %w", err)
+	}
+	return runID, nil
+}
+
+// spawnEntry adopts the parentless mission already linked to runID, or
+// spawns stepName's mission and pauses the run when that fails.
+func (e *Engine) spawnEntry(ctx context.Context, runID, stepName string, step Step, runContext map[string]string) error {
 	entryID, err := e.events.WorkflowChild(ctx, runID, "")
 	if err != nil {
-		return runID, fmt.Errorf("workflows start run: look up entry mission: %w", err)
+		return fmt.Errorf("look up entry mission: %w", err)
 	}
 	if entryID != "" {
 		e.log.Info("workflows: adopting existing entry mission", "run_id", runID, "mission_id", entryID)
-		return runID, nil
+		return nil
 	}
-	if _, err := e.spawnStep(ctx, runID, def.Entry, def.Entry, def.Steps[def.Entry], runContext, "", ""); err != nil {
-		e.pauseRun(ctx, runID, fmt.Sprintf("spawn entry step %q failed: %s", def.Entry, err.Error()))
-		return runID, fmt.Errorf("workflows start run: spawn entry step: %w", err)
+	if _, err := e.spawnStep(ctx, runID, stepName, stepName, step, runContext, "", ""); err != nil {
+		spawnErr := fmt.Errorf("spawn entry step: %w", err)
+		return errors.Join(spawnErr, e.pauseRun(ctx, runID, fmt.Sprintf("spawn entry step %q failed: %s", stepName, err.Error())))
 	}
-	return runID, nil
+	return nil
+}
+
+// RecoverRunsWithoutEntry spawns or adopts the entry mission of every
+// running run created before cutoff that no mission links to, which a
+// crash between CreateRun and the entry spawn leaves behind. The brain
+// runs it once at boot with its start time as cutoff, so a StartRun in
+// flight in this process is never touched. Returns the runs recovered.
+func (e *Engine) RecoverRunsWithoutEntry(ctx context.Context, cutoff time.Time) (int, error) {
+	runs, err := e.store.RunsWithoutMissions(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("workflows recover runs: %w", err)
+	}
+	recovered := 0
+	var errs []error
+	for _, run := range runs {
+		if err := e.recoverEntry(ctx, run); err != nil {
+			errs = append(errs, fmt.Errorf("workflows recover run %s: %w", run.ID, err))
+			continue
+		}
+		recovered++
+	}
+	return recovered, errors.Join(errs...)
+}
+
+// recoverEntry spawns run's current step, which is still the entry
+// step since no mission ever ran for it.
+func (e *Engine) recoverEntry(ctx context.Context, run Run) error {
+	wf, err := e.store.Get(ctx, run.WorkflowID)
+	if err != nil {
+		return err
+	}
+	def, err := ParseDefinition(wf.Definition)
+	if err != nil {
+		return errors.Join(err, e.pauseRun(ctx, run.ID, fmt.Sprintf("recover entry: parse definition failed: %s", err.Error())))
+	}
+	step, ok := def.Steps[run.CurrentStep]
+	if !ok {
+		err := fmt.Errorf("entry step %q not in definition", run.CurrentStep)
+		return errors.Join(err, e.pauseRun(ctx, run.ID, "recover entry: "+err.Error()))
+	}
+	e.log.Info("workflows: recovering run without entry mission", "run_id", run.ID, "step", run.CurrentStep)
+	return e.spawnEntry(ctx, run.ID, run.CurrentStep, step, run.Context)
 }
 
 // OnMissionTerminal reacts to mission m reaching a terminal phase: load
@@ -114,7 +167,9 @@ func (e *Engine) StartRun(ctx context.Context, workflowID string, runContext map
 // alone. The next step's mission is adopt-or-create: a mission the run
 // already spawned from m (a crash or failed record between spawn and
 // edge.taken) is adopted, never created twice. Errors are load failures
-// or a failed edge.taken record, both safe to retry.
+// or a failed run transition, all safe to retry: a transition commits
+// atomically, and once it lands the run is no longer running (pause,
+// fail, end) or has taken the edge for m, so the retry is a no-op.
 func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) error {
 	run, err := e.store.GetRun(ctx, m.WorkflowRunID)
 	if err != nil {
@@ -165,8 +220,7 @@ func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) erro
 		// failure semantics (slice 6 adds notifications). mission.done
 		// with no matching edge is equally a dead end the author likely
 		// forgot to wire — same pause treatment.
-		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("no matching edge for step %q on %s", run.CurrentStep, on))
-		return nil
+		return e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("no matching edge for step %q on %s", run.CurrentStep, on))
 	}
 
 	firings, err := e.store.CountEdgeFirings(ctx, m.WorkflowRunID, matched.From, matched.On, matched.To)
@@ -174,19 +228,16 @@ func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) erro
 		return fmt.Errorf("workflows: terminal mission %s: count edge firings: %w", m.ID, err)
 	}
 	if firings >= matched.MaxIterations {
-		e.failRun(ctx, m.WorkflowRunID, matched)
-		return nil
+		return e.failRun(ctx, m.WorkflowRunID, matched)
 	}
 
 	if matched.To == endStep {
-		e.endRun(ctx, m.WorkflowRunID, matched)
-		return nil
+		return e.endRun(ctx, m.WorkflowRunID, matched)
 	}
 
 	step, ok := def.Steps[matched.To]
 	if !ok {
-		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("edge targets unknown step %q", matched.To))
-		return nil
+		return e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("edge targets unknown step %q", matched.To))
 	}
 	childID, err := e.events.WorkflowChild(ctx, m.WorkflowRunID, m.ID)
 	if err != nil {
@@ -197,14 +248,12 @@ func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) erro
 	} else {
 		events, err := e.events.Events(ctx, m.ID)
 		if err != nil {
-			e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("load mission %s events failed: %s", m.ID, err.Error()))
-			return nil
+			return e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("load mission %s events failed: %s", m.ID, err.Error()))
 		}
 		outcome := missions.OutcomeDigest(m, events, m.Phase, m.FailureReason)
 		childID, err = e.spawnStep(ctx, m.WorkflowRunID, run.CurrentStep, matched.To, step, run.Context, outcome, m.ID)
 		if err != nil {
-			e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("spawn step %q failed: %s", matched.To, err.Error()))
-			return nil
+			return e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("spawn step %q failed: %s", matched.To, err.Error()))
 		}
 	}
 	if err := e.store.ApplyRunTransition(ctx, m.WorkflowRunID, RunTransition{
@@ -271,36 +320,40 @@ func StepCreateRequest(step Step, goal, runID, stepName, outcome, parentMissionI
 	}
 }
 
-func (e *Engine) pauseRun(ctx context.Context, runID, reason string) {
+// pauseRun, failRun and endRun return the transition error so the
+// drainer retries the event instead of marking it processed.
+func (e *Engine) pauseRun(ctx context.Context, runID, reason string) error {
 	run, err := e.store.GetRun(ctx, runID)
 	if err != nil {
-		e.log.Warn("workflows: pause run: reload failed", "run_id", runID, "error", err)
-		return
+		return fmt.Errorf("workflows: pause run %s: reload: %w", runID, err)
 	}
 	if err := e.store.ApplyRunTransition(ctx, runID, RunTransition{
 		Status: "paused", CurrentStep: run.CurrentStep,
 		Events: []RunTransitionEvent{{Kind: "run.paused", Payload: map[string]any{"reason": reason}}},
 	}); err != nil {
-		e.log.Warn("workflows: pause run failed", "run_id", runID, "error", err)
+		return fmt.Errorf("workflows: pause run %s: %w", runID, err)
 	}
+	return nil
 }
 
-func (e *Engine) failRun(ctx context.Context, runID string, edge *Edge) {
+func (e *Engine) failRun(ctx context.Context, runID string, edge *Edge) error {
 	if err := e.store.ApplyRunTransition(ctx, runID, RunTransition{
 		Status: "failed", CurrentStep: edge.From,
 		Events: []RunTransitionEvent{{Kind: "run.cap_exceeded", Payload: map[string]any{
 			"from": edge.From, "on": edge.On, "to": edge.To, "max_iterations": edge.MaxIterations,
 		}}},
 	}); err != nil {
-		e.log.Warn("workflows: fail run (cap exceeded) failed", "run_id", runID, "error", err)
+		return fmt.Errorf("workflows: fail run %s (cap exceeded): %w", runID, err)
 	}
+	return nil
 }
 
-func (e *Engine) endRun(ctx context.Context, runID string, edge *Edge) {
+func (e *Engine) endRun(ctx context.Context, runID string, edge *Edge) error {
 	if err := e.store.ApplyRunTransition(ctx, runID, RunTransition{
 		Status: "done", CurrentStep: endStep,
 		Events: []RunTransitionEvent{{Kind: "run.done", Payload: map[string]any{"from": edge.From, "on": edge.On}}},
 	}); err != nil {
-		e.log.Warn("workflows: end run failed", "run_id", runID, "error", err)
+		return fmt.Errorf("workflows: end run %s: %w", runID, err)
 	}
+	return nil
 }
