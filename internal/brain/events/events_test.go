@@ -144,6 +144,62 @@ func TestMissionTerminal(t *testing.T) {
 	}
 }
 
+func TestMissionActionableEncodeDecode(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       MissionPayload
+		wantKind string
+		wantJSON string
+		wantErr  bool
+	}{
+		{
+			name:     "paused carries status",
+			in:       MissionPayload{MissionID: "m1", Phase: "build", Status: "paused", OriginKind: "api"},
+			wantKind: KindMissionPaused,
+			wantJSON: `{"mission_id":"m1","phase":"build","status":"paused","origin_kind":"api","unattended":false}`,
+		},
+		{
+			name:     "waiting_for_input carries workflow run",
+			in:       MissionPayload{MissionID: "m2", Phase: "plan", Status: "waiting_for_input", WorkflowRunID: "r1", OriginKind: "workflow", Unattended: true},
+			wantKind: KindMissionWaitingForInput,
+			wantJSON: `{"mission_id":"m2","phase":"plan","status":"waiting_for_input","workflow_run_id":"r1","origin_kind":"workflow","unattended":true}`,
+		},
+		{name: "working rejected", in: MissionPayload{MissionID: "m3", Phase: "build", Status: "working"}, wantErr: true},
+		{name: "empty status rejected", in: MissionPayload{MissionID: "m3", Phase: "build"}, wantErr: true},
+		{name: "missing mission id rejected", in: MissionPayload{Phase: "build", Status: "paused"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ev, err := MissionActionable(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("MissionActionable(%+v) = nil error, want error", tt.in)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("MissionActionable: %v", err)
+			}
+			prefix := tt.in.MissionID + ":" + tt.in.Status + ":"
+			if ev.Source != SourceMission || ev.Kind != tt.wantKind || !strings.HasPrefix(ev.DedupKey, prefix) || len(ev.DedupKey) != len(prefix)+36 {
+				t.Fatalf("event = %+v", ev)
+			}
+			if string(ev.Payload) != tt.wantJSON {
+				t.Fatalf("payload = %s, want %s", ev.Payload, tt.wantJSON)
+			}
+			back, err := DecodeMission(ev)
+			if err != nil || back != tt.in {
+				t.Fatalf("DecodeMission = %+v, %v, want %+v", back, err, tt.in)
+			}
+		})
+	}
+	a, _ := MissionActionable(MissionPayload{MissionID: "m1", Status: "paused"})
+	b, _ := MissionActionable(MissionPayload{MissionID: "m1", Status: "paused"})
+	if a.DedupKey == b.DedupKey {
+		t.Fatalf("two pauses share dedup key %q, want distinct", a.DedupKey)
+	}
+}
+
 func TestDecodeMissionRejectsBadPayload(t *testing.T) {
 	for _, raw := range []string{`not json`, `{}`, `{"phase":"done"}`} {
 		if _, err := DecodeMission(Event{ID: 1, Payload: json.RawMessage(raw)}); err == nil {
