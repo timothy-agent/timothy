@@ -1321,8 +1321,9 @@ func (s *Store) ApplyTransition(ctx context.Context, id string, t Transition) er
 			return fmt.Errorf("missions apply transition event: %w", err)
 		}
 	}
-	// D-117: the terminal effects (workflow advance, memory extraction)
-	// ride an events row committed with the transition itself.
+	// D-117: the terminal effects (workflow advance, memory extraction,
+	// terminal notification) ride an events row committed with the
+	// transition itself.
 	if t.Next.Phase.Terminal() {
 		ev, err := events.MissionTerminal(events.MissionPayload{
 			MissionID: id, Phase: string(t.Next.Phase), Reason: failedReason(t.Events),

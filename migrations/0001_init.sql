@@ -716,7 +716,10 @@ CREATE TABLE IF NOT EXISTS missions (
     kind                  text NOT NULL CHECK (kind IN ('coding', 'general')),
     -- The creating agent, if any -- resolved to defaults (route,
     -- prompt_overlay, ...) at create time, never re-read live afterward.
-    agent_id              uuid REFERENCES agents(id),
+    -- Deleting an agent keeps past missions with agent_id NULL;
+    -- agents.Store.Delete refuses with 409 in_use while a non-terminal
+    -- mission still names it (issue #846).
+    agent_id              uuid REFERENCES agents(id) ON DELETE SET NULL,
     phase                 text NOT NULL DEFAULT 'discover',
     status                text NOT NULL DEFAULT 'idle',
     -- Why status='paused': "approval", "infra", etc (statemachine.go).

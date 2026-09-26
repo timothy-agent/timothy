@@ -46,6 +46,36 @@ func TestOnTransitionWritesNotificationOnActionableTransition(t *testing.T) {
 	}
 }
 
+// TestOnTransitionSilentOnTerminal confirms OnTransition writes no
+// notification for a transition into done/error: NotifyConsumer sends
+// those off the events inbox instead (D-117, issue #843).
+func TestOnTransitionSilentOnTerminal(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	n := testNotifier(t, store)
+
+	goal := marker + "notify-terminal"
+	id, err := store.Create(ctx, Mission{Goal: goal, Kind: "general"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusDone, ""); err != nil {
+		t.Fatalf("OnTransition (done): %v", err)
+	}
+	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusError, ""); err != nil {
+		t.Fatalf("OnTransition (error): %v", err)
+	}
+	notes, err := n.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	for _, note := range notes {
+		if note.MissionID == id {
+			t.Fatalf("OnTransition into a terminal state wrote a notification: %+v", note)
+		}
+	}
+}
+
 func TestOnTransitionSilentOnNonActionable(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
@@ -131,9 +161,11 @@ func TestClearMissionMarksUnreadRowsRead(t *testing.T) {
 
 	// A NEW notification for the same mission after clearing is not
 	// suppressed by the dedup logic (the prior one is read, so the
-	// NOT EXISTS ... AND NOT read guard doesn't see it).
-	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusDone, ""); err != nil {
-		t.Fatalf("OnTransition after clear: %v", err)
+	// NOT EXISTS ... AND NOT read guard doesn't see it). done is a
+	// terminal state; OnTransition no longer fires on it (NotifyConsumer
+	// does), so this exercises NotifyMessage directly instead.
+	if err := n.NotifyMessage(ctx, id, "done", composeMessage("done", goal, "")); err != nil {
+		t.Fatalf("NotifyMessage after clear: %v", err)
 	}
 	notes, err = n.List(ctx)
 	if err != nil {
@@ -160,7 +192,7 @@ func TestMarkRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusError, ""); err != nil {
+	if err := n.OnTransition(ctx, Mission{ID: id, Goal: goal}, StatusWorking, StatusPaused, ""); err != nil {
 		t.Fatalf("OnTransition: %v", err)
 	}
 	notes, err := n.List(ctx)
