@@ -52,3 +52,30 @@ func TestIsActionableTransition(t *testing.T) {
 		})
 	}
 }
+
+// TestLeftActionable covers the issue #935 clear hook's trigger.
+func TestLeftActionable(t *testing.T) {
+	cases := []struct {
+		before, after Status
+		want          bool
+	}{
+		{StatusPaused, StatusIdle, true},
+		{StatusPaused, StatusWorking, true},
+		{StatusPaused, StatusError, true},
+		{StatusPaused, StatusDone, true},
+		{StatusPaused, StatusWaitingForInput, true},
+		{StatusWaitingForInput, StatusIdle, true},
+		{StatusWaitingForInput, StatusError, true},
+		{StatusWaitingForInput, StatusPaused, true},
+		{StatusPaused, StatusPaused, false},
+		{StatusWaitingForInput, StatusWaitingForInput, false},
+		{StatusWorking, StatusPaused, false},
+		{StatusWorking, StatusIdle, false},
+		{StatusIdle, StatusWorking, false},
+	}
+	for _, tc := range cases {
+		if got := leftActionable(tc.before, tc.after); got != tc.want {
+			t.Errorf("leftActionable(%q, %q) = %v, want %v", tc.before, tc.after, got, tc.want)
+		}
+	}
+}

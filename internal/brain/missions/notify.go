@@ -65,6 +65,27 @@ func isActionableTransition(before, after Status) (kind string, ok bool) {
 	}
 }
 
+// leftActionable reports whether a mission is leaving paused or
+// waiting_for_input (resume, answer, approval, cancel, terminal).
+func leftActionable(before, after Status) bool {
+	if before == after {
+		return false
+	}
+	return before == StatusPaused || before == StatusWaitingForInput
+}
+
+// clearActionableNotificationsTx marks the mission's unread paused and
+// waiting_for_input notifications read, so sendOncePerMission lets the
+// next pause through (issue #935). Terminal rows are left alone.
+func clearActionableNotificationsTx(ctx context.Context, tx pgx.Tx, missionID string) error {
+	if _, err := tx.Exec(ctx, `UPDATE notifications SET read = true
+		WHERE mission_id = $1 AND kind IN ($2, $3) AND NOT read`,
+		missionID, string(StatusPaused), string(StatusWaitingForInput)); err != nil {
+		return fmt.Errorf("clear actionable notifications: %w", err)
+	}
+	return nil
+}
+
 // composeMessage builds the operator-facing notification text for an
 // actionable transition: the mission's display title (PRTitle's own
 // name-vs-truncated-goal fallback, reused here so the two surfaces
@@ -195,20 +216,6 @@ func (n *Notifier) NotifyOperator(ctx context.Context, kind, message string) err
 		n.hub.Publish(Signal{Kind: "notification", ID: id})
 	}
 	n.fanOut(ctx, "", kind, message)
-	return nil
-}
-
-// ClearMission marks unread rows read once the mission advances past
-// waiting_for_input/paused — stale "waiting for input" rows don't
-// linger once the situation's resolved.
-func (n *Notifier) ClearMission(ctx context.Context, missionID string) error {
-	db, err := n.db.Get()
-	if err != nil {
-		return fmt.Errorf("notify: clear: %w", err)
-	}
-	if _, err := db.Exec(ctx, `UPDATE notifications SET read = true WHERE mission_id = $1 AND NOT read`, missionID); err != nil {
-		return fmt.Errorf("notify: clear: %w", err)
-	}
 	return nil
 }
 
