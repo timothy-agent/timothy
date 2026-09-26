@@ -46,7 +46,9 @@ CLAUDE.md so other work does not pay for it every session.
   accept `attach` (parent workspace files, copied into the child
   workspace by the provisioner before discover and recorded as "pdf"
   sources with `MissionID` set) and `brief` (a "brief" source rendered
-  as referenced context).
+  as referenced context). The HTTP create path with `parent_mission_id`
+  runs `InheritParent` (issue #923): a non-empty body field wins, an
+  empty one inherits the parent's value, destinations never inherit.
 - Mission attachments (issue #359): PDF/text converted via markitdown,
   images captioned via the vision route (`chat.CaptionImageOverGateway`),
   audio transcribed via the whisper sidecar, all ONCE at create (prompt-
