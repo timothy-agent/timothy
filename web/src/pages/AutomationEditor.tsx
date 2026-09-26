@@ -1,9 +1,18 @@
 import { ChevronRight } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 
-import { createAutomation, getAutomation, listChannels, listConnectors, listDestinations, patchAutomation } from '../api/client'
+import {
+  createAutomation,
+  getAutomation,
+  listChannels,
+  listConnectors,
+  listDestinations,
+  listSecretRefs,
+  patchAutomation,
+  setSecret,
+} from '../api/client'
 import type { AdminConnector, Automation, AutomationAction, AutomationTemplate, Channel, Destination, MissionTemplate } from '../api/types'
 import { useAgents, useRoutes } from '../components/AgentPicker'
 import {
@@ -11,6 +20,7 @@ import {
   draftsToInput,
   goalHint,
   newTriggerDraft,
+  pendingSecrets,
   triggerError,
   type TriggerDraft,
 } from '../components/automations/triggerDrafts'
@@ -18,6 +28,7 @@ import { TriggerList } from '../components/automations/TriggerList'
 import { type PendingAttachment } from '../components/Composer'
 import { MissionActionFields } from '../components/missions/MissionActionFields'
 import { normalizeTemplate } from '../components/missions/missionTemplate'
+import { useDefaultSecretBackend } from '../components/settings/useDefaultSecretBackend'
 import { Field, FieldGroup, Form, FormActions } from '../components/timothy/field'
 import { PageHeader } from '../components/timothy/page-header'
 import { PageShell } from '../components/timothy/page-shell'
@@ -181,6 +192,12 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
   const [destinations, setDestinations] = useState<Destination[] | null>(null)
   const [connectors, setConnectors] = useState<AdminConnector[] | null>(null)
   const [channels, setChannels] = useState<Channel[] | null>(null)
+  const [secretNames, setSecretNames] = useState<string[]>([])
+  // written tracks secret names this session has already stored, so a
+  // retry after an automation-save failure reuses the name instead of
+  // tripping the "already exists" collision check.
+  const written = useRef(new Set<string>())
+  const secretBackend = useDefaultSecretBackend()
   const [draft, setDraft] = useState(initial)
   const [showAdvanced, setShowAdvanced] = useState(
     initial.concurrency !== limitDefaults.concurrency ||
@@ -198,6 +215,7 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
     listDestinations().then(setDestinations, () => setDestinations([]))
     listConnectors().then(setConnectors, () => setConnectors([]))
     listChannels().then(setChannels, () => setChannels([]))
+    listSecretRefs().then((refs) => setSecretNames(refs.map((r) => r.name)), () => undefined)
   }, [])
 
   // An untouched agent falls back to the default agent.
@@ -224,6 +242,20 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
       draft.attachments.some((a) => a.uploading)
     if (invalid) return
 
+    const collision = draft.triggers.find(
+      (t) =>
+        t.kind === 'webhook' &&
+        t.secretMode === 'new' &&
+        secretNames.includes(t.credentialRef.trim()) &&
+        !written.current.has(t.credentialRef.trim()),
+    )
+    if (collision) {
+      setTriggerErrors({
+        [collision.key]: 'A secret with this name already exists. Pick it under Existing or choose another name.',
+      })
+      return
+    }
+
     const mission = normalizeTemplate({
       ...draft.mission,
       attachments: draft.attachments.map((a) => ({ id: a.id, name: a.name ?? '' })),
@@ -242,6 +274,19 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
     setBusy(true)
     setNameError(undefined)
     setTriggerErrors({})
+
+    const pending = pendingSecrets(draft.triggers)
+    try {
+      for (const { name, value } of pending) {
+        await setSecret(name, value)
+        written.current.add(name)
+      }
+    } catch (err) {
+      toast.error('Could not store the signing secret', { description: errText(err) })
+      setBusy(false)
+      return
+    }
+
     try {
       if (automation) {
         await patchAutomation(automation.id, {
@@ -387,6 +432,7 @@ function EditorForm({ automation, initial }: { automation: Automation | null; in
             connectors={connectors}
             channels={channels}
             submitted={submitted}
+            secretBackend={secretBackend}
           />
         </FieldGroup>
 

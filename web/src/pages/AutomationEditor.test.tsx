@@ -16,6 +16,9 @@ vi.mock('../api/client', () => ({
   listAgents: vi.fn(),
   listChannels: vi.fn(() => Promise.resolve([])),
   listRoutes: vi.fn(),
+  listSecretRefs: vi.fn(() => Promise.resolve([])),
+  listSecretBackends: vi.fn(() => Promise.resolve([])),
+  setSecret: vi.fn(() => Promise.resolve()),
   uploadAttachment: vi.fn(),
 }))
 
@@ -29,7 +32,9 @@ import {
   listConnectors,
   listDestinations,
   listRoutes,
+  listSecretRefs,
   patchAutomation,
+  setSecret,
 } from '../api/client'
 
 const agent = { id: agentID, name: 'briefing', enabled: true, is_default: true } as AdminAgent
@@ -82,7 +87,9 @@ beforeEach(() => {
   vi.mocked(listRoutes).mockResolvedValue(routes)
   vi.mocked(listDestinations).mockResolvedValue([])
   vi.mocked(listConnectors).mockResolvedValue([github])
+  vi.mocked(listSecretRefs).mockResolvedValue([])
   vi.mocked(createAutomation).mockResolvedValue({ id: 'new1' })
+  vi.mocked(setSecret).mockResolvedValue(undefined)
 })
 
 describe('AutomationEditor create', () => {
@@ -333,6 +340,7 @@ describe('AutomationEditor event triggers', () => {
     await pickKind('Webhook')
     fireEvent.click(screen.getByRole('radio', { name: 'Generic' }))
     fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'HOOK_KEY' } })
+    fireEvent.change(screen.getByLabelText('Signing key'), { target: { value: 'k3y' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add filter' }))
     fireEvent.change(screen.getByLabelText('Filter 1 path'), { target: { value: 'action' } })
     fireEvent.change(screen.getByLabelText('Filter 1 equals'), { target: { value: 'opened' } })
@@ -343,7 +351,12 @@ describe('AutomationEditor event triggers', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
 
     await waitFor(() => expect(createAutomation).toHaveBeenCalled())
-    expect(wire(vi.mocked(createAutomation).mock.calls[0][0]).triggers).toEqual([
+    expect(setSecret).toHaveBeenCalledWith('HOOK_KEY', 'k3y')
+    expect(vi.mocked(setSecret).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(createAutomation).mock.invocationCallOrder[0],
+    )
+    const input = wire(vi.mocked(createAutomation).mock.calls[0][0])
+    expect(input.triggers).toEqual([
       {
         kind: 'webhook',
         config: { scheme: 'generic', filters: [{ path: 'action', equals: 'opened' }] },
@@ -352,6 +365,7 @@ describe('AutomationEditor event triggers', () => {
         tool_allowlist: ['search_mail'],
       },
     ])
+    expect(JSON.stringify(input)).not.toContain('k3y')
   })
 
   it('blocks submit on an incomplete event trigger', async () => {
@@ -361,6 +375,7 @@ describe('AutomationEditor event triggers', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
     expect(await screen.findByText('Enter the signing secret name.')).toBeInTheDocument()
     expect(createAutomation).not.toHaveBeenCalled()
+    expect(setSecret).not.toHaveBeenCalled()
   })
 
   it('shows a server trigger error under the trigger it names', async () => {
@@ -371,10 +386,54 @@ describe('AutomationEditor event triggers', () => {
     await fillBasics()
     await pickKind('Webhook')
     fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'HOOK_KEY' } })
+    fireEvent.change(screen.getByLabelText('Signing key'), { target: { value: 'k3y' } })
     fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
     const group = screen.getByRole('group', { name: 'Trigger 1' })
     expect(await within(group).findByText('webhook trigger scheme must be "github" or "generic"')).toBeInTheDocument()
     expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('retries a failed create by reusing the already-written secret name', async () => {
+    vi.mocked(createAutomation).mockRejectedValueOnce(apiError('boom', 'automations_failed'))
+    vi.mocked(createAutomation).mockResolvedValueOnce({ id: 'new1' })
+    renderAt('/automations/new')
+    await fillBasics()
+    await pickKind('Webhook')
+    fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'HOOK_KEY' } })
+    fireEvent.change(screen.getByLabelText('Signing key'), { target: { value: 'k3y' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+    await waitFor(() => expect(createAutomation).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+    await waitFor(() => expect(createAutomation).toHaveBeenCalledTimes(2))
+    expect(setSecret).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/already exists/)).toBeNull()
+  })
+
+  it('toasts a secret write failure and never posts the automation', async () => {
+    vi.mocked(setSecret).mockRejectedValue(apiError('write failed', 'internal'))
+    renderAt('/automations/new')
+    await fillBasics()
+    await pickKind('Webhook')
+    fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'HOOK_KEY' } })
+    fireEvent.change(screen.getByLabelText('Signing key'), { target: { value: 'k3y' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not store the signing secret', { description: 'write failed' }),
+    )
+    expect(createAutomation).not.toHaveBeenCalled()
+  })
+
+  it('blocks a new secret name that already exists', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([{ name: 'HOOK_KEY', backend: 'db', referenced_by: [] }])
+    renderAt('/automations/new')
+    await fillBasics()
+    await pickKind('Webhook')
+    fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'HOOK_KEY' } })
+    fireEvent.change(screen.getByLabelText('Signing key'), { target: { value: 'k3y' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create automation' }))
+    expect(await screen.findByText(/A secret with this name already exists/)).toBeInTheDocument()
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(createAutomation).not.toHaveBeenCalled()
   })
 
   it('switches the goal hint with the trigger kinds', async () => {
@@ -407,15 +466,17 @@ describe('AutomationEditor event triggers', () => {
     })
     vi.mocked(getAutomation).mockResolvedValue(stored)
     vi.mocked(patchAutomation).mockResolvedValue(stored)
+    vi.mocked(listSecretRefs).mockResolvedValue([{ name: 'HOOK_KEY', backend: 'db', referenced_by: [] }])
     renderAt('/automations/s1/edit')
     await ready()
     expect(screen.getByLabelText('Repository')).toHaveValue('octo/timothy')
     expect(screen.getByRole('checkbox', { name: /pr\.opened/ })).toBeChecked()
-    expect(screen.getByLabelText('Signing secret')).toHaveValue('HOOK_KEY')
+    expect(await screen.findByLabelText('existing credential')).toHaveTextContent('HOOK_KEY')
     expect(screen.getByLabelText('Filter 1 path')).toHaveValue('action')
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() => expect(patchAutomation).toHaveBeenCalled())
+    expect(setSecret).not.toHaveBeenCalled()
     expect(wire(vi.mocked(patchAutomation).mock.calls[0][1]).triggers).toEqual([
       { id: 't5', kind: 'connector_event', config: { connector_id: connectorID, repo: 'octo/timothy', events: ['pr.opened'] }, enabled: true },
       {

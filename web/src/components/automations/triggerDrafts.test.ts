@@ -8,7 +8,9 @@ import {
   goalHint,
   newTriggerDraft,
   patternError,
+  pendingSecrets,
   repoError,
+  secretFieldError,
   triggerError,
 } from './triggerDrafts'
 
@@ -78,11 +80,26 @@ describe('webhook drafts', () => {
 
   it('loads scheme, filters without the $. prefix, and the secret name', () => {
     const [d] = draftsFromTriggers([stored])
-    expect(d).toMatchObject({ id: 't6', scheme: 'generic', filters: [{ path: 'action', equals: 'opened' }], credentialRef: 'HOOK_KEY', enabled: false })
+    expect(d).toMatchObject({
+      id: 't6',
+      scheme: 'generic',
+      filters: [{ path: 'action', equals: 'opened' }],
+      credentialRef: 'HOOK_KEY',
+      secretMode: 'existing',
+      secretValue: '',
+      enabled: false,
+    })
   })
 
-  it('round-trips with credential_ref at the top level', () => {
-    expect(draftsToInput(draftsFromTriggers([stored]))).toEqual([
+  it('a fresh draft starts in new mode with no secret value', () => {
+    const d = newTriggerDraft()
+    expect(d.secretMode).toBe('new')
+    expect(d.secretValue).toBe('')
+  })
+
+  it('round-trips with credential_ref at the top level and never a secretValue', () => {
+    const [d] = draftsFromTriggers([stored])
+    expect(draftsToInput([{ ...d, secretValue: 'should-not-leak' }])).toEqual([
       { id: 't6', kind: 'webhook', config: { scheme: 'generic', filters: [{ path: 'action', equals: 'opened' }] }, credential_ref: 'HOOK_KEY', enabled: false },
     ])
   })
@@ -90,6 +107,36 @@ describe('webhook drafts', () => {
   it('omits empty filters', () => {
     const d = { ...newTriggerDraft(), kind: 'webhook' as const, credentialRef: ' HOOK_KEY ' }
     expect(draftsToInput([d])).toEqual([{ kind: 'webhook', config: { scheme: 'github' }, credential_ref: 'HOOK_KEY', enabled: true }])
+  })
+})
+
+describe('secretFieldError', () => {
+  it('new mode: needs a name, a valid shape, then a value', () => {
+    const hook = { ...newTriggerDraft(), kind: 'webhook' as const }
+    expect(secretFieldError(hook)).toBe('Enter the signing secret name.')
+    expect(secretFieldError({ ...hook, credentialRef: 'bad name!' })).toBe('Use letters, digits, _ . / or -.')
+    expect(secretFieldError({ ...hook, credentialRef: 'HOOK_KEY' })).toBe('Paste the signing key.')
+    expect(secretFieldError({ ...hook, credentialRef: 'HOOK_KEY', secretValue: 'k3y' })).toBeUndefined()
+  })
+
+  it('existing mode: needs a picked name only', () => {
+    const hook = { ...newTriggerDraft(), kind: 'webhook' as const, secretMode: 'existing' as const }
+    expect(secretFieldError(hook)).toBe('Pick a stored secret.')
+    expect(secretFieldError({ ...hook, credentialRef: 'HOOK_KEY' })).toBeUndefined()
+  })
+})
+
+describe('pendingSecrets', () => {
+  it('collects new-mode webhook secrets with a value, deduped by name', () => {
+    const a = { ...newTriggerDraft(), kind: 'webhook' as const, credentialRef: 'HOOK_KEY', secretValue: 'k3y' }
+    const b = { ...newTriggerDraft(), kind: 'webhook' as const, credentialRef: 'HOOK_KEY', secretValue: 'k3y2' }
+    const existing = { ...newTriggerDraft(), kind: 'webhook' as const, secretMode: 'existing' as const, credentialRef: 'OTHER' }
+    const empty = { ...newTriggerDraft(), kind: 'webhook' as const, credentialRef: 'EMPTY' }
+    expect(pendingSecrets([a, b, existing, empty])).toEqual([{ name: 'HOOK_KEY', value: 'k3y2' }])
+  })
+
+  it('ignores non-webhook and blank-name drafts', () => {
+    expect(pendingSecrets([newTriggerDraft(), { ...newTriggerDraft(), kind: 'connector_event' as const }])).toEqual([])
   })
 })
 
@@ -104,12 +151,13 @@ describe('triggerError', () => {
     expect(triggerError({ ...base, connectorId: connectorID, repo: 'octo/timothy', events: ['pr.opened'] })).toBeUndefined()
   })
 
-  it('needs a webhook secret name and valid filter paths', () => {
+  it('needs a webhook secret name and value before checking filter paths', () => {
     const hook = { ...newTriggerDraft(), kind: 'webhook' as const }
     expect(triggerError(hook)).toBe('Enter the signing secret name.')
-    expect(triggerError({ ...hook, credentialRef: 'K', filters: [{ path: '', equals: 'x' }] })).toBe('Fix the filter paths.')
-    expect(triggerError({ ...hook, credentialRef: 'K', filters: [{ path: 'a b', equals: 'x' }] })).toBe('Fix the filter paths.')
-    expect(triggerError({ ...hook, credentialRef: 'K', filters: [{ path: '$.pull_request.user.login', equals: 'x' }] })).toBeUndefined()
+    const named = { ...hook, credentialRef: 'K', secretValue: 'v' }
+    expect(triggerError({ ...named, filters: [{ path: '', equals: 'x' }] })).toBe('Fix the filter paths.')
+    expect(triggerError({ ...named, filters: [{ path: 'a b', equals: 'x' }] })).toBe('Fix the filter paths.')
+    expect(triggerError({ ...named, filters: [{ path: '$.pull_request.user.login', equals: 'x' }] })).toBeUndefined()
   })
 
   it('leaves cron and manual rows as before', () => {

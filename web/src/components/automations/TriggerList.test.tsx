@@ -7,6 +7,15 @@ import { TooltipProvider } from '../ui/tooltip'
 import { cronError, draftsFromTriggers, draftsToInput, newTriggerDraft, type TriggerDraft } from './triggerDrafts'
 import { TriggerList } from './TriggerList'
 
+vi.mock('../../api/client', () => ({ listSecretRefs: vi.fn() }))
+
+import { listSecretRefs } from '../../api/client'
+
+const secretRefs = [
+  { name: 'HOOK_KEY', backend: 'db', referenced_by: [] },
+  { name: 'UNUSED', backend: 'db', referenced_by: [] },
+]
+
 const connectorID = '0000000c-0000-0000-0000-000000000001'
 
 const connector = (over: Partial<AdminConnector>): AdminConnector => ({
@@ -251,6 +260,7 @@ describe('TriggerList connector event', () => {
 describe('TriggerList webhook', () => {
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn()
+    vi.mocked(listSecretRefs).mockResolvedValue(secretRefs)
   })
 
   it('sets scheme and secret name', async () => {
@@ -260,7 +270,31 @@ describe('TriggerList webhook', () => {
     expect(screen.getByRole('radio', { name: 'GitHub' })).toHaveAttribute('data-state', 'on')
     fireEvent.click(screen.getByRole('radio', { name: 'Generic' }))
     fireEvent.change(screen.getByLabelText('Signing secret'), { target: { value: 'HOOK_KEY' } })
-    expect(lastCall(onChange)[0]).toMatchObject({ kind: 'webhook', scheme: 'generic', credentialRef: 'HOOK_KEY' })
+    fireEvent.change(screen.getByLabelText('Signing key'), { target: { value: 'k3y' } })
+    expect(lastCall(onChange)[0]).toMatchObject({ kind: 'webhook', scheme: 'generic', credentialRef: 'HOOK_KEY', secretValue: 'k3y' })
+  })
+
+  it('lists every stored secret, including one nothing references, in existing mode', async () => {
+    const onChange = vi.fn()
+    render(<Harness initial={[newTriggerDraft()]} onChange={onChange} />)
+    await pickKind('Webhook')
+    fireEvent.click(screen.getByRole('radio', { name: 'Existing' }))
+    fireEvent.click(await screen.findByLabelText('existing credential'))
+    expect(await screen.findByRole('option', { name: 'HOOK_KEY' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'UNUSED' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: 'HOOK_KEY' }))
+    expect(lastCall(onChange)[0]).toMatchObject({ secretMode: 'existing', credentialRef: 'HOOK_KEY' })
+  })
+
+  it('clears the secret value when switching modes', async () => {
+    const onChange = vi.fn()
+    render(<Harness initial={[newTriggerDraft()]} onChange={onChange} />)
+    await pickKind('Webhook')
+    fireEvent.change(screen.getByLabelText('Signing key'), { target: { value: 'k3y' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Existing' }))
+    expect(lastCall(onChange)[0].secretValue).toBe('')
+    fireEvent.click(screen.getByRole('radio', { name: 'New secret' }))
+    expect(lastCall(onChange)[0].secretValue).toBe('')
   })
 
   it('adds, edits, removes and caps filter rows', async () => {
