@@ -257,7 +257,14 @@ func (h *missionAPI) routeExists(ctx context.Context, name string) bool {
 	return err == nil
 }
 
-func failMission(w http.ResponseWriter, err error) {
+// failMission maps a mission-path error to its HTTP response. Only
+// ErrInvalidMission (a request-shape problem) is a 400: anything else
+// unmatched is a store/provision failure, never the caller's fault, so
+// it's logged server-side and returned as a generic 500 rather than
+// leaking driver text (e.g. a raw Postgres constraint violation, issue
+// #845). log nil-falls-back to slog.Default() since some tests/paths
+// construct a missionAPI without one (automations_integration_test.go).
+func failMission(w http.ResponseWriter, log *slog.Logger, err error) {
 	switch {
 	case errors.Is(err, missions.ErrNotFound):
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
@@ -274,7 +281,11 @@ func failMission(w http.ResponseWriter, err error) {
 	case errors.Is(err, missions.ErrInvalidMission):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
-		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		if log == nil {
+			log = slog.Default()
+		}
+		log.Error("mission request failed", "error", err)
+		jsonError(w, http.StatusInternalServerError, "internal_error", "internal error")
 	}
 }
 
@@ -777,12 +788,12 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, "route_unusable", err.Error())
 			return
 		}
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	id, err := h.driver.Create(r.Context(), m)
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	// Re-read rather than echo req/m back: Driver.Create's own
@@ -867,7 +878,7 @@ func (h *missionAPI) routing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.driver.ChangeRouting(r.Context(), r.PathValue("id"), body.ReviewRoute, body.ReviewRouteModel); err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1340,7 +1351,7 @@ func (h *missionAPI) missionExecutionPlan(w http.ResponseWriter, r *http.Request
 	}
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	harnessSource := "native"
@@ -1469,7 +1480,7 @@ func emptyEntries(entries []executionPlanEntry) []executionPlanEntry {
 func (h *missionAPI) get(w http.ResponseWriter, r *http.Request) {
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, h.decorateTopModels(r.Context(), []missions.Mission{sanitizeMission(m)})[0])
@@ -1486,7 +1497,7 @@ func (h *missionAPI) get(w http.ResponseWriter, r *http.Request) {
 func (h *missionAPI) delete(w http.ResponseWriter, r *http.Request) {
 	m, err := h.store.Delete(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if m.SessionID != "" && h.dir != nil {
@@ -1505,7 +1516,7 @@ func (h *missionAPI) delete(w http.ResponseWriter, r *http.Request) {
 func (h *missionAPI) events(w http.ResponseWriter, r *http.Request) {
 	events, err := h.store.Events(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
@@ -1543,7 +1554,7 @@ func (h *missionAPI) resume(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.driver.Signal(r.Context(), id, missions.InputResume); err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1561,7 +1572,7 @@ func truncateAnswer(s string, n int) string {
 
 func (h *missionAPI) cancel(w http.ResponseWriter, r *http.Request) {
 	if err := h.driver.Signal(r.Context(), r.PathValue("id"), missions.InputCancel); err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1585,7 +1596,7 @@ func (h *missionAPI) note(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	m, err := h.store.Get(r.Context(), id)
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if m.Phase.Terminal() {
@@ -1615,7 +1626,7 @@ func (h *missionAPI) permission(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if m.PendingPermission == "" {
@@ -1656,7 +1667,7 @@ func (h *missionAPI) permission(w http.ResponseWriter, r *http.Request) {
 // cannot call this.
 func (h *missionAPI) approvePlan(w http.ResponseWriter, r *http.Request) {
 	if err := h.driver.DecidePlan(r.Context(), r.PathValue("id"), missions.InputPlanApprove, ""); err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1687,7 +1698,7 @@ func (h *missionAPI) replan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := h.driver.DecidePlan(r.Context(), id, missions.InputPlanReplan, feedback); err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1698,7 +1709,7 @@ func (h *missionAPI) replan(w http.ResponseWriter, r *http.Request) {
 // feedback text taken (unlike replan).
 func (h *missionAPI) rediscover(w http.ResponseWriter, r *http.Request) {
 	if err := h.driver.DecidePlan(r.Context(), r.PathValue("id"), missions.InputPlanRediscover, ""); err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1721,7 +1732,7 @@ func (h *missionAPI) answer(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	m, err := h.store.Get(r.Context(), id)
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if m.PendingInput == nil {
@@ -1749,7 +1760,7 @@ func (h *missionAPI) answer(w http.ResponseWriter, r *http.Request) {
 	}
 	answer := truncateAnswer(body.Answer, resumeAnswerCap)
 	if err := h.driver.AnswerAskUser(r.Context(), id, answer); err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1771,7 +1782,7 @@ func declaredArtifacts(plan missions.Plan) map[string]bool {
 func (h *missionAPI) files(w http.ResponseWriter, r *http.Request) {
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if m.Workspace == "" {
@@ -1796,7 +1807,7 @@ func (h *missionAPI) files(w http.ResponseWriter, r *http.Request) {
 func (h *missionAPI) download(w http.ResponseWriter, r *http.Request) {
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if m.Workspace == "" {
@@ -1834,7 +1845,7 @@ func (h *missionAPI) exportPDF(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if m.Workspace == "" {
@@ -1904,7 +1915,7 @@ func (h *missionAPI) promoteKB(w http.ResponseWriter, r *http.Request) {
 	}
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if m.Phase != missions.PhaseDone {
@@ -2090,7 +2101,7 @@ func missionDisplayName(m missions.Mission) string {
 func (h *missionAPI) archive(w http.ResponseWriter, r *http.Request) {
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if m.Workspace == "" {
@@ -2243,7 +2254,7 @@ func pushStatusCode(err error) (status int, code string) {
 func (h *missionAPI) push(w http.ResponseWriter, r *http.Request) {
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	if reason := missions.NotPushable(m); reason != "" {
@@ -2289,7 +2300,7 @@ func (h *missionAPI) push(w http.ResponseWriter, r *http.Request) {
 func (h *missionAPI) pr(w http.ResponseWriter, r *http.Request) {
 	m, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failMission(w, err)
+		failMission(w, h.log, err)
 		return
 	}
 	repoURL := m.RepoURL()
