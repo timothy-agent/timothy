@@ -30,7 +30,7 @@ import (
 // ErrInvalidMission is a 400 with the validation message intact, and
 // everything else (a raw store/driver error, including a Postgres
 // constraint violation) is a generic 500 that never echoes the
-// driver's own text — logged server-side instead (the regression this
+// driver's own text; it is logged server-side instead (the regression this
 // issue covers: a NOT NULL violation used to leak as a 400).
 func TestFailMission(t *testing.T) {
 	t.Parallel()
@@ -227,7 +227,7 @@ func TestMissionsExportPDFNotEnabled(t *testing.T) {
 // settings-configured default via the seam. This test wires no
 // ValidateDeps, so every case here reaches the degraded store, a
 // generic 500 (failMission's default, see TestMissionsDeleteReachesStore)
-// — the harness/kind combination itself is distinguished instead by
+// and the harness/kind combination itself is distinguished instead by
 // asserting the codingExecutorDefault seam was (or wasn't) invoked, the
 // one observable difference at this layer. The unknown-harness and
 // coding-only rejections ValidateCreate performs are covered directly
@@ -255,7 +255,7 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 	if code := post(nil, `{"goal":"g","kind":"coding","harness":"not-a-real-harness"}`); code != 500 {
 		t.Fatalf("unknown harness = %d, want 500 (reached degraded store)", code)
 	}
-	// "native" normalizes to "" and reaches the (degraded) store — same
+	// "native" normalizes to "" and reaches the (degraded) store: the same
 	// generic 500 failMission maps every unrecognized store error to.
 	if code := post(nil, `{"goal":"g","kind":"coding","harness":"native"}`); code != 500 {
 		t.Fatalf("harness=native = %d, want 500 (reached degraded store)", code)
@@ -1289,7 +1289,7 @@ func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 // rejects on kind itself: it reaches missions.ClassifyKind (defaulting
 // to "general" with no classify wired) and then 400s on
 // ValidateCreate's own route-required check (this test wires no
-// route) — proving kind validation accepted the empty kind rather than
+// route), proving kind validation accepted the empty kind rather than
 // rejecting it. An explicit kind is still validated and honored
 // exactly as before.
 func TestMissionsCreateKindOptional(t *testing.T) {
