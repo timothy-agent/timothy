@@ -75,6 +75,23 @@ describe('CredentialsTab', () => {
     expect(screen.queryByRole('button', { name: 'Delete GITHUB_PAT' })).not.toBeInTheDocument()
   })
 
+  it('renders an automation webhook referent and no delete button', async () => {
+    vi.mocked(listSecretRefs).mockResolvedValue([
+      {
+        name: 'HOOK_KEY',
+        backend: 'db',
+        referenced_by: [{ kind: 'automation', name: 'pr-review', role: 'credential' }],
+        system: false,
+      },
+    ])
+    renderTab()
+
+    expect(await screen.findByText('HOOK_KEY')).toBeInTheDocument()
+    expect(screen.getByText(/automation: pr-review/)).toBeInTheDocument()
+    expect(screen.queryByText('orphaned')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete HOOK_KEY' })).not.toBeInTheDocument()
+  })
+
   it('shows an empty state when nothing is stored', async () => {
     vi.mocked(listSecretRefs).mockResolvedValue([])
     renderTab()
