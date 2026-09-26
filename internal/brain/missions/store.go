@@ -415,6 +415,27 @@ func (s *Store) Get(ctx context.Context, id string) (Mission, error) {
 	return m, nil
 }
 
+// WorkflowChild returns the id of the first mission workflow run runID
+// spawned from parentMissionID, or "" when there is none. An empty
+// parentMissionID matches the run's parentless entry mission.
+func (s *Store) WorkflowChild(ctx context.Context, runID, parentMissionID string) (string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", fmt.Errorf("missions workflow child: %w", err)
+	}
+	var id string
+	err = db.QueryRow(ctx, `SELECT id::text FROM missions
+		WHERE workflow_run_id = $1 AND parent_mission_id IS NOT DISTINCT FROM NULLIF($2, '')::uuid
+		ORDER BY created_at, id LIMIT 1`, runID, parentMissionID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("missions workflow child of run %s: %w", runID, err)
+	}
+	return id, nil
+}
+
 // Delete permanently removes a terminal mission: its row (mission_events
 // and notifications cascade via FK, migrations 0025/0027) plus every
 // other trace this package owns. This is NOT a violation of the

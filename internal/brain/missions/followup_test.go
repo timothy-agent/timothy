@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -59,8 +60,9 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		EscalationRoute: "route-d", MaxIterations: 12, BudgetCurrency: "USD",
 		RouteModel: "P/m-a", PlanRouteModel: "P/m-c", ReviewRouteModel: "P/m-b",
 		AutoApproveTools: true, PromptOverlay: "be terse",
-		Harness: "claude-cli", Environment: "node",
-		Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}},
+		Harness: "claude-cli", Environment: "node", ExecutorSessionPolicy: SessionPolicyFresh,
+		ToolAllowlist: []string{"shell", "write_file", "web_search"},
+		Sources:       []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}},
 		Destinations: []DestinationEntry{
 			{DestinationID: "gh-dest-1", RepoURL: "https://github.com/o/r.git"},
 			{DestinationID: "dest-1"},
@@ -96,6 +98,12 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		child.ConnectorID() != "conn1" ||
 		child.RouteModel != "P/m-a" || child.PlanRouteModel != "P/m-c" || child.ReviewRouteModel != "P/m-b" {
 		t.Fatalf("child did not inherit parent settings: %+v", child)
+	}
+	if child.ExecutorSessionPolicy != SessionPolicyFresh {
+		t.Fatalf("child.ExecutorSessionPolicy = %q, want the parent's %q", child.ExecutorSessionPolicy, SessionPolicyFresh)
+	}
+	if !reflect.DeepEqual(child.ToolAllowlist, []string{"shell", "write_file", "web_search"}) {
+		t.Fatalf("child.ToolAllowlist = %v, want the parent's", child.ToolAllowlist)
 	}
 	if child.ParentMissionID != "parent" {
 		t.Fatalf("child.ParentMissionID = %q, want %q", child.ParentMissionID, "parent")
@@ -477,5 +485,213 @@ func writeAttachFile(t *testing.T, root, rel, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", rel, err)
+	}
+}
+
+// inheritParentFixture is a terminal parent with every inheritable
+// field set, for the InheritParent tests.
+func inheritParentFixture() Mission {
+	budget := 5.0
+	return Mission{
+		ID: "parent", Goal: "fix the login bug", Kind: KindCoding, Phase: PhaseDone, Status: StatusDone,
+		AgentID: "agent-1", Route: "route-a", ReviewRoute: "route-b", PlanRoute: "route-c", EscalationRoute: "route-d",
+		RouteModel: "P/m-a", PlanRouteModel: "P/m-c", ReviewRouteModel: "P/m-b",
+		MaxIterations: 12, BudgetAmount: &budget, BudgetCurrency: "EUR",
+		AutoApproveTools: true, AutoApprovePlan: true,
+		Harness: "claude-cli", ReviewHarness: "codex-cli", Environment: "node",
+		ExecutorSessionPolicy: SessionPolicyFresh, ToolAllowlist: []string{"shell", "write_file"},
+		Flow:         FlowFull,
+		Sources:      []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}},
+		Destinations: []DestinationEntry{{DestinationID: "dest-1"}},
+	}
+}
+
+// TestInheritParentEmptyFieldsInherit proves a request carrying only a
+// goal and sources resolves to exactly the chat follow-up request.
+func TestInheritParentEmptyFieldsInherit(t *testing.T) {
+	parent := inheritParentFixture()
+	lineage := SourceEntry{Source: SourceKindMission, ID: ParentLineageID, MissionID: parent.ID}
+	repo, _ := parent.repoSource()
+	req := CreateRequest{Goal: "now add tests", ParentMissionID: parent.ID, Sources: []SourceEntry{lineage}}
+
+	got := InheritParent(req, parent)
+	want := FollowUpCreateRequest(parent, "now add tests", []SourceEntry{lineage, repo})
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("InheritParent =\n%+v\nwant\n%+v", got, want)
+	}
+}
+
+// TestInheritParentExplicitWins proves every non-empty request field
+// overrides the parent's value, including explicit false pointers.
+func TestInheritParentExplicitWins(t *testing.T) {
+	parent := inheritParentFixture()
+	f, budget, timeout, unattended := false, 9.0, 30, true
+	for _, tc := range []struct {
+		name  string
+		req   CreateRequest
+		check func(CreateRequest) bool
+	}{
+		{"name", CreateRequest{Name: "n"}, func(r CreateRequest) bool { return r.Name == "n" }},
+		{"kind", CreateRequest{Kind: KindGeneral}, func(r CreateRequest) bool { return r.Kind == KindGeneral }},
+		{"agent", CreateRequest{AgentID: "agent-2"}, func(r CreateRequest) bool { return r.AgentID == "agent-2" }},
+		{"route", CreateRequest{Route: "x"}, func(r CreateRequest) bool { return r.Route == "x" }},
+		{"review_route", CreateRequest{ReviewRoute: "x"}, func(r CreateRequest) bool { return r.ReviewRoute == "x" }},
+		{"plan_route", CreateRequest{PlanRoute: "x"}, func(r CreateRequest) bool { return r.PlanRoute == "x" }},
+		{"escalation_route", CreateRequest{EscalationRoute: "x"}, func(r CreateRequest) bool { return r.EscalationRoute == "x" }},
+		{"route_model", CreateRequest{RouteModel: "Q/x"}, func(r CreateRequest) bool { return r.RouteModel == "Q/x" }},
+		{"plan_route_model", CreateRequest{PlanRouteModel: "Q/x"}, func(r CreateRequest) bool { return r.PlanRouteModel == "Q/x" }},
+		{"review_route_model", CreateRequest{ReviewRouteModel: "Q/x"}, func(r CreateRequest) bool { return r.ReviewRouteModel == "Q/x" }},
+		{"max_iterations", CreateRequest{MaxIterations: 3}, func(r CreateRequest) bool { return r.MaxIterations == 3 }},
+		{"budget_amount", CreateRequest{BudgetAmount: &budget}, func(r CreateRequest) bool { return *r.BudgetAmount == 9 }},
+		{"budget_currency", CreateRequest{BudgetCurrency: "USD"}, func(r CreateRequest) bool { return r.BudgetCurrency == "USD" }},
+		{"auto_approve_tools false", CreateRequest{AutoApproveTools: &f}, func(r CreateRequest) bool { return !*r.AutoApproveTools }},
+		{"auto_approve_plan false", CreateRequest{AutoApprovePlan: &f}, func(r CreateRequest) bool { return !*r.AutoApprovePlan }},
+		{"harness native", CreateRequest{Harness: "native"}, func(r CreateRequest) bool { return r.Harness == "native" }},
+		{"review_harness native", CreateRequest{ReviewHarness: "native"}, func(r CreateRequest) bool { return r.ReviewHarness == "native" }},
+		{"environment", CreateRequest{Environment: "go"}, func(r CreateRequest) bool { return r.Environment == "go" }},
+		{"executor_session_policy", CreateRequest{ExecutorSessionPolicy: SessionPolicyResume}, func(r CreateRequest) bool { return r.ExecutorSessionPolicy == SessionPolicyResume }},
+		{"has_plan", CreateRequest{HasPlan: true}, func(r CreateRequest) bool { return r.HasPlan }},
+		{"flow", CreateRequest{Flow: string(FlowLight)}, func(r CreateRequest) bool { return r.Flow == string(FlowLight) }},
+		{"permission_timeout", CreateRequest{PermissionTimeoutSeconds: &timeout}, func(r CreateRequest) bool { return *r.PermissionTimeoutSeconds == 30 }},
+		{"unattended", CreateRequest{Unattended: &unattended}, func(r CreateRequest) bool { return *r.Unattended }},
+		{"tool_allowlist empty", CreateRequest{ToolAllowlist: []string{}}, func(r CreateRequest) bool { return r.ToolAllowlist != nil && len(r.ToolAllowlist) == 0 }},
+		{"origin_kind", CreateRequest{OriginKind: OriginChat}, func(r CreateRequest) bool { return r.OriginKind == OriginChat }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.req.Goal, tc.req.ParentMissionID = "g", parent.ID
+			if got := InheritParent(tc.req, parent); !tc.check(got) {
+				t.Fatalf("explicit %s lost: %+v", tc.name, got)
+			}
+		})
+	}
+}
+
+// TestInheritParentNeverCopiesDestinations proves destinations come
+// from the request alone (D-061), empty or not.
+func TestInheritParentNeverCopiesDestinations(t *testing.T) {
+	parent := inheritParentFixture()
+	if got := InheritParent(CreateRequest{Goal: "g"}, parent); len(got.Destinations) != 0 {
+		t.Fatalf("Destinations = %+v, want none from the parent", got.Destinations)
+	}
+	own := []DestinationEntry{{DestinationID: "dest-2"}}
+	if got := InheritParent(CreateRequest{Goal: "g", Destinations: own}, parent); !reflect.DeepEqual(got.Destinations, own) {
+		t.Fatalf("Destinations = %+v, want the request's %+v", got.Destinations, own)
+	}
+}
+
+// TestInheritParentLightBodyOverridesParentFullFlow proves light=true
+// drops the parent's full flow so ResolveDefaults maps it to light,
+// while an omitted light keeps the parent's flow.
+func TestInheritParentLightBodyOverridesParentFullFlow(t *testing.T) {
+	parent := Mission{ID: "parent", Kind: KindGeneral, Flow: FlowFull, Phase: PhaseDone}
+	got := InheritParent(CreateRequest{Goal: "g", Light: true}, parent)
+	if !got.Light || got.Flow != "" {
+		t.Fatalf("light body: Light=%v Flow=%q, want true and empty", got.Light, got.Flow)
+	}
+	m, err := ResolveDefaults(context.Background(), got, ResolveDeps{})
+	if err != nil || m.Flow != FlowLight {
+		t.Fatalf("resolved flow = %q err=%v, want light", m.Flow, err)
+	}
+
+	parent.Flow = FlowLight
+	if got := InheritParent(CreateRequest{Goal: "g"}, parent); got.Flow != string(FlowLight) {
+		t.Fatalf("omitted light: Flow = %q, want the parent's light", got.Flow)
+	}
+}
+
+// TestInheritParentRepoSourceInherited proves the parent's clone source
+// is carried after the request's own sources when the request names no
+// repo.
+func TestInheritParentRepoSourceInherited(t *testing.T) {
+	parent := inheritParentFixture()
+	lineage := SourceEntry{Source: SourceKindMission, ID: ParentLineageID, MissionID: parent.ID}
+	got := InheritParent(CreateRequest{Goal: "g", Sources: []SourceEntry{lineage}}, parent)
+	want := []SourceEntry{lineage, parent.Sources[0]}
+	if !reflect.DeepEqual(got.Sources, want) {
+		t.Fatalf("Sources = %+v, want %+v", got.Sources, want)
+	}
+}
+
+// TestInheritParentBodyRepoWins proves a request repo source replaces
+// the parent's instead of adding a second one.
+func TestInheritParentBodyRepoWins(t *testing.T) {
+	parent := inheritParentFixture()
+	own := SourceEntry{Source: SourceKindGitHub, RepoURL: "https://github.com/o/other.git", ConnectorID: "conn2"}
+	got := InheritParent(CreateRequest{Goal: "g", Sources: []SourceEntry{own}}, parent)
+	if !reflect.DeepEqual(got.Sources, []SourceEntry{own}) {
+		t.Fatalf("Sources = %+v, want only the request's repo", got.Sources)
+	}
+}
+
+// validateInherited resolves an inherited request and runs ValidateCreate
+// over it, the checks an API create would hit.
+func validateInherited(t *testing.T, req CreateRequest) Mission {
+	t.Helper()
+	deps := ResolveDeps{RouteForRole: func(context.Context, string) string { return "default" }}
+	m, err := ResolveDefaults(context.Background(), req, deps)
+	if err != nil {
+		t.Fatalf("ResolveDefaults: %v", err)
+	}
+	if err := ValidateCreate(context.Background(), m, ValidateDeps{}); err != nil {
+		t.Fatalf("ValidateCreate: %v (mission %+v)", err, m)
+	}
+	return m
+}
+
+// TestInheritParentGeneralBodyUnderCodingParent proves a kind=general
+// follow-up of a coding parent drops the coding-only fields instead of
+// failing validation, and keeps the rest.
+func TestInheritParentGeneralBodyUnderCodingParent(t *testing.T) {
+	parent := inheritParentFixture()
+	req := InheritParent(CreateRequest{Goal: "write the release notes", Kind: KindGeneral}, parent)
+	if req.Environment != "" || req.ExecutorSessionPolicy != "" || req.Flow != "" {
+		t.Fatalf("kind-bound fields inherited: env=%q policy=%q flow=%q", req.Environment, req.ExecutorSessionPolicy, req.Flow)
+	}
+	for _, e := range req.Sources {
+		if e.Source == SourceKindGitHub {
+			t.Fatalf("parent repo source inherited across a kind change: %+v", e)
+		}
+	}
+	m := validateInherited(t, req)
+	if m.Kind != KindGeneral || m.Harness != "" || m.Flow != FlowFull {
+		t.Fatalf("resolved kind=%q harness=%q flow=%q, want general, none, full", m.Kind, m.Harness, m.Flow)
+	}
+	if m.Route != "route-a" || m.PlanRoute != "route-c" || m.MaxIterations != 12 || m.BudgetCurrency != "EUR" {
+		t.Fatalf("kind-neutral settings lost: %+v", m)
+	}
+}
+
+// TestInheritParentCodingBodyUnderLightGeneralParent proves a
+// kind=coding follow-up of a light general parent does not inherit the
+// light flow.
+func TestInheritParentCodingBodyUnderLightGeneralParent(t *testing.T) {
+	parent := Mission{ID: "parent", Goal: "summarize", Kind: KindGeneral, Flow: FlowLight, Phase: PhaseDone, Route: "route-a", MaxIterations: 4}
+	req := InheritParent(CreateRequest{Goal: "build the tool", Kind: KindCoding}, parent)
+	m := validateInherited(t, req)
+	if m.Kind != KindCoding || m.Flow != FlowFull || m.Route != "route-a" || m.MaxIterations != 4 {
+		t.Fatalf("resolved %+v, want coding, full flow, inherited route and max_iterations", m)
+	}
+}
+
+// TestInheritParentSameKindInheritsKindBoundFields proves an explicit
+// kind equal to the parent's still inherits everything.
+func TestInheritParentSameKindInheritsKindBoundFields(t *testing.T) {
+	parent := inheritParentFixture()
+	lineage := SourceEntry{Source: SourceKindMission, ID: ParentLineageID, MissionID: parent.ID}
+	got := InheritParent(CreateRequest{Goal: "g", Kind: KindCoding, Sources: []SourceEntry{lineage}}, parent)
+	want := InheritParent(CreateRequest{Goal: "g", Sources: []SourceEntry{lineage}}, parent)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("same-kind request =\n%+v\nwant\n%+v", got, want)
+	}
+	validateInherited(t, got)
+}
+
+// TestInheritParentKindChangeExplicitFieldsStillWin proves the kind
+// guard only skips inheritance: body values still apply.
+func TestInheritParentKindChangeExplicitFieldsStillWin(t *testing.T) {
+	parent := Mission{ID: "parent", Kind: KindGeneral, Flow: FlowLight, Phase: PhaseDone}
+	got := InheritParent(CreateRequest{Goal: "g", Kind: KindCoding, Environment: "go", ExecutorSessionPolicy: SessionPolicyFresh}, parent)
+	if got.Environment != "go" || got.ExecutorSessionPolicy != SessionPolicyFresh {
+		t.Fatalf("explicit fields lost across a kind change: %+v", got)
 	}
 }

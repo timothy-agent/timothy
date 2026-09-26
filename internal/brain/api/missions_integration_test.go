@@ -809,6 +809,81 @@ func TestMissionsCreateFollowUp(t *testing.T) {
 	}
 }
 
+// TestMissionsCreateFollowUpInheritsParentSettings covers issue #923: a
+// create naming only goal and parent_mission_id inherits the parent's
+// settings, and explicit body fields win over them.
+func TestMissionsCreateFollowUpInheritsParentSettings(t *testing.T) {
+	store := testMissionStore(t)
+
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+
+	post := func(body string) missions.Mission {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("create %s: code=%d body=%s, want 201", body, w.Code, w.Body.String())
+		}
+		var created missions.Mission
+		if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+			t.Fatalf("decode create response: %v", err)
+		}
+		got, err := store.Get(context.Background(), created.ID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		return got
+	}
+
+	parentID, err := store.Create(context.Background(), missions.Mission{
+		Goal: "itest-api-mission inherit parent", Kind: missions.KindCoding,
+		Route: "itest-route", PlanRoute: "itest-plan", ReviewRoute: "itest-review",
+		MaxIterations: 7, Harness: "claude-cli", ExecutorSessionPolicy: missions.SessionPolicyFresh,
+		BudgetCurrency: "EUR", AutoApprovePlan: false, AutoApproveTools: true,
+	})
+	if err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	// ApplyTransition writes max_iterations, so the terminal step keeps 7.
+	if err := store.ApplyTransition(context.Background(), parentID, missions.Transition{
+		Next: missions.StepState{Phase: missions.PhaseDone, Status: missions.StatusDone, MaxIterations: 7},
+	}); err != nil {
+		t.Fatalf("apply transition to terminal: %v", err)
+	}
+
+	child := post(`{"goal":"itest-api-mission inherit child","parent_mission_id":"` + parentID + `"}`)
+	if child.Kind != missions.KindCoding || child.Route != "itest-route" || child.PlanRoute != "itest-plan" ||
+		child.ReviewRoute != "itest-review" || child.MaxIterations != 7 || child.Harness != "claude-cli" ||
+		child.ExecutorSessionPolicy != missions.SessionPolicyFresh || child.BudgetCurrency != "EUR" ||
+		child.AutoApprovePlan || child.OriginKind != missions.OriginFollowup {
+		t.Fatalf("child did not inherit parent settings: %+v", child)
+	}
+	if child.ParentMissionID != parentID || !strings.Contains(child.ParentContext(), "itest-api-mission inherit parent") {
+		t.Fatalf("child lineage = (%q, %q), want the parent's", child.ParentMissionID, child.ParentContext())
+	}
+
+	explicit := post(`{"goal":"itest-api-mission inherit explicit","parent_mission_id":"` + parentID + `",` +
+		`"route":"itest-other","max_iterations":3,"harness":"native","auto_approve_plan":true}`)
+	if explicit.Route != "itest-other" || explicit.MaxIterations != 3 || explicit.Harness != "" || !explicit.AutoApprovePlan {
+		t.Fatalf("explicit body fields lost: %+v", explicit)
+	}
+	if explicit.PlanRoute != "itest-plan" || explicit.Kind != missions.KindCoding {
+		t.Fatalf("unset fields should still inherit: %+v", explicit)
+	}
+
+	// A kind override drops the coding-only fields instead of 400ing.
+	general := post(`{"goal":"itest-api-mission inherit general","kind":"general","parent_mission_id":"` + parentID + `"}`)
+	if general.Kind != missions.KindGeneral || general.Harness != "" || general.ExecutorSessionPolicy != "" ||
+		general.Route != "itest-route" || general.MaxIterations != 7 {
+		t.Fatalf("kind override: %+v", general)
+	}
+}
+
 // TestMissionsCreateFollowUpUnknownParent covers the 400 path with a
 // LIVE store (TestMissionsCreateValidatesParentMission in
 // missions_test.go covers the same shape against a degraded pool,
