@@ -12,7 +12,7 @@ import (
 )
 
 // notifiedKind marks that a mission's terminal notification has
-// already fired — the append-only idempotency record NotifyConsumer
+// already fired: the append-only idempotency record NotifyConsumer
 // checks before sending, mission_events has no other way to record
 // "this already happened" (D-117, issue #843).
 const notifiedKind = "mission.notified"
@@ -59,7 +59,7 @@ func (NotifyConsumer) Kinds() []string {
 	return []string{events.KindMissionDone, events.KindMissionFailed}
 }
 
-// Handle sends the terminal notification then records notifiedKind —
+// Handle sends the terminal notification then records notifiedKind:
 // send before mark, so a crash between the two only risks a duplicate
 // webhook fan-out (at-least-once), never a lost notification. The
 // marker is appended outside the drain tx: appendEventTx takes FOR

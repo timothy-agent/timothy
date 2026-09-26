@@ -19,7 +19,7 @@ import (
 const webhookTimeout = 10 * time.Second
 
 // Notifier fires ONLY on actionable transitions (waiting_for_input,
-// paused) and only exactly on the transition INTO that state —
+// paused) and only exactly on the transition INTO that state;
 // re-kicking an already-paused mission stays silent. Terminal
 // transitions (done, error) notify through NotifyConsumer instead
 // (D-117, issue #843), off the durable events inbox rather than
