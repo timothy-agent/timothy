@@ -48,18 +48,33 @@ func TestCreatePathGolden(t *testing.T) {
 			}, "nightly", tc.agent, []string{"d1"}, "r1")
 			stepReq := workflows.StepCreateRequest(workflows.Step{Goal: goal, Kind: tc.kind, AgentID: tc.agent, Route: tc.route, PlanRoute: tc.planRoute, Light: tc.light, DestinationIDs: []string{"d1"}}, goal, "run-1", "build", "", "")
 
+			// A follow-up's request is built from the API caller's own
+			// resolved mission, kept unmasked as the parent: proves a
+			// follow-up resolves to the same mission a fresh API create
+			// with the same input would, once its own Destinations
+			// (deliberately never carried) are set aside.
+			parent, err := missions.ResolveDefaults(context.Background(), apiReq, deps)
+			if err != nil {
+				t.Fatalf("ResolveDefaults parent: %v", err)
+			}
+			fuReq := missions.FollowUpCreateRequest(parent, goal, nil)
+
 			var got []missions.Mission
-			wantOrigin := []string{missions.OriginAPI, missions.OriginAutomation, missions.OriginWorkflow}
-			for i, req := range []missions.CreateRequest{apiReq, autoReq, stepReq} {
+			wantOrigin := []string{missions.OriginAPI, missions.OriginAutomation, missions.OriginWorkflow, missions.OriginFollowup}
+			for i, req := range []missions.CreateRequest{apiReq, autoReq, stepReq, fuReq} {
 				m, err := missions.ResolveDefaults(context.Background(), req, deps)
 				if err != nil {
 					t.Fatalf("ResolveDefaults: %v", err)
 				}
 				// Origin, unattended and the unattended permission
-				// timeout differ by caller by design (issue #817).
-				unattended := i > 0
+				// timeout differ by caller by design (issue #817). A
+				// follow-up is attended, same as the API.
+				unattended := i == 1 || i == 2
 				if m.OriginKind != wantOrigin[i] || m.Unattended != unattended || (m.PermissionTimeoutSeconds != nil) != unattended {
 					t.Fatalf("caller %d: origin=%q unattended=%v timeout=%v, want %q %v", i, m.OriginKind, m.Unattended, m.PermissionTimeoutSeconds, wantOrigin[i], unattended)
+				}
+				if i == 3 && len(m.Destinations) != 0 {
+					t.Fatalf("follow-up Destinations = %+v, want none: it's a per-mission choice", m.Destinations)
 				}
 				m.OriginKind, m.Unattended, m.PermissionTimeoutSeconds = "", false, nil
 				m.Name, m.AutomationRunID, m.WorkflowRunID, m.WorkflowStep = "", "", "", ""
@@ -72,6 +87,12 @@ func TestCreatePathGolden(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got[0], got[2]) {
 				t.Fatalf("workflow resolved differently:\napi  %+v\nstep %+v", got[0], got[2])
+			}
+			// The follow-up never carries Destinations, unlike the other
+			// three callers here; set aside before the shape comparison.
+			got[3].Destinations = got[0].Destinations
+			if !reflect.DeepEqual(got[0], got[3]) {
+				t.Fatalf("follow-up resolved differently:\napi %+v\nfu  %+v", got[0], got[3])
 			}
 			if got[0].ReviewRoute != tc.wantReview || got[0].MaxIterations != 6 || got[0].BudgetCurrency != "USD" {
 				t.Fatalf("resolved = %+v, want review_route %q, max 6, USD", got[0], tc.wantReview)
