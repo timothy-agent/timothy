@@ -317,3 +317,100 @@ func TestAgentDeleteRefusedWhileAutomationUsesIt(t *testing.T) {
 		t.Fatalf("Delete once unreferenced: %v", err)
 	}
 }
+
+// TestAgentDeleteWithPastMissionsNullsAgentID covers issue #846: a
+// terminal (phase=done) mission referencing the agent does not block
+// Delete, and the FK's ON DELETE SET NULL keeps the mission's history
+// with agent_id cleared rather than dropping the row.
+func TestAgentDeleteWithPastMissionsNullsAgentID(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	tag := fmt.Sprintf("%d-", time.Now().UnixNano())
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	id, err := s.Create(ctx, Agent{Name: marker + tag + "past-mission", Enabled: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	var missionID string
+	if err := db.QueryRow(ctx, `INSERT INTO missions (goal, kind, agent_id, phase, origin_kind)
+		VALUES ($1, 'general', $2, 'done', 'api') RETURNING id`,
+		marker+tag+"goal", id).Scan(&missionID); err != nil {
+		t.Fatalf("insert mission: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(cctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, `DELETE FROM missions WHERE id = $1`, missionID)
+	})
+
+	if err := s.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete with only terminal missions = %v, want nil", err)
+	}
+	var agentID *string
+	if err := db.QueryRow(ctx, `SELECT agent_id FROM missions WHERE id = $1`, missionID).Scan(&agentID); err != nil {
+		t.Fatalf("select mission: %v", err)
+	}
+	if agentID != nil {
+		t.Fatalf("mission agent_id = %v, want NULL", *agentID)
+	}
+}
+
+// TestAgentDeleteRefusedWhileMissionActive covers issue #846: a
+// non-terminal mission still naming the agent refuses Delete with
+// ErrInUse, and Delete succeeds once the mission reaches a terminal
+// phase.
+func TestAgentDeleteRefusedWhileMissionActive(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	tag := fmt.Sprintf("%d-", time.Now().UnixNano())
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	id, err := s.Create(ctx, Agent{Name: marker + tag + "active-mission", Enabled: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	missionName := marker + tag + "live"
+	var missionID string
+	if err := db.QueryRow(ctx, `INSERT INTO missions (goal, name, kind, agent_id, phase, origin_kind)
+		VALUES ($1, $2, 'general', $3, 'build', 'api') RETURNING id`,
+		marker+tag+"goal", missionName, id).Scan(&missionID); err != nil {
+		t.Fatalf("insert mission: %v", err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(cctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		_, _ = conn.Exec(cctx, `DELETE FROM missions WHERE id = $1`, missionID)
+	})
+
+	err = s.Delete(ctx, id)
+	if !errors.Is(err, ErrInUse) {
+		t.Fatalf("Delete of an agent with an active mission = %v, want ErrInUse", err)
+	}
+	if !strings.Contains(err.Error(), missionName) {
+		t.Fatalf("error %q does not name mission %q", err, missionName)
+	}
+
+	if _, err := db.Exec(ctx, `UPDATE missions SET phase = 'done' WHERE id = $1`, missionID); err != nil {
+		t.Fatalf("update mission phase: %v", err)
+	}
+	if err := s.Delete(ctx, id); err != nil {
+		t.Fatalf("Delete once mission is terminal: %v", err)
+	}
+}

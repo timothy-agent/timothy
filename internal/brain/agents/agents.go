@@ -452,20 +452,31 @@ func (s *Store) SetDefault(ctx context.Context, id string) error {
 
 // Delete removes an agent; the default is protected (sessions must
 // always have somewhere to land), and so is any agent an automation
-// still runs as (issues #815, #821).
+// still runs as (issues #815, #821) or a non-terminal mission still
+// names (issue #846: a live mission reads its agent live for connector
+// reads, grants and skills, so deleting under it would silently switch
+// identity). A past (terminal) mission survives with agent_id set to
+// NULL by the FK's ON DELETE SET NULL, keeping its history.
 func (s *Store) Delete(ctx context.Context, id string) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("agents delete: %w", err)
 	}
-	before, err := scanAgent(db.QueryRow(ctx, `SELECT `+agentColumns+` FROM agents WHERE id = $1`, id))
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("agents delete: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	before, err := scanAgent(tx.QueryRow(ctx,
+		`SELECT `+agentColumns+` FROM agents WHERE id = $1 FOR UPDATE`, id))
 	if err != nil {
 		return fmt.Errorf("agent %s: %w", id, ErrNotFound)
 	}
 	if before.IsDefault {
 		return fmt.Errorf("the default agent cannot be deleted: %w", ErrInUse)
 	}
-	rows, err := db.Query(ctx, `SELECT name FROM automations WHERE agent_id = $1 ORDER BY name`, id)
+	rows, err := tx.Query(ctx, `SELECT name FROM automations WHERE agent_id = $1 ORDER BY name`, id)
 	if err != nil {
 		return fmt.Errorf("agents delete: %w", err)
 	}
@@ -476,12 +487,41 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	if len(names) > 0 {
 		return fmt.Errorf("agent is used by automation(s) %s: %w", strings.Join(names, ", "), ErrInUse)
 	}
-	if _, err := db.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id); err != nil {
+	missionRows, err := tx.Query(ctx, `SELECT coalesce(nullif(name, ''), id::text) FROM missions
+		WHERE agent_id = $1 AND phase NOT IN ('done', 'failed') ORDER BY created_at LIMIT 5`, id)
+	if err != nil {
+		return fmt.Errorf("agents delete: %w", err)
+	}
+	missionNames, err := pgx.CollectRows(missionRows, pgx.RowTo[string])
+	if err != nil {
+		return fmt.Errorf("agents delete: %w", err)
+	}
+	if len(missionNames) > 0 {
+		return fmt.Errorf("agent is used by active mission(s) %s: %w", strings.Join(missionNames, ", "), ErrInUse)
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM agents WHERE id = $1`, id); err != nil {
+		if inUse, wrapped := inUseErr(err); inUse {
+			return wrapped
+		}
+		return fmt.Errorf("agents delete: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("agents delete: %w", err)
 	}
 	s.audit(ctx, "delete", id, before, nil)
 	s.invalidate()
 	return nil
+}
+
+// inUseErr reports whether err is a foreign key violation (23503) and,
+// if so, wraps it as ErrInUse naming the referencing table — a
+// catch-all for any reference the checks above didn't already name.
+func inUseErr(err error) (bool, error) {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+		return false, nil
+	}
+	return true, fmt.Errorf("agent is still referenced by %s: %w", pgErr.TableName, ErrInUse)
 }
 
 func (s *Store) audit(ctx context.Context, action, id string, before, after any) {
