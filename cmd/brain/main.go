@@ -529,6 +529,9 @@ func main() {
 		}
 		automationStarter = automations.NewStarter(automationStore, missionDriver.Create, missionResolve, missionStore.ParentLineage, destinationEnabled, notify, app.Log)
 		consumers := []events.Consumer{missions.NewMemoryConsumer(missionDriver)}
+		if missionNotifier != nil {
+			consumers = append(consumers, missions.NewNotifyConsumer(missionStore, missionNotifier.NotifyMessage, app.Log))
+		}
 		if workflowEngine != nil {
 			consumers = append(consumers, workflowEngine)
 		}
