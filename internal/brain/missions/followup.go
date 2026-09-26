@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 )
@@ -117,10 +119,92 @@ func FollowUpCreateRequest(parent Mission, goal string, sources []SourceEntry) C
 		MaxIterations: parent.MaxIterations, BudgetAmount: parent.BudgetAmount, BudgetCurrency: parent.BudgetCurrency,
 		AutoApproveTools: &autoApproveTools, AutoApprovePlan: &autoApprovePlan,
 		Harness: parent.Harness, ReviewHarness: parent.ReviewHarness, Environment: parent.Environment,
-		Flow:            string(parent.Flow),
-		ParentMissionID: parent.ID, Sources: sources,
+		ExecutorSessionPolicy: parent.ExecutorSessionPolicy,
+		ToolAllowlist:         slices.Clone(parent.ToolAllowlist),
+		Flow:                  string(parent.Flow),
+		ParentMissionID:       parent.ID, Sources: sources,
 		OriginKind: OriginFollowup,
 	}
+}
+
+// InheritParent fills req's unset fields from parent so an API create
+// with parent_mission_id inherits what a chat follow-up does (issue
+// #923). Precedence: an explicit non-empty req field wins (strings
+// non-empty, pointers non-nil, bools true, MaxIterations > 0), an empty
+// or omitted one inherits the parent's value via FollowUpCreateRequest,
+// and ResolveDefaults then fills whatever is still unset. Destinations
+// always come from req, never the parent (D-061). Light or an explicit
+// Flow replaces the parent's flow. The parent's repo source is carried
+// when req.Sources has none. When req names a kind other than the
+// parent's, the kind-bound fields ValidateCreate checks (environment,
+// executor_session_policy, repo source, flow) are not inherited;
+// harness needs no guard since ResolveHarness drops it off coding.
+func InheritParent(req CreateRequest, parent Mission) CreateRequest {
+	out := FollowUpCreateRequest(parent, req.Goal, req.Sources)
+	kindChanged := req.Kind != "" && req.Kind != parent.Kind
+	if kindChanged {
+		out.Environment, out.ExecutorSessionPolicy, out.Flow = "", "", ""
+	}
+	str := func(dst *string, v string) {
+		if v != "" {
+			*dst = v
+		}
+	}
+	str(&out.Name, req.Name)
+	str(&out.Kind, req.Kind)
+	str(&out.AgentID, req.AgentID)
+	str(&out.Route, req.Route)
+	str(&out.ReviewRoute, req.ReviewRoute)
+	str(&out.PlanRoute, req.PlanRoute)
+	str(&out.EscalationRoute, req.EscalationRoute)
+	str(&out.RouteModel, req.RouteModel)
+	str(&out.PlanRouteModel, req.PlanRouteModel)
+	str(&out.ReviewRouteModel, req.ReviewRouteModel)
+	str(&out.BudgetCurrency, req.BudgetCurrency)
+	str(&out.Harness, req.Harness)
+	str(&out.ReviewHarness, req.ReviewHarness)
+	str(&out.Environment, req.Environment)
+	str(&out.ExecutorSessionPolicy, req.ExecutorSessionPolicy)
+	str(&out.ParentMissionID, req.ParentMissionID)
+	str(&out.AutomationRunID, req.AutomationRunID)
+	str(&out.WorkflowRunID, req.WorkflowRunID)
+	str(&out.WorkflowStep, req.WorkflowStep)
+	str(&out.OriginKind, req.OriginKind)
+	str(&out.ChannelConversationID, req.ChannelConversationID)
+	if req.MaxIterations > 0 {
+		out.MaxIterations = req.MaxIterations
+	}
+	if req.BudgetAmount != nil {
+		out.BudgetAmount = req.BudgetAmount
+	}
+	if req.AutoApproveTools != nil {
+		out.AutoApproveTools = req.AutoApproveTools
+	}
+	if req.AutoApprovePlan != nil {
+		out.AutoApprovePlan = req.AutoApprovePlan
+	}
+	if req.PermissionTimeoutSeconds != nil {
+		out.PermissionTimeoutSeconds = req.PermissionTimeoutSeconds
+	}
+	if req.Unattended != nil {
+		out.Unattended = req.Unattended
+	}
+	if req.ToolAllowlist != nil {
+		out.ToolAllowlist = req.ToolAllowlist
+	}
+	if req.HasPlan {
+		out.HasPlan = true
+	}
+	if req.Light || req.Flow != "" {
+		out.Light, out.Flow = req.Light, req.Flow
+	}
+	if !kindChanged && !slices.ContainsFunc(req.Sources, func(e SourceEntry) bool { return gitprovider.IsKind(e.Source) }) {
+		if repo, ok := parent.repoSource(); ok {
+			out.Sources = append(slices.Clone(req.Sources), repo)
+		}
+	}
+	out.Destinations = req.Destinations
+	return out
 }
 
 // CreateFollowUp spawns a new mission continuing a terminal parent —

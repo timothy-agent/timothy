@@ -31,11 +31,13 @@ type missionSpawner interface {
 }
 
 // missionEvents is the narrow slice of *missions.Store the engine needs
-// to load a terminal mission and assemble its OutcomeDigest for the
-// next step's goal interpolation; *missions.Store satisfies it.
+// to load a terminal mission, assemble its OutcomeDigest for the next
+// step's goal interpolation, and find a step mission an earlier attempt
+// already spawned; *missions.Store satisfies it.
 type missionEvents interface {
 	Get(ctx context.Context, id string) (missions.Mission, error)
 	Events(ctx context.Context, id string) ([]missions.Event, error)
+	WorkflowChild(ctx context.Context, runID, parentMissionID string) (string, error)
 }
 
 // Engine reacts to mission terminal events and drives workflow runs
@@ -68,7 +70,9 @@ func (e *Engine) SetResolveDeps(deps missions.ResolveDeps) {
 
 // StartRun creates a new run for workflowID and spawns the entry step's
 // mission. runContext seeds {{context.KEY}} interpolation for every
-// step in this run.
+// step in this run. An entry mission already linked to the run is
+// adopted, never created twice. Nothing re-drives StartRun for an
+// existing run today, so this only keeps the entry spawn safe to retry.
 func (e *Engine) StartRun(ctx context.Context, workflowID string, runContext map[string]string) (string, error) {
 	wf, err := e.store.Get(ctx, workflowID)
 	if err != nil {
@@ -85,6 +89,14 @@ func (e *Engine) StartRun(ctx context.Context, workflowID string, runContext map
 	if err != nil {
 		return "", fmt.Errorf("workflows start run: %w", err)
 	}
+	entryID, err := e.events.WorkflowChild(ctx, runID, "")
+	if err != nil {
+		return runID, fmt.Errorf("workflows start run: look up entry mission: %w", err)
+	}
+	if entryID != "" {
+		e.log.Info("workflows: adopting existing entry mission", "run_id", runID, "mission_id", entryID)
+		return runID, nil
+	}
 	if _, err := e.spawnStep(ctx, runID, def.Entry, def.Entry, def.Steps[def.Entry], runContext, "", ""); err != nil {
 		e.pauseRun(ctx, runID, fmt.Sprintf("spawn entry step %q failed: %s", def.Entry, err.Error()))
 		return runID, fmt.Errorf("workflows start run: spawn entry step: %w", err)
@@ -99,7 +111,10 @@ func (e *Engine) StartRun(ctx context.Context, workflowID string, runContext map
 // that). Every decision appends a run event; the engine never mutates
 // the mission itself. Idempotent for redelivery: a run no longer
 // running, on another step, or that already took an edge for m is left
-// alone. Errors are load failures before any run write, safe to retry.
+// alone. The next step's mission is adopt-or-create: a mission the run
+// already spawned from m (a crash or failed record between spawn and
+// edge.taken) is adopted, never created twice. Errors are load failures
+// or a failed edge.taken record, both safe to retry.
 func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) error {
 	run, err := e.store.GetRun(ctx, m.WorkflowRunID)
 	if err != nil {
@@ -173,23 +188,33 @@ func (e *Engine) OnMissionTerminal(ctx context.Context, m missions.Mission) erro
 		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("edge targets unknown step %q", matched.To))
 		return nil
 	}
-	events, err := e.events.Events(ctx, m.ID)
+	childID, err := e.events.WorkflowChild(ctx, m.WorkflowRunID, m.ID)
 	if err != nil {
-		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("load mission %s events failed: %s", m.ID, err.Error()))
-		return nil
+		return fmt.Errorf("workflows: terminal mission %s: look up spawned mission: %w", m.ID, err)
 	}
-	outcome := missions.OutcomeDigest(m, events, m.Phase, m.FailureReason)
-	if _, err := e.spawnStep(ctx, m.WorkflowRunID, run.CurrentStep, matched.To, step, run.Context, outcome, m.ID); err != nil {
-		e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("spawn step %q failed: %s", matched.To, err.Error()))
-		return nil
+	if childID != "" {
+		e.log.Info("workflows: adopting already spawned step mission", "run_id", m.WorkflowRunID, "mission_id", childID, "parent_mission_id", m.ID)
+	} else {
+		events, err := e.events.Events(ctx, m.ID)
+		if err != nil {
+			e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("load mission %s events failed: %s", m.ID, err.Error()))
+			return nil
+		}
+		outcome := missions.OutcomeDigest(m, events, m.Phase, m.FailureReason)
+		childID, err = e.spawnStep(ctx, m.WorkflowRunID, run.CurrentStep, matched.To, step, run.Context, outcome, m.ID)
+		if err != nil {
+			e.pauseRun(ctx, m.WorkflowRunID, fmt.Sprintf("spawn step %q failed: %s", matched.To, err.Error()))
+			return nil
+		}
 	}
 	if err := e.store.ApplyRunTransition(ctx, m.WorkflowRunID, RunTransition{
 		Status: "running", CurrentStep: matched.To,
 		Events: []RunTransitionEvent{{Kind: "edge.taken", Payload: map[string]any{
-			"from": matched.From, "on": matched.On, "to": matched.To, "mission_id": m.ID,
+			"from": matched.From, "on": matched.On, "to": matched.To, "mission_id": m.ID, "spawned_mission_id": childID,
 		}}},
 	}); err != nil {
-		e.log.Warn("workflows: terminal mission: advance run failed", "run_id", m.WorkflowRunID, "error", err)
+		// Returned so the drainer retries; the retry adopts childID.
+		return fmt.Errorf("workflows: terminal mission %s: record edge to %q: %w", m.ID, matched.To, err)
 	}
 	return nil
 }
