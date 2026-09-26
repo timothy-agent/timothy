@@ -60,6 +60,24 @@ func testStore(t *testing.T) *Store {
 	return NewStore(pool, log)
 }
 
+// cleanupExec runs sql on a fresh connection when the test ends; the
+// store's pool dies with t.Context before cleanups run.
+func cleanupExec(t *testing.T, sql string, args ...any) {
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		if _, err := conn.Exec(ctx, sql, args...); err != nil {
+			t.Errorf("cleanup %q: %v", sql, err)
+		}
+	})
+}
+
 // execer is the shared Exec surface between a pool connection and a
 // one-shot pgx.Conn: lets sweep run identically at setup (via the
 // pool) and teardown (via a fresh connection, since the pool dies with

@@ -8,9 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 )
@@ -104,6 +108,10 @@ func TestApplyTransitionFailedEventCarriesReason(t *testing.T) {
 // TestApplyTransitionCommitFailureLeavesNoEvent makes the transition's
 // commit fail through a deferred constraint trigger on its own events
 // row: the mission stays where it was and no events row survives.
+// The trigger sits on the shared events table, so a leftover from an
+// interrupted run is dropped first, cleanups are registered before the
+// CREATEs, and they run on a fresh connection because the store's pool
+// dies with t.Context before cleanups run.
 func TestApplyTransitionCommitFailureLeavesNoEvent(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
@@ -111,7 +119,39 @@ func TestApplyTransitionCommitFailureLeavesNoEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	db, _ := s.db.Get()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	for _, q := range []string{
+		`DROP TRIGGER IF EXISTS itest_events_reject ON events`,
+		`DROP FUNCTION IF EXISTS itest_events_reject()`,
+	} {
+		if _, err := db.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	// Cleanups run LIFO: drop trigger, drop function, then this guard.
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(cctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("guard connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(cctx) }()
+		var n int
+		if err := conn.QueryRow(cctx, `SELECT count(*) FROM pg_trigger WHERE tgname = 'itest_events_reject'`).Scan(&n); err != nil {
+			t.Errorf("guard query: %v", err)
+			return
+		}
+		if n != 0 {
+			t.Errorf("itest_events_reject triggers left = %d, want 0", n)
+		}
+	})
+	cleanupExec(t, `DROP FUNCTION IF EXISTS itest_events_reject()`)
+	cleanupExec(t, `DROP TRIGGER IF EXISTS itest_events_reject ON events`)
 	if _, err := db.Exec(ctx, `CREATE OR REPLACE FUNCTION itest_events_reject() RETURNS trigger LANGUAGE plpgsql AS
 		$$BEGIN RAISE EXCEPTION 'itest: reject commit'; END$$`); err != nil {
 		t.Fatalf("create function: %v", err)
@@ -120,10 +160,6 @@ func TestApplyTransitionCommitFailureLeavesNoEvent(t *testing.T) {
 		DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (NEW.dedup_key = '%s') EXECUTE FUNCTION itest_events_reject()`, id)); err != nil {
 		t.Fatalf("create trigger: %v", err)
 	}
-	t.Cleanup(func() {
-		_, _ = db.Exec(context.Background(), `DROP TRIGGER IF EXISTS itest_events_reject ON events`)
-		_, _ = db.Exec(context.Background(), `DROP FUNCTION IF EXISTS itest_events_reject()`)
-	})
 
 	err = s.ApplyTransition(ctx, id, Transition{
 		Next:   StepState{Phase: PhaseDone, Status: StatusDone, MaxIterations: 8},
