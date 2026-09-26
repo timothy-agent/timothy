@@ -281,11 +281,7 @@ func failMission(w http.ResponseWriter, log *slog.Logger, err error) {
 	case errors.Is(err, missions.ErrInvalidMission):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
-		if log == nil {
-			log = slog.Default()
-		}
-		log.Error("mission request failed", "error", err)
-		jsonError(w, http.StatusInternalServerError, "internal_error", "internal error")
+		failInternal(w, log, "mission", err)
 	}
 }
 

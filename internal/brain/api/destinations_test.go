@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"testing"
 
@@ -34,24 +35,13 @@ func TestDestinationsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 
 func TestFailDestination(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name string
-		err  error
-		want int
-	}{
-		{"not found", destinations.ErrNotFound, 404},
-		{"referenced", destinations.ErrReferenced, 409},
-		{"other", errors.New("bad config"), 400},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			failDestination(w, tt.err)
-			if w.Code != tt.want {
-				t.Fatalf("failDestination(%v) = %d, want %d", tt.err, w.Code, tt.want)
-			}
-		})
-	}
+	runFailCases(t, failDestination, []failCase{
+		{"not found", destinations.ErrNotFound, 404, "not_found"},
+		{"referenced", destinations.ErrReferenced, 409, "referenced"},
+		{"invalid", fmt.Errorf("%w: name is required", destinations.ErrInvalid), 400, "bad_request"},
+		{"driver error", errPGDriver, 500, "internal_error"},
+		{"other", errors.New("db down"), 500, "internal_error"},
+	})
 }
 
 // fakeTester is a minimal destinationTester fake, exercising the test
