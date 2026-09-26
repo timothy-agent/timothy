@@ -297,6 +297,10 @@ type scriptedRunner struct {
 	reviewCalls []ReviewPacket
 	plans       []Plan
 	planIdx     int
+	// planErr, if set, makes every PlanSession call fail with this error
+	// instead of returning a scripted plan (issue #844's schema-error
+	// pause path).
+	planErr error
 	// planDiscoverNotes records the discoverNotes argument PlanSession
 	// was called with, one entry per call — lets a test assert the plan
 	// phase actually received what the discover phase stored.
@@ -343,6 +347,9 @@ func (r *scriptedRunner) RunReview(ctx context.Context, m Mission, packet Review
 
 func (r *scriptedRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	r.planDiscoverNotes = append(r.planDiscoverNotes, discoverNotes)
+	if r.planErr != nil {
+		return Plan{}, r.planErr
+	}
 	s := r.plans[r.planIdx]
 	if r.planIdx < len(r.plans)-1 {
 		r.planIdx++
@@ -1364,6 +1371,47 @@ func TestDriverHarnessCapBeatsBackoff(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected a mission.paused event with cause harness_retries_exhausted")
+	}
+}
+
+// TestDriverPlanSchemaErrorPausesWithDetail pins issue #844's backstop:
+// a PlanSession that keeps failing with a schema error (the planner
+// never resubmits a usable plan even after seeing the tool error)
+// still hits the harness-retry cap and pauses, with the last schema
+// error surfaced in the pause detail.
+func TestDriverPlanSchemaErrorPausesWithDetail(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{planErr: fmt.Errorf(`submit_plan: unknown field "acceptance_criteria" (allowed unit fields: title, artifacts, check_cmd, criteria, scope); resubmit using only these fields`)}
+	d := testDriver(store, runner)
+
+	driveN(t, d, "m1", 3)
+
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Status != StatusPaused || m.PauseReason != PauseNoProgress {
+		t.Fatalf("mission after 3 plan schema errors = %+v, want paused/no_progress", m)
+	}
+	if m.HarnessRetries != 3 {
+		t.Fatalf("mission.HarnessRetries = %d, want 3", m.HarnessRetries)
+	}
+	var detail string
+	for _, ev := range store.events["m1"] {
+		if ev.Kind != "mission.paused" {
+			continue
+		}
+		var payload struct {
+			Cause  string `json:"cause"`
+			Detail string `json:"detail"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal pause payload: %v", err)
+		}
+		if payload.Cause == "harness_retries_exhausted" {
+			detail = payload.Detail
+		}
+	}
+	if !strings.Contains(detail, "acceptance_criteria") {
+		t.Fatalf("pause detail = %q, want it to contain acceptance_criteria", detail)
 	}
 }
 

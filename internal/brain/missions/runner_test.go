@@ -1381,6 +1381,98 @@ func TestPlanSessionRecoversWithFeedback(t *testing.T) {
 	}
 }
 
+// TestPlanToolRejectsUnknownField pins issue #844: PlanTool's Execute
+// decodes strictly itself, so an unknown field is a plain tool error
+// the planner sees in-turn instead of surfacing only after the turn
+// ends via parsePlan.
+func TestPlanToolRejectsUnknownField(t *testing.T) {
+	tool := PlanTool()
+	bad := `{"units":[{"title":"Write it","artifacts":["out.md"],"check_cmd":"grep -q x out.md","criteria":["a","b"],"acceptance_criteria":["a","b"]}]}`
+	_, err := tool.Execute(context.Background(), json.RawMessage(bad))
+	if err == nil {
+		t.Fatal("PlanTool Execute accepted an unknown field")
+	}
+	if !strings.Contains(err.Error(), `unknown field "acceptance_criteria"`) {
+		t.Fatalf("error = %q, want it to name the unknown field", err.Error())
+	}
+	if !strings.Contains(err.Error(), "allowed unit fields") {
+		t.Fatalf("error = %q, want it to name the allowed unit fields", err.Error())
+	}
+
+	valid := `{"units":[{"title":"Write it","artifacts":["out.md"],"check_cmd":"grep -q x out.md","criteria":["a","b"]}]}`
+	res, err := tool.Execute(context.Background(), json.RawMessage(valid))
+	if err != nil || res != "plan recorded" {
+		t.Fatalf("PlanTool Execute(valid) = (%q, %v), want (\"plan recorded\", nil)", res, err)
+	}
+}
+
+// TestParsePlanUnknownFieldNamesSchema confirms parsePlan's post-turn
+// path stays wrapped the same way it always was ("invalid plan JSON",
+// grepped in logs) while the underlying decode error now names the
+// field and the schema hint.
+func TestParsePlanUnknownFieldNamesSchema(t *testing.T) {
+	bad := `{"units":[{"title":"Write it","artifacts":["out.md"],"check_cmd":"grep -q x out.md","criteria":["a","b"],"acceptance_criteria":["a","b"]}]}`
+	_, err := parsePlan(bad)
+	if err == nil {
+		t.Fatal("parsePlan accepted an unknown field")
+	}
+	for _, want := range []string{"invalid plan JSON", `unknown field "acceptance_criteria"`, "allowed unit fields"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want it to contain %q", err.Error(), want)
+		}
+	}
+}
+
+// TestPlanSessionRecoveryQuotesSchemaError confirms a schema-rejected
+// submit_plan call still completes in one turn (D-075: an errored
+// sentinel keeps the turn open so the model can retry), and only a
+// planner that never resubmits a usable plan reaches the recovery
+// turn, whose injected message quotes the schema error verbatim.
+func TestPlanSessionRecoveryQuotesSchemaError(t *testing.T) {
+	bad := `{"units":[{"title":"Write it","artifacts":["out.md"],"check_cmd":"grep -q x out.md","criteria":["a","b"],"acceptance_criteria":["a","b"]}]}`
+	valid := `{"units":[{"title":"Write it","artifacts":["out.md"],"check_cmd":"grep -q x out.md","criteria":["a","b"]}]}`
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, bad)},
+		{toolEndEvent(planToolName, valid)},
+	}}
+	r := newTestRunner(agent)
+	plan, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Goal: "fix bug"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if len(plan.Units) != 1 || plan.Units[0].Title != "Write it" {
+		t.Fatalf("PlanSession plan = %+v", plan)
+	}
+	if agent.call != 2 {
+		t.Fatalf("expected exactly two turns (original + one recovery), got %d", agent.call)
+	}
+	last := agent.requests[1].Messages[len(agent.requests[1].Messages)-1]
+	if !strings.Contains(last.Content, `unknown field "acceptance_criteria"`) {
+		t.Fatalf("recovery message = %q, want it to quote the unknown-field error", last.Content)
+	}
+}
+
+// canaryAcceptanceCriteriaReplanPayload reproduces the local canary
+// transcript from 2026-09-23 (issue #844): a replan turn's submit_plan
+// call carrying units[].acceptance_criteria alongside the correct
+// criteria field.
+const canaryAcceptanceCriteriaReplanPayload = `{"units":[{"title":"Write the report","artifacts":["report.md"],"check_cmd":"test -s report.md","criteria":["report.md exists and is non-empty","covers the requested topic"],"acceptance_criteria":["report.md exists and is non-empty","covers the requested topic"]}]}`
+
+// TestPlanSessionCanaryAcceptanceCriteriaTranscript is the regression
+// case for issue #844: both parsePlan (post-turn) and PlanTool's
+// Execute (in-turn) reject the canary payload's acceptance_criteria
+// field by name, never silently drop or alias it to criteria.
+func TestPlanSessionCanaryAcceptanceCriteriaTranscript(t *testing.T) {
+	_, err := parsePlan(canaryAcceptanceCriteriaReplanPayload)
+	if err == nil || !strings.Contains(err.Error(), `unknown field "acceptance_criteria"`) {
+		t.Fatalf("parsePlan(canary payload) error = %v, want it to name acceptance_criteria", err)
+	}
+	_, err = PlanTool().Execute(context.Background(), json.RawMessage(canaryAcceptanceCriteriaReplanPayload))
+	if err == nil || !strings.Contains(err.Error(), `unknown field "acceptance_criteria"`) {
+		t.Fatalf("PlanTool Execute(canary payload) error = %v, want it to name acceptance_criteria", err)
+	}
+}
+
 // TestRunWorkerReportsPermissionParkAndClear is the M4.1 exit
 // criterion: a tool call that parks on an interactive permission
 // prompt must reach the mission row (via parkNotifier), not vanish
@@ -3965,5 +4057,34 @@ func TestToolAllowlistNarrowsEveryPhase(t *testing.T) {
 	}
 	if req := agent.requests[0]; req.ToolAllow != nil || !hasTool(req, "shell") || !hasTool(req, "write_note") {
 		t.Fatalf("unrestricted worker ToolAllow = %v extras = %v, want nil and shell/write_note", req.ToolAllow, toolNames(req))
+	}
+}
+
+// TestDelegatedAllowlistGap pins delegatedAllowlistGap's compatibility
+// rule (D-119, issue #865): a delegated CLI's surface is its own shell
+// and file edit, so an allowlist can only be honored when it grants
+// both.
+func TestDelegatedAllowlistGap(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		allowlist []string
+		want      []string
+	}{
+		{"unrestricted", nil, nil},
+		{"grants both", []string{"shell", "write_file"}, nil},
+		{"missing write_file", []string{"shell"}, []string{"write_file"}},
+		{"missing everything relevant", []string{"search_web"}, []string{"shell", "write_file"}},
+		{"empty allowlist", []string{}, []string{"shell", "write_file"}},
+		{"names an unrelated builtin", []string{"mission_status"}, []string{"shell", "write_file"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := Mission{ToolAllowlist: tc.allowlist}
+			if got := m.delegatedAllowlistGap(); !slices.Equal(got, tc.want) {
+				t.Fatalf("delegatedAllowlistGap(%v) = %v, want %v", tc.allowlist, got, tc.want)
+			}
+		})
 	}
 }

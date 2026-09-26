@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 )
 
@@ -36,6 +38,14 @@ func failAgent(w http.ResponseWriter, err error) {
 	case errors.Is(err, agents.ErrNameConflict):
 		jsonError(w, http.StatusConflict, "name_conflict", err.Error())
 	default:
+		// A raw pg error would leak the SQLSTATE and table internals; the
+		// agents store wraps every case it recognizes as one of the
+		// sentinels above, so anything else is unexpected (issue #846).
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			jsonError(w, http.StatusInternalServerError, "internal_error", "agent store error")
+			return
+		}
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	}
 }

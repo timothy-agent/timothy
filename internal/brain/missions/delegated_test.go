@@ -1599,6 +1599,68 @@ func TestDelegatedRunWorker_Dispatch_NoUsableEntryPauses(t *testing.T) {
 	}
 }
 
+// TestDelegatedRunWorker_ToolAllowlist pins the D-119 backstop (issue
+// #865): every delegated harness refuses a mission whose tool_allowlist
+// excludes shell or write_file before touching the route resolver or
+// the sandbox, and lets one through that grants both (the resolver
+// itself is stubbed to fail, so getting past the guard shows up as a
+// "route resolve failed" error instead of native or a spawn).
+func TestDelegatedRunWorker_ToolAllowlist(t *testing.T) {
+	harnesses := []string{"claude-cli", "codex-cli", "cursor-cli", "opencode", "pi"}
+	cases := []struct {
+		name       string
+		allowlist  []string
+		compatible bool
+	}{
+		{"unrestricted", nil, true},
+		{"grants both", []string{"shell", "write_file"}, true},
+		{"search_web only", []string{"search_web"}, false},
+		{"mission_status only", []string{"mission_status"}, false},
+	}
+	for _, harness := range harnesses {
+		for _, tc := range cases {
+			t.Run(harness+"/"+tc.name, func(t *testing.T) {
+				native := &fakeNative{verdict: WorkerVerdict{Outcome: "done"}}
+				sandbox := newFakeSandbox()
+				events := &fakeEventSink{}
+				r := newTestDelegatedRunner(native, scriptedResolver(nil, errors.New("resolve boom")), scriptedCred("", nil), sandbox, events, nil, &fakeLedger{})
+				m := testMission("m1", t.TempDir())
+				m.Harness = harness
+				m.ToolAllowlist = tc.allowlist
+
+				_, _, err := r.RunWorker(testCtx(t), m, WorkPacket{Goal: "test"})
+				if native.callCount() != 0 {
+					t.Fatalf("native call count = %d, want 0", native.callCount())
+				}
+				if sandbox.launches != 0 {
+					t.Fatalf("sandbox launches = %d, want 0", sandbox.launches)
+				}
+				if !tc.compatible {
+					unavailable := wantUnavailable(t, err, "tool_allowlist")
+					if unavailable.Harness != harness {
+						t.Fatalf("unavailable.Harness = %q, want %q", unavailable.Harness, harness)
+					}
+					skipped, ok := events.last("executor.skipped")
+					if !ok {
+						t.Fatal("no executor.skipped event")
+					}
+					var payload map[string]any
+					_ = json.Unmarshal(skipped.Payload, &payload)
+					if payload["reason"] != "tool_allowlist" {
+						t.Fatalf("executor.skipped reason = %v, want tool_allowlist", payload["reason"])
+					}
+					return
+				}
+				// Compatible: the guard let it through to the route
+				// resolver, which is stubbed to fail.
+				if err == nil || !strings.Contains(err.Error(), "route resolve failed") {
+					t.Fatalf("err = %v, want it to reach the stubbed route resolve failure", err)
+				}
+			})
+		}
+	}
+}
+
 // --- scenario 6b: route_model pin (D-078) ---------------------------------
 
 // pinnedHarnessEntry is harnessEntry with a distinct provider/model so

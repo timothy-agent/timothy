@@ -216,6 +216,71 @@ func TestDelegatedRunReview_FallsBackToNative(t *testing.T) {
 	}
 }
 
+// TestDelegatedRunReview_ToolAllowlist pins the D-119 review backstop
+// (issue #865): a mission whose tool_allowlist excludes "shell" falls
+// back to native review without ever resolving the delegated route
+// (the reviewer's own shell cannot be narrowed per tool), while an
+// allowlist that grants shell still takes the delegated path.
+func TestDelegatedRunReview_ToolAllowlist(t *testing.T) {
+	t.Run("excludes shell falls back to native", func(t *testing.T) {
+		native := &fakeNative{reviewVerdict: ReviewVerdict{Approved: true, Provider: "native"}}
+		resolve, calls := countingResolver(scriptedResolver(nil, nil))
+		events := &fakeEventSink{}
+		r := newTestDelegatedRunner(native, resolve, scriptedCred("", nil), newFakeSandbox(), events, nil, nil)
+		m := reviewTestMission("m1", t.TempDir())
+		m.ToolAllowlist = []string{"search_web"}
+
+		verdict, err := r.RunReview(testCtx(t), m, ReviewPacket{Goal: "g"})
+		if err != nil {
+			t.Fatalf("RunReview: %v", err)
+		}
+		if !verdict.Approved || verdict.Provider != "native" || native.reviewCount() != 1 {
+			t.Fatalf("native verdict not returned: %+v (native calls %d)", verdict, native.reviewCount())
+		}
+		if *calls != 0 {
+			t.Fatalf("route resolved %d times, want 0 (the guard fires before any resolve)", *calls)
+		}
+		fb, ok := events.last("review.delegated_fallback")
+		if !ok {
+			t.Fatal("no review.delegated_fallback event recorded")
+		}
+		var payload map[string]any
+		_ = json.Unmarshal(fb.Payload, &payload)
+		if payload["harness"] != m.ReviewHarness || payload["reason"] != fallbackToolAllowlist {
+			t.Fatalf("fallback payload = %v, want harness %q reason %q", payload, m.ReviewHarness, fallbackToolAllowlist)
+		}
+	})
+
+	t.Run("grants shell takes the delegated path", func(t *testing.T) {
+		native := &fakeNative{reviewVerdict: ReviewVerdict{Approved: true, Provider: "native"}}
+		resolve, calls := countingResolver(scriptedResolver(nil, errors.New("boom")))
+		events := &fakeEventSink{}
+		r := newTestDelegatedRunner(native, resolve, scriptedCred("", nil), newFakeSandbox(), events, nil, nil)
+		m := reviewTestMission("m1", t.TempDir())
+		m.ToolAllowlist = []string{"shell"}
+
+		verdict, err := r.RunReview(testCtx(t), m, ReviewPacket{Goal: "g"})
+		if err != nil {
+			t.Fatalf("RunReview: %v", err)
+		}
+		if *calls != 1 {
+			t.Fatalf("route resolved %d times, want 1 (the guard let it through)", *calls)
+		}
+		if !verdict.Approved || verdict.Provider != "native" || native.reviewCount() != 1 {
+			t.Fatalf("native verdict not returned after the resolve failure: %+v (native calls %d)", verdict, native.reviewCount())
+		}
+		fb, ok := events.last("review.delegated_fallback")
+		if !ok {
+			t.Fatal("no review.delegated_fallback event recorded")
+		}
+		var payload map[string]any
+		_ = json.Unmarshal(fb.Payload, &payload)
+		if payload["reason"] != "resolve_failed" {
+			t.Fatalf("fallback reason = %v, want resolve_failed (reached the resolver this time)", payload["reason"])
+		}
+	})
+}
+
 // TestDelegatedRunWorker_EventsCarryPhaseBuild pins the worker side
 // of issue #582's phase field: every worker run's executor events say
 // build, so the timeline can tell them from review runs.

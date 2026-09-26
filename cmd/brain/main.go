@@ -486,6 +486,7 @@ func main() {
 			return true, nil
 		}
 		missionDriver.SetValidateDeps(deps)
+		missionDriver.SetResolveDeps(missionResolve)
 	}
 	// WORKFLOWS_ENABLED gates the orchestration-above-missions layer
 	// (D-070, slice 1): requires missions to already be enabled
@@ -529,6 +530,9 @@ func main() {
 		}
 		automationStarter = automations.NewStarter(automationStore, missionDriver.Create, missionResolve, missionStore.ParentLineage, destinationEnabled, notify, app.Log)
 		consumers := []events.Consumer{missions.NewMemoryConsumer(missionDriver)}
+		if missionNotifier != nil {
+			consumers = append(consumers, missions.NewNotifyConsumer(missionStore, missionNotifier.NotifyMessage, app.Log))
+		}
 		if workflowEngine != nil {
 			consumers = append(consumers, workflowEngine)
 		}

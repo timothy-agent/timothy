@@ -351,6 +351,22 @@ func TestValidateCreate(t *testing.T) {
 			m.Flow = "bogus"
 			return m
 		}, ValidateDeps{}, true},
+		{"claude-cli harness with no allowlist accepted", func(m Mission) Mission {
+			m.Kind, m.Harness = "coding", "claude-cli"
+			return m
+		}, ValidateDeps{}, false},
+		{"claude-cli harness with a compatible allowlist accepted", func(m Mission) Mission {
+			m.Kind, m.Harness, m.ToolAllowlist = "coding", "claude-cli", []string{"shell", "write_file"}
+			return m
+		}, ValidateDeps{}, false},
+		{"claude-cli harness with a narrower allowlist rejected", func(m Mission) Mission {
+			m.Kind, m.Harness, m.ToolAllowlist = "coding", "claude-cli", []string{"search_web"}
+			return m
+		}, ValidateDeps{}, true},
+		{"general mission with an allowlist and no harness accepted", func(m Mission) Mission {
+			m.ToolAllowlist = []string{"search_web"}
+			return m
+		}, ValidateDeps{}, false},
 		{"no_prove on general accepted", func(m Mission) Mission {
 			m.Flow = FlowNoProve
 			return m
@@ -379,5 +395,21 @@ func TestValidateCreate(t *testing.T) {
 				t.Fatalf("ValidateCreate error %v does not wrap ErrInvalidMission", err)
 			}
 		})
+	}
+}
+
+// TestValidateCreateToolAllowlistHarness pins the specific sentinel a
+// harness/tool_allowlist mismatch wraps (D-119, issue #865): callers
+// map on ErrToolAllowlistHarness, distinct from every other
+// ErrInvalidMission rejection.
+func TestValidateCreateToolAllowlistHarness(t *testing.T) {
+	m := baseValidMission()
+	m.Kind, m.Harness, m.ToolAllowlist = "coding", "claude-cli", []string{"search_web"}
+	err := ValidateCreate(context.Background(), m, ValidateDeps{})
+	if !errors.Is(err, ErrToolAllowlistHarness) {
+		t.Fatalf("err = %v, want ErrToolAllowlistHarness", err)
+	}
+	if !errors.Is(err, ErrInvalidMission) {
+		t.Fatalf("err = %v, want it to also wrap ErrInvalidMission", err)
 	}
 }

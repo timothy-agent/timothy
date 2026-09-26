@@ -226,4 +226,8 @@ CLAUDE.md so other work does not pay for it every session.
   as the fallbacks. Delegated CLI runs are capped too:
   `executor_worker_max_turns` (40) alongside
   `executor_review_max_turns` (6), both on `SetExecutorKnobs`.
+- `submit_plan` decodes strictly in Execute (issue #844): a schema
+  error is a tool error the planner sees in-turn, and the harness-retry
+  cap stays the backstop for a planner that never resubmits a usable
+  plan.
 - `make canary` is the regression gate for any harness change.

@@ -2072,6 +2072,28 @@ func execEnvironmentNote(loc *time.Location) string {
 	return " Commands run inside an isolated Linux container with python3, node, git, and standard POSIX/coreutils tools available; each mission gets its own container, state persists across your commands within the mission. Today is " + time.Now().In(loc).Format("Monday, 2006-01-02 (MST).") + " Present all dates and times in this timezone unless the goal asks otherwise."
 }
 
+// planSchemaHint names the submit_plan tool's actual accepted fields
+// (sentinel.go's PlanTool schema, not the internal Plan struct) so a
+// schema error tells the planner exactly what it may resubmit.
+const planSchemaHint = "allowed plan fields: units, infeasible, reason, assumptions; allowed unit fields: title, artifacts, check_cmd, criteria, scope; allowed assumption fields: assumption, default"
+
+// decodePlanStrict decodes submit_plan's arguments with unknown fields
+// rejected (issue #844): PlanTool's Execute calls this so a schema
+// error becomes a tool error the planner sees in-turn, and parsePlan
+// calls it too so the post-turn path stays consistent.
+func decodePlanStrict(text string) (Plan, error) {
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.DisallowUnknownFields()
+	var plan Plan
+	if err := dec.Decode(&plan); err != nil {
+		if field, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
+			return Plan{}, fmt.Errorf("submit_plan: unknown field %s (%s); resubmit using only these fields", field, planSchemaHint)
+		}
+		return Plan{}, fmt.Errorf("submit_plan: arguments do not match the schema: %v (%s)", err, planSchemaHint)
+	}
+	return plan, nil
+}
+
 // parsePlan decodes the planner's reply strictly: fences stripped,
 // unknown fields rejected: same discipline as loop/turnmemory.go's
 // distillation parsing.
@@ -2082,10 +2104,8 @@ func parsePlan(raw string) (Plan, error) {
 	text = strings.TrimSuffix(text, "```")
 	text = strings.TrimSpace(text)
 
-	dec := json.NewDecoder(strings.NewReader(text))
-	dec.DisallowUnknownFields()
-	var plan Plan
-	if err := dec.Decode(&plan); err != nil {
+	plan, err := decodePlanStrict(text)
+	if err != nil {
 		return Plan{}, fmt.Errorf("mission runner: invalid plan JSON: %w", err)
 	}
 	plan.normalize()
@@ -2247,6 +2267,29 @@ func planToolAllow(skillsHint string) []string {
 var allowlistPassTools = []string{
 	missionStatusToolName, discoverNotesToolName, planToolName, reviewVerdictToolName,
 	askUserToolName, "retrieve_output", "load_skill",
+}
+
+// delegatedWorkerTools are the tools a delegated CLI's own shell/edit
+// surface stands in for: a tool_allowlist can only be honored by a
+// delegated harness when it grants both (D-119, issue #865). The CLI
+// has no per-tool gate of its own, so anything narrower than this
+// cannot be enforced short of not running the harness at all.
+var delegatedWorkerTools = []string{"shell", "write_file"}
+
+// delegatedAllowlistGap reports which of delegatedWorkerTools m's
+// tool_allowlist excludes: nil when m has no allowlist (unrestricted,
+// always compatible) or every entry is present.
+func (m Mission) delegatedAllowlistGap() []string {
+	if m.ToolAllowlist == nil {
+		return nil
+	}
+	var gap []string
+	for _, name := range delegatedWorkerTools {
+		if !m.allowsTool(name) {
+			gap = append(gap, name)
+		}
+	}
+	return gap
 }
 
 // allowsTool reports whether m's tool_allowlist lets a turn offer name.
