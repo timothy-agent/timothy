@@ -815,7 +815,7 @@ func TestMissionsCreateFollowUp(t *testing.T) {
 func TestMissionsCreateFollowUpInheritsParentSettings(t *testing.T) {
 	store := testMissionStore(t)
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
