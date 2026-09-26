@@ -5,11 +5,14 @@ package channels
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
@@ -379,72 +382,261 @@ func TestMissionAskReplyTo(t *testing.T) {
 	}
 }
 
-// TestOutcomesConsumer: done and failed events report to the
-// conversation (failures too); 4xx is dropped, 5xx retried; missions
-// without a conversation and disabled channels send nothing.
-func TestOutcomesConsumer(t *testing.T) {
+// outcomeFixture is a paired channel conversation, an Outcomes
+// consumer over the real missions store and a fake bot.
+type outcomeFixture struct {
+	s    *Store
+	ms   *missions.Store
+	pool *pgpool.Pool
+	ch   string
+	conv Conversation
+	f    *fakeBot
+	o    *Outcomes
+}
+
+func newOutcomeFixture(t *testing.T, name string) *outcomeFixture {
+	t.Helper()
 	s, pool := testStore(t)
-	ctx := t.Context()
 	ms, _ := missionFixtures(t, pool)
-	id := createChannel(t, s, runTag()+"outcome")
+	id := createChannel(t, s, runTag()+name)
 	conv := pairedConversation(t, s, id, "77")
-	mid, err := ms.Create(ctx, missions.Mission{Goal: marker + "outcome", Name: "Outcome test", Kind: "general", Route: "default", ChannelConversationID: conv.ID})
+	f := newFakeBot(t)
+	o := NewOutcomes(s, MissionDeps{Get: ms.Get, Events: ms.Events, AppendEvent: ms.AppendEvent,
+		WebBaseURL: func(context.Context) string { return "https://timothy.test" }},
+		fakeResolve, f.srv.Client(), nil, discardLog())
+	o.APIBase = f.srv.URL
+	return &outcomeFixture{s: s, ms: ms, pool: pool, ch: id, conv: conv, f: f, o: o}
+}
+
+// mission creates a fresh mission; conversation ties it to the
+// fixture's conversation.
+func (x *outcomeFixture) mission(t *testing.T, name string, conversation bool) string {
+	t.Helper()
+	m := missions.Mission{Goal: marker + "outcome " + name, Name: name, Kind: "general", Route: "default"}
+	if conversation {
+		m.ChannelConversationID = x.conv.ID
+	}
+	id, err := x.ms.Create(t.Context(), m)
 	if err != nil {
 		t.Fatal(err)
 	}
-	plain, _ := ms.Create(ctx, missions.Mission{Goal: marker + "outcome plain", Kind: "general", Route: "default"})
-	f := newFakeBot(t)
-	o := NewOutcomes(s, MissionDeps{Get: ms.Get, Events: ms.Events, WebBaseURL: func(context.Context) string { return "https://timothy.test" }},
-		fakeResolve, f.srv.Client(), nil, discardLog())
-	o.APIBase = f.srv.URL
-	event := func(missionID, phase, reason string) events.Event {
-		ev, err := events.MissionTerminal(events.MissionPayload{MissionID: missionID, Phase: phase, Reason: reason})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return ev
-	}
+	return id
+}
 
-	if err := o.Handle(ctx, nil, event(mid, "done", "")); err != nil {
-		t.Fatalf("done: %v", err)
-	}
-	sends := sendTexts(f)
-	if len(sends) != 1 || !strings.HasPrefix(sends[0], "Mission Outcome test is done\n\n") ||
-		!strings.Contains(sends[0], "mission title: Outcome test") || !strings.HasSuffix(sends[0], "https://timothy.test/missions/"+mid) {
-		t.Fatalf("done message = %q", sends)
-	}
-	if err := o.Handle(ctx, nil, event(mid, "failed", "max_iterations")); err != nil {
-		t.Fatalf("failed: %v", err)
-	}
-	if sends = sendTexts(f); len(sends) != 2 || !strings.HasPrefix(sends[1], "Mission Outcome test failed: max_iterations") {
-		t.Fatalf("failed message = %q", sends)
-	}
-	if err := o.Handle(ctx, nil, event(plain, "done", "")); err != nil || len(sendTexts(f)) != 2 {
-		t.Fatalf("mission without a conversation: err=%v sends=%d", err, len(sendTexts(f)))
-	}
-
-	f.mu.Lock()
-	f.sendStatus = 403
-	f.mu.Unlock()
-	if err := o.Handle(ctx, nil, event(mid, "done", "")); err != nil {
-		t.Fatalf("a 403 must not retry: %v", err)
-	}
-	f.mu.Lock()
-	f.sendStatus = 500
-	f.mu.Unlock()
-	if err := o.Handle(ctx, nil, event(mid, "done", "")); err == nil {
-		t.Fatal("a 500 must return an error so the drainer retries")
-	}
-	f.mu.Lock()
-	f.sendStatus = 0
-	f.mu.Unlock()
-	off := false
-	if err := s.Patch(ctx, id, Patch{Enabled: &off}); err != nil {
+// markers returns the payloads of the mission's outcome replied
+// records.
+func (x *outcomeFixture) markers(t *testing.T, missionID string) []map[string]any {
+	t.Helper()
+	evs, err := x.ms.Events(t.Context(), missionID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	before := len(f.callsOf("sendMessage"))
-	if err := o.Handle(ctx, nil, event(mid, "done", "")); err != nil || len(f.callsOf("sendMessage")) != before {
-		t.Fatalf("disabled channel: err=%v sends %d -> %d", err, before, len(f.callsOf("sendMessage")))
+	var out []map[string]any
+	for _, ev := range evs {
+		if ev.Kind != outcomeRepliedKind {
+			continue
+		}
+		var p map[string]any
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+func (x *outcomeFixture) setSendStatus(st int) {
+	x.f.mu.Lock()
+	x.f.sendStatus = st
+	x.f.mu.Unlock()
+}
+
+func terminalEvent(t *testing.T, missionID, phase, reason string) events.Event {
+	t.Helper()
+	ev, err := events.MissionTerminal(events.MissionPayload{MissionID: missionID, Phase: phase, Reason: reason})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ev
+}
+
+// TestOutcomesConsumer: done and failed events report to the
+// conversation once (failures too); 4xx is dropped; missions without a
+// conversation and disabled channels send nothing. Each scenario uses
+// its own mission since the marker suppresses repeats.
+func TestOutcomesConsumer(t *testing.T) {
+	x := newOutcomeFixture(t, "outcome")
+	ctx := t.Context()
+
+	done := x.mission(t, "Outcome test", true)
+	if err := x.o.Handle(ctx, nil, terminalEvent(t, done, "done", "")); err != nil {
+		t.Fatalf("done: %v", err)
+	}
+	sends := sendTexts(x.f)
+	if len(sends) != 1 || !strings.HasPrefix(sends[0], "Mission Outcome test is done\n\n") ||
+		!strings.Contains(sends[0], "mission title: Outcome test") || !strings.HasSuffix(sends[0], "https://timothy.test/missions/"+done) {
+		t.Fatalf("done message = %q", sends)
+	}
+	marks := x.markers(t, done)
+	if len(marks) != 1 || marks[0]["kind"] != events.KindMissionDone || marks[0]["channel_id"] != x.ch {
+		t.Fatalf("done markers = %+v", marks)
+	}
+	// A second delivery of the same event replies nothing.
+	if err := x.o.Handle(ctx, nil, terminalEvent(t, done, "done", "")); err != nil {
+		t.Fatalf("redelivered done: %v", err)
+	}
+	if n := len(sendTexts(x.f)); n != 1 {
+		t.Fatalf("redelivery sent again: %d sends", n)
+	}
+	if n := len(x.markers(t, done)); n != 1 {
+		t.Fatalf("redelivery markers = %d, want 1", n)
+	}
+
+	failed := x.mission(t, "Outcome test", true)
+	if err := x.o.Handle(ctx, nil, terminalEvent(t, failed, "failed", "max_iterations")); err != nil {
+		t.Fatalf("failed: %v", err)
+	}
+	if sends = sendTexts(x.f); len(sends) != 2 || !strings.HasPrefix(sends[1], "Mission Outcome test failed: max_iterations") {
+		t.Fatalf("failed message = %q", sends)
+	}
+	if n := len(x.markers(t, failed)); n != 1 {
+		t.Fatalf("failed markers = %d, want 1", n)
+	}
+
+	plain := x.mission(t, "plain", false)
+	if err := x.o.Handle(ctx, nil, terminalEvent(t, plain, "done", "")); err != nil || len(sendTexts(x.f)) != 2 {
+		t.Fatalf("mission without a conversation: err=%v sends=%d", err, len(sendTexts(x.f)))
+	}
+	if n := len(x.markers(t, plain)); n != 0 {
+		t.Fatalf("mission without a conversation got %d markers", n)
+	}
+
+	rejected := x.mission(t, "rejected", true)
+	x.setSendStatus(403)
+	if err := x.o.Handle(ctx, nil, terminalEvent(t, rejected, "done", "")); err != nil {
+		t.Fatalf("a 403 must not retry: %v", err)
+	}
+	if n := len(x.markers(t, rejected)); n != 0 {
+		t.Fatalf("a 403 wrote %d markers", n)
+	}
+	x.setSendStatus(0)
+
+	disabled := x.mission(t, "disabled", true)
+	off := false
+	if err := x.s.Patch(ctx, x.ch, Patch{Enabled: &off}); err != nil {
+		t.Fatal(err)
+	}
+	before := len(x.f.callsOf("sendMessage"))
+	if err := x.o.Handle(ctx, nil, terminalEvent(t, disabled, "done", "")); err != nil || len(x.f.callsOf("sendMessage")) != before {
+		t.Fatalf("disabled channel: err=%v sends %d -> %d", err, before, len(x.f.callsOf("sendMessage")))
+	}
+	if n := len(x.markers(t, disabled)); n != 0 {
+		t.Fatalf("disabled channel wrote %d markers", n)
+	}
+}
+
+// TestOutcomesSendFailureWritesNoMarker: a 5xx returns the error and
+// records nothing, so the retry sends once and marks once.
+func TestOutcomesSendFailureWritesNoMarker(t *testing.T) {
+	x := newOutcomeFixture(t, "outcome-fail")
+	ctx := t.Context()
+	mid := x.mission(t, "Retry test", true)
+
+	x.setSendStatus(500)
+	if err := x.o.Handle(ctx, nil, terminalEvent(t, mid, "done", "")); err == nil {
+		t.Fatal("a 500 must return an error so the drainer retries")
+	}
+	if n := len(x.markers(t, mid)); n != 0 {
+		t.Fatalf("a failed send wrote %d markers", n)
+	}
+	x.setSendStatus(0)
+	if err := x.o.Handle(ctx, nil, terminalEvent(t, mid, "done", "")); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if n := len(sendTexts(x.f)); n != 1 {
+		t.Fatalf("successful sends = %d, want 1", n)
+	}
+	if n := len(x.markers(t, mid)); n != 1 {
+		t.Fatalf("markers after retry = %d, want 1", n)
+	}
+}
+
+// failOnce is a consumer that fails its first delivery, so the drainer
+// redelivers the event to every consumer.
+type failOnce struct{ calls *int }
+
+func (failOnce) Name() string    { return "fail-once" }
+func (failOnce) Kinds() []string { return []string{events.KindMissionDone} }
+func (c failOnce) Handle(context.Context, pgx.Tx, events.Event) error {
+	*c.calls++
+	if *c.calls == 1 {
+		return errors.New("sibling failed")
+	}
+	return nil
+}
+
+// TestOutcomesRedeliveryRepliesOnce drives the real drainer: a sibling
+// consumer failure redelivers the event, and a reset processed_at (a
+// crash before the drain committed) delivers it a third time; the chat
+// gets exactly one reply.
+func TestOutcomesRedeliveryRepliesOnce(t *testing.T) {
+	x := newOutcomeFixture(t, "outcome-redeliver")
+	ctx := t.Context()
+	mid := x.mission(t, "Redelivery test", true)
+	db, err := x.pool.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = db.Exec(cctx, `DELETE FROM events WHERE source = $1 AND dedup_key = $2`, events.SourceMission, mid)
+	})
+	evID, err := events.NewStore(x.pool).Add(ctx, terminalEvent(t, mid, "done", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	drainer := events.NewDrainer(events.NewStore(x.pool), []events.Consumer{failOnce{calls: &calls}, x.o}, nil, discardLog())
+	state := func() (attempts int, processed bool) {
+		t.Helper()
+		if err := db.QueryRow(ctx, `SELECT attempts, processed_at IS NOT NULL FROM events WHERE id = $1`, evID).Scan(&attempts, &processed); err != nil {
+			t.Fatal(err)
+		}
+		return attempts, processed
+	}
+	// drainUntil drains until the event has at least want attempts.
+	drainUntil := func(want int) {
+		t.Helper()
+		for range 20 {
+			if a, _ := state(); a >= want {
+				return
+			}
+			if _, err := drainer.Drain(ctx); err != nil {
+				t.Fatalf("Drain: %v", err)
+			}
+		}
+		t.Fatalf("event %d never reached %d attempts", evID, want)
+	}
+
+	drainUntil(1)
+	if _, processed := state(); processed {
+		t.Fatal("the event was processed despite the failing sibling")
+	}
+	drainUntil(2)
+	if _, processed := state(); !processed {
+		t.Fatal("the event was not processed on redelivery")
+	}
+	if _, err := db.Exec(ctx, `UPDATE events SET processed_at = NULL WHERE id = $1`, evID); err != nil {
+		t.Fatal(err)
+	}
+	drainUntil(3)
+
+	if n := len(x.f.callsOf("sendMessage")); n != 1 {
+		t.Fatalf("sendMessage calls = %d, want 1", n)
+	}
+	if n := len(x.markers(t, mid)); n != 1 {
+		t.Fatalf("markers = %d, want 1", n)
 	}
 }
 
