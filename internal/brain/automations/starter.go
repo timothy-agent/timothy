@@ -32,11 +32,21 @@ const (
 	// for the claim tx, which stays idle while the mission provisions.
 	startIdleTimeout = 10 * time.Minute
 
-	SkipRouteUnusable = "route_unusable"
-	SkipCreateFailed  = "create_failed"
+	SkipRouteUnusable    = "route_unusable"
+	SkipCreateFailed     = "create_failed"
+	SkipTriggerGone      = "trigger_gone"
+	SkipAllowlistHarness = "harness_ignores_allowlist"
 )
 
 var errAgentMissing = errors.New("automation agent does not exist")
+
+// errTriggerGone reports that the run's trigger no longer exists (issue
+// #865): trigger_id went NULL between dispatch and start (ON DELETE SET
+// NULL) on a run whose event is not run.now, so there is no trigger
+// left to read a tool_allowlist from. Starting it unrestricted would
+// silently drop whatever the deleted trigger scoped it to, so the run
+// is skipped instead.
+var errTriggerGone = errors.New("automations: run's trigger no longer exists")
 
 // Starter creates the missions of runs the dispatcher committed as
 // starting. It never decides whether a run starts.
@@ -175,6 +185,13 @@ func (s *Starter) start(ctx context.Context, tx pgx.Tx, runID, automationID stri
 		s.log.Info("automations: run started", "automation_id", automationID, "run_id", runID, "mission_id", missionID)
 		return nil
 	}
+	if errors.Is(createErr, errTriggerGone) {
+		// The trigger wins over every other reason (issue #865): a run
+		// whose trigger vanished never had a tool_allowlist left to
+		// enforce, so it is skipped rather than started unrestricted or
+		// counted as a failure against the automation.
+		return s.skipRun(ctx, tx, runID, automationID, SkipTriggerGone, createErr, now)
+	}
 	var prev struct {
 		StartAttempts int `json:"start_attempts"`
 	}
@@ -191,8 +208,11 @@ func (s *Starter) start(ctx context.Context, tx pgx.Tx, runID, automationID stri
 		return nil
 	}
 	reason := SkipCreateFailed
-	if routeErr != nil {
+	switch {
+	case routeErr != nil:
 		reason = SkipRouteUnusable
+	case errors.Is(createErr, missions.ErrToolAllowlistHarness):
+		reason = SkipAllowlistHarness
 	}
 	if err := mergeRunEvent(ctx, tx, runID, map[string]any{"start_error": createErr.Error(), "start_attempts": attempts}); err != nil {
 		return err
@@ -211,10 +231,32 @@ func (s *Starter) start(ctx context.Context, tx pgx.Tx, runID, automationID stri
 	return nil
 }
 
+// skipRun records runID skipped for reason instead of starting or
+// failing it (issue #865): unlike finalizeRun's failed path, it never
+// touches the automation's consecutive_failures, since the run never
+// got a fair chance to start and must not trip the breaker, but still
+// frees its concurrency slot for a queued run behind it.
+func (s *Starter) skipRun(ctx context.Context, tx pgx.Tx, runID, automationID, reason string, causeErr error, now time.Time) error {
+	if err := mergeRunEvent(ctx, tx, runID, map[string]any{"start_error": causeErr.Error()}); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE automation_runs SET status = 'skipped', skip_reason = $2, finished_at = $3 WHERE id = $1`,
+		runID, reason, now); err != nil {
+		return fmt.Errorf("automations start: skip run: %w", err)
+	}
+	s.log.Warn("automations: run skipped before starting", "automation_id", automationID, "run_id", runID, "reason", reason, "error", causeErr)
+	return releaseSlot(ctx, tx, automationID, now)
+}
+
 // createMission builds the run's mission from its automation's action
 // and hands it to create.
 func (s *Starter) createMission(ctx context.Context, tx pgx.Tx, automationID, runID string, rawEvent []byte) (string, error) {
 	a, err := getAutomation(ctx, tx, automationID, "")
+	if err != nil {
+		return "", err
+	}
+	event := runEvent(rawEvent)
+	allowlist, err := runToolAllowlist(ctx, tx, a, runID, event)
 	if err != nil {
 		return "", err
 	}
@@ -231,13 +273,16 @@ func (s *Starter) createMission(ctx context.Context, tx pgx.Tx, automationID, ru
 	if !agentExists {
 		return "", fmt.Errorf("agent %s: %w", a.AgentID, errAgentMissing)
 	}
-	req, err := s.createRequest(ctx, tx, a, runID, runEvent(rawEvent))
+	req, err := s.createRequest(ctx, tx, a, runID, event, allowlist)
 	if err != nil {
 		return "", err
 	}
 	m, err := missions.ResolveDefaults(ctx, req, s.resolve)
 	if err != nil {
 		return "", fmt.Errorf("resolve mission: %w", err)
+	}
+	if err := missions.CheckToolAllowlistHarness(m); err != nil {
+		return "", err
 	}
 	id, err := s.create(ctx, m)
 	if err != nil {
@@ -250,7 +295,10 @@ func (s *Starter) createMission(ctx context.Context, tx pgx.Tx, automationID, ru
 // Goal and name are interpolated before any source is attached, so
 // outcome text is never interpolated. Sources are the parent lineage
 // (continuity), the trigger, the notes, then the action's attachments.
-func (s *Starter) createRequest(ctx context.Context, tx pgx.Tx, a Automation, runID string, event map[string]any) (missions.CreateRequest, error) {
+// allowlist is the firing trigger's tool_allowlist (runToolAllowlist),
+// resolved by the caller so a gone trigger is caught before any of this
+// runs.
+func (s *Starter) createRequest(ctx context.Context, tx pgx.Tx, a Automation, runID string, event map[string]any, allowlist []string) (missions.CreateRequest, error) {
 	var notes []Note
 	if a.NotesEnabled {
 		var err error
@@ -281,10 +329,6 @@ func (s *Starter) createRequest(ctx context.Context, tx pgx.Tx, a Automation, ru
 	}
 	if e, ok := notesSource(notes); ok {
 		sources = append(sources, e)
-	}
-	allowlist, err := runToolAllowlist(ctx, tx, a, runID, event)
-	if err != nil {
-		return missions.CreateRequest{}, err
 	}
 	if len(allowlist) > 0 {
 		var agentTools []string
@@ -319,25 +363,61 @@ const noToolsAllowlist = "mission_status"
 
 // runToolAllowlist returns the tool_allowlist of the trigger that fired
 // runID: its own trigger, or the automation's manual trigger for a
-// run.now. nil when that trigger has none or is gone.
+// run.now. Wraps errTriggerGone when a trigger the run needed no
+// longer exists (see triggerAllowlist).
 func runToolAllowlist(ctx context.Context, tx pgx.Tx, a Automation, runID string, event map[string]any) ([]string, error) {
 	var triggerID *string
 	if err := tx.QueryRow(ctx, `SELECT trigger_id::text FROM automation_runs WHERE id = $1`, runID).Scan(&triggerID); err != nil {
 		return nil, fmt.Errorf("automations start: run trigger: %w", err)
 	}
-	for _, t := range a.Triggers {
-		if triggerID != nil && t.ID == *triggerID ||
-			triggerID == nil && event["kind"] == events.KindRunNow && t.Kind == TriggerManual {
+	return triggerAllowlist(a.Triggers, triggerID, event["kind"])
+}
+
+// triggerAllowlist is runToolAllowlist's pure decision: triggerID nil
+// with a run.now event reads the automation's manual trigger (nil when
+// it has none, or the automation carries none at all: a run.now needs
+// no manual trigger row to fire); triggerID nil with any OTHER named
+// event kind means trigger_id went NULL on a run that needed a real
+// trigger (fire() always records one for cron/webhook/channel/connector
+// events), so it wraps errTriggerGone. An absent event kind (a run row
+// with no event at all, e.g. a crash-recovery row inserted directly
+// rather than through fire()) carries no evidence either way and stays
+// legacy-compatible: nil, nil. triggerID set names a trigger that no
+// longer matches any of triggers, also errTriggerGone.
+func triggerAllowlist(triggers []Trigger, triggerID *string, eventKind any) ([]string, error) {
+	if triggerID == nil {
+		switch eventKind {
+		case events.KindRunNow:
+			for _, t := range triggers {
+				if t.Kind == TriggerManual {
+					return t.ToolAllowlist, nil
+				}
+			}
+			return nil, nil
+		case nil:
+			return nil, nil
+		default:
+			return nil, errTriggerGone
+		}
+	}
+	for _, t := range triggers {
+		if t.ID == *triggerID {
 			return t.ToolAllowlist, nil
 		}
 	}
-	return nil, nil
+	return nil, errTriggerGone
 }
 
 // intersectToolAllowlist keeps the trigger entries the agent's Tools
 // grant: an entry survives when some agent tool equals or matches it
 // (tools.ToolMatches). Agent Tools are the ceiling, except for the
-// note tools, which the automation grants itself.
+// note tools, which the automation grants itself. A builtin the agent
+// lacks is dropped even though an unrestricted mission on the same
+// agent gets every builtin (only a trigger's allowlist narrows; the
+// agent's Tools are never widened by it). A delegated coding harness
+// needs both shell and write_file present in the agent's Tools AND
+// surviving this intersection, or CheckToolAllowlistHarness rejects the
+// run at create.
 func intersectToolAllowlist(trigger, agentTools []string) []string {
 	var out []string
 	for _, entry := range trigger {

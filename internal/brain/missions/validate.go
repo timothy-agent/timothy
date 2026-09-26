@@ -17,6 +17,12 @@ import (
 // it already does for ErrNotFound/ErrBranchConflict/etc.
 var ErrInvalidMission = errors.New("invalid mission")
 
+// ErrToolAllowlistHarness reports that m's harness cannot honor its
+// tool_allowlist (D-119, issue #865): a delegated CLI's surface is its
+// own sandbox shell and file edit, never narrowed per tool, so a
+// tool_allowlist is only compatible when it grants both.
+var ErrToolAllowlistHarness = errors.New("harness cannot honor tool_allowlist")
+
 // ValidateDeps are the store-backed checks ValidateCreate needs beyond
 // the Mission struct itself — each nil-gated: an unset func skips that
 // one check rather than failing closed, same contract as Driver's other
@@ -111,6 +117,9 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 		if _, ok := executor.Lookup(m.Harness); !ok {
 			return fmt.Errorf("%w: unknown harness %q", ErrInvalidMission, m.Harness)
 		}
+	}
+	if err := CheckToolAllowlistHarness(m); err != nil {
+		return err
 	}
 	if m.ReviewHarness != "" {
 		if _, ok := executor.Lookup(m.ReviewHarness); !ok {
@@ -209,4 +218,21 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 		}
 	}
 	return nil
+}
+
+// CheckToolAllowlistHarness rejects a mission whose harness cannot
+// honor its tool_allowlist (D-119, issue #865): a delegated CLI has no
+// per-tool gate of its own, so a tool_allowlist narrower than
+// delegatedWorkerTools cannot be enforced. "" harness (native) always
+// passes.
+func CheckToolAllowlistHarness(m Mission) error {
+	if m.Harness == "" {
+		return nil
+	}
+	gap := m.delegatedAllowlistGap()
+	if len(gap) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %w: harness %q runs its own shell and file tools and cannot be narrowed; tool_allowlist lacks %s (the agent's Tools must grant them too) or set harness to native",
+		ErrInvalidMission, ErrToolAllowlistHarness, m.Harness, strings.Join(gap, ", "))
 }

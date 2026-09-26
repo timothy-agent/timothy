@@ -307,6 +307,15 @@ func (r *delegatedRunner) RunReview(ctx context.Context, m Mission, packet Revie
 	if m.ReviewHarness == "" {
 		return r.native.RunReview(ctx, m, packet)
 	}
+	if m.ToolAllowlist != nil && !m.allowsTool("shell") {
+		// D-119, issue #865: the delegated reviewer runs read-only through
+		// its own shell (never a per-tool gate), so an allowlist that
+		// excludes shell falls back to native review rather than running a
+		// CLI it cannot honor.
+		r.log.Warn("delegated runner: tool_allowlist excludes shell; review falls back to native", "mission_id", m.ID, "harness", m.ReviewHarness)
+		r.recordEventForce(ctx, m.ID, "review.delegated_fallback", map[string]any{"harness": m.ReviewHarness, "reason": fallbackToolAllowlist})
+		return r.native.RunReview(ctx, m, packet)
+	}
 	verdict, reason, err := r.runDelegatedReview(ctx, m, packet)
 	if reason == "" {
 		return verdict, err
@@ -336,6 +345,10 @@ const (
 	fallbackNoResult          = "no_result"
 	fallbackUnparseableResult = "unparseable_verdict"
 	fallbackPollFailed        = "poll_failed"
+	// fallbackToolAllowlist (D-119, issue #865): the review CLI reads the
+	// worktree with its own shell, which a tool_allowlist that excludes
+	// "shell" cannot narrow.
+	fallbackToolAllowlist = "tool_allowlist"
 )
 
 // delegatedReviewSystemAppend closes the reviewer's system prompt for a
@@ -534,6 +547,18 @@ func (r *delegatedRunner) RunWorker(ctx context.Context, m Mission, packet WorkP
 		r.log.Warn("delegated runner: harness not allowed for kind; pausing as infra", "mission_id", m.ID, "kind", m.Kind, "harness", m.Harness)
 		r.recordSkipped(ctx, m.ID, m.Harness, "harness not allowed for kind", nil)
 		return unavailable("harness not allowed for kind "+m.Kind, time.Time{})
+	}
+	if gap := m.delegatedAllowlistGap(); len(gap) > 0 {
+		// D-119, issue #865: a CLI's surface is its own sandbox shell and
+		// file edit, never narrowed per tool, so a run whose tool_allowlist
+		// excludes one of them cannot be honored by any delegated harness.
+		// ValidateCreate should already have rejected this mission; this is
+		// the backstop for one that predates that check or reached here by
+		// another path.
+		reason := "harness cannot honor tool_allowlist (missing " + strings.Join(gap, ", ") + ")"
+		r.log.Warn("delegated runner: tool_allowlist excludes a delegated tool; pausing as infra", "mission_id", m.ID, "harness", m.Harness, "missing", gap)
+		r.recordSkipped(ctx, m.ID, m.Harness, "tool_allowlist", map[string]any{"missing": gap})
+		return unavailable(reason, time.Time{})
 	}
 	adapter, ok := executor.Lookup(m.Harness)
 	if !ok {

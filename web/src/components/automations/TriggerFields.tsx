@@ -381,7 +381,7 @@ export function ToolAllowlistField({ draft, update, index }: { draft: TriggerDra
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="mt-3">
-          <Field label="Tools" optional description="Runs from this trigger get only these of the agent's tools. Empty keeps them all.">
+          <Field label="Tools" optional description="Runs from this trigger get only these of the agent's tools; tools the agent lacks are dropped. Empty keeps them all. Delegated coding harnesses need shell and write_file.">
             {(p) => (
               <ChipsInput
                 {...p}

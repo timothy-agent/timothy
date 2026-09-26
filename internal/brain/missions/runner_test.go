@@ -3967,3 +3967,32 @@ func TestToolAllowlistNarrowsEveryPhase(t *testing.T) {
 		t.Fatalf("unrestricted worker ToolAllow = %v extras = %v, want nil and shell/write_note", req.ToolAllow, toolNames(req))
 	}
 }
+
+// TestDelegatedAllowlistGap pins delegatedAllowlistGap's compatibility
+// rule (D-119, issue #865): a delegated CLI's surface is its own shell
+// and file edit, so an allowlist can only be honored when it grants
+// both.
+func TestDelegatedAllowlistGap(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		allowlist []string
+		want      []string
+	}{
+		{"unrestricted", nil, nil},
+		{"grants both", []string{"shell", "write_file"}, nil},
+		{"missing write_file", []string{"shell"}, []string{"write_file"}},
+		{"missing everything relevant", []string{"search_web"}, []string{"shell", "write_file"}},
+		{"empty allowlist", []string{}, []string{"shell", "write_file"}},
+		{"names an unrelated builtin", []string{"mission_status"}, []string{"shell", "write_file"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := Mission{ToolAllowlist: tc.allowlist}
+			if got := m.delegatedAllowlistGap(); !slices.Equal(got, tc.want) {
+				t.Fatalf("delegatedAllowlistGap(%v) = %v, want %v", tc.allowlist, got, tc.want)
+			}
+		})
+	}
+}
