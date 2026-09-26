@@ -2,6 +2,7 @@ package missions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -66,6 +67,16 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		},
 	})
 	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	// PromptOverlay now comes from the agent's current defaults, not the
+	// parent's snapshot (ResolveDefaults' own precedence).
+	d.SetResolveDeps(ResolveDeps{
+		Agent: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+			if agentID == "agent-1" {
+				return AgentDefaults{PromptOverlay: "be terse"}, true
+			}
+			return AgentDefaults{}, false
+		},
+	})
 
 	id, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "now add tests"})
 	if err != nil {
@@ -97,6 +108,78 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 	}
 	if len(child.Destinations) != 0 {
 		t.Fatalf("child.Destinations = %+v, want empty, destinations are a per-mission choice", child.Destinations)
+	}
+}
+
+// TestCreateFollowUpResolvesDefaults proves CreateFollowUp routes
+// through ResolveDefaults: the agent's current overlay applies,
+// OriginKind is followup, the mission is attended with no permission
+// timeout, MaxIterations still comes from the parent, and ReviewHarness
+// carries over.
+func TestCreateFollowUpResolvesDefaults(t *testing.T) {
+	store := newFakeStore()
+	store.put("parent", Mission{
+		ID: "parent", Goal: "fix the login bug", Kind: "coding", Phase: PhaseDone, Status: StatusDone,
+		AgentID: "agent-1", MaxIterations: 9, Harness: "claude-cli", ReviewHarness: "codex-cli",
+	})
+	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d.SetResolveDeps(ResolveDeps{
+		Agent: func(ctx context.Context, agentID string) (AgentDefaults, bool) {
+			if agentID == "agent-1" {
+				return AgentDefaults{PromptOverlay: "agent overlay"}, true
+			}
+			return AgentDefaults{}, false
+		},
+	})
+
+	id, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "now add tests"})
+	if err != nil {
+		t.Fatalf("CreateFollowUp: %v", err)
+	}
+	child, err := store.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("Get child: %v", err)
+	}
+	if child.PromptOverlay != "agent overlay" {
+		t.Fatalf("child.PromptOverlay = %q, want the agent's current overlay", child.PromptOverlay)
+	}
+	if child.OriginKind != OriginFollowup {
+		t.Fatalf("child.OriginKind = %q, want %q", child.OriginKind, OriginFollowup)
+	}
+	if child.Unattended {
+		t.Fatal("child.Unattended should be false: a follow-up is attended")
+	}
+	if child.PermissionTimeoutSeconds != nil {
+		t.Fatalf("child.PermissionTimeoutSeconds = %v, want nil", child.PermissionTimeoutSeconds)
+	}
+	if child.MaxIterations != 9 {
+		t.Fatalf("child.MaxIterations = %d, want the parent's 9", child.MaxIterations)
+	}
+	if child.ReviewHarness != "codex-cli" {
+		t.Fatalf("child.ReviewHarness = %q, want the parent's codex-cli", child.ReviewHarness)
+	}
+}
+
+// TestCreateFollowUpRouteGate proves a carried route with no usable
+// provider fails through the D-100 gate and leaves no child mission.
+func TestCreateFollowUpRouteGate(t *testing.T) {
+	store := newFakeStore()
+	store.put("parent", Mission{
+		ID: "parent", Goal: "ship it", Kind: "general", Phase: PhaseDone, Status: StatusDone,
+		Route: "dead",
+	})
+	d := NewDriver(store, followUpBlockedRunner(), nil, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	d.SetResolveDeps(ResolveDeps{ResolveRoute: resolveFixture})
+
+	_, err := d.CreateFollowUp(context.Background(), "parent", FollowUpOptions{Goal: "ship more"})
+	var unusable *RouteUnusableError
+	if !errors.As(err, &unusable) {
+		t.Fatalf("err = %v, want a RouteUnusableError", err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if len(store.missions) != 1 {
+		t.Fatalf("store holds %d missions, want only the parent", len(store.missions))
 	}
 }
 

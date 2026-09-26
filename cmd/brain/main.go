@@ -486,6 +486,7 @@ func main() {
 			return true, nil
 		}
 		missionDriver.SetValidateDeps(deps)
+		missionDriver.SetResolveDeps(missionResolve)
 	}
 	// WORKFLOWS_ENABLED gates the orchestration-above-missions layer
 	// (D-070, slice 1): requires missions to already be enabled

@@ -258,6 +258,11 @@ type Driver struct {
 	// within it). See SetValidateDeps.
 	validateDeps *ValidateDeps
 
+	// resolveDeps backs CreateFollowUp's ResolveDefaults call; every
+	// field is nil-safe, so an unset Driver just skips those resolution
+	// steps. See SetResolveDeps.
+	resolveDeps ResolveDeps
+
 	// driving guards against two Drive loops racing the same mission:
 	// Advance's own state transitions pass through status='idle'
 	// transiently between steps (e.g. stepReviewApprove moving to the
@@ -802,6 +807,15 @@ func (d *Driver) SetEventsKick(fn func()) {
 // existing tests that build a bare Mission{} keep passing.
 func (d *Driver) SetValidateDeps(deps ValidateDeps) {
 	d.validateDeps = &deps
+}
+
+// SetResolveDeps wires the lookups CreateFollowUp's ResolveDefaults
+// call needs — a setter for the same reason SetValidateDeps is:
+// cmd/brain/main.go builds the gateway route resolver and agent
+// resolver after the Driver. Unset (the default) leaves every field
+// nil, so ResolveDefaults just skips those resolution steps.
+func (d *Driver) SetResolveDeps(deps ResolveDeps) {
+	d.resolveDeps = deps
 }
 
 // resultStepOrder documents runResult's fixed sequence (slice 1 of the
