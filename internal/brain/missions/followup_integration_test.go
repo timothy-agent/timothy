@@ -62,7 +62,7 @@ func TestChatFollowUpLandsWithAgentDefaults(t *testing.T) {
 		}
 
 		logger := slog.Default()
-		d := NewDriver(s, followUpBlockedRunner(), nil, nil, nil, nil, nil, nil, logger)
+		d := NewDriver(s, followUpBlockedRunner(), nil, nil, nil, nil, nil, logger)
 		d.SetResolveDeps(ResolveDeps{Agent: agentResolver})
 
 		childID, err := d.CreateFollowUp(ctx, parentID, FollowUpOptions{Goal: marker + tag + " child"})
@@ -99,7 +99,7 @@ func TestChatFollowUpLandsWithAgentDefaults(t *testing.T) {
 		}
 
 		logger := slog.Default()
-		d := NewDriver(s, followUpBlockedRunner(), nil, nil, nil, nil, nil, nil, logger)
+		d := NewDriver(s, followUpBlockedRunner(), nil, nil, nil, nil, nil, logger)
 		d.SetResolveDeps(ResolveDeps{Agent: agentResolver, ResolveRoute: resolveFixture})
 
 		if _, err := d.CreateFollowUp(ctx, parentID, FollowUpOptions{Goal: marker + tag + " child dead route"}); err == nil {

@@ -988,7 +988,7 @@ func TestPhaseTerminal(t *testing.T) {
 
 // TestStepPlanAwaitingApprovalEmitsEvent confirms the park itself
 // (D-087, issue #456) fires mission.plan_awaiting_approval. The
-// notification inbox entry (Notifier.OnTransition) rides the generic
+// notification (the mission.paused inbox event) rides the generic
 // idle/working -> paused transition this produces, no separate wiring
 // needed.
 func TestStepPlanAwaitingApprovalEmitsEvent(t *testing.T) {

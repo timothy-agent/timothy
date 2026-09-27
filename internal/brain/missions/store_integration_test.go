@@ -60,6 +60,24 @@ func testStore(t *testing.T) *Store {
 	return NewStore(pool, log)
 }
 
+// cleanupExec runs sql on a fresh connection when the test ends; the
+// store's pool dies with t.Context before cleanups run.
+func cleanupExec(t *testing.T, sql string, args ...any) {
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		if _, err := conn.Exec(ctx, sql, args...); err != nil {
+			t.Errorf("cleanup %q: %v", sql, err)
+		}
+	})
+}
+
 // execer is the shared Exec surface between a pool connection and a
 // one-shot pgx.Conn: lets sweep run identically at setup (via the
 // pool) and teardown (via a fresh connection, since the pool dies with
@@ -81,7 +99,7 @@ func sweep(ctx context.Context, db execer) {
 func sweepMissionsSQL(filter string) string {
 	return `WITH gone AS (
 		DELETE FROM missions WHERE ` + filter + ` RETURNING id, session_id
-	), ev AS (DELETE FROM events WHERE source = 'mission' AND dedup_key IN (SELECT id::text FROM gone)),
+	), ev AS (DELETE FROM events WHERE source = 'mission' AND payload->>'mission_id' IN (SELECT id::text FROM gone)),
 	ids AS (SELECT session_id FROM gone WHERE session_id IS NOT NULL),
 	g AS (DELETE FROM session_grants WHERE session_id IN (SELECT session_id FROM ids)),
 	a AS (DELETE FROM tool_audit WHERE session_id IN (SELECT session_id FROM ids)),

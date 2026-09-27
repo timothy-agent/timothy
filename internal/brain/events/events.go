@@ -23,6 +23,10 @@ const (
 
 	KindMissionDone   = "mission.done"
 	KindMissionFailed = "mission.failed"
+	// KindMissionPaused and KindMissionWaitingForInput mark a mission
+	// arriving at an actionable status.
+	KindMissionPaused          = "mission.paused"
+	KindMissionWaitingForInput = "mission.waiting_for_input"
 
 	// SourceManual marks events an operator requested through the API.
 	SourceManual = "manual"
@@ -95,11 +99,12 @@ type Consumer interface {
 	Handle(ctx context.Context, tx pgx.Tx, ev Event) error
 }
 
-// MissionPayload is the payload of a mission.done or mission.failed
-// event. Empty strings are omitted.
+// MissionPayload is the payload of a mission event. Status is set on
+// actionable events only. Empty strings are omitted.
 type MissionPayload struct {
 	MissionID     string `json:"mission_id"`
 	Phase         string `json:"phase"`
+	Status        string `json:"status,omitempty"`
 	Reason        string `json:"reason,omitempty"`
 	WorkflowRunID string `json:"workflow_run_id,omitempty"`
 	OriginKind    string `json:"origin_kind,omitempty"`
@@ -128,7 +133,31 @@ func MissionTerminal(p MissionPayload) (Event, error) {
 	return Event{Source: SourceMission, Kind: kind, DedupKey: p.MissionID, Payload: raw}, nil
 }
 
-// DecodeMission reads a mission terminal event's payload.
+// MissionActionable builds the event for a mission arriving at status
+// paused or waiting_for_input. The dedup key carries a fresh request id:
+// a mission can pause many times, and a transition with no mission
+// events has no sequence number to key on.
+func MissionActionable(p MissionPayload) (Event, error) {
+	var kind string
+	switch p.Status {
+	case "paused":
+		kind = KindMissionPaused
+	case "waiting_for_input":
+		kind = KindMissionWaitingForInput
+	default:
+		return Event{}, fmt.Errorf("events: status %q is not actionable", p.Status)
+	}
+	if p.MissionID == "" {
+		return Event{}, fmt.Errorf("events: mission actionable event needs a mission id")
+	}
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return Event{}, fmt.Errorf("events: marshal mission payload: %w", err)
+	}
+	return Event{Source: SourceMission, Kind: kind, DedupKey: p.MissionID + ":" + p.Status + ":" + newRequestID(), Payload: raw}, nil
+}
+
+// DecodeMission reads a mission event's payload.
 func DecodeMission(ev Event) (MissionPayload, error) {
 	var p MissionPayload
 	if err := json.Unmarshal(ev.Payload, &p); err != nil {

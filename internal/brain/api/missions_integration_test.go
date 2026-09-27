@@ -135,7 +135,7 @@ func TestMissionsResumeWithAnswerReachesWorker(t *testing.T) {
 	// that outlives this test; a nil runner panics there once it
 	// reaches runExecute, surfacing as an async crash during package
 	// teardown instead of a normal test failure.
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -205,7 +205,7 @@ func TestMissionsResumeWithoutAnswerLeavesProgressUntouched(t *testing.T) {
 
 	// Signal(InputResume) fires Drive in a background goroutine that
 	// outlives this test (same reason as TestMissionsResumeWithAnswerReachesWorker).
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -249,7 +249,7 @@ func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
 
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -298,7 +298,7 @@ func TestMissionsNoteAppendsEventAndProgressWithoutPhaseChange(t *testing.T) {
 func TestMissionsNoteAcceptedOnEveryNonTerminalPhase(t *testing.T) {
 	store := testMissionStore(t)
 	ctx := context.Background()
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -354,7 +354,7 @@ func TestMissionsNoteAcceptedOnEveryNonTerminalPhase(t *testing.T) {
 // before any store write is attempted.
 func TestMissionsNoteUnknownMission(t *testing.T) {
 	store := testMissionStore(t)
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -378,7 +378,7 @@ func TestMissionsNoteEmptyTextRejected(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -408,7 +408,7 @@ func TestMissionsNoteTerminalMissionRejected(t *testing.T) {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
 
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -427,7 +427,7 @@ func TestMissionsNoteTerminalMissionRejected(t *testing.T) {
 // "pointer field, omitted vs explicit false" shape as auto_approve_tools.
 func TestMissionsCreateDefaultsAutoApprovePlanTrue(t *testing.T) {
 	store := testMissionStore(t)
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -461,7 +461,7 @@ func TestMissionsCreateDefaultsAutoApprovePlanTrue(t *testing.T) {
 // the true default).
 func TestMissionsCreateHonorsExplicitAutoApprovePlanFalse(t *testing.T) {
 	store := testMissionStore(t)
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -507,7 +507,7 @@ func TestMissionsApprovePlanRejectedWhenNotParked(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -542,7 +542,7 @@ func TestMissionsApprovePlanAdvancesToGenerate(t *testing.T) {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -575,7 +575,7 @@ func TestMissionsAnswerRejectedWhenNotParked(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -604,7 +604,7 @@ func TestMissionsAnswerValidatesMCQOption(t *testing.T) {
 		t.Fatalf("SetPendingInput: %v", err)
 	}
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -639,7 +639,7 @@ func TestMissionsAnswerResumesMission(t *testing.T) {
 		t.Fatalf("SetPendingInput: %v", err)
 	}
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -673,7 +673,7 @@ func TestMissionsAnswerResumesMission(t *testing.T) {
 func TestMissionsCreateLeavesEnvironmentForDetection(t *testing.T) {
 	store := testMissionStore(t)
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -712,7 +712,7 @@ func TestMissionsCreateLeavesEnvironmentForDetection(t *testing.T) {
 func TestMissionsCreateCarriesPlanRoute(t *testing.T) {
 	store := testMissionStore(t)
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -751,7 +751,7 @@ func TestMissionsCreateCarriesPlanRoute(t *testing.T) {
 func TestMissionsCreateFollowUp(t *testing.T) {
 	store := testMissionStore(t)
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -815,7 +815,7 @@ func TestMissionsCreateFollowUp(t *testing.T) {
 func TestMissionsCreateFollowUpInheritsParentSettings(t *testing.T) {
 	store := testMissionStore(t)
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -891,7 +891,7 @@ func TestMissionsCreateFollowUpInheritsParentSettings(t *testing.T) {
 func TestMissionsCreateFollowUpUnknownParent(t *testing.T) {
 	store := testMissionStore(t)
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
@@ -925,7 +925,7 @@ func TestMissionsCreateWithPDFAttachment(t *testing.T) {
 	}
 	attStore := attachments.New(t.TempDir(), pool)
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 
 	post := func(m *http.ServeMux, body string) (int, []byte) {
@@ -1063,7 +1063,7 @@ func TestMissionsCreateWithPDFAttachment(t *testing.T) {
 // chat_test.go's own waitFor makes for auto-title.
 func TestMissionsCreateGeneratesNameAsync(t *testing.T) {
 	store := testMissionStore(t)
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	nameMission := func(ctx context.Context, goal string) string {
@@ -1109,7 +1109,7 @@ func TestMissionsCreateGeneratesNameAsync(t *testing.T) {
 // truncated goal.
 func TestMissionsCreateNameFallsBackToEmptyOnGenerationFailure(t *testing.T) {
 	store := testMissionStore(t)
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	done := make(chan struct{})
@@ -2092,7 +2092,7 @@ func TestMissionsRoutingPatchStateGate(t *testing.T) {
 		t.Fatalf("ApplyTransition: %v", err)
 	}
 
-	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, nil, discard())
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
 	a := &API{token: "tok", log: discard()}
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, resolveRouteFixture, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)

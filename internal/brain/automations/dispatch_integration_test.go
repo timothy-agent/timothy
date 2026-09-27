@@ -9,24 +9,36 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
-// dispatchHarness wires the ticker, dispatcher, drainer and starter
-// over the real database with one fake clock. create defaults to
-// inserting the mission row without driving it.
+// dispatchHarness wires the ticker, dispatcher and starter over the
+// real database with one fake clock. create defaults to inserting the
+// mission row without driving it.
+//
+// The database is shared with a live brain whose drainer, ticker and
+// starter would race the harness (issue #924). The harness fences them
+// off for its lifetime: a dedicated connection holds the drain and tick
+// advisory locks, so live drains and ticks skip; run.now and terminal
+// events go straight to Dispatcher.Handle, recorded as processed in the
+// same tx; cron events drain through the harness's own lock-free drain;
+// and every starting run of this test carries a start_attempt_at of
+// fenceStart, which the live starter's real clock never reaches.
 type dispatchHarness struct {
 	t        *testing.T
 	pool     *pgpool.Pool
 	store    *Store
 	events   *events.Store
 	missions *missions.Store
-	drainer  *events.Drainer
+	disp     *Dispatcher
 	starter  *Starter
 	ticker   *Ticker
 	tag      string
@@ -36,14 +48,32 @@ type dispatchHarness struct {
 	createFn func(ctx context.Context, m missions.Mission) (string, error)
 	// startedAt records each created mission's clock time.
 	startedAt map[string]time.Time
+	// added holds the ids of events the test inserted for drain.
+	added []int64
 }
 
 // dispatchBase is a fixed clock origin on an hour boundary.
 var dispatchBase = time.Date(2030, 1, 7, 10, 0, 0, 0, time.UTC)
 
+// fenceStart is due for the harness clock and in the future for a live
+// starter.
+var fenceStart = dispatchBase.Add(-time.Hour).Format(time.RFC3339)
+
 func newDispatchHarness(t *testing.T) *dispatchHarness {
 	t.Helper()
 	s, pool := testStore(t)
+	fence, err := pgx.Connect(t.Context(), os.Getenv("DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("fence connect: %v", err)
+	}
+	// Registered first so it runs last, after the rows are gone.
+	t.Cleanup(func() { _ = fence.Close(context.Background()) })
+	if err := events.HoldDrainLock(t.Context(), fence); err != nil {
+		t.Fatalf("hold drain lock: %v", err)
+	}
+	if _, err := fence.Exec(t.Context(), `SELECT pg_advisory_lock($1)`, int64(tickLockKey)); err != nil {
+		t.Fatalf("hold tick lock: %v", err)
+	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	h := &dispatchHarness{
 		t: t, pool: pool, store: s, events: events.NewStore(pool), missions: missions.NewStore(pool, log),
@@ -51,9 +81,8 @@ func newDispatchHarness(t *testing.T) *dispatchHarness {
 	}
 	h.createFn = func(ctx context.Context, m missions.Mission) (string, error) { return h.missions.Create(ctx, m) }
 	notifier := missions.NewNotifier(pool, "", nil, log)
-	disp := NewDispatcher(notifier.NotifyMessage, log)
-	disp.now = func() time.Time { return h.clock }
-	h.drainer = events.NewDrainer(h.events, []events.Consumer{disp}, nil, log)
+	h.disp = NewDispatcher(notifier.NotifyMessage, log)
+	h.disp.now = func() time.Time { return h.clock }
 	h.starter = NewStarter(s, func(ctx context.Context, m missions.Mission) (string, error) {
 		id, err := h.createFn(ctx, m)
 		if err == nil {
@@ -62,7 +91,7 @@ func newDispatchHarness(t *testing.T) *dispatchHarness {
 		return id, err
 	}, missions.ResolveDeps{}, h.missions.ParentLineage, nil, notifier.NotifyMessage, log)
 	h.starter.now = func() time.Time { return h.clock }
-	h.ticker = NewTicker(s, h.events, nil, func(context.Context) *time.Location { return h.loc }, nil, log)
+	h.ticker = NewTicker(s, h.events, nil, nil, nil, log)
 	t.Cleanup(func() {
 		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -126,24 +155,72 @@ func (h *dispatchHarness) anchor(automationID string, at time.Time) {
 		automationID, at.UTC().Format(time.RFC3339))
 }
 
-func (h *dispatchHarness) tick() {
+// inTx runs fn in one tx, fences this test's starting runs and commits.
+func (h *dispatchHarness) inTx(fn func(ctx context.Context, tx pgx.Tx) error) {
 	h.t.Helper()
-	if err := h.ticker.Tick(h.t.Context(), h.clock); err != nil {
-		h.t.Fatalf("Tick: %v", err)
+	ctx := h.t.Context()
+	db, err := h.pool.Get()
+	if err != nil {
+		h.t.Fatalf("pool: %v", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		h.t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := fn(ctx, tx); err != nil {
+		h.t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE automation_runs SET event = event || jsonb_build_object('start_attempt_at', $2::text)
+		WHERE status = 'starting' AND mission_id IS NULL AND event->>'start_attempt_at' IS NULL
+			AND automation_id IN (SELECT id FROM automations WHERE name LIKE $1 || '%')`, h.tag, fenceStart); err != nil {
+		h.t.Fatalf("fence starting runs: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.t.Fatalf("commit: %v", err)
 	}
 }
 
+// tick runs the ticker at the clock under the harness's tick lock.
+func (h *dispatchHarness) tick() {
+	h.t.Helper()
+	h.inTx(func(ctx context.Context, tx pgx.Tx) error {
+		_, err := h.ticker.tickTriggers(ctx, tx, h.clock, h.loc)
+		return err
+	})
+}
+
+// drain hands this test's unprocessed events (its automations' cron
+// events and the ones it added) to the dispatcher and marks them
+// processed.
 func (h *dispatchHarness) drain() {
 	h.t.Helper()
-	for range 10 {
-		n, err := h.drainer.Drain(h.t.Context())
+	h.inTx(func(ctx context.Context, tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, source, kind, dedup_key, payload, created_at, attempts FROM events
+			WHERE processed_at IS NULL AND (id = ANY($2) OR (source = 'cron'
+				AND payload->>'automation_id' IN (SELECT id::text FROM automations WHERE name LIKE $1 || '%')))
+			ORDER BY id FOR UPDATE`, h.tag, h.added)
 		if err != nil {
-			h.t.Fatalf("Drain: %v", err)
+			return fmt.Errorf("claim: %w", err)
 		}
-		if n == 0 {
-			return
+		evs, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (events.Event, error) {
+			var ev events.Event
+			err := r.Scan(&ev.ID, &ev.Source, &ev.Kind, &ev.DedupKey, &ev.Payload, &ev.CreatedAt, &ev.Attempts)
+			return ev, err
+		})
+		if err != nil {
+			return fmt.Errorf("claim scan: %w", err)
 		}
-	}
+		for _, ev := range evs {
+			if err := h.disp.Handle(ctx, tx, ev); err != nil {
+				return fmt.Errorf("handle %s: %w", ev.Kind, err)
+			}
+			if _, err := tx.Exec(ctx, `UPDATE events SET processed_at = now(), attempts = attempts + 1 WHERE id = $1`, ev.ID); err != nil {
+				return fmt.Errorf("mark processed: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 func (h *dispatchHarness) pass() int {
@@ -155,15 +232,50 @@ func (h *dispatchHarness) pass() int {
 	return n
 }
 
+// addEvent inserts ev for the next drain.
 func (h *dispatchHarness) addEvent(ev events.Event) {
 	h.t.Helper()
-	if _, err := h.events.Add(h.t.Context(), ev); err != nil {
+	id, err := h.events.Add(h.t.Context(), ev)
+	if err != nil {
 		h.t.Fatalf("add event: %v", err)
 	}
+	h.added = append(h.added, id)
 }
 
-// fireNow records a run.now for automationID and drains it; the clock
-// advances a second so run order is deterministic.
+// addEventIfNew inserts ev for the next drain unless its dedup key
+// exists and reports whether it did.
+func (h *dispatchHarness) addEventIfNew(ev events.Event) bool {
+	h.t.Helper()
+	id, inserted, err := h.events.AddIfNew(h.t.Context(), ev)
+	if err != nil {
+		h.t.Fatalf("add event: %v", err)
+	}
+	if inserted {
+		h.added = append(h.added, id)
+	}
+	return inserted
+}
+
+// dispatch records ev as processed and hands it to the dispatcher in
+// one tx. Dispatching the same event again is a redelivery.
+func (h *dispatchHarness) dispatch(ev events.Event) {
+	h.t.Helper()
+	h.inTx(func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `INSERT INTO events (source, kind, dedup_key, payload, processed_at, attempts)
+			VALUES ($1, $2, $3, $4, now(), 1)
+			ON CONFLICT (source, dedup_key) DO UPDATE SET processed_at = now(), attempts = events.attempts + 1 RETURNING id`,
+			ev.Source, ev.Kind, ev.DedupKey, []byte(ev.Payload)).Scan(&ev.ID); err != nil {
+			return fmt.Errorf("record event: %w", err)
+		}
+		if err := h.disp.Handle(ctx, tx, ev); err != nil {
+			return fmt.Errorf("handle %s: %w", ev.Kind, err)
+		}
+		return nil
+	})
+}
+
+// fireNow dispatches a run.now for automationID; the clock advances a
+// second so run order is deterministic.
 func (h *dispatchHarness) fireNow(automationID string) {
 	h.t.Helper()
 	h.clock = h.clock.Add(time.Second)
@@ -171,11 +283,10 @@ func (h *dispatchHarness) fireNow(automationID string) {
 	if err != nil {
 		h.t.Fatalf("RunNow: %v", err)
 	}
-	h.addEvent(ev)
-	h.drain()
+	h.dispatch(ev)
 }
 
-// finish records missionID's terminal event and drains it.
+// finish dispatches missionID's terminal event.
 func (h *dispatchHarness) finish(missionID string, failed bool) {
 	h.t.Helper()
 	phase := "done"
@@ -186,8 +297,7 @@ func (h *dispatchHarness) finish(missionID string, failed bool) {
 	if err != nil {
 		h.t.Fatalf("MissionTerminal: %v", err)
 	}
-	h.addEvent(ev)
-	h.drain()
+	h.dispatch(ev)
 }
 
 // runs returns automationID's runs, oldest first.
@@ -224,8 +334,10 @@ func (h *dispatchHarness) wantStatuses(automationID string, want ...string) []Ru
 	return rs
 }
 
+// backlog counts this test's unprocessed events.
 func (h *dispatchHarness) backlog() int {
-	return h.count(`SELECT count(*) FROM events WHERE processed_at IS NULL`)
+	return h.count(`SELECT count(*) FROM events WHERE processed_at IS NULL AND (id = ANY($2) OR (source = 'cron'
+		AND payload->>'automation_id' IN (SELECT id::text FROM automations WHERE name LIKE $1 || '%')))`, h.tag, h.added)
 }
 
 func TestDispatchCronEndToEnd(t *testing.T) {
@@ -346,8 +458,7 @@ func TestDispatchQueueCollapse(t *testing.T) {
 	h.pass()
 	h.wantStatuses(id, RunDone, "skipped/superseded", "skipped/superseded", RunRunning)
 	// Redelivered finalize is a no-op.
-	h.exec(`UPDATE events SET processed_at = NULL WHERE source = 'mission' AND dedup_key = $1`, rs[0].MissionID)
-	h.drain()
+	h.finish(rs[0].MissionID, false)
 	h.wantStatuses(id, RunDone, "skipped/superseded", "skipped/superseded", RunRunning)
 }
 
@@ -449,7 +560,8 @@ func TestStarterRecovery(t *testing.T) {
 	ctx := t.Context()
 	id := h.create("recovery", "", ConcurrencySkip, 1, 60)
 	now := h.clock
-	runID, _, err := h.store.CreateRun(ctx, nil, Run{AutomationID: id, DedupKey: h.tag + "crash", Status: RunStarting, CreatedAt: now, StartedAt: &now})
+	fenced := json.RawMessage(`{"start_attempt_at":"` + fenceStart + `"}`)
+	runID, _, err := h.store.CreateRun(ctx, nil, Run{AutomationID: id, DedupKey: h.tag + "crash", Status: RunStarting, Event: fenced, CreatedAt: now, StartedAt: &now})
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
@@ -463,7 +575,7 @@ func TestStarterRecovery(t *testing.T) {
 	h.wantStatuses(id, RunRunning)
 
 	// A mission created before the crash is adopted, never duplicated.
-	adopted, _, _ := h.store.CreateRun(ctx, nil, Run{AutomationID: id, DedupKey: h.tag + "adopt", Status: RunStarting, CreatedAt: now.Add(time.Second), StartedAt: &now})
+	adopted, _, _ := h.store.CreateRun(ctx, nil, Run{AutomationID: id, DedupKey: h.tag + "adopt", Status: RunStarting, Event: fenced, CreatedAt: now.Add(time.Second), StartedAt: &now})
 	existing, err := h.missions.Create(ctx, missions.Mission{Goal: h.tag + "adopted", Kind: missions.KindGeneral, AgentID: h.agentID, Flow: missions.FlowLight, AutomationRunID: adopted})
 	if err != nil {
 		t.Fatalf("seed mission: %v", err)
@@ -548,11 +660,10 @@ func TestDispatchDeletedAutomation(t *testing.T) {
 	h := newDispatchHarness(t)
 	id := h.create("deleted", "", ConcurrencySkip, 1, 6)
 	ev, _ := events.RunNow(id, h.clock)
-	h.addEvent(ev)
 	if err := h.store.Delete(t.Context(), id); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	h.drain()
+	h.dispatch(ev)
 	if n := h.count(`SELECT count(*) FROM automation_runs WHERE automation_id = $1`, id); n != 0 {
 		t.Fatalf("runs for a deleted automation = %d", n)
 	}
@@ -570,9 +681,8 @@ func TestDispatchSelfTriggerGuard(t *testing.T) {
 	origin := h.runs(own)[0].MissionID
 	for _, target := range []string{own, other} {
 		raw, _ := json.Marshal(map[string]any{"automation_id": target, "requested_at": h.clock, "origin_mission_id": origin})
-		h.addEvent(events.Event{Source: events.SourceManual, Kind: events.KindRunNow, DedupKey: h.tag + "self-" + target, Payload: raw})
+		h.dispatch(events.Event{Source: events.SourceManual, Kind: events.KindRunNow, DedupKey: h.tag + "self-" + target, Payload: raw})
 	}
-	h.drain()
 	if n := len(h.runs(own)); n != 1 {
 		t.Fatalf("own automation runs = %d, want 1: its own mission must not trigger it", n)
 	}

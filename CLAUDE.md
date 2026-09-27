@@ -48,7 +48,8 @@ First run: `cp deploy/env.example deploy/.env` and set
   `session`, `agents`, `missions` (agent harness), `workflows`
   (orchestration above missions: steps + outcome-driven edges, env-gated
   `WORKFLOWS_ENABLED`), `events` (durable inbox + drain loop for
-  mission terminal effects, including terminal notification, D-117), `connectors`
+  mission terminal effects and every mission notification: done, failed,
+  paused, waiting_for_input, D-117), `connectors`
   (google/microsoft/github/mcp/imap/caldav, unified capability tools:
   `search_mail`, `read_mail`, `send_mail`, `list_calendar_events`,
   `create_calendar_event` route to the right connector/account via an
