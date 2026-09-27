@@ -562,13 +562,21 @@ func TestOutcomesSendFailureWritesNoMarker(t *testing.T) {
 	}
 }
 
-// failOnce is a consumer that fails its first delivery, so the drainer
-// redelivers the event to every consumer.
-type failOnce struct{ calls *int }
+// failOnce is a consumer that fails its first delivery of the named
+// mission's event, so the drainer redelivers it to every consumer.
+// Other missions' events pass, so leftovers in a shared database do not
+// use up the failure.
+type failOnce struct {
+	mission string
+	calls   *int
+}
 
 func (failOnce) Name() string    { return "fail-once" }
 func (failOnce) Kinds() []string { return []string{events.KindMissionDone} }
-func (c failOnce) Handle(context.Context, pgx.Tx, events.Event) error {
+func (c failOnce) Handle(_ context.Context, _ pgx.Tx, ev events.Event) error {
+	if ev.DedupKey != c.mission {
+		return nil
+	}
 	*c.calls++
 	if *c.calls == 1 {
 		return errors.New("sibling failed")
@@ -598,7 +606,7 @@ func TestOutcomesRedeliveryRepliesOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := 0
-	drainer := events.NewDrainer(events.NewStore(x.pool), []events.Consumer{failOnce{calls: &calls}, x.o}, nil, discardLog())
+	drainer := events.NewDrainer(events.NewStore(x.pool), []events.Consumer{failOnce{mission: mid, calls: &calls}, x.o}, nil, discardLog())
 	state := func() (attempts int, processed bool) {
 		t.Helper()
 		if err := db.QueryRow(ctx, `SELECT attempts, processed_at IS NOT NULL FROM events WHERE id = $1`, evID).Scan(&attempts, &processed); err != nil {
