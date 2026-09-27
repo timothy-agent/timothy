@@ -35,6 +35,17 @@ const (
 // from migrate's "TIMO" and missions' "TIMS".
 const drainLockKey = 0x45564E54
 
+// HoldDrainLock takes the drain lock at session level on conn, waiting
+// out a running drain. Every Drain on another session then skips until
+// conn unlocks or closes. Integration tests use it to fence a live
+// drainer off a shared database.
+func HoldDrainLock(ctx context.Context, conn *pgx.Conn) error {
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, int64(drainLockKey)); err != nil {
+		return fmt.Errorf("events hold drain lock: %w", err)
+	}
+	return nil
+}
+
 // Drainer delivers unprocessed events to their consumers (D-117).
 type Drainer struct {
 	store     *Store

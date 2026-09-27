@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -33,7 +34,7 @@ func (a *API) registerAutomations(handle func(pattern string, h http.Handler), s
 	if store == nil {
 		return
 	}
-	h := &automationAPI{store: store, events: ev, kick: kick, destinations: destinations, attachments: attachments, loc: loc, connectorKinds: connectorKinds, destinationKinds: destinationKinds, connectors: connectors, channels: channels}
+	h := &automationAPI{store: store, events: ev, kick: kick, destinations: destinations, attachments: attachments, loc: loc, connectorKinds: connectorKinds, destinationKinds: destinationKinds, connectors: connectors, channels: channels, log: a.log}
 	handle("GET /v1/automations", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/automations", a.auth(http.HandlerFunc(h.create)))
 	handle("GET /v1/automations/stats", a.auth(http.HandlerFunc(h.stats)))
@@ -63,6 +64,7 @@ type automationAPI struct {
 	destinationKinds kindLister
 	connectors       connectorLookup
 	channels         channelLookup
+	log              *slog.Logger
 }
 
 // kindLister returns the kinds of the enabled rows of one table.
@@ -210,7 +212,7 @@ func decodeStrict(r *http.Request, v any) error {
 	return dec.Decode(v)
 }
 
-func failAutomation(w http.ResponseWriter, err error) {
+func failAutomation(w http.ResponseWriter, log *slog.Logger, err error) {
 	var ae *attachmentError
 	var ve *automations.ValidationError
 	switch {
@@ -222,12 +224,12 @@ func failAutomation(w http.ResponseWriter, err error) {
 		jsonError(w, http.StatusConflict, "note_limit", err.Error())
 	case errors.Is(err, automations.ErrBadCron):
 		jsonError(w, http.StatusBadRequest, "bad_cron", err.Error())
-	case errors.As(err, &ae):
-		jsonError(w, attachmentErrorStatus(err), "bad_request", err.Error())
+	case errors.As(err, &ae) && ae.status < http.StatusInternalServerError:
+		jsonError(w, ae.status, "bad_request", err.Error())
 	case errors.Is(err, automations.ErrUnknownAgent), errors.As(err, &ve):
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 	default:
-		jsonError(w, http.StatusInternalServerError, "automations_failed", err.Error())
+		failInternal(w, log, "automation", err)
 	}
 }
 
@@ -353,14 +355,14 @@ func (h *automationAPI) view(ctx context.Context, a automations.Automation) (aut
 func (h *automationAPI) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.store.List(r.Context())
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	views := make([]automationView, 0, len(rows))
 	for _, a := range rows {
 		v, err := h.view(r.Context(), a)
 		if err != nil {
-			failAutomation(w, err)
+			failAutomation(w, h.log, err)
 			return
 		}
 		views = append(views, v)
@@ -371,12 +373,12 @@ func (h *automationAPI) list(w http.ResponseWriter, r *http.Request) {
 func (h *automationAPI) get(w http.ResponseWriter, r *http.Request) {
 	a, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	v, err := h.view(r.Context(), a)
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -385,7 +387,7 @@ func (h *automationAPI) get(w http.ResponseWriter, r *http.Request) {
 func (h *automationAPI) stats(w http.ResponseWriter, r *http.Request) {
 	st, err := h.store.Stats(r.Context(), time.Now(), h.location(r.Context()))
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
@@ -403,13 +405,13 @@ func (h *automationAPI) templates(w http.ResponseWriter, r *http.Request) {
 	var err error
 	if h.connectorKinds != nil {
 		if conns, err = h.connectorKinds(r.Context()); err != nil {
-			failAutomation(w, err)
+			failAutomation(w, h.log, err)
 			return
 		}
 	}
 	if h.destinationKinds != nil {
 		if dests, err = h.destinationKinds(r.Context()); err != nil {
-			failAutomation(w, err)
+			failAutomation(w, h.log, err)
 			return
 		}
 	}
@@ -497,20 +499,20 @@ func (h *automationAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	a := req.automation()
 	if err := automations.Validate(&a); err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	if err := h.validateTriggerConnectors(r.Context(), a.Triggers); err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	if err := h.prepareAction(r.Context(), &a.Action, nil); err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	id, err := h.store.Create(r.Context(), a)
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
@@ -570,19 +572,19 @@ func (h *automationAPI) patch(w http.ResponseWriter, r *http.Request) {
 	if req.Triggers != nil {
 		ts := toTriggers(*req.Triggers)
 		if err := h.validateTriggerConnectors(r.Context(), ts); err != nil {
-			failAutomation(w, err)
+			failAutomation(w, h.log, err)
 			return
 		}
 		p.Triggers = &ts
 	}
 	if req.Action != nil {
 		if err := automations.ValidateAction(*req.Action); err != nil {
-			failAutomation(w, err)
+			failAutomation(w, h.log, err)
 			return
 		}
 		before, err := h.store.Get(r.Context(), id)
 		if err != nil {
-			failAutomation(w, err)
+			failAutomation(w, h.log, err)
 			return
 		}
 		var existing []missions.SourceEntry
@@ -590,12 +592,12 @@ func (h *automationAPI) patch(w http.ResponseWriter, r *http.Request) {
 			existing = before.Action.Mission.Attachments
 		}
 		if err := h.prepareAction(r.Context(), req.Action, existing); err != nil {
-			failAutomation(w, err)
+			failAutomation(w, h.log, err)
 			return
 		}
 	}
 	if err := h.store.Patch(r.Context(), id, p); err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	h.get(w, r)
@@ -603,7 +605,7 @@ func (h *automationAPI) patch(w http.ResponseWriter, r *http.Request) {
 
 func (h *automationAPI) delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.Delete(r.Context(), r.PathValue("id")); err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -614,7 +616,7 @@ func (h *automationAPI) delete(w http.ResponseWriter, r *http.Request) {
 func (h *automationAPI) runNow(w http.ResponseWriter, r *http.Request) {
 	a, err := h.store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	now := time.Now()
@@ -624,12 +626,12 @@ func (h *automationAPI) runNow(w http.ResponseWriter, r *http.Request) {
 	}
 	ev, err := events.RunNow(a.ID, now)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "automations_failed", err.Error())
+		failInternalCode(w, h.log, "automations_failed", "automation", err)
 		return
 	}
 	eventID, err := h.events.Add(r.Context(), ev)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "automations_failed", err.Error())
+		failInternalCode(w, h.log, "automations_failed", "automation", err)
 		return
 	}
 	if h.kick != nil {
@@ -658,12 +660,12 @@ func (h *automationAPI) runs(w http.ResponseWriter, r *http.Request) {
 	}
 	id := r.PathValue("id")
 	if _, err := h.store.Get(r.Context(), id); err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	runs, err := h.store.ListRuns(r.Context(), id, limit)
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
@@ -672,12 +674,12 @@ func (h *automationAPI) runs(w http.ResponseWriter, r *http.Request) {
 func (h *automationAPI) listNotes(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := h.store.Get(r.Context(), id); err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	notes, err := h.store.ListNotes(r.Context(), id)
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"notes": notes})
@@ -686,7 +688,7 @@ func (h *automationAPI) listNotes(w http.ResponseWriter, r *http.Request) {
 func (h *automationAPI) getNote(w http.ResponseWriter, r *http.Request) {
 	n, err := h.store.GetNote(r.Context(), r.PathValue("id"), r.PathValue("name"))
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, n)
@@ -706,7 +708,7 @@ func (h *automationAPI) putNote(w http.ResponseWriter, r *http.Request) {
 	}
 	n, created, err := h.store.PutNote(r.Context(), r.PathValue("id"), r.PathValue("name"), *req.Content, "")
 	if err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	status := http.StatusOK
@@ -718,7 +720,7 @@ func (h *automationAPI) putNote(w http.ResponseWriter, r *http.Request) {
 
 func (h *automationAPI) deleteNote(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.DeleteNote(r.Context(), r.PathValue("id"), r.PathValue("name")); err != nil {
-		failAutomation(w, err)
+		failAutomation(w, h.log, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

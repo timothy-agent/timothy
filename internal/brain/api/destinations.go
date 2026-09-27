@@ -74,7 +74,7 @@ func failDestination(w http.ResponseWriter, log *slog.Logger, err error) {
 func (h *destinationAPI) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.store.List(r.Context())
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "destinations_failed", err.Error())
+		failInternalCode(w, h.log, "destinations_failed", "destination", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"destinations": rows})

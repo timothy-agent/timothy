@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http/httptest"
@@ -65,22 +66,15 @@ func TestChannelsRejectBadBodiesBeforeTheStore(t *testing.T) {
 
 func TestFailChannel(t *testing.T) {
 	t.Parallel()
-	for _, tt := range []struct {
-		err  error
-		want int
-		code string
-	}{
-		{fmt.Errorf("x: %w", channels.ErrNotFound), 404, "not_found"},
-		{channels.ErrNameConflict, 409, "name_conflict"},
-		{fmt.Errorf("%w: %q", channels.ErrKindUnavailable, "slack"), 400, "not_available"},
-		{fmt.Errorf("%w: name is required", channels.ErrInvalid), 400, "bad_request"},
-		{channels.ErrUnknownAgent, 400, "bad_request"},
-		{errors.New("db down"), 500, "channels_failed"},
-	} {
-		w := httptest.NewRecorder()
-		failChannel(w, tt.err)
-		if w.Code != tt.want || !strings.Contains(w.Body.String(), `"error":"`+tt.code+`"`) {
-			t.Fatalf("failChannel(%v) = %d %s, want %d %s", tt.err, w.Code, w.Body.String(), tt.want, tt.code)
-		}
-	}
+	runFailCases(t, failChannel, []failCase{
+		{"not found", fmt.Errorf("x: %w", channels.ErrNotFound), 404, "not_found"},
+		{"name conflict", channels.ErrNameConflict, 409, "name_conflict"},
+		{"kind unavailable", fmt.Errorf("%w: %q", channels.ErrKindUnavailable, "slack"), 400, "not_available"},
+		{"invalid", fmt.Errorf("%w: name is required", channels.ErrInvalid), 400, "bad_request"},
+		{"unknown agent", channels.ErrUnknownAgent, 400, "bad_request"},
+		{"driver error", errPGDriver, 500, "internal_error"},
+		{"canceled", fmt.Errorf("channels list: %w", context.Canceled), 500, "internal_error"},
+		{"deadline", fmt.Errorf("channels get: %w", context.DeadlineExceeded), 500, "internal_error"},
+		{"other", errors.New("db down"), 500, "internal_error"},
+	})
 }
