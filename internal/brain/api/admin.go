@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
@@ -192,7 +193,7 @@ func (a *API) registerSecrets(handle func(pattern string, h http.Handler), gw Ga
 	if gw == nil {
 		return
 	}
-	h := &secretsAPI{gw: gw, connectors: conns, destinations: dests, automations: autos}
+	h := &secretsAPI{gw: gw, connectors: conns, destinations: dests, automations: autos, log: a.log}
 	handle("GET /v1/admin/secrets", a.auth(http.HandlerFunc(h.list)))
 	handle("DELETE /v1/admin/secrets/{ref_name}", a.auth(http.HandlerFunc(h.delete)))
 }
@@ -202,6 +203,7 @@ type secretsAPI struct {
 	connectors   connectorLister
 	destinations destinationLister
 	automations  automationLister
+	log          *slog.Logger
 }
 
 // connectorRefs maps every stored secret ref name to the connector
@@ -286,17 +288,17 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 	}
 	byConnector, err := connectorRefs(r.Context(), h.connectors)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "connectors_failed", err.Error())
+		failInternalCode(w, h.log, "connectors_failed", "connector", err)
 		return
 	}
 	byDestination, err := destinationCredentialRefs(r.Context(), h.destinations)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "destinations_failed", err.Error())
+		failInternalCode(w, h.log, "destinations_failed", "destination", err)
 		return
 	}
 	byAutomation, err := automationTriggerCredentialRefs(r.Context(), h.automations)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "automations_failed", err.Error())
+		failInternalCode(w, h.log, "automations_failed", "automation", err)
 		return
 	}
 
@@ -328,7 +330,7 @@ func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
 	refName := r.PathValue("ref_name")
 	byConnector, err := connectorRefs(r.Context(), h.connectors)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "connectors_failed", err.Error())
+		failInternalCode(w, h.log, "connectors_failed", "connector", err)
 		return
 	}
 	if refs := byConnector[refName]; len(refs) > 0 {
@@ -342,7 +344,7 @@ func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	byDestination, err := destinationCredentialRefs(r.Context(), h.destinations)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "destinations_failed", err.Error())
+		failInternalCode(w, h.log, "destinations_failed", "destination", err)
 		return
 	}
 	if refs := byDestination[refName]; len(refs) > 0 {
@@ -356,7 +358,7 @@ func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	byAutomation, err := automationTriggerCredentialRefs(r.Context(), h.automations)
 	if err != nil {
-		jsonError(w, http.StatusInternalServerError, "automations_failed", err.Error())
+		failInternalCode(w, h.log, "automations_failed", "automation", err)
 		return
 	}
 	if refs := byAutomation[refName]; len(refs) > 0 {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,7 +34,8 @@ func attachErr(status int, msg string) error {
 // *attachmentError, else 500 -- callers map a resolver error to
 // jsonError with this and err.Error().
 func attachmentErrorStatus(err error) int {
-	if ae, ok := err.(*attachmentError); ok {
+	var ae *attachmentError
+	if errors.As(err, &ae) {
 		return ae.status
 	}
 	return http.StatusInternalServerError

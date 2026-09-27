@@ -73,7 +73,8 @@ func TestStarterAppliesTriggerToolAllowlist(t *testing.T) {
 	}
 	now := h.clock
 	triggerID := a.Triggers[0].ID
-	if _, _, err := h.store.CreateRun(t.Context(), nil, Run{AutomationID: id, TriggerID: &triggerID, DedupKey: h.tag + "cron", Status: RunStarting, CreatedAt: now, StartedAt: &now}); err != nil {
+	if _, _, err := h.store.CreateRun(t.Context(), nil, Run{AutomationID: id, TriggerID: &triggerID, DedupKey: h.tag + "cron", Status: RunStarting,
+		Event: json.RawMessage(`{"start_attempt_at":"` + fenceStart + `"}`), CreatedAt: now, StartedAt: &now}); err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
 	h.pass()
@@ -106,7 +107,7 @@ func TestStarterSkipsRunWithDeletedTrigger(t *testing.T) {
 	now := h.clock
 	if _, _, err := h.store.CreateRun(t.Context(), nil, Run{
 		AutomationID: id, TriggerID: &triggerID, DedupKey: h.tag + "gone", Status: RunStarting, CreatedAt: now, StartedAt: &now,
-		Event: json.RawMessage(`{"kind":"cron.due"}`),
+		Event: json.RawMessage(`{"kind":"cron.due","start_attempt_at":"` + fenceStart + `"}`),
 	}); err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}

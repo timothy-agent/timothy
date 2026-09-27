@@ -138,35 +138,9 @@ func (t *Ticker) Tick(ctx context.Context, now time.Time) error {
 	if !acquired {
 		return tx.Commit(ctx)
 	}
-	rows, err := tx.Query(ctx, `SELECT t.id, t.automation_id, t.config, t.state, a.created_at
-		FROM automation_triggers t JOIN automations a ON a.id = t.automation_id
-		WHERE t.kind = 'cron' AND t.enabled AND a.enabled AND (a.expires_at IS NULL OR a.expires_at > $1)
-		ORDER BY t.created_at, t.id`, now)
+	fired, err := t.tickTriggers(ctx, tx, now, loc)
 	if err != nil {
-		return fmt.Errorf("automations tick: query triggers: %w", err)
-	}
-	var triggers []cronTrigger
-	for rows.Next() {
-		var c cronTrigger
-		if err := rows.Scan(&c.id, &c.automationID, &c.config, &c.state, &c.automationCreatedAt); err != nil {
-			rows.Close()
-			return fmt.Errorf("automations tick: scan trigger: %w", err)
-		}
-		triggers = append(triggers, c)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("automations tick: triggers: %w", err)
-	}
-	fired := 0
-	for _, c := range triggers {
-		ok, err := t.tickTrigger(ctx, tx, c, now, loc)
-		if err != nil {
-			return err
-		}
-		if ok {
-			fired++
-		}
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("automations tick: commit: %w", err)
@@ -175,6 +149,42 @@ func (t *Ticker) Tick(ctx context.Context, now time.Time) error {
 		t.kick()
 	}
 	return nil
+}
+
+// tickTriggers runs every enabled cron trigger through tx at now and
+// reports how many fired. The caller holds the ticker lock.
+func (t *Ticker) tickTriggers(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Location) (int, error) {
+	rows, err := tx.Query(ctx, `SELECT t.id, t.automation_id, t.config, t.state, a.created_at
+		FROM automation_triggers t JOIN automations a ON a.id = t.automation_id
+		WHERE t.kind = 'cron' AND t.enabled AND a.enabled AND (a.expires_at IS NULL OR a.expires_at > $1)
+		ORDER BY t.created_at, t.id`, now)
+	if err != nil {
+		return 0, fmt.Errorf("automations tick: query triggers: %w", err)
+	}
+	var triggers []cronTrigger
+	for rows.Next() {
+		var c cronTrigger
+		if err := rows.Scan(&c.id, &c.automationID, &c.config, &c.state, &c.automationCreatedAt); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("automations tick: scan trigger: %w", err)
+		}
+		triggers = append(triggers, c)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("automations tick: triggers: %w", err)
+	}
+	fired := 0
+	for _, c := range triggers {
+		ok, err := t.tickTrigger(ctx, tx, c, now, loc)
+		if err != nil {
+			return 0, err
+		}
+		if ok {
+			fired++
+		}
+	}
+	return fired, nil
 }
 
 // tickTrigger walks one trigger's boundaries, inserts its event and
