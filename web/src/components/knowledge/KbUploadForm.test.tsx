@@ -1,7 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { KbDocument } from '../../api/types'
-import { KbUploadForm, parseUrls } from './KbUploadForm'
+import { toast } from 'sonner'
+import { KbUploadForm, markdownFile, parseUrls } from './KbUploadForm'
+
+vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 afterEach(cleanup)
 
@@ -26,6 +29,19 @@ describe('parseUrls', () => {
       'https://a.com',
       'http://b.com',
     ])
+  })
+})
+
+describe('markdownFile', () => {
+  it('wraps markdown as a .md file named after the title', async () => {
+    const f = markdownFile('  Lab notes  ', '# Hi')
+    expect(f.name).toBe('Lab notes.md')
+    expect(f.type).toBe('text/markdown')
+    expect(await f.text()).toBe('# Hi')
+  })
+
+  it('replaces path separators so the server keeps the whole title', () => {
+    expect(markdownFile('a/b\\c', 'x').name).toBe('a-b-c.md')
   })
 })
 
@@ -69,5 +85,55 @@ describe('KbUploadForm', () => {
       target: { value: 'https://example.com/a' },
     })
     expect(screen.getByRole('button', { name: 'Add URL' })).not.toBeDisabled()
+  })
+
+  const fillMarkdown = (title: string, body: string) => {
+    fireEvent.change(screen.getByPlaceholderText('Markdown title'), { target: { value: title } })
+    fireEvent.change(screen.getByPlaceholderText('Paste or write markdown'), { target: { value: body } })
+  }
+
+  it('disables Add markdown until both title and markdown are non-blank', () => {
+    render(<KbUploadForm uploadFile={vi.fn()} addUrl={vi.fn()} onUploaded={vi.fn()} />)
+    const button = screen.getByRole('button', { name: 'Add markdown' })
+    expect(button).toBeDisabled()
+
+    fillMarkdown('Notes', '   ')
+    expect(button).toBeDisabled()
+
+    fillMarkdown('  ', '# body')
+    expect(button).toBeDisabled()
+
+    fillMarkdown('Notes', '# body')
+    expect(button).not.toBeDisabled()
+  })
+
+  it('uploads pasted markdown as a .md file, reports it, and clears the fields', async () => {
+    const uploadFile = vi.fn().mockResolvedValue(doc)
+    const onUploaded = vi.fn()
+    render(<KbUploadForm uploadFile={uploadFile} addUrl={vi.fn()} onUploaded={onUploaded} />)
+
+    fillMarkdown('Notes', '# body')
+    fireEvent.click(screen.getByRole('button', { name: 'Add markdown' }))
+
+    await waitFor(() => expect(onUploaded).toHaveBeenCalledWith(doc))
+    const sent = uploadFile.mock.calls[0][0] as File
+    expect(sent.name).toBe('Notes.md')
+    expect(await sent.text()).toBe('# body')
+    expect(screen.getByPlaceholderText('Markdown title')).toHaveValue('')
+    expect(screen.getByPlaceholderText('Paste or write markdown')).toHaveValue('')
+  })
+
+  it('keeps the markdown and toasts the title when the upload fails', async () => {
+    const uploadFile = vi.fn().mockRejectedValue(new Error('boom'))
+    const onUploaded = vi.fn()
+    render(<KbUploadForm uploadFile={uploadFile} addUrl={vi.fn()} onUploaded={onUploaded} />)
+
+    fillMarkdown('Notes', '# body')
+    fireEvent.click(screen.getByRole('button', { name: 'Add markdown' }))
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Notes: upload failed', expect.anything()))
+    expect(onUploaded).not.toHaveBeenCalled()
+    expect(screen.getByPlaceholderText('Paste or write markdown')).toHaveValue('# body')
+    expect(screen.getByPlaceholderText('Markdown title')).toHaveValue('Notes')
   })
 })

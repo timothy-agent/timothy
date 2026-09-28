@@ -3,6 +3,8 @@ import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type { KbDocument } from '../../api/types'
 import { Button } from '../ui/button'
+import { Input } from '../ui/input'
+import { Textarea } from '../ui/textarea'
 import { errText } from '../../lib/errors'
 
 const acceptExt = '.pdf,.md,.txt,.docx,.html'
@@ -26,7 +28,15 @@ export function parseUrls(text: string): string[] {
   return urls
 }
 
-// KbUploadForm is the drag/drop-file + paste-URL(s) upload UI shared by
+// markdownFile wraps pasted markdown as a .md upload, which brain
+// ingests without markitdown conversion. Path separators become '-'
+// because the server keeps only a filename's last path segment.
+export function markdownFile(title: string, markdown: string): File {
+  const name = title.trim().replace(/[/\\]/g, '-')
+  return new File([markdown], `${name}.md`, { type: 'text/markdown' })
+}
+
+// KbUploadForm is the drag/drop-file + paste-URL(s) + paste-markdown upload UI shared by
 // a collection's own detail page (uploadFile/addUrl scoped to that
 // collection) and the top-level auto-classify entry point (scoped to
 // nothing — brain picks or creates the collection).
@@ -42,6 +52,9 @@ export function KbUploadForm({
   const [uploading, setUploading] = useState<Record<string, boolean>>({})
   const [url, setUrl] = useState('')
   const [urlProgress, setUrlProgress] = useState<{ done: number; total: number } | null>(null)
+  const [mdTitle, setMdTitle] = useState('')
+  const [markdown, setMarkdown] = useState('')
+  const [addingMarkdown, setAddingMarkdown] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const uploadFiles = async (files: File[]) => {
@@ -82,6 +95,23 @@ export function KbUploadForm({
     setUrl('')
     if (failed.length > 0) {
       toast.error(`${failed.length} of ${urls.length} failed: ${failed[0]}${failed.length > 1 ? '…' : ''}`)
+    }
+  }
+
+  const canAddMarkdown = mdTitle.trim() !== '' && markdown.trim() !== '' && !addingMarkdown
+
+  const submitMarkdown = async () => {
+    if (!canAddMarkdown) return
+    setAddingMarkdown(true)
+    try {
+      const doc = await uploadFile(markdownFile(mdTitle, markdown))
+      onUploaded(doc)
+      setMdTitle('')
+      setMarkdown('')
+    } catch (err) {
+      toast.error(`${mdTitle.trim()}: upload failed`, { description: errText(err) })
+    } finally {
+      setAddingMarkdown(false)
     }
   }
 
@@ -159,6 +189,35 @@ export function KbUploadForm({
             'Add URL'
           )}
         </Button>
+      </form>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          void submitMarkdown()
+        }}
+        className="space-y-2"
+      >
+        <Input value={mdTitle} onChange={(e) => setMdTitle(e.target.value)} placeholder="Markdown title" />
+        <Textarea
+          rows={4}
+          value={markdown}
+          onChange={(e) => setMarkdown(e.target.value)}
+          placeholder="Paste or write markdown"
+          className="max-h-80 font-mono"
+        />
+        <div className="flex justify-end">
+          <Button type="submit" variant="outline" disabled={!canAddMarkdown}>
+            {addingMarkdown ? (
+              <>
+                <LoaderCircle className="animate-spin" />
+                adding…
+              </>
+            ) : (
+              'Add markdown'
+            )}
+          </Button>
+        </div>
       </form>
     </div>
   )
