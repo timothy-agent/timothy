@@ -204,7 +204,7 @@ func (a *RepoAdapter) OpenPR(ctx context.Context, m missions.Mission, token stri
 	if !ok {
 		return "", 0, fmt.Errorf("pr: mission repo_url is not a recognizable %s https clone URL", c.Kind())
 	}
-	return a.openPRFor(ctx, c, m, token, ref)
+	return a.openPRFor(ctx, c, m, token, ref, nil)
 }
 
 // openPRFor is OpenPR's actual implementation, parameterized by the
@@ -213,8 +213,12 @@ func (a *RepoAdapter) OpenPR(ctx context.Context, m missions.Mission, token stri
 // calls this with the resolved (possibly just-created) target repo,
 // which can legitimately differ from where the mission was cloned from
 // (or name a repo when the mission was never cloned from one at all, a
-// scratch mission).
-func (a *RepoAdapter) openPRFor(ctx context.Context, c gitprovider.Client, m missions.Mission, token string, ref gitprovider.RepoRef) (url string, number int, err error) {
+// scratch mission). extra names diff paths outside the plan's declared
+// artifacts/scope (D-122, issue #949): nil from the manual PR endpoint
+// (OpenPR), set by DeliverMission's push_pr case from its own
+// checkDeliveryArtifacts call, and recorded on mission.pr_opened so an
+// operator sees what else the PR carries.
+func (a *RepoAdapter) openPRFor(ctx context.Context, c gitprovider.Client, m missions.Mission, token string, ref gitprovider.RepoRef, extra []string) (url string, number int, err error) {
 	if _, err := a.pushWithClient(ctx, c, m, token, ref); err != nil {
 		return "", 0, err
 	}
@@ -235,7 +239,11 @@ func (a *RepoAdapter) openPRFor(ctx context.Context, c gitprovider.Client, m mis
 	if err != nil {
 		return "", 0, fmt.Errorf("pr: %w", err)
 	}
-	if err := a.Events.AppendEvent(ctx, m.ID, "mission.pr_opened", map[string]any{"url": pr.HTMLURL, "number": pr.Number}); err != nil {
+	payload := map[string]any{"url": pr.HTMLURL, "number": pr.Number}
+	if len(extra) > 0 {
+		payload["extra_paths"] = extra
+	}
+	if err := a.Events.AppendEvent(ctx, m.ID, "mission.pr_opened", payload); err != nil {
 		return pr.HTMLURL, pr.Number, fmt.Errorf("pr: record pr_opened: %w", err)
 	}
 	return pr.HTMLURL, pr.Number, nil
@@ -413,7 +421,18 @@ func (a *RepoAdapter) DeliverMission(ctx context.Context, cfg RepoDestinationCon
 		if !ok {
 			return fmt.Errorf("deliver: repo_url is not a recognizable %s https clone URL", c.Kind())
 		}
-		url, number, err := a.openPRFor(ctx, c, m, token, ref)
+		guard, guardErr := checkDeliveryArtifacts(ctx, m.WorktreePath(), m.BaseCommit, m.Plan)
+		if guardErr != nil {
+			payload := map[string]any{"diff_paths": guard.diff}
+			if len(guard.ignored) > 0 {
+				payload["gitignored_artifacts"] = guard.ignored
+			}
+			if err := a.Events.AppendEvent(ctx, m.ID, "mission.delivery_no_artifacts", payload); err != nil {
+				return fmt.Errorf("deliver: record delivery_no_artifacts: %w", err)
+			}
+			return fmt.Errorf("deliver: %w", guardErr)
+		}
+		url, number, err := a.openPRFor(ctx, c, m, token, ref, guard.extra)
 		if err != nil {
 			return fmt.Errorf("deliver: %w", err)
 		}
