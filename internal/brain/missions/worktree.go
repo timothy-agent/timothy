@@ -471,35 +471,43 @@ func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
 // mission branch never carries empty commits.
 var errNothingToCommit = errors.New("worktree: nothing to commit")
 
-// CommitUnit stages only the unit's declared paths (artifacts plus
-// scope, D-121, issue #948) and commits them, or returns
-// errNothingToCommit when none of those paths changed. It never runs
-// `git add -A` on the whole tree: a worker's stray output (core dumps,
-// gitignored artifacts, editor swap files) outside the declared paths
-// stays unstaged/untracked. skipped lists every such path left out of
-// the commit (an unstaged tracked edit or an untracked file), whether
-// or not a commit was made, so the caller can report it. A github-
-// connection mission's clone carries a LOCAL user.name/user.email (set
-// once at Provision time, see cloneRepo/setLocalIdentity) — that takes
-// priority so commits are authored as the connection; otherwise falls
-// back to the operator's configured git identity when set, then
-// commitName/commitEmail, independent of host git config.
+// CommitUnit stages tracked changes and scoped untracked files, then
+// commits them, or returns errNothingToCommit when nothing was staged
+// (D-121, issue #948). It never runs a bare `git add -A`: that once let
+// a worker's stray untracked output (a core dump, in mission f78f7fff)
+// become the whole commit and PR when the unit's real artifacts were
+// gitignored. Tracked modifications and deletions stage across the
+// whole tree (`git add -u`) regardless of scope — an out-of-scope
+// tracked edit still reaches the reviewer through the existing
+// ScopeCreep detector (review.go outsideScope), so restricting it here
+// would only let a stale go.mod/go.sum, a lockfile, or a rework fix to
+// an earlier unit's file silently miss the pushed commit. Untracked
+// files stage only under the unit's artifacts, scope entries, or an
+// artifact's own parent directory (untrackedStagePaths); an untracked
+// file elsewhere (the actual incident) stays untracked. skipped lists
+// every untracked file left out, whether or not a commit was made, so
+// the caller can report it. A github-connection mission's clone
+// carries a LOCAL user.name/user.email (set once at Provision time,
+// see cloneRepo/setLocalIdentity) — that takes priority so commits are
+// authored as the connection; otherwise falls back to the operator's
+// configured git identity when set, then commitName/commitEmail,
+// independent of host git config.
 func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string, artifacts, scope []string) (skipped []string, err error) {
-	paths, err := commitPaths(artifacts, scope)
+	cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
+	defer cancel()
+	if out, addErr := runGit(cctx, worktree, "add", "-u"); addErr != nil {
+		return nil, fmt.Errorf("worktree: commit add -u: %w: %s", addErr, out)
+	}
+	lsOut, err := runGit(cctx, worktree, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("worktree: commit ls-files: %w: %s", err, lsOut)
+	}
+	toStage, err := untrackedStagePaths(splitNulSeparated(lsOut), artifacts, scope)
 	if err != nil {
 		return nil, err
 	}
-	cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
-	defer cancel()
-	for _, p := range paths {
-		if out, addErr := runGit(cctx, worktree, "add", "-A", "--", p); addErr != nil {
-			// A declared path that never came into being (a unit whose
-			// worker produced nothing), or one .gitignore excludes
-			// (mission f78f7fff, issue #948), matches nothing to stage;
-			// leave it for CheckArtifacts to fail on, not a commit error.
-			if strings.Contains(out, "did not match any files") || strings.Contains(out, "ignored by one of your .gitignore files") {
-				continue
-			}
+	for _, p := range toStage {
+		if out, addErr := runGit(cctx, worktree, "add", "--", p); addErr != nil {
 			return nil, fmt.Errorf("worktree: commit add %s: %w: %s", p, addErr, out)
 		}
 	}
@@ -540,33 +548,106 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string, ar
 	return skipped, nil
 }
 
-// commitPaths builds the deduplicated path set CommitUnit stages: a
-// unit's declared artifacts plus its scope entries (D-121). Every path
-// must resolve inside the workspace; an absolute path or one escaping
-// via ".." is rejected, since either means the unit is malformed
-// rather than merely unstaged.
-func commitPaths(artifacts, scope []string) ([]string, error) {
+// cleanRelPath validates and cleans one workspace-relative path
+// (D-121): slash-separated, no absolute path or ".." escape. Blank
+// input (after trimming) returns "", nil — the caller drops it.
+func cleanRelPath(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(p) {
+		return "", fmt.Errorf("worktree: commit path %q must be workspace-relative", p)
+	}
+	clean := path.Clean(filepath.ToSlash(p))
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("worktree: commit path %q escapes the workspace", p)
+	}
+	return clean, nil
+}
+
+// cleanRelPaths cleans a list of workspace-relative paths, dropping
+// blanks, in order.
+func cleanRelPaths(paths []string) ([]string, error) {
 	var out []string
-	seen := map[string]bool{}
-	for _, p := range append(append([]string{}, artifacts...), scope...) {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
+	for _, p := range paths {
+		clean, err := cleanRelPath(p)
+		if err != nil {
+			return nil, err
 		}
-		if filepath.IsAbs(p) {
-			return nil, fmt.Errorf("worktree: commit path %q must be workspace-relative", p)
+		if clean != "" {
+			out = append(out, clean)
 		}
-		clean := path.Clean(filepath.ToSlash(p))
-		if clean == ".." || strings.HasPrefix(clean, "../") {
-			return nil, fmt.Errorf("worktree: commit path %q escapes the workspace", p)
-		}
-		if seen[clean] {
-			continue
-		}
-		seen[clean] = true
-		out = append(out, clean)
 	}
 	return out, nil
+}
+
+// untrackedStagePaths filters candidates (untracked, already
+// gitignore-filtered files from `git ls-files --others
+// --exclude-standard`) down to the ones CommitUnit stages for this
+// unit (D-121, issue #948): an exact match to a declared artifact, a
+// path equal to or beneath a scope entry, or a path beneath an
+// artifact's own parent directory. A root-level artifact's parent
+// directory is "." and never counts as a directory match — otherwise
+// a root-level artifact would reopen the hole this closes by matching
+// every other untracked file at the workspace root.
+func untrackedStagePaths(candidates, artifacts, scope []string) ([]string, error) {
+	cleanArtifacts, err := cleanRelPaths(artifacts)
+	if err != nil {
+		return nil, err
+	}
+	cleanScope, err := cleanRelPaths(scope)
+	if err != nil {
+		return nil, err
+	}
+	var artifactDirs []string
+	for _, a := range cleanArtifacts {
+		if dir := path.Dir(a); dir != "." {
+			artifactDirs = append(artifactDirs, dir)
+		}
+	}
+	var out []string
+	for _, c := range candidates {
+		c = path.Clean(filepath.ToSlash(c))
+		switch {
+		case containsPath(cleanArtifacts, c), underAny(c, cleanScope), underAny(c, artifactDirs):
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// containsPath reports whether p equals one of paths exactly.
+func containsPath(paths []string, p string) bool {
+	for _, want := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+// underAny reports whether p equals one of prefixes or sits beneath one.
+func underAny(p string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if p == prefix || strings.HasPrefix(p, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// splitNulSeparated splits `git ls-files -z` output: paths separated
+// by NUL rather than newline, so a filename containing a newline still
+// parses as one entry.
+func splitNulSeparated(out string) []string {
+	var files []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			files = append(files, p)
+		}
+	}
+	return files
 }
 
 // splitStagedStatus reads `git status --porcelain` output and reports

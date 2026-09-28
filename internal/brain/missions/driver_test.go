@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1655,9 +1656,10 @@ func TestDriverReworkUntouchedEvent(t *testing.T) {
 
 // TestDriverCommitSkippedPathsEvent proves the driver records
 // mission.commit_skipped_paths (D-121, issue #948) when a worker turn
-// leaves an out-of-scope tracked edit and an untracked stray file
-// alongside the unit's own in-scope commit: both are named in the
-// event and neither lands in the commit.
+// leaves an out-of-scope untracked stray file alongside the unit's own
+// commit: the stray file is named in the event and left untracked,
+// while an out-of-scope tracked edit still lands in the commit (D-121
+// stages every tracked change, scope-restricting only untracked files).
 func TestDriverCommitSkippedPathsEvent(t *testing.T) {
 	requireGit(t)
 	root := t.TempDir()
@@ -1705,12 +1707,14 @@ func TestDriverCommitSkippedPathsEvent(t *testing.T) {
 			payload = string(ev.Payload)
 		}
 	}
-	if !strings.Contains(payload, "outside.txt") || !strings.Contains(payload, "core.1") {
-		t.Fatalf("mission.commit_skipped_paths payload = %q, want outside.txt and core.1 listed", payload)
+	if !strings.Contains(payload, "core.1") || strings.Contains(payload, "outside.txt") {
+		t.Fatalf("mission.commit_skipped_paths payload = %q, want core.1 alone (outside.txt is a tracked edit, always staged)", payload)
 	}
-	committed := strings.TrimSpace(gitRun(t, wt, "diff", "--name-only", "HEAD~1", "HEAD"))
-	if committed != "src/main.go" {
-		t.Fatalf("commit touched %q, want only src/main.go", committed)
+	committed := strings.Split(strings.TrimSpace(gitRun(t, wt, "diff", "--name-only", "HEAD~1", "HEAD")), "\n")
+	sort.Strings(committed)
+	want := []string{"outside.txt", "src/main.go"}
+	if strings.Join(committed, "|") != strings.Join(want, "|") {
+		t.Fatalf("commit touched %v, want %v", committed, want)
 	}
 }
 
