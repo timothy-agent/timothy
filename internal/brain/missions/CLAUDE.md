@@ -246,4 +246,11 @@ CLAUDE.md so other work does not pay for it every session.
   paused/waiting rows read in the same tx, and the consumer skips an
   actionable event whose mission already left that status, so the next
   pause notifies again (issue #935).
+- `CommitUnit` never runs `git add -A` (D-121, issue #948): it stages
+  only a unit's declared artifacts plus scope (`commitPaths`, rejecting
+  any path outside the workspace), so gitignored artifacts or stray
+  worker output never becomes the whole commit. Anything left unstaged
+  or untracked outside that set is reported in `mission.commit_skipped_paths`
+  instead of riding along; `errNothingToCommit` (D-099) still applies
+  when the declared paths carry no change.
 - `make canary` is the regression gate for any harness change.

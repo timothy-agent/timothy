@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -470,25 +471,45 @@ func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
 // mission branch never carries empty commits.
 var errNothingToCommit = errors.New("worktree: nothing to commit")
 
-// CommitUnit commits the worktree's current changes, or returns
-// errNothingToCommit when there are none. A github-
+// CommitUnit stages only the unit's declared paths (artifacts plus
+// scope, D-121, issue #948) and commits them, or returns
+// errNothingToCommit when none of those paths changed. It never runs
+// `git add -A` on the whole tree: a worker's stray output (core dumps,
+// gitignored artifacts, editor swap files) outside the declared paths
+// stays unstaged/untracked. skipped lists every such path left out of
+// the commit (an unstaged tracked edit or an untracked file), whether
+// or not a commit was made, so the caller can report it. A github-
 // connection mission's clone carries a LOCAL user.name/user.email (set
 // once at Provision time, see cloneRepo/setLocalIdentity) — that takes
 // priority so commits are authored as the connection; otherwise falls
 // back to the operator's configured git identity when set, then
 // commitName/commitEmail, independent of host git config.
-func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) error {
+func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string, artifacts, scope []string) (skipped []string, err error) {
+	paths, err := commitPaths(artifacts, scope)
+	if err != nil {
+		return nil, err
+	}
 	cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
 	defer cancel()
-	if out, err := runGit(cctx, worktree, "add", "-A"); err != nil {
-		return fmt.Errorf("worktree: commit add: %w: %s", err, out)
+	for _, p := range paths {
+		if out, addErr := runGit(cctx, worktree, "add", "-A", "--", p); addErr != nil {
+			// A declared path that never came into being (a unit whose
+			// worker produced nothing), or one .gitignore excludes
+			// (mission f78f7fff, issue #948), matches nothing to stage;
+			// leave it for CheckArtifacts to fail on, not a commit error.
+			if strings.Contains(out, "did not match any files") || strings.Contains(out, "ignored by one of your .gitignore files") {
+				continue
+			}
+			return nil, fmt.Errorf("worktree: commit add %s: %w: %s", p, addErr, out)
+		}
 	}
 	status, err := runGit(cctx, worktree, "status", "--porcelain")
 	if err != nil {
-		return fmt.Errorf("worktree: commit status: %w: %s", err, status)
+		return nil, fmt.Errorf("worktree: commit status: %w: %s", err, status)
 	}
-	if strings.TrimSpace(status) == "" {
-		return errNothingToCommit
+	staged, skipped := splitStagedStatus(status)
+	if !staged {
+		return skipped, errNothingToCommit
 	}
 	name, email := commitName, commitEmail
 	if w.identity != nil {
@@ -514,9 +535,62 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) er
 		"commit", "-m", message)
 	cmd.Dir = worktree
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("worktree: commit: %w: %s", err, string(out))
+		return skipped, fmt.Errorf("worktree: commit: %w: %s", err, string(out))
 	}
-	return nil
+	return skipped, nil
+}
+
+// commitPaths builds the deduplicated path set CommitUnit stages: a
+// unit's declared artifacts plus its scope entries (D-121). Every path
+// must resolve inside the workspace; an absolute path or one escaping
+// via ".." is rejected, since either means the unit is malformed
+// rather than merely unstaged.
+func commitPaths(artifacts, scope []string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, p := range append(append([]string{}, artifacts...), scope...) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if filepath.IsAbs(p) {
+			return nil, fmt.Errorf("worktree: commit path %q must be workspace-relative", p)
+		}
+		clean := path.Clean(filepath.ToSlash(p))
+		if clean == ".." || strings.HasPrefix(clean, "../") {
+			return nil, fmt.Errorf("worktree: commit path %q escapes the workspace", p)
+		}
+		if seen[clean] {
+			continue
+		}
+		seen[clean] = true
+		out = append(out, clean)
+	}
+	return out, nil
+}
+
+// splitStagedStatus reads `git status --porcelain` output and reports
+// whether anything landed in the index (staged, true when CommitUnit
+// has something to commit) plus every path left out of it: an index
+// status of ' ' or '?' means that path's change is only in the working
+// tree or untracked, never staged.
+func splitStagedStatus(status string) (staged bool, skipped []string) {
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		indexStatus := line[0]
+		p := strings.TrimSpace(line[3:])
+		if p == "" {
+			continue
+		}
+		if indexStatus == ' ' || indexStatus == '?' {
+			skipped = append(skipped, p)
+			continue
+		}
+		staged = true
+	}
+	return staged, skipped
 }
 
 // localIdentity reads worktree's LOCAL (not global) user.name/

@@ -1692,16 +1692,25 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 	case "done":
 		if wt := m.WorktreePath(); wt != "" {
 			var unitTitle string
+			var artifacts, scope []string
 			if unit, _ := currentUnit(m.Plan); unit != nil {
-				unitTitle = unit.Title
+				unitTitle, artifacts, scope = unit.Title, unit.Artifacts, unit.Scope
 			}
 			body := "mission " + m.ID + " iteration " + fmt.Sprint(m.Iteration)
 			msg := CommitMessage(unitTitle, m.Goal, body, d.effectiveCommitStyle(ctx, m))
-			switch err := d.workspace.CommitUnit(ctx, wt, msg); {
+			skipped, err := d.workspace.CommitUnit(ctx, wt, msg, artifacts, scope)
+			switch {
 			case errors.Is(err, errNothingToCommit):
 				d.log.Debug("driver: commit unit skipped, no changes", "mission_id", m.ID)
 			case err != nil:
 				d.log.Warn("driver: commit unit failed", "mission_id", m.ID, "error", err)
+			}
+			if len(skipped) > 0 {
+				if err := d.store.AppendEvent(ctx, m.ID, "mission.commit_skipped_paths", map[string]any{
+					"paths": skipped,
+				}); err != nil {
+					d.log.Warn("driver: record commit skipped paths failed", "mission_id", m.ID, "error", err)
+				}
 			}
 		}
 		if err := d.store.SetLastEvidence(ctx, m.ID, verdict.Evidence); err != nil {
