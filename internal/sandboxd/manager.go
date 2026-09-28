@@ -117,6 +117,14 @@ const (
 	// the ulimit kills.
 	sandboxFsizeLimit = 100 << 20
 
+	// sandboxCoreLimit (D-106) is 0: a process that dies on SIGXFSZ (from
+	// sandboxFsizeLimit above), SIGSEGV, or SIGABRT must never write a
+	// core dump into the worktree. A core dump is a raw memory snapshot,
+	// so it can contain the process environment, including any secret
+	// injected per-exec against the D-053 allowlist; one such dump was
+	// committed and pushed to a public repo by a mission harness.
+	sandboxCoreLimit = 0
+
 	// execGraceKill is how long `timeout` waits after SIGTERM before
 	// SIGKILL — matches shell.go's cmd.WaitDelay intent (give a process a
 	// moment to exit cleanly, then force it).
@@ -539,10 +547,13 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 			PidsLimit:         &pids,
 			// Ulimits (D-106): nofile bounds an fd-exhaustion loop, fsize
 			// stops one runaway write from filling the workspace volume's
-			// backing disk, which no cgroup memory cap covers.
+			// backing disk, which no cgroup memory cap covers, and core
+			// stops any dump-signaled death (fsize's own SIGXFSZ included)
+			// from writing a core file into the worktree.
 			Ulimits: []*container.Ulimit{
 				{Name: "nofile", Soft: sandboxNofileLimit, Hard: sandboxNofileLimit},
 				{Name: "fsize", Soft: sandboxFsizeLimit, Hard: sandboxFsizeLimit},
+				{Name: "core", Soft: sandboxCoreLimit, Hard: sandboxCoreLimit},
 			},
 		},
 		// OomScoreAdj (D-056): the kernel sacrifices sandboxes before

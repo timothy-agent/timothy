@@ -732,6 +732,7 @@ func TestCreateContainerHardensRootfs(t *testing.T) {
 	wantUlimits := map[string]int64{
 		"nofile": sandboxNofileLimit,
 		"fsize":  sandboxFsizeLimit,
+		"core":   sandboxCoreLimit,
 	}
 	gotUlimits := map[string]int64{}
 	for _, u := range gotHostConfig.Ulimits {
