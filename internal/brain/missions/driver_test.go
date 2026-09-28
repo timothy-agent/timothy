@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1616,7 +1617,7 @@ func TestDriverReworkUntouchedEvent(t *testing.T) {
 			store := newFakeStore()
 			store.put("m1", Mission{
 				ID: "m1", Kind: "coding", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8, ReworkRounds: 1,
-				Workspace: root, Plan: Plan{Units: []PlanUnit{{Title: "u1"}}}, ReviewFindings: []Finding{finding},
+				Workspace: root, Plan: Plan{Units: []PlanUnit{{Title: "u1", Scope: []string{"x.go", "y.go"}}}}, ReviewFindings: []Finding{finding},
 			})
 			runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
 			workspace := NewWorkspace(root, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -1650,6 +1651,70 @@ func TestDriverReworkUntouchedEvent(t *testing.T) {
 				t.Fatalf("mission.rework_untouched emitted = %v, want %v", saw, tc.wantEvent)
 			}
 		})
+	}
+}
+
+// TestDriverCommitSkippedPathsEvent proves the driver records
+// mission.commit_skipped_paths (D-121, issue #948) when a worker turn
+// leaves an out-of-scope untracked stray file alongside the unit's own
+// commit: the stray file is named in the event and left untracked,
+// while an out-of-scope tracked edit still lands in the commit (D-121
+// stages every tracked change, scope-restricting only untracked files).
+func TestDriverCommitSkippedPathsEvent(t *testing.T) {
+	requireGit(t)
+	root := t.TempDir()
+	wt := filepath.Join(root, "wt")
+	if err := os.MkdirAll(wt, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, wt, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(wt, "outside.txt"), []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, wt, "add", "outside.txt")
+	gitRun(t, wt, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "base")
+	store := newFakeStore()
+	store.put("m1", Mission{
+		ID: "m1", Kind: "coding", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8,
+		Workspace: root, Plan: Plan{Units: []PlanUnit{{Title: "u1", Artifacts: []string{"src/main.go"}, Scope: []string{"src"}}}},
+	})
+	runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "done"}}}
+	workspace := NewWorkspace(root, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := NewDriver(store, runner, workspace, nil, nil, fakeSandboxExec, nil, slog.Default())
+
+	// The worker's in-scope artifact, an out-of-scope tracked edit and
+	// an out-of-scope untracked stray file all land before the turn ends.
+	if err := os.MkdirAll(filepath.Join(wt, "src"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "src", "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "outside.txt"), []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "core.1"), []byte("core dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.Advance(context.Background(), "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+
+	var payload string
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.commit_skipped_paths" {
+			payload = string(ev.Payload)
+		}
+	}
+	if !strings.Contains(payload, "core.1") || strings.Contains(payload, "outside.txt") {
+		t.Fatalf("mission.commit_skipped_paths payload = %q, want core.1 alone (outside.txt is a tracked edit, always staged)", payload)
+	}
+	committed := strings.Split(strings.TrimSpace(gitRun(t, wt, "diff", "--name-only", "HEAD~1", "HEAD")), "\n")
+	sort.Strings(committed)
+	want := []string{"outside.txt", "src/main.go"}
+	if strings.Join(committed, "|") != strings.Join(want, "|") {
+		t.Fatalf("commit touched %v, want %v", committed, want)
 	}
 }
 
@@ -3975,9 +4040,16 @@ func TestDriverFindingsOnlyReReview(t *testing.T) {
 		t.Fatalf("round 1 unit files = %v, want the changed files inside the unit's scope", full.UnitFiles)
 	}
 
-	// The rework turn: the worker fixes main.go and also edits docs/.
-	writeWorktreeFile(t, wt, "src/main.go", "package main\n\nfunc main() { validate() }\n"+filler)
+	// A stray commit outside the unit's scope lands in history between
+	// reviews (D-121: CommitUnit itself would never stage docs/notes.md
+	// for this unit, so simulate one having landed some other way — the
+	// point here is ScopeCreep reading it back out of the range diff).
 	writeWorktreeFile(t, wt, "docs/notes.md", "# notes\n")
+	gitRun(t, wt, "add", "docs/notes.md")
+	gitRun(t, wt, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "stray docs edit")
+
+	// The rework turn: the worker fixes main.go.
+	writeWorktreeFile(t, wt, "src/main.go", "package main\n\nfunc main() { validate() }\n"+filler)
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
 		t.Fatalf("rework turn: %v", err)
 	}

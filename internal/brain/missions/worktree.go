@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -470,25 +471,39 @@ func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
 // mission branch never carries empty commits.
 var errNothingToCommit = errors.New("worktree: nothing to commit")
 
-// CommitUnit commits the worktree's current changes, or returns
-// errNothingToCommit when there are none. A github-
-// connection mission's clone carries a LOCAL user.name/user.email (set
-// once at Provision time, see cloneRepo/setLocalIdentity) — that takes
-// priority so commits are authored as the connection; otherwise falls
-// back to the operator's configured git identity when set, then
-// commitName/commitEmail, independent of host git config.
-func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) error {
+// CommitUnit commits the unit's changes, or returns errNothingToCommit
+// when nothing was staged (D-121, issue #948). Tracked edits and
+// deletions stage tree-wide (`git add -u`); untracked files stage only
+// under the unit's artifacts, scope, or an artifact's parent dir.
+// skipped lists the untracked files left out. A github-connection
+// clone's LOCAL user.name/user.email wins, then the operator's git
+// identity, then commitName/commitEmail.
+func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string, artifacts, scope []string) (skipped []string, err error) {
 	cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
 	defer cancel()
-	if out, err := runGit(cctx, worktree, "add", "-A"); err != nil {
-		return fmt.Errorf("worktree: commit add: %w: %s", err, out)
+	if out, addErr := runGit(cctx, worktree, "add", "-u"); addErr != nil {
+		return nil, fmt.Errorf("worktree: commit add -u: %w: %s", addErr, out)
+	}
+	lsOut, err := runGit(cctx, worktree, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("worktree: commit ls-files: %w: %s", err, lsOut)
+	}
+	toStage, err := untrackedStagePaths(splitNulSeparated(lsOut), artifacts, scope)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range toStage {
+		if out, addErr := runGit(cctx, worktree, "add", "--", p); addErr != nil {
+			return nil, fmt.Errorf("worktree: commit add %s: %w: %s", p, addErr, out)
+		}
 	}
 	status, err := runGit(cctx, worktree, "status", "--porcelain")
 	if err != nil {
-		return fmt.Errorf("worktree: commit status: %w: %s", err, status)
+		return nil, fmt.Errorf("worktree: commit status: %w: %s", err, status)
 	}
-	if strings.TrimSpace(status) == "" {
-		return errNothingToCommit
+	staged, skipped := splitStagedStatus(status)
+	if !staged {
+		return skipped, errNothingToCommit
 	}
 	name, email := commitName, commitEmail
 	if w.identity != nil {
@@ -514,9 +529,129 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string) er
 		"commit", "-m", message)
 	cmd.Dir = worktree
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("worktree: commit: %w: %s", err, string(out))
+		return skipped, fmt.Errorf("worktree: commit: %w: %s", err, string(out))
 	}
-	return nil
+	return skipped, nil
+}
+
+// cleanRelPath cleans one workspace-relative path, rejecting absolute
+// paths and ".." escapes. Blank input returns "".
+func cleanRelPath(p string) (string, error) {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return "", nil
+	}
+	if filepath.IsAbs(p) {
+		return "", fmt.Errorf("worktree: commit path %q must be workspace-relative", p)
+	}
+	clean := path.Clean(filepath.ToSlash(p))
+	if clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", fmt.Errorf("worktree: commit path %q escapes the workspace", p)
+	}
+	return clean, nil
+}
+
+// cleanRelPaths cleans a list of workspace-relative paths, dropping
+// blanks, in order.
+func cleanRelPaths(paths []string) ([]string, error) {
+	var out []string
+	for _, p := range paths {
+		clean, err := cleanRelPath(p)
+		if err != nil {
+			return nil, err
+		}
+		if clean != "" {
+			out = append(out, clean)
+		}
+	}
+	return out, nil
+}
+
+// untrackedStagePaths keeps the untracked candidates that match an
+// artifact exactly, sit under a scope entry, or sit under an
+// artifact's parent dir (D-121). The workspace root never counts as an
+// artifact dir.
+func untrackedStagePaths(candidates, artifacts, scope []string) ([]string, error) {
+	cleanArtifacts, err := cleanRelPaths(artifacts)
+	if err != nil {
+		return nil, err
+	}
+	cleanScope, err := cleanRelPaths(scope)
+	if err != nil {
+		return nil, err
+	}
+	var artifactDirs []string
+	for _, a := range cleanArtifacts {
+		if dir := path.Dir(a); dir != "." {
+			artifactDirs = append(artifactDirs, dir)
+		}
+	}
+	var out []string
+	for _, c := range candidates {
+		c = path.Clean(filepath.ToSlash(c))
+		switch {
+		case containsPath(cleanArtifacts, c), underAny(c, cleanScope), underAny(c, artifactDirs):
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// containsPath reports whether p equals one of paths exactly.
+func containsPath(paths []string, p string) bool {
+	for _, want := range paths {
+		if p == want {
+			return true
+		}
+	}
+	return false
+}
+
+// underAny reports whether p equals one of prefixes or sits beneath one.
+func underAny(p string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if p == prefix || strings.HasPrefix(p, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// splitNulSeparated splits `git ls-files -z` output: paths separated
+// by NUL rather than newline, so a filename containing a newline still
+// parses as one entry.
+func splitNulSeparated(out string) []string {
+	var files []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" {
+			files = append(files, p)
+		}
+	}
+	return files
+}
+
+// splitStagedStatus reads `git status --porcelain` output and reports
+// whether anything landed in the index (staged, true when CommitUnit
+// has something to commit) plus every path left out of it: an index
+// status of ' ' or '?' means that path's change is only in the working
+// tree or untracked, never staged.
+func splitStagedStatus(status string) (staged bool, skipped []string) {
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		indexStatus := line[0]
+		p := strings.TrimSpace(line[3:])
+		if p == "" {
+			continue
+		}
+		if indexStatus == ' ' || indexStatus == '?' {
+			skipped = append(skipped, p)
+			continue
+		}
+		staged = true
+	}
+	return staged, skipped
 }
 
 // localIdentity reads worktree's LOCAL (not global) user.name/

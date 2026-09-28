@@ -246,4 +246,9 @@ CLAUDE.md so other work does not pay for it every session.
   paused/waiting rows read in the same tx, and the consumer skips an
   actionable event whose mission already left that status, so the next
   pause notifies again (issue #935).
+- `CommitUnit` never runs a bare `git add -A` (D-121, issue #948):
+  tracked edits and deletions stage tree-wide (`git add -u`); untracked
+  files stage only under the unit's artifacts, scope, or an artifact's
+  parent dir (never the workspace root). Left-out untracked files are
+  reported in `mission.commit_skipped_paths`.
 - `make canary` is the regression gate for any harness change.

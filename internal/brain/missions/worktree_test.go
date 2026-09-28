@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -331,7 +332,7 @@ func TestProvisionSelfInitRollbackAndCommitUnit(t *testing.T) {
 	if err := os.WriteFile(committed, []byte("unit 1 output"), 0o600); err != nil {
 		t.Fatalf("write unit file: %v", err)
 	}
-	if err := w.CommitUnit(ctx, worktree, "unit 1"); err != nil {
+	if _, err := w.CommitUnit(ctx, worktree, "unit 1", []string{"unit1.txt"}, nil); err != nil {
 		t.Fatalf("CommitUnit: %v", err)
 	}
 
@@ -368,7 +369,7 @@ func TestCommitUnitSkipsWhenNothingChanged(t *testing.T) {
 	}
 	base := head()
 
-	if err := w.CommitUnit(ctx, worktree, "noop turn"); !errors.Is(err, errNothingToCommit) {
+	if _, err := w.CommitUnit(ctx, worktree, "noop turn", []string{"unit1.txt"}, nil); !errors.Is(err, errNothingToCommit) {
 		t.Fatalf("CommitUnit on a clean worktree = %v, want errNothingToCommit", err)
 	}
 	if head() != base {
@@ -378,13 +379,13 @@ func TestCommitUnitSkipsWhenNothingChanged(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(worktree, "unit1.txt"), []byte("unit 1 output"), 0o600); err != nil {
 		t.Fatalf("write unit file: %v", err)
 	}
-	if err := w.CommitUnit(ctx, worktree, "unit 1"); err != nil {
+	if _, err := w.CommitUnit(ctx, worktree, "unit 1", []string{"unit1.txt"}, nil); err != nil {
 		t.Fatalf("CommitUnit with changes: %v", err)
 	}
 	if head() == base {
 		t.Fatal("CommitUnit with changes did not move HEAD")
 	}
-	if err := w.CommitUnit(ctx, worktree, "noop turn"); !errors.Is(err, errNothingToCommit) {
+	if _, err := w.CommitUnit(ctx, worktree, "noop turn", []string{"unit1.txt"}, nil); !errors.Is(err, errNothingToCommit) {
 		t.Fatalf("second clean CommitUnit = %v, want errNothingToCommit", err)
 	}
 
@@ -394,6 +395,195 @@ func TestCommitUnitSkipsWhenNothingChanged(t *testing.T) {
 	}
 	if lines := strings.Split(strings.TrimSpace(log), "\n"); len(lines) != 1 || !strings.Contains(lines[0], "unit 1") {
 		t.Fatalf("git log since base = %q, want exactly the one commit that changed files", log)
+	}
+}
+
+// TestUntrackedStagePaths is a table test on the path-set builder
+// (D-121, issue #948): an exact artifact match, a scope directory, an
+// artifact's own parent directory, a root-level artifact NOT matching
+// an unrelated root file (the actual incident), and both escape forms
+// rejected.
+func TestUntrackedStagePaths(t *testing.T) {
+	cases := []struct {
+		name                         string
+		candidates, artifacts, scope []string
+		want                         []string
+		wantErr                      bool
+	}{
+		{
+			"exact artifact match",
+			[]string{"src/main.go", "other.go"}, []string{"src/main.go"}, nil,
+			[]string{"src/main.go"}, false,
+		},
+		{
+			"scope directory matches anything beneath it",
+			[]string{"docs/notes.md", "docs/sub/more.md", "other.go"}, nil, []string{"docs"},
+			[]string{"docs/notes.md", "docs/sub/more.md"}, false,
+		},
+		{
+			"artifact's own parent directory matches a sibling",
+			[]string{"src/helper.go", "other.go"}, []string{"src/main.go"}, nil,
+			[]string{"src/helper.go"}, false,
+		},
+		{
+			"root-level artifact does not match another root file",
+			[]string{"core.1"}, []string{"main.go"}, nil,
+			nil, false,
+		},
+		{"absolute artifact rejected", nil, []string{"/etc/passwd"}, nil, nil, true},
+		{"absolute scope rejected", nil, nil, []string{"/tmp/x"}, nil, true},
+		{"dot-dot escape rejected", nil, []string{"../outside.txt"}, nil, nil, true},
+		{"nested dot-dot escape rejected", nil, nil, []string{"src/../../outside"}, nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := untrackedStagePaths(tc.candidates, tc.artifacts, tc.scope)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("untrackedStagePaths(...) = %v, want an error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("untrackedStagePaths(...): %v", err)
+			}
+			if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Fatalf("untrackedStagePaths(%v, %v, %v) = %v, want %v", tc.candidates, tc.artifacts, tc.scope, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCommitUnitStagesTrackedEditsAndScopedUntracked proves CommitUnit
+// (D-121, issue #948) stages every tracked change regardless of scope
+// (an out-of-scope edit and a tracked deletion), but restricts
+// untracked files to the unit's declared paths: an in-scope new file
+// and a new sibling in an artifact's own directory stage, a root-level
+// untracked stray file (the actual incident) does not.
+func TestCommitUnitStagesTrackedEditsAndScopedUntracked(t *testing.T) {
+	requireGit(t)
+	w := newTestWorkspace(t)
+	ctx := context.Background()
+
+	_, worktree, _, _, _, err := w.Provision(ctx, "mission-scoped-commit", "Add a feature", "", "coding", "", nil, nil, "", "")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	// Pre-existing tracked files: one the unit declares no scope over,
+	// one it will delete.
+	if err := os.MkdirAll(filepath.Join(worktree, "src"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(worktree, "go.mod")
+	if err := os.WriteFile(outside, []byte("module x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	toDelete := filepath.Join(worktree, "src", "old.go")
+	if err := os.WriteFile(toDelete, []byte("package src\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, worktree, "add", "go.mod", "src/old.go")
+	gitRun(t, worktree, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "seed")
+
+	// In-scope new file the unit declares as its artifact.
+	if err := os.WriteFile(filepath.Join(worktree, "src", "main.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// New untracked sibling in the artifact's own directory.
+	if err := os.WriteFile(filepath.Join(worktree, "src", "helper.go"), []byte("package main\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A rework fix to a file outside the unit's scope: tracked edit and
+	// deletion, both must still land in the commit (D-121).
+	if err := os.WriteFile(outside, []byte("module x\n\nrequire y v1.0.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(toDelete); err != nil {
+		t.Fatal(err)
+	}
+	// Untracked stray file at the workspace root (mission f78f7fff).
+	if err := os.WriteFile(filepath.Join(worktree, "core.1"), []byte("core dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped, err := w.CommitUnit(ctx, worktree, "unit 1", []string{"src/main.go"}, nil)
+	if err != nil {
+		t.Fatalf("CommitUnit: %v", err)
+	}
+	if len(skipped) != 1 || skipped[0] != "core.1" {
+		t.Fatalf("skipped = %v, want [core.1]", skipped)
+	}
+
+	committed := strings.Split(strings.TrimSpace(gitRun(t, worktree, "diff", "--name-only", "HEAD~1", "HEAD")), "\n")
+	sort.Strings(committed)
+	want := []string{"go.mod", "src/helper.go", "src/main.go", "src/old.go"}
+	if strings.Join(committed, "|") != strings.Join(want, "|") {
+		t.Fatalf("commit touched %v, want %v", committed, want)
+	}
+	status := gitRun(t, worktree, "status", "--porcelain")
+	if !strings.Contains(status, "?? core.1") {
+		t.Fatalf("status = %q, want core.1 left untracked", status)
+	}
+}
+
+// TestCommitUnitSkipsGitignoredArtifactsAndStrayFile reproduces mission
+// f78f7fff (issue #948): the unit's declared artifact is gitignored by
+// the goal's own rule, so the only material in the worktree is a stray
+// untracked core dump outside scope. CommitUnit must not fall back to
+// committing it: errNothingToCommit, no commit, the stray file reported
+// as skipped.
+func TestCommitUnitSkipsGitignoredArtifactsAndStrayFile(t *testing.T) {
+	requireGit(t)
+	w := newTestWorkspace(t)
+	ctx := context.Background()
+
+	_, worktree, _, _, _, err := w.Provision(ctx, "mission-f78f7fff", "Add a feature", "", "coding", "", nil, nil, "", "")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	head := func() string {
+		out, err := runGit(ctx, worktree, "rev-parse", "HEAD")
+		if err != nil {
+			t.Fatalf("rev-parse HEAD: %v: %s", err, out)
+		}
+		return strings.TrimSpace(out)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, ".gitignore"), []byte("build/*\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, worktree, "add", ".gitignore")
+	gitRun(t, worktree, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "add gitignore")
+	base := head()
+
+	// Declared artifact falls under the gitignore rule.
+	if err := os.MkdirAll(filepath.Join(worktree, "build"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "build", "out.bin"), []byte("binary"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Stray untracked file outside the unit's scope.
+	if err := os.WriteFile(filepath.Join(worktree, "core.1"), []byte("core dump"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	skipped, err := w.CommitUnit(ctx, worktree, "unit 1", []string{"build/out.bin"}, []string{"build"})
+	if !errors.Is(err, errNothingToCommit) {
+		t.Fatalf("CommitUnit = %v, want errNothingToCommit", err)
+	}
+	if head() != base {
+		t.Fatal("CommitUnit moved HEAD despite reporting errNothingToCommit")
+	}
+	if len(skipped) != 1 || skipped[0] != "core.1" {
+		t.Fatalf("skipped = %v, want [core.1]", skipped)
+	}
+	if _, err := os.Stat(filepath.Join(worktree, "core.1")); err != nil {
+		t.Fatalf("core.1 should remain on disk, untracked: %v", err)
+	}
+	status := strings.TrimSpace(gitRun(t, worktree, "status", "--porcelain"))
+	if status != "?? core.1" {
+		t.Fatalf("status = %q, want only core.1 untracked", status)
 	}
 }
 
@@ -597,7 +787,7 @@ func TestProvisionClonesRepoWithConnIdentity(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(worktree, "new.txt"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.CommitUnit(ctx, worktree, "conn identity commit"); err != nil {
+	if _, err := w.CommitUnit(ctx, worktree, "conn identity commit", []string{"new.txt"}, nil); err != nil {
 		t.Fatalf("CommitUnit: %v", err)
 	}
 
@@ -684,7 +874,7 @@ func TestProvisionClonesRepoWithSigningKey(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(worktree, "new.txt"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.CommitUnit(ctx, worktree, "signed commit"); err != nil {
+	if _, err := w.CommitUnit(ctx, worktree, "signed commit", []string{"new.txt"}, nil); err != nil {
 		t.Fatalf("CommitUnit: %v", err)
 	}
 
