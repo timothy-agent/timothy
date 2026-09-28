@@ -118,6 +118,16 @@ func (cursorAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 		"--force",
 		"--output-format", "stream-json",
 		"--trust",
+		// D-120 (issue #947): cursor-agent self-updates on start by
+		// downloading a 129-146 MB per-arch package into
+		// ~/.local/share/cursor-agent/versions/ and extracting it; the
+		// sandbox fsize ulimit is 100 MB (D-106), so tar dies with
+		// SIGXFSZ and dumps core into the mission worktree. This hidden
+		// commander flag (found by disassembling the shipped bundle -
+		// undocumented in --help) short-circuits the same gate that
+		// already skips updates on a "static" channel, before the
+		// background update check is even scheduled.
+		"--disable-auto-update",
 		"--model", spec.Model,
 	}
 	if spec.SystemAppend != "" {

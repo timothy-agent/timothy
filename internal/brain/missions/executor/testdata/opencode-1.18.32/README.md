@@ -1,12 +1,13 @@
-# opencode-1.18.18 fixtures
+# opencode-1.18.32 fixtures
 
-Recorded live against `opencode-ai@1.18.18` (npm) in a
+Recorded live against `opencode-ai@1.18.32` (npm) in a
 `node:24.18.0-slim` container, talking to the host's local Ollama via
 `--add-host=host.docker.internal:host-gateway`, model `gpt-oss:20b`.
-Recorded by hand (same rationale as pi-0.84.1). No secrets to redact
+Recorded by hand (same rationale as pi-0.87.1). No secrets to redact
 (local Ollama, no key); session/message/part/call ids replaced with
-`ses_SESSION*`/`msg_MESSAGE*`/`prt_PART*`/`call_CALL*` placeholders and
-the recording tmpdir with `/work/ws`.
+`ses_SESSION*`/`msg_MESSAGE*`/`prt_PART*`/`call_CALL*` placeholders. The
+recording tmpdirs (`/w/ws-happy`, `/w/ws-tool`) are container-relative,
+not host paths, so they were left as-is.
 
 Provider config was `~/.config/opencode/opencode.json`:
 
@@ -36,8 +37,7 @@ opencode run --format json -m ollama/gpt-oss:20b "<prompt>"
 - `error.ndjson`: baseURL pointed at a dead port. Single top-level
   `{"type":"error","error":{"name":"APIError","data":{message,isRetryable,
   metadata:{url}}}}` event and **exit 1** — unlike codex, opencode's exit
-  code is a reliable failure signal (confirmed here and in the 5/5
-  container-reliability protocol runs, all exit 0 on success).
+  code is a reliable failure signal (confirmed here again on this bump).
 
 Notes for the parser:
 
@@ -48,9 +48,6 @@ Notes for the parser:
 - `step_finish.part.tokens`: `{total,input,output,reasoning,
   cache:{write,read}}`; `cost` present (0 for local provider). No
   per-run aggregate — sum the step_finish events.
-- Upstream reliability context: issue #31435 (empty JSONL in containers,
-  exit 0) is open and its fix PR #31446 closed unmerged, but the repro
-  there uses the official opencode container image + Vertex SSE; this
-  environment (npm install in node:24.18.0-slim + openai-compatible)
-  passed 5/5 consecutive runs. Treat empty stdout with exit 0 as a
-  failure anyway.
+- No wire-format drift found between 1.18.18 and 1.18.32: event shapes,
+  field names, and exit-code behavior all matched; the adapter needed
+  no changes for this bump.

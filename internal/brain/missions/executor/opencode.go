@@ -12,7 +12,7 @@ import (
 const opencodeHarness = "opencode"
 
 // opencodeAdapter wires the opencode CLI's headless json mode (verified
-// against opencode-ai 1.18.18 fixtures in testdata/opencode-1.18.18).
+// against opencode-ai 1.18.32 fixtures in testdata/opencode-1.18.32).
 // opencode has no output-schema flag, so it uses the same pi-style
 // sentinel-verdict path as pi/codex's trailing-JSON extraction.
 type opencodeAdapter struct{}
@@ -83,7 +83,7 @@ func (opencodeAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) 
 	}
 	if spec.ReadOnly {
 		// issue #582: the adapter runs opencode with permission "allow"
-		// and no per-tool deny surface is verified against 1.18.18.
+		// and no per-tool deny surface is verified against 1.18.32.
 		return Invocation{}, fmt.Errorf("executor/opencode: %w", ErrReadOnlyUnsupported)
 	}
 

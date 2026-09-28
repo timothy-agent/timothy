@@ -11,7 +11,7 @@ import (
 const piHarness = "pi"
 
 // piAdapter wires the pi coding agent's headless json mode (verified
-// against pi-coding-agent 0.84.1 fixtures in testdata/pi-0.84.1). pi
+// against pi-coding-agent 0.87.1 fixtures in testdata/pi-0.87.1). pi
 // supports both the anthropic and openai-compatible wire formats
 // (Capabilities().WireFormat names only the default; BuildInvocation
 // picks the actual one from spec.Wire).
@@ -275,11 +275,34 @@ type piUsage struct {
 }
 
 type piAssistantMessage struct {
-	Role         string           `json:"role"`
-	Content      []piContentBlock `json:"content"`
-	Usage        piUsage          `json:"usage"`
-	StopReason   string           `json:"stopReason"`
-	ErrorMessage string           `json:"errorMessage"`
+	Role string `json:"role"`
+	// Content is decoded lazily via textBlocks: pi 0.87.1 added a
+	// system-role message whose content is a plain string (the
+	// preamble), not a content-block array like every other role, so a
+	// fixed []piContentBlock field here would fail the whole message
+	// array's decode the moment a system entry shows up.
+	Content      json.RawMessage `json:"content"`
+	Usage        piUsage         `json:"usage"`
+	StopReason   string          `json:"stopReason"`
+	ErrorMessage string          `json:"errorMessage"`
+}
+
+// textBlocks decodes Content as a content-block array and returns its
+// text blocks' text, joined. A role whose content is a plain string
+// (system's preamble) or any other non-array shape carries no text
+// blocks, and decodes to nil rather than an error.
+func (m piAssistantMessage) textBlocks() string {
+	var blocks []piContentBlock
+	if err := json.Unmarshal(m.Content, &blocks); err != nil {
+		return ""
+	}
+	var texts []string
+	for _, b := range blocks {
+		if b.Type == "text" {
+			texts = append(texts, b.Text)
+		}
+	}
+	return strings.Join(texts, "")
 }
 
 type piMessageEndLine struct {
@@ -399,17 +422,11 @@ func (p *piParser) handleMessageEnd(m piAssistantMessage) (Event, bool) {
 	p.lastStopReason = m.StopReason
 	p.lastErrorMessage = m.ErrorMessage
 
-	var texts []string
-	for _, b := range m.Content {
-		if b.Type == "text" {
-			texts = append(texts, b.Text)
-		}
-	}
-	if len(texts) == 0 {
+	text := m.textBlocks()
+	if text == "" {
 		p.stats.Unknown++
 		return Event{}, false
 	}
-	text := strings.Join(texts, "")
 	p.lastAssistantText = text
 	p.stats.Events++
 	return Event{Kind: KindText, Text: text}, true
@@ -434,14 +451,8 @@ func (p *piParser) buildTerminalEvent(a piAgentEndLine) Event {
 		usage.CacheReadTokens += m.Usage.CacheRead
 		usage.CacheWriteTokens += m.Usage.CacheWrite
 
-		var texts []string
-		for _, b := range m.Content {
-			if b.Type == "text" {
-				texts = append(texts, b.Text)
-			}
-		}
-		if len(texts) > 0 {
-			lastText = strings.Join(texts, "")
+		if text := m.textBlocks(); text != "" {
+			lastText = text
 		}
 		lastStopReason = m.StopReason
 		lastErrorMessage = m.ErrorMessage

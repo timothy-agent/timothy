@@ -12,7 +12,7 @@ import (
 // loadOpencodeFixture returns every non-empty line of a recorded opencode fixture.
 func loadOpencodeFixture(t *testing.T, name string) [][]byte {
 	t.Helper()
-	f, err := os.Open(filepath.Join("testdata", "opencode-1.18.18", name)) //nolint:gosec // G304: fixed testdata path.
+	f, err := os.Open(filepath.Join("testdata", "opencode-1.18.32", name)) //nolint:gosec // G304: fixed testdata path.
 	if err != nil {
 		t.Fatalf("open fixture: %v", err)
 	}
@@ -42,8 +42,9 @@ func TestOpencodeParser_Happy(t *testing.T) {
 
 	want := []eventSummary{
 		{kind: KindSystem, textHead: "ses_SESSION01"},
-		{kind: KindText, textHead: "VERDICT: {\"status\":\""},
-		{kind: KindResult, textHead: "VERDICT: {\"status\":\""},
+		{kind: KindTool, toolName: "write", status: "finished"},
+		{kind: KindText, textHead: "{\"status\":\"DONE\",\"no"},
+		{kind: KindResult, textHead: "{\"status\":\"DONE\",\"no"},
 	}
 
 	var got []eventSummary
@@ -78,11 +79,11 @@ func TestOpencodeParser_Happy(t *testing.T) {
 	if resultEv.Usage == nil {
 		t.Fatal("result event carries no usage")
 	}
-	if resultEv.Usage.InputTokens != 6212 {
-		t.Errorf("Usage.InputTokens = %d, want 6212", resultEv.Usage.InputTokens)
+	if resultEv.Usage.InputTokens != 6235+61 {
+		t.Errorf("Usage.InputTokens = %d, want 6235+61=6296", resultEv.Usage.InputTokens)
 	}
-	if resultEv.Usage.OutputTokens != 55 {
-		t.Errorf("Usage.OutputTokens = %d, want 55", resultEv.Usage.OutputTokens)
+	if resultEv.Usage.OutputTokens != 248+15 {
+		t.Errorf("Usage.OutputTokens = %d, want 248+15=263", resultEv.Usage.OutputTokens)
 	}
 	if resultEv.Usage.CostUSD != nil {
 		t.Error("opencode never reports a trusted cost - CostUSD must stay nil")
@@ -98,8 +99,8 @@ func TestOpencodeParser_Happy(t *testing.T) {
 	if res.Status != "DONE" {
 		t.Errorf("ParseResult status = %q, want DONE", res.Status)
 	}
-	if res.Note != "all checks passed" {
-		t.Errorf("ParseResult note = %q, want %q", res.Note, "all checks passed")
+	if res.Note != "created hello.txt" {
+		t.Errorf("ParseResult note = %q, want %q", res.Note, "created hello.txt")
 	}
 
 	stats := p.(ParserStats).Stats()
@@ -120,14 +121,13 @@ func TestOpencodeParser_Tool(t *testing.T) {
 
 	want := []eventSummary{
 		{kind: KindSystem, textHead: "ses_SESSION01"},
-		{kind: KindText, textHead: "Executing the file c"},
 		{kind: KindTool, toolName: "write", status: "finished"},
 		// step_finish reason "tool-calls" after the write is noise (tokens folded in).
-		{kind: KindText, textHead: "Reading back the fil"},
+		{kind: KindText, textHead: "Need to read back."},
 		{kind: KindTool, toolName: "read", status: "finished"},
 		// step_finish reason "tool-calls" after the read is noise too.
-		{kind: KindText, textHead: "**check.txt**\n\n```\no"},
-		{kind: KindResult, textHead: "**check.txt**\n\n```\no"},
+		{kind: KindText, textHead: "{\"status\":\"DONE\",\"no"},
+		{kind: KindResult, textHead: "{\"status\":\"DONE\",\"no"},
 	}
 
 	var got []eventSummary
@@ -162,15 +162,14 @@ func TestOpencodeParser_Tool(t *testing.T) {
 	if resultEv.Usage == nil {
 		t.Fatal("result event carries no usage")
 	}
-	if resultEv.Usage.InputTokens != 6216+6279+6389 {
-		t.Errorf("Usage.InputTokens = %d, want 6216+6279+6389=18884", resultEv.Usage.InputTokens)
+	if resultEv.Usage.InputTokens != 1030+44+96 {
+		t.Errorf("Usage.InputTokens = %d, want 1030+44+96=1170", resultEv.Usage.InputTokens)
 	}
-	if resultEv.Usage.OutputTokens != 240+55+16 {
-		t.Errorf("Usage.OutputTokens = %d, want 240+55+16=311", resultEv.Usage.OutputTokens)
+	if resultEv.Usage.OutputTokens != 263+45+18 {
+		t.Errorf("Usage.OutputTokens = %d, want 263+45+18=326", resultEv.Usage.OutputTokens)
 	}
-	// no verdict sentinel in this fixture's final text.
-	if resultEv.Result != nil {
-		t.Errorf("tool fixture's final text has no verdict, want nil Result, got %s", resultEv.Result)
+	if resultEv.Result == nil {
+		t.Fatal("tool fixture's final text carries a verdict, want non-nil Result")
 	}
 
 	stats := p.(ParserStats).Stats()

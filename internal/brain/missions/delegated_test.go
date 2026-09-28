@@ -1828,10 +1828,10 @@ func TestDelegatedRunWorker_APIKeyMode_EnvAndCostRecorded(t *testing.T) {
 
 // loadPiDelegatedFixture returns every non-empty line of a recorded pi
 // fixture — same loader shape as loadDelegatedFixture, pointed at the
-// pi-0.84.1 testdata directory instead.
+// pi-0.87.1 testdata directory instead.
 func loadPiDelegatedFixture(t *testing.T, name string) [][]byte {
 	t.Helper()
-	f, err := os.Open(filepath.Join("executor", "testdata", "pi-0.84.1", name)) //nolint:gosec // G304: fixed testdata path.
+	f, err := os.Open(filepath.Join("executor", "testdata", "pi-0.87.1", name)) //nolint:gosec // G304: fixed testdata path.
 	if err != nil {
 		t.Fatalf("open fixture: %v", err)
 	}

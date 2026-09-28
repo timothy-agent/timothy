@@ -1,6 +1,6 @@
-# pi-0.84.1 fixtures
+# pi-0.87.1 fixtures
 
-Recorded live against `@earendil-works/pi-coding-agent@0.84.1` in a
+Recorded live against `@earendil-works/pi-coding-agent@0.87.1` in a
 `node:24.18.0-slim` container, talking to the host's local Ollama
 (`qwen3:30b-a3b`, tools-capable) via `--add-host=host.docker.internal:host-gateway`
 and an openai-completions `models.json` provider entry pointed at
@@ -11,12 +11,14 @@ npm install, then run) - these were recorded by hand instead. No
 redaction of secrets was needed (local Ollama, dummy `apiKey`); the
 session header's random UUID was replaced with the placeholder
 `SESSION_ID` for the same reason claude's fixtures do it, and `cwd` was
-already the container-relative `/w`, not a host path.
+set to the container-relative `/w`, not a host path.
 
 Invocation shape for `happy.ndjson`/`error.ndjson`/`no-verdict.ndjson`
 (each fixture only differs in prompt/model endpoint), recorded before
 `--mode rpc` (issue #358) replaced `--mode json` as the adapter's
-default:
+default - kept as `--mode json` recordings on this bump too since the
+two modes only differ by the two rpc-only noise line types (see below),
+never in the events the parser acts on:
 
 ```
 PI_CODING_AGENT_DIR=/w/pi-agent PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETRY=0 NO_COLOR=1 \
@@ -24,6 +26,23 @@ PI_CODING_AGENT_DIR=/w/pi-agent PI_OFFLINE=1 PI_SKIP_VERSION_CHECK=1 PI_TELEMETR
   --tools read,bash,edit,write,grep,find,ls --model timothy/qwen3:30b-a3b "<prompt>" \
   > run.ndjson 2> stderr.log
 ```
+
+`models.json` schema matches the adapter's own `piModelsConfig`
+(`providers.<name> = {baseUrl, api, apiKey, models:[{id}]}`, current
+`docs/models.md` in the installed package) - the pi-0.84.1 README's
+example used an older `kind`/top-level-`models` shape that 0.87.1 no
+longer accepts (`Error: Model "..." not found`); re-recording this
+version is what caught the drift.
+
+0.87.1's `message_end`/`agent_end` lines add a `system`-role message
+(the preamble) whose `content` is a plain string, not the content-block
+array every other role uses - `piAssistantMessage.Content` decoding it
+as `[]piContentBlock` failed the whole `messages` array's unmarshal the
+moment a `system` entry showed up, silently dropping the terminal
+`agent_end` as noise (no `KindResult` event at all). Fixed by decoding
+`Content` as `json.RawMessage` and adding `textBlocks()`, which treats a
+content shape it cannot parse as a role that carries no text blocks
+rather than an error.
 
 `--mode rpc`'s own invocation drops the trailing `"<prompt>"` argv
 element (the prompt instead rides `{"type":"prompt","message":"..."}`
@@ -51,20 +70,21 @@ fixture recorded/built against that mode.
   "stop"` and no trailing JSON object anywhere in the final message.
   Exit code 0.
 - `rpc.ndjson` - hand-built, not recorded live (issue #358, mid-run
-  steering): `--mode rpc`'s stream is identical to `--mode json` except
-  for two extra line types this fixture adds around a `happy.ndjson`-
-  shaped run: `response` (the per-command ack `--mode rpc` emits for
-  each stdin command) and `queue_update` (emitted when a `steer`
-  command is accepted). Both must parse as noise, same as any other
-  unrecognized type; there is no `session` event difference from json
-  mode.
+  steering), carried forward unchanged from pi-0.84.1: `--mode rpc`'s
+  stream is identical to `--mode json` except for two extra line types
+  this fixture adds around a `happy.ndjson`-shaped run: `response` (the
+  per-command ack `--mode rpc` emits for each stdin command) and
+  `queue_update` (emitted when a `steer` command is accepted). Both
+  must parse as noise, same as any other unrecognized type; there is no
+  `session` event difference from json mode.
 - `review-approve.ndjson` / `review-rework.ndjson` - hand-built, not
-  recorded live (issue #582, delegated reviewer): a `--mode rpc` run
-  launched with `--tools read,grep,find,ls` whose final assistant
-  message ends with a single line holding a `review_verdict`-shaped
-  JSON object (`decision`, `findings`, `resolved`) instead of the
-  DONE/RETRY/BLOCKED sentinel. `extractTrailingJSONObject` lifts that
-  line into `Event.Result` unchanged; the missions package decodes it
-  with `parseReviewVerdict`, never `ParseResult` (which only knows the
-  worker statuses). approve resolves a prior finding; rework opens one
-  blocking finding with file and evidence.
+  recorded live (issue #582, delegated reviewer), carried forward
+  unchanged from pi-0.84.1: a `--mode rpc` run launched with `--tools
+  read,grep,find,ls` whose final assistant message ends with a single
+  line holding a `review_verdict`-shaped JSON object (`decision`,
+  `findings`, `resolved`) instead of the DONE/RETRY/BLOCKED sentinel.
+  `extractTrailingJSONObject` lifts that line into `Event.Result`
+  unchanged; the missions package decodes it with `parseReviewVerdict`,
+  never `ParseResult` (which only knows the worker statuses). approve
+  resolves a prior finding; rework opens one blocking finding with file
+  and evidence.

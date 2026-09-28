@@ -336,6 +336,7 @@ func TestCursorAdapter_BuildInvocation(t *testing.T) {
 				want := []string{
 					"cursor-agent", "-p", "--force",
 					"--output-format", "stream-json", "--trust",
+					"--disable-auto-update",
 					"--model", "claude-sonnet-5-high",
 					"@PROMPT@", cursorVerdictInstruction,
 				}
@@ -346,6 +347,18 @@ func TestCursorAdapter_BuildInvocation(t *testing.T) {
 					if inv.Argv[i] != want[i] {
 						t.Errorf("argv[%d] = %q, want %q", i, inv.Argv[i], want[i])
 					}
+				}
+			},
+		},
+		{
+			name: "argv disables cursor-agent's self-update (D-120, issue #947)",
+			spec: InvocationSpec{ //nolint:gosec // G101: fixture value, not a real credential.
+				Model: "claude-sonnet-5-high", PromptPath: "/tmp/run/prompt.md",
+				AuthMode: AuthAPIKey, APIKey: "sk-cursor-test",
+			},
+			check: func(t *testing.T, inv Invocation) {
+				if !containsFlag(inv.Argv, "--disable-auto-update") {
+					t.Errorf("argv %v missing --disable-auto-update", inv.Argv)
 				}
 			},
 		},
