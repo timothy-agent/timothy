@@ -471,27 +471,13 @@ func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
 // mission branch never carries empty commits.
 var errNothingToCommit = errors.New("worktree: nothing to commit")
 
-// CommitUnit stages tracked changes and scoped untracked files, then
-// commits them, or returns errNothingToCommit when nothing was staged
-// (D-121, issue #948). It never runs a bare `git add -A`: that once let
-// a worker's stray untracked output (a core dump, in mission f78f7fff)
-// become the whole commit and PR when the unit's real artifacts were
-// gitignored. Tracked modifications and deletions stage across the
-// whole tree (`git add -u`) regardless of scope — an out-of-scope
-// tracked edit still reaches the reviewer through the existing
-// ScopeCreep detector (review.go outsideScope), so restricting it here
-// would only let a stale go.mod/go.sum, a lockfile, or a rework fix to
-// an earlier unit's file silently miss the pushed commit. Untracked
-// files stage only under the unit's artifacts, scope entries, or an
-// artifact's own parent directory (untrackedStagePaths); an untracked
-// file elsewhere (the actual incident) stays untracked. skipped lists
-// every untracked file left out, whether or not a commit was made, so
-// the caller can report it. A github-connection mission's clone
-// carries a LOCAL user.name/user.email (set once at Provision time,
-// see cloneRepo/setLocalIdentity) — that takes priority so commits are
-// authored as the connection; otherwise falls back to the operator's
-// configured git identity when set, then commitName/commitEmail,
-// independent of host git config.
+// CommitUnit commits the unit's changes, or returns errNothingToCommit
+// when nothing was staged (D-121, issue #948). Tracked edits and
+// deletions stage tree-wide (`git add -u`); untracked files stage only
+// under the unit's artifacts, scope, or an artifact's parent dir.
+// skipped lists the untracked files left out. A github-connection
+// clone's LOCAL user.name/user.email wins, then the operator's git
+// identity, then commitName/commitEmail.
 func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string, artifacts, scope []string) (skipped []string, err error) {
 	cctx, cancel := context.WithTimeout(ctx, gitOpTimeout)
 	defer cancel()
@@ -548,9 +534,8 @@ func (w *Workspace) CommitUnit(ctx context.Context, worktree, message string, ar
 	return skipped, nil
 }
 
-// cleanRelPath validates and cleans one workspace-relative path
-// (D-121): slash-separated, no absolute path or ".." escape. Blank
-// input (after trimming) returns "", nil — the caller drops it.
+// cleanRelPath cleans one workspace-relative path, rejecting absolute
+// paths and ".." escapes. Blank input returns "".
 func cleanRelPath(p string) (string, error) {
 	p = strings.TrimSpace(p)
 	if p == "" {
@@ -582,15 +567,10 @@ func cleanRelPaths(paths []string) ([]string, error) {
 	return out, nil
 }
 
-// untrackedStagePaths filters candidates (untracked, already
-// gitignore-filtered files from `git ls-files --others
-// --exclude-standard`) down to the ones CommitUnit stages for this
-// unit (D-121, issue #948): an exact match to a declared artifact, a
-// path equal to or beneath a scope entry, or a path beneath an
-// artifact's own parent directory. A root-level artifact's parent
-// directory is "." and never counts as a directory match — otherwise
-// a root-level artifact would reopen the hole this closes by matching
-// every other untracked file at the workspace root.
+// untrackedStagePaths keeps the untracked candidates that match an
+// artifact exactly, sit under a scope entry, or sit under an
+// artifact's parent dir (D-121). The workspace root never counts as an
+// artifact dir.
 func untrackedStagePaths(candidates, artifacts, scope []string) ([]string, error) {
 	cleanArtifacts, err := cleanRelPaths(artifacts)
 	if err != nil {

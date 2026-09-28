@@ -502,8 +502,7 @@ func TestCommitUnitStagesTrackedEditsAndScopedUntracked(t *testing.T) {
 	if err := os.Remove(toDelete); err != nil {
 		t.Fatal(err)
 	}
-	// Out-of-scope untracked stray file at the workspace root — the
-	// actual f78f7fff incident this closes.
+	// Untracked stray file at the workspace root (mission f78f7fff).
 	if err := os.WriteFile(filepath.Join(worktree, "core.1"), []byte("core dump"), 0o600); err != nil {
 		t.Fatal(err)
 	}

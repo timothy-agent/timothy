@@ -247,14 +247,8 @@ CLAUDE.md so other work does not pay for it every session.
   actionable event whose mission already left that status, so the next
   pause notifies again (issue #935).
 - `CommitUnit` never runs a bare `git add -A` (D-121, issue #948):
-  tracked modifications/deletions stage across the whole tree (`git add
-  -u`, so an out-of-scope tracked edit still reaches the reviewer
-  through the existing ScopeCreep detector), but an untracked file
-  stages only under the unit's artifacts, scope entries, or an
-  artifact's own parent directory (`untrackedStagePaths`, rejecting any
-  path outside the workspace) — closing the actual incident (a stray
-  untracked core dump becoming the whole commit) without also dropping
-  unscoped tracked edits like go.mod/go.sum. Untracked files left out
-  are reported in `mission.commit_skipped_paths`; `errNothingToCommit`
-  (D-099) still applies when nothing was staged.
+  tracked edits and deletions stage tree-wide (`git add -u`); untracked
+  files stage only under the unit's artifacts, scope, or an artifact's
+  parent dir (never the workspace root). Left-out untracked files are
+  reported in `mission.commit_skipped_paths`.
 - `make canary` is the regression gate for any harness change.
