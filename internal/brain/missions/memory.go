@@ -177,6 +177,13 @@ func OutcomeDigest(m Mission, events []Event, terminal Phase, failureReason stri
 			fmt.Fprintf(&b, "- %s: %s\n", u.Title, status)
 		}
 	}
+	// D-123, issue #950: a unit a rejected plan attempt carried that the
+	// resubmission dropped is part of the goal that was never done; the
+	// digest must say so, since it feeds the operator-facing outcome and
+	// a follow-up mission's parent context.
+	if len(m.Plan.ScopeDropped) > 0 {
+		fmt.Fprintf(&b, "\nscope dropped from plan (not done): %s\n", strings.Join(m.Plan.ScopeDropped, ", "))
+	}
 	if m.RunsPlanless() && m.FinalOutput != "" {
 		b.WriteString("\nfinal output:\n")
 		b.WriteString(truncateRunes(m.FinalOutput, finalOutputDigestCap))

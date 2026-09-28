@@ -144,6 +144,60 @@ func TestManagerLifecycle(t *testing.T) {
 	})
 }
 
+// TestCoreUlimitPreventsDump is the regression case for the core.234
+// leak (issue #946): a process that dies on a dump-eligible signal,
+// direct SIGSEGV or SIGXFSZ from a low fsize ulimit, must not leave a
+// core file in the workdir.
+func TestCoreUlimitPreventsDump(t *testing.T) {
+	image := os.Getenv("MISSION_SANDBOX_TEST_IMAGE")
+	if image == "" {
+		t.Skip("MISSION_SANDBOX_TEST_IMAGE not set; skipping sandbox integration test")
+	}
+	ctx := context.Background()
+	mgr, err := NewManager(ctx, image, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	missionID := "it-core-" + time.Now().UTC().Format("20060102-150405.000000000")
+	t.Cleanup(func() { _ = mgr.Remove(context.Background(), missionID) })
+
+	missionDir := "/workspace/missions/coding/" + missionID
+	if err := os.MkdirAll(missionDir, 0o777); err != nil { //nolint:gosec // test fixture inside the test container's own workspace mount
+		t.Skipf("cannot create %s (workspace volume not mounted writable here): %v", missionDir, err)
+	}
+
+	assertNoCoreFiles := func(t *testing.T) {
+		t.Helper()
+		var out bytes.Buffer
+		if _, err := mgr.Exec(ctx, missionID, "", missionDir, "ls -a", 5*time.Second, &out); err != nil {
+			t.Fatalf("Exec (ls): %v", err)
+		}
+		for _, name := range strings.Fields(out.String()) {
+			if strings.HasPrefix(name, "core") {
+				t.Errorf("workdir contains %q after a dump-eligible death, want no core file", name)
+			}
+		}
+	}
+
+	t.Run("SIGSEGV does not dump", func(t *testing.T) {
+		var out bytes.Buffer
+		if _, err := mgr.Exec(ctx, missionID, "", missionDir, "kill -SEGV $$", 5*time.Second, &out); err != nil {
+			t.Fatalf("Exec: %v", err)
+		}
+		assertNoCoreFiles(t)
+	})
+
+	t.Run("SIGXFSZ from a low ulimit -f does not dump", func(t *testing.T) {
+		// A low per-exec fsize ulimit plus a write exceeding it raises
+		// SIGXFSZ: the exact signal that produced the leaked core.234.
+		var out bytes.Buffer
+		if _, err := mgr.Exec(ctx, missionID, "", missionDir, "sh -c 'ulimit -f 1; yes > bigfile'", 5*time.Second, &out); err != nil {
+			t.Fatalf("Exec: %v", err)
+		}
+		assertNoCoreFiles(t)
+	})
+}
+
 func TestPingAndCheckImage(t *testing.T) {
 	image := os.Getenv("MISSION_SANDBOX_TEST_IMAGE")
 	if image == "" {

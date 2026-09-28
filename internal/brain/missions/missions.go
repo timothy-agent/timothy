@@ -564,6 +564,12 @@ type Plan struct {
 	// findings-only packet renders only progress notes written after
 	// it, the rework turns' notes. Zero on plans written before D-098.
 	LastReviewAt time.Time `json:"last_review_at,omitzero"`
+	// ScopeDropped (D-123, issue #950) names units a rejected plan
+	// attempt carried that the planner's resubmission dropped instead
+	// of carrying forward or reporting infeasible; set by PlanSession,
+	// persisted with the plan so the reviewer packet keeps seeing it
+	// until a replan clears it.
+	ScopeDropped []string `json:"scope_dropped,omitempty"`
 	// Provider/Model (issue #507) are who served the plan turn; set by
 	// PlanSession after parsing, never persisted with the stored plan.
 	Provider string `json:"-"`
@@ -596,6 +602,16 @@ type PlanUnit struct {
 	// check_cmd: a tautological check_cmd (echo 'done') can no
 	// longer fake completion when the declared artifact is missing.
 	Artifacts []string `json:"artifacts,omitempty"`
+	// EvidenceOnly (D-123, issue #950) marks a unit whose deliverable
+	// is a side effect (a GitHub issue, an API call, external state)
+	// rather than a file: the planner sets this explicitly, so the
+	// harness never infers it from an empty Artifacts list, and a unit
+	// that merely forgot its artifacts is still rejected. An
+	// evidence-only unit skips the "must list at least one artifact"
+	// gate; its check_cmd alone must observe the side effect, and the
+	// plan-acceptance rule that the gate fail before the work still
+	// applies (probeCheckCmds runs over every unit regardless).
+	EvidenceOnly bool `json:"evidence_only,omitempty"`
 	// Criteria (D-095, issue #520) are the unit's acceptance criteria,
 	// 2 to 6 short lines the planner extracts from the goal: the
 	// reviewer judges the unit against them instead of the full goal.
