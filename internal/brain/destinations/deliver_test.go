@@ -364,7 +364,12 @@ func TestDeliverNowNeverRetries(t *testing.T) {
 // records the delivered pr_url/pr_number/branch/remote_host on the
 // entry, same as any other successful delivery.
 func TestDeliverGitHubRoutesToAdapter(t *testing.T) {
+	requireGitForGuard(t)
 	m := pushableMission(t)
+	base := initGuardRepo(t, m.WorktreePath())
+	commitGuardFiles(t, m.WorktreePath(), map[string][]byte{"internal/api/handler.go": []byte("package api\n")}, "add handler")
+	m.BaseCommit = base
+	m.Plan = missions.Plan{Units: []missions.PlanUnit{unit([]string{"internal/api/handler.go"}, nil)}}
 	destStore := &fakeDestStore{rows: map[string]Destination{
 		"d1": {ID: "d1", Name: "gh-1", Kind: "github", Enabled: true, Config: json.RawMessage(`{"connector_id":"conn1","mode":"push_pr"}`)},
 	}}
@@ -424,7 +429,12 @@ func (a *capturingAdapter) Deliver(_ context.Context, _ json.RawMessage, _ strin
 // first, Render runs against the resulting mission.pr_opened event,
 // then the telegram entry delivers.
 func TestDeliverGitHubDeliversBeforeMessageKinds(t *testing.T) {
+	requireGitForGuard(t)
 	m := pushableMission(t)
+	base := initGuardRepo(t, m.WorktreePath())
+	commitGuardFiles(t, m.WorktreePath(), map[string][]byte{"internal/api/handler.go": []byte("package api\n")}, "add handler")
+	m.BaseCommit = base
+	m.Plan = missions.Plan{Units: []missions.PlanUnit{unit([]string{"internal/api/handler.go"}, nil)}}
 	destStore := &fakeDestStore{rows: map[string]Destination{
 		"tg1": {ID: "tg1", Name: "telegram-1", Kind: "telegram", Enabled: true, Config: json.RawMessage(`{"chat_id":"123"}`), CredentialRef: "tok"},
 		"gh1": {ID: "gh1", Name: "gh-1", Kind: "github", Enabled: true, Config: json.RawMessage(`{"connector_id":"conn1","mode":"push_pr"}`)},

@@ -723,8 +723,13 @@ func TestDeliverMissionModes(t *testing.T) {
 
 	t.Run("github push_pr records branch, pr url and number", func(t *testing.T) {
 		t.Parallel()
+		requireGitForGuard(t)
 		m := pushableMission(t)
 		m.Name = "Molla-go URL Shortener Design"
+		base := initGuardRepo(t, m.WorktreePath())
+		commitGuardFiles(t, m.WorktreePath(), map[string][]byte{"internal/api/handler.go": []byte("package api\n")}, "add handler")
+		m.BaseCommit = base
+		m.Plan = missions.Plan{Units: []missions.PlanUnit{unit([]string{"internal/api/handler.go"}, nil)}}
 		p := &fakePusher{host: "github.com"}
 		c := githubClient(&fakeGitClient{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/1", prNumber: 1})
 		a := &RepoAdapter{Pusher: p, Events: &fakeEvents{}, ResolveToken: resolveToken, Clients: clients(c)}
@@ -743,8 +748,13 @@ func TestDeliverMissionModes(t *testing.T) {
 
 	t.Run("bitbucket push_pr records pr url, number and events", func(t *testing.T) {
 		t.Parallel()
+		requireGitForGuard(t)
 		m := bitbucketMission(t)
 		m.Name = "Widget Pricing Fix"
+		base := initGuardRepo(t, m.WorktreePath())
+		commitGuardFiles(t, m.WorktreePath(), map[string][]byte{"internal/pricing/fix.go": []byte("package pricing\n")}, "fix pricing")
+		m.BaseCommit = base
+		m.Plan = missions.Plan{Units: []missions.PlanUnit{unit([]string{"internal/pricing/fix.go"}, nil)}}
 		ev := &fakeEvents{}
 		c := bitbucketClient(&fakeGitClient{repoExists: true, defaultBranch: "main",
 			prURL: "https://bitbucket.org/acme/widgets/pull-requests/7", prNumber: 7})
