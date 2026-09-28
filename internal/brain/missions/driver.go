@@ -1491,6 +1491,15 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_created", planCreatedPayload); err != nil {
 		return StepInput{}, fmt.Errorf("driver: record plan: %w", err)
 	}
+	// D-123, issue #950: the planner's resubmission dropped a unit a
+	// rejected attempt carried instead of carrying it forward or
+	// reporting infeasible; the operator gets a signal and the reviewer
+	// packet carries the same titles.
+	if len(plan.ScopeDropped) > 0 {
+		if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_scope_dropped", map[string]any{"titles": plan.ScopeDropped}); err != nil {
+			d.log.Warn("driver: record plan scope dropped failed", "mission_id", m.ID, "error", err)
+		}
+	}
 	if m.ReplanUsed {
 		// Carry forward prior harness evidence: a unit the new plan kept
 		// unchanged (same title, same check_cmd) and that had already
@@ -1972,6 +1981,7 @@ func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, idx []int, uni
 		Plan: m.Plan, Units: units, UnitIndex: idx, Evidence: m.LastEvidence,
 		Listing: ListWorkspace(m.WorkRoot()), Progress: m.Progress,
 		OpenFindings: OpenFindings(m.ReviewFindings),
+		ScopeDropped: m.Plan.ScopeDropped,
 	}
 	if !hasCriteria(units) {
 		packet.Goal = m.Goal
@@ -2021,7 +2031,8 @@ func (d *Driver) findingsReviewPacket(ctx context.Context, m Mission, open []Fin
 	}
 	packet := ReviewPacket{
 		FindingsOnly: true, Units: affected, OpenFindings: open,
-		Progress: progressSince(m.Progress, m.Plan.LastReviewAt),
+		Progress:     progressSince(m.Progress, m.Plan.LastReviewAt),
+		ScopeDropped: m.Plan.ScopeDropped,
 	}
 	wt := m.WorktreePath()
 	paths := append(append([]string{}, files...), reviewScope(affected)...)

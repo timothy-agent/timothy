@@ -172,6 +172,11 @@ type ReviewPacket struct {
 	// unit's scope, for the reviewer to judge; the harness opens no
 	// finding for them.
 	ScopeCreep []string
+	// ScopeDropped (D-123, issue #950) names units a rejected plan
+	// attempt carried that the planner's resubmission dropped; carried
+	// on every round, full or findings-only, so the verdict must
+	// address whether that means part of the goal is unfinished.
+	ScopeDropped []string
 }
 
 // findingFiles lists the distinct files the findings name, in order.

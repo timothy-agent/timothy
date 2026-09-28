@@ -710,6 +710,9 @@ export interface PlanUnit {
   title: string
   check_cmd: string
   artifacts?: string[]
+  // evidence_only (D-123) marks a unit whose deliverable is a side
+  // effect (e.g. a GitHub issue) rather than a file: no artifacts.
+  evidence_only?: boolean
   // criteria (D-095) are the unit's acceptance criteria, 2 to 6 short
   // lines the reviewer judges against; scope lists the paths the unit
   // may touch. Both absent on plans written before D-095.
@@ -816,7 +819,9 @@ export interface Mission {
   // before the discover phase existed, or one that hasn't reached it
   // yet.
   discover_notes?: string
-  plan: { units: PlanUnit[]; assumptions?: PlanAssumption[] }
+  // scope_dropped (D-123) names units a rejected plan attempt carried
+  // that the planner's resubmission dropped.
+  plan: { units: PlanUnit[]; assumptions?: PlanAssumption[]; scope_dropped?: string[] }
   progress: ProgressNote[]
   iteration: number
   max_iterations: number

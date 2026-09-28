@@ -92,7 +92,11 @@ func PlanTool() *tools.Tool {
 							"artifacts": {
 								"type": "array",
 								"items": {"type": "string"},
-								"description": "Workspace-relative file path(s) this unit must produce. Required: at least one. Files only — the harness rejects directories."
+								"description": "Workspace-relative file path(s) this unit must produce. Required: at least one, unless evidence_only is true. Files only — the harness rejects directories."
+							},
+							"evidence_only": {
+								"type": "boolean",
+								"description": "Set true when this unit's deliverable is a side effect (a GitHub issue, an API call, external state) rather than a file: no artifacts are required, and check_cmd alone must observe the side effect. Never set this to avoid writing an artifact you could have produced."
 							},
 							"check_cmd": {
 								"type": "string",
@@ -109,7 +113,7 @@ func PlanTool() *tools.Tool {
 								"description": "Workspace-relative files or directory prefixes this unit may touch. Optional: defaults to the directories of its artifacts."
 							}
 						},
-						"required": ["title", "artifacts", "check_cmd", "criteria"]
+						"required": ["title", "check_cmd", "criteria"]
 					}
 				},
 				"infeasible": {
