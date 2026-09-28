@@ -1,4 +1,4 @@
-import { createSSEParser, getToken } from '../api/client'
+import { apiFetch, createSSEParser, getToken } from '../api/client'
 
 export interface Signal {
   kind: string
@@ -36,7 +36,7 @@ export function subscribeEvents(onSignal: (s: Signal) => void, onReady?: () => v
   async function connect() {
     if (stopped) return
     try {
-      const res = await fetch('/v1/events', {
+      const res = await apiFetch('/v1/events', {
         headers: { Authorization: `Bearer ${getToken()}` },
         signal: controller.signal,
       })

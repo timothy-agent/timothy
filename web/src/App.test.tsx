@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { acknowledgeNeedToken } from './api/client'
+import { acknowledgeNeedToken, loginExpiredMessage } from './api/client'
 import App from './App'
 
 // App wires in a lot of background polling (sessions, pending memories,
@@ -199,5 +199,19 @@ describe('Footer version', () => {
     )
     renderAt('/')
     expect(await screen.findByText(`v${__APP_VERSION__} (${__GIT_SHA__})`)).toBeTruthy()
+  })
+})
+
+// An auth proxy in front of Timothy (Caddy + Tinyauth on homelab)
+// redirects every API call to its login page once its session expires.
+describe('Login session expiry', () => {
+  it('shows one sticky sign-in toast however many calls hit the redirect', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ type: 'opaqueredirect', ok: false, status: 0 }))
+    renderAt('/')
+
+    expect(await screen.findByText(loginExpiredMessage)).toBeTruthy()
+    expect(screen.getAllByText(loginExpiredMessage)).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy()
+    expect(screen.queryByLabelText('API token')).toBeNull()
   })
 })

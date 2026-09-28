@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { subscribeLoginExpired } from '../api/client'
 import { subscribeEvents } from './events'
 
 afterEach(() => {
@@ -55,5 +56,18 @@ describe('subscribeEvents', () => {
     const callsAtUnsubscribe = fetchMock.mock.calls.length
     await new Promise((r) => setTimeout(r, 1100))
     expect(fetchMock.mock.calls.length).toBe(callsAtUnsubscribe)
+  })
+
+  it('reports login expiry when the stream is redirected to an auth proxy login', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ type: 'opaqueredirect', ok: false, status: 0 }))
+    const onLoginExpired = vi.fn()
+    const stop = subscribeLoginExpired(onLoginExpired)
+
+    const unsubscribe = subscribeEvents(vi.fn())
+    await vi.waitFor(() => expect(onLoginExpired).toHaveBeenCalledTimes(1))
+
+    unsubscribe()
+    stop()
   })
 })

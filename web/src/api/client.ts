@@ -172,6 +172,40 @@ function emitNeedToken() {
   for (const listener of needTokenListeners) listener()
 }
 
+// subscribeLoginExpired fires when a forward-auth proxy in front of
+// Timothy (e.g. Caddy + Tinyauth) redirects an API call to its login
+// page, meaning the proxy session expired. A failure before any
+// subscriber exists is replayed once to the first one.
+const loginExpiredListeners = new Set<() => void>()
+let pendingLoginExpired = false
+
+export function subscribeLoginExpired(listener: () => void): () => void {
+  loginExpiredListeners.add(listener)
+  if (pendingLoginExpired) {
+    pendingLoginExpired = false
+    listener()
+  }
+  return () => {
+    loginExpiredListeners.delete(listener)
+  }
+}
+
+export const loginExpiredMessage = 'Your login session expired. Sign in again to continue.'
+
+// apiFetch is fetch with redirects surfaced instead of followed: brain
+// never redirects, so any redirect is an auth proxy sending the call to
+// a cross-origin login page, which the browser would otherwise report
+// only as a generic network error.
+export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(input, { ...init, redirect: 'manual' })
+  if (res.type === 'opaqueredirect') {
+    if (loginExpiredListeners.size === 0) pendingLoginExpired = true
+    for (const listener of loginExpiredListeners) listener()
+    throw new ChatError(0, loginExpiredMessage, 'login_expired')
+  }
+  return res
+}
+
 function failChat(status: number, message: string, code?: string, sessionId?: string): never {
   if (status === 401 || code === 'auth_not_configured') emitNeedToken()
   throw new ChatError(status, message, code, sessionId)
@@ -235,7 +269,7 @@ export async function streamLive(
   onEvent: (ev: ChatEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`/v1/sessions/${sessionId}/live`, {
+  const res = await apiFetch(`/v1/sessions/${sessionId}/live`, {
     headers: { Authorization: `Bearer ${getToken()}` },
     signal,
   })
@@ -273,7 +307,7 @@ async function postSSE(
   onEvent: (ev: ChatEvent) => void,
   { signal, onSession }: ChatStreamOptions,
 ): Promise<void> {
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -315,7 +349,7 @@ async function postSSE(
 // request is the plain-JSON counterpart of chatStream: same auth, same
 // structured errors.
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
@@ -410,7 +444,7 @@ export async function setSessionKnowledge(id: string, collections: string[]): Pr
 // code (e.g. "bn"); omitted lets the sidecar auto-detect.
 export async function transcribe(blob: Blob, language?: string): Promise<string> {
   const url = language ? `/v1/transcribe?language=${encodeURIComponent(language)}` : '/v1/transcribe'
-  const res = await fetch(url, {
+  const res = await apiFetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${getToken()}` },
     body: blob,
@@ -445,7 +479,7 @@ export interface AttachmentUpload {
 export async function uploadAttachment(file: File): Promise<AttachmentUpload> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch('/v1/attachments', {
+  const res = await apiFetch('/v1/attachments', {
     method: 'POST',
     headers: { Authorization: `Bearer ${getToken()}` },
     body: form,
@@ -468,7 +502,7 @@ export async function uploadAttachment(file: File): Promise<AttachmentUpload> {
 // rendering (AuthedImage): GET /v1/attachments/{id} requires the
 // bearer header, so a bare <img src> cannot fetch it directly.
 export async function fetchAttachmentBlob(id: string): Promise<Blob> {
-  const res = await fetch(`/v1/attachments/${id}`, {
+  const res = await apiFetch(`/v1/attachments/${id}`, {
     headers: { Authorization: `Bearer ${getToken()}` },
   })
   if (!res.ok) {
@@ -983,7 +1017,7 @@ export async function searchKbDocuments(q = ''): Promise<KbDocument[]> {
 export async function uploadKbDocument(collectionId: string, file: File): Promise<KbDocument> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch(`/v1/admin/kb/collections/${collectionId}/documents`, {
+  const res = await apiFetch(`/v1/admin/kb/collections/${collectionId}/documents`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${getToken()}` },
     body: form,
@@ -1025,7 +1059,7 @@ export async function reingestKbDocument(id: string): Promise<void> {
 export async function uploadKbDocumentAuto(file: File): Promise<KbDocument> {
   const form = new FormData()
   form.append('file', file)
-  const res = await fetch('/v1/admin/kb/documents', {
+  const res = await apiFetch('/v1/admin/kb/documents', {
     method: 'POST',
     headers: { Authorization: `Bearer ${getToken()}` },
     body: form,
@@ -1580,7 +1614,7 @@ export async function listMissionFiles(
 // it via a programmatic anchor click: plain hrefs can't carry the
 // bearer token from localStorage.
 async function fetchBlobDownload(path: string, fallbackName: string): Promise<void> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     headers: { Authorization: `Bearer ${getToken()}` },
   })
   if (!res.ok) {
@@ -1643,7 +1677,7 @@ export async function fetchMissionFileBlob(
   path: string,
   cap: number = missionFilePreviewCap,
 ): Promise<Blob> {
-  const res = await fetch(`/v1/missions/${id}/files/${encodeFilePath(path)}`, {
+  const res = await apiFetch(`/v1/missions/${id}/files/${encodeFilePath(path)}`, {
     headers: { Authorization: `Bearer ${getToken()}` },
   })
   if (!res.ok) {

@@ -2,7 +2,7 @@ import { Brain, ChartColumn, ChevronRight, House, KeyRound, Library, MessageCirc
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { toast, Toaster } from 'sonner'
-import { backendVersion, getToken, subscribeNeedToken } from './api/client'
+import { backendVersion, getToken, loginExpiredMessage, subscribeLoginExpired, subscribeNeedToken } from './api/client'
 import { BrandMark } from './components/BrandMark'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
@@ -378,6 +378,20 @@ function App() {
       })
     })
   }, [])
+
+  // One sticky toast however many calls fail: the fixed id makes sonner
+  // update it in place instead of stacking copies.
+  useEffect(
+    () =>
+      subscribeLoginExpired(() => {
+        toast.error(loginExpiredMessage, {
+          id: 'login-expired',
+          duration: Infinity,
+          action: { label: 'Sign in', onClick: () => window.location.reload() },
+        })
+      }),
+    [],
+  )
 
   // Primes the shared AudioContext on the app's FIRST real user
   // gesture: a permission toast can fire from a background SSE signal

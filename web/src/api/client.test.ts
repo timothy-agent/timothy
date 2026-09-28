@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   acknowledgeNeedToken,
+  apiFetch,
   ChatError,
   chatStream,
   consumeTokenFragment,
@@ -17,6 +18,7 @@ import {
   openMissionPR,
   patchBudget,
   pushMission,
+  subscribeLoginExpired,
   subscribeNeedToken,
   timothyAuthErrorMessage,
   usageBudget,
@@ -509,5 +511,72 @@ describe('mission artifacts and push', () => {
     clickSpy.mockRestore()
     vi.mocked(URL.createObjectURL).mockRestore?.()
     vi.mocked(URL.revokeObjectURL).mockRestore?.()
+  })
+})
+
+describe('login expiry (forward-auth proxy redirect)', () => {
+  const stubRedirect = () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi.fn().mockResolvedValue({ type: 'opaqueredirect', ok: false, status: 0 })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  it('asks fetch not to follow redirects', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })))
+    await apiFetch('/v1/x', { method: 'POST' })
+    expect(fetch).toHaveBeenCalledWith('/v1/x', { method: 'POST', redirect: 'manual' })
+  })
+
+  it('throws login_expired and notifies subscribers on a redirect', async () => {
+    stubRedirect()
+    const listener = vi.fn()
+    const stop = subscribeLoginExpired(listener)
+
+    const err = await listProviders().catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ChatError)
+    expect((err as ChatError).code).toBe('login_expired')
+    expect(listener).toHaveBeenCalledTimes(1)
+    stop()
+  })
+
+  it('does not open the token dialog on a redirect', async () => {
+    stubRedirect()
+    const needToken = vi.fn()
+    const stopNeed = subscribeNeedToken(needToken)
+    const stopLogin = subscribeLoginExpired(() => {})
+
+    await expect(listProviders()).rejects.toBeInstanceOf(ChatError)
+    expect(needToken).not.toHaveBeenCalled()
+    stopNeed()
+    stopLogin()
+  })
+
+  it('replays a redirect to the first late subscriber only once', async () => {
+    stubRedirect()
+    await expect(listProviders()).rejects.toBeInstanceOf(ChatError)
+
+    const first = vi.fn()
+    const stopFirst = subscribeLoginExpired(first)
+    expect(first).toHaveBeenCalledTimes(1)
+    const second = vi.fn()
+    const stopSecond = subscribeLoginExpired(second)
+    expect(second).not.toHaveBeenCalled()
+    stopFirst()
+    stopSecond()
+  })
+
+  it('does not notify on brain\'s own 401', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: 'unauthorized', message: 'no' }), { status: 401 })),
+    )
+    const listener = vi.fn()
+    const stop = subscribeLoginExpired(listener)
+
+    await expect(listProviders()).rejects.toBeInstanceOf(ChatError)
+    expect(listener).not.toHaveBeenCalled()
+    stop()
   })
 })
