@@ -276,21 +276,16 @@ type piUsage struct {
 
 type piAssistantMessage struct {
 	Role string `json:"role"`
-	// Content is decoded lazily via textBlocks: pi 0.87.1 added a
-	// system-role message whose content is a plain string (the
-	// preamble), not a content-block array like every other role, so a
-	// fixed []piContentBlock field here would fail the whole message
-	// array's decode the moment a system entry shows up.
+	// Content is raw: pi 0.87.1 system messages carry a plain string,
+	// not a content-block array.
 	Content      json.RawMessage `json:"content"`
 	Usage        piUsage         `json:"usage"`
 	StopReason   string          `json:"stopReason"`
 	ErrorMessage string          `json:"errorMessage"`
 }
 
-// textBlocks decodes Content as a content-block array and returns its
-// text blocks' text, joined. A role whose content is a plain string
-// (system's preamble) or any other non-array shape carries no text
-// blocks, and decodes to nil rather than an error.
+// textBlocks returns the joined text blocks of Content, or "" when
+// Content is not a block array.
 func (m piAssistantMessage) textBlocks() string {
 	var blocks []piContentBlock
 	if err := json.Unmarshal(m.Content, &blocks); err != nil {

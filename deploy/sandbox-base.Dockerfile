@@ -41,13 +41,9 @@ RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @anthropic-ai/claude-code@2.1.27
 RUN NPM_CONFIG_PREFIX=/usr/local npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.87.1 \
     && pi --version
 
-# Headless OpenAI Codex CLI, same rationale as claude/pi above. Fixture
-# dir stays testdata/codex-0.147.0 on this bump - re-recording needs a
-# live run against local Ollama (issue #951) and that run hung against
-# this pin (codex 0.157.1's own background websocket sync retrying
-# against api.openai.com, unrelated to the custom provider under test);
-# parser tests still pass against the kept 0.147.0 fixtures, no known
-# wire-format drift.
+# Headless OpenAI Codex CLI, same rationale as claude/pi above.
+# Fixtures stay testdata/codex-0.147.0: re-recording 0.157.1 hung on
+# its own background sync to api.openai.com (issue #951).
 RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @openai/codex@0.157.1 \
     && codex --version
 
@@ -68,20 +64,10 @@ RUN NPM_CONFIG_PREFIX=/usr/local npm install -g opencode-ai@1.18.32 \
 # bump: read the version off the installer script, refresh both
 # checksums, re-record fixtures if the wire format moved.
 #
-# D-120 (issue #947): cursor-agent self-updates on start, downloading
-# a per-arch package (129-146 MB of node/cursor-agent-sea/cursor-agent-
-# worker-sea) into ~/.local/share/cursor-agent/versions/ and extracting
-# it; the sandbox fsize ulimit is 100 MB (D-106), so tar dies with
-# SIGXFSZ on every mission and dumps core into the worktree. The
-# minified bundle's own commander setup (`index.js`, hidden global
-# option) shows an undocumented `--disable-auto-update` flag that
-# short-circuits the exact same gate the CLI already uses to skip
-# updates on a "static" channel (`o.disableAutoUpdate||"static"===
-# channel||setTimeout(updateCursorAgent,...)`), before the background
-# update check is even scheduled - never raise fsize to work around
-# this. The cursor adapter (executor/cursor.go) always passes this
-# flag; verified by running cursor-agent in a container with the flag
-# and confirming no versions/ directory appears under HOME.
+# D-120 (issue #947): cursor-agent self-updates on start and the
+# download exceeds the fsize ulimit (D-106), so tar dies with SIGXFSZ
+# and dumps core. The adapter passes the hidden --disable-auto-update
+# flag; never raise fsize instead.
 ARG TARGETARCH
 ARG CURSOR_VERSION=2026.09.26-dd393fe
 # Per-arch tarball checksums (release builds are multi-arch).
