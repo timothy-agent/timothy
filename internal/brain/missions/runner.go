@@ -1578,26 +1578,32 @@ func tryParseFindings(args json.RawMessage) (discoverReport, bool) {
 }
 
 // discoverEnvironmentNudge asks the discover turn to report the
-// project's toolchain only while the mission has none yet (issue
-// #495): a repo whose markers already decided it, or an operator's
-// explicit pick, is not up for debate.
+// project's toolchain while the mission has none yet or a repo marker
+// set it (issue #495); an operator's explicit pick or a discover-set
+// value is not up for debate.
 func (r *nativeRunner) discoverEnvironmentNudge(m Mission) string {
-	if m.Kind != KindCoding || m.Environment != "" {
+	if m.Kind != KindCoding || (m.Environment != "" && (m.EnvironmentMarker == "" || m.EnvironmentMarker == "discover")) {
 		return ""
 	}
 	return " Also fill the environment field with the sandbox toolchain this project needs (from what is in the workspace, or what the goal asks to build); when the language is none of the listed values, leave environment empty and name it in the stack field."
 }
 
-// applyDiscoverReport persists the report's environment when the
-// mission has none yet and the value is a registered image key other
-// than base (issue #495); the driver recreates the sandbox container
-// afterwards. A stack the sandbox has no image for is prefixed onto
+// applyDiscoverReport persists the report's environment when it is a
+// registered image key other than base and the mission has none yet or
+// a repo marker set a different one (issue #495); an operator-explicit
+// or discover-set value is kept. The driver recreates the sandbox
+// container afterwards. A stack the sandbox has no image for is prefixed onto
 // the findings so the planner budgets a bootstrap unit instead of
 // finding out at build time.
 func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, report discoverReport) string {
-	if m.Kind == KindCoding && m.Environment == "" && r.environmentSink != nil {
+	if m.Kind == KindCoding && r.environmentSink != nil {
 		env := strings.ToLower(strings.TrimSpace(report.Environment))
-		if env != "" && env != "base" && Environments[env] {
+		overridable := m.Environment == "" ||
+			(m.EnvironmentMarker != "" && m.EnvironmentMarker != "discover" && env != m.Environment)
+		if env != "" && env != "base" && Environments[env] && overridable {
+			if m.Environment != "" {
+				r.log.Info("mission discover: overriding marker-detected environment", "mission_id", m.ID, "from", m.Environment, "to", env, "marker", m.EnvironmentMarker)
+			}
 			if err := r.environmentSink.SetEnvironment(ctx, m.ID, env, "discover", nil); err != nil {
 				r.log.Warn("mission discover: set environment failed", "mission_id", m.ID, "environment", env, "error", err)
 			}

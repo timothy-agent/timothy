@@ -181,6 +181,34 @@ func TestMissionCRUD(t *testing.T) {
 	}
 }
 
+// TestSetEnvironmentPersistsMarker: SetEnvironment writes the marker
+// next to the environment and Get reads both back.
+func TestSetEnvironmentPersistsMarker(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	id, err := s.Create(ctx, Mission{Goal: marker + "env marker", Kind: KindCoding, Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if m, err := s.Get(ctx, id); err != nil || m.Environment != "" || m.EnvironmentMarker != "" {
+		t.Fatalf("Get after Create = %+v, %v, want empty environment and marker", m, err)
+	}
+	if err := s.SetEnvironment(ctx, id, "node", "package.json", nil); err != nil {
+		t.Fatalf("SetEnvironment: %v", err)
+	}
+	if err := s.SetEnvironment(ctx, id, "php", "discover", nil); err != nil {
+		t.Fatalf("SetEnvironment override: %v", err)
+	}
+	m, err := s.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Environment != "php" || m.EnvironmentMarker != "discover" {
+		t.Fatalf("Get = environment %q marker %q, want php/discover", m.Environment, m.EnvironmentMarker)
+	}
+}
+
 // TestGetMapsOnlyNoRowsToNotFound: an unknown or malformed id is
 // ErrNotFound; any other failure (here a cancelled context) is returned
 // as itself so events consumers retry instead of treating the mission

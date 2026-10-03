@@ -141,9 +141,13 @@ type Mission struct {
 	// coding mission's container runs: "" is the base image. Unlike
 	// Harness, there is no settings default — precedence is explicit
 	// request -> repo markers right after the clone -> the discover
-	// turn's own report -> base (issue #495). Sticky once set
-	// (Store.SetEnvironment). General missions never set this.
-	Environment       string `json:"environment,omitempty"`
+	// turn's own report -> base (issue #495). Set by
+	// Store.SetEnvironment; the discover report may replace a
+	// marker-detected value once. General missions never set this.
+	Environment string `json:"environment,omitempty"`
+	// EnvironmentMarker records what set Environment: "" for an
+	// explicit operator value, "discover", or the repo marker file.
+	EnvironmentMarker string `json:"environment_marker,omitempty"`
 	PendingPermission string `json:"pending_permission,omitempty"`
 	// PendingPermissionTool/Args/Danger/Rationale describe the parked
 	// tool call for the UI — set alongside PendingPermission whenever a

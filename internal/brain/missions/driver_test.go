@@ -204,6 +204,7 @@ func (f *fakeStore) SetEnvironment(ctx context.Context, id, environment, marker 
 	defer f.mu.Unlock()
 	m := f.missions[id]
 	m.Environment = environment
+	m.EnvironmentMarker = marker
 	f.missions[id] = m
 	return nil
 }
