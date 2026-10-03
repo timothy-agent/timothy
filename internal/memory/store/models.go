@@ -30,20 +30,23 @@ const (
 )
 
 // ActorUser marks a memory the user stated explicitly ("Timothy,
-// remember…"); those skip the pending stage.
+// remember…"); those skip the pending stage unless RequireReview is set.
 const ActorUser = "user"
 
 // Memory is one stored fact. Content is atomic and self-contained
 // (absolute dates, no pronouns needing context).
 type Memory struct {
-	ID              string
-	Type            MemoryType
-	Content         string
-	Embedding       Vector
-	EntityRefs      []string
-	SourceSession   string
-	SourceSeq       int64
-	Actor           string
+	ID            string
+	Type          MemoryType
+	Content       string
+	Embedding     Vector
+	EntityRefs    []string
+	SourceSession string
+	SourceSeq     int64
+	Actor         string
+	// RequireReview keeps a user-actor insertion pending; it is an
+	// insertion policy input and is not persisted.
+	RequireReview   bool
 	CreatedAt       time.Time
 	LastConfirmedAt time.Time
 	SupersededBy    string

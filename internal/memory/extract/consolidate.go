@@ -208,7 +208,7 @@ func (c *Consolidator) Run(ctx context.Context) (Summary, error) {
 // logged and skipped, never an error - the queue is already correct
 // by the time this pass would have acted.
 func (c *Consolidator) dedupePending(ctx context.Context) (deduped int, err error) {
-	pairs, err := c.store.RedundantPendingPairs(ctx, nearDupSimilarity)
+	pairs, err := c.store.RedundantPendingPairs(ctx, NearDupSimilarity)
 	if err != nil {
 		return 0, err
 	}
@@ -235,7 +235,7 @@ func (c *Consolidator) dedupePending(ctx context.Context) (deduped int, err erro
 // similarity edges), asks the mini category for one canonical fact
 // per group, and applies the merges that survive the guard.
 func (c *Consolidator) mergeNearDups(ctx context.Context) (merged, rejected int, err error) {
-	pairs, err := c.store.NearDupPairs(ctx, nearDupSimilarity)
+	pairs, err := c.store.NearDupPairs(ctx, NearDupSimilarity)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -426,11 +426,11 @@ func (c *Consolidator) mergedContent(ctx context.Context, lines []string) (strin
 	// known - there is no single caller-side sensitivity flag that
 	// would even apply here.
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
-		Route: sideRoute,
-		Purpose:      "memory-consolidate",
-		System:       mergeSystem,
-		Messages:     []provider.Message{{Role: "user", Content: strings.Join(lines, "\n")}},
-		MaxTokens:    mergeMaxTokens,
+		Route:     sideRoute,
+		Purpose:   "memory-consolidate",
+		System:    mergeSystem,
+		Messages:  []provider.Message{{Role: "user", Content: strings.Join(lines, "\n")}},
+		MaxTokens: mergeMaxTokens,
 	})
 	if err != nil {
 		return "", err

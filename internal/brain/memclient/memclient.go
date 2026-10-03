@@ -67,34 +67,53 @@ func (c *Client) Extract(ctx context.Context, sessionID string, sourceSeq int64,
 	return out.MemoryIDs, nil
 }
 
-// Add stores a user-explicit memory (actor=user → active) and
-// returns its id.
-func (c *Client) Add(ctx context.Context, content, memoryType string) (string, error) {
-	body, err := json.Marshal(map[string]string{"content": content, "type": memoryType})
+// Add stores a user-explicit memory unless the turn's Go-side trust
+// gate requires review; it returns the id and resulting status.
+func (c *Client) Add(ctx context.Context, content, memoryType string, requireReview bool) (string, string, error) {
+	body, err := json.Marshal(struct {
+		Content       string `json:"content"`
+		Type          string `json:"type"`
+		RequireReview bool   `json:"require_review"`
+	}{
+		Content: content, Type: memoryType, RequireReview: requireReview,
+	})
 	if err != nil {
-		return "", fmt.Errorf("memclient: marshal: %w", err)
+		return "", "", fmt.Errorf("memclient: marshal: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/memories", bytes.NewReader(body))
 	if err != nil {
-		return "", fmt.Errorf("memclient: request: %w", err)
+		return "", "", fmt.Errorf("memclient: request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("memclient: memoryd unreachable: %w", err)
+		return "", "", fmt.Errorf("memclient: memoryd unreachable: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return "", fmt.Errorf("memclient: memoryd http %d: %s", resp.StatusCode, string(msg))
+		return "", "", fmt.Errorf("memclient: memoryd http %d: %s", resp.StatusCode, string(msg))
 	}
 	var out struct {
-		ID string `json:"id"`
+		ID     string `json:"id"`
+		Status string `json:"status"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", fmt.Errorf("memclient: decode: %w", err)
+		return "", "", fmt.Errorf("memclient: decode: %w", err)
 	}
-	return out.ID, nil
+	switch out.Status {
+	case "active", "pending":
+		if out.ID == "" {
+			return "", "", fmt.Errorf("memclient: memoryd returned %s status without an id", out.Status)
+		}
+	case "dropped":
+		if out.ID != "" {
+			return "", "", fmt.Errorf("memclient: memoryd returned dropped status with id %q", out.ID)
+		}
+	default:
+		return "", "", fmt.Errorf("memclient: memoryd returned unknown status %q", out.Status)
+	}
+	return out.ID, out.Status, nil
 }
 
 // Memory is one retrieved long-term memory.

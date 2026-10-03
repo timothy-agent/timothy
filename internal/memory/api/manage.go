@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/SumonMSelim/timothy/internal/memory/extract"
 	"github.com/SumonMSelim/timothy/internal/memory/store"
 )
 
@@ -15,6 +16,8 @@ import (
 type Manager interface {
 	ListByStatus(ctx context.Context, status store.Status, types ...store.MemoryType) ([]store.Memory, error)
 	Insert(ctx context.Context, m store.Memory) (string, error)
+	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, status store.Status, ok bool, err error)
+	Confirm(ctx context.Context, id string) error
 	Promote(ctx context.Context, id string) error
 	Reject(ctx context.Context, id string) error
 	Supersede(ctx context.Context, oldID, newID string) error
@@ -71,12 +74,13 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"memories": out})
 }
 
-// handleAdd stores a user-explicit memory ("Timothy, remember…") —
-// actor=user activates it directly (D-011).
+// handleAdd stores a user-explicit memory. Tainted or sensitive content
+// stays pending for review; clean explicit memories still activate.
 func (a *API) handleAdd(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Content string `json:"content"`
-		Type    string `json:"type,omitempty"`
+		Content       string `json:"content"`
+		Type          string `json:"type,omitempty"`
+		RequireReview bool   `json:"require_review,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
@@ -94,13 +98,49 @@ func (a *API) handleAdd(w http.ResponseWriter, r *http.Request) {
 	m := store.Memory{
 		Type: store.MemoryType(req.Type), Content: req.Content,
 		Actor: store.ActorUser, Confidence: 1,
+		RequireReview: req.RequireReview || extract.RequiresReview(req.Content),
 	}
-	// Best-effort embedding: a user memory without a vector still
-	// serves the text and entity legs.
+	// Best-effort embedding: a memory without a vector still serves the
+	// text and entity legs, though similarity checks are unavailable.
 	if vecs, _, err := a.embed.Embed(r.Context(), []string{req.Content}, "memory-remember"); err != nil {
 		a.log.Warn("remember embedding failed; stored without vector", "error", err)
-	} else {
+	} else if len(vecs) > 0 {
 		m.Embedding = store.Vector(vecs[0])
+	} else {
+		a.log.Warn("remember embedding returned no vector")
+	}
+
+	if len(m.Embedding) > 0 {
+		dupID, similarity, status, found, err := a.store.NearestActive(r.Context(), m.Embedding)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, "dedup_failed", err.Error())
+			return
+		}
+		if found && similarity >= extract.NearDupSimilarity {
+			switch status {
+			case store.StatusRejected:
+				a.log.Info("memory dropped as near-duplicate of rejected fact",
+					"of", dupID, "similarity", similarity)
+				writeAddResult(w, "", "dropped")
+				return
+			case store.StatusPending:
+				a.log.Info("memory duplicate matched pending row; skipped",
+					"of", dupID, "similarity", similarity)
+				writeAddResult(w, dupID, string(store.StatusPending))
+				return
+			case store.StatusActive:
+				if m.RequireReview {
+					break
+				}
+				if err := a.store.Confirm(r.Context(), dupID); err != nil {
+					a.log.Warn("confirm on duplicate failed; fact still dropped", "of", dupID, "error", err)
+				}
+				a.log.Info("memory duplicate reinforced existing row",
+					"of", dupID, "similarity", similarity)
+				writeAddResult(w, dupID, string(store.StatusActive))
+				return
+			}
+		}
 	}
 
 	id, err := a.store.Insert(r.Context(), m)
@@ -108,8 +148,16 @@ func (a *API) handleAdd(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "insert_failed", err.Error())
 		return
 	}
+	status := store.StatusActive
+	if m.RequireReview {
+		status = store.StatusPending
+	}
+	writeAddResult(w, id, string(status))
+}
+
+func writeAddResult(w http.ResponseWriter, id, status string) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"id": id})
+	_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "status": status})
 }
 
 // handleResolve answers a queue card: confirm, reject, or

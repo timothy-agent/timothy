@@ -194,6 +194,21 @@ func TestInsertStagesAgentWrites(t *testing.T) {
 	if ugot.Status != StatusActive {
 		t.Fatalf("user-explicit status = %s, want active", ugot.Status)
 	}
+
+	reviewRequired := mem("tainted remember content")
+	reviewRequired.Actor = ActorUser
+	reviewRequired.RequireReview = true
+	rid, err := s.Insert(ctx, reviewRequired)
+	if err != nil {
+		t.Fatalf("Insert review-required user memory: %v", err)
+	}
+	rgot, err := s.Get(ctx, rid)
+	if err != nil {
+		t.Fatalf("Get review-required memory: %v", err)
+	}
+	if rgot.Status != StatusPending {
+		t.Fatalf("review-required user status = %s, want pending", rgot.Status)
+	}
 }
 
 func TestInsertStoresEmbedding(t *testing.T) {

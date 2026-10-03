@@ -22,7 +22,7 @@ func TestDescriptionsNameTheirContrastedTool(t *testing.T) {
 		{KBRead(func(context.Context, string) (KBDocument, error) { return KBDocument{}, nil }), []string{"search_kb"}},
 		{WebSearch(""), []string{"fetch_url"}},
 		{WebFetch(WebFetchConfig{}), []string{"search_web"}},
-		{Remember(func(context.Context, string, string) (string, error) { return "", nil }), []string{"search_memory"}},
+		{Remember(func(context.Context, string, string) (string, string, error) { return "", "active", nil }), []string{"search_memory"}},
 		{Shell(ShellConfig{}), []string{"write_file"}},
 		{WriteFile(WriteFileConfig{}), []string{"shell"}},
 		{RetrieveOutput(nil), []string{"shell", "search_web"}},

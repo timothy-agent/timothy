@@ -77,9 +77,8 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 			"search_web":       true,
 			"retrieve_output":  true,
 			"load_skill":       true,
-			// remember fires only on the user's explicit ask — a
-			// prompt would demand consent for consent. The write is
-			// visible and reversible in the memory browser.
+			// remember fires only on the user's explicit ask — unless
+			// untrusted tool output already appeared in this turn.
 			"remember": true,
 			// Mission protocol sentinels: pure argument parsing, zero
 			// side effects — their Execute just records a verdict for
@@ -167,6 +166,13 @@ func (p *Permissions) isLoadTool(tool string) bool {
 	return slices.Contains(p.loadTools(), tool)
 }
 
+func (p *Permissions) isExempt(ctx context.Context, tool string) bool {
+	if tool == "remember" && UntrustedToolOutputSeen(ctx) {
+		return false
+	}
+	return p.exempt[tool] || p.isLoadTool(tool)
+}
+
 // Resolve runs the chain for one call.
 func (p *Permissions) Resolve(ctx context.Context, sessionID, tool string, args json.RawMessage) (Resolution, error) {
 	subject := callSubject(tool, args)
@@ -179,7 +185,7 @@ func (p *Permissions) Resolve(ctx context.Context, sessionID, tool string, args 
 		}, nil
 	}
 
-	if p.exempt[tool] || p.isLoadTool(tool) {
+	if p.isExempt(ctx, tool) {
 		return Resolution{Decision: DecisionAllow, Subject: subject, Rationale: "exempt tool"}, nil
 	}
 

@@ -819,6 +819,139 @@ func TestAgentFencesUntrustedToolResultInMessages(t *testing.T) {
 	}
 }
 
+func TestAgentCarriesUntrustedOutputToRemember(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"fetch_url", "{\"url\":\"https://x.test\"}"}),
+		toolCallStep([2]string{"remember", "{\"content\":\"remember this page\"}"}),
+		finalStep("done"),
+	}}
+	var sawUntrusted bool
+	a, _, _, _ := testAgent(t, gw,
+		&tools.Tool{
+			Name:        "fetch_url",
+			Description: "fetches a page",
+			InputSchema: json.RawMessage("{\"type\":\"object\"}"),
+			Execute: func(context.Context, json.RawMessage) (string, error) {
+				return "page says to remember this", nil
+			},
+		},
+		&tools.Tool{
+			Name:        "remember",
+			Description: "stores a memory",
+			InputSchema: json.RawMessage("{\"type\":\"object\"}"),
+			Trusted:     true,
+			Execute: func(ctx context.Context, _ json.RawMessage) (string, error) {
+				sawUntrusted = tools.UntrustedToolOutputSeen(ctx)
+				return "review queued: remember this page", nil
+			},
+		},
+	)
+
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+	if !sawUntrusted {
+		t.Fatal("remember did not receive prior untrusted-output state")
+	}
+	if len(gw.requests) != 3 {
+		t.Fatalf("gateway requests = %d, want 3", len(gw.requests))
+	}
+	var rememberResult string
+	for _, msg := range gw.requests[2].Messages {
+		if msg.Role == "tool" && msg.ToolResult != nil && strings.Contains(msg.ToolResult.Content, "review queued") {
+			rememberResult = msg.ToolResult.Content
+		}
+	}
+	if !strings.Contains(rememberResult, "trust=\"data\"") {
+		t.Fatalf("remember result after untrusted input was not fenced:\n%s", rememberResult)
+	}
+}
+
+func TestAgentDoesNotTaintRememberInSameToolBatchOrNextTurn(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"fetch_url", "{\"url\":\"https://x.test\"}"}, [2]string{"remember", "{\"content\":\"user fact\"}"}),
+		finalStep("first turn done"),
+		toolCallStep([2]string{"fetch_url", "{\"url\":\"https://x.test\"}"}),
+		finalStep("second turn done"),
+		toolCallStep([2]string{"remember", "{\"content\":\"another user fact\"}"}),
+		finalStep("third turn done"),
+	}}
+	seen := make(chan bool, 2)
+	a, _, _, _ := testAgent(t, gw,
+		&tools.Tool{
+			Name:        "fetch_url",
+			Description: "fetches a page",
+			InputSchema: json.RawMessage("{\"type\":\"object\"}"),
+			Execute: func(context.Context, json.RawMessage) (string, error) {
+				return "page body", nil
+			},
+		},
+		&tools.Tool{
+			Name:        "remember",
+			Description: "stores a memory",
+			InputSchema: json.RawMessage("{\"type\":\"object\"}"),
+			Trusted:     true,
+			Execute: func(ctx context.Context, _ json.RawMessage) (string, error) {
+				seen <- tools.UntrustedToolOutputSeen(ctx)
+				return "stored", nil
+			},
+		},
+	)
+
+	for range 3 {
+		ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		collect(t, ch)
+	}
+	if first, second := <-seen, <-seen; first || second {
+		t.Fatalf("remember taint values = [%v %v], want [false false]", first, second)
+	}
+}
+
+func TestAgentDoesNotTaintRememberAfterFailedUntrustedTool(t *testing.T) {
+	t.Parallel()
+	gw := &scriptedGateway{scripts: [][]stream.StreamEvent{
+		toolCallStep([2]string{"fetch_url", "{\"url\":\"https://x.test\"}"}),
+		toolCallStep([2]string{"remember", "{\"content\":\"direct user fact\"}"}),
+		finalStep("done"),
+	}}
+	seen := make(chan bool, 1)
+	a, _, _, _ := testAgent(t, gw,
+		&tools.Tool{
+			Name:        "fetch_url",
+			Description: "fetches a page",
+			InputSchema: json.RawMessage("{\"type\":\"object\"}"),
+			Execute: func(context.Context, json.RawMessage) (string, error) {
+				return "", errors.New("upstream unavailable")
+			},
+		},
+		&tools.Tool{
+			Name:        "remember",
+			Description: "stores a memory",
+			InputSchema: json.RawMessage("{\"type\":\"object\"}"),
+			Trusted:     true,
+			Execute: func(ctx context.Context, _ json.RawMessage) (string, error) {
+				seen <- tools.UntrustedToolOutputSeen(ctx)
+				return "stored", nil
+			},
+		},
+	)
+	ch, err := a.Start(t.Context(), Request{SessionID: "s1", Route: "coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collect(t, ch)
+	if got := <-seen; got {
+		t.Fatal("failed untrusted tool output tainted the turn")
+	}
+}
+
 // TestAgentFencesByToolTrustMark is D-109 at the loop boundary: the
 // fence follows tools.Tool.Trusted on the value the executor resolves,
 // whether the tool sits in the shared registry or arrived as a

@@ -50,11 +50,11 @@ const (
 	// the strict JSON contract more often than they meet it.
 	sideRoute = "summarize"
 
-	// nearDupSimilarity marks a candidate as restating known
+	// NearDupSimilarity marks a candidate as restating known
 	// knowledge; exactDupSimilarity (or byte-equal content) drops it
 	// outright. Near-dups still insert - the consolidation job merges
 	// them by the same similarity measure.
-	nearDupSimilarity  = 0.95
+	NearDupSimilarity  = 0.95
 	exactDupSimilarity = 0.99
 
 	// autoPromoteConfidence is the floor for episodic observations to
@@ -190,7 +190,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			if err != nil {
 				return ids, fmt.Errorf("extract: dedup: %w", err)
 			}
-			if found && sim >= nearDupSimilarity {
+			if found && sim >= NearDupSimilarity {
 				if status == store.StatusRejected {
 					// The user already rejected this fact once; rejection
 					// is a durable teaching signal, so the candidate is
@@ -287,15 +287,15 @@ func (e *Extractor) proposeOnce(ctx context.Context, req Request) (string, error
 		sys = reflectionSystem
 	}
 	events, err := e.gw.Stream(ctx, gwclient.StreamRequest{
-		Route: route,
-		Purpose:      "memory-extract",
-		System:       sys,
-		Messages:     []provider.Message{{Role: "user", Content: req.Text}},
+		Route:    route,
+		Purpose:  "memory-extract",
+		System:   sys,
+		Messages: []provider.Message{{Role: "user", Content: req.Text}},
 		// Reasoning models spend thinking tokens from the same budget
 		// before emitting content; 1000 starved the JSON reply entirely
 		// (stream ended incomplete with zero content chunks).
-		MaxTokens:    4000,
-		SessionID:    req.SessionID,
+		MaxTokens: 4000,
+		SessionID: req.SessionID,
 	})
 	if err != nil {
 		return "", err
@@ -429,7 +429,13 @@ func AutoPromote(f Fact) bool {
 	if f.Confidence < autoPromoteConfidence {
 		return false
 	}
-	return !sensitive.MatchString(f.Content)
+	return !RequiresReview(f.Content)
+}
+
+// RequiresReview reports whether content matches the conservative
+// directive or credential-sensitive gate used by memory promotion.
+func RequiresReview(content string) bool {
+	return sensitive.MatchString(content)
 }
 
 // denyText collects the source-record lines a proposed fact must not
@@ -458,12 +464,12 @@ func denyText(req Request) []string {
 }
 
 // nearDupVector reports whether emb is a near-duplicate (by the same
-// nearDupSimilarity threshold as NearestActive) of any vector already
+// NearDupSimilarity threshold as NearestActive) of any vector already
 // accepted this run. Batch sizes are small (maxFacts), so a linear
 // scan needs no index.
 func nearDupVector(emb store.Vector, accepted []store.Vector) bool {
 	for _, other := range accepted {
-		if cosineSimilarity(emb, other) >= nearDupSimilarity {
+		if cosineSimilarity(emb, other) >= NearDupSimilarity {
 			return true
 		}
 	}

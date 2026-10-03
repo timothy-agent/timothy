@@ -97,6 +97,26 @@ func TestAutoPromote(t *testing.T) {
 	}
 }
 
+func TestRequiresReview(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		content string
+		want    bool
+	}{
+		{content: "The user always wants weekly reports emailed.", want: true},
+		{content: "The user's API token is stored in the vault.", want: true},
+		{content: "The user visited Lisbon on 2026-07-05.", want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.content, func(t *testing.T) {
+			t.Parallel()
+			if got := RequiresReview(tc.content); got != tc.want {
+				t.Fatalf("RequiresReview(%q) = %v, want %v", tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBoundedWindow(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

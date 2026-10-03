@@ -28,11 +28,11 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
-	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gitevents"
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
@@ -263,7 +263,7 @@ func main() {
 		return flags.Enabled(ctx, settings.KeyKBLocalOCR)
 	}, app.Log)
 
-	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, flags.Location, mc.Add, app.Log, toolCalls, sensitiveRoute, fxStore, kbEnrich)
+	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, flags.Location, rememberWithTurnTrust(mc), app.Log, toolCalls, sensitiveRoute, fxStore, kbEnrich)
 	if buildErr != nil {
 		fmt.Fprintln(os.Stderr, buildErr)
 		os.Exit(1)
@@ -2021,6 +2021,12 @@ func (r turnRouter) RouteForRole(ctx context.Context, role string) (string, bool
 // buildAgent assembles the compiled-in tool registry and its guard
 // rails (D-009, D-010). The returned builtin set is the fixed half of
 // the tool surface; connector tools join it via swapAgentTools.
+func rememberWithTurnTrust(mc *memclient.Client) builtin.RememberFunc {
+	return func(ctx context.Context, content, memoryType string) (string, string, error) {
+		return mc.Add(ctx, content, memoryType, tools.UntrustedToolOutputSeen(ctx))
+	}
+}
+
 func buildAgent(gwc *gwclient.Client, store *session.Store, db *pgpool.Pool, workspace, searxngURL, markitdownURL string, packs []skills.Skill, skillAllow func(context.Context, string) bool, defaultLoc func(context.Context) *time.Location, remember builtin.RememberFunc, log *slog.Logger, toolCalls *prometheus.CounterVec, sensitiveRoute func(context.Context) string, fxStore *fxrates.Store, kbEnrich *kb.Enricher) (*loop.Agent, *loop.PermBroker, *tools.Outputs, []*tools.Tool, *tools.Permissions, error) {
 	outputs := tools.NewOutputs(db)
 	set := []*tools.Tool{

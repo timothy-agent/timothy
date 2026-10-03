@@ -72,3 +72,18 @@ func SessionIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(sessionIDKey{}).(string)
 	return id
 }
+
+type untrustedToolOutputSeenKey struct{}
+
+// WithUntrustedToolOutputSeen marks later tool calls in this turn as
+// having model-visible untrusted output in their context.
+func WithUntrustedToolOutputSeen(ctx context.Context) context.Context {
+	return context.WithValue(ctx, untrustedToolOutputSeenKey{}, true)
+}
+
+// UntrustedToolOutputSeen reports whether an earlier tool call in this
+// turn returned non-empty, untrusted content to the model.
+func UntrustedToolOutputSeen(ctx context.Context) bool {
+	seen, _ := ctx.Value(untrustedToolOutputSeenKey{}).(bool)
+	return seen
+}

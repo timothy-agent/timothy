@@ -530,6 +530,7 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 	toolCallCount := 0
 	executedCalls := 0
 	coerced := false
+	untrustedToolOutputSeen := false
 	var repeats tools.RepeatGuard
 	stuck := false
 	// route is req.Route until a tool with a forced route runs; from
@@ -803,7 +804,12 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			run = append(run, c)
 		}
 		attendedMission := req.MissionID != "" && !req.Unattended
-		executed := a.executeAll(ctx, exec, req.SessionID, req.MissionID, run, toolNames, req.Unattended, attendedMission, req.ToolResultCap, emit)
+		taintedBeforeStep := untrustedToolOutputSeen
+		stepCtx := ctx
+		if taintedBeforeStep {
+			stepCtx = tools.WithUntrustedToolOutputSeen(stepCtx)
+		}
+		executed := a.executeAll(stepCtx, exec, req.SessionID, req.MissionID, run, toolNames, req.Unattended, attendedMission, req.ToolResultCap, emit)
 		results := make([]provider.ToolResult, 0, len(calls))
 		for i, c := range calls {
 			if refused[i] {
@@ -818,8 +824,16 @@ func (a *Agent) run(ctx context.Context, req Request, out chan<- stream.StreamEv
 			Role: "assistant", Content: text.String(), ToolCalls: calls,
 		})
 		for i := range results {
+			rawContent := results[i].Content
+			trusted := exec.Trusted(calls[i].Name)
+			if calls[i].Name == "remember" && taintedBeforeStep {
+				trusted = false
+			}
 			results[i].Content = capToolResult(results[i].Content, req.ToolResultCap)
-			results[i].Content = fenceUntrusted(calls[i].Name, exec.Trusted(calls[i].Name), results[i].Content, results[i].IsError)
+			results[i].Content = fenceUntrusted(calls[i].Name, trusted, results[i].Content, results[i].IsError)
+			if !results[i].IsError && rawContent != "" && !exec.Trusted(calls[i].Name) {
+				untrustedToolOutputSeen = true
+			}
 			msgs = append(msgs, provider.Message{Role: "tool", ToolResult: &results[i]})
 		}
 

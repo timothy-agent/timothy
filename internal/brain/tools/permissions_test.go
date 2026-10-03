@@ -436,3 +436,20 @@ func TestNoteToolExemption(t *testing.T) {
 		t.Fatal("write_note must not be exempt by name")
 	}
 }
+
+func TestRememberPermissionExemptionIsTurnScoped(t *testing.T) {
+	t.Parallel()
+	p := NewPermissions(nil, "/workspace")
+	ctx := context.Background()
+
+	if !p.isExempt(ctx, "remember") {
+		t.Fatal("remember should be exempt before untrusted output")
+	}
+	tainted := WithUntrustedToolOutputSeen(ctx)
+	if p.isExempt(tainted, "remember") {
+		t.Fatal("remember stayed exempt after untrusted output")
+	}
+	if !p.isExempt(tainted, "search_web") {
+		t.Fatal("untrusted output changed unrelated tool exemptions")
+	}
+}

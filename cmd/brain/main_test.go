@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -12,8 +13,64 @@ import (
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
+	"github.com/SumonMSelim/timothy/internal/brain/memclient"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
+
+func TestRememberWithTurnTrustForwardsReviewGate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		content    string
+		tainted    bool
+		wantStatus string
+	}{
+		{name: "clean turn", content: "clean fact", wantStatus: "active"},
+		{name: "untrusted tool output seen", content: "tainted fact", tainted: true, wantStatus: "pending"},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/memories" {
+			t.Errorf("request = %s %s, want POST /v1/memories", r.Method, r.URL.Path)
+		}
+		var req struct {
+			Content       string `json:"content"`
+			Type          string `json:"type"`
+			RequireReview bool   `json:"require_review"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		wantReview := req.Content == "tainted fact"
+		wantStatus := "active"
+		if wantReview {
+			wantStatus = "pending"
+		}
+		if req.RequireReview != wantReview || req.Type != "semantic" {
+			t.Errorf("request = %+v, want require_review=%v and type=semantic", req, wantReview)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": wantStatus + "-1", "status": wantStatus})
+	}))
+	defer srv.Close()
+
+	save := rememberWithTurnTrust(memclient.New(srv.URL))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			if tc.tainted {
+				ctx = tools.WithUntrustedToolOutputSeen(ctx)
+			}
+			id, status, err := save(ctx, tc.content, "semantic")
+			if err != nil {
+				t.Fatalf("save: %v", err)
+			}
+			if id != tc.wantStatus+"-1" || status != tc.wantStatus {
+				t.Fatalf("save = (%q, %q), want status %q", id, status, tc.wantStatus)
+			}
+		})
+	}
+}
 
 // TestIntersectReadOnlyConnectorToolsMatchesAllowlist confirms the
 // resolver's matching step: only tools whose name matches an allow

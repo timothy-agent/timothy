@@ -9,9 +9,9 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
-// RememberFunc stores one user-explicit memory and returns its id;
-// main curries the memoryd client in.
-type RememberFunc func(ctx context.Context, content, memoryType string) (string, error)
+// RememberFunc stores one memory and returns its id and lifecycle
+// status; main curries the memoryd client in.
+type RememberFunc func(ctx context.Context, content, memoryType string) (id, status string, err error)
 
 type rememberArgs struct {
 	Content string `json:"content"`
@@ -19,8 +19,8 @@ type rememberArgs struct {
 }
 
 // Remember lets the model store a fact the user explicitly asked to
-// keep ("Timothy, remember…"). User-explicit memories activate
-// immediately — no confirmation queue (D-011).
+// keep ("Timothy, remember…"). Clean user-explicit memories activate
+// immediately; tainted or sensitive facts wait for review (D-011).
 func Remember(save RememberFunc) *tools.Tool {
 	return &tools.Tool{
 		Name:    "remember",
@@ -70,11 +70,20 @@ Returns a confirmation with the stored memory's id.`,
 			if typ == "" {
 				typ = "semantic"
 			}
-			id, err := save(ctx, content, typ)
+			id, status, err := save(ctx, content, typ)
 			if err != nil {
 				return "", fmt.Errorf("remember: %w", err)
 			}
-			return "Stored in long-term memory (id " + id + "): " + content, nil
+			switch status {
+			case "active":
+				return "Stored in long-term memory (id " + id + "): " + content, nil
+			case "pending":
+				return "Awaiting memory review (id " + id + "): " + content, nil
+			case "dropped":
+				return "Not stored because this fact matches a previously rejected memory.", nil
+			default:
+				return "", fmt.Errorf("remember: memoryd returned unknown status %q", status)
+			}
 		},
 	}
 }
