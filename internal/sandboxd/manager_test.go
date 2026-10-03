@@ -360,6 +360,85 @@ func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
 	}
 }
 
+// TestCreateContainerToolchainsMount covers D-125: the mise toolchain
+// cache volume is replicated into mission containers when configured and
+// omitted when not.
+func TestCreateContainerToolchainsMount(t *testing.T) {
+	tc := mount.Mount{Type: mount.TypeVolume, Source: "timothy_sandbox-toolchains", Target: toolchainsMountPath}
+	tests := []struct {
+		name string
+		tm   mount.Mount
+		want int
+	}{
+		{"configured", tc, 2},
+		{"absent", mount.Mount{}, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMounts []mount.Mount
+			cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Fatalf("read create body: %v", err)
+					}
+					var cfg struct {
+						HostConfig container.HostConfig
+					}
+					if err := json.Unmarshal(body, &cfg); err != nil {
+						t.Fatalf("unmarshal create body: %v", err)
+					}
+					gotMounts = cfg.HostConfig.Mounts
+					writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+				case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+				}
+			})
+			mgr := newTestManager(cli)
+			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+			mgr.toolchainsMount = tt.tm
+
+			if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+				t.Fatalf("createContainer: %v", err)
+			}
+			if len(gotMounts) != tt.want {
+				t.Fatalf("Mounts = %+v, want %d", gotMounts, tt.want)
+			}
+			found := false
+			for _, m := range gotMounts {
+				if m.Target == toolchainsMountPath && m.Source == tc.Source {
+					found = true
+				}
+			}
+			if found != (tt.tm.Source != "") {
+				t.Errorf("toolchains mount present = %v, Mounts = %+v", found, gotMounts)
+			}
+		})
+	}
+}
+
+// TestResolveMountToolchainsVolume confirms resolveMount resolves the
+// toolchains volume from toolchainsVolumeMetaPath (D-125).
+func TestResolveMountToolchainsVolume(t *testing.T) {
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, container.InspectResponse{
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "timothy_sandbox-toolchains", Destination: toolchainsVolumeMetaPath},
+			},
+		})
+	})
+	m, err := resolveMount(context.Background(), cli, toolchainsVolumeMetaPath, toolchainsMountPath)
+	if err != nil {
+		t.Fatalf("resolveMount: %v", err)
+	}
+	if m.Source != "timothy_sandbox-toolchains" || m.Target != toolchainsMountPath {
+		t.Errorf("mount = %+v", m)
+	}
+}
+
 // TestImageFor covers D-05x's environment->image derivation: "" and
 // "base" both resolve to the operator-configured base image; every
 // other allowlisted key derives a variant ref from the base ref

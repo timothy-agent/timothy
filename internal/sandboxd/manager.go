@@ -65,6 +65,10 @@ const (
 	// through this mount itself.
 	stateVolumeMetaPath = "/statevols/claude"
 
+	// toolchainsVolumeMetaPath is the same self-inspection mount for the
+	// mise toolchain cache volume (D-125).
+	toolchainsVolumeMetaPath = "/statevols/toolchains"
+
 	// sandboxHomePath / tmpMountPath are the two paths that lose their
 	// writable backing under ReadonlyRootfs (D-106) and get a tmpfs
 	// instead. sandboxHomePath is the image's HOME
@@ -77,6 +81,12 @@ const (
 	// CLI's subscription-auth state lives here, shared across a
 	// mission's container restarts and across missions.
 	executorStateMountPath = "/home/sandbox/.claude"
+
+	// toolchainsMountPath is where the toolchain cache volume is
+	// mounted, rw, in every mission container: mise's data dir
+	// (MISE_DATA_DIR in sandbox-base.Dockerfile), so installed
+	// toolchains survive across missions.
+	toolchainsMountPath = "/home/sandbox/.local/share/mise"
 
 	// sandboxMemoryBytes / sandboxNanoCPUs / sandboxPidsLimit cap one
 	// mission's blast radius: model-authored commands, unlike
@@ -249,6 +259,11 @@ type Manager struct {
 	// state. Zero value (Source == "") means absent.
 	stateMount mount.Mount
 
+	// toolchainsMount is the mise toolchain cache volume, resolved like
+	// stateMount and equally optional: absent means toolchains are
+	// ephemeral per container. D-125 (issue #990).
+	toolchainsMount mount.Mount
+
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per-mission ensureContainer lock
 
@@ -288,7 +303,11 @@ func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, 
 	if err != nil {
 		log.Info("sandbox: executor state volume not configured, mission containers will run without it", "error", err)
 	}
-	return &Manager{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, locks: map[string]*sync.Mutex{}}, nil
+	tm, err := resolveMount(ctx, cli, toolchainsVolumeMetaPath, toolchainsMountPath)
+	if err != nil {
+		log.Info("sandbox: toolchain cache volume not configured, mission toolchains will be ephemeral", "error", err)
+	}
+	return &Manager{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, toolchainsMount: tm, locks: map[string]*sync.Mutex{}}, nil
 }
 
 // resolveWorkspaceMount inspects the calling container (brain) for its
@@ -525,6 +544,9 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 	if m.stateMount.Source != "" {
 		mounts = append(mounts, m.stateMount)
 	}
+	if m.toolchainsMount.Source != "" {
+		mounts = append(mounts, m.toolchainsMount)
+	}
 	hostCfg := &container.HostConfig{
 		Mounts: mounts,
 		// Init (tini) reaps zombie processes: `sleep infinity` as PID 1
@@ -584,8 +606,8 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		// A container restart now wipes both. That also makes D-103's
 		// $HOME marker probe read a restart as a recreate, which is the
 		// safe direction: never resume into a container whose process
-		// tree is gone. The .claude state volume mounts over this tmpfs
-		// and keeps persisting.
+		// tree is gone. The .claude state volume and the toolchain cache
+		// volume mount over this tmpfs and keep persisting.
 		Tmpfs: map[string]string{
 			tmpMountPath:    "rw,nosuid,nodev," + sandboxTmpfsSize,
 			sandboxHomePath: "rw,nosuid,nodev,uid=65534,gid=65534," + sandboxHomeTmpfsSize,

@@ -270,6 +270,10 @@ services:
       #   docker run --rm -u 0 -v timothy_executor-claude-state:/s timothy-sandbox:latest chown 65534:65534 /s
       #   docker run --rm -it -v timothy_executor-claude-state:/home/sandbox/.claude timothy-sandbox:latest claude /login
       - executor-claude-state:/statevols/claude
+      # D-125 (issue #990): mise toolchain cache. Metadata-only
+      # self-inspection like the mounts above; replicated rw at
+      # /home/sandbox/.local/share/mise in mission containers. Optional.
+      - sandbox-toolchains:/statevols/toolchains
       # Host meminfo — under LXC, lxcfs serves the guest's real memory
       # limit here, while this container's own /proc shows the
       # hypervisor's (Capacity's admission gate would otherwise read a
@@ -412,6 +416,8 @@ volumes:
   # mission containers — see the sandboxd service comment above for the
   # one-off login command.
   executor-claude-state:
+  # D-125: mise toolchains shared across missions.
+  sandbox-toolchains:
 
 networks:
   timothy:
