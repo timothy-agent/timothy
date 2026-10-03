@@ -290,7 +290,7 @@ type nativeRunner struct {
 // environmentSetter is the narrow slice of *Store DiscoverSession
 // writes the discover turn's environment report through.
 type environmentSetter interface {
-	SetEnvironment(ctx context.Context, id, environment, marker string) error
+	SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error
 }
 
 // SetEnvironmentSink wires the store the discover turn's environment
@@ -1598,7 +1598,7 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 	if m.Kind == KindCoding && m.Environment == "" && r.environmentSink != nil {
 		env := strings.ToLower(strings.TrimSpace(report.Environment))
 		if env != "" && env != "base" && Environments[env] {
-			if err := r.environmentSink.SetEnvironment(ctx, m.ID, env, "discover"); err != nil {
+			if err := r.environmentSink.SetEnvironment(ctx, m.ID, env, "discover", nil); err != nil {
 				r.log.Warn("mission discover: set environment failed", "mission_id", m.ID, "environment", env, "error", err)
 			}
 		}

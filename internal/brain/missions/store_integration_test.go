@@ -2251,3 +2251,51 @@ func TestCreateToolAllowlistRoundTrip(t *testing.T) {
 		t.Fatalf("Get http-style = %v, %v, want nil allowlist", m.ToolAllowlist, err)
 	}
 }
+
+func TestSetEnvironmentEventCandidates(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	cases := []struct {
+		name       string
+		candidates []string
+		want       []string
+	}{
+		{"with candidates", []string{"package.json"}, []string{"package.json"}},
+		{"nil candidates", nil, []string{}},
+	}
+	for _, tc := range cases {
+		id, err := s.Create(ctx, Mission{Goal: marker + "env-" + tc.name, Kind: "coding"})
+		if err != nil {
+			t.Fatalf("%s: Create: %v", tc.name, err)
+		}
+		if err := s.SetEnvironment(ctx, id, "php", "composer.json", tc.candidates); err != nil {
+			t.Fatalf("%s: SetEnvironment: %v", tc.name, err)
+		}
+		events, err := s.Events(ctx, id)
+		if err != nil {
+			t.Fatalf("%s: Events: %v", tc.name, err)
+		}
+		var found bool
+		for _, e := range events {
+			if e.Kind != "mission.environment_detected" {
+				continue
+			}
+			found = true
+			var p struct {
+				Environment string   `json:"environment"`
+				Marker      string   `json:"marker"`
+				Candidates  []string `json:"candidates"`
+			}
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				t.Fatalf("%s: payload: %v", tc.name, err)
+			}
+			if p.Environment != "php" || p.Marker != "composer.json" || p.Candidates == nil || !slices.Equal(p.Candidates, tc.want) {
+				t.Errorf("%s: payload = %+v, want candidates %v", tc.name, p, tc.want)
+			}
+		}
+		if !found {
+			t.Errorf("%s: no mission.environment_detected event", tc.name)
+		}
+	}
+}

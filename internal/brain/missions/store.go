@@ -1091,8 +1091,9 @@ func (s *Store) SetNameIfEmpty(ctx context.Context, id, name string) error {
 // — sticky, like SetProvisioned: driver.go's ensureProvisioned only
 // calls this once, when Environment is still "". Bypasses the state
 // machine like SetDiscoverNotes/SetLastEvidence: detection happens
-// mid-provisioning, not at an Advance boundary.
-func (s *Store) SetEnvironment(ctx context.Context, id, environment, marker string) error {
+// mid-provisioning, not at an Advance boundary. candidates lists the
+// losing markers (always present in the payload, empty when none).
+func (s *Store) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("missions set environment: %w", err)
@@ -1106,8 +1107,11 @@ func (s *Store) SetEnvironment(ctx context.Context, id, environment, marker stri
 		id, environment); err != nil {
 		return fmt.Errorf("missions set environment: %w", err)
 	}
+	if candidates == nil {
+		candidates = []string{}
+	}
 	if err := appendEventTx(ctx, tx, id, "mission.environment_detected", map[string]any{
-		"environment": environment, "marker": marker,
+		"environment": environment, "marker": marker, "candidates": candidates,
 	}, "live"); err != nil {
 		return fmt.Errorf("missions set environment event: %w", err)
 	}

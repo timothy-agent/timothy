@@ -2372,7 +2372,7 @@ type fakeEnvironmentSink struct {
 	calls []string
 }
 
-func (f *fakeEnvironmentSink) SetEnvironment(ctx context.Context, id, environment, marker string) error {
+func (f *fakeEnvironmentSink) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error {
 	f.calls = append(f.calls, id+":"+environment+":"+marker)
 	return nil
 }
