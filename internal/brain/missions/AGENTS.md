@@ -1,7 +1,7 @@
 # Missions harness
 
 Loaded when working under `internal/brain/missions/`. Moved out of the root
-CLAUDE.md so other work does not pay for it every session.
+AGENTS.md so other work does not pay for it every session.
 
 - `internal/brain/missions/`: `statemachine.go` (pure `Step()`, sole
   transition logic), `store.go` (`ApplyTransition` is the only state
@@ -178,6 +178,15 @@ CLAUDE.md so other work does not pay for it every session.
 - A plan unit whose every artifact belongs to an earlier unit (a
   trailing "format and verify" unit) is rejected at plan acceptance
   (`checkOwnArtifacts`): its commands belong in the producing units.
+- Evidence-only units (D-123, issue #950): a unit whose deliverable is
+  a side effect (a GitHub issue, an API call) sets `evidence_only` on
+  `submit_plan` and lists no artifacts. The flag is explicit, never
+  inferred from an empty artifacts list, so a unit that forgot its
+  artifacts is still rejected. `check_cmd` still has to fail before the
+  work and pass after. When a rejected plan's resubmission drops a unit
+  instead of keeping it, marking it evidence-only, or reporting
+  infeasible, the runner records `mission.plan_scope_dropped` and
+  carries the dropped titles into review packets and the outcome digest.
 - Plan defects travel back to the planner (issue #718): a worker
   BLOCKED note that names the plan (`namesPlanDefect`: a gate,
   criterion, artifact path, "cannot pass", "in isolation") is
