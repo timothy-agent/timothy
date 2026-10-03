@@ -43,7 +43,7 @@ func post(t *testing.T, a *API, body string) *httptest.ResponseRecorder {
 func TestExtractReturnsIDs(t *testing.T) {
 	t.Parallel()
 	ext := &fakeExtractor{ids: []string{"id-1", "id-2"}}
-	rec := post(t, testAPI(ext), `{"session_id":"s1","source_seq":9,"text":"turn text"}`)
+	rec := post(t, testAPI(ext), `{"session_id":"s1","source_seq":9,"text":"turn text","deny":["User lives in Porto."]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
 	}
@@ -58,6 +58,9 @@ func TestExtractReturnsIDs(t *testing.T) {
 	}
 	if ext.last.SessionID != "s1" || ext.last.SourceSeq != 9 {
 		t.Fatalf("request not passed through: %+v", ext.last)
+	}
+	if len(ext.last.Deny) != 1 || ext.last.Deny[0] != "User lives in Porto." {
+		t.Fatalf("deny not passed through: %v", ext.last.Deny)
 	}
 }
 

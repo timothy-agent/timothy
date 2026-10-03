@@ -107,13 +107,19 @@ type Compactor interface {
 // failure may touch the user-facing turn. route is "" for the normal
 // side-call route, or the sensitive route pin when the turn executed a
 // sensitive tool (see Service.sensitive).
-type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string, route string)
+type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string, route string, deny []string)
 
-// MemoryRetrieve returns the rendered long-term memory block for a
-// user message, or "" for nothing relevant. The wrapper owns timeout
-// and error handling; a failure returns "": a turn without memories
-// beats no turn.
-type MemoryRetrieve func(ctx context.Context, sessionID, query string) string
+// MemoryRecall carries both the rendered prompt block and its source
+// contents so extraction can fence assistant echoes of injected facts.
+type MemoryRecall struct {
+	Block    string
+	Contents []string
+}
+
+// MemoryRetrieve returns the rendered long-term memory block and its
+// source contents, or an empty value for nothing relevant. The wrapper
+// owns timeout and error handling; a turn without memories beats no turn.
+type MemoryRetrieve func(ctx context.Context, sessionID, query string) MemoryRecall
 
 // AttachmentStore is the slice of *attachments.Store chat needs: Get
 // validates a ref exists (400 before any event append), Open resolves
@@ -148,24 +154,24 @@ type Service struct {
 	classify       agents.Classify // nil: auto-dispatch falls back to default
 	budget         func(context.Context) int
 	packs          []skills.Skill
-	skillAllow     func(context.Context, string) bool   // nil: all packs allowed
-	location       func(context.Context) *time.Location // nil: date line renders in UTC
+	skillAllow     func(context.Context, string) bool                      // nil: all packs allowed
+	location       func(context.Context) *time.Location                    // nil: date line renders in UTC
 	writing        func(context.Context) (style, samplesCollection string) // nil: both empty, no writing-style block
-	skillBodies    map[string]string                    // name -> full pack body, for skill_hint
-	flushEvery     time.Duration                        // pending-state flush cadence mid-stream
-	turnTimeout    time.Duration                        // detached-turn ceiling; defaults to the turnTimeout const, overridable in tests
-	sensitive      *session.SensitiveTools              // nil: no sensitive-tool route pin for side-calls
-	attachments    AttachmentStore                      // nil: attachments disabled (ATTACHMENTS_DIR unset)
-	markitdownURL  string                               // "": pdf attachments disabled (MARKITDOWN_URL unset)
-	markitdownHTTP *http.Client                         // shared client for the markitdown sidecar call
-	whisperURL     string                               // "": audio attachments attach without a transcript (WHISPER_URL unset)
-	whisperHTTP    *http.Client                         // shared client for the whisper sidecar call
-	kbSearch       KBSearch                             // nil: search_kb never offered, regardless of agent config; whole-KB by default, agent Knowledge only boosts ranking
-	kbRead         KBRead                               // nil: read_kb never offered, regardless of agent config; reaches any document, not just the agent's Knowledge collections
-	kbSamples      KBSamples                            // nil: writing_samples never offered
-	missions       MissionStore                         // nil: mission #-mention references never resolve
-	kbDocs         KBDocStore                           // nil: kb doc #-mention references never resolve
-	kbEnrich       *kb.Enricher                         // nil: chat PDF attachments skip image/scanned-page captioning (issue #350)
+	skillBodies    map[string]string                                       // name -> full pack body, for skill_hint
+	flushEvery     time.Duration                                           // pending-state flush cadence mid-stream
+	turnTimeout    time.Duration                                           // detached-turn ceiling; defaults to the turnTimeout const, overridable in tests
+	sensitive      *session.SensitiveTools                                 // nil: no sensitive-tool route pin for side-calls
+	attachments    AttachmentStore                                         // nil: attachments disabled (ATTACHMENTS_DIR unset)
+	markitdownURL  string                                                  // "": pdf attachments disabled (MARKITDOWN_URL unset)
+	markitdownHTTP *http.Client                                            // shared client for the markitdown sidecar call
+	whisperURL     string                                                  // "": audio attachments attach without a transcript (WHISPER_URL unset)
+	whisperHTTP    *http.Client                                            // shared client for the whisper sidecar call
+	kbSearch       KBSearch                                                // nil: search_kb never offered, regardless of agent config; whole-KB by default, agent Knowledge only boosts ranking
+	kbRead         KBRead                                                  // nil: read_kb never offered, regardless of agent config; reaches any document, not just the agent's Knowledge collections
+	kbSamples      KBSamples                                               // nil: writing_samples never offered
+	missions       MissionStore                                            // nil: mission #-mention references never resolve
+	kbDocs         KBDocStore                                              // nil: kb doc #-mention references never resolve
+	kbEnrich       *kb.Enricher                                            // nil: chat PDF attachments skip image/scanned-page captioning (issue #350)
 	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -967,9 +973,11 @@ const (
 // loop from the serving agent's config: empty means no tools (an
 // agent must opt into tools explicitly), the same flip as skills.
 // Two exemptions, independent of the agent's own list:
+//
 //   - retrieve_output always stays available: it is how the model
 //     reads back its own offloaded tool results (D-019); filtering it
 //     out would silently strand any result too big to inline.
+//
 //   - load_skill follows the SKILLS allowlist, not the tools one: it
 //     is present only when the agent has at least one skill to load
 //     (an agent with none has nothing load_skill could load, and
@@ -1523,9 +1531,11 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	if skillBody != "" {
 		system += "\n\n# Skill: " + skillHint + "\n\n" + skillBody
 	}
+	var memoryContents []string
 	if s.recall != nil && profile.Memory {
-		if block := s.recall(turnCtx, sessionID, userText); block != "" {
-			system += "\n\n" + block
+		if recall := s.recall(turnCtx, sessionID, userText); recall.Block != "" {
+			system += "\n\n" + recall.Block
+			memoryContents = append([]string(nil), recall.Contents...)
 		}
 	}
 
@@ -1596,7 +1606,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	// defer-equivalent (drainAndPersist, on every exit path) owns
 	// freeing it via turnDone.
 	out := make(chan stream.StreamEvent)
-	go s.relay(reqCtx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, bc, upstream, out)
+	go s.relay(reqCtx, sessionID, userText, route, profile, needsTitle, sessionSensitive, memoryContents, start, bc, upstream, out)
 	return sessionID, out, nil
 }
 
@@ -1625,7 +1635,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 // the still-live upstream to completion so the turn finishes and
 // persists normally, with every event still reaching bc for any /live
 // subscriber.
-func (s *Service) relay(reqCtx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, start time.Time, bc *turnBroadcaster, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
+func (s *Service) relay(reqCtx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, memoryContents []string, start time.Time, bc *turnBroadcaster, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
 	var usage *stream.Usage
@@ -1782,7 +1792,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 			notePermission(ev)
 			bc.publish(ev)
 		}
-		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool, mediaRefs)
+		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool, mediaRefs, memoryContents)
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
 		// that order: mirrors missions.Store's own "publish only after
@@ -1852,7 +1862,7 @@ func stampDuration(base *stream.Meta, start time.Time) *stream.Meta {
 	return &m
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text string, segmentStarts []int, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool, mediaRefs []session.MediaRef) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text string, segmentStarts []int, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool, mediaRefs []session.MediaRef, memoryContents []string) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -2012,7 +2022,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		} else if text != "" {
 			mtext += "\n\nassistant: " + text
 		}
-		go s.memory(context.Background(), sessionID, turnSeq, mtext, sensitiveRoute)
+		go s.memory(context.Background(), sessionID, turnSeq, mtext, sensitiveRoute, memoryContents)
 	}
 
 	if s.compactor != nil {

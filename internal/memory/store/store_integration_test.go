@@ -361,6 +361,115 @@ func TestSupersedeChain(t *testing.T) {
 	}
 }
 
+func TestConfirmSupersedingActivatesAndArchivesAtomically(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	old := mem("active Amsterdam fact")
+	old.Actor = ActorUser
+	oldID, err := s.Insert(ctx, old)
+	if err != nil {
+		t.Fatalf("Insert old: %v", err)
+	}
+	proposal := mem("pending Berlin correction")
+	proposal.Supersedes = oldID
+	proposalID, err := s.Insert(ctx, proposal)
+	if err != nil {
+		t.Fatalf("Insert proposal: %v", err)
+	}
+
+	if err := s.ConfirmSuperseding(ctx, proposalID); err != nil {
+		t.Fatalf("ConfirmSuperseding: %v", err)
+	}
+	gotOld, err := s.Get(ctx, oldID)
+	if err != nil {
+		t.Fatalf("Get old: %v", err)
+	}
+	gotProposal, err := s.Get(ctx, proposalID)
+	if err != nil {
+		t.Fatalf("Get proposal: %v", err)
+	}
+	if gotOld.Status != StatusArchived || gotOld.SupersededBy != proposalID {
+		t.Fatalf("old = %+v, want archived -> %s", gotOld, proposalID)
+	}
+	if gotProposal.Status != StatusActive || gotProposal.Supersedes != oldID {
+		t.Fatalf("proposal = %+v, want active superseding %s", gotProposal, oldID)
+	}
+}
+
+func TestConfirmSupersedingStaleOldRollsBack(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	old := mem("active original fact")
+	old.Actor = ActorUser
+	oldID, err := s.Insert(ctx, old)
+	if err != nil {
+		t.Fatalf("Insert old: %v", err)
+	}
+	proposal := mem("pending correction")
+	proposal.Supersedes = oldID
+	proposalID, err := s.Insert(ctx, proposal)
+	if err != nil {
+		t.Fatalf("Insert proposal: %v", err)
+	}
+	other := mem("already applied replacement")
+	other.Actor = ActorUser
+	otherID, err := s.Insert(ctx, other)
+	if err != nil {
+		t.Fatalf("Insert other: %v", err)
+	}
+	if err := s.Supersede(ctx, oldID, otherID); err != nil {
+		t.Fatalf("Supersede old: %v", err)
+	}
+
+	if err := s.ConfirmSuperseding(ctx, proposalID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("ConfirmSuperseding err = %v, want ErrNotFound", err)
+	}
+	gotProposal, err := s.Get(ctx, proposalID)
+	if err != nil {
+		t.Fatalf("Get proposal: %v", err)
+	}
+	if gotProposal.Status != StatusPending || gotProposal.SupersededBy != "" {
+		t.Fatalf("proposal = %+v, want unchanged pending row", gotProposal)
+	}
+}
+
+func TestCorrectSupersedingAppendsEditedFact(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	old := mem("active Amsterdam fact")
+	old.Actor = ActorUser
+	oldID, err := s.Insert(ctx, old)
+	if err != nil {
+		t.Fatalf("Insert old: %v", err)
+	}
+	proposal := mem("pending Berlin correction")
+	proposal.Supersedes = oldID
+	proposalID, err := s.Insert(ctx, proposal)
+	if err != nil {
+		t.Fatalf("Insert proposal: %v", err)
+	}
+	corrected := mem("edited Lisbon correction")
+	corrected.Actor = ActorUser
+	correctedID, err := s.CorrectSuperseding(ctx, proposalID, corrected)
+	if err != nil {
+		t.Fatalf("CorrectSuperseding: %v", err)
+	}
+
+	chain, err := s.Chain(ctx, oldID)
+	if err != nil {
+		t.Fatalf("Chain: %v", err)
+	}
+	if len(chain) != 3 || chain[0].ID != oldID || chain[1].ID != proposalID || chain[2].ID != correctedID {
+		t.Fatalf("chain = %+v, want old -> proposal -> edited correction", chain)
+	}
+	if chain[1].Status != StatusArchived || chain[2].Status != StatusActive || chain[2].Content != corrected.Content {
+		t.Fatalf("corrected chain = %+v", chain)
+	}
+}
+
 func TestUpsertEntityIdempotent(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
@@ -427,6 +536,42 @@ func TestNearestActive(t *testing.T) {
 	}
 	if sim < 0.999 {
 		t.Fatalf("identical vector similarity = %f, want ~1", sim)
+	}
+}
+
+func TestNearestActiveOnlyPrefersActiveKnowledge(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	query := make(Vector, 1024)
+	query[0], query[1] = 1, 0.1
+
+	active := mem("active known fact")
+	active.Actor = ActorUser
+	active.Embedding = make(Vector, 1024)
+	active.Embedding[0] = 1
+	activeID, err := s.Insert(ctx, active)
+	if err != nil {
+		t.Fatalf("Insert active: %v", err)
+	}
+	pending := mem("pending proposal")
+	pending.Embedding = query
+	if _, err := s.Insert(ctx, pending); err != nil {
+		t.Fatalf("Insert pending: %v", err)
+	}
+
+	allID, _, allStatus, ok, err := s.NearestActive(ctx, query)
+	if err != nil {
+		t.Fatalf("NearestActive: %v", err)
+	}
+	if !ok || allStatus != StatusPending {
+		t.Fatalf("NearestActive = (%s, %s, %v), want pending match", allID, allStatus, ok)
+	}
+	activeIDGot, similarity, ok, err := s.NearestActiveOnly(ctx, query)
+	if err != nil {
+		t.Fatalf("NearestActiveOnly: %v", err)
+	}
+	if !ok || activeIDGot != activeID || similarity < 0.99 {
+		t.Fatalf("NearestActiveOnly = (%s, %f, %v), want active %s", activeIDGot, similarity, ok, activeID)
 	}
 }
 

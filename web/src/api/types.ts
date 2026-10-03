@@ -243,6 +243,7 @@ export interface MemoryItem {
   source_session?: string
   created_at: string
   superseded_by?: string
+  supersedes?: { id: string; content: string }
 }
 
 // One hybrid-retrieval hit (memory browser search).

@@ -15,16 +15,18 @@ import (
 )
 
 type fakeManager struct {
-	memories   map[string]store.Memory
-	listed     []store.Memory
-	promoted   []string
-	rejected   []string
-	inserted   []store.Memory
-	superseded map[string]string
-	nextID     int
-	entities   []store.Entity
-	edges      []store.EntityEdge
-	entityMems map[string][]store.Memory
+	memories             map[string]store.Memory
+	listed               []store.Memory
+	promoted             []string
+	rejected             []string
+	inserted             []store.Memory
+	superseded           map[string]string
+	confirmedSuperseding []string
+	correctedSuperseding []store.Memory
+	nextID               int
+	entities             []store.Entity
+	edges                []store.EntityEdge
+	entityMems           map[string][]store.Memory
 }
 
 func newFakeManager() *fakeManager {
@@ -33,6 +35,13 @@ func newFakeManager() *fakeManager {
 
 func (f *fakeManager) ListByStatus(_ context.Context, status store.Status, types ...store.MemoryType) ([]store.Memory, error) {
 	return f.listed, nil
+}
+
+func (f *fakeManager) Get(_ context.Context, id string) (store.Memory, error) {
+	if m, ok := f.memories[id]; ok {
+		return m, nil
+	}
+	return store.Memory{}, store.ErrNotFound
 }
 
 func (f *fakeManager) Insert(_ context.Context, m store.Memory) (string, error) {
@@ -45,6 +54,16 @@ func (f *fakeManager) Insert(_ context.Context, m store.Memory) (string, error) 
 func (f *fakeManager) Promote(_ context.Context, id string) error {
 	f.promoted = append(f.promoted, id)
 	return nil
+}
+
+func (f *fakeManager) ConfirmSuperseding(_ context.Context, id string) error {
+	f.confirmedSuperseding = append(f.confirmedSuperseding, id)
+	return nil
+}
+
+func (f *fakeManager) CorrectSuperseding(_ context.Context, id string, m store.Memory) (string, error) {
+	f.correctedSuperseding = append(f.correctedSuperseding, m)
+	return "corrected-" + id, nil
 }
 
 func (f *fakeManager) Reject(_ context.Context, id string) error {
@@ -90,6 +109,32 @@ func TestListDefaultsToPendingQueue(t *testing.T) {
 	}
 }
 
+func TestListIncludesSupersededFactForQueueComparison(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.listed = []store.Memory{{
+		ID: "candidate", Type: store.TypeSemantic, Content: "User lives in Berlin.",
+		Status: store.StatusPending, Supersedes: "old", CreatedAt: time.Now(),
+	}}
+	fm.memories["old"] = store.Memory{ID: "old", Content: "User lives in Amsterdam."}
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories", nil)
+	rec := httptest.NewRecorder()
+	manageAPI(fm).handleList(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		Memories []memoryJSON `json:"memories"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Memories) != 1 || out.Memories[0].Supersedes == nil ||
+		out.Memories[0].Supersedes.ID != "old" || out.Memories[0].Supersedes.Content != "User lives in Amsterdam." {
+		t.Fatalf("memories = %+v, want the prior fact attached", out.Memories)
+	}
+}
+
 func TestAddStoresUserExplicit(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
@@ -131,12 +176,43 @@ func resolve(t *testing.T, fm *fakeManager, id, body string) *httptest.ResponseR
 func TestResolveConfirm(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
+	fm.memories["m1"] = store.Memory{ID: "m1", Status: store.StatusPending}
 	rec := resolve(t, fm, "m1", `{"action":"confirm"}`)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	if len(fm.promoted) != 1 || fm.promoted[0] != "m1" {
 		t.Fatalf("promoted = %v", fm.promoted)
+	}
+}
+
+func TestResolveSupersedingConfirmationUsesAtomicTransition(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.memories["candidate"] = store.Memory{ID: "candidate", Status: store.StatusPending, Supersedes: "old"}
+	rec := resolve(t, fm, "candidate", `{"action":"confirm"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	if len(fm.confirmedSuperseding) != 1 || fm.confirmedSuperseding[0] != "candidate" || len(fm.promoted) != 0 {
+		t.Fatalf("atomic confirms = %v, ordinary promotes = %v", fm.confirmedSuperseding, fm.promoted)
+	}
+}
+
+func TestResolveEditedSupersedingCorrectionUsesAtomicTransition(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.memories["candidate"] = store.Memory{
+		ID: "candidate", Type: store.TypeSemantic, Content: "User lives in Berlin.",
+		Status: store.StatusPending, Supersedes: "old", CreatedAt: time.Now(),
+	}
+	rec := resolve(t, fm, "candidate", `{"action":"confirm","content":"User lives in Lisbon."}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	if len(fm.correctedSuperseding) != 1 || fm.correctedSuperseding[0].Content != "User lives in Lisbon." ||
+		fm.correctedSuperseding[0].Actor != store.ActorUser || len(fm.inserted) != 0 {
+		t.Fatalf("corrections = %+v inserted = %+v", fm.correctedSuperseding, fm.inserted)
 	}
 }
 

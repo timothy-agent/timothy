@@ -1599,7 +1599,7 @@ func TestMemoryExtractGetsUserTextAndResidue(t *testing.T) {
 		text      string
 	}
 	got := make(chan call, 1)
-	svc.SetMemoryExtract(func(_ context.Context, sessionID string, seq int64, text, _ string) {
+	svc.SetMemoryExtract(func(_ context.Context, sessionID string, seq int64, text, _ string, _ []string) {
 		got <- call{sessionID, seq, text}
 	})
 
@@ -1625,6 +1625,46 @@ func TestMemoryExtractGetsUserTextAndResidue(t *testing.T) {
 	}
 }
 
+func TestMemoryExtractReceivesRetrievedContentAsDeny(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("User lives in Porto.")}
+	svc := newService(gw, log)
+	const fact = "User lives in Porto."
+	svc.SetMemoryRetrieve(func(context.Context, string, string) MemoryRecall {
+		return MemoryRecall{
+			Block:    "<memory source=\"timothy-memory\" trust=\"data\">\n- [semantic] " + fact + "\n</memory>",
+			Contents: []string{fact},
+		}
+	})
+	got := make(chan []string, 1)
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, _ string, deny []string) {
+		got <- deny
+	})
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "where do I live?"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	select {
+	case deny := <-got:
+		found := false
+		for _, item := range deny {
+			if item == fact {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("deny = %v, want injected memory %q", deny, fact)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("memory extract never invoked")
+	}
+}
+
 func TestMemoryExtractWithoutDistillSendsAssistantText(t *testing.T) {
 	t.Parallel()
 	log := newFakeLog()
@@ -1632,7 +1672,7 @@ func TestMemoryExtractWithoutDistillSendsAssistantText(t *testing.T) {
 	svc := newService(gw, log) // no distiller
 
 	got := make(chan string, 1)
-	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, text, _ string) {
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, text, _ string, _ []string) {
 		got <- text
 	})
 
@@ -1658,11 +1698,11 @@ func TestMemoryRetrieveInjectsIntoSystemTail(t *testing.T) {
 	gw := &fakeGW{events: okEvents("answer")}
 	svc := newService(gw, log)
 	block := "<memory source=\"timothy-memory\" trust=\"data\">\n- [semantic] user lives in Porto\n</memory>"
-	svc.SetMemoryRetrieve(func(_ context.Context, sessionID, query string) string {
+	svc.SetMemoryRetrieve(func(_ context.Context, sessionID, query string) MemoryRecall {
 		if sessionID != "s1" || !strings.Contains(query, "where do I live") {
 			t.Errorf("retrieve got sessionID=%s query=%q", sessionID, query)
 		}
-		return block
+		return MemoryRecall{Block: block, Contents: []string{"user lives in Porto"}}
 	})
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "where do I live?"})
@@ -1704,7 +1744,7 @@ func TestMemoryRetrieveEmptyLeavesSystemUntouched(t *testing.T) {
 	log := newFakeLog()
 	gw := &fakeGW{events: okEvents("answer")}
 	svc := newService(gw, log)
-	svc.SetMemoryRetrieve(func(context.Context, string, string) string { return "" })
+	svc.SetMemoryRetrieve(func(context.Context, string, string) MemoryRecall { return MemoryRecall{} })
 
 	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hello"})
 	if err != nil {
@@ -1732,7 +1772,7 @@ func TestMemoryExtractFiresOnTextlessTurn(t *testing.T) {
 	}}
 	svc := newService(gw, log)
 	got := make(chan string, 1)
-	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, text, _ string) {
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, text, _ string, _ []string) {
 		got <- text
 	})
 
@@ -1884,9 +1924,9 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 	}
 	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
 	recalled := false
-	svc.SetMemoryRetrieve(func(context.Context, string, string) string {
+	svc.SetMemoryRetrieve(func(context.Context, string, string) MemoryRecall {
 		recalled = true
-		return "MEMORY BLOCK"
+		return MemoryRecall{Block: "MEMORY BLOCK"}
 	})
 
 	if _, _, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "hi", Agent: "nope"}); err == nil {
@@ -2596,7 +2636,7 @@ func TestMemoryExtractUsesSensitiveRouteWhenTurnRanSensitiveTool(t *testing.T) {
 	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	got := make(chan string, 1)
-	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string, _ []string) {
 		got <- route
 	})
 
@@ -2632,7 +2672,7 @@ func TestMemoryExtractUsesEmptyRouteWhenTurnDidNotRunSensitiveTool(t *testing.T)
 	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	got := make(chan string, 1)
-	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string, _ []string) {
 		got <- route
 	})
 
@@ -3050,7 +3090,7 @@ func TestPersistTurnPinsSideCallsWhenSessionPreviouslySensitive(t *testing.T) {
 	svc.SetSensitiveTools(&session.SensitiveTools{ConnectorNames: func(context.Context) []string { return []string{"personal"} }, Route: func(context.Context) string { return "local" }})
 
 	extractRoute := make(chan string, 1)
-	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string) {
+	svc.SetMemoryExtract(func(_ context.Context, _ string, _ int64, _ string, route string, _ []string) {
 		extractRoute <- route
 	})
 

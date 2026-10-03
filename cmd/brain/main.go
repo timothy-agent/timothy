@@ -28,11 +28,11 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
-	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gitevents"
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
@@ -755,11 +755,12 @@ func main() {
 		}
 		return nil
 	}
-	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) {
+	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string, injectedMemories []string) {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return
 		}
-		deny := extractDeny(ctx)
+		deny := append([]string(nil), extractDeny(ctx)...)
+		deny = append(deny, injectedMemories...)
 		ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
 		defer cancel()
 		if _, err := mc.Extract(ectx, sessionID, seq, text, route, "chat", deny); err != nil {
@@ -800,15 +801,19 @@ func main() {
 		}
 		return ids
 	})
-	svc.SetMemoryRetrieve(func(ctx context.Context, sessionID, query string) string {
+	svc.SetMemoryRetrieve(func(ctx context.Context, sessionID, query string) chat.MemoryRecall {
 		rctx, cancel := context.WithTimeout(ctx, retrieveBudget)
 		defer cancel()
 		memories, err := mc.Retrieve(rctx, sessionID, query)
 		if err != nil {
 			app.Log.Warn("memory retrieval failed; turn continues without", "session_id", sessionID, "error", err)
-			return ""
+			return chat.MemoryRecall{}
 		}
-		return memclient.RenderBlock(memories)
+		contents := make([]string, len(memories))
+		for i, memory := range memories {
+			contents[i] = memory.Content
+		}
+		return chat.MemoryRecall{Block: memclient.RenderBlock(memories), Contents: contents}
 	})
 
 	attachmentStore := buildAttachments(app.DB, app.Log)

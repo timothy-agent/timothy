@@ -14,8 +14,11 @@ import (
 // graph endpoints.
 type Manager interface {
 	ListByStatus(ctx context.Context, status store.Status, types ...store.MemoryType) ([]store.Memory, error)
+	Get(ctx context.Context, id string) (store.Memory, error)
 	Insert(ctx context.Context, m store.Memory) (string, error)
 	Promote(ctx context.Context, id string) error
+	ConfirmSuperseding(ctx context.Context, id string) error
+	CorrectSuperseding(ctx context.Context, id string, m store.Memory) (string, error)
 	Reject(ctx context.Context, id string) error
 	Supersede(ctx context.Context, oldID, newID string) error
 	Chain(ctx context.Context, id string) ([]store.Memory, error)
@@ -25,15 +28,21 @@ type Manager interface {
 }
 
 type memoryJSON struct {
-	ID            string  `json:"id"`
-	Type          string  `json:"type"`
-	Content       string  `json:"content"`
-	Status        string  `json:"status"`
-	Confidence    float32 `json:"confidence"`
-	Actor         string  `json:"actor"`
-	SourceSession string  `json:"source_session,omitempty"`
-	CreatedAt     string  `json:"created_at"`
-	SupersededBy  string  `json:"superseded_by,omitempty"`
+	ID            string          `json:"id"`
+	Type          string          `json:"type"`
+	Content       string          `json:"content"`
+	Status        string          `json:"status"`
+	Confidence    float32         `json:"confidence"`
+	Actor         string          `json:"actor"`
+	SourceSession string          `json:"source_session,omitempty"`
+	CreatedAt     string          `json:"created_at"`
+	SupersededBy  string          `json:"superseded_by,omitempty"`
+	Supersedes    *supersedesJSON `json:"supersedes,omitempty"`
+}
+
+type supersedesJSON struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
 }
 
 func toJSON(m store.Memory) memoryJSON {
@@ -66,6 +75,14 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 	out := make([]memoryJSON, len(memories))
 	for i, m := range memories {
 		out[i] = toJSON(m)
+		if m.Supersedes != "" {
+			previous, err := a.store.Get(r.Context(), m.Supersedes)
+			if err != nil {
+				jsonError(w, http.StatusInternalServerError, "list_failed", err.Error())
+				return
+			}
+			out[i].Supersedes = &supersedesJSON{ID: previous.ID, Content: previous.Content}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"memories": out})
@@ -132,7 +149,15 @@ func (a *API) handleResolve(w http.ResponseWriter, r *http.Request) {
 		if edited := strings.TrimSpace(req.Content); edited != "" {
 			err = a.confirmEdited(r.Context(), id, edited)
 		} else {
-			err = a.store.Promote(r.Context(), id)
+			var memory store.Memory
+			memory, err = a.store.Get(r.Context(), id)
+			if err == nil {
+				if memory.Supersedes != "" {
+					err = a.store.ConfirmSuperseding(r.Context(), id)
+				} else {
+					err = a.store.Promote(r.Context(), id)
+				}
+			}
 		}
 	case "reject":
 		err = a.store.Reject(r.Context(), id)
@@ -168,6 +193,10 @@ func (a *API) confirmEdited(ctx context.Context, id, content string) error {
 		a.log.Warn("edit embedding failed; stored without vector", "error", err)
 	} else {
 		m.Embedding = store.Vector(vecs[0])
+	}
+	if orig.Supersedes != "" {
+		_, err = a.store.CorrectSuperseding(ctx, id, m)
+		return err
 	}
 	newID, err := a.store.Insert(ctx, m)
 	if err != nil {

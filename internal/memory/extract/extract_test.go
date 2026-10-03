@@ -187,10 +187,11 @@ type fakeStore struct {
 	confirmed []string
 	entities  map[string]string
 	nearest   struct {
-		id     string
-		sim    float64
-		status store.Status
-		ok     bool
+		id      string
+		sim     float64
+		status  store.Status
+		content string
+		ok      bool
 	}
 	nextID int
 }
@@ -200,6 +201,10 @@ func (s *fakeStore) Insert(_ context.Context, m store.Memory) (string, error) {
 	id := fmt.Sprintf("mem-%d", s.nextID)
 	s.inserted = append(s.inserted, m)
 	return id, nil
+}
+
+func (s *fakeStore) Get(_ context.Context, id string) (store.Memory, error) {
+	return store.Memory{ID: id, Content: s.nearest.content, Status: s.nearest.status}, nil
 }
 
 func (s *fakeStore) Promote(_ context.Context, id string) error {
@@ -229,6 +234,14 @@ func (s *fakeStore) NearestActive(context.Context, store.Vector) (string, float6
 		status = store.StatusActive
 	}
 	return s.nearest.id, s.nearest.sim, status, s.nearest.ok, nil
+}
+
+func (s *fakeStore) NearestActiveOnly(context.Context, store.Vector) (string, float64, bool, error) {
+	status := s.nearest.status
+	if status == "" {
+		status = store.StatusActive
+	}
+	return s.nearest.id, s.nearest.sim, s.nearest.ok && status == store.StatusActive, nil
 }
 
 func testLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -290,6 +303,7 @@ func TestExtractDropsExactDuplicate(t *testing.T) {
 	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	st.nearest.id, st.nearest.sim, st.nearest.ok = "existing", 0.995, true
+	st.nearest.content = "User lives in Porto."
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
@@ -303,20 +317,64 @@ func TestExtractDropsExactDuplicate(t *testing.T) {
 	}
 }
 
-func TestExtractNearDuplicateReinforcesInsteadOfInserting(t *testing.T) {
+func TestExtractNearDuplicateCreatesPendingSupersede(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	st.nearest.id, st.nearest.sim, st.nearest.ok = "existing", 0.96, true
+	st.nearest.content = "User lives in Amsterdam."
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
-	if len(ids) != 0 || len(st.inserted) != 0 {
-		t.Fatalf("near dup inserted: ids=%v inserted=%d", ids, len(st.inserted))
+	if len(ids) != 1 || len(st.inserted) != 1 {
+		t.Fatalf("near correction not inserted: ids=%v inserted=%d", ids, len(st.inserted))
 	}
-	if len(st.confirmed) != 1 || st.confirmed[0] != "existing" {
-		t.Fatalf("confirmed = %v, want [existing]", st.confirmed)
+	if st.inserted[0].Supersedes != "existing" {
+		t.Fatalf("supersedes = %q, want existing", st.inserted[0].Supersedes)
+	}
+	if len(st.confirmed) != 0 {
+		t.Fatalf("confirmed = %v, want none for a correction", st.confirmed)
+	}
+}
+
+func TestExtractActiveNearDuplicatePairs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		old       string
+		candidate string
+		exact     bool
+	}{
+		{name: "identical", old: "User likes tea.", candidate: "User likes tea.", exact: true},
+		{name: "whitespace only", old: "User likes tea.", candidate: " User  likes\ttea. ", exact: true},
+		{name: "negation", old: "User likes tea.", candidate: "User does not like tea."},
+		{name: "city swap", old: "User lives in Amsterdam.", candidate: "User lives in Berlin."},
+		{name: "number swap", old: "User owns 2 cats.", candidate: "User owns 3 cats."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gw := &fakeGateway{
+				replies: []string{fmt.Sprintf(`[{"type":"semantic","content":%q,"entities":[],"confidence":0.9,"changes_behavior":true}]`, tt.candidate)},
+				embeds:  [][]float32{{1, 0}},
+			}
+			st := &fakeStore{}
+			st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing", 0.96, store.StatusActive, true
+			st.nearest.content = tt.old
+			ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+			if err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			if tt.exact {
+				if len(ids) != 0 || len(st.inserted) != 0 || len(st.confirmed) != 1 || st.confirmed[0] != "existing" {
+					t.Fatalf("exact result: ids=%v inserted=%+v confirmed=%v", ids, st.inserted, st.confirmed)
+				}
+				return
+			}
+			if len(ids) != 1 || len(st.inserted) != 1 || st.inserted[0].Supersedes != "existing" || len(st.confirmed) != 0 {
+				t.Fatalf("correction result: ids=%v inserted=%+v confirmed=%v", ids, st.inserted, st.confirmed)
+			}
+		})
 	}
 }
 
@@ -328,6 +386,7 @@ func TestExtractPendingDuplicateSkipsWithoutConfirm(t *testing.T) {
 	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing-pending", 0.96, store.StatusPending, true
+	st.nearest.content = "User is based in Porto, Portugal."
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
@@ -340,13 +399,29 @@ func TestExtractPendingDuplicateSkipsWithoutConfirm(t *testing.T) {
 	}
 }
 
+func TestExtractPendingNearNegationIsKeptForReview(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User does not like tea.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
+	st := &fakeStore{}
+	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing-pending", 0.96, store.StatusPending, true
+	st.nearest.content = "User likes tea."
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 1 || len(st.inserted) != 1 || st.inserted[0].Supersedes != "" || len(st.confirmed) != 0 {
+		t.Fatalf("pending contradiction result: ids=%v inserted=%+v confirmed=%v", ids, st.inserted, st.confirmed)
+	}
+}
+
 // A near-dup match against an active row still reinforces via Confirm
 // (unchanged behavior, pinned against the status-branch refactor).
-func TestExtractActiveDuplicateStillConfirms(t *testing.T) {
+func TestExtractDuplicateReinforces(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing-active", 0.96, store.StatusActive, true
+	st.nearest.content = "User is based in Porto, Portugal."
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
@@ -366,6 +441,7 @@ func TestExtractRejectedDuplicateDropped(t *testing.T) {
 	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User is based in Porto, Portugal.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
 	st := &fakeStore{}
 	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing-rejected", 0.96, store.StatusRejected, true
+	st.nearest.content = "User is based in Porto, Portugal."
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
@@ -396,6 +472,25 @@ func TestExtractIntraBatchNearDuplicateSkipped(t *testing.T) {
 	}
 	if len(ids) != 1 || len(st.inserted) != 1 {
 		t.Fatalf("want intra-batch dup skipped, one insert: ids=%v inserted=%d", ids, len(st.inserted))
+	}
+}
+
+func TestExtractIntraBatchNegationCandidateKept(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{
+		replies: []string{`[
+			{"type":"semantic","content":"User likes tea.","entities":[],"confidence":0.9,"changes_behavior":true},
+			{"type":"semantic","content":"User does not like tea.","entities":[],"confidence":0.9,"changes_behavior":true}
+		]`},
+		embeds: [][]float32{{1, 0}, {0.96, 0.28}},
+	}
+	st := &fakeStore{}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 2 || len(st.inserted) != 2 {
+		t.Fatalf("negation pair dropped: ids=%v inserted=%+v", ids, st.inserted)
 	}
 }
 
@@ -442,6 +537,22 @@ func TestExtractDenyFencesSettingsValue(t *testing.T) {
 	}
 }
 
+func TestExtractDenyFencesInjectedMemoryEchoBeforeConfirm(t *testing.T) {
+	t.Parallel()
+	const fact = "User lives in Porto."
+	gw := &fakeGateway{replies: []string{fmt.Sprintf(`[{"type":"semantic","content":%q,"entities":[],"confidence":0.9,"changes_behavior":true}]`, fact)}}
+	st := &fakeStore{}
+	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "existing", 0.99, store.StatusActive, true
+	st.nearest.content = fact
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "assistant: " + fact, Deny: []string{fact}})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 0 || len(st.inserted) != 0 || len(st.confirmed) != 0 {
+		t.Fatalf("echo caused a memory action: ids=%v inserted=%+v confirmed=%v", ids, st.inserted, st.confirmed)
+	}
+}
+
 func TestEchoesDeny(t *testing.T) {
 	t.Parallel()
 	deny := []string{"create a file named redirects.md explaining 301, 302, and 307 redirects"}
@@ -450,6 +561,12 @@ func TestEchoesDeny(t *testing.T) {
 	}
 	if echoesDeny("The bKash production API rejects requests without an app key header.", deny) {
 		t.Fatal("unrelated fact wrongly dropped")
+	}
+	if echoesDeny("User lives in Berlin.", []string{"User lives in Amsterdam."}) {
+		t.Fatal("a changed location was mistaken for an injected-memory echo")
+	}
+	if !echoesDeny("User lives in Amsterdam.", []string{"User lives in Amsterdam."}) {
+		t.Fatal("an exact injected-memory echo was not caught")
 	}
 }
 
