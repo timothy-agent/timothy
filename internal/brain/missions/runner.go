@@ -1643,7 +1643,7 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 	if stack == "" {
 		return report.Findings
 	}
-	if m.ToolchainInstall != "failed" && stackCoveredByEnvironment(stack, m.Environment, strings.ToLower(strings.TrimSpace(report.Environment))) {
+	if m.ToolchainInstall != "failed" && (stackCoveredByEnvironment(stack, m.Environment, strings.ToLower(strings.TrimSpace(report.Environment))) || stackNeedsNoToolchain(stack)) {
 		return report.Findings
 	}
 	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan's first unit must be a " + bootstrapAllowance + " that installs it into the workspace.\n\n%s", NeutralizeSlot(stack), report.Findings)
@@ -1659,13 +1659,46 @@ var stackWords = map[string][]string{
 	"php":    {"php", "laravel", "symfony", "composer"},
 }
 
+// noToolchainStackWords are stack words for formats the base image
+// already handles, plus filler. A stack made only of these ("Markdown
+// documentation", "YAML config files") needs no bootstrap.
+var noToolchainStackWords = map[string]bool{
+	"markdown": true, "md": true, "documentation": true, "docs": true, "doc": true,
+	"text": true, "txt": true, "plain": true, "prose": true, "readme": true,
+	"html": true, "css": true, "yaml": true, "yml": true, "json": true, "toml": true, "csv": true,
+	"shell": true, "bash": true, "sh": true, "posix": true,
+	"and": true, "or": true, "with": true, "only": true, "a": true, "the": true, "of": true,
+	"file": true, "files": true, "project": true, "repository": true, "repo": true, "config": true,
+}
+
+// stackNeedsNoToolchain reports whether every word of a discover stack
+// is a no-toolchain format or filler (issue #996).
+func stackNeedsNoToolchain(stack string) bool {
+	words := stackWordList(stack)
+	if len(words) == 0 {
+		return false
+	}
+	for _, w := range words {
+		if !noToolchainStackWords[w] {
+			return false
+		}
+	}
+	return true
+}
+
+// stackWordList lowercases a stack and splits it on anything not a
+// letter or digit.
+func stackWordList(stack string) []string {
+	return strings.FieldsFunc(strings.ToLower(stack), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+}
+
 // stackCoveredByEnvironment reports whether a discover stack names the
 // language of one of envs' images. Weak models fill stack even when the
 // image carries the toolchain; the bootstrap note must not follow.
 func stackCoveredByEnvironment(stack string, envs ...string) bool {
-	words := strings.FieldsFunc(strings.ToLower(stack), func(r rune) bool {
-		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
-	})
+	words := stackWordList(stack)
 	for _, env := range envs {
 		for _, want := range stackWords[env] {
 			if slices.Contains(words, want) {

@@ -2464,6 +2464,9 @@ func TestDiscoverSessionDropsStackTheImageCovers(t *testing.T) {
 		{"failed install keeps the note", Mission{Environment: "php", ToolchainInstall: "failed"}, `{"findings":"f","stack":"PHP 7.4"}`, true},
 		{"other language keeps the note", Mission{Environment: "php"}, `{"findings":"f","stack":"Rust CLI"}`, true},
 		{"django is not go", Mission{Environment: "go"}, `{"findings":"f","stack":"Django"}`, true},
+		{"markdown documentation needs no toolchain", Mission{}, `{"findings":"f","stack":"Markdown documentation"}`, false},
+		{"yaml config files need no toolchain", Mission{Environment: "base"}, `{"findings":"f","stack":"YAML config files"}`, false},
+		{"rust with markdown docs keeps the note", Mission{}, `{"findings":"f","stack":"Rust CLI with markdown docs"}`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
