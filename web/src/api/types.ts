@@ -713,6 +713,9 @@ export interface PlanUnit {
   // evidence_only (D-123) marks a unit whose deliverable is a side
   // effect (e.g. a GitHub issue) rather than a file: no artifacts.
   evidence_only?: boolean
+  // bootstrap (D-124) marks the first unit that installs a missing
+  // toolchain into the workspace.
+  bootstrap?: boolean
   // criteria (D-095) are the unit's acceptance criteria, 2 to 6 short
   // lines the reviewer judges against; scope lists the paths the unit
   // may touch. Both absent on plans written before D-095.

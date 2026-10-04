@@ -238,8 +238,8 @@ func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (M
 		// (its image is fixed at create, issue #495). A repo with no
 		// marker leaves "" for the discover turn to fill in.
 		if m.Environment == "" {
-			if env, marker := detectEnvironmentFromMarkers(worktree); env != "" {
-				if err := p.store.SetEnvironment(ctx, m.ID, env, marker); err != nil {
+			if env, marker, candidates := detectEnvironmentFromMarkers(worktree); env != "" {
+				if err := p.store.SetEnvironment(ctx, m.ID, env, marker, candidates); err != nil {
 					p.log.Warn("driver: set environment from markers failed", "mission_id", m.ID, "error", err)
 				} else {
 					m.Environment = env
