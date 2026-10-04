@@ -616,6 +616,12 @@ type PlanUnit struct {
 	// plan-acceptance rule that the gate fail before the work still
 	// applies (probeCheckCmds runs over every unit regardless).
 	EvidenceOnly bool `json:"evidence_only,omitempty"`
+	// Bootstrap (D-124, issue #980) marks the one unit that installs a
+	// toolchain the sandbox lacks. It must be the first unit; the
+	// plan-acceptance probe treats a missing command in its check_cmd,
+	// and in later units' check_cmds, as the expected pre-state instead
+	// of a rejection.
+	Bootstrap bool `json:"bootstrap,omitempty"`
 	// Criteria (D-095, issue #520) are the unit's acceptance criteria,
 	// 2 to 6 short lines the planner extracts from the goal: the
 	// reviewer judges the unit against them instead of the full goal.
