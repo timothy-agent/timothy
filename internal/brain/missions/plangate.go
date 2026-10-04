@@ -68,6 +68,9 @@ func checkPlanGates(plan Plan, m Mission) error {
 			return fmt.Errorf("mission runner: unit %q check_cmd pipes into grep -q '^$', which exits 1 on empty output as well as on filenames, so it can never pass; to assert a command prints nothing pipe it into %s instead", u.Title, emptyOutputHint)
 		}
 	}
+	if err := checkBootstrap(plan); err != nil {
+		return err
+	}
 	if err := checkOwnArtifacts(plan); err != nil {
 		return err
 	}
@@ -80,6 +83,28 @@ func checkPlanGates(plan Plan, m Mission) error {
 	return checkCodeFloor(plan, m.Environment)
 }
 
+// checkBootstrap enforces the bootstrap-unit contract (D-124, issue
+// #980): at most one, first in the plan, and still gated by a check_cmd.
+func checkBootstrap(plan Plan) error {
+	first := -1
+	for i, u := range plan.Units {
+		if !u.Bootstrap {
+			continue
+		}
+		if first >= 0 {
+			return fmt.Errorf("mission runner: units %q and %q are both marked bootstrap; only one unit may install the toolchain, so merge them into a single first unit", plan.Units[first].Title, u.Title)
+		}
+		first = i
+		if i != 0 {
+			return fmt.Errorf("mission runner: bootstrap unit %q must be the first unit of the plan, since later units depend on the toolchain it installs; move it first", u.Title)
+		}
+		if strings.TrimSpace(u.CheckCmd) == "" {
+			return fmt.Errorf("mission runner: bootstrap unit %q needs a check_cmd that runs the installed binary by its workspace-relative path; it is still a gate", u.Title)
+		}
+	}
+	return nil
+}
+
 // smallPlanArtifactCap is the plan size below which a single-directory
 // coding plan is one unit: each extra unit costs a CLI session
 // bootstrap and a reviewed evidence set (issue #720).
@@ -89,15 +114,22 @@ const smallPlanArtifactCap = 8
 // single-directory change into several units. Every extra unit pays
 // for another session bootstrap and another evidence set, and the files
 // share a package, so the work is one unit. Applies in transcribe mode
-// too (D-102): an operator's file list is not a unit split.
+// too (D-102): an operator's file list is not a unit split. A bootstrap
+// unit (D-124) is never merged: it must stay first and separate.
 func checkUnitGranularity(plan Plan, m Mission) error {
-	if len(plan.Units) < 2 {
+	units := make([]PlanUnit, 0, len(plan.Units))
+	for _, u := range plan.Units {
+		if !u.Bootstrap {
+			units = append(units, u)
+		}
+	}
+	if len(units) < 2 {
 		return nil
 	}
 	dir := ""
 	count := 0
-	titles := make([]string, 0, len(plan.Units))
-	for _, u := range plan.Units {
+	titles := make([]string, 0, len(units))
+	for _, u := range units {
 		for _, a := range u.Artifacts {
 			count++
 			d := path.Dir(cleanArtifact(a))
@@ -204,6 +236,8 @@ const probeTimeout = 60 * time.Second
 // a missing command (exit 127, or the shell's "not found" line). Any
 // other failure is the expected state of a gate whose artifacts do not
 // exist yet; a timeout or an exec error is inconclusive and accepted.
+// When the first unit is a bootstrap unit (D-124), a missing command is
+// that pre-state for every unit and is accepted.
 func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan) error {
 	if r.sandbox == nil {
 		return nil
@@ -212,6 +246,7 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 	backend := func(ctx context.Context, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		return r.sandbox(ctx, m.ID, m.Environment, workdir, command, timeout, out)
 	}
+	bootstrapFirst := len(plan.Units) > 0 && plan.Units[0].Bootstrap
 	for _, u := range plan.Units {
 		if strings.TrimSpace(u.CheckCmd) == "" {
 			continue
@@ -233,6 +268,10 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 			}
 			return fmt.Errorf("mission runner: unit %q check_cmd `%s` already exits 0 before any work was done, so it cannot tell done from not done. A toolchain call alone passes while the files are still missing (go test -run X matches nothing, gofmt -l prints nothing for absent files), so anchor the gate on content the unit adds, e.g. %s. A unit that adds no new content (a final format/verify unit) can have no such gate: remove it and put its commands into the code units' check_cmds", u.Title, u.CheckCmd, anchor)
 		case res.ExitCode == 127 || shellNotFound.MatchString(lastLine(res.Excerpt)):
+			if bootstrapFirst {
+				r.log.Info("plan probe: missing command accepted, bootstrap unit precedes it", "mission_id", m.ID, "unit", u.Title, "not_found", strings.TrimSpace(lastLine(res.Excerpt)))
+				continue
+			}
 			env := m.Environment
 			if env == "" {
 				env = "sandbox"

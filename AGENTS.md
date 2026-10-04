@@ -8,6 +8,9 @@ Timothy: self-hosted personal AI assistant. Go microservices + one
 PostgreSQL database + React web UI, run via Docker Compose
 (`deploy/docker-compose.yml`).
 
+Local models: native host Ollama at host.docker.internal:11434,
+registered as an openaicompat provider.
+
 | Service      | Role                                                                  |
 |--------------|-----------------------------------------------------------------------|
 | `brain`      | Public API (:8300 host, :8080 in-network): chat, agent loop, missions |
@@ -17,7 +20,8 @@ PostgreSQL database + React web UI, run via Docker Compose
 | `web`        | React UI (:3300)                                                      |
 | `searxng`    | Metasearch backend for search_web                                     |
 | `markitdown` | Python sidecar: file → markdown                                       |
-| `whisper`    | Python sidecar: local speech-to-text                                  |
+| `ocr`        | Python sidecar: tesseract image OCR (always on)                       |
+| `whisper`    | Python sidecar: local speech-to-text (off unless `COMPOSE_PROFILES=whisper`) |
 | `pdfgen`     | Python sidecar: markdown → PDF via Typst (mission export)             |
 
 ## Commands
@@ -35,17 +39,29 @@ docker run --rm -v "$PWD/web":/app -w /app node:24.18.0-alpine \
   sh -c "npm run build && npm run lint && npm test"
 ```
 
+Single Go test:
+
+```sh
+docker run --rm -v "$PWD":/src -w /src \
+  -v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
+  -e GOFLAGS=-buildvcs=false golang:1.26.6 \
+  go test -race -run TestName ./internal/brain/missions/
+```
+
 First run: `cp deploy/env.example deploy/.env`, set `POSTGRES_PASSWORD`.
 Never read `.env*` files (hooks block it); get values into containers
 via the existing `--env-file` Make targets.
 
 ## Layout
 
+A local where-to-look index with `file:line` anchors may exist at `docs/codebase-map.md` (gitignored). Check the commit it names before trusting a line number.
+
 - `cmd/{brain,gateway,memoryd,sandboxd,skills-validate}`: binaries;
   all wiring in each `main.go` (nil-able deps, env-gated features).
 - `internal/brain/`: `api` (HTTP handlers, nil-gated `register*`),
   `loop` (THE tool loop, lives here only), `tools` + `tools/builtin`,
-  `chat`, `session`, `agents`, `missions` (agent harness),
+  `chat`, `session`, `agents`, `missions` (agent harness), `events` (mission notification inbox),
+  `automations`, `channels`,
   `workflows` (orchestration above missions, env-gated
   `WORKFLOWS_ENABLED`), `connectors`, `destinations`, `kb`,
   `attachments`, `gwclient`, `memclient`, `sandboxclient`,
@@ -56,13 +72,19 @@ via the existing `--env-file` Make targets.
   (source-aware fact extraction), `retrieval` (hybrid, RRF-fused).
 - `internal/platform/`: shared (`migrate`, `pgpool`, `sse`,
   `httpserver`, `metrics`, `logging`, `config`, `service`, `netguard`,
-  `markitdown`, `whisper`).
+  `markitdown`, `whisper`, `pdfgen`, `tesseract`, `trustfence`).
+- `internal/secretstore/`: secret backends. Raw values stay here.
 - `migrations/`: numbered idempotent SQL, embedded via `embed.go`.
   Pre-release: schema changes edit the original migration in place
   (currently one file, `0001_init.sql`); never add iterative ALTERs.
-- `web/`: React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui.
+- `web/`: React 19 + react-router 8 + TypeScript 7 + Vite 8 + Tailwind v4 + shadcn/ui.
 
 ## Missions harness
+
+The full contract (phases, light missions, sentinel end-turn rule,
+verification and review gates, attachments, PDF export) lives in
+`internal/brain/missions/AGENTS.md` and loads when working there. Web
+work on missions should read it too.
 
 - `internal/brain/missions/`: `statemachine.go` (pure `Step()`, sole
   transition logic), `store.go` (`ApplyTransition` is the only state
@@ -72,7 +94,7 @@ via the existing `--env-file` Make targets.
   template an automation action carries; automations themselves live
   in `internal/brain/automations`).
 - Light missions (kind=general, `light` flag): born in phase=build,
-  skip discover/plan; the worker carries the deliverable in
+  skip discover/plan/prove; the worker carries the deliverable in
   mission_status's `final_output` argument.
 - Worker turns end on successful sentinel execution
   (`loop.Request.EndTurnTools`); never add a post-sentinel model call.
@@ -83,11 +105,21 @@ via the existing `--env-file` Make targets.
   `parent_mission_id`; parent outcome digest snapshotted into
   `parent_context` at create, rendered into prompts. Never reopen a
   terminal mission.
-- PDF attachments: markitdown-converted once at create, markdown in
-  the `attachments` jsonb column, rendered neutralized into every
-  prompt (cap 8); API responses strip the markdown.
+- Mission attachments: PDF/text via markitdown, images captioned,
+  audio via whisper, converted once at create and stored on the
+  mission's `sources` jsonb (cap 8); rendered neutralized into every
+  prompt; API responses strip the markdown.
 - Model-derived text entering prompts goes through `NeutralizeSlot`.
 - `make canary` gates every harness change.
+
+## Sandbox toolchain cache
+
+D-125 (issue #990): the base sandbox image carries mise (shims on PATH,
+`MISE_TRUSTED_CONFIG_PATHS=/workspace`). The optional `sandbox-toolchains`
+named volume holds mise's data dir (`/home/sandbox/.mise`)
+and is shared by all mission containers so per-repo toolchains install
+once. sandboxd resolves it like the `.claude` state volume; absent means
+ephemeral toolchains. The PHP variant does not use it.
 
 ## Key invariants (enforce, never relax)
 

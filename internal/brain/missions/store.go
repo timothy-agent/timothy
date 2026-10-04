@@ -91,7 +91,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay,
 	pending_permission, auto_approve_tools, auto_approve_plan, last_evidence,
-	discover_notes, replan_used, automation_run_id, session_id, harness, review_harness, environment,
+	discover_notes, replan_used, automation_run_id, session_id, harness, review_harness, environment, environment_marker,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow,
 	review_findings, rework_rounds, has_plan, executor_session_policy, harness_retries, origin_kind, unattended, tool_allowlist,
@@ -177,7 +177,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment,
+		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment, &m.EnvironmentMarker,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -265,7 +265,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment,
+		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment, &m.EnvironmentMarker,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -1087,12 +1087,14 @@ func (s *Store) SetNameIfEmpty(ctx context.Context, id, name string) error {
 }
 
 // SetEnvironment persists a coding mission's auto-detected sandbox
-// environment (D-05x) and appends a mission.environment_detected event
-// — sticky, like SetProvisioned: driver.go's ensureProvisioned only
-// calls this once, when Environment is still "". Bypasses the state
+// environment (D-05x) with the marker that set it and appends a
+// mission.environment_detected event. driver.go's ensureProvisioned
+// calls it when Environment is still "", and the discover report may
+// call it once more to replace a marker-detected value. Bypasses the state
 // machine like SetDiscoverNotes/SetLastEvidence: detection happens
-// mid-provisioning, not at an Advance boundary.
-func (s *Store) SetEnvironment(ctx context.Context, id, environment, marker string) error {
+// mid-provisioning, not at an Advance boundary. candidates lists the
+// losing markers (always present in the payload, empty when none).
+func (s *Store) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("missions set environment: %w", err)
@@ -1102,12 +1104,15 @@ func (s *Store) SetEnvironment(ctx context.Context, id, environment, marker stri
 		return fmt.Errorf("missions set environment begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if _, err := tx.Exec(ctx, `UPDATE missions SET environment = $2, updated_at = now() WHERE id = $1`,
-		id, environment); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE missions SET environment = $2, environment_marker = $3, updated_at = now() WHERE id = $1`,
+		id, environment, marker); err != nil {
 		return fmt.Errorf("missions set environment: %w", err)
 	}
+	if candidates == nil {
+		candidates = []string{}
+	}
 	if err := appendEventTx(ctx, tx, id, "mission.environment_detected", map[string]any{
-		"environment": environment, "marker": marker,
+		"environment": environment, "marker": marker, "candidates": candidates,
 	}, "live"); err != nil {
 		return fmt.Errorf("missions set environment event: %w", err)
 	}
