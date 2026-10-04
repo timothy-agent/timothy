@@ -148,6 +148,14 @@ type Mission struct {
 	// EnvironmentMarker records what set Environment: "" for an
 	// explicit operator value, "discover", or the repo marker file.
 	EnvironmentMarker string `json:"environment_marker,omitempty"`
+	// Toolchains maps tool -> version prefix pinned by the repo's marker
+	// files (D-126), installed in the sandbox before discover. Written
+	// with Environment by Store.SetEnvironment.
+	Toolchains map[string]string `json:"toolchains,omitempty"`
+	// ToolchainInstall is "installed" or "failed" from the latest
+	// toolchain install event, "" when none ran. Derived by the driver
+	// before the discover turn, never persisted or serialized.
+	ToolchainInstall string `json:"-"`
 	PendingPermission string `json:"pending_permission,omitempty"`
 	// PendingPermissionTool/Args/Danger/Rationale describe the parked
 	// tool call for the UI — set alongside PendingPermission whenever a

@@ -6,6 +6,7 @@ package missions
 // embeds one and its Set* setters delegate straight through.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
@@ -100,7 +102,18 @@ type provisioner struct {
 	// leaves the mission unnamed here and the branch slugged from the
 	// goal; runResult's backfill still names it later.
 	nameMission func(context.Context, string) string
+
+	// sandboxExec runs the toolchain install (D-126) in the mission's
+	// sandbox. nil skips the install.
+	sandboxExec sandboxExec
 }
+
+// toolchainInstallTimeout bounds one toolchain install (D-126); the
+// discover turn waits for it, so a hung download cannot hold a mission.
+const toolchainInstallTimeout = 10 * time.Minute
+
+// toolchainErrCap bounds the install output kept on a failure event.
+const toolchainErrCap = 2000
 
 // ensureProvisioned gives a mission everything Create used to set up
 // inline — a hidden session, its standing grants, and a workspace —
@@ -237,15 +250,33 @@ func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (M
 		// sandbox exec, so the container is created on the right image
 		// (its image is fixed at create, issue #495). A repo with no
 		// marker leaves "" for the discover turn to fill in.
+		toolchains := map[string]string{}
+		if m.Kind == KindCoding {
+			toolchains = detectMissionToolchains(worktree, m.Environment, m.Goal)
+		}
+		setEnv := false
 		if m.Environment == "" {
 			if env, marker, candidates := detectEnvironmentFromMarkers(worktree); env != "" {
-				if err := p.store.SetEnvironment(ctx, m.ID, env, marker, candidates); err != nil {
+				if m.Kind == KindCoding {
+					toolchains = detectMissionToolchains(worktree, env, m.Goal)
+				}
+				if err := p.store.SetEnvironment(ctx, m.ID, env, marker, candidates, toolchains); err != nil {
 					p.log.Warn("driver: set environment from markers failed", "mission_id", m.ID, "error", err)
 				} else {
 					m.Environment = env
+					m.Toolchains = toolchains
+					setEnv = true
 				}
 			}
 		}
+		if !setEnv && len(toolchains) > 0 {
+			if err := p.store.SetToolchains(ctx, m.ID, toolchains); err != nil {
+				p.log.Warn("driver: set toolchains failed", "mission_id", m.ID, "error", err)
+			} else {
+				m.Toolchains = toolchains
+			}
+		}
+		p.installToolchains(ctx, m, workRoot)
 		if m.ParentMissionID != "" && missionPolicyFor(m).needsWorktree {
 			ref := baseUsed
 			if ref == "" {
@@ -487,4 +518,38 @@ func (p *provisioner) grantSessionDefaults(ctx context.Context, m Mission) {
 			p.log.Warn("driver: approval allowlist grant failed", "mission_id", m.ID, "tool", tool, "error", err)
 		}
 	}
+}
+
+// installToolchains installs and globally activates m.Toolchains in the
+// mission's sandbox (D-126) and records mission.toolchain_installed or
+// mission.toolchain_install_failed. A failure never fails provisioning:
+// the mission proceeds and the discover turn is told. Returns the
+// failure text and true when the install failed. No toolchains means
+// no exec.
+func (p *provisioner) installToolchains(ctx context.Context, m Mission, workRoot string) (string, bool) {
+	if p.sandboxExec == nil || len(m.Toolchains) == 0 {
+		return "", false
+	}
+	var out bytes.Buffer
+	code, err := p.sandboxExec(ctx, m.ID, m.Environment, workRoot, buildToolchainInstallCmd(m.Toolchains), toolchainInstallTimeout, &out)
+	if err == nil && code == 0 {
+		if aerr := p.store.AppendEvent(ctx, m.ID, "mission.toolchain_installed", map[string]any{"toolchains": m.Toolchains}); aerr != nil {
+			p.log.Warn("driver: record toolchain install failed", "mission_id", m.ID, "error", aerr)
+		}
+		return "", false
+	}
+	detail := strings.TrimSpace(out.String())
+	if len(detail) > toolchainErrCap {
+		detail = "..." + detail[len(detail)-toolchainErrCap:]
+	}
+	if err != nil {
+		detail = strings.TrimSpace(err.Error() + "\n" + detail)
+	}
+	p.log.Warn("driver: toolchain install failed; mission continues", "mission_id", m.ID, "toolchains", m.Toolchains, "exit_code", code, "error", err)
+	if aerr := p.store.AppendEvent(ctx, m.ID, "mission.toolchain_install_failed", map[string]any{
+		"toolchains": m.Toolchains, "exit_code": code, "error": detail,
+	}); aerr != nil {
+		p.log.Warn("driver: record toolchain install failure failed", "mission_id", m.ID, "error", aerr)
+	}
+	return detail, true
 }

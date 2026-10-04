@@ -290,7 +290,7 @@ type nativeRunner struct {
 // environmentSetter is the narrow slice of *Store DiscoverSession
 // writes the discover turn's environment report through.
 type environmentSetter interface {
-	SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error
+	SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string, toolchains map[string]string) error
 }
 
 // SetEnvironmentSink wires the store the discover turn's environment
@@ -1474,7 +1474,7 @@ func discoverMaxSteps(m Mission) int {
 // failure. provider/model (issue #507) are who served the turn that
 // produced the returned notes; empty when the turn errored.
 func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, servedProvider, servedModel string, err error) {
-	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m)
+	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + discoverToolchainNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m)
 	sc := contextBlocks(m.Sources, contextSession, "")
 	user := "Goal: " + NeutralizeSlot(m.Goal) + sc.head
 	if notes := progressWithOperatorNotes(m.Progress, progressRenderCap, nil); notes != "" {
@@ -1588,6 +1588,36 @@ func (r *nativeRunner) discoverEnvironmentNudge(m Mission) string {
 	return " Also fill the environment field with the sandbox toolchain this project needs (from what is in the workspace, or what the goal asks to build); when the language is none of the listed values, leave environment empty and name it in the stack field."
 }
 
+// toolchainSummary renders toolchains as "node 18, python 3.10".
+func toolchainSummary(toolchains map[string]string) string {
+	tools := make([]string, 0, len(toolchains))
+	for t := range toolchains {
+		tools = append(tools, t)
+	}
+	sort.Strings(tools)
+	for i, t := range tools {
+		tools[i] = t + " " + toolchains[t]
+	}
+	return strings.Join(tools, ", ")
+}
+
+// discoverToolchainNudge tells the discover turn what the harness did
+// about the repo's pinned toolchains (D-126): installed ones are not
+// reinstalled; after a failed install a bootstrap unit (D-124) is allowed.
+func discoverToolchainNudge(m Mission) string {
+	if m.Kind != KindCoding || len(m.Toolchains) == 0 {
+		return ""
+	}
+	list := toolchainSummary(m.Toolchains)
+	switch m.ToolchainInstall {
+	case "installed":
+		return " Toolchains installed: " + list + ". Do not reinstall them."
+	case "failed":
+		return " The harness tried to install the repo's pinned toolchains (" + list + ") in the sandbox and failed. Say so in your findings and set stack to the project's language: the plan's first unit may be a bootstrap unit (bootstrap: true) that installs the toolchain into the workspace."
+	}
+	return ""
+}
+
 // applyDiscoverReport persists the report's environment when it is a
 // registered image key other than base and the mission has none yet or
 // a repo marker set a different one (issue #495); an operator-explicit
@@ -1604,7 +1634,7 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 			if m.Environment != "" {
 				r.log.Info("mission discover: overriding marker-detected environment", "mission_id", m.ID, "from", m.Environment, "to", env, "marker", m.EnvironmentMarker)
 			}
-			if err := r.environmentSink.SetEnvironment(ctx, m.ID, env, "discover", nil); err != nil {
+			if err := r.environmentSink.SetEnvironment(ctx, m.ID, env, "discover", nil, detectMissionToolchains(m.WorkRoot(), env, m.Goal)); err != nil {
 				r.log.Warn("mission discover: set environment failed", "mission_id", m.ID, "environment", env, "error", err)
 			}
 		}

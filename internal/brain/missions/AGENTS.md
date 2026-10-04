@@ -196,6 +196,17 @@ AGENTS.md so other work does not pay for it every session.
   unit's `check_cmd` as the expected pre-state; "already exits 0" is
   still rejected and post-turn verification is unchanged. The
   granularity merge never folds a bootstrap unit into the work units.
+- Repo toolchain versions (D-126, issue #991): `detectToolchainVersions`
+  (environment.go, marker-only, normalized to mise-acceptable prefixes;
+  `detectMissionToolchains` falls back to versions the goal names) fills `missions.toolchains` alongside the environment. Brain installs
+  them with `mise use --global` through the sandbox exec path right
+  after provisioning (`provisioner.installToolchains`, 10 minute
+  ceiling) and again after a discover-driven sandbox recreate, never
+  inside sandboxd's create call (30 s header timeout). A failure never
+  fails provisioning: `mission.toolchain_install_failed` carries the
+  output tail and the discover nudge and notes allow a bootstrap unit
+  (D-124). Executor CLIs keep the image's node via rewritten shebangs
+  in `deploy/sandbox-base.Dockerfile`.
 - Plan defects travel back to the planner (issue #718): a worker
   BLOCKED note that names the plan (`namesPlanDefect`: a gate,
   criterion, artifact path, "cannot pass", "in isolation") is

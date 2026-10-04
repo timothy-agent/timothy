@@ -54,6 +54,17 @@ RUN NPM_CONFIG_PREFIX=/usr/local npm install -g @openai/codex@0.157.1 \
 RUN NPM_CONFIG_PREFIX=/usr/local npm install -g opencode-ai@1.18.32 \
     && opencode --version
 
+# Executor CLIs must keep running on this image's node 24 when a mission
+# pins another node through mise (D-126, issue #991): shims precede
+# /usr/local/bin on PATH, so `#!/usr/bin/env node` would pick the pinned
+# version. claude and opencode are native binaries and are left alone.
+RUN for c in claude codex pi opencode; do \
+      f="$(readlink -f "/usr/local/bin/$c")"; \
+      if [ "$(head -n 1 "$f")" = '#!/usr/bin/env node' ]; then \
+        sed -i '1s|.*|#!/usr/local/bin/node|' "$f"; \
+      fi; \
+    done
+
 # Headless Cursor CLI, same rationale as claude/pi/codex/opencode
 # above. No npm package exists; the official installer
 # (https://cursor.com/install) downloads this same per-arch tarball
