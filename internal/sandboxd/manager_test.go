@@ -360,6 +360,85 @@ func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
 	}
 }
 
+// TestCreateContainerToolchainsMount covers D-125: the mise toolchain
+// cache volume is replicated into mission containers when configured and
+// omitted when not.
+func TestCreateContainerToolchainsMount(t *testing.T) {
+	tc := mount.Mount{Type: mount.TypeVolume, Source: "timothy_sandbox-toolchains", Target: toolchainsMountPath}
+	tests := []struct {
+		name string
+		tm   mount.Mount
+		want int
+	}{
+		{"configured", tc, 2},
+		{"absent", mount.Mount{}, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMounts []mount.Mount
+			cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Fatalf("read create body: %v", err)
+					}
+					var cfg struct {
+						HostConfig container.HostConfig
+					}
+					if err := json.Unmarshal(body, &cfg); err != nil {
+						t.Fatalf("unmarshal create body: %v", err)
+					}
+					gotMounts = cfg.HostConfig.Mounts
+					writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+				case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+				}
+			})
+			mgr := newTestManager(cli)
+			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+			mgr.toolchainsMount = tt.tm
+
+			if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+				t.Fatalf("createContainer: %v", err)
+			}
+			if len(gotMounts) != tt.want {
+				t.Fatalf("Mounts = %+v, want %d", gotMounts, tt.want)
+			}
+			found := false
+			for _, m := range gotMounts {
+				if m.Target == toolchainsMountPath && m.Source == tc.Source {
+					found = true
+				}
+			}
+			if found != (tt.tm.Source != "") {
+				t.Errorf("toolchains mount present = %v, Mounts = %+v", found, gotMounts)
+			}
+		})
+	}
+}
+
+// TestResolveMountToolchainsVolume confirms resolveMount resolves the
+// toolchains volume from toolchainsVolumeMetaPath (D-125).
+func TestResolveMountToolchainsVolume(t *testing.T) {
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, container.InspectResponse{
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "timothy_sandbox-toolchains", Destination: toolchainsVolumeMetaPath},
+			},
+		})
+	})
+	m, err := resolveMount(context.Background(), cli, toolchainsVolumeMetaPath, toolchainsMountPath)
+	if err != nil {
+		t.Fatalf("resolveMount: %v", err)
+	}
+	if m.Source != "timothy_sandbox-toolchains" || m.Target != toolchainsMountPath {
+		t.Errorf("mount = %+v", m)
+	}
+}
+
 // TestImageFor covers D-05x's environment->image derivation: "" and
 // "base" both resolve to the operator-configured base image; every
 // other allowlisted key derives a variant ref from the base ref
@@ -690,16 +769,16 @@ func TestCreateContainerHardensRootfs(t *testing.T) {
 		t.Errorf("ReadonlyRootfs = false, want true")
 	}
 
-	// Each tmpfs must be writable by the sandbox uid and must NOT be
-	// noexec: workers run scripts from /tmp and binaries installed under
-	// HOME by `npm install -g` / `pip install --user`.
+	// Each tmpfs must be writable by the sandbox uid and must say exec
+	// explicitly, since Docker defaults tmpfs to noexec: `go test` runs
+	// its binary from /tmp and HOME holds `npm install -g` binaries.
 	tmpfsCases := []struct {
 		path      string
 		wantOpts  []string
 		wantSized string
 	}{
-		{path: tmpMountPath, wantOpts: []string{"rw", "nosuid", "nodev"}, wantSized: sandboxTmpfsSize},
-		{path: sandboxHomePath, wantOpts: []string{"rw", "nosuid", "nodev", "uid=65534", "gid=65534"}, wantSized: sandboxHomeTmpfsSize},
+		{path: tmpMountPath, wantOpts: []string{"rw", "exec", "nosuid", "nodev"}, wantSized: sandboxTmpfsSize},
+		{path: sandboxHomePath, wantOpts: []string{"rw", "exec", "nosuid", "nodev", "uid=65534", "gid=65534"}, wantSized: sandboxHomeTmpfsSize},
 	}
 	for _, tc := range tmpfsCases {
 		opts, ok := gotHostConfig.Tmpfs[tc.path]
@@ -717,6 +796,12 @@ func TestCreateContainerHardensRootfs(t *testing.T) {
 		}
 		if slices.Contains(strings.Split(opts, ","), "noexec") {
 			t.Errorf("Tmpfs[%s] = %q, must not be noexec", tc.path, opts)
+		}
+	}
+
+	for _, p := range []string{executorStateMountPath, toolchainsMountPath} {
+		if filepath.Dir(p) != sandboxHomePath {
+			t.Errorf("volume mount %q is not a direct child of %q; Docker would create its parents root-owned on the HOME tmpfs", p, sandboxHomePath)
 		}
 	}
 
@@ -800,7 +885,7 @@ func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
 	if !slices.Contains(gotEnv, sandboxPath) {
 		t.Fatalf("Env = %v, want to contain %q", gotEnv, sandboxPath)
 	}
-	wantPrefix := "PATH=/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:/home/sandbox/go/bin:"
+	wantPrefix := "PATH=/home/sandbox/.mise/shims:/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:/home/sandbox/go/bin:"
 	if !strings.HasPrefix(sandboxPath, wantPrefix) {
 		t.Errorf("sandboxPath = %q, want prefix %q", sandboxPath, wantPrefix)
 	}

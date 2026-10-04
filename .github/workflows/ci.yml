@@ -225,6 +225,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build base image
         run: docker build -f deploy/sandbox-base.Dockerfile -t timothy-sandbox-base:ci .
+      - name: Smoke test base image
+        run: ./scripts/sandbox-base-smoke.sh timothy-sandbox-base:ci
       - name: Build variant images
         run: |
           for lang in go node python java php; do
