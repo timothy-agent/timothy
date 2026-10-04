@@ -915,6 +915,10 @@ CREATE TABLE IF NOT EXISTS missions (
     -- The marker file that set environment ('' when the operator set
     -- it explicitly, 'discover' when the discover report did).
     environment_marker    text NOT NULL DEFAULT '',
+    -- Toolchain versions from repo markers or the goal (D-126), tool ->
+    -- mise version prefix, written with environment by
+    -- store.SetEnvironment and installed before discover.
+    toolchains            jsonb NOT NULL DEFAULT '{}',
     -- FinalOutput is a light mission's verbatim final worker message
     -- (D-069), the deliverable itself, since destinations delivery has
     -- no other body content for a mission with no review/artifacts.

@@ -603,6 +603,21 @@ describe('MissionDetail environment pill', () => {
   })
 })
 
+describe('MissionDetail toolchains pill', () => {
+  it('lists the pinned toolchains sorted by tool', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, toolchains: { python: '3.10', node: '18' } })
+    renderPage()
+    expect(await screen.findByText('node 18 · python 3.10')).toBeTruthy()
+  })
+
+  it('omits the pill when no toolchains are pinned', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, toolchains: {} })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByTitle(/Toolchain versions/)).toBeNull()
+  })
+})
+
 const githubDestinationRow: Destination = {
   id: 'dest-gh',
   name: 'origin repo',
