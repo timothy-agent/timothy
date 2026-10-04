@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EntityGraphData, MemoryItem } from '../../api/types'
@@ -77,6 +77,22 @@ function renderTab() {
   )
 }
 
+// Chart handlers register in a mount effect, so wait for them, then fire
+// inside act() so the selection and its dispatchAction effect flush first.
+async function clickNode(id: string) {
+  await waitFor(() => expect(clickHandler).not.toBeNull())
+  act(() => clickHandler!({ dataType: 'node', data: { id } }))
+}
+
+async function clickCanvas(downX: number, upX: number) {
+  await waitFor(() => expect(zrMousedownHandler).not.toBeNull())
+  await waitFor(() => expect(zrClickHandler).not.toBeNull())
+  act(() => {
+    zrMousedownHandler!({ offsetX: downX, offsetY: 100 })
+    zrClickHandler!({ target: null, offsetX: upX, offsetY: 100 })
+  })
+}
+
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
@@ -104,7 +120,7 @@ describe('GraphTab', () => {
   it('clicking a node opens the detail panel with its memories, graph wrapper stays mounted', async () => {
     renderTab()
     await screen.findByTestId('entity-graph')
-    clickHandler!({ dataType: 'node', data: { id: 'e1' } })
+    await clickNode('e1')
     const panel = await screen.findByTestId('entity-detail')
     expect(panel).toHaveTextContent('timothy')
     expect(await screen.findByTestId('entity-memory')).toHaveTextContent(
@@ -118,20 +134,16 @@ describe('GraphTab', () => {
   it('clicking the empty canvas clears the selection', async () => {
     renderTab()
     await screen.findByTestId('entity-graph')
-    clickHandler!({ dataType: 'node', data: { id: 'e1' } })
+    await clickNode('e1')
     await screen.findByTestId('entity-detail')
-    await waitFor(() => expect(zrMousedownHandler).not.toBeNull())
-    await waitFor(() => expect(zrClickHandler).not.toBeNull())
-    zrMousedownHandler!({ offsetX: 100, offsetY: 100 })
-    zrClickHandler!({ target: null, offsetX: 100, offsetY: 100 })
+    await clickCanvas(100, 100)
     await waitFor(() => expect(screen.queryByTestId('entity-detail')).toBeNull())
   })
 
   it('rings the selected node by its index in the kind-filtered series', async () => {
     renderTab()
     await screen.findByTestId('entity-graph')
-    await waitFor(() => expect(clickHandler).not.toBeNull())
-    clickHandler!({ dataType: 'node', data: { id: 'e2' } })
+    await clickNode('e2')
     await screen.findByTestId('entity-detail')
     expect(dispatchAction).toHaveBeenLastCalledWith({ type: 'select', seriesId: 'entities', dataIndex: 1 })
     fireEvent.click(screen.getByRole('button', { name: 'project' }))
@@ -143,12 +155,9 @@ describe('GraphTab', () => {
   it('releasing a pan on empty canvas keeps the selection', async () => {
     renderTab()
     await screen.findByTestId('entity-graph')
-    clickHandler!({ dataType: 'node', data: { id: 'e1' } })
+    await clickNode('e1')
     await screen.findByTestId('entity-detail')
-    await waitFor(() => expect(zrMousedownHandler).not.toBeNull())
-    await waitFor(() => expect(zrClickHandler).not.toBeNull())
-    zrMousedownHandler!({ offsetX: 100, offsetY: 100 })
-    zrClickHandler!({ target: null, offsetX: 120, offsetY: 100 })
+    await clickCanvas(100, 120)
     expect(await screen.findByTestId('entity-detail')).toBeInTheDocument()
   })
 
