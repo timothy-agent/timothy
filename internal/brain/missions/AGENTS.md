@@ -196,6 +196,30 @@ AGENTS.md so other work does not pay for it every session.
   unit's `check_cmd` as the expected pre-state; "already exits 0" is
   still rejected and post-turn verification is unchanged. The
   granularity merge never folds a bootstrap unit into the work units.
+  Coding missions only (issue #996): the plan prompt carries the
+  bootstrap rule (`planBootstrapRule`) only when the discover notes hold
+  a harness `bootstrapAllowance` note, and `checkBootstrap` rejects a
+  bootstrap unit on any other kind.
+- Repo toolchain versions (D-126, issue #991): `detectToolchainVersions`
+  (environment.go, marker-only, normalized to mise-acceptable prefixes;
+  `detectMissionToolchains` falls back to versions the goal names) fills `missions.toolchains` alongside the environment. Brain installs
+  them with `mise use --global` through the sandbox exec path right
+  after provisioning (`provisioner.installToolchains`, 10 minute
+  ceiling) and again after a discover-driven sandbox recreate, never
+  inside sandboxd's create call (30 s header timeout). A failure never
+  fails provisioning: `mission.toolchain_install_failed` carries the
+  output tail and the discover nudge and notes allow a bootstrap unit
+  (D-124). Executor CLIs keep the image's node via rewritten shebangs
+  in `deploy/sandbox-base.Dockerfile`.
+- PHP minors (D-127, issue #992): the php image bakes 8.1 to 8.4
+  (default 8.4, `phpMinors` mirrors the Dockerfile). For the php env
+  only, composer.json `config.platform.php` then `require.php` picks a
+  minor; a lower bound selects the lowest baked minor that satisfies it.
+  `buildPHPSelectCmd` links `php`, `phar`, `phar.phar` from
+  `/usr/bin/<name><minor>` into `/home/sandbox/.local/bin` as the
+  sandbox uid. No root exec: the rootfs is read-only with all caps
+  dropped, so `update-alternatives` cannot run. An unbaked minor fails
+  the same way as a mise install.
 - Plan defects travel back to the planner (issue #718): a worker
   BLOCKED note that names the plan (`namesPlanDefect`: a gate,
   criterion, artifact path, "cannot pass", "in isolation") is

@@ -68,7 +68,7 @@ func checkPlanGates(plan Plan, m Mission) error {
 			return fmt.Errorf("mission runner: unit %q check_cmd pipes into grep -q '^$', which exits 1 on empty output as well as on filenames, so it can never pass; to assert a command prints nothing pipe it into %s instead", u.Title, emptyOutputHint)
 		}
 	}
-	if err := checkBootstrap(plan); err != nil {
+	if err := checkBootstrap(plan, m); err != nil {
 		return err
 	}
 	if err := checkOwnArtifacts(plan); err != nil {
@@ -84,12 +84,16 @@ func checkPlanGates(plan Plan, m Mission) error {
 }
 
 // checkBootstrap enforces the bootstrap-unit contract (D-124, issue
-// #980): at most one, first in the plan, and still gated by a check_cmd.
-func checkBootstrap(plan Plan) error {
+// #980): coding missions only (issue #996), at most one, first in the
+// plan, and still gated by a check_cmd.
+func checkBootstrap(plan Plan, m Mission) error {
 	first := -1
 	for i, u := range plan.Units {
 		if !u.Bootstrap {
 			continue
+		}
+		if m.Kind != KindCoding {
+			return fmt.Errorf("mission runner: unit %q is marked bootstrap, but only coding missions install toolchains; drop the bootstrap unit and plan the deliverable with the tools the sandbox has", u.Title)
 		}
 		if first >= 0 {
 			return fmt.Errorf("mission runner: units %q and %q are both marked bootstrap; only one unit may install the toolchain, so merge them into a single first unit", plan.Units[first].Title, u.Title)
