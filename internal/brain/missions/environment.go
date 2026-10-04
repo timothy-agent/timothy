@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -158,9 +159,11 @@ func countSourceFiles(root string) map[string]int {
 //	python  .python-version, runtime.txt, pyproject.toml requires-python, .tool-versions, .mise.toml
 //	node    .nvmrc, .node-version, package.json engines.node, .tool-versions, .mise.toml
 //	go      go.mod go directive, .tool-versions, .mise.toml
+//	php     composer.json config.platform.php then require.php, .tool-versions, .mise.toml
 //
 // Other tools are ignored: mise builds most of them from source, which
-// the sandbox cannot do inside the install ceiling.
+// the sandbox cannot do inside the install ceiling. php is kept only
+// for the php env, whose image bakes the minors (D-127).
 //
 // The language markers apply when env is that language or "" / "base";
 // .tool-versions and .mise.toml apply for every env. A constraint is
@@ -176,7 +179,11 @@ func detectToolchainVersions(worktree, env string) map[string]string {
 		if _, ok := out[tool]; ok {
 			return
 		}
-		if v, ok := normalizeToolVersion(constraint); ok && supportedToolchains[tool] {
+		normalize := normalizeToolVersion
+		if tool == "php" {
+			normalize = normalizePHPVersion
+		}
+		if v, ok := normalize(constraint); ok && supportedToolchains[tool] {
 			out[tool] = v
 		}
 	}
@@ -206,17 +213,44 @@ func detectToolchainVersions(worktree, env string) map[string]string {
 			set("go", m[1])
 		}
 	}
+	if env == "php" {
+		var composer struct {
+			Require map[string]string `json:"require"`
+			Config  struct {
+				Platform map[string]string `json:"platform"`
+			} `json:"config"`
+		}
+		if json.Unmarshal([]byte(readMarker(worktree, "composer.json")), &composer) == nil {
+			set("php", composer.Config.Platform["php"])
+			set("php", composer.Require["php"])
+		}
+	}
 	for tool, v := range parseToolVersions(readMarker(worktree, ".tool-versions")) {
 		set(tool, v)
 	}
 	for tool, v := range parseMiseToml(readMarker(worktree, ".mise.toml")) {
 		set(tool, v)
 	}
+	if env != "php" {
+		delete(out, "php")
+	}
 	return out
 }
 
-// supportedToolchains are the tools mise installs from prebuilt binaries.
-var supportedToolchains = map[string]bool{"python": true, "node": true, "go": true}
+// supportedToolchains are the tools mise installs from prebuilt
+// binaries, plus php, which is selected from the minors the php image
+// bakes (D-127).
+var supportedToolchains = map[string]bool{"python": true, "node": true, "go": true, "php": true}
+
+// phpMinors are the PHP minors deploy/sandbox-php.Dockerfile bakes, ascending.
+var phpMinors = []string{"8.1", "8.2", "8.3", "8.4"}
+
+// phpBinDir and phpLinkDir are where the php image's versioned binaries
+// live and the sandbox-writable PATH dir that outranks them.
+const (
+	phpBinDir  = "/usr/bin"
+	phpLinkDir = "/home/sandbox/.local/bin"
+)
 
 var (
 	finalVersionRe   = regexp.MustCompile(`^[0-9][0-9A-Za-z.\-]*$`)
@@ -226,7 +260,7 @@ var (
 	goDirectiveRe    = regexp.MustCompile(`(?m)^go\s+(\d+\.\d+(?:\.\d+)?)\s*$`)
 	miseToolLineRe   = regexp.MustCompile(`^["']?([A-Za-z0-9_-]+)["']?\s*=\s*(.+)$`)
 	quotedRe         = regexp.MustCompile(`["']([^"']+)["']`)
-	goalToolchainRe  = regexp.MustCompile(`(?i)\b(?:python\s*v?([23]\.\d+(?:\.\d+)?)|node(?:\.?js)?\s*v?(\d{2}(?:\.\d+){0,2})|go(?:lang)?\s*v?(1\.\d+(?:\.\d+)?))\b`)
+	goalToolchainRe  = regexp.MustCompile(`(?i)\b(?:python\s*v?([23]\.\d+(?:\.\d+)?)|node(?:\.?js)?\s*v?(\d{2}(?:\.\d+){0,2})|go(?:lang)?\s*v?(1\.\d+(?:\.\d+)?)|php\s*v?([5-8]\.\d+)(?:\.\d+)?)\b`)
 	toolAliases      = map[string]string{"nodejs": "node", "golang": "go"}
 )
 
@@ -237,16 +271,18 @@ var (
 func detectMissionToolchains(worktree, env, goal string) map[string]string {
 	out := detectToolchainVersions(worktree, env)
 	for tool, v := range goalToolchainVersions(goal) {
-		if _, ok := out[tool]; !ok {
-			out[tool] = v
+		if _, ok := out[tool]; ok || (tool == "php" && env != "php") {
+			continue
 		}
+		out[tool] = v
 	}
 	return out
 }
 
 // goalToolchainVersions returns the first version the goal names per
-// tool. Patterns are strict (python 2.x/3.x and go 1.x need a minor,
-// node a two-digit major) so prose like "go 2 steps" never matches.
+// tool. Patterns are strict (python 2.x/3.x, go 1.x and php need a
+// minor, node a two-digit major) so prose like "go 2 steps" never
+// matches. php keeps only major.minor.
 func goalToolchainVersions(goal string) map[string]string {
 	out := map[string]string{}
 	for _, m := range goalToolchainRe.FindAllStringSubmatch(goal, -1) {
@@ -256,8 +292,10 @@ func goalToolchainVersions(goal string) map[string]string {
 			tool, v = "python", m[1]
 		case m[2] != "":
 			tool, v = "node", m[2]
-		default:
+		case m[3] != "":
 			tool, v = "go", m[3]
+		default:
+			tool, v = "php", m[4]
 		}
 		if _, ok := out[tool]; !ok {
 			out[tool] = v
@@ -289,6 +327,52 @@ func normalizeToolVersion(c string) (string, bool) {
 		return "", false
 	}
 	return v, true
+}
+
+// normalizePHPVersion reduces a composer php constraint to a minor. A
+// lower bound ("^8.0.2", ">=8.1", "~8.1") selects the lowest baked
+// minor of the same major that satisfies it, so a Laravel 9 "^8.0.2"
+// runs on 8.1; an exact or wildcard pin keeps its own minor even when
+// the image lacks it, which the install then reports. Alternatives
+// ("|" or "||") are not guessed at.
+func normalizePHPVersion(c string) (string, bool) {
+	c = strings.TrimSpace(c)
+	if c == "" || strings.Contains(c, "|") {
+		return "", false
+	}
+	m := versionClauseRe.FindStringSubmatch(c)
+	if m == nil {
+		return "", false
+	}
+	parts := strings.Split(m[2], ".")
+	if len(parts) == 1 {
+		parts = append(parts, "0")
+	}
+	minor := parts[0] + "." + parts[1]
+	lowerBound := m[1] == "^" || m[1] == ">=" || (m[1] == "~" && len(strings.Split(m[2], ".")) <= 2)
+	if !lowerBound {
+		return minor, true
+	}
+	want := minorNumber(minor)
+	for _, b := range phpMinors {
+		if strings.HasPrefix(b, parts[0]+".") && minorNumber(b) >= want {
+			return b, true
+		}
+	}
+	return minor, true
+}
+
+// minorNumber returns the minor of a "major.minor" string, -1 when unparsable.
+func minorNumber(v string) int {
+	_, after, ok := strings.Cut(v, ".")
+	if !ok {
+		return -1
+	}
+	n, err := strconv.Atoi(after)
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // readMarker returns a marker file's contents, "" when it is absent,
@@ -380,19 +464,40 @@ func parseMiseToml(s string) map[string]string {
 }
 
 // buildToolchainInstallCmd is the shell command that installs and
-// globally activates every detected toolchain, in sorted tool order.
-// Tool and version are whitelisted at detection; each spec is still
-// single-quoted.
+// globally activates every detected toolchain, in sorted tool order:
+// php is selected from the image (buildPHPSelectCmd), the rest go
+// through mise. Tool and version are whitelisted at detection; each
+// value is still single-quoted.
 func buildToolchainInstallCmd(toolchains map[string]string) string {
 	tools := make([]string, 0, len(toolchains))
 	for t := range toolchains {
-		tools = append(tools, t)
+		if t != "php" {
+			tools = append(tools, t)
+		}
 	}
 	sort.Strings(tools)
 	var b strings.Builder
+	if v, ok := toolchains["php"]; ok {
+		b.WriteString(buildPHPSelectCmd(v, phpBinDir, phpLinkDir))
+		if len(tools) == 0 {
+			return b.String()
+		}
+		b.WriteString(" && ")
+	}
 	b.WriteString("mise use --global")
 	for _, t := range tools {
 		b.WriteString(" " + shQuote(t+"@"+toolchains[t]))
 	}
 	return b.String()
+}
+
+// buildPHPSelectCmd activates one baked PHP minor (D-127) by linking
+// php, phar and phar.phar from binDir into linkDir, which precedes
+// binDir on the sandbox PATH. It runs as the sandbox uid: the rootfs
+// is read-only and capabilities are dropped, so update-alternatives is
+// not an option. A minor the image lacks exits 1 with a message naming it.
+func buildPHPSelectCmd(version, binDir, linkDir string) string {
+	return "(set -e; v=" + shQuote(version) + "; bin=" + shQuote(binDir) + "; link=" + shQuote(linkDir) +
+		`; if [ ! -x "$bin/php$v" ]; then echo "php $v is not installed in this sandbox image" >&2; exit 1; fi` +
+		`; mkdir -p "$link"; for b in php phar phar.phar; do if [ -x "$bin/$b$v" ]; then ln -sf "$bin/$b$v" "$link/$b"; fi; done)`
 }

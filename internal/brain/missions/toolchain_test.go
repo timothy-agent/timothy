@@ -69,6 +69,16 @@ func TestDetectToolchainVersions(t *testing.T) {
 		{"hostile version rejected", "", map[string]string{".tool-versions": "python 3.10;rm\nnode $(x)\n"}, map[string]string{"python": "3.10"}},
 		{"hostile tool name rejected", "", map[string]string{".tool-versions": "py$thon 3.10\n"}, map[string]string{}},
 		{"unsupported tools ignored", "", map[string]string{".tool-versions": "ruby 3.3.0\nphp 8.2\n", ".mise.toml": "[tools]\njava = \"21\"\n"}, map[string]string{}},
+		{"composer require caret", "php", map[string]string{"composer.json": `{"require":{"php":"^8.1"}}`}, map[string]string{"php": "8.1"}},
+		{"composer platform beats require", "php", map[string]string{"composer.json": `{"require":{"php":"^8.1"},"config":{"platform":{"php":"8.3.12"}}}`}, map[string]string{"php": "8.3"}},
+		{"composer laravel 9 lower bound clamps to baked", "php", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`}, map[string]string{"php": "8.1"}},
+		{"composer unbaked exact kept for the install to report", "php", map[string]string{"composer.json": `{"require":{"php":"7.4.33"}}`}, map[string]string{"php": "7.4"}},
+		{"composer alternatives skipped", "php", map[string]string{"composer.json": `{"require":{"php":"^7.4|^8.0"}}`}, map[string]string{}},
+		{"composer without php constraint", "php", map[string]string{"composer.json": `{"require":{"laravel/framework":"^12.0"}}`}, map[string]string{}},
+		{"bad composer.json", "php", map[string]string{"composer.json": `{`}, map[string]string{}},
+		{"php tool-versions in php env", "php", map[string]string{".tool-versions": "php 8.2.10\n"}, map[string]string{"php": "8.2"}},
+		{"composer beats tool-versions", "php", map[string]string{"composer.json": `{"require":{"php":"^8.3"}}`, ".tool-versions": "php 8.1\n"}, map[string]string{"php": "8.3"}},
+		{"php ignored outside php env", "base", map[string]string{"composer.json": `{"require":{"php":"^8.1"}}`, ".mise.toml": "[tools]\nphp = \"8.2\"\n"}, map[string]string{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -96,6 +106,9 @@ func TestGoalToolchainVersions(t *testing.T) {
 		{"go 2 steps back, python 3 rewrite, node 8", map[string]string{}},
 		{"Django 4.2 upgrade", map[string]string{}},
 		{"node 180 workers", map[string]string{}},
+		{"Laravel app on PHP 8.2", map[string]string{"php": "8.2"}},
+		{"php8.1.27 legacy fix", map[string]string{"php": "8.1"}},
+		{"php 8 rewrite", map[string]string{}},
 		{"", map[string]string{}},
 	}
 	for _, tc := range cases {
@@ -114,6 +127,114 @@ func TestDetectMissionToolchainsGoalFallback(t *testing.T) {
 	}
 	if got := detectMissionToolchains("", "python", "a CLI tool"); len(got) != 0 {
 		t.Fatalf("no marker, no goal version = %v, want none", got)
+	}
+	if got := detectMissionToolchains("", "php", "Laravel on PHP 8.2"); !reflect.DeepEqual(got, map[string]string{"php": "8.2"}) {
+		t.Fatalf("php env goal = %v, want php 8.2", got)
+	}
+	if got := detectMissionToolchains("", "node", "port the PHP 8.2 app to Node 20"); !reflect.DeepEqual(got, map[string]string{"node": "20"}) {
+		t.Fatalf("non-php env must drop the goal's php: got %v", got)
+	}
+}
+
+func TestNormalizePHPVersion(t *testing.T) {
+	cases := []struct {
+		in, want string
+		ok       bool
+	}{
+		{"^8.1", "8.1", true},
+		{">=8.2", "8.2", true},
+		{"~8.1", "8.1", true},
+		{"~8.1.3", "8.1", true},
+		{"^8.0.2", "8.1", true},
+		{"^8", "8.1", true},
+		{">=7.4", "7.4", true},
+		{"8.2.*", "8.2", true},
+		{"8.0.30", "8.0", true},
+		{"^8.5", "8.5", true},
+		{"^7.4|^8.0", "", false},
+		{"^7.4 || ^8.0", "", false},
+		{"<9", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := normalizePHPVersion(tc.in)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("normalizePHPVersion(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestBuildPHPSelectCmdRoundTrip runs the php selection through /bin/sh
+// against a fake bin dir: the requested minor is linked, a missing
+// minor fails naming it, and a hostile version stays one value.
+func TestBuildPHPSelectCmdRoundTrip(t *testing.T) {
+	bin := t.TempDir()
+	for _, name := range []string{"php8.1", "phar8.1", "php8.4", "phar8.4", "phar.phar8.4"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\necho "+name+"\n"), 0o700); err != nil { //nolint:gosec // test stub must be executable
+			t.Fatal(err)
+		}
+	}
+	run := func(t *testing.T, version, link string) (string, error) {
+		dir := t.TempDir()
+		cmd := exec.Command("/bin/sh", "-c", buildPHPSelectCmd(version, bin, link)) //nolint:gosec // test-authored command
+		cmd.Dir = dir
+		cmd.Env = []string{"PATH=/usr/bin:/bin"}
+		out, err := cmd.CombinedOutput()
+		if _, serr := os.Stat(filepath.Join(dir, "pwned")); serr == nil {
+			t.Fatal("injected command ran")
+		}
+		return string(out), err
+	}
+	t.Run("links the minor's binaries", func(t *testing.T) {
+		link := filepath.Join(t.TempDir(), "nested", "bin")
+		if out, err := run(t, "8.4", link); err != nil {
+			t.Fatalf("run: %v: %s", err, out)
+		}
+		for name, want := range map[string]string{"php": "php8.4", "phar": "phar8.4", "phar.phar": "phar.phar8.4"} {
+			got, err := os.Readlink(filepath.Join(link, name))
+			if err != nil || got != filepath.Join(bin, want) {
+				t.Errorf("%s -> %q (%v), want %q", name, got, err, filepath.Join(bin, want))
+			}
+		}
+	})
+	t.Run("relinks and skips absent binaries", func(t *testing.T) {
+		link := t.TempDir()
+		if out, err := run(t, "8.4", link); err != nil {
+			t.Fatalf("run 8.4: %v: %s", err, out)
+		}
+		if out, err := run(t, "8.1", link); err != nil {
+			t.Fatalf("run 8.1: %v: %s", err, out)
+		}
+		if got, _ := os.Readlink(filepath.Join(link, "php")); got != filepath.Join(bin, "php8.1") {
+			t.Errorf("php -> %q, want php8.1", got)
+		}
+	})
+	t.Run("missing minor fails naming it", func(t *testing.T) {
+		link := t.TempDir()
+		out, err := run(t, "7.4", link)
+		if err == nil || !strings.Contains(out, "php 7.4 is not installed") {
+			t.Fatalf("err = %v, out = %q; want failure naming 7.4", err, out)
+		}
+		if _, serr := os.Lstat(filepath.Join(link, "php")); serr == nil {
+			t.Fatal("php linked despite missing minor")
+		}
+	})
+	t.Run("hostile version stays one value", func(t *testing.T) {
+		if _, err := run(t, "8.1'; touch pwned; '", t.TempDir()); err == nil {
+			t.Fatal("hostile version succeeded")
+		}
+	})
+}
+
+func TestBuildToolchainInstallCmdPHP(t *testing.T) {
+	phpOnly := buildToolchainInstallCmd(map[string]string{"php": "8.1"})
+	if phpOnly != buildPHPSelectCmd("8.1", phpBinDir, phpLinkDir) {
+		t.Fatalf("php only = %q, want the php select alone", phpOnly)
+	}
+	mixed := buildToolchainInstallCmd(map[string]string{"php": "8.1", "node": "20"})
+	want := buildPHPSelectCmd("8.1", phpBinDir, phpLinkDir) + " && mise use --global 'node@20'"
+	if mixed != want {
+		t.Fatalf("mixed = %q, want %q", mixed, want)
 	}
 }
 

@@ -146,3 +146,28 @@ func TestProvisionToolchainInstallFailureEvent(t *testing.T) {
 	}
 	t.Fatal("no mission.toolchain_install_failed event")
 }
+
+// TestProvisionPHPToolchain: a php repo records the composer minor, and
+// a minor the image lacks yields a failure event naming it while the
+// mission still provisions. The selection itself runs through the real
+// /bin/sh; this container has no /usr/bin/php7.4.
+func TestProvisionPHPToolchain(t *testing.T) {
+	m, _ := provisionWithRepo(t, map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`})
+	if m.Environment != "php" || !reflect.DeepEqual(m.Toolchains, map[string]string{"php": "8.1"}) {
+		t.Fatalf("env = %q, Toolchains = %v; want php with php 8.1", m.Environment, m.Toolchains)
+	}
+	m, store := provisionWithRepo(t, map[string]string{"composer.json": `{"require":{"php":"7.4.33"}}`})
+	if m.Workspace == "" {
+		t.Fatal("mission not provisioned after a failed php select")
+	}
+	events, _ := store.Events(context.Background(), m.ID)
+	for _, e := range events {
+		if e.Kind == "mission.toolchain_install_failed" {
+			if !strings.Contains(string(e.Payload), "php 7.4 is not installed") {
+				t.Fatalf("failure payload = %s, want it to name php 7.4", e.Payload)
+			}
+			return
+		}
+	}
+	t.Fatal("no mission.toolchain_install_failed event")
+}
