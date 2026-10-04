@@ -211,6 +211,15 @@ AGENTS.md so other work does not pay for it every session.
   output tail and the discover nudge and notes allow a bootstrap unit
   (D-124). Executor CLIs keep the image's node via rewritten shebangs
   in `deploy/sandbox-base.Dockerfile`.
+- PHP minors (D-127, issue #992): the php image bakes 8.1 to 8.4
+  (default 8.4, `phpMinors` mirrors the Dockerfile). For the php env
+  only, composer.json `config.platform.php` then `require.php` picks a
+  minor; a lower bound selects the lowest baked minor that satisfies it.
+  `buildPHPSelectCmd` links `php`, `phar`, `phar.phar` from
+  `/usr/bin/<name><minor>` into `/home/sandbox/.local/bin` as the
+  sandbox uid. No root exec: the rootfs is read-only with all caps
+  dropped, so `update-alternatives` cannot run. An unbaked minor fails
+  the same way as a mise install.
 - Plan defects travel back to the planner (issue #718): a worker
   BLOCKED note that names the plan (`namesPlanDefect`: a gate,
   criterion, artifact path, "cannot pass", "in isolation") is

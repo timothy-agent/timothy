@@ -1643,7 +1643,37 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 	if stack == "" {
 		return report.Findings
 	}
+	if m.ToolchainInstall != "failed" && stackCoveredByEnvironment(stack, m.Environment, strings.ToLower(strings.TrimSpace(report.Environment))) {
+		return report.Findings
+	}
 	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan's first unit must be a " + bootstrapAllowance + " that installs it into the workspace.\n\n%s", NeutralizeSlot(stack), report.Findings)
+}
+
+// stackWords maps an environment image to the words a discover stack
+// uses for the language it carries.
+var stackWords = map[string][]string{
+	"go":     {"go", "golang"},
+	"node":   {"node", "nodejs", "javascript", "typescript"},
+	"python": {"python", "django", "flask", "fastapi"},
+	"java":   {"java", "kotlin", "spring", "gradle", "maven"},
+	"php":    {"php", "laravel", "symfony", "composer"},
+}
+
+// stackCoveredByEnvironment reports whether a discover stack names the
+// language of one of envs' images. Weak models fill stack even when the
+// image carries the toolchain; the bootstrap note must not follow.
+func stackCoveredByEnvironment(stack string, envs ...string) bool {
+	words := strings.FieldsFunc(strings.ToLower(stack), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+	for _, env := range envs {
+		for _, want := range stackWords[env] {
+			if slices.Contains(words, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // reviewSystemPrompt is the reviewer's system prompt; reviewSystemToolCall

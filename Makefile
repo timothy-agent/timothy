@@ -169,6 +169,6 @@ sandbox-image:
 sandbox-base-smoke:
 	./scripts/sandbox-base-smoke.sh timothy-sandbox-base:latest
 
-# Checks the php variant has PHP 8.4, Laravel's extensions, and composer.
+# Checks the php variant has PHP 8.1 to 8.4, Laravel's extensions, minor selection, and composer.
 sandbox-php-smoke:
 	./scripts/sandbox-php-smoke.sh timothy-sandbox-php:latest
