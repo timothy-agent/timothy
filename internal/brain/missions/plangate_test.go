@@ -246,6 +246,15 @@ func TestCheckUnitGranularity(t *testing.T) {
 		{"single unit accepted", KindCoding, false, []PlanUnit{
 			{Title: "only", Artifacts: []string{"internal/core/a.go", "internal/core/b.go"}},
 		}, ""},
+		{"bootstrap unit never merged", KindCoding, false, []PlanUnit{
+			{Title: "install php", Bootstrap: true, EvidenceOnly: true, CheckCmd: ".tools/bin/php -v"},
+			{Title: "upgrade", Artifacts: []string{"composer.json", "composer.lock"}},
+		}, ""},
+		{"bootstrap excluded, rest still merged", KindCoding, false, []PlanUnit{
+			{Title: "install php", Bootstrap: true, EvidenceOnly: true, CheckCmd: ".tools/bin/php -v"},
+			{Title: "a", Artifacts: []string{"pkg/a.go"}},
+			{Title: "b", Artifacts: []string{"pkg/b.go"}},
+		}, "they are one unit of work"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

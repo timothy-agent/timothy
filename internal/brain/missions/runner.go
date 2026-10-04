@@ -290,7 +290,7 @@ type nativeRunner struct {
 // environmentSetter is the narrow slice of *Store DiscoverSession
 // writes the discover turn's environment report through.
 type environmentSetter interface {
-	SetEnvironment(ctx context.Context, id, environment, marker string) error
+	SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error
 }
 
 // SetEnvironmentSink wires the store the discover turn's environment
@@ -1578,27 +1578,33 @@ func tryParseFindings(args json.RawMessage) (discoverReport, bool) {
 }
 
 // discoverEnvironmentNudge asks the discover turn to report the
-// project's toolchain only while the mission has none yet (issue
-// #495): a repo whose markers already decided it, or an operator's
-// explicit pick, is not up for debate.
+// project's toolchain while the mission has none yet or a repo marker
+// set it (issue #495); an operator's explicit pick or a discover-set
+// value is not up for debate.
 func (r *nativeRunner) discoverEnvironmentNudge(m Mission) string {
-	if m.Kind != KindCoding || m.Environment != "" {
+	if m.Kind != KindCoding || (m.Environment != "" && (m.EnvironmentMarker == "" || m.EnvironmentMarker == "discover")) {
 		return ""
 	}
 	return " Also fill the environment field with the sandbox toolchain this project needs (from what is in the workspace, or what the goal asks to build); when the language is none of the listed values, leave environment empty and name it in the stack field."
 }
 
-// applyDiscoverReport persists the report's environment when the
-// mission has none yet and the value is a registered image key other
-// than base (issue #495); the driver recreates the sandbox container
-// afterwards. A stack the sandbox has no image for is prefixed onto
+// applyDiscoverReport persists the report's environment when it is a
+// registered image key other than base and the mission has none yet or
+// a repo marker set a different one (issue #495); an operator-explicit
+// or discover-set value is kept. The driver recreates the sandbox
+// container afterwards. A stack the sandbox has no image for is prefixed onto
 // the findings so the planner budgets a bootstrap unit instead of
 // finding out at build time.
 func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, report discoverReport) string {
-	if m.Kind == KindCoding && m.Environment == "" && r.environmentSink != nil {
+	if m.Kind == KindCoding && r.environmentSink != nil {
 		env := strings.ToLower(strings.TrimSpace(report.Environment))
-		if env != "" && env != "base" && Environments[env] {
-			if err := r.environmentSink.SetEnvironment(ctx, m.ID, env, "discover"); err != nil {
+		overridable := m.Environment == "" ||
+			(m.EnvironmentMarker != "" && m.EnvironmentMarker != "discover" && env != m.Environment)
+		if env != "" && env != "base" && Environments[env] && overridable {
+			if m.Environment != "" {
+				r.log.Info("mission discover: overriding marker-detected environment", "mission_id", m.ID, "from", m.Environment, "to", env, "marker", m.EnvironmentMarker)
+			}
+			if err := r.environmentSink.SetEnvironment(ctx, m.ID, env, "discover", nil); err != nil {
 				r.log.Warn("mission discover: set environment failed", "mission_id", m.ID, "environment", env, "error", err)
 			}
 		}
@@ -1607,7 +1613,7 @@ func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, repor
 	if stack == "" {
 		return report.Findings
 	}
-	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan must include a unit that installs what the work needs before building or testing.\n\n%s", NeutralizeSlot(stack), report.Findings)
+	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan's first unit must be a bootstrap unit (bootstrap: true) that installs it into the workspace.\n\n%s", NeutralizeSlot(stack), report.Findings)
 }
 
 // reviewSystemPrompt is the reviewer's system prompt; reviewSystemToolCall
@@ -1917,7 +1923,7 @@ func reportInProgress(p ReviewPacket) bool {
 // (D-077), and assumptions. Kept as one shared string so
 // build/prove's unit parsing (parsePlan) never has to distinguish
 // which mode produced a plan.
-const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. If the unit's deliverable is a side effect rather than a file (a GitHub issue, an API call, external state that check_cmd can itself observe, e.g. `gh issue list --json number --jq 'length' | awk '$1>=8'`), set evidence_only=true instead and omit artifacts; check_cmd is still a gate, so it must fail against the workspace as it stands now and pass once the side effect exists. Never drop a deliverable the goal asks for just because it produces no file: use an evidence-only unit, or, if the sandbox genuinely cannot perform it (no credential, no tool in the allowlist), say so by calling submit_plan with infeasible=true and a reason naming exactly what cannot be done, or ask_user if it is ambiguous rather than achievable, instead of silently narrowing the plan to the parts that produce files. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). check_cmd is executed literally as `/bin/sh -c \"<check_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command). It is a gate, not a proof: it must FAIL against the workspace as it stands now and PASS once the unit's work exists, and the harness runs it once at plan acceptance to confirm the first half, rejecting a gate that already passes. For a unit whose artifacts are source files it must build, test or run them with the environment's toolchain (`go test ./pkg/...`, `python3 -m pytest tests/`, `npm test`); a grep against source only proves text is present, so greps may accompany the toolchain call but never stand alone. A toolchain call alone passes while the unit's files are still missing (`go test ./pkg/ -run TestX` exits 0 when no test file exists, `gofmt -l` prints nothing for absent files, pytest collects nothing), so anchor each code unit's check_cmd on a symbol the unit adds, e.g. `grep -q 'func TestBase62' internal/core/base62_test.go && go test ./internal/core/ -run TestBase62`. For document artifacts check CONTENT (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in check_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`; to assert a command prints nothing (gofmt -l, a linter) pipe it into `awk 'END{exit NR>0}'`, NEVER `grep -q '^$'`, which exits 1 on empty input. Do not add a separate final \"format and verify\" unit: put the toolchain call in every code unit's own check_cmd. For a small coding change (at most 8 source files, all in one directory or package), submit ONE unit covering all of them rather than one unit per file, since each extra unit costs a separate session and review round. The harness commits each unit's files itself after the worker turn, so criteria and check_cmd must judge file CONTENT only, never git status, staging, untracked, or uncommitted state. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
+const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. If the unit's deliverable is a side effect rather than a file (a GitHub issue, an API call, external state that check_cmd can itself observe, e.g. `gh issue list --json number --jq 'length' | awk '$1>=8'`), set evidence_only=true instead and omit artifacts; check_cmd is still a gate, so it must fail against the workspace as it stands now and pass once the side effect exists. Never drop a deliverable the goal asks for just because it produces no file: use an evidence-only unit, or, if the sandbox genuinely cannot perform it (no credential, no tool in the allowlist), say so by calling submit_plan with infeasible=true and a reason naming exactly what cannot be done, or ask_user if it is ambiguous rather than achievable, instead of silently narrowing the plan to the parts that produce files. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). check_cmd is executed literally as `/bin/sh -c \"<check_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command). It is a gate, not a proof: it must FAIL against the workspace as it stands now and PASS once the unit's work exists, and the harness runs it once at plan acceptance to confirm the first half, rejecting a gate that already passes. For a unit whose artifacts are source files it must build, test or run them with the environment's toolchain (`go test ./pkg/...`, `python3 -m pytest tests/`, `npm test`); a grep against source only proves text is present, so greps may accompany the toolchain call but never stand alone. A toolchain call alone passes while the unit's files are still missing (`go test ./pkg/ -run TestX` exits 0 when no test file exists, `gofmt -l` prints nothing for absent files, pytest collects nothing), so anchor each code unit's check_cmd on a symbol the unit adds, e.g. `grep -q 'func TestBase62' internal/core/base62_test.go && go test ./internal/core/ -run TestBase62`. For document artifacts check CONTENT (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in check_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`; to assert a command prints nothing (gofmt -l, a linter) pipe it into `awk 'END{exit NR>0}'`, NEVER `grep -q '^$'`, which exits 1 on empty input. Do not add a separate final \"format and verify\" unit: put the toolchain call in every code unit's own check_cmd. For a small coding change (at most 8 source files, all in one directory or package), submit ONE unit covering all of them rather than one unit per file, since each extra unit costs a separate session and review round. The harness commits each unit's files itself after the worker turn, so criteria and check_cmd must judge file CONTENT only, never git status, staging, untracked, or uncommitted state. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. When the discover findings say the sandbox lacks the toolchain, make the FIRST unit a toolchain bootstrap with bootstrap=true: the sandbox has no root, so it installs into the workspace (e.g. `./.tools/`) and its check_cmd runs the installed binary by its workspace-relative path; later units call the toolchain the same way. Without such a unit, any check_cmd using a missing command is rejected. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
 
 // planSystemPrompt builds PlanSession's system prompt: the design-mode
 // opening (break the goal into units from scratch) or, when hasPlan is
@@ -2134,7 +2140,7 @@ func execEnvironmentNote(loc *time.Location) string {
 // planSchemaHint names the submit_plan tool's actual accepted fields
 // (sentinel.go's PlanTool schema, not the internal Plan struct) so a
 // schema error tells the planner exactly what it may resubmit.
-const planSchemaHint = "allowed plan fields: units, infeasible, reason, assumptions; allowed unit fields: title, artifacts, evidence_only, check_cmd, criteria, scope; allowed assumption fields: assumption, default"
+const planSchemaHint = "allowed plan fields: units, infeasible, reason, assumptions; allowed unit fields: title, artifacts, evidence_only, bootstrap, check_cmd, criteria, scope; allowed assumption fields: assumption, default"
 
 // decodePlanStrict decodes submit_plan's arguments with unknown fields
 // rejected (issue #844): PlanTool's Execute calls this so a schema
