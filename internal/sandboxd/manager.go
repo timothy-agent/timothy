@@ -42,8 +42,9 @@ const sandboxUser = "65534:65534"
 // under the sandbox HOME is on PATH for every later exec in the same
 // container: sandbox-base.Dockerfile sets NPM_CONFIG_PREFIX to
 // /home/sandbox/.npm-global and adds .local/bin, sandbox-go.Dockerfile
-// adds go/bin.
-const sandboxPath = "PATH=/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:/home/sandbox/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+// adds go/bin. mise shims (D-125) precede them so a pinned toolchain
+// wins; with no pin a shim falls through to the image's binary.
+const sandboxPath = "PATH=/home/sandbox/.mise/shims:/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:/home/sandbox/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 const (
 	workspaceMountPath  = "/workspace"
@@ -85,8 +86,10 @@ const (
 	// toolchainsMountPath is where the toolchain cache volume is
 	// mounted, rw, in every mission container: mise's data dir
 	// (MISE_DATA_DIR in sandbox-base.Dockerfile), so installed
-	// toolchains survive across missions.
-	toolchainsMountPath = "/home/sandbox/.local/share/mise"
+	// toolchains survive across missions. A direct child of HOME: Docker
+	// creates missing parents of a mount point root-owned on the tmpfs,
+	// which would lock uid 65534 out of e.g. ~/.local (issue #995).
+	toolchainsMountPath = "/home/sandbox/.mise"
 
 	// sandboxMemoryBytes / sandboxNanoCPUs / sandboxPidsLimit cap one
 	// mission's blast radius: model-authored commands, unlike
@@ -599,18 +602,20 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		// /home/sandbox is the sandbox HOME that `npm install -g`
 		// (NPM_CONFIG_PREFIX), `pip install --user`, and the caches under
 		// it all write to (sandbox-base.Dockerfile). Both were the
-		// writable layer before. nosuid,nodev but NOT noexec: workers
-		// legitimately run scripts from /tmp and installed binaries from
-		// HOME. uid/gid pin the mounts to the sandbox user, since a fresh
-		// tmpfs is otherwise root-owned and uid 65534 could not write it.
+		// writable layer before. nosuid,nodev,exec: Docker mounts tmpfs
+		// noexec unless told otherwise, which breaks `go test` (it runs
+		// its test binary from /tmp) and binaries installed under HOME
+		// (issue #995). uid/gid pin the mounts to the sandbox user,
+		// since a fresh tmpfs is otherwise root-owned and uid 65534 could
+		// not write it.
 		// A container restart now wipes both. That also makes D-103's
 		// $HOME marker probe read a restart as a recreate, which is the
 		// safe direction: never resume into a container whose process
 		// tree is gone. The .claude state volume and the toolchain cache
 		// volume mount over this tmpfs and keep persisting.
 		Tmpfs: map[string]string{
-			tmpMountPath:    "rw,nosuid,nodev," + sandboxTmpfsSize,
-			sandboxHomePath: "rw,nosuid,nodev,uid=65534,gid=65534," + sandboxHomeTmpfsSize,
+			tmpMountPath:    "rw,exec,nosuid,nodev," + sandboxTmpfsSize,
+			sandboxHomePath: "rw,exec,nosuid,nodev,uid=65534,gid=65534," + sandboxHomeTmpfsSize,
 		},
 		// Default bridge: internet access (a coding mission may need
 		// `pip install`/`npm install`), but NOT the compose-internal

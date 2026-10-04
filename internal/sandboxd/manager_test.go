@@ -769,16 +769,16 @@ func TestCreateContainerHardensRootfs(t *testing.T) {
 		t.Errorf("ReadonlyRootfs = false, want true")
 	}
 
-	// Each tmpfs must be writable by the sandbox uid and must NOT be
-	// noexec: workers run scripts from /tmp and binaries installed under
-	// HOME by `npm install -g` / `pip install --user`.
+	// Each tmpfs must be writable by the sandbox uid and must say exec
+	// explicitly, since Docker defaults tmpfs to noexec: `go test` runs
+	// its binary from /tmp and HOME holds `npm install -g` binaries.
 	tmpfsCases := []struct {
 		path      string
 		wantOpts  []string
 		wantSized string
 	}{
-		{path: tmpMountPath, wantOpts: []string{"rw", "nosuid", "nodev"}, wantSized: sandboxTmpfsSize},
-		{path: sandboxHomePath, wantOpts: []string{"rw", "nosuid", "nodev", "uid=65534", "gid=65534"}, wantSized: sandboxHomeTmpfsSize},
+		{path: tmpMountPath, wantOpts: []string{"rw", "exec", "nosuid", "nodev"}, wantSized: sandboxTmpfsSize},
+		{path: sandboxHomePath, wantOpts: []string{"rw", "exec", "nosuid", "nodev", "uid=65534", "gid=65534"}, wantSized: sandboxHomeTmpfsSize},
 	}
 	for _, tc := range tmpfsCases {
 		opts, ok := gotHostConfig.Tmpfs[tc.path]
@@ -796,6 +796,12 @@ func TestCreateContainerHardensRootfs(t *testing.T) {
 		}
 		if slices.Contains(strings.Split(opts, ","), "noexec") {
 			t.Errorf("Tmpfs[%s] = %q, must not be noexec", tc.path, opts)
+		}
+	}
+
+	for _, p := range []string{executorStateMountPath, toolchainsMountPath} {
+		if filepath.Dir(p) != sandboxHomePath {
+			t.Errorf("volume mount %q is not a direct child of %q; Docker would create its parents root-owned on the HOME tmpfs", p, sandboxHomePath)
 		}
 	}
 
@@ -879,7 +885,7 @@ func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
 	if !slices.Contains(gotEnv, sandboxPath) {
 		t.Fatalf("Env = %v, want to contain %q", gotEnv, sandboxPath)
 	}
-	wantPrefix := "PATH=/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:/home/sandbox/go/bin:"
+	wantPrefix := "PATH=/home/sandbox/.mise/shims:/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:/home/sandbox/go/bin:"
 	if !strings.HasPrefix(sandboxPath, wantPrefix) {
 		t.Errorf("sandboxPath = %q, want prefix %q", sandboxPath, wantPrefix)
 	}
