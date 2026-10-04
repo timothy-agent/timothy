@@ -3,6 +3,7 @@ package retrieval
 import (
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,7 +31,7 @@ func TestPackNeverExceedsBudget(t *testing.T) {
 				fmt.Sprintf("m%d", i), 1+rng.Intn(400), 1.0/float64(i+1)))
 		}
 		budget := 50 + rng.Intn(2000)
-		picked, used, err := Pack(scored, budget)
+		picked, used, err := Pack(scored, budget, 0)
 		if err != nil {
 			t.Fatalf("Pack: %v", err)
 		}
@@ -68,7 +69,7 @@ func TestPackPrefersHighScores(t *testing.T) {
 		scoredItem("worst", 100, 0.1),
 	}
 	// Budget fits the block framing plus roughly two 100-word items.
-	picked, _, err := Pack(scored, 300)
+	picked, _, err := Pack(scored, 300, 0)
 	if err != nil {
 		t.Fatalf("Pack: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestPackSerialPositioning(t *testing.T) {
 		scoredItem("third", 10, 0.7),
 		scoredItem("fourth", 10, 0.6),
 	}
-	picked, _, err := Pack(scored, 10_000)
+	picked, _, err := Pack(scored, 10_000, 0)
 	if err != nil {
 		t.Fatalf("Pack: %v", err)
 	}
@@ -109,13 +110,50 @@ func TestPackSerialPositioning(t *testing.T) {
 	}
 }
 
+func TestPackLimitSelectsTopItemsBeforeAttentionPositioning(t *testing.T) {
+	t.Parallel()
+	scored := make([]Scored, 12)
+	for i := range scored {
+		rank := i + 1
+		scored[i] = scoredItem(fmt.Sprintf("m%02d", rank), 1, float64(13-rank))
+	}
+
+	picked, _, err := Pack(scored, 10_000, 8)
+	if err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	want := []string{"m01", "m03", "m04", "m05", "m06", "m07", "m08", "m02"}
+	got := make([]string, len(picked))
+	for i, item := range picked {
+		got[i] = item.ID
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("picked = %v, want top eight in attention order %v", got, want)
+	}
+}
+
+func TestPackLimitCountsOnlyItemsThatFit(t *testing.T) {
+	t.Parallel()
+	picked, _, err := Pack([]Scored{
+		scoredItem("too-large", 2000, 0.9),
+		scoredItem("first-fit", 10, 0.8),
+		scoredItem("second-fit", 10, 0.7),
+	}, 100, 1)
+	if err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	if len(picked) != 1 || picked[0].ID != "first-fit" {
+		t.Fatalf("picked = %+v, want only first-fit", picked)
+	}
+}
+
 func TestPackSkipsOversizedButKeepsSmaller(t *testing.T) {
 	t.Parallel()
 	scored := []Scored{
 		scoredItem("huge", 2000, 0.9),
 		scoredItem("small", 20, 0.5),
 	}
-	picked, _, err := Pack(scored, 100)
+	picked, _, err := Pack(scored, 100, 0)
 	if err != nil {
 		t.Fatalf("Pack: %v", err)
 	}
@@ -128,7 +166,7 @@ func TestPackNothingFitsMeansNoBlock(t *testing.T) {
 	t.Parallel()
 	// A budget below even the fence framing must yield an empty pick
 	// and report zero tokens — no block gets injected at all.
-	picked, used, err := Pack([]Scored{scoredItem("a", 200, 0.9)}, 10)
+	picked, used, err := Pack([]Scored{scoredItem("a", 200, 0.9)}, 10, 0)
 	if err != nil {
 		t.Fatalf("Pack: %v", err)
 	}
@@ -139,7 +177,7 @@ func TestPackNothingFitsMeansNoBlock(t *testing.T) {
 
 func TestPackDefaultBudget(t *testing.T) {
 	t.Parallel()
-	picked, used, err := Pack([]Scored{scoredItem("a", 10, 0.9)}, 0)
+	picked, used, err := Pack([]Scored{scoredItem("a", 10, 0.9)}, 0, 0)
 	if err != nil {
 		t.Fatalf("Pack: %v", err)
 	}

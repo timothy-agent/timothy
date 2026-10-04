@@ -4,15 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
+	"github.com/SumonMSelim/timothy/internal/memory/retrieval"
 )
 
 const (
 	searchMemoryDefaultLimit = 8
-	searchMemoryMaxLimit     = 20
+	searchMemoryMaxLimit     = retrieval.MaxRetrieveLimit
 )
 
 // SearchMemoryHit is one recalled long-term memory; memclient.Memory
@@ -101,8 +103,7 @@ the operator has no preference.`,
 			if err != nil {
 				return "", fmt.Errorf("search_memory: %w", err)
 			}
-			// memoryd's /v1/retrieve has no limit parameter, so the
-			// ceiling is enforced here rather than trusted to a backend.
+			sort.SliceStable(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
 			if len(hits) > limit {
 				hits = hits[:limit]
 			}

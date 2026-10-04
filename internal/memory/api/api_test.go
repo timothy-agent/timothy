@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -163,6 +165,49 @@ func TestRetrieveReturnsPackedMemories(t *testing.T) {
 	}
 	if len(s.sawEmb) == 0 {
 		t.Fatal("query embedding not passed to search")
+	}
+}
+
+func TestRetrieveLimitSelectsTopResultsBeforeAttentionPositioning(t *testing.T) {
+	t.Parallel()
+	lastConfirmed := time.Now()
+	cands := make(map[string]*retrieval.Candidate, 12)
+	for rank := 1; rank <= 12; rank++ {
+		id := fmt.Sprintf("m%02d", rank)
+		cands[id] = retrieval.NewCandidate(id, store.TypeSemantic, id, lastConfirmed, map[string]int{"vector": rank})
+	}
+	s := &fakeSearcher{cands: cands}
+	rec := postRetrieve(t, retrieveAPI(s, &fakeEmbedder{}), `{"query":"x","limit":8}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		Memories []retrievedMemory `json:"memories"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := []string{"m01", "m03", "m04", "m05", "m06", "m07", "m08", "m02"}
+	got := make([]string, len(out.Memories))
+	for i, memory := range out.Memories {
+		got[i] = memory.ID
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("memory ids = %v, want top eight positioned for attention %v", got, want)
+	}
+}
+
+func TestRetrieveRejectsOutOfRangeLimit(t *testing.T) {
+	t.Parallel()
+	for _, limit := range []int{0, -1, retrieval.MaxRetrieveLimit + 1} {
+		t.Run(fmt.Sprintf("limit_%d", limit), func(t *testing.T) {
+			t.Parallel()
+			body := fmt.Sprintf(`{"query":"x","limit":%d}`, limit)
+			rec := postRetrieve(t, retrieveAPI(&fakeSearcher{}, &fakeEmbedder{}), body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body)
+			}
+		})
 	}
 }
 

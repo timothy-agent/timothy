@@ -7,6 +7,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -97,6 +98,7 @@ type retrieveRequest struct {
 	Query        string   `json:"query"`
 	SessionID    string   `json:"session_id,omitempty"`
 	BudgetTokens int      `json:"budget_tokens,omitempty"`
+	Limit        *int     `json:"limit,omitempty"`
 	Types        []string `json:"types,omitempty"`
 }
 
@@ -121,6 +123,10 @@ func (a *API) handleRetrieve(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "query is required")
 		return
 	}
+	if req.Limit != nil && (*req.Limit < 1 || *req.Limit > retrieval.MaxRetrieveLimit) {
+		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("limit must be between 1 and %d", retrieval.MaxRetrieveLimit))
+		return
+	}
 
 	var embedding store.Vector
 	if vecs, _, err := a.embed.Embed(r.Context(), []string{req.Query}, "memory-retrieve"); err != nil {
@@ -140,7 +146,11 @@ func (a *API) handleRetrieve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	packed, tokens, err := retrieval.Pack(retrieval.Fuse(cands, time.Now()), req.BudgetTokens)
+	limit := 0
+	if req.Limit != nil {
+		limit = *req.Limit
+	}
+	packed, tokens, err := retrieval.Pack(retrieval.Fuse(cands, time.Now()), req.BudgetTokens, limit)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "retrieval_failed", err.Error())
 		return

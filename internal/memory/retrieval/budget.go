@@ -12,6 +12,9 @@ import (
 // not choose (spec default).
 const DefaultBudgetTokens = 1500
 
+// MaxRetrieveLimit bounds caller-selected result counts at the retrieval API.
+const MaxRetrieveLimit = 20
+
 // Token counting mirrors session's approach: tiktoken o200k with
 // embedded BPE data. The budget is a promise to the prompt assembler,
 // so a real tokenizer — never a bytes/3 heuristic — enforces it.
@@ -32,14 +35,15 @@ func encoder() (*tiktoken.Tiktoken, error) {
 	return enc, encErr
 }
 
-// Pack selects the highest-scored memories that fit budgetTokens and
+// Pack selects the highest-scored memories that fit budgetTokens and maxItems, then
 // orders them for mid-context attention loss: the best item leads,
 // the runner-up closes, the rest fill the middle best-first
 // (serial-position effect). Input must be sorted best-first (Fuse's
 // contract). The budget bounds the FINAL injected block: each item is
 // costed in its rendered, escaped form and the fence + preamble are
-// reserved up front — not just the raw contents.
-func Pack(scored []Scored, budgetTokens int) ([]Scored, int, error) {
+// reserved up front — not just the raw contents. A non-positive maxItems
+// leaves the result count uncapped.
+func Pack(scored []Scored, budgetTokens, maxItems int) ([]Scored, int, error) {
 	e, err := encoder()
 	if err != nil {
 		return nil, 0, err
@@ -57,6 +61,9 @@ func Pack(scored []Scored, budgetTokens int) ([]Scored, int, error) {
 		}
 		picked = append(picked, s)
 		used += cost
+		if maxItems > 0 && len(picked) == maxItems {
+			break
+		}
 	}
 	if len(picked) == 0 {
 		return nil, 0, nil // nothing fits: no block, no framing cost

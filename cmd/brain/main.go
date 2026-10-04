@@ -28,11 +28,11 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
-	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/fxrates"
 	"github.com/SumonMSelim/timothy/internal/brain/gitevents"
+	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
@@ -803,7 +803,7 @@ func main() {
 	svc.SetMemoryRetrieve(func(ctx context.Context, sessionID, query string) string {
 		rctx, cancel := context.WithTimeout(ctx, retrieveBudget)
 		defer cancel()
-		memories, err := mc.Retrieve(rctx, sessionID, query)
+		memories, err := mc.Retrieve(rctx, sessionID, query, 0)
 		if err != nil {
 			app.Log.Warn("memory retrieval failed; turn continues without", "session_id", sessionID, "error", err)
 			return ""
@@ -1460,14 +1460,9 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	nativeRunner.SetSearchMemory(func(ctx context.Context, query string, limit int) ([]builtin.SearchMemoryHit, error) {
 		rctx, cancel := context.WithTimeout(ctx, retrieveBudget)
 		defer cancel()
-		memories, err := mc.Retrieve(rctx, "", query)
+		memories, err := mc.Retrieve(rctx, "", query, limit)
 		if err != nil {
 			return nil, err
-		}
-		// /v1/retrieve has no limit parameter; the tool's ceiling is
-		// applied to the returned set.
-		if len(memories) > limit {
-			memories = memories[:limit]
 		}
 		out := make([]builtin.SearchMemoryHit, len(memories))
 		for i, m := range memories {

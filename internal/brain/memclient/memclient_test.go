@@ -90,9 +90,13 @@ func TestExtractSurfacesHTTPError(t *testing.T) {
 
 func TestRetrieveRoundTrip(t *testing.T) {
 	t.Parallel()
+	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/retrieve" {
 			t.Errorf("path = %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode request: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"memories": []map[string]any{
 			{"id": "m1", "type": "semantic", "content": "user lives in Porto", "score": 0.02},
@@ -100,12 +104,34 @@ func TestRetrieveRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	memories, err := New(srv.URL).Retrieve(t.Context(), "s1", "where do I live?")
+	memories, err := New(srv.URL).Retrieve(t.Context(), "s1", "where do I live?", 8)
 	if err != nil {
 		t.Fatalf("Retrieve: %v", err)
 	}
 	if len(memories) != 1 || memories[0].Content != "user lives in Porto" {
 		t.Fatalf("memories = %+v", memories)
+	}
+	if got["limit"] != float64(8) {
+		t.Fatalf("limit = %v, want 8", got["limit"])
+	}
+}
+
+func TestRetrieveOmitsUnboundedLimit(t *testing.T) {
+	t.Parallel()
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"memories": []Memory{}})
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL).Retrieve(t.Context(), "s1", "query", 0); err != nil {
+		t.Fatalf("Retrieve: %v", err)
+	}
+	if _, ok := got["limit"]; ok {
+		t.Fatalf("request contains limit = %v, want no limit", got["limit"])
 	}
 }
 
