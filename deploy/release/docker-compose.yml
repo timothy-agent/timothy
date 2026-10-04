@@ -220,6 +220,10 @@ services:
       # or writes mission files through this mount. A container's own
       # replicated mount is unaffected by the ro flag here.
       - workspace:/workspace:ro
+      # D-125 (issue #990): mise toolchain cache. Metadata-only
+      # self-inspection like the mounts above; replicated rw at
+      # /home/sandbox/.mise in mission containers. Optional.
+      - sandbox-toolchains:/statevols/toolchains
       # Host meminfo — under LXC, lxcfs serves the guest's real memory
       # limit here, while this container's own /proc shows the
       # hypervisor's (Capacity's admission gate would otherwise read a
@@ -320,6 +324,7 @@ volumes:
   pgdata:
   workspace:
   attachments:
+  sandbox-toolchains:
 
 networks:
   timothy:
