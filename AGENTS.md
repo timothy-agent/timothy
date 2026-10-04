@@ -119,7 +119,8 @@ D-125 (issue #990): the base sandbox image carries mise (shims on PATH,
 named volume holds mise's data dir (`/home/sandbox/.mise`)
 and is shared by all mission containers so per-repo toolchains install
 once. sandboxd resolves it like the `.claude` state volume; absent means
-ephemeral toolchains. The PHP variant does not use it.
+ephemeral toolchains. PHP does not go through mise: the php image bakes
+8.1 to 8.4 and a mission links its minor into `~/.local/bin` (D-127).
 
 ## Key invariants (enforce, never relax)
 

@@ -888,6 +888,9 @@ export interface Mission {
   // time (explicit request > repo markers > goal keyword > base).
   // General missions never set this.
   environment?: string
+  // toolchains maps tool -> version prefix the repo's marker files pin
+  // (D-126); installed in the sandbox before discover.
+  toolchains?: Record<string, string>
   // harness is the delegated CLI executor this coding mission's worker
   // turns run under (D-051): "" or absent is native in-process
   // dispatch, "claude-cli"/"pi"/"codex-cli"/"opencode"/"cursor-cli" name
