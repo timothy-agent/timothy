@@ -141,9 +141,13 @@ type Mission struct {
 	// coding mission's container runs: "" is the base image. Unlike
 	// Harness, there is no settings default — precedence is explicit
 	// request -> repo markers right after the clone -> the discover
-	// turn's own report -> base (issue #495). Sticky once set
-	// (Store.SetEnvironment). General missions never set this.
-	Environment       string `json:"environment,omitempty"`
+	// turn's own report -> base (issue #495). Set by
+	// Store.SetEnvironment; the discover report may replace a
+	// marker-detected value once. General missions never set this.
+	Environment string `json:"environment,omitempty"`
+	// EnvironmentMarker records what set Environment: "" for an
+	// explicit operator value, "discover", or the repo marker file.
+	EnvironmentMarker string `json:"environment_marker,omitempty"`
 	PendingPermission string `json:"pending_permission,omitempty"`
 	// PendingPermissionTool/Args/Danger/Rationale describe the parked
 	// tool call for the UI — set alongside PendingPermission whenever a
@@ -612,6 +616,12 @@ type PlanUnit struct {
 	// plan-acceptance rule that the gate fail before the work still
 	// applies (probeCheckCmds runs over every unit regardless).
 	EvidenceOnly bool `json:"evidence_only,omitempty"`
+	// Bootstrap (D-124, issue #980) marks the one unit that installs a
+	// toolchain the sandbox lacks. It must be the first unit; the
+	// plan-acceptance probe treats a missing command in its check_cmd,
+	// and in later units' check_cmds, as the expected pre-state instead
+	// of a rejection.
+	Bootstrap bool `json:"bootstrap,omitempty"`
 	// Criteria (D-095, issue #520) are the unit's acceptance criteria,
 	// 2 to 6 short lines the planner extracts from the goal: the
 	// reviewer judges the unit against them instead of the full goal.
