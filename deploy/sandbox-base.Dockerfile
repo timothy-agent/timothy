@@ -127,7 +127,7 @@ RUN case "${TARGETARCH}" in \
 # use — an empty named volume otherwise mounts root-owned and the CLI
 # cannot write its own state (D-054). The mise data and cache dirs get
 # the same treatment for the sandbox-toolchains volume (D-125).
-RUN mkdir -p /home/sandbox/.claude /home/sandbox/.local/share/mise /home/sandbox/.cache/mise \
+RUN mkdir -p /home/sandbox/.claude /home/sandbox/.mise /home/sandbox/.cache/mise \
     && chown -R 65534:65534 /home/sandbox
 ENV HOME=/home/sandbox
 # Debian's system python3 is PEP 668 externally-managed; without this,
@@ -138,11 +138,11 @@ ENV NPM_CONFIG_PREFIX=/home/sandbox/.npm-global
 # mise: shims, not `mise activate`, because commands run via `sh -c`.
 # Only /workspace configs are trusted, so a cloned repo outside it can
 # not run mise tasks or hooks unprompted.
-ENV MISE_DATA_DIR=/home/sandbox/.local/share/mise
+ENV MISE_DATA_DIR=/home/sandbox/.mise
 ENV MISE_CACHE_DIR=/home/sandbox/.cache/mise
 ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_YES=1
-ENV PATH="/home/sandbox/.local/share/mise/shims:/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:${PATH}"
+ENV PATH="/home/sandbox/.mise/shims:/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:${PATH}"
 
 USER 65534:65534
 WORKDIR /workspace

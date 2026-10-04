@@ -116,7 +116,7 @@ work on missions should read it too.
 
 D-125 (issue #990): the base sandbox image carries mise (shims on PATH,
 `MISE_TRUSTED_CONFIG_PATHS=/workspace`). The optional `sandbox-toolchains`
-named volume holds mise's data dir (`/home/sandbox/.local/share/mise`)
+named volume holds mise's data dir (`/home/sandbox/.mise`)
 and is shared by all mission containers so per-repo toolchains install
 once. sandboxd resolves it like the `.claude` state volume; absent means
 ephemeral toolchains. The PHP variant does not use it.
