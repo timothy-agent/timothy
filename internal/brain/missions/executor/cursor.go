@@ -90,7 +90,7 @@ func (cursorAdapter) BuildInvocation(spec InvocationSpec) (Invocation, error) {
 			Allow: spec.AllowTools,
 			Deny:  spec.DenyTools,
 		},
-		// repo bans AI attribution in commits/PRs (CLAUDE.md); cursor-agent
+		// repo bans AI attribution in commits/PRs (AGENTS.md); cursor-agent
 		// defaults both flags to true.
 		Attribution: cursorAttribution{
 			AttributeCommitsToAgent: false,

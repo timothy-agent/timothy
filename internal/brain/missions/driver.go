@@ -68,7 +68,7 @@ type driverStore interface {
 	SetLastEvidence(ctx context.Context, id, evidence string) error
 	SetFinalOutput(ctx context.Context, id, text string) error
 	SetDiscoverNotes(ctx context.Context, id, notes string) error
-	SetEnvironment(ctx context.Context, id, environment, marker string) error
+	SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error
 	SetNameIfEmpty(ctx context.Context, id, name string) error
 	SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error
 	SetDestinations(ctx context.Context, id string, entries []DestinationEntry) error

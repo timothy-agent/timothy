@@ -415,7 +415,7 @@ func CommitType(text string) string {
 	return "feat"
 }
 
-// maxCommitSubjectLen matches the repo convention (root CLAUDE.md):
+// maxCommitSubjectLen matches the repo convention (root AGENTS.md):
 // commit subjects stay at or under 72 chars.
 const maxCommitSubjectLen = 72
 
