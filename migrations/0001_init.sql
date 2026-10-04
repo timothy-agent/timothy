@@ -908,9 +908,13 @@ CREATE TABLE IF NOT EXISTS missions (
     -- Unlike harness, this has NO settings default: precedence is
     -- explicit request -> auto-detect from repo markers at
     -- provisioning (driver.go's ensureProvisioned) -> base ("").
-    -- Sticky once detected (store.SetEnvironment) so a mission never
-    -- re-detects mid-run. General missions never set this.
+    -- Set by store.SetEnvironment; the discover report may replace a
+    -- marker-detected value once, never an explicit or discover-set
+    -- one. General missions never set this.
     environment           text NOT NULL DEFAULT '',
+    -- The marker file that set environment ('' when the operator set
+    -- it explicitly, 'discover' when the discover report did).
+    environment_marker    text NOT NULL DEFAULT '',
     -- FinalOutput is a light mission's verbatim final worker message
     -- (D-069), the deliverable itself, since destinations delivery has
     -- no other body content for a mission with no review/artifacts.
