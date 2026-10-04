@@ -68,7 +68,8 @@ type driverStore interface {
 	SetLastEvidence(ctx context.Context, id, evidence string) error
 	SetFinalOutput(ctx context.Context, id, text string) error
 	SetDiscoverNotes(ctx context.Context, id, notes string) error
-	SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error
+	SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string, toolchains map[string]string) error
+	SetToolchains(ctx context.Context, id string, toolchains map[string]string) error
 	SetNameIfEmpty(ctx context.Context, id, name string) error
 	SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error
 	SetDestinations(ctx context.Context, id string, entries []DestinationEntry) error
@@ -275,7 +276,7 @@ func NewDriver(store driverStore, runner Runner, workspace *Workspace, sessions 
 	return &Driver{
 		store: store, runner: runner, workspace: workspace, sessions: sessions, perms: perms, log: log,
 		sandboxExec: sandboxExec, sandboxRemove: sandboxRemove,
-		provision:    provisioner{store: store, workspace: workspace, sessions: sessions, perms: perms, log: log},
+		provision:    provisioner{store: store, workspace: workspace, sessions: sessions, perms: perms, log: log, sandboxExec: sandboxExec},
 		budget:       budgetProjector{log: log},
 		verify:       verifier{store: store, sandboxExec: sandboxExec, log: log},
 		cfg:          DefaultConfig,
@@ -1429,19 +1430,45 @@ const discoverNotesCap = 8000
 // are stored on the mission (SetDiscoverNotes) so the next phase's own
 // (separate) Advance call reads them back via a fresh Get.
 func (d *Driver) runDiscover(ctx context.Context, m Mission) (StepInput, error) {
+	m.ToolchainInstall = d.toolchainInstallState(ctx, m)
 	notes, provider, model, err := d.runner.DiscoverSession(ctx, m)
 	if err != nil {
 		return StepInput{}, err
 	}
 	notes = truncate(notes, discoverNotesCap)
+	if failure := d.recreateSandboxIfEnvironmentChanged(ctx, m); failure != "" {
+		notes += "\n\n" + failure
+	}
 	if err := d.store.SetDiscoverNotes(ctx, m.ID, notes); err != nil {
 		return StepInput{}, fmt.Errorf("driver: store discover notes: %w", err)
 	}
 	if err := d.store.AppendEvent(ctx, m.ID, "mission.discover_complete", map[string]any{"chars": len(notes)}); err != nil {
 		d.log.Warn("driver: record discover complete failed", "mission_id", m.ID, "error", err)
 	}
-	d.recreateSandboxIfEnvironmentChanged(ctx, m)
 	return StepInput{Input: InputPhaseComplete, Provider: provider, Model: model}, nil
+}
+
+// toolchainInstallState reads the latest toolchain install outcome
+// (D-126) from the event log: "installed", "failed", or "" when none ran.
+func (d *Driver) toolchainInstallState(ctx context.Context, m Mission) string {
+	if len(m.Toolchains) == 0 {
+		return ""
+	}
+	events, err := d.store.Events(ctx, m.ID)
+	if err != nil {
+		d.log.Warn("driver: read toolchain install state failed", "mission_id", m.ID, "error", err)
+		return ""
+	}
+	state := ""
+	for _, e := range events {
+		switch e.Kind {
+		case "mission.toolchain_installed":
+			state = "installed"
+		case "mission.toolchain_install_failed":
+			state = "failed"
+		}
+	}
+	return state
 }
 
 // recreateSandboxIfEnvironmentChanged removes the mission's sandbox
@@ -1450,23 +1477,30 @@ func (d *Driver) runDiscover(ctx context.Context, m Mission) (StepInput, error) 
 // shell calls already created it on base, so without this the mission
 // would keep running on base whatever Environment now says. Discover
 // holds no CLI session, so nothing in the container is lost; the next
-// exec recreates it on the right image. Best-effort: a removal failure
-// leaves the mission on base, which is what it had before.
-func (d *Driver) recreateSandboxIfEnvironmentChanged(ctx context.Context, before Mission) {
+// exec recreates it on the right image. The toolchains re-detected for
+// the new environment (D-126) are installed into the new container
+// right away; a failed install returns a note for the planner's
+// discover notes naming the bootstrap allowance. Best-effort: a removal
+// failure leaves the mission on base, which is what it had before.
+func (d *Driver) recreateSandboxIfEnvironmentChanged(ctx context.Context, before Mission) string {
 	if d.sandboxRemove == nil {
-		return
+		return ""
 	}
 	after, err := d.store.Get(ctx, before.ID)
 	if err != nil || after.Environment == before.Environment {
-		return
+		return ""
 	}
 	if err := d.sandboxRemove.Remove(ctx, before.ID); err != nil {
 		d.log.Warn("driver: sandbox recreate after environment change failed; mission stays on base", "mission_id", before.ID, "environment", after.Environment, "error", err)
-		return
+		return ""
 	}
 	if err := d.store.AppendEvent(ctx, before.ID, "mission.sandbox_recreated", map[string]any{"environment": after.Environment}); err != nil {
 		d.log.Warn("driver: record sandbox recreate failed", "mission_id", before.ID, "error", err)
 	}
+	if _, failed := d.provision.installToolchains(ctx, after, after.WorkRoot()); !failed {
+		return ""
+	}
+	return "Installing the toolchains for the " + after.Environment + " environment (" + toolchainSummary(after.Toolchains) + ") failed in the sandbox; the plan's first unit may be a " + bootstrapAllowance + " that installs the toolchain into the workspace."
 }
 
 func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
