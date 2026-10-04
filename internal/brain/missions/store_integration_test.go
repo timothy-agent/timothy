@@ -194,10 +194,10 @@ func TestSetEnvironmentPersistsMarker(t *testing.T) {
 	if m, err := s.Get(ctx, id); err != nil || m.Environment != "" || m.EnvironmentMarker != "" {
 		t.Fatalf("Get after Create = %+v, %v, want empty environment and marker", m, err)
 	}
-	if err := s.SetEnvironment(ctx, id, "node", "package.json", nil); err != nil {
+	if err := s.SetEnvironment(ctx, id, "node", "package.json", nil, nil); err != nil {
 		t.Fatalf("SetEnvironment: %v", err)
 	}
-	if err := s.SetEnvironment(ctx, id, "php", "discover", nil); err != nil {
+	if err := s.SetEnvironment(ctx, id, "php", "discover", nil, nil); err != nil {
 		t.Fatalf("SetEnvironment override: %v", err)
 	}
 	m, err := s.Get(ctx, id)
@@ -2297,7 +2297,7 @@ func TestSetEnvironmentEventCandidates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: Create: %v", tc.name, err)
 		}
-		if err := s.SetEnvironment(ctx, id, "php", "composer.json", tc.candidates); err != nil {
+		if err := s.SetEnvironment(ctx, id, "php", "composer.json", tc.candidates, nil); err != nil {
 			t.Fatalf("%s: SetEnvironment: %v", tc.name, err)
 		}
 		events, err := s.Events(ctx, id)

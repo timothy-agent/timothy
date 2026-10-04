@@ -2372,7 +2372,7 @@ type fakeEnvironmentSink struct {
 	calls []string
 }
 
-func (f *fakeEnvironmentSink) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error {
+func (f *fakeEnvironmentSink) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string, toolchains map[string]string) error {
 	f.calls = append(f.calls, id+":"+environment+":"+marker)
 	return nil
 }
@@ -2445,6 +2445,43 @@ func TestDiscoverSessionPrefixesUnsupportedStack(t *testing.T) {
 	}
 	if !strings.HasSuffix(notes, "Cargo.toml at the root") {
 		t.Fatalf("notes = %q, want the findings kept after the stack note", notes)
+	}
+}
+
+// TestDiscoverSessionDropsStackTheImageCovers: a stack naming the
+// mission's own image language gets no bootstrap note unless the
+// toolchain install failed (issue #992 E2E: "PHP 8.1 CLI" on php).
+func TestDiscoverSessionDropsStackTheImageCovers(t *testing.T) {
+	cases := []struct {
+		name     string
+		mission  Mission
+		args     string
+		wantNote bool
+	}{
+		{"php stack on php env", Mission{Environment: "php"}, `{"findings":"f","stack":"PHP 8.1 CLI script"}`, false},
+		{"laravel on php env after installed", Mission{Environment: "php", ToolchainInstall: "installed"}, `{"findings":"f","stack":"Laravel 10"}`, false},
+		{"stack matches the report's environment", Mission{}, `{"findings":"f","environment":"python","stack":"Django app"}`, false},
+		{"failed install keeps the note", Mission{Environment: "php", ToolchainInstall: "failed"}, `{"findings":"f","stack":"PHP 7.4"}`, true},
+		{"other language keeps the note", Mission{Environment: "php"}, `{"findings":"f","stack":"Rust CLI"}`, true},
+		{"django is not go", Mission{Environment: "go"}, `{"findings":"f","stack":"Django"}`, true},
+		{"markdown documentation needs no toolchain", Mission{}, `{"findings":"f","stack":"Markdown documentation"}`, false},
+		{"yaml config files need no toolchain", Mission{Environment: "base"}, `{"findings":"f","stack":"YAML config files"}`, false},
+		{"rust with markdown docs keeps the note", Mission{}, `{"findings":"f","stack":"Rust CLI with markdown docs"}`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(discoverNotesToolName, tc.args)}}}
+			r := newTestRunner(agent)
+			m := tc.mission
+			m.ID, m.Kind, m.Route, m.Goal = "m1", KindCoding, "default", "test"
+			notes, _, _, err := r.DiscoverSession(context.Background(), m)
+			if err != nil {
+				t.Fatalf("DiscoverSession: %v", err)
+			}
+			if got := strings.HasPrefix(notes, "Stack: "); got != tc.wantNote {
+				t.Fatalf("notes = %q, want stack note %v", notes, tc.wantNote)
+			}
+		})
 	}
 }
 
