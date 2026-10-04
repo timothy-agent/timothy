@@ -98,6 +98,10 @@ func PlanTool() *tools.Tool {
 								"type": "boolean",
 								"description": "Set true when this unit's deliverable is a side effect (a GitHub issue, an API call, external state) rather than a file: no artifacts are required, and check_cmd alone must observe the side effect. Never set this to avoid writing an artifact you could have produced."
 							},
+							"bootstrap": {
+								"type": "boolean",
+								"description": "Set true on the single FIRST unit that installs a toolchain the sandbox lacks, into the workspace (e.g. ./.tools/), since the sandbox has no root. Its check_cmd runs the installed binary by workspace-relative path. At most one unit, and only as unit 1."
+							},
 							"check_cmd": {
 								"type": "string",
 								"description": "A real POSIX shell command, run as /bin/sh -c \"<check_cmd>\" in the mission's workspace, that must fail before the unit's work exists and pass after; follow the check_cmd rules above."

@@ -56,7 +56,7 @@ When submitting:
 
 ### Project invariants
 
-A few rules are enforced in review and are not up for relaxation. See [CLAUDE.md](CLAUDE.md) for the full list. Highlights:
+A few rules are enforced in review and are not up for relaxation. See [AGENTS.md](AGENTS.md) for the full list. Highlights:
 
 - Append-only stores stay append-only (`session_events`, `mission_events`, `memories`).
 - Safety invariants (allowlists, ceilings, permission gates) live in Go code, never in a prompt.

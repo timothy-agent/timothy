@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible kb-eval sandbox-image
+	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible kb-eval sandbox-image sandbox-php-smoke sandbox-base-smoke
 
 build:
 	$(GO_RUN) go build ./...
@@ -164,3 +164,11 @@ sandbox-image:
 	docker build -f deploy/sandbox-python.Dockerfile -t timothy-sandbox-python:latest .
 	docker build -f deploy/sandbox-java.Dockerfile -t timothy-sandbox-java:latest .
 	docker build -f deploy/sandbox-php.Dockerfile -t timothy-sandbox-php:latest .
+
+# Checks the base image has mise, a writable toolchain dir, and a reusable cache volume.
+sandbox-base-smoke:
+	./scripts/sandbox-base-smoke.sh timothy-sandbox-base:latest
+
+# Checks the php variant has PHP 8.4, Laravel's extensions, and composer.
+sandbox-php-smoke:
+	./scripts/sandbox-php-smoke.sh timothy-sandbox-php:latest
