@@ -1500,7 +1500,7 @@ func (d *Driver) recreateSandboxIfEnvironmentChanged(ctx context.Context, before
 	if _, failed := d.provision.installToolchains(ctx, after, after.WorkRoot()); !failed {
 		return ""
 	}
-	return "Installing the toolchains for the " + after.Environment + " environment (" + toolchainSummary(after.Toolchains) + ") failed in the sandbox; the plan's first unit may be a bootstrap unit (bootstrap: true) that installs the toolchain into the workspace."
+	return "Installing the toolchains for the " + after.Environment + " environment (" + toolchainSummary(after.Toolchains) + ") failed in the sandbox; the plan's first unit may be a " + bootstrapAllowance + " that installs the toolchain into the workspace."
 }
 
 func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {

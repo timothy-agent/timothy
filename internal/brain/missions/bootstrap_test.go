@@ -69,18 +69,21 @@ func TestCheckBootstrap(t *testing.T) {
 	}
 	cases := []struct {
 		name    string
+		kind    string
 		units   []PlanUnit
 		wantErr []string
 	}{
-		{"two bootstrap units", []PlanUnit{u("Install PHP", true, "a"), u("Install Composer", true, "b")}, []string{"Install PHP", "Install Composer"}},
-		{"bootstrap not first", []PlanUnit{u("Feature", false, "a"), u("Install PHP", true, "b")}, []string{"Install PHP", "first unit"}},
-		{"bootstrap without check_cmd", []PlanUnit{u("Install PHP", true, "  "), u("Feature", false, "b")}, []string{"Install PHP", "check_cmd"}},
-		{"valid first bootstrap", []PlanUnit{u("Install PHP", true, "a"), u("Feature", false, "b")}, nil},
-		{"no bootstrap", []PlanUnit{u("Feature", false, "a")}, nil},
+		{"general mission bootstrap rejected", KindGeneral, []PlanUnit{u("Bootstrap toolchain", true, "a"), u("Write explainer", false, "b")}, []string{"Bootstrap toolchain", "only coding missions", "drop the bootstrap unit"}},
+		{"general mission without bootstrap", KindGeneral, []PlanUnit{u("Write explainer", false, "a")}, nil},
+		{"two bootstrap units", KindCoding, []PlanUnit{u("Install PHP", true, "a"), u("Install Composer", true, "b")}, []string{"Install PHP", "Install Composer"}},
+		{"bootstrap not first", KindCoding, []PlanUnit{u("Feature", false, "a"), u("Install PHP", true, "b")}, []string{"Install PHP", "first unit"}},
+		{"bootstrap without check_cmd", KindCoding, []PlanUnit{u("Install PHP", true, "  "), u("Feature", false, "b")}, []string{"Install PHP", "check_cmd"}},
+		{"valid first bootstrap", KindCoding, []PlanUnit{u("Install PHP", true, "a"), u("Feature", false, "b")}, nil},
+		{"no bootstrap", KindCoding, []PlanUnit{u("Feature", false, "a")}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := checkBootstrap(Plan{Units: tc.units})
+			err := checkBootstrap(Plan{Units: tc.units}, Mission{Kind: tc.kind})
 			if tc.wantErr == nil {
 				if err != nil {
 					t.Fatalf("checkBootstrap = %v, want nil", err)
@@ -156,5 +159,38 @@ func TestPlanSessionAcceptsBootstrapPlan(t *testing.T) {
 	}
 	if agent.call != 1 || len(plan.Units) != 2 || !plan.Units[0].Bootstrap {
 		t.Fatalf("plan = %+v after %d turns, want the bootstrap plan accepted at once", plan, agent.call)
+	}
+}
+
+// TestPlanPromptBootstrapRule: the bootstrap instruction reaches the
+// planner only for coding missions whose discover notes carry a
+// harness bootstrap allowance (issue #996).
+func TestPlanPromptBootstrapRule(t *testing.T) {
+	stackNote := "Stack: Rust CLI. The sandbox has no preinstalled toolchain for it; the plan's first unit must be a " + bootstrapAllowance + " that installs it into the workspace.\n\nfindings"
+	cases := []struct {
+		name  string
+		kind  string
+		notes string
+		want  bool
+	}{
+		{"general mission", KindGeneral, "plain findings", false},
+		{"general mission with a stack note", KindGeneral, stackNote, false},
+		{"coding mission without stack note", KindCoding, "go.mod at the root", false},
+		{"coding mission with stack note", KindCoding, stackNote, true},
+		{"coding mission after failed recreate install", KindCoding, "findings\n\nInstalling the toolchains for the python environment (python 3.10) failed in the sandbox; the plan's first unit may be a " + bootstrapAllowance + " that installs the toolchain into the workspace.", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			allowed := bootstrapAllowed(Mission{Kind: tc.kind}, tc.notes)
+			if allowed != tc.want {
+				t.Fatalf("bootstrapAllowed = %v, want %v", allowed, tc.want)
+			}
+			for _, hasPlan := range []bool{false, true} {
+				got := strings.Contains(planSystemPrompt(hasPlan, allowed), "bootstrap=true")
+				if got != tc.want {
+					t.Fatalf("hasPlan=%v: prompt carries bootstrap rule = %v, want %v", hasPlan, got, tc.want)
+				}
+			}
+		})
 	}
 }

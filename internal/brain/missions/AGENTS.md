@@ -196,6 +196,10 @@ AGENTS.md so other work does not pay for it every session.
   unit's `check_cmd` as the expected pre-state; "already exits 0" is
   still rejected and post-turn verification is unchanged. The
   granularity merge never folds a bootstrap unit into the work units.
+  Coding missions only (issue #996): the plan prompt carries the
+  bootstrap rule (`planBootstrapRule`) only when the discover notes hold
+  a harness `bootstrapAllowance` note, and `checkBootstrap` rejects a
+  bootstrap unit on any other kind.
 - Repo toolchain versions (D-126, issue #991): `detectToolchainVersions`
   (environment.go, marker-only, normalized to mise-acceptable prefixes;
   `detectMissionToolchains` falls back to versions the goal names) fills `missions.toolchains` alongside the environment. Brain installs
