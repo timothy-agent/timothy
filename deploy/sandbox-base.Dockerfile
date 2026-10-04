@@ -12,6 +12,7 @@
 # CLI executor) and general POSIX tooling. Per-language toolchains
 # (go, java, php, ...) live in sandbox-<lang>.Dockerfile variants
 # FROM this image — see the "environment" axis (D-05x, sandboxd).
+# The base also carries mise for per-repo toolchain versions (issue #990).
 FROM node:24.18.0-slim AS node-dist
 
 FROM debian:stable-slim
@@ -87,6 +88,25 @@ RUN case "${TARGETARCH}" in \
     && chmod -R a+rX /opt/cursor \
     && cursor-agent --version
 
+# mise (issue #990): per-repo toolchain versions (python, node, ...) read
+# from the repo's own version files. Same pin-and-checksum approach as
+# cursor-agent above, no pipe-to-shell. The tarball extracts to
+# mise/bin/mise.
+ARG MISE_VERSION=2026.10.1
+ARG MISE_SHA256_AMD64=9b92aa39b8fde54b28c8f974a68f2501925a1523d6c05a52719145df3acdd75a
+ARG MISE_SHA256_ARM64=15b7e978812d1657e615f42f366c4101f9d8733b96a85b12779a9f3f3e2d8596
+RUN case "${TARGETARCH}" in \
+      arm64) arch=arm64; sha="${MISE_SHA256_ARM64}" ;; \
+      *) arch=x64; sha="${MISE_SHA256_AMD64}" ;; \
+    esac \
+    && curl -sSL -o /tmp/mise.tar.gz \
+      "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-${arch}.tar.gz" \
+    && echo "${sha}  /tmp/mise.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/mise.tar.gz -C /tmp \
+    && install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise \
+    && rm -rf /tmp/mise /tmp/mise.tar.gz \
+    && mise --version
+
 # Same numeric uid/gid as brain's alpine "nobody" (65534) — both sides
 # write the shared workspace volume as the same owner. Debian's built-in
 # nobody has HOME=/nonexistent, which breaks pip/npm; give it a real,
@@ -94,15 +114,24 @@ RUN case "${TARGETARCH}" in \
 # .claude is pre-created and owned by the sandbox uid so the
 # executor-claude-state named volume inherits that ownership on first
 # use — an empty named volume otherwise mounts root-owned and the CLI
-# cannot write its own state (D-054).
-RUN mkdir -p /home/sandbox/.claude && chown -R 65534:65534 /home/sandbox
+# cannot write its own state (D-054). The mise data and cache dirs get
+# the same treatment for the sandbox-toolchains volume (D-125).
+RUN mkdir -p /home/sandbox/.claude /home/sandbox/.mise /home/sandbox/.cache/mise \
+    && chown -R 65534:65534 /home/sandbox
 ENV HOME=/home/sandbox
 # Debian's system python3 is PEP 668 externally-managed; without this,
 # `pip install` (even --user) refuses to run for a model-authored command
 # that has no way to pass extra pip flags on its own.
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ENV NPM_CONFIG_PREFIX=/home/sandbox/.npm-global
-ENV PATH="/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:${PATH}"
+# mise: shims, not `mise activate`, because commands run via `sh -c`.
+# Only /workspace configs are trusted, so a cloned repo outside it can
+# not run mise tasks or hooks unprompted.
+ENV MISE_DATA_DIR=/home/sandbox/.mise
+ENV MISE_CACHE_DIR=/home/sandbox/.cache/mise
+ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
+ENV MISE_YES=1
+ENV PATH="/home/sandbox/.mise/shims:/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:${PATH}"
 
 USER 65534:65534
 WORKDIR /workspace
