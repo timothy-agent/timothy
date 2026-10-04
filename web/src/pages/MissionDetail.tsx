@@ -855,6 +855,14 @@ export function MissionDetail() {
                       </Badge>
                     )
                   })()}
+                {mission.toolchains && Object.keys(mission.toolchains).length > 0 && (
+                  <Badge variant="secondary" title="Toolchain versions pinned by the repo, installed in the sandbox">
+                    {Object.entries(mission.toolchains)
+                      .sort(([a], [b]) => a.localeCompare(b))
+                      .map(([tool, version]) => `${tool} ${version}`)
+                      .join(' · ')}
+                  </Badge>
+                )}
                 {githubModes.includes('push') && (
                   <Badge variant="secondary" title="This mission pushes its branch automatically when it finishes">
                     auto-push

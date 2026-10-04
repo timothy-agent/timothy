@@ -199,12 +199,22 @@ func (f *fakeStore) SetDiscoverNotes(ctx context.Context, id, notes string) erro
 	return nil
 }
 
-func (f *fakeStore) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string) error {
+func (f *fakeStore) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string, toolchains map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	m := f.missions[id]
 	m.Environment = environment
 	m.EnvironmentMarker = marker
+	m.Toolchains = toolchains
+	f.missions[id] = m
+	return nil
+}
+
+func (f *fakeStore) SetToolchains(ctx context.Context, id string, toolchains map[string]string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.Toolchains = toolchains
 	f.missions[id] = m
 	return nil
 }
@@ -518,7 +528,7 @@ func TestDriverDiscoverRecreatesSandboxOnEnvironmentChange(t *testing.T) {
 	runner := &scriptedRunner{
 		discoverNotes: []string{"fresh vite project"},
 		onDiscover: func(ctx context.Context, m Mission) {
-			_ = store.SetEnvironment(ctx, m.ID, "node", "discover", nil)
+			_ = store.SetEnvironment(ctx, m.ID, "node", "discover", nil, nil)
 		},
 		plans: []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
