@@ -68,6 +68,26 @@ func TestGuardSubject(t *testing.T) {
 		{name: "credentials file punctuated", command: `cat "~/.aws/credentials";`, blocked: "credential stores|home dotfiles"},
 		{name: "env file in subdir", command: "cat deploy/.env", blocked: "env files"},
 		{name: "keystore file", command: "keytool -list -keystore app.keystore", blocked: "key material"},
+
+		// Issue #1004: committed env templates hold names, not secrets.
+		{name: "env example", command: "cat .env.example"},
+		{name: "env sample in subdir", command: "grep APP_ app/.env.sample"},
+		{name: "env dist uppercase", command: "cat .ENV.DIST"},
+		{name: "env template", command: "cat config/.env.template"},
+		{name: "env local", command: "cat .env.local", blocked: "env files"},
+		{name: "env testing", command: "cat .env.testing", blocked: "env files"},
+		{name: "env example suffixed", command: "cat .env.example.bak", blocked: "env files"},
+		{name: "copy template to env", command: "cp .env.example .env && php artisan test", blocked: "export variables"},
+
+		// Issue #1005: a quoted sed/awk range address is program text.
+		{name: "sed range print", command: "php artisan test 2>&1 | sed -n '/NotifiableModelTest/,/Duration/p'"},
+		{name: "sed range delete", command: "sed '/BEGIN/,/END/d' notes.md"},
+		{name: "sed range negated", command: `sed -n "/start/,/stop/!p" notes.md`},
+		{name: "awk range", command: "awk '/R1/,/R2/' rules-checklist.md"},
+		{name: "sed range escaped slash", command: `sed -n '/a\/b/,/c/p' notes.md`},
+		{name: "unquoted range checked", command: "sed -n /start/,/stop/p notes.md", blocked: "outside the workspace"},
+		{name: "quoted range into system dir", command: "cat '/etc/,/x/p'", blocked: "system dirs"},
+		{name: "quoted single address path", command: "cat '/Users/someone/p'", blocked: "outside the workspace"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -101,7 +121,7 @@ func TestGuardSubject(t *testing.T) {
 }
 
 // TestGuardedCommandsRunAsIntended is a real /bin/sh round-trip for
-// the two commands issue #653 found the guard misreading as paths:
+// commands the guard once misread (issues #653, #1004, #1005):
 // a fake pass here would mean the guard's tokenizer parsed something
 // the shell itself does not, since quoting bugs forgive themselves in
 // mocks (see real-shell-tests-for-composed-commands.md).
@@ -116,6 +136,13 @@ func TestGuardedCommandsRunAsIntended(t *testing.T) {
 	if err := os.WriteFile(dir+"/ideas.md", []byte(ideas), 0o644); err != nil { //nolint:gosec // test fixture
 		t.Fatal(err)
 	}
+	log := "PASS A\nNotifiableModelTest x\nmid\nDuration 1s\nafter\n"
+	if err := os.WriteFile(dir+"/test.log", []byte(log), 0o644); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/.env.example", []byte("APP_KEY=\nDB_HOST=\n"), 0o644); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
 	tests := []struct {
 		name    string
 		command string
@@ -123,6 +150,8 @@ func TestGuardedCommandsRunAsIntended(t *testing.T) {
 	}{
 		{name: "awk", command: "awk '/R1/{ok=1} END{exit !ok}' rules-checklist.md; echo $?", want: "0\n"},
 		{name: "grep", command: "grep -c '^### ' ideas.md", want: "2\n"},
+		{name: "sed range", command: "sed -n '/NotifiableModelTest/,/Duration/p' test.log", want: "NotifiableModelTest x\nmid\nDuration 1s\n"},
+		{name: "env template", command: "grep -c = .env.example", want: "2\n"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
