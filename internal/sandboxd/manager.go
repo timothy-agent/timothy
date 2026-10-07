@@ -532,7 +532,8 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 
 	cfg := &container.Config{
 		Image: image,
-		// PATH/HOME only — deliberately NOT os.Environ(): the whole point
+		// PATH/HOME only (the rest comes from the image ENV, see
+		// sandbox-base.Dockerfile) — deliberately NOT os.Environ(): the whole point
 		// of the sandbox is that a model-authored command never sees
 		// brain's DATABASE_URL/TIMOTHY_MASTER_KEY/API tokens. Anything
 		// beyond this (e.g. an executor's ANTHROPIC_* credentials) is
