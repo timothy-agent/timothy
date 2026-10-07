@@ -125,7 +125,8 @@ func TestPrepareSandboxNpm(t *testing.T) {
 
 // artisanStub is a PHP script with the two artisan commands prepare
 // touches: key:generate writes APP_KEY into .env; test reports 36
-// passed with a key and 36 warnings without one (the be8a2860 shape).
+// passed with a key and 36 warnings without one (the be8a2860 shape),
+// colored the way Collision prints it.
 const artisanStub = `<?php
 $cmd = $argv[1] ?? '';
 if ($cmd === 'key:generate') {
@@ -135,8 +136,8 @@ if ($cmd === 'key:generate') {
 }
 if ($cmd === 'test') {
     $env = @file_get_contents('.env');
-    if ($env !== false && preg_match('/^APP_KEY=base64:/m', $env)) { echo "  Tests:    36 passed (72 assertions)\n"; exit(0); }
-    echo "  Tests:    36 warnings (72 assertions)\n"; exit(0);
+    if ($env !== false && preg_match('/^APP_KEY=base64:/m', $env)) { echo "  \e[90mTests:\e[39m    \e[32;1m36 passed\e[39;22m\e[90m (72 assertions)\e[39m\n"; exit(0); }
+    echo "  \e[90mTests:\e[39m    \e[33;1m36 warnings\e[39;22m\e[90m (72 assertions)\e[39m\n"; exit(0);
 }
 exit(1);
 `
@@ -186,5 +187,65 @@ func TestPrepareSandboxLaravelShape(t *testing.T) {
 	}
 	if len(f.Audit) != 2 {
 		t.Errorf("Audit = %+v, want composer.lock and package-lock.json", f.Audit)
+	}
+}
+
+// TestPrepareSandboxLaravelNoNpmLock is the solid-principles-example-laravel
+// shape: composer.lock but a package.json with no lockfile. npm installs
+// node_modules without writing a lockfile into the worktree, and the
+// lockfile generated under the workspace is audited with lodash's
+// advisories.
+func TestPrepareSandboxLaravelNoNpmLock(t *testing.T) {
+	image := os.Getenv("PREPARE_SANDBOX_PHP_IMAGE")
+	if image == "" {
+		t.Skip("PREPARE_SANDBOX_PHP_IMAGE not set")
+	}
+	m := prepareFixture(t, map[string]string{
+		"composer.json": `{"name":"fixture/app","require":{"psr/log":"^3.0"},"scripts":{"test":["@php artisan test"]}}`,
+		"package.json":  `{"name":"fixture","version":"1.0.0","private":true,"dependencies":{"lodash":"4.17.15"}}`,
+		".env.example":  "APP_NAME=Fixture\nAPP_KEY=\n",
+		"phpunit.xml":   "<phpunit/>\n",
+		"artisan":       artisanStub,
+	})
+	run := dockerRunExec(image)
+	wt := m.WorktreePath()
+	var out strings.Builder
+	if code, err := run(context.Background(), m.ID, "", wt, "composer update --no-install --no-interaction", 3*time.Minute, &out); err != nil || code != 0 {
+		t.Fatalf("lockfile generation: %d %v\n%s", code, err, out.String())
+	}
+	store := newFakeStore()
+	store.missions[m.ID] = m
+	p := &provisioner{store: store, log: slog.Default(), sandboxExec: run}
+	got := p.prepareWorkspace(context.Background(), m)
+	f := got.EnvFacts.Prepare
+	if f == nil {
+		t.Fatal("no prepare facts")
+	}
+	t.Logf("prepare facts: %+v", f)
+	if len(f.Failures) != 0 {
+		t.Errorf("failures: %v", f.Failures)
+	}
+	if fmt.Sprint(f.Installed) != "[composer "+npmNoLockInstalled+"]" || !dirExists(wt, "node_modules/lodash") {
+		t.Errorf("installs = %v", f.Installed)
+	}
+	if fileExists(wt, "package-lock.json") {
+		t.Error("package-lock.json written into the worktree")
+	}
+	if f.TestCmd != "composer test" || f.Tests == nil || f.Tests.Passed != 36 || f.Tests.Warnings != 0 {
+		t.Errorf("baseline = %q %+v, want composer test with 36 passed and 0 warnings", f.TestCmd, f.Tests)
+	}
+	var npmAudit *AuditFact
+	for i := range f.Audit {
+		if f.Audit[i].Path == npmGeneratedLockLabel {
+			npmAudit = &f.Audit[i]
+		}
+	}
+	if len(f.Audit) != 2 || npmAudit == nil || npmAudit.Packages == 0 || npmAudit.Vulnerabilities == 0 {
+		t.Errorf("Audit = %+v, want composer.lock and the generated lockfile with lodash advisories", f.Audit)
+	}
+	for _, e := range store.events[m.ID] {
+		if strings.Contains(string(e.Payload), `\u001b`) {
+			t.Errorf("event %s keeps escape sequences: %s", e.Kind, e.Payload)
+		}
 	}
 }

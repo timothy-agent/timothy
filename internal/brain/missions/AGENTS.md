@@ -281,12 +281,18 @@ AGENTS.md so other work does not pay for it every session.
   `mission.prepare_step` event with exit code, duration and output tail
   under a 25 minute ceiling: `mise install` (tools, osv-scanner via
   aqua; under `miseLocked` like `installToolchains`, D-131), `mise deps install <provider>` per root lockfile
-  (`depsProviders`), the `env-template` custom provider (copies
+  (`depsProviders`; a root package.json with no node lockfile runs
+  `npm install --no-package-lock` instead, so no lockfile lands in the
+  repo), the `env-template` custom provider (copies
   `.env.example` and runs `php artisan key:generate` only right after
   the copy), the test ladder (`testLadder`: repo mise task, manifest
   rules, Makefile target; first candidate that exits 0 becomes the
   baseline and `tasks.test`), and osv-scanner over every lockfile into
-  `<workspace>/prepare/osv.json`. Every outcome lands on
+  `<workspace>/prepare/osv.json`, plus, for that no-lockfile
+  package.json, a package-lock.json generated in
+  `<workspace>/prepare/npm/` (labeled harness-generated in the facts).
+  Step output is stripped of ANSI escapes before it is parsed or
+  stored (Collision colors whatever NO_COLOR says). Every outcome lands on
   `EnvFacts.Prepare` and renders in the facts block; a failure is a
   fact, never a mission failure. `mise.local.toml` and `.env` are never
   staged (`harnessWrittenPaths`). Not here: devcontainer and
