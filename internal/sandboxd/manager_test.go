@@ -889,6 +889,34 @@ func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
 	if !strings.HasPrefix(sandboxPath, wantPrefix) {
 		t.Errorf("sandboxPath = %q, want prefix %q", sandboxPath, wantPrefix)
 	}
+	if len(gotEnv) != 2 {
+		t.Errorf("Env = %v, want only PATH and HOME (the rest comes from the image ENV)", gotEnv)
+	}
+}
+
+// TestBaseImageSetsNonInteractiveEnv confirms the base image carries the
+// non-interactive, wide-output ENV (issue #1009) that createContainer's
+// PATH/HOME-only Env merges with, and that mise never auto-installs.
+func TestBaseImageSetsNonInteractiveEnv(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "sandbox-base.Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	df := strings.Join(strings.Fields(strings.ReplaceAll(string(raw), "\\\n", " ")), " ")
+	for _, kv := range []string{
+		"COLUMNS=200", "TERM=dumb", "CI=1", "NO_COLOR=1", "FORCE_COLOR=0", "LANG=C.UTF-8",
+		"GIT_TERMINAL_PROMPT=0", "COMPOSER_NO_INTERACTION=1", "PIP_NO_INPUT=1",
+		"PIP_DISABLE_PIP_VERSION_CHECK=1", "PYTHONUNBUFFERED=1", "NPM_CONFIG_FUND=false",
+		"NPM_CONFIG_UPDATE_NOTIFIER=false", "MISE_AUTO_INSTALL=false",
+		"MISE_EXEC_AUTO_INSTALL=false", "MISE_NOT_FOUND_AUTO_INSTALL=false",
+	} {
+		if !strings.Contains(df, " "+kv) {
+			t.Errorf("sandbox-base.Dockerfile ENV is missing %s", kv)
+		}
+	}
+	if strings.Contains(df, "MISE_GITHUB_TOKEN") {
+		t.Error("MISE_GITHUB_TOKEN must never be baked into the image")
+	}
 }
 
 // TestManagerCapacityReadsRealMeminfo confirms Capacity reads the

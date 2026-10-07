@@ -142,6 +142,25 @@ ENV MISE_DATA_DIR=/home/sandbox/.mise
 ENV MISE_CACHE_DIR=/home/sandbox/.cache/mise
 ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_YES=1
+# Non-interactive, wide-output exec environment (issue #1009): commands
+# run without a TTY, so runners must not wrap at 80 columns, prompt, watch
+# or colour. Image ENV merges with sandboxd's create-time PATH and HOME.
+ENV COLUMNS=200 \
+    TERM=dumb \
+    CI=1 \
+    NO_COLOR=1 \
+    FORCE_COLOR=0 \
+    LANG=C.UTF-8 \
+    GIT_TERMINAL_PROMPT=0 \
+    COMPOSER_NO_INTERACTION=1 \
+    PIP_NO_INPUT=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONUNBUFFERED=1 \
+    NPM_CONFIG_FUND=false \
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    MISE_AUTO_INSTALL=false \
+    MISE_EXEC_AUTO_INSTALL=false \
+    MISE_NOT_FOUND_AUTO_INSTALL=false
 ENV PATH="/home/sandbox/.mise/shims:/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:${PATH}"
 
 USER 65534:65534
