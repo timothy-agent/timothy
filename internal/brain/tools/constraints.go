@@ -183,10 +183,25 @@ func WithinRoot(root, path string) error {
 // A destructive command confined "on paper" to the sandbox would still
 // land through either gap.
 func CheckCommandPaths(root, command string) error {
+	return checkCommandPaths(root, command, false)
+}
+
+// CheckSandboxCommandPaths is CheckCommandPaths for a shell whose
+// commands run inside the mission container: a read-only command may
+// also name the container's own read paths (D-129), which resolve in
+// the container, not on brain's filesystem.
+func CheckSandboxCommandPaths(root, command string) error {
+	return checkCommandPaths(root, command, readOnlyCommand(command))
+}
+
+func checkCommandPaths(root, command string, sandboxRead bool) error {
 	if root == "" {
 		return nil
 	}
 	for _, tok := range CommandTokens(command) {
+		if sandboxRead && sandboxReadable(tok) {
+			continue
+		}
 		abs := tok
 		if !filepath.IsAbs(tok) {
 			abs = filepath.Join(root, tok)
