@@ -142,11 +142,6 @@ func TestValidExecEnv(t *testing.T) {
 			wantOK: true,
 		},
 		{
-			name:   "mise github token allowlisted",
-			env:    map[string]string{"MISE_GITHUB_TOKEN": "ghp_test"}, //nolint:gosec // G101: fixture value.
-			wantOK: true,
-		},
-		{
 			name:    "unknown name rejected",
 			env:     map[string]string{"AWS_SECRET_ACCESS_KEY": "x"},
 			wantOK:  false,

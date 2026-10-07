@@ -451,13 +451,6 @@ func (d *Driver) SetCloneTokenResolver(resolve CloneTokenResolver) {
 	d.provision.resolveCloneToken = resolve
 }
 
-// SetToolchainExecEnv wires the sandbox exec that carries per-exec
-// values for the toolchain install (MISE_GITHUB_TOKEN, issue #1009) — a
-// setter for the same reason SetAgentResolver is.
-func (d *Driver) SetToolchainExecEnv(exec sandboxExecEnv) {
-	d.provision.sandboxExecEnv = exec
-}
-
 // CloneAuthResolver upgrades an already-resolved https token into the
 // RemoteAuth a clone actually runs with (D-102, issue #796): it is the
 // transport decision, which lives outside this package, so the

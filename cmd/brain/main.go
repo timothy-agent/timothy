@@ -1501,7 +1501,6 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// only to pre-authorize a mission's hidden session at creation.
 	perms := tools.NewPermissions(db, toolWorkspaceRoot)
 	driver := missions.NewDriver(store, runner, workspace, sessions, perms, sandboxMgr.Exec, sandboxMgr, log)
-	driver.SetToolchainExecEnv(sandboxMgr.ExecEnv)
 	driver.SetFXRates(fxStore)
 	driver.SetAutomationGrants(automations.MissionGrants(noteStore, log))
 	driver.SetCapacityGate(sandboxMgr)
