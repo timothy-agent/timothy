@@ -286,9 +286,9 @@ func TestResolveSandboxOpaqueGuardStillDenies(t *testing.T) {
 
 // TestResolveSandboxRelaxations is D-129 (issue #1012) through the
 // real chain: a mission session with a registered sandbox and a shell
-// grant runs language installs, env template copies and container
-// reads without a prompt; system installs still ask; and a chat
-// session (no sandbox) keeps the hard deny.
+// grant runs language installs, env template copies, container reads
+// and /tmp writes without a prompt; system installs still ask; and a
+// chat session (no sandbox) keeps the hard deny.
 func TestResolveSandboxRelaxations(t *testing.T) {
 	p, mission := integrationPermissions(t)
 	_, chat := integrationPermissions(t)
@@ -316,6 +316,8 @@ func TestResolveSandboxRelaxations(t *testing.T) {
 		{command: "cat ~/.ssh/id_rsa", mission: DecisionDeny, chat: DecisionDeny},
 		{command: "cat ../../.env", mission: DecisionDeny, chat: DecisionDeny},
 		{command: "cp app.jar /usr/local/lib/", mission: DecisionDeny, chat: DecisionDeny},
+		{command: "mkdir -p /tmp/a && echo x > /tmp/a/out", mission: DecisionAllow, chat: DecisionDeny},
+		{command: "echo x > /tmp/../etc/x", mission: DecisionDeny, chat: DecisionDeny},
 	}
 	for _, tc := range tests {
 		for _, s := range []struct {

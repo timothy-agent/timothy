@@ -282,8 +282,9 @@ var sandboxDowngradeable = map[string]bool{
 // command may skip the interactive prompt because (1) the session has
 // a registered sandbox root, (2) every matched danger rule is
 // file-scoped, and (3) every absolute path the command names sits
-// inside that root — relative paths resolve against the sandbox
-// itself, since a sandboxed session's shell runs rooted there. The
+// inside that root or under the container's own /tmp. Relative
+// paths resolve against the sandbox itself, since a sandboxed
+// session's shell runs rooted there. The
 // policy guard (.. rejection, off-limits paths) already ran before
 // this is consulted.
 func (p *Permissions) sandboxAllows(ctx context.Context, sessionID, subject string, matchedRules []string) bool {
@@ -297,7 +298,7 @@ func (p *Permissions) sandboxAllows(ctx context.Context, sessionID, subject stri
 		return false
 	}
 	for _, tok := range CommandTokens(subject) {
-		if strings.HasPrefix(tok, "/") && !pathWithin(root, tok) {
+		if strings.HasPrefix(tok, "/") && !pathWithin(root, tok) && !sandboxWritable(tok) {
 			return false
 		}
 	}
@@ -497,8 +498,10 @@ var AllowedAbsPrefixes = []string{"/dev/null", "/dev/stdin", "/dev/stdout", "/de
 // bypass, opencode allow) already do all of the below in the same
 // container. The native worker gets parity: env files inside the
 // worktree, reads of committed credential-looking repo files, reads of
-// the container's own toolchain paths. Host paths (~, ~/.ssh, ~/.aws),
-// ssh keys, writes outside the worktree and chat sessions keep the rule.
+// the container's own toolchain paths, and writes to the container's
+// /tmp, a per-container tmpfs rather than a host path. Host paths (~,
+// ~/.ssh, ~/.aws), ssh keys, other writes outside the worktree and chat
+// sessions keep the rule.
 type sandboxRelax int
 
 const (
@@ -517,6 +520,13 @@ const (
 // non-secret HOME subdirs. HOME itself is left out so a recursive read
 // cannot walk into the executor auth state.
 var sandboxReadPrefixes = []string{"/usr", "/opt", "/tmp", "/home/sandbox/.mise", "/home/sandbox/.cache", "/home/sandbox/.local"}
+
+// sandboxWritable reports whether a token lexically cleans to the
+// container's /tmp, a per-container tmpfs any command may name (D-129).
+func sandboxWritable(tok string) bool {
+	cleaned := path.Clean(tok)
+	return cleaned == "/tmp" || strings.HasPrefix(cleaned, "/tmp/")
+}
 
 // sandboxReadFiles are single files under guarded dirs that are safe
 // to read in the container.
@@ -702,7 +712,7 @@ func guardSubject(root, sandbox, tool, subject string) string {
 			if pathWithin(root, tok) {
 				continue
 			}
-			if sandbox != "" && sandboxReadable(tok) && readOnly() {
+			if sandbox != "" && (sandboxWritable(tok) || sandboxReadable(tok) && readOnly()) {
 				continue
 			}
 			return fmt.Sprintf("policy guard: %s is outside the workspace %s — use paths under the workspace", tok, root)

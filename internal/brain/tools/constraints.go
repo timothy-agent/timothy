@@ -187,19 +187,20 @@ func CheckCommandPaths(root, command string) error {
 }
 
 // CheckSandboxCommandPaths is CheckCommandPaths for a shell whose
-// commands run inside the mission container: a read-only command may
-// also name the container's own read paths (D-129), which resolve in
-// the container, not on brain's filesystem.
+// commands run inside the mission container: any command may also name
+// the container's /tmp and a read-only command its read paths (D-129),
+// which resolve in the container, not on brain's filesystem.
 func CheckSandboxCommandPaths(root, command string) error {
-	return checkCommandPaths(root, command, readOnlyCommand(command))
+	return checkCommandPaths(root, command, true)
 }
 
-func checkCommandPaths(root, command string, sandboxRead bool) error {
+func checkCommandPaths(root, command string, sandbox bool) error {
 	if root == "" {
 		return nil
 	}
+	sandboxRead := sandbox && readOnlyCommand(command)
 	for _, tok := range CommandTokens(command) {
-		if sandboxRead && sandboxReadable(tok) {
+		if sandbox && sandboxWritable(tok) || sandboxRead && sandboxReadable(tok) {
 			continue
 		}
 		abs := tok

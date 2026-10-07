@@ -257,8 +257,9 @@ func TestCheckCommandPaths(t *testing.T) {
 
 // TestCheckSandboxCommandPaths pins D-129 at exec time: a read-only
 // command run in the mission container may name the container's read
-// paths, a write there or a host path may not, and the host-side
-// CheckCommandPaths keeps refusing all of them.
+// paths, any command may name its /tmp, a write elsewhere or a host
+// path may not, and the host-side CheckCommandPaths keeps refusing all
+// of them.
 func TestCheckSandboxCommandPaths(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -274,7 +275,11 @@ func TestCheckSandboxCommandPaths(t *testing.T) {
 		{command: "grep -r token /home/sandbox"},
 		{command: "du -a /home"},
 		{command: "cp /usr/share/x /tmp/y"},
-		{command: "echo x > /tmp/y"},
+		{command: "echo x > /tmp/y", allowed: true},
+		{command: "mkdir -p /tmp/a && cp go.mod /tmp/a/", allowed: true},
+		{command: "make 2>/tmp/err.txt | tee /tmp/out.txt", allowed: true},
+		{command: "echo x > /tmp/../etc/x"},
+		{command: "echo x > /tmpfoo"},
 		{command: "cat /etc/passwd"},
 		{command: "cat /home/sandbox/.claude/.credentials.json"},
 		{command: "cat /workspace-other/notes"},
