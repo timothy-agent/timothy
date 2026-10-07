@@ -2,6 +2,7 @@ package missions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1505,9 +1506,15 @@ func (d *Driver) recreateSandboxIfEnvironmentChanged(ctx context.Context, before
 
 func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 	priorPlan := m.Plan
+	m.PlanGate = d.planGateState(ctx, m)
 	plan, err := d.runner.PlanSession(ctx, m, replanNotes(m))
 	if err != nil {
 		return StepInput{}, err
+	}
+	if plan.GranularityWaived {
+		if err := d.store.AppendEvent(ctx, m.ID, "mission.plan_granularity_waived", map[string]any{"units": len(plan.Units)}); err != nil {
+			return StepInput{}, fmt.Errorf("driver: record granularity waiver: %w", err)
+		}
 	}
 	// D-077: the planner refused to write a plan because the goal cannot
 	// be achieved as stated: fail the mission instead of storing a plan
@@ -1547,6 +1554,64 @@ func (d *Driver) runPlan(ctx context.Context, m Mission) (StepInput, error) {
 	return StepInput{Input: InputPhaseComplete, Provider: plan.Provider, Model: plan.Model}, nil
 }
 
+// planGateState derives the plan gates' mission history from the
+// event log (issue #1007): failed plan turns (mission.turn, phase plan,
+// worker_failed) since the last successful one, any granularity
+// rejection, the waiver, and whether a repo destination delivers the
+// branch. A read error is logged and yields no history.
+func (d *Driver) planGateState(ctx context.Context, m Mission) PlanGateState {
+	g := PlanGateState{RepoDestination: d.hasRepoDestination(ctx, m)}
+	events, err := d.store.Events(ctx, m.ID)
+	if err != nil {
+		d.log.Warn("driver: read plan gate history failed", "mission_id", m.ID, "error", err)
+		return g
+	}
+	for _, e := range events {
+		switch e.Kind {
+		case "mission.plan_granularity_waived":
+			g.GranularityWaived = true
+		case "mission.turn":
+			var p struct {
+				Phase  string `json:"phase"`
+				OK     bool   `json:"ok"`
+				Input  string `json:"input"`
+				Reason string `json:"reason"`
+			}
+			if json.Unmarshal(e.Payload, &p) != nil || p.Phase != string(PhasePlan) {
+				continue
+			}
+			switch {
+			case p.OK:
+				g.LastRejection = ""
+			case p.Input == string(InputWorkerFailed):
+				g.LastRejection = p.Reason
+				if strings.Contains(p.Reason, granularityMarker) {
+					g.GranularityRejected = true
+				}
+			}
+		}
+	}
+	return g
+}
+
+// hasRepoDestination reports whether the result phase pushes the
+// mission branch: an entry with a repo_url, or one the repo policy
+// resolver recognizes as a repo-kind row.
+func (d *Driver) hasRepoDestination(ctx context.Context, m Mission) bool {
+	for _, e := range m.Destinations {
+		if e.RepoURL != "" {
+			return true
+		}
+		if e.DestinationID == "" || d.resolveGitHubPolicy == nil {
+			continue
+		}
+		if _, ok, err := d.resolveGitHubPolicy(ctx, e.DestinationID); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
 // replanNotes extends the planner's discoverNotes input with what
 // stalled, on a replan only, first-time planning passes m.DiscoverNotes
 // through unchanged. Folded into the existing discoverNotes string
@@ -1572,7 +1637,7 @@ func replanNotes(m Mission) string {
 		if progress := progressWithOperatorNotes(m.Progress, 3, nil); progress != "" {
 			notes += "\n\nRecent progress (includes any operator answers to prior questions):\n" + progress
 		}
-		return notes
+		return notes + planRejectionNote(m)
 	}
 	var b strings.Builder
 	b.WriteString(m.DiscoverNotes)
@@ -1589,7 +1654,17 @@ func replanNotes(m Mission) string {
 		b.WriteString(notes)
 	}
 	b.WriteString("\nKeep verified units unchanged, restructure or fix the rest.")
+	b.WriteString(planRejectionNote(m))
 	return b.String()
+}
+
+// planRejectionNote carries the last failed plan turn's reason into
+// the next plan session (issue #1007); empty when there is none.
+func planRejectionNote(m Mission) string {
+	if m.PlanGate.LastRejection == "" {
+		return ""
+	}
+	return "\n\nThe previous plan attempt was rejected by the harness: " + m.PlanGate.LastRejection + "\nDo not resubmit a plan with the same defect."
 }
 
 // progressWithOperatorNotes renders the last n progress notes, oldest
