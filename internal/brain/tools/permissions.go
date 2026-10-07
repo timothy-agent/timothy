@@ -282,8 +282,9 @@ var sandboxDowngradeable = map[string]bool{
 // command may skip the interactive prompt because (1) the session has
 // a registered sandbox root, (2) every matched danger rule is
 // file-scoped, and (3) every absolute path the command names sits
-// inside that root — relative paths resolve against the sandbox
-// itself, since a sandboxed session's shell runs rooted there. The
+// inside that root or under the container's own /tmp. Relative
+// paths resolve against the sandbox itself, since a sandboxed
+// session's shell runs rooted there. The
 // policy guard (.. rejection, off-limits paths) already ran before
 // this is consulted.
 func (p *Permissions) sandboxAllows(ctx context.Context, sessionID, subject string, matchedRules []string) bool {
@@ -297,7 +298,7 @@ func (p *Permissions) sandboxAllows(ctx context.Context, sessionID, subject stri
 		return false
 	}
 	for _, tok := range CommandTokens(subject) {
-		if strings.HasPrefix(tok, "/") && !pathWithin(root, tok) {
+		if strings.HasPrefix(tok, "/") && !pathWithin(root, tok) && !sandboxWritable(tok) {
 			return false
 		}
 	}
