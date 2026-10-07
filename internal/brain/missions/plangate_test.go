@@ -351,6 +351,9 @@ func TestPushesOrOpensPR(t *testing.T) {
 		{"Add PR template parser", "go test ./internal/pr/", false},
 		{"Fix push notification retry", "go test ./push/", false},
 		{"Write prompt docs", "grep -q x docs/prompt.md", false},
+		{"Address pull request review comments", "go test ./internal/api/", false},
+		{"Document the pull request template", "grep -q Summary .github/pull_request_template.md", false},
+		{"Submit a pull request", "", true},
 	}
 	for _, tc := range cases {
 		if got := pushesOrOpensPR(tc.title, tc.cmd); got != tc.want {

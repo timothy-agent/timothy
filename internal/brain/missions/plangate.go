@@ -90,7 +90,7 @@ func checkPlanGates(plan Plan, m Mission) error {
 
 // deliveryPattern matches a unit that pushes a branch or opens a pull
 // request. Kept narrow: a false match drops a real unit.
-var deliveryPattern = regexp.MustCompile(`(?i)\bgit\s+push\b|\bgh\s+pr\b|\bpull[ -]requests?\b|\b(open|create)(s|ing)?\s+(a\s+|the\s+)?prs?\b|\bpush(es|ing)?\s+(the\s+|a\s+)?(mission\s+|feature\s+)?branch\b`)
+var deliveryPattern = regexp.MustCompile(`(?i)\bgit\s+push\b|\bgh\s+pr\b|\b(open|create|raise|submit)(s|ing)?\s+(a\s+|the\s+)?(prs?|pull[ -]requests?)\b|\bpush(es|ing)?\s+(the\s+|a\s+)?(mission\s+|feature\s+)?branch\b`)
 
 // pushesOrOpensPR reports whether a unit's title or check_cmd delivers
 // the branch itself.
