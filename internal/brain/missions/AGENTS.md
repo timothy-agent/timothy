@@ -265,12 +265,15 @@ AGENTS.md so other work does not pay for it every session.
   in the worktree pass. `checkUntrackedAssumptions` rejects an
   assumption saying a path stays untracked / not committed while a
   unit lists that exact path in artifacts or scope or as a check_cmd
-  word. A planned worker carries the report in mission_status's
-  `final_output`; the driver stores the latest non-empty one as
-  `missions.final_output`, the web Result panel prefers it over
-  `last_evidence`, and `PRBody` renders it in `<details>` (60k rune
-  cap). Delegated CLI results carry only a note, so a delegated worker
-  reaches it only through a text sentinel.
+  word, matched per clause. A claim clause naming no path that says
+  "lockfile" (or whose assumption does) covers every known lockfile
+  name a unit uses that git does not track yet (`trackedIn`); tracked
+  lockfiles stay allowed. A planned worker carries the report in
+  `final_output` (mission_status natively, the optional field of the
+  delegated result object otherwise); the driver stores the latest
+  non-empty one as `missions.final_output`, the web Result panel
+  prefers it over `last_evidence`, and `PRBody` renders it in
+  `<details>` (60k rune cap).
 - Environment facts (issue #1008): `renderEnvFacts` (envfacts.go)
   appends one deterministic block to the discover, plan, reviewer
   (native and delegated) and worker (native and delegated) prompts:

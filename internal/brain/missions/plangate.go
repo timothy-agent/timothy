@@ -75,7 +75,7 @@ func checkPlanGates(plan Plan, m Mission) error {
 	if err := checkOwnArtifacts(plan); err != nil {
 		return err
 	}
-	if err := checkUntrackedAssumptions(plan); err != nil {
+	if err := checkUntrackedAssumptions(plan, trackedIn(m.WorkRoot())); err != nil {
 		return err
 	}
 	if err := checkReportArtifacts(plan, m); err != nil {
@@ -276,30 +276,52 @@ func isShellWordSep(r rune) bool {
 	return strings.ContainsRune(" \t\n;&|()<>'\"=`", r)
 }
 
+// clauseSep splits assumption text into clauses, so a path named in one
+// clause ("the fix must land in package.json") is not read as the
+// subject of an untracked claim in another.
+var clauseSep = regexp.MustCompile(`;|\.\s|\.$|\n`)
+
+// lockfileWord matches a claim about "the lockfile".
+var lockfileWord = regexp.MustCompile(`(?i)\block\s?files?\b`)
+
+// knownLockfiles are the base names a pathless "lockfile" claim covers.
+var knownLockfiles = map[string]bool{
+	"package-lock.json": true, "npm-shrinkwrap.json": true, "yarn.lock": true, "pnpm-lock.yaml": true,
+	"bun.lock": true, "bun.lockb": true, "composer.lock": true, "poetry.lock": true, "uv.lock": true,
+	"Pipfile.lock": true, "Gemfile.lock": true, "Cargo.lock": true, "go.sum": true,
+}
+
 // checkUntrackedAssumptions rejects a plan that assumes a file stays
 // untracked while a unit lists it in artifacts or scope or uses it in
 // check_cmd (D-134, issue #1039): CommitUnit stages untracked files
 // under a unit's artifacts and scope, so the assumption cannot hold.
-func checkUntrackedAssumptions(plan Plan) error {
+// A claim clause that names no path but says "lockfile" (or whose
+// assumption does) covers every
+// known lockfile tracked reports as not tracked yet; a tracked one is
+// committed as an ordinary edit.
+func checkUntrackedAssumptions(plan Plan, tracked func(p string) bool) error {
 	for _, as := range plan.Assumptions {
-		text := strings.TrimSpace(as.Assumption + " " + as.Default)
-		if !untrackedClaim.MatchString(text) {
-			continue
-		}
-		for _, tok := range pathToken.FindAllString(text, -1) {
-			p := cleanArtifact(tok)
-			for _, u := range plan.Units {
-				where := ""
-				switch {
-				case listsPath(u.Artifacts, p):
-					where = "artifacts"
-				case listsPath(u.Scope, p):
-					where = "scope"
-				case listsPath(strings.FieldsFunc(u.CheckCmd, isShellWordSep), p):
-					where = "check_cmd"
+		text := strings.TrimSpace(as.Assumption + "; " + as.Default)
+		for _, field := range []string{as.Assumption, as.Default} {
+			for _, clause := range clauseSep.Split(field, -1) {
+				if !untrackedClaim.MatchString(clause) {
+					continue
 				}
-				if where != "" {
-					return fmt.Errorf("mission runner: plan assumption %q says %s stays untracked, but unit %q uses it in its %s, and the harness commits the files a unit declares; either keep %s out of that unit's artifacts, scope and check_cmd, or drop the assumption", text, p, u.Title, where, p)
+				toks := pathToken.FindAllString(clause, -1)
+				for _, tok := range toks {
+					want := cleanArtifact(tok)
+					if u, where, p := unitPathUse(plan, func(p string) bool { return p == want }); where != "" {
+						return fmt.Errorf("mission runner: plan assumption %q says %s stays untracked, but unit %q uses it in its %s, and the harness commits the files a unit declares; either keep %s out of that unit's artifacts, scope and check_cmd, or drop the assumption", text, p, u, where, p)
+					}
+				}
+				// The assumption field is the topic a bare default clause
+				// ("stays untracked") speaks about.
+				if len(toks) > 0 || !lockfileWord.MatchString(clause) && !lockfileWord.MatchString(as.Assumption) {
+					continue
+				}
+				untrackedLock := func(p string) bool { return knownLockfiles[path.Base(p)] && !tracked(p) }
+				if u, where, p := unitPathUse(plan, untrackedLock); where != "" {
+					return fmt.Errorf("mission runner: plan assumption %q says the lockfile stays untracked, but unit %q uses %s in its %s and the repository does not track it, and the harness commits the files a unit declares; either keep %s out of that unit's artifacts, scope and check_cmd (put the fix in the manifest), or drop the assumption", text, u, p, where, p)
 				}
 			}
 		}
@@ -307,14 +329,43 @@ func checkUntrackedAssumptions(plan Plan) error {
 	return nil
 }
 
-// listsPath reports whether any non-blank entry of list cleans to p.
-func listsPath(list []string, p string) bool {
-	for _, s := range list {
-		if strings.TrimSpace(s) != "" && cleanArtifact(s) == p {
-			return true
+// unitPathUse finds the first unit with an artifact, scope entry or
+// check_cmd word whose cleaned path match accepts.
+func unitPathUse(plan Plan, match func(p string) bool) (unit, where, p string) {
+	for _, u := range plan.Units {
+		for _, l := range []struct {
+			where   string
+			entries []string
+		}{
+			{"artifacts", u.Artifacts},
+			{"scope", u.Scope},
+			{"check_cmd", strings.FieldsFunc(u.CheckCmd, isShellWordSep)},
+		} {
+			for _, e := range l.entries {
+				if strings.TrimSpace(e) == "" {
+					continue
+				}
+				if c := cleanArtifact(e); match(c) {
+					return u.Title, l.where, c
+				}
+			}
 		}
 	}
-	return false
+	return "", "", ""
+}
+
+// trackedIn reports whether git tracks p in the worktree at root; any
+// git failure (no repository) reads as untracked.
+func trackedIn(root string) func(p string) bool {
+	return func(p string) bool {
+		if root == "" || !filepath.IsLocal(p) {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), gitOpTimeout)
+		defer cancel()
+		_, err := runGit(ctx, root, "ls-files", "--error-unmatch", "--", p)
+		return err == nil
+	}
 }
 
 func cleanArtifact(a string) string {
