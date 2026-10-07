@@ -43,6 +43,28 @@ func laravelViteMission() Mission {
 	}
 }
 
+// preparedLaravelMission is laravelViteMission after the prepare step
+// (D-130): both installs done, env file created, baseline measured,
+// both lockfiles audited, plus one recorded failure with its tail.
+func preparedLaravelMission() Mission {
+	m := laravelViteMission()
+	m.EnvFacts.Prepare = &PrepareFacts{
+		Steps: []PrepareStepFact{
+			{Name: "tools", DurationMs: 6600, OK: true},
+			{Name: "deps:composer", DurationMs: 42000, OK: true},
+			{Name: "deps:pnpm", ExitCode: 1, DurationMs: 3200, Tail: "mise ERROR provider 'pnpm' is inactive\n(missing pnpm-lock.yaml)"},
+		},
+		Installed:  []string{"composer", "npm"},
+		EnvFile:    ".env created from .env.example with a generated app key",
+		TestCmd:    "composer test",
+		TestSource: "composer.json scripts.test",
+		Tests:      &TestSummary{Passed: 36, Parsed: true},
+		Audit:      []AuditFact{{Path: "composer.lock", Packages: 112, Vulnerabilities: 2}, {Path: "package-lock.json", Packages: 300}},
+		Failures:   []string{"deps pnpm failed; dependencies may need installing by hand"},
+	}
+	return m
+}
+
 func envFactsFixtures() map[string]Mission {
 	return map[string]Mission{
 		"general": {ID: "m-gen", Goal: "Say hello", Kind: KindGeneral},
@@ -52,6 +74,7 @@ func envFactsFixtures() map[string]Mission {
 			EnvFacts: &EnvFacts{BaseBranch: "main", Manifests: []string{"go.mod", "go.sum"}, Tools: []ToolFact{{Name: "git", Version: "git version 2.39.5"}, {Name: "go", Version: "go version go1.26.6 linux/amd64"}}},
 		},
 		"push_pr_polyglot": laravelViteMission(),
+		"prepared":         preparedLaravelMission(),
 		"nested_push": {
 			ID: "m-nested", Kind: KindCoding, Branch: "feat/api", BaseCommit: "fedcba9876543210",
 			Sources: []SourceEntry{{Source: SourceKindGitHub, ConnectorID: "gh1", RepoURL: "https://github.com/o/mono"}},

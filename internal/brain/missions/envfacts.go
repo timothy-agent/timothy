@@ -30,6 +30,8 @@ type EnvFacts struct {
 	// Tools are sorted by name; an empty Version means not installed.
 	Tools []ToolFact `json:"tools,omitempty"`
 	Gaps  []string   `json:"gaps,omitempty"`
+	// Prepare is the prepare step's outcome (D-130), nil until it ran.
+	Prepare *PrepareFacts `json:"prepare,omitempty"`
 }
 
 // DestinationFact is one repo destination the result phase delivers to.
@@ -368,6 +370,7 @@ func renderEnvFacts(m Mission) string {
 			fmt.Fprintf(&b, "- Not installed: %s.\n", strings.Join(absent, ", "))
 		}
 	}
+	b.WriteString(renderPrepareFacts(facts.Prepare))
 	fmt.Fprintf(&b, "- Sandbox limits: unprivileged user (no root, no sudo); read-only root filesystem, writable only in the workspace, HOME (tmpfs %s) and /tmp (tmpfs %s); memory %s including swap; %d CPUs; %d processes; %s per file; network on; no Docker socket.\n",
 		sandboxLimitHome, sandboxLimitTmp, sandboxLimitMemory, sandboxLimitCPUs, sandboxLimitPids, sandboxLimitFileMax)
 	for _, g := range facts.Gaps {

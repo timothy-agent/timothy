@@ -1019,6 +1019,11 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 		}
 		m = provisioned
 	}
+	// D-130: the prepare step runs once, before the first discover turn
+	// and outside any model turn; a brain restart mid-prepare resumes here.
+	if m.Phase == PhaseDiscover {
+		m = d.provision.prepareWorkspace(ctx, m)
+	}
 
 	before := m.Status
 	turnStart := time.Now()

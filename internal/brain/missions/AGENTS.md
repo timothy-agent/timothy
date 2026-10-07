@@ -270,6 +270,27 @@ AGENTS.md so other work does not pay for it every session.
   after a sandbox recreate (`provisioner.collectEnvFacts`, coding
   missions only) and stored on `missions.env_facts`. The limit
   constants mirror `internal/sandboxd/manager.go`; change both together.
+- Prepare step (D-130, issue #1010): `Driver.Advance` runs
+  `provisioner.prepareWorkspace` (prepare.go) for a coding mission in
+  discover, after provisioning and before the turn, once per mission
+  (`mission.prepare_complete` on record means done). It writes a
+  harness `mise.local.toml` at the worktree root carrying only keys the
+  repo's own mise config does not declare (`repoMiseKeys`, `tomlKeys`;
+  mise loads the local file over `mise.toml`, so omission is how the
+  repo wins), then runs through the sandbox exec path, each step a
+  `mission.prepare_step` event with exit code, duration and output tail
+  under a 25 minute ceiling: `mise install` (tools, osv-scanner via
+  aqua), `mise deps install <provider>` per root lockfile
+  (`depsProviders`), the `env-template` custom provider (copies
+  `.env.example` and runs `php artisan key:generate` only right after
+  the copy), the test ladder (`testLadder`: repo mise task, manifest
+  rules, Makefile target; first candidate that exits 0 becomes the
+  baseline and `tasks.test`), and osv-scanner over every lockfile into
+  `<workspace>/prepare/osv.json`. Every outcome lands on
+  `EnvFacts.Prepare` and renders in the facts block; a failure is a
+  fact, never a mission failure. `mise.local.toml` and `.env` are never
+  staged (`harnessWrittenPaths`). Not here: devcontainer and
+  CI-workflow test sources, nested manifests, repo custom providers.
 - Per-criterion review rubric (issue #718): `review_verdict` carries
   `criteria` (unit index, criterion index, met/not_met/cannot_tell,
   evidence), optional so existing fixtures still parse and an unknown
