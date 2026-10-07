@@ -140,6 +140,9 @@ ENV NPM_CONFIG_PREFIX=/home/sandbox/.npm-global
 # not run mise tasks or hooks unprompted.
 ENV MISE_DATA_DIR=/home/sandbox/.mise
 ENV MISE_CACHE_DIR=/home/sandbox/.cache/mise
+# mise deps freshness hashes live in the state dir; keep them on disk
+# with the caches so a sandbox recreate does not rerun every install.
+ENV MISE_STATE_DIR=/home/sandbox/.cache/mise-state
 ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_YES=1
 # Non-interactive, wide-output exec environment (issue #1009): commands
@@ -161,6 +164,22 @@ ENV COLUMNS=200 \
     MISE_AUTO_INSTALL=false \
     MISE_EXEC_AUTO_INSTALL=false \
     MISE_NOT_FOUND_AUTO_INSTALL=false
+# Package caches (D-131): sandboxd mounts ~/.cache from the shared
+# sandbox-caches volume, or from the mission's workspace when that
+# volume is absent, so caches stay on disk and off the HOME tmpfs.
+# -modcacherw keeps the Go module cache deletable by workspace teardown.
+ENV XDG_CACHE_HOME=/home/sandbox/.cache \
+    COMPOSER_CACHE_DIR=/home/sandbox/.cache/composer \
+    npm_config_cache=/home/sandbox/.cache/npm \
+    PIP_CACHE_DIR=/home/sandbox/.cache/pip \
+    UV_CACHE_DIR=/home/sandbox/.cache/uv \
+    GOMODCACHE=/home/sandbox/.cache/go-mod \
+    GOCACHE=/home/sandbox/.cache/go-build \
+    GOFLAGS=-modcacherw \
+    MAVEN_OPTS=-Dmaven.repo.local=/home/sandbox/.cache/m2/repository \
+    GRADLE_USER_HOME=/home/sandbox/.cache/gradle \
+    YARN_CACHE_FOLDER=/home/sandbox/.cache/yarn \
+    BUN_INSTALL_CACHE_DIR=/home/sandbox/.cache/bun
 ENV PATH="/home/sandbox/.mise/shims:/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:${PATH}"
 
 USER 65534:65534

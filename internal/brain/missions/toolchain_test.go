@@ -232,7 +232,7 @@ func TestBuildToolchainInstallCmdPHP(t *testing.T) {
 		t.Fatalf("php only = %q, want the php select alone", phpOnly)
 	}
 	mixed := buildToolchainInstallCmd(map[string]string{"php": "8.1", "node": "20"})
-	want := buildPHPSelectCmd("8.1", phpBinDir, phpLinkDir) + " && mise use --global 'node@20'"
+	want := buildPHPSelectCmd("8.1", phpBinDir, phpLinkDir) + " && " + miseLocked("mise use --global 'node@20'")
 	if mixed != want {
 		t.Fatalf("mixed = %q, want %q", mixed, want)
 	}
@@ -273,6 +273,55 @@ func TestBuildToolchainInstallCmdRoundTrip(t *testing.T) {
 				t.Fatal("injected command ran")
 			}
 		})
+	}
+}
+
+// TestMiseLockedSerializesRoundTrip runs two miseLocked commands at once
+// through /bin/sh with a stub mise that records its start and end: the
+// lock on the data dir (D-131) must keep them from overlapping, create a
+// missing data dir, and pass the exit code through.
+func TestMiseLockedSerializesRoundTrip(t *testing.T) {
+	if _, err := exec.LookPath("flock"); err != nil {
+		t.Skip("flock not installed")
+	}
+	bin := t.TempDir()
+	logPath := filepath.Join(t.TempDir(), "calls")
+	stub := "#!/bin/sh\necho \"start $1\" >> \"$CALL_LOG\"\nsleep 0.3\necho \"end $1\" >> \"$CALL_LOG\"\n[ \"$1\" != fail ]\n"
+	if err := os.WriteFile(filepath.Join(bin, "mise"), []byte(stub), 0o700); err != nil { //nolint:gosec // test stub must be executable
+		t.Fatal(err)
+	}
+	dataDir := filepath.Join(t.TempDir(), "not-yet", "mise")
+	run := func(arg string) *exec.Cmd {
+		cmd := exec.Command("/bin/sh", "-c", miseLocked("mise "+shQuote(arg))) //nolint:gosec // test-authored command
+		cmd.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "MISE_DATA_DIR=" + dataDir, "CALL_LOG=" + logPath}
+		return cmd
+	}
+	a, b := run("a"), run("b")
+	if err := a.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Wait(); err != nil {
+		t.Fatalf("a: %v", err)
+	}
+	if err := b.Wait(); err != nil {
+		t.Fatalf("b: %v", err)
+	}
+	raw, err := os.ReadFile(logPath) //nolint:gosec // test-owned log path
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) != 4 || strings.Fields(lines[0])[1] != strings.Fields(lines[1])[1] || strings.Fields(lines[2])[1] != strings.Fields(lines[3])[1] {
+		t.Fatalf("calls overlapped: %q", lines)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, ".timothy-install.lock")); err != nil {
+		t.Fatalf("lock file not in the data dir: %v", err)
+	}
+	if err := run("fail").Run(); err == nil {
+		t.Fatal("failing mise exited 0 through the lock")
 	}
 }
 
@@ -354,7 +403,7 @@ func TestProvisionInstallsDetectedToolchains(t *testing.T) {
 	if !reflect.DeepEqual(m.Toolchains, map[string]string{"python": "3.10"}) {
 		t.Fatalf("Toolchains = %v, want python 3.10", m.Toolchains)
 	}
-	if len(ex.cmds) != 1 || ex.cmds[0] != "mise use --global 'python@3.10'" || ex.envs[0] != "python" {
+	if len(ex.cmds) != 1 || ex.cmds[0] != miseLocked("mise use --global 'python@3.10'") || ex.envs[0] != "python" {
 		t.Fatalf("exec cmds = %q envs = %q, want one install on the python image", ex.cmds, ex.envs)
 	}
 	if !reflect.DeepEqual(ex.probes, []string{"python"}) {
@@ -513,7 +562,7 @@ func TestDriverDiscoverReinstallsToolchainsAfterRecreate(t *testing.T) {
 			if _, err := d.Advance(context.Background(), "m1"); err != nil {
 				t.Fatalf("Advance: %v", err)
 			}
-			if len(ex.cmds) != 1 || ex.cmds[0] != "mise use --global 'python@3.10'" || ex.envs[0] != "python" {
+			if len(ex.cmds) != 1 || ex.cmds[0] != miseLocked("mise use --global 'python@3.10'") || ex.envs[0] != "python" {
 				t.Fatalf("exec cmds = %q envs = %q, want one install on the python image", ex.cmds, ex.envs)
 			}
 			if !reflect.DeepEqual(ex.probes, []string{"python"}) {

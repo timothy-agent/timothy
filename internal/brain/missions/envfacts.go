@@ -56,7 +56,7 @@ const (
 	sandboxLimitPids    = 256
 	sandboxLimitHome    = "1 GiB"
 	sandboxLimitTmp     = "512 MiB"
-	sandboxLimitFileMax = "100 MiB"
+	sandboxLimitFileMax = "256 MiB"
 )
 
 // manifestMaxDepth bounds the manifest walk: files up to three
@@ -371,7 +371,7 @@ func renderEnvFacts(m Mission) string {
 		}
 	}
 	b.WriteString(renderPrepareFacts(facts.Prepare))
-	fmt.Fprintf(&b, "- Sandbox limits: unprivileged user (no root, no sudo); read-only root filesystem, writable only in the workspace, HOME (tmpfs %s) and /tmp (tmpfs %s); memory %s including swap; %d CPUs; %d processes; %s per file; network on; no Docker socket.\n",
+	fmt.Fprintf(&b, "- Sandbox limits: unprivileged user (no root, no sudo); read-only root filesystem, writable only in the workspace, HOME (tmpfs %s; package caches in ~/.cache are on disk) and /tmp (tmpfs %s); memory %s including swap; %d CPUs; %d processes; %s per file; network on; no Docker socket.\n",
 		sandboxLimitHome, sandboxLimitTmp, sandboxLimitMemory, sandboxLimitCPUs, sandboxLimitPids, sandboxLimitFileMax)
 	for _, g := range facts.Gaps {
 		fmt.Fprintf(&b, "- Gap: %s If the goal depends on this, submit the plan as infeasible.\n", NeutralizeSlot(g))

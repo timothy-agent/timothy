@@ -280,7 +280,7 @@ AGENTS.md so other work does not pay for it every session.
   repo wins), then runs through the sandbox exec path, each step a
   `mission.prepare_step` event with exit code, duration and output tail
   under a 25 minute ceiling: `mise install` (tools, osv-scanner via
-  aqua), `mise deps install <provider>` per root lockfile
+  aqua; under `miseLocked` like `installToolchains`, D-131), `mise deps install <provider>` per root lockfile
   (`depsProviders`), the `env-template` custom provider (copies
   `.env.example` and runs `php artisan key:generate` only right after
   the copy), the test ladder (`testLadder`: repo mise task, manifest

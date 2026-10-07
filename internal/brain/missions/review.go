@@ -354,7 +354,7 @@ func ListWorkspace(workRoot string) string {
 			return filepath.SkipAll
 		}
 		if d.IsDir() {
-			if d.Name() == ".git" {
+			if d.Name() == ".git" || isSandboxCacheDir(workRoot, path, d) {
 				return filepath.SkipDir
 			}
 			return nil

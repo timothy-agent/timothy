@@ -250,6 +250,28 @@ func TestProvisionWorkspacePathIncludesKind(t *testing.T) {
 	}
 }
 
+// TestProvisionCreatesSandboxCacheDir covers D-131: every kind's
+// workspace gets the package cache dir beside the worktree, since
+// sandboxd mounts it and Docker requires it to exist.
+func TestProvisionCreatesSandboxCacheDir(t *testing.T) {
+	requireGit(t)
+	w := newTestWorkspace(t)
+	ctx := context.Background()
+	for _, kind := range []string{"coding", "general"} {
+		workspace, worktree, _, _, _, err := w.Provision(ctx, "mission-cache-"+kind, "Fix the login bug", "", kind, "", nil, nil, "", "")
+		if err != nil {
+			t.Fatalf("Provision %s: %v", kind, err)
+		}
+		fi, err := os.Stat(filepath.Join(workspace, SandboxCacheDirName))
+		if err != nil || !fi.IsDir() {
+			t.Fatalf("%s: cache dir missing: %v", kind, err)
+		}
+		if worktree != "" && strings.HasPrefix(filepath.Join(workspace, SandboxCacheDirName), worktree+string(filepath.Separator)) {
+			t.Fatalf("%s: cache dir is inside the worktree %s", kind, worktree)
+		}
+	}
+}
+
 // TestProvisionCodingMissionSelfInitsRepo covers the fix's core case:
 // a coding mission always self-initializes its own git repo inside
 // its workspace — no repo needs to pre-exist in the container.

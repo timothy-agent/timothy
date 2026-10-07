@@ -70,6 +70,10 @@ const (
 	// mise toolchain cache volume (D-125).
 	toolchainsVolumeMetaPath = "/statevols/toolchains"
 
+	// cachesVolumeMetaPath is the same self-inspection mount for the
+	// package cache volume (D-131).
+	cachesVolumeMetaPath = "/statevols/caches"
+
 	// sandboxHomePath / tmpMountPath are the two paths that lose their
 	// writable backing under ReadonlyRootfs (D-106) and get a tmpfs
 	// instead. sandboxHomePath is the image's HOME
@@ -90,6 +94,19 @@ const (
 	// creates missing parents of a mount point root-owned on the tmpfs,
 	// which would lock uid 65534 out of e.g. ~/.local (issue #995).
 	toolchainsMountPath = "/home/sandbox/.mise"
+
+	// cachesMountPath (D-131) holds the package manager caches: the
+	// image ENV (sandbox-base.Dockerfile) points composer, npm, pip, uv,
+	// Go, Maven, Gradle, yarn, bun and mise state here. Backed by the
+	// shared cache volume, or by the mission's own missionCacheDirName
+	// dir when that volume is absent; never by the HOME tmpfs, whose
+	// pages count against the memory cap.
+	cachesMountPath = "/home/sandbox/.cache"
+
+	// missionCacheDirName is the fallback cache dir in a mission's
+	// workspace dir, beside the worktree. Brain creates it at provision
+	// (missions.SandboxCacheDirName); keep both in sync.
+	missionCacheDirName = ".sandbox-cache"
 
 	// sandboxMemoryBytes / sandboxNanoCPUs / sandboxPidsLimit cap one
 	// mission's blast radius: model-authored commands, unlike
@@ -124,11 +141,10 @@ const (
 	// loop inside the container.
 	sandboxNofileLimit = 4096
 
-	// sandboxFsizeLimit (D-106) caps any single file a mission writes at
-	// the same 100 MB ceiling attachments.MaxSizeBytes allows, so an
-	// artifact a mission could legitimately hand back is never the thing
-	// the ulimit kills.
-	sandboxFsizeLimit = 100 << 20
+	// sandboxFsizeLimit (D-106) caps any single file a mission writes.
+	// 256 MiB (D-131) clears large package archives and build outputs
+	// while one runaway write still cannot fill the workspace disk.
+	sandboxFsizeLimit = 256 << 20
 
 	// sandboxCoreLimit (D-106) disables core dumps: a dump lands in the
 	// worktree and carries the process env, secrets included.
@@ -267,6 +283,11 @@ type Manager struct {
 	// ephemeral per container. D-125 (issue #990).
 	toolchainsMount mount.Mount
 
+	// cachesMount is the package cache volume (D-131), resolved like
+	// toolchainsMount. Absent means each mission container mounts its
+	// own workspace cache dir instead (cachesMountFor).
+	cachesMount mount.Mount
+
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per-mission ensureContainer lock
 
@@ -310,7 +331,11 @@ func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, 
 	if err != nil {
 		log.Info("sandbox: toolchain cache volume not configured, mission toolchains will be ephemeral", "error", err)
 	}
-	return &Manager{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, toolchainsMount: tm, locks: map[string]*sync.Mutex{}}, nil
+	cm, err := resolveMount(ctx, cli, cachesVolumeMetaPath, cachesMountPath)
+	if err != nil {
+		log.Info("sandbox: package cache volume not configured, caches go to each mission's workspace", "error", err)
+	}
+	return &Manager{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, toolchainsMount: tm, cachesMount: cm, locks: map[string]*sync.Mutex{}}, nil
 }
 
 // resolveWorkspaceMount inspects the calling container (brain) for its
@@ -406,6 +431,24 @@ func (m *Manager) missionMount(workdir, missionID string) (mount.Mount, error) {
 	}
 	scoped.VolumeOptions = &mount.VolumeOptions{Subpath: subpath}
 	return scoped, nil
+}
+
+// cachesMountFor returns a mission container's package cache mount
+// (D-131): the shared volume when configured, else the
+// missionCacheDirName dir inside the mission's scoped workspace mount,
+// so caches always land on disk. Brain creates that dir at provision;
+// Docker requires it to exist.
+func (m *Manager) cachesMountFor(missionMount mount.Mount) mount.Mount {
+	if m.cachesMount.Source != "" {
+		return m.cachesMount
+	}
+	fallback := mount.Mount{Type: missionMount.Type, Source: missionMount.Source, Target: cachesMountPath}
+	if missionMount.Type == mount.TypeBind {
+		fallback.Source = path.Join(missionMount.Source, missionCacheDirName)
+		return fallback
+	}
+	fallback.VolumeOptions = &mount.VolumeOptions{Subpath: path.Join(missionMount.VolumeOptions.Subpath, missionCacheDirName)}
+	return fallback
 }
 
 // Ping reports whether the Docker daemon is reachable — the sandbox
@@ -551,6 +594,7 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 	if m.toolchainsMount.Source != "" {
 		mounts = append(mounts, m.toolchainsMount)
 	}
+	mounts = append(mounts, m.cachesMountFor(workspaceMount))
 	hostCfg := &container.HostConfig{
 		Mounts: mounts,
 		// Init (tini) reaps zombie processes: `sleep infinity` as PID 1
@@ -612,8 +656,9 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		// A container restart now wipes both. That also makes D-103's
 		// $HOME marker probe read a restart as a recreate, which is the
 		// safe direction: never resume into a container whose process
-		// tree is gone. The .claude state volume and the toolchain cache
-		// volume mount over this tmpfs and keep persisting.
+		// tree is gone. The .claude state volume, the toolchain cache
+		// volume and the package cache mount (D-131) mount over this
+		// tmpfs and keep persisting.
 		Tmpfs: map[string]string{
 			tmpMountPath:    "rw,exec,nosuid,nodev," + sandboxTmpfsSize,
 			sandboxHomePath: "rw,exec,nosuid,nodev,uid=65534,gid=65534," + sandboxHomeTmpfsSize,
