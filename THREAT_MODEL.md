@@ -175,14 +175,18 @@ not-found and out-of-bounds into the same 404.
   credentials or keys (`.npmrc`, `config/secrets.yml`, test `*.pem`)
   can be read; read-only commands can name `/usr`, `/opt`, `/tmp`,
   `/etc/os-release` and the HOME subdirs `.mise`, `.cache` and
-  `.local`. The container runs as uid 65534 on a read-only rootfs and
+  `.local`. Any command can write under `/tmp`, which is the
+  container's own size-bounded tmpfs, not a host path, and where the
+  delegated executors already write; paths are cleaned first, so
+  `/tmp/../etc` stays denied.
+  The container runs as uid 65534 on a read-only rootfs and
   never receives host secrets, so these reach nothing the worker could
   not already reach. The one secret the container does hold, the
   claude CLI auth state under `/home/sandbox/.claude`, stays excluded:
   HOME itself is not a read path, so a recursive read of HOME cannot
   walk into it, and `.claude` is denied explicitly as well. System
   package managers, sudo, docker, pipe-to-shell, ssh keys, home
-  dotfiles, paths outside the worktree, and every chat or host
+  dotfiles, other paths outside the worktree, and every chat or host
   session keep the original rules.
 - **Open:** mission containers share one read-write workspace volume
   across missions, so missions are not isolated from each other's files

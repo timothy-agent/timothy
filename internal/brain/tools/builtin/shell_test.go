@@ -206,8 +206,8 @@ func TestShellRunnerStillRejectsSymlinkEscape(t *testing.T) {
 
 // TestShellRunnerAllowsContainerReadPaths pins D-129: a Runner-backed
 // shell runs in the mission container, so a read-only command naming
-// the container's /usr reaches the Runner; the in-process shell still
-// refuses it.
+// the container's /usr, or a write to its /tmp, reaches the Runner;
+// the in-process shell still refuses it.
 func TestShellRunnerAllowsContainerReadPaths(t *testing.T) {
 	t.Parallel()
 	runnerCalled := false
@@ -223,6 +223,9 @@ func TestShellRunnerAllowsContainerReadPaths(t *testing.T) {
 	}
 	if !runnerCalled {
 		t.Fatal("Runner was not called for a container read path")
+	}
+	if _, err := runTool(t, sandboxed, "mise run audit > /tmp/audit.json 2>/tmp/audit_err.txt"); err != nil {
+		t.Fatalf("sandboxed tmp write: %v", err)
 	}
 	if _, err := runTool(t, sandboxed, "cp x /usr/local/bin/"); err == nil || !strings.Contains(err.Error(), "outside the workspace") {
 		t.Fatalf("sandboxed write err = %v, want outside the workspace", err)
