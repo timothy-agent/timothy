@@ -5,9 +5,12 @@ package sandboxd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
+	"path"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -228,5 +231,54 @@ func TestCheckImageMissingErrors(t *testing.T) {
 	}
 	if err := mgr.CheckImage(ctx); err == nil {
 		t.Fatal("CheckImage: want an error for a nonexistent image, got nil")
+	}
+}
+
+// TestTwoOwnersOnOneDaemon is the issue #1036 case on a real daemon
+// (D-132): two Managers with different owners share it, and B can
+// neither list, remove nor exec in A's container.
+func TestTwoOwnersOnOneDaemon(t *testing.T) {
+	image := os.Getenv("MISSION_SANDBOX_TEST_IMAGE")
+	if image == "" {
+		t.Skip("MISSION_SANDBOX_TEST_IMAGE not set; skipping sandbox integration test")
+	}
+	ctx := context.Background()
+	run := time.Now().UTC().Format("20060102-150405.000000000")
+	newMgr := func(owner string) *Manager {
+		mgr, err := NewManager(ctx, image, testLogger())
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		mgr.owner = owner
+		return mgr
+	}
+	a, b := newMgr("it-owner-a-"+run), newMgr("it-owner-b-"+run)
+	missionID := "it-owner-" + run
+	t.Cleanup(func() { _ = a.Remove(context.Background(), missionID) })
+
+	missionDir := "/workspace/missions/coding/" + missionID
+	if err := os.MkdirAll(path.Join(missionDir, missionCacheDirName), 0o777); err != nil { //nolint:gosec // test fixture inside the test container's own workspace mount
+		t.Skipf("cannot create %s (workspace volume not mounted writable here): %v", missionDir, err)
+	}
+	var out bytes.Buffer
+	if _, err := a.Exec(ctx, missionID, "", missionDir, "true", 5*time.Second, &out); err != nil {
+		t.Fatalf("A Exec: %v", err)
+	}
+
+	if ids, err := b.List(ctx); err != nil || slices.Contains(ids, missionID) {
+		t.Fatalf("B List = %v, %v; want no error and no A container", ids, err)
+	}
+	if err := b.Remove(ctx, missionID); err != nil {
+		t.Fatalf("B Remove: %v", err)
+	}
+	if _, err := b.Exec(ctx, missionID, "", missionDir, "true", 5*time.Second, &out); !errors.Is(err, ErrForeignContainer) {
+		t.Fatalf("B Exec err = %v, want ErrForeignContainer", err)
+	}
+	ids, err := a.List(ctx)
+	if err != nil || !slices.Contains(ids, missionID) {
+		t.Fatalf("A List = %v, %v; want A's container to survive B's Remove", ids, err)
+	}
+	if _, err := a.Exec(ctx, missionID, "", missionDir, "true", 5*time.Second, &out); err != nil {
+		t.Fatalf("A Exec after B's Remove: %v", err)
 	}
 }

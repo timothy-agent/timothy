@@ -6,12 +6,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/moby/moby/api/types/common"
 	"github.com/moby/moby/api/types/container"
+
+	"github.com/SumonMSelim/timothy/internal/brain/sandboxclient"
 )
 
 func testLog() *slog.Logger {
@@ -413,17 +416,10 @@ func TestHandleExecNoEnvOmitsExecEnv(t *testing.T) {
 
 func TestHandleRemoveIdempotent(t *testing.T) {
 	t.Parallel()
-	calls := 0
-	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete {
-			calls++
-			http.Error(w, "no such container", http.StatusNotFound)
-			return
-		}
-		t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+	d := newFakeDaemon(map[string]map[string]string{
+		containerName(validUUID): {missionLabel: validUUID, ownerLabel: testOwner},
 	})
-	mgr := newTestManager(cli)
-	api := testAPI(mgr)
+	api := testAPI(newTestManager(newTestClient(t, d.handle)))
 
 	for i := 0; i < 2; i++ {
 		rec := httptest.NewRecorder()
@@ -432,8 +428,156 @@ func TestHandleRemoveIdempotent(t *testing.T) {
 			t.Errorf("call %d: status = %d, want 204", i, rec.Code)
 		}
 	}
-	if calls != 2 {
-		t.Fatalf("daemon remove calls = %d, want 2", calls)
+	if got := d.removedNames(); len(got) != 1 || got[0] != containerName(validUUID) {
+		t.Fatalf("daemon removed %v, want exactly [%s]", got, containerName(validUUID))
+	}
+}
+
+// otherUUID / legacyUUID are mission ids of containers this instance
+// does not own: one labelled by another instance, one from before D-132
+// with no owner label.
+const (
+	otherUUID  = "b2c3d4e5-0000-4000-8000-000000000002"
+	legacyUUID = "b2c3d4e5-0000-4000-8000-000000000003"
+)
+
+// fakeDaemon is a Docker daemon stand-in that several Managers can
+// share, like instances on one host. It honors label filters on list,
+// inspect by name, and remove by id.
+type fakeDaemon struct {
+	mu         sync.Mutex
+	containers map[string]map[string]string // name -> labels
+	removed    []string
+}
+
+func newFakeDaemon(containers map[string]map[string]string) *fakeDaemon {
+	return &fakeDaemon{containers: containers}
+}
+
+func (d *fakeDaemon) removedNames() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Clone(d.removed)
+}
+
+func (d *fakeDaemon) exists(name string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	_, ok := d.containers[name]
+	return ok
+}
+
+func (d *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	rest := r.URL.Path[strings.Index(r.URL.Path, "/containers/")+len("/containers/"):]
+	switch {
+	case r.Method == http.MethodGet && rest == "json":
+		var filters map[string]map[string]bool
+		if f := r.URL.Query().Get("filters"); f != "" {
+			if err := json.Unmarshal([]byte(f), &filters); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		items := []container.Summary{}
+		for name, labels := range d.containers {
+			if matchesLabels(labels, filters["label"]) {
+				items = append(items, container.Summary{ID: name, Names: []string{"/" + name}, Labels: labels})
+			}
+		}
+		writeJSONNoT(w, items)
+	case r.Method == http.MethodGet && strings.HasSuffix(rest, "/json"):
+		name := strings.TrimSuffix(rest, "/json")
+		labels, ok := d.containers[name]
+		if !ok {
+			http.Error(w, "no such container", http.StatusNotFound)
+			return
+		}
+		writeJSONNoT(w, container.InspectResponse{
+			ID: name, Name: "/" + name,
+			Config: &container.Config{Labels: labels},
+			State:  &container.State{Running: true},
+		})
+	case r.Method == http.MethodDelete:
+		if _, ok := d.containers[rest]; !ok {
+			http.Error(w, "no such container", http.StatusNotFound)
+			return
+		}
+		delete(d.containers, rest)
+		d.removed = append(d.removed, rest)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "unexpected call "+r.Method+" "+r.URL.Path, http.StatusNotImplemented)
+	}
+}
+
+// matchesLabels applies Docker's label filter: every "key" or
+// "key=value" entry must match.
+func matchesLabels(labels map[string]string, want map[string]bool) bool {
+	for f := range want {
+		k, v, hasValue := strings.Cut(f, "=")
+		got, ok := labels[k]
+		if !ok || (hasValue && got != v) {
+			return false
+		}
+	}
+	return true
+}
+
+func writeJSONNoT(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// TestSweepLeavesOtherInstancesContainers is the issue #1036 regression:
+// instance A's mission is missing from instance B's store, so B's sweep
+// treats it as terminal. B must still leave A's container, and any
+// pre-D-132 container, untouched, and remove only its own orphan.
+func TestSweepLeavesOtherInstancesContainers(t *testing.T) {
+	t.Parallel()
+	const ownerA, ownerB = "timothy-timothy", "timothy-demo1"
+	d := newFakeDaemon(map[string]map[string]string{
+		containerName(validUUID):  {missionLabel: validUUID, ownerLabel: ownerA},
+		containerName(otherUUID):  {missionLabel: otherUUID, ownerLabel: ownerB},
+		containerName(legacyUUID): {missionLabel: legacyUUID},
+	})
+	cli := newTestClient(t, d.handle)
+	mgrB := newTestManager(cli)
+	mgrB.owner = ownerB
+	apiB := testAPI(mgrB)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/sandboxes", apiB.handleList)
+	mux.HandleFunc("DELETE /v1/sandboxes/{missionID}", apiB.handleRemove)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	var seen []string
+	err := sandboxclient.New(srv.URL).Sweep(t.Context(), func(id string) bool {
+		seen = append(seen, id)
+		return true // B's store knows none of these missions
+	})
+	if err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+	if len(seen) != 1 || seen[0] != otherUUID {
+		t.Errorf("B's sweep saw %v, want only its own [%s]", seen, otherUUID)
+	}
+	if got := d.removedNames(); len(got) != 1 || got[0] != containerName(otherUUID) {
+		t.Errorf("daemon removed %v, want only B's own %s", got, containerName(otherUUID))
+	}
+	for _, id := range []string{validUUID, legacyUUID} {
+		if !d.exists(containerName(id)) {
+			t.Errorf("container %s was removed by another instance's sweep", containerName(id))
+		}
+	}
+
+	// A direct DELETE of A's mission through B is equally a no-op.
+	rec := httptest.NewRecorder()
+	apiB.handleRemove(rec, removeReq(validUUID))
+	if rec.Code != http.StatusNoContent || !d.exists(containerName(validUUID)) {
+		t.Errorf("DELETE via B: status %d, A's container exists=%v; want 204 and untouched", rec.Code, d.exists(containerName(validUUID)))
 	}
 }
 
@@ -442,9 +586,11 @@ func TestHandleListLabelFiltering(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/json") {
 			writeJSON(t, w, http.StatusOK, []container.Summary{
-				{ID: "c1", Labels: map[string]string{missionLabel: validUUID}},
-				{ID: "c2", Labels: map[string]string{missionLabel: ""}},
+				{ID: "c1", Labels: map[string]string{missionLabel: validUUID, ownerLabel: testOwner}},
+				{ID: "c2", Labels: map[string]string{missionLabel: "", ownerLabel: testOwner}},
 				{ID: "c3", Labels: map[string]string{}},
+				{ID: "c4", Labels: map[string]string{missionLabel: otherUUID, ownerLabel: "timothy-b"}},
+				{ID: "c5", Labels: map[string]string{missionLabel: legacyUUID}},
 			})
 			return
 		}
@@ -464,7 +610,7 @@ func TestHandleListLabelFiltering(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if len(out.MissionIDs) != 1 || out.MissionIDs[0] != validUUID {
-		t.Fatalf("mission_ids = %v, want [%s] (empty/missing labels skipped)", out.MissionIDs, validUUID)
+		t.Fatalf("mission_ids = %v, want [%s] (empty/missing labels and other owners skipped)", out.MissionIDs, validUUID)
 	}
 }
 
@@ -475,7 +621,7 @@ func TestHandleCapacity(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/containers/json") {
 			writeJSON(t, w, http.StatusOK, []container.Summary{
-				{ID: "c1", Labels: map[string]string{missionLabel: validUUID}},
+				{ID: "c1", Labels: map[string]string{missionLabel: validUUID, ownerLabel: testOwner}},
 			})
 			return
 		}

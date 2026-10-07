@@ -51,6 +51,21 @@ const (
 	containerNamePrefix = "timothy-sandbox-"
 	missionLabel        = "timothy.mission"
 
+	// ownerLabel names the sandboxd instance that created a container
+	// (D-132): several Timothy instances may share one Docker daemon, and
+	// each must list, remove and start only its own sandboxes.
+	ownerLabel = "timothy.owner"
+
+	// composeProjectLabel is the label Docker Compose puts on every
+	// container it starts; sandboxd's own value is its owner id.
+	composeProjectLabel = "com.docker.compose.project"
+
+	// defaultOwner is the owner id when sandboxd cannot read its own
+	// compose project (not run under Compose, or self-inspect failed).
+	// Two such instances on one daemon would share it, so a multi-instance
+	// host must run every instance under Compose with distinct projects.
+	defaultOwner = "timothy"
+
 	// missionsDirName is the segment brain's $WORKSPACES adds under
 	// /workspace (deploy/docker-compose.yml) — every mission workspace is
 	// /workspace/missions/<kind>/<mission id>, provisioned by brain
@@ -288,6 +303,10 @@ type Manager struct {
 	// own workspace cache dir instead (cachesMountFor).
 	cachesMount mount.Mount
 
+	// owner is this instance's ownerLabel value (D-132), resolved once
+	// at startup by resolveOwner.
+	owner string
+
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per-mission ensureContainer lock
 
@@ -335,7 +354,51 @@ func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, 
 	if err != nil {
 		log.Info("sandbox: package cache volume not configured, caches go to each mission's workspace", "error", err)
 	}
-	return &Manager{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, toolchainsMount: tm, cachesMount: cm, locks: map[string]*sync.Mutex{}}, nil
+	owner := resolveOwner(ctx, cli, log)
+	log.Info("sandbox: owner resolved", "owner", owner)
+	return &Manager{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, toolchainsMount: tm, cachesMount: cm, owner: owner, locks: map[string]*sync.Mutex{}}, nil
+}
+
+// resolveOwner returns this instance's owner id (D-132): the compose
+// project label on sandboxd's own container, else defaultOwner.
+func resolveOwner(ctx context.Context, cli *client.Client, log *slog.Logger) string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Warn("sandbox: read own hostname, using default owner", "owner", defaultOwner, "error", err)
+		return defaultOwner
+	}
+	self, err := cli.ContainerInspect(ctx, hostname, client.ContainerInspectOptions{})
+	if err != nil {
+		log.Warn("sandbox: inspect own container, using default owner", "owner", defaultOwner, "error", err)
+		return defaultOwner
+	}
+	if project := containerLabels(self)[composeProjectLabel]; project != "" {
+		return project
+	}
+	log.Warn("sandbox: own container has no compose project label, using default owner", "owner", defaultOwner)
+	return defaultOwner
+}
+
+// ErrForeignContainer reports a mission's container that another
+// sandboxd instance owns (D-132). sandboxd never starts or execs in it.
+var ErrForeignContainer = errors.New("sandbox: container belongs to another instance")
+
+// checkOwner gates ensureContainer's use of an existing container
+// (D-132). A container with no ownerLabel predates D-132; exec may
+// reuse it, since its name carries a mission UUID only the owning
+// instance's brain knows. Remove and List never touch it (see Remove).
+func (m *Manager) checkOwner(labels map[string]string) error {
+	if owner := labels[ownerLabel]; owner != "" && owner != m.owner {
+		return fmt.Errorf("%w: owner %q, this instance is %q", ErrForeignContainer, owner, m.owner)
+	}
+	return nil
+}
+
+func containerLabels(insp client.ContainerInspectResult) map[string]string {
+	if insp.Container.Config == nil {
+		return nil
+	}
+	return insp.Container.Config.Labels
 }
 
 // resolveWorkspaceMount inspects the calling container (brain) for its
@@ -472,7 +535,9 @@ func (m *Manager) CheckImage(ctx context.Context) error {
 }
 
 // containerName is deterministic per mission so ensureContainer's
-// get-or-create is idempotent across brain restarts.
+// get-or-create is idempotent across brain restarts. Mission ids are
+// UUIDs, so names do not collide across instances sharing a daemon;
+// ownership is the ownerLabel, not the name (D-132).
 func containerName(missionID string) string {
 	return containerNamePrefix + missionID
 }
@@ -525,6 +590,9 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID, environment, w
 	insp, err := m.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	switch {
 	case err == nil:
+		if err := m.checkOwner(containerLabels(insp)); err != nil {
+			return "", err
+		}
 		if insp.Container.State != nil && insp.Container.State.Running {
 			return insp.Container.ID, nil
 		}
@@ -546,6 +614,9 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID, environment, w
 		insp, err = m.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 		if err != nil {
 			return "", fmt.Errorf("sandbox: inspect after create conflict: %w", err)
+		}
+		if err := m.checkOwner(containerLabels(insp)); err != nil {
+			return "", err
 		}
 		if insp.Container.State != nil && insp.Container.State.Running {
 			return insp.Container.ID, nil
@@ -585,7 +656,7 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		Env:    []string{sandboxPath, "HOME=/home/sandbox"},
 		User:   sandboxUser,
 		Cmd:    []string{"sleep", "infinity"},
-		Labels: map[string]string{missionLabel: missionID},
+		Labels: map[string]string{missionLabel: missionID, ownerLabel: m.owner},
 	}
 	mounts := []mount.Mount{workspaceMount}
 	if m.stateMount.Source != "" {
@@ -857,11 +928,29 @@ func (m *Manager) ExecEnv(ctx context.Context, missionID, environment, workdir, 
 // Remove force-removes missionID's sandbox container, if any. Callers
 // treat this as best-effort — a slow or unreachable daemon must never
 // block a mission's terminal state transition.
+//
+// D-132: only a container carrying this instance's ownerLabel is
+// removed. Another instance's container, or a pre-D-132 one with no
+// owner label, is left untouched and reported as success: brain's sweep
+// cannot tell whose an unlabelled container is. Such a legacy container
+// stays until removed by hand (docker rm) once its mission is done.
 func (m *Manager) Remove(ctx context.Context, missionID string) error {
 	name := containerName(missionID)
-	_, err := m.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
-	if err != nil && !errdefs.IsNotFound(err) {
-		return fmt.Errorf("sandbox: remove container %s: %w", name, err)
+	insp, err := m.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
+	switch {
+	case errdefs.IsNotFound(err):
+	case err != nil:
+		return fmt.Errorf("sandbox: inspect container %s: %w", name, err)
+	case containerLabels(insp)[ownerLabel] != m.owner:
+		if m.log != nil {
+			m.log.Info("sandbox: not removing container of another or unknown owner", "mission", missionID, "owner", containerLabels(insp)[ownerLabel])
+		}
+		return nil
+	default:
+		_, err = m.cli.ContainerRemove(ctx, insp.Container.ID, client.ContainerRemoveOptions{Force: true})
+		if err != nil && !errdefs.IsNotFound(err) {
+			return fmt.Errorf("sandbox: remove container %s: %w", name, err)
+		}
 	}
 	m.mu.Lock()
 	delete(m.locks, missionID)
@@ -870,7 +959,7 @@ func (m *Manager) Remove(ctx context.Context, missionID string) error {
 }
 
 // List returns the mission id (the timothy.mission label's value) of
-// every sandbox container that exists, running or not. The caller
+// every sandbox container this instance owns (D-132), running or not. The caller
 // (brain's sandboxclient.Sweep) filters this against its own
 // terminal-mission knowledge and deletes what it decides is safe to
 // remove — this package holds no Postgres state to make that call
@@ -878,13 +967,16 @@ func (m *Manager) Remove(ctx context.Context, missionID string) error {
 func (m *Manager) List(ctx context.Context) ([]string, error) {
 	result, err := m.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: make(client.Filters).Add("label", missionLabel),
+		Filters: make(client.Filters).Add("label", missionLabel, ownerLabel+"="+m.owner),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: list: %w", err)
 	}
 	ids := make([]string, 0, len(result.Items))
 	for _, c := range result.Items {
+		if c.Labels[ownerLabel] != m.owner {
+			continue
+		}
 		if missionID := c.Labels[missionLabel]; missionID != "" {
 			ids = append(ids, missionID)
 		}
