@@ -1,9 +1,10 @@
 # Timothy Threat Model
 
-Status: alpha-exit review, 2026-08-30. Companion to `SECURITY.md` (which
+Status: alpha-exit review, 2026-08-30; dispositions refreshed against
+the code on 2026-10-07. Companion to `SECURITY.md` (which
 covers reporting). This document names the trust boundaries, the assets
 worth protecting, the attack surfaces, and the disposition of each known
-risk: mitigated, accepted, or open (tracked by issue).
+risk: mitigated, accepted, or open (tracked by issue where one exists).
 
 ## System and trust posture
 
@@ -20,8 +21,8 @@ database:
 
 - `brain` publishes the only externally reachable API (`:8300`), plus a
   static web UI (`:3300`).
-- `gateway`, `memoryd`, `sandboxd`, `searxng`, `markitdown`, `whisper`,
-  and `pdfgen` publish no host ports and are internal-only.
+- `gateway`, `memoryd`, `sandboxd`, `searxng`, `markitdown`, `ocr`,
+  `whisper`, and `pdfgen` publish no host ports and are internal-only.
 - `sandboxd` holds the Docker socket and lives on its own network
   (`timothy-sandbox`), reachable only by `brain`.
 
@@ -63,20 +64,26 @@ database:
 
 Every `/v1` route requires the bearer token, validated with a
 constant-time compare and failing closed when the token is unset. The
-only unauthenticated routes are `/health`, `/metrics`, and the OAuth
-callback (which authenticates via a single-use expiring state token
-because an identity provider redirects a browser to it).
+routes outside the API token are `/health`, `/metrics` (its own token,
+below), the OAuth callback (which authenticates via a single-use
+expiring state token because an identity provider redirects a browser
+to it), and `POST /hooks/{trigger_id}` (each delivery is checked
+against its trigger's HMAC-SHA256 key in constant time, with a
+timestamp skew bound, a body cap, and a per-trigger rate limit;
+`internal/brain/api/hooks.go`).
 
 - **Mitigated:** token validation (constant-time, fail-closed), complete
   route coverage, gateway admin routes reachable only through brain's
   authenticated proxy allowlist.
-- **Open:** `/metrics` is unauthenticated on the published port and
-  exposes route-level telemetry. Tracked in issue #438.
+- **Mitigated:** `/metrics` on brain's published port requires a bearer
+  token, `TIMOTHY_METRICS_TOKEN`, separate from the API token
+  (`httpserver.Server.ProtectMetrics`, D-100). The compare is
+  constant-time, and an unset token fails closed with 503. Issue #438.
 - **Accepted:** single token, no roles. Correct for single-operator;
   documented here so it is a deliberate choice, not an oversight.
-- **Transport:** no built-in TLS. Any exposure beyond localhost requires
-  an external reverse proxy terminating TLS. Called out in the web
-  hardening work (issue #432); the token travels cleartext without it.
+- **Accepted:** no built-in TLS. Any exposure beyond a trusted LAN
+  requires an external reverse proxy terminating TLS, and README.md
+  states this (issue #432). Without it the token travels in cleartext.
 
 ### Secret handling
 
@@ -90,9 +97,13 @@ leak points.
 - **Mitigated:** encryption at rest for secret columns, no-plaintext-in-
   responses, referential-integrity delete guard, redirect-drop on the
   vault HTTP client, sandbox containers never receive brain's env.
-- **Open:** GCM seals with nil additional data, so `ref_name` is not
-  bound to its ciphertext; a DB-write attacker without the key could swap
-  ciphertext between rows. One-line hardening, tracked in issue #433.
+- **Mitigated:** GCM binds each row's `ref_name` as additional data
+  (`internal/secretstore/cipher.go`, D-105), so ciphertext swapped
+  between rows fails to open. Rows sealed before D-105 are re-sealed on
+  first read (`Store.openDB`) and by a startup sweep
+  (`Store.ResealLegacy`, D-114). Issue #433.
+- **Residual:** the legacy no-AAD open path (`openLegacy`) stays as a
+  fallback until the sweep is known to have run on every instance.
 - **Residual:** redaction is per-site, not a central logging filter. A
   new code path that logs a resolved secret has nothing catching it.
   Noted as a coding invariant (secrets by ref only) rather than a
@@ -107,17 +118,20 @@ the DNS-rebind window, and re-enters per redirect hop. `fetch_url` and KB
 URL ingest go through it and strip userinfo.
 
 - **Mitigated:** the two model-facing URL paths (`fetch_url`, KB ingest).
-- **Open:** webhook destinations, the MCP connector endpoint, and the
-  mission webhook notifier use plain HTTP clients with no netguard. The
-  model can pick a webhook destination via `deliver`, and brain sits on
-  both networks where the unauthenticated internal services live, so an
-  unguarded URL is an in-network request primitive. Tracked in issue
+- **Mitigated:** webhook destinations (`destinations.WebhookAdapter`),
+  the MCP connector endpoint, the mission webhook notifier, and the
+  channel client all dial through `netguard.Guard` (wired in
+  `cmd/brain/main.go`), so a URL that resolves to a blocked range is
+  refused. An internal receiver needs an explicit host in the
+  `outbound_host_allowlist` setting, which is empty by default. Issue
   #431.
 - **Accepted:** fixed-vendor connector clients (GitHub/Google/Microsoft)
-  and sidecar clients (markitdown/pdfgen/whisper/searxng) are unguarded
-  because their addresses are operator env, never model input. CalDAV
-  deliberately permits cleartext basic auth to loopback for test
-  fixtures; documented as a small accepted hole.
+  and sidecar clients (markitdown/ocr/pdfgen/whisper/searxng) are
+  unguarded because their addresses are operator env, never model
+  input. CalDAV and IMAP/SMTP connectors also skip netguard; their
+  endpoints come from operator connector config through the
+  authenticated API. CalDAV deliberately permits cleartext basic auth
+  to loopback for test fixtures; documented as a small accepted hole.
 
 ### Prompt injection and tool actions
 
@@ -127,19 +141,27 @@ telling the model they are data, not instructions.
 
 - **Mitigated:** memory content fencing (single-sourced, tolerant of
   forged close tags).
-- **Open (highest severity):** no equivalent fencing for web pages,
-  search results, mail bodies, KB chunks, or converted attachments, while
-  `fetch_url`, `search_web`, `search_kb`, and `read_kb` are permission-
-  exempt. That gives injected content a prompt-free read-then-exfiltrate
-  chain (`fetch_url` to a public URL carrying data in the query string,
-  which netguard does not stop because the destination is a real external
-  host). The fencing mechanism already exists; it just is not applied to
-  the higher-volume channels. Tracked in issue #430.
+- **Mitigated:** every tool result that is not marked `Trusted` on its
+  `tools.Tool` value is fenced the same way before the model sees it
+  (`fenceUntrusted` in `internal/brain/loop/agent.go`, one fence in
+  `internal/platform/trustfence`, D-107 and D-109). That covers web
+  pages, search results, mail bodies, KB passages, converted documents,
+  and remote MCP output. Trust is opt-in per tool, so a new tool is
+  fenced by default. Issue #430.
+- **Open (no issue):** the fence is advice to the model, not a Go
+  check. `fetch_url`, `search_web`, `search_kb`, and `read_kb` stay
+  permission-exempt, so injected content that the model obeys anyway
+  still has a prompt-free read-then-exfiltrate chain (`fetch_url` to a
+  public URL carrying data in the query string, which netguard does
+  not stop because the destination is a real external host). Revoking
+  those exemptions was scoped out of #430. `shell` output is shown
+  unfenced; it only counts as untrusted for memory writes (D-128).
 - **Mitigated:** action tools that change state or leave the system
-  (`shell`, `write_file`, `push_mission_branch`, `deliver`) are not
-  permission-exempt and prompt unless an operator-authored agent has
-  pre-granted them in its approval allowlist. Turn-ending sentinels are
-  pure argument parsing.
+  (`shell`, `push_mission_branch`, `deliver`) are not permission-exempt
+  and prompt unless an operator-authored agent has pre-granted them in
+  its approval allowlist. `write_file` is exempt because it is confined
+  to its root by construction (relative paths only, `..` rejected).
+  Turn-ending sentinels are pure argument parsing.
 
 ### Mission sandbox
 
@@ -148,10 +170,13 @@ no-new-privileges, distroless, network-isolated. Its API never accepts
 container names, images, mounts, or arbitrary env; the mission ID is
 shape-validated before any Docker call. Mission containers run as an
 unprivileged user with capped memory, CPU, PIDs, and OOM sacrifice bias,
-a deny-by-default env allowlist, and value-length limits. Their rootfs is
-read-only (D-106), with writable space only on the workspace volume, the
-executor state volume, and size-bounded tmpfs at `/tmp` and the sandbox
-HOME; nofile and fsize ulimits bound fd and single-file-size exhaustion,
+a deny-by-default env allowlist, and value-length limits. Each mission
+container mounts only its own workspace directory, never the shared
+workspace root (`Manager.missionMount` in `internal/sandboxd`). Their
+rootfs is read-only (D-106), with writable space only on that mission
+directory, the executor state volume, the optional toolchain and
+package cache volumes (D-125, D-131), and size-bounded tmpfs at `/tmp`
+and the sandbox HOME; nofile and fsize ulimits bound fd and single-file-size exhaustion,
 and Docker's default seccomp profile applies, pinned by never setting a
 `seccomp=` security option. Shell commands are
 scored by a classifier that treats anything it cannot parse
@@ -163,7 +188,11 @@ not-found and out-of-bounds into the same 404.
 - **Mitigated:** sandboxd hardening, narrow unauthenticated-but-
   unreachable API, per-mission resource caps, read-only rootfs with
   bounded tmpfs, nofile/fsize ulimits, default seccomp profile, env
-  allowlist, symlink-safe writes, download containment.
+  allowlist, symlink-safe writes, download containment (issue #437).
+- **Mitigated:** per-mission workspace isolation. `Manager.missionMount`
+  mounts the volume narrowed by Subpath to `missions/<kind>/<id>` and
+  rejects a workdir that names another mission, so one mission cannot
+  read or clobber another's files. Issue #749.
 - **Accepted:** the shell classifier is a best-effort regex, not a
   boundary; the container is the boundary. Stated in code and here.
 - **Accepted (D-129):** in a session with a registered mission sandbox,
@@ -198,20 +227,24 @@ not-found and out-of-bounds into the same 404.
   without `--require-hashes`, Maven and Gradle check less and can serve
   it. Remove the `sandbox-caches` mount from sandboxd to disable
   sharing: each mission then caches in its own workspace dir.
-- **Open:** mission containers share one read-write workspace volume
-  across missions, so missions are not isolated from each other's files
-  (issue #749). Sandbox containers on the default bridge reach the bridge
-  gateway address (typically `172.17.0.1`) and through it any port the
-  host publishes, including brain's `:8300`; the API token is never given
-  to the sandbox, so this is defense-in-depth rather than an open door.
-  Replacing bridge networking is not planned; the containment boundary is
-  the container, and outbound internet access is a requirement (a coding
-  mission runs `pip install` / `npm install`). Tracked in issue #437.
+- **Accepted:** the executor state volume (`/home/sandbox/.claude`, the
+  claude CLI auth state) is mounted read-write in every mission
+  container. The native worker's shell guard denies it, but code a
+  hostile repo runs in the container (build scripts, package hooks) or
+  a delegated executor can read it.
+- **Accepted:** sandbox containers on the default bridge reach the
+  bridge gateway address (typically `172.17.0.1`) and through it any
+  port the host publishes, including brain's `:8300`. The API token and
+  the metrics token are never given to the sandbox, so this is
+  defense-in-depth rather than an open door. Replacing bridge networking
+  was scoped out of #437; the containment boundary is the container,
+  and outbound internet access is a requirement (a coding mission runs
+  `pip install` / `npm install`).
 
 ### Sidecars
 
-markitdown, whisper, and pdfgen are internal-only FastAPI services that
-parse attacker-influenceable bytes. markitdown loads no third-party
+markitdown, ocr, whisper, and pdfgen are internal-only FastAPI services
+that parse attacker-influenceable bytes. markitdown loads no third-party
 converters. pdfgen writes document content to separate files and pulls it
 in with Typst `read()` rather than interpolating, and escapes titles, so
 Typst injection is handled; it shells out with an argv list and no shell.
@@ -219,11 +252,13 @@ Typst injection is handled; it shells out with an argv list and no shell.
 - **Mitigated:** markitdown converter isolation, pdfgen content/argument
   separation, URL fetch kept in brain behind netguard (sidecars convert
   bytes only).
-- **Open:** all three read unbounded request bodies (bounded only by
-  brain's caller-side caps); pdfgen's Typst compile has no timeout and
-  returns stderr (temp paths) to callers; no sidecar carries compose-level
-  memory/CPU/PID limits, so a pathological file can hang a worker or OOM
-  the host. Tracked in issue #434.
+- **Mitigated:** each sidecar caps its request body (`MAX_BODY_BYTES`
+  in each `*-svc/main.py`) and returns 413, refusing an oversized
+  Content-Length before reading any body. pdfgen's Typst compile runs
+  with a 90 s timeout and returns 504 past it, and its stderr is
+  scrubbed of temp paths (`_scrub_stderr`). markitdown, ocr, pdfgen,
+  whisper, and searxng carry `mem_limit`, `cpus`, and `pids_limit` in
+  both compose files. Issue #434.
 
 ### Web UI
 
@@ -236,11 +271,17 @@ header.
 
 - **Mitigated:** same-origin proxy, default-schema sanitization,
   server-side MIME sniffing with allowlist.
-- **Open:** no CSP, X-Frame-Options, or HSTS, with the API token in
-  `localStorage`, so any successful XSS is a full token compromise. The
-  mermaid `dangerouslySetInnerHTML` path renders model-authored diagram
-  source outside the sanitize pipeline and needs its security level
-  pinned to strict. Tracked in issue #432.
+- **Mitigated:** nginx sends a Content-Security-Policy (`script-src
+  'self'`, `object-src 'none'`, `frame-ancestors 'none'`),
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and
+  `Referrer-Policy` on every response
+  (`web/nginx/default.conf.template`). Mermaid, whose SVG reaches the
+  DOM through `dangerouslySetInnerHTML` outside the sanitize pipeline,
+  is initialized with `securityLevel: 'strict'` (`MermaidBlock.tsx`,
+  pinned by its test). Issue #432.
+- **Accepted:** the API token stays in `localStorage`, so an XSS that
+  gets past the CSP is a full token compromise. Moving it was scoped
+  out of #432. HSTS is left to the TLS-terminating proxy.
 
 ### Data at rest and recovery
 
@@ -289,16 +330,17 @@ refuses to install on a mismatch.
 
 | Risk | Severity | Issue |
 |------|----------|-------|
-| Unfenced untrusted content plus exempt read/fetch tools (injection to exfil) | High | #430 |
-| Operator-URL outbound paths bypass netguard | High | #431 |
-| No CSP/frame headers; token in localStorage; mermaid SVG path | Medium | #432 |
-| Secret-store AES-GCM without AAD | Medium | #433 |
-| Sidecar input limits, Typst timeout, resource caps | Medium | #434 |
-| No per-image SBOM (rest of release integrity mitigated) | Low | #435 |
-| Mission sandbox hardening round 2 | Low | #437 |
-| Unauthenticated `/metrics` on the public port | Low | #438 |
+| Exempt read/fetch tools give injected content a prompt-free exfil path; the fence (#430) is advisory | High | none (exemptions scoped out of #430) |
+| No per-image SBOM (rest of release integrity mitigated) | Low | none (scoped out of #435) |
+
+Issues #430, #431, #432, #433, #434, #435, #437, #438, and #749 are
+closed; their mitigations are described in the sections above.
 
 Accepted risks (single-operator posture, documented deliberately): one
-token equals administrative access; no TLS without an external proxy; the
-shell classifier is advisory; no database-level encryption at rest on a
-single host; fixed-vendor and sidecar clients skip netguard by design.
+token equals administrative access; no TLS without an external proxy;
+the API token lives in `localStorage`; the shell classifier is
+advisory; no database-level encryption at rest on a single host;
+fixed-vendor, sidecar, CalDAV, and IMAP clients skip netguard by
+design; sandboxes reach host-published ports through the bridge
+gateway; package caches, toolchains, and the executor auth state are
+shared across missions.
