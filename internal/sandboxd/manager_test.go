@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -54,8 +55,11 @@ func writeJSON(t *testing.T, w http.ResponseWriter, status int, v any) {
 	}
 }
 
+// testOwner is newTestManager's owner id (D-132).
+const testOwner = "timothy-a"
+
 func newTestManager(cli *client.Client) *Manager {
-	return &Manager{cli: cli, baseImage: "img", locks: map[string]*sync.Mutex{}}
+	return &Manager{cli: cli, baseImage: "img", owner: testOwner, locks: map[string]*sync.Mutex{}}
 }
 
 func TestResolveWorkspaceMountVolume(t *testing.T) {
@@ -188,6 +192,9 @@ func TestEnsureContainerNotFoundCreates(t *testing.T) {
 			}
 			if cfg.HostConfig.Init == nil || !*cfg.HostConfig.Init {
 				t.Errorf("create body: HostConfig.Init not set true")
+			}
+			if cfg.Labels[ownerLabel] != testOwner || cfg.Labels[missionLabel] != "m1" {
+				t.Errorf("create body: Labels = %v, want mission m1 and owner %s", cfg.Labels, testOwner)
 			}
 			if cfg.User != sandboxUser {
 				t.Errorf("create body: User = %q, want %q", cfg.User, sandboxUser)
@@ -1333,6 +1340,150 @@ func TestEnsureContainerRejectsUnscopedWorkdirOnEveryPath(t *testing.T) {
 			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 			if _, err := mgr.ensureContainer(context.Background(), "m1", "", tc.workdir); !errors.Is(err, ErrWorkspaceScope) {
 				t.Fatalf("err = %v, want ErrWorkspaceScope", err)
+			}
+		})
+	}
+}
+
+// TestListFiltersOnOwner pins D-132: List asks the daemon for this
+// instance's owner label and drops anything else the daemon returns.
+func TestListFiltersOnOwner(t *testing.T) {
+	var gotFilters map[string]map[string]bool
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.Unmarshal([]byte(r.URL.Query().Get("filters")), &gotFilters); err != nil {
+			t.Fatalf("decode filters: %v", err)
+		}
+		writeJSON(t, w, http.StatusOK, []container.Summary{
+			{ID: "c1", Labels: map[string]string{missionLabel: "mine", ownerLabel: testOwner}},
+			{ID: "c2", Labels: map[string]string{missionLabel: "theirs", ownerLabel: "timothy-b"}},
+			{ID: "c3", Labels: map[string]string{missionLabel: "legacy"}},
+		})
+	})
+	ids, err := newTestManager(cli).List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "mine" {
+		t.Errorf("List = %v, want [mine]", ids)
+	}
+	if want := map[string]bool{missionLabel: true, ownerLabel + "=" + testOwner: true}; !maps.Equal(gotFilters["label"], want) {
+		t.Errorf("label filters = %v, want %v", gotFilters["label"], want)
+	}
+}
+
+// TestRemoveOnlyOwnContainer pins D-132: Remove deletes a container
+// only when it carries this instance's owner label. Another instance's
+// container and a pre-D-132 unlabelled one are left alone, without
+// error, so brain's sweep never kills a sibling instance's mission.
+func TestRemoveOnlyOwnContainer(t *testing.T) {
+	tests := []struct {
+		name       string
+		labels     map[string]string // nil: no container
+		wantRemove bool
+	}{
+		{name: "own container", labels: map[string]string{missionLabel: "m1", ownerLabel: testOwner}, wantRemove: true},
+		{name: "another instance's container", labels: map[string]string{missionLabel: "m1", ownerLabel: "timothy-b"}},
+		{name: "unlabelled legacy container", labels: map[string]string{missionLabel: "m1"}},
+		{name: "no container"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			containers := map[string]map[string]string{}
+			if tc.labels != nil {
+				containers[containerName("m1")] = tc.labels
+			}
+			d := newFakeDaemon(containers)
+			mgr := newTestManager(newTestClient(t, d.handle))
+			if err := mgr.Remove(context.Background(), "m1"); err != nil {
+				t.Fatalf("Remove: %v", err)
+			}
+			removed := len(d.removedNames()) == 1
+			if removed != tc.wantRemove {
+				t.Errorf("removed = %v, want %v", removed, tc.wantRemove)
+			}
+		})
+	}
+}
+
+// TestEnsureContainerRefusesForeignContainer pins D-132: an existing
+// container owned by another instance is never reused, restarted or
+// started after a create conflict; ensureContainer errors instead.
+// An unlabelled pre-D-132 container stays reusable for its mission.
+func TestEnsureContainerRefusesForeignContainer(t *testing.T) {
+	foreign := &container.Config{Labels: map[string]string{missionLabel: "m1", ownerLabel: "timothy-b"}}
+	tests := []struct {
+		name        string
+		config      *container.Config
+		running     bool
+		conflict    bool // first inspect 404, create 409, then inspect finds it
+		wantForeign bool
+	}{
+		{name: "foreign running", config: foreign, running: true, wantForeign: true},
+		{name: "foreign exited", config: foreign, wantForeign: true},
+		{name: "foreign after create conflict", config: foreign, conflict: true, wantForeign: true},
+		{name: "own running", config: &container.Config{Labels: map[string]string{missionLabel: "m1", ownerLabel: testOwner}}, running: true},
+		{name: "legacy unlabelled running", config: &container.Config{Labels: map[string]string{missionLabel: "m1"}}, running: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			inspects := 0
+			cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/v1.51/containers/timothy-sandbox-m1/json":
+					inspects++
+					if tc.conflict && inspects == 1 {
+						http.Error(w, "no such container", http.StatusNotFound)
+						return
+					}
+					writeJSON(t, w, http.StatusOK, container.InspectResponse{
+						ID: "c1", Config: tc.config, State: &container.State{Running: tc.running},
+					})
+				case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create" && tc.conflict:
+					http.Error(w, "already exists", http.StatusConflict)
+				default:
+					t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+				}
+			})
+			mgr := newTestManager(cli)
+			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
+			id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
+			if tc.wantForeign {
+				if !errors.Is(err, ErrForeignContainer) {
+					t.Fatalf("err = %v, want ErrForeignContainer", err)
+				}
+				return
+			}
+			if err != nil || id != "c1" {
+				t.Fatalf("ensureContainer = %q, %v; want c1, nil", id, err)
+			}
+		})
+	}
+}
+
+// TestResolveOwner pins D-132's owner id: sandboxd's own compose
+// project label, else defaultOwner.
+func TestResolveOwner(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		labels map[string]string
+		want   string
+	}{
+		{name: "compose project label", status: http.StatusOK, labels: map[string]string{composeProjectLabel: "timothy-demo1"}, want: "timothy-demo1"},
+		{name: "no compose label", status: http.StatusOK, labels: map[string]string{}, want: defaultOwner},
+		{name: "self inspect fails", status: http.StatusNotFound, want: defaultOwner},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if tc.status != http.StatusOK {
+					http.Error(w, "no such container", tc.status)
+					return
+				}
+				writeJSON(t, w, http.StatusOK, container.InspectResponse{ID: "self", Config: &container.Config{Labels: tc.labels}})
+			})
+			if got := resolveOwner(context.Background(), cli, testLog()); got != tc.want {
+				t.Errorf("resolveOwner = %q, want %q", got, tc.want)
 			}
 		})
 	}

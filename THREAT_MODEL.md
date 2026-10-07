@@ -193,6 +193,16 @@ not-found and out-of-bounds into the same 404.
   mounts the volume narrowed by Subpath to `missions/<kind>/<id>` and
   rejects a workdir that names another mission, so one mission cannot
   read or clobber another's files. Issue #749.
+- **Mitigated (D-132):** several instances can share one Docker daemon.
+  Each sandboxd labels its containers `timothy.owner` with its own
+  compose project name, and list, remove and exec act only on
+  containers carrying that label, so one instance's orphan sweep cannot
+  delete another instance's live sandboxes. sandboxd refuses to start
+  or exec in another instance's container. A container from before
+  D-132 has no owner label: exec still reuses it for its own mission,
+  but no sweep removes it; clear those by hand. Instances not run under
+  Compose share a fixed default owner, so give each instance its own
+  compose project. Issue #1036.
 - **Accepted:** the shell classifier is a best-effort regex, not a
   boundary; the container is the boundary. Stated in code and here.
 - **Accepted (D-129):** in a session with a registered mission sandbox,
