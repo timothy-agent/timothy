@@ -255,6 +255,23 @@ func TestCheckUnitGranularity(t *testing.T) {
 			{Title: "a", Artifacts: []string{"pkg/a.go"}},
 			{Title: "b", Artifacts: []string{"pkg/b.go"}},
 		}, "they are one unit of work"},
+		{"root manifests plus report accepted", KindCoding, false, []PlanUnit{
+			{Title: "upgrade", Artifacts: []string{"composer.json", "composer.lock"}},
+			{Title: "report", Artifacts: []string{"SECURITY_REPORT.md"}},
+		}, ""},
+		{"evidence-only plus artifact unit accepted", KindCoding, false, []PlanUnit{
+			{Title: "code", Artifacts: []string{"pkg/a.go"}},
+			{Title: "file issue", EvidenceOnly: true, CheckCmd: "gh issue list | awk 'END{exit NR<1}'"},
+		}, ""},
+		{"one code unit plus report in the same dir accepted", KindCoding, false, []PlanUnit{
+			{Title: "code", Artifacts: []string{"pkg/a.go", "pkg/a_test.go"}},
+			{Title: "notes", Artifacts: []string{"pkg/NOTES.md"}},
+		}, ""},
+		{"code-only same-package split still rejected", KindCoding, false, []PlanUnit{
+			{Title: "a", Artifacts: []string{"pkg/a.go", "pkg/README.md"}},
+			{Title: "report", Artifacts: []string{"REPORT.md"}},
+			{Title: "b", Artifacts: []string{"pkg/b.go"}},
+		}, `units "a", "b" all produce code files in pkg and the plan has only 2 of them`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -273,5 +290,224 @@ func TestCheckUnitGranularity(t *testing.T) {
 				t.Fatalf("checkUnitGranularity = %v, want %q", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// TestGranularityWaiver (issue #1007): a split plan is waived once a
+// granularity rejection is on record, and never after the waiver is
+// spent.
+func TestGranularityWaiver(t *testing.T) {
+	split := Plan{Units: []PlanUnit{
+		{Title: "a", Artifacts: []string{"pkg/a.go"}, CheckCmd: "go test ./pkg/"},
+		{Title: "b", Artifacts: []string{"pkg/b.go"}, CheckCmd: "go test ./pkg/"},
+	}}
+	cases := []struct {
+		name       string
+		gate       PlanGateState
+		wantErr    bool
+		wantWaived bool
+	}{
+		{"first submit rejected", PlanGateState{}, true, false},
+		{"second submit waived", PlanGateState{GranularityRejected: true}, false, true},
+		{"waiver already spent", PlanGateState{GranularityRejected: true, GranularityWaived: true}, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := Mission{Kind: KindCoding, Environment: "go", PlanGate: tc.gate}
+			err := checkPlanGates(split, m)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("checkPlanGates = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			r := &nativeRunner{log: slog.Default()}
+			raw := `{"units":[{"title":"a","artifacts":["pkg/a.go"],"criteria":["c1","c2"],"check_cmd":"go test ./pkg/"},{"title":"b","artifacts":["pkg/b.go"],"criteria":["c1","c2"],"check_cmd":"go test ./pkg/"}]}`
+			plan, err := r.acceptPlan(context.Background(), m, raw)
+			if err != nil {
+				t.Fatalf("acceptPlan: %v", err)
+			}
+			if plan.GranularityWaived != tc.wantWaived {
+				t.Fatalf("GranularityWaived = %v, want %v", plan.GranularityWaived, tc.wantWaived)
+			}
+		})
+	}
+}
+
+// TestPushesOrOpensPR pins the delivery pattern on the spellings a
+// planner uses and on look-alikes it must leave alone.
+func TestPushesOrOpensPR(t *testing.T) {
+	cases := []struct {
+		title, cmd string
+		want       bool
+	}{
+		{"Push branch and open pull request", "", true},
+		{"Open a PR", "", true},
+		{"Create the PR for review", "", true},
+		{"Deliver", "gh pr list --head x --json number --jq 'length' | awk '$1>=1'", true},
+		{"Deliver", "git push origin HEAD", true},
+		{"Push the mission branch", "", true},
+		{"Upgrade dependencies", "grep -q laravel composer.json", false},
+		{"Add PR template parser", "go test ./internal/pr/", false},
+		{"Fix push notification retry", "go test ./push/", false},
+		{"Write prompt docs", "grep -q x docs/prompt.md", false},
+		{"Address pull request review comments", "go test ./internal/api/", false},
+		{"Document the pull request template", "grep -q Summary .github/pull_request_template.md", false},
+		{"Submit a pull request", "", true},
+	}
+	for _, tc := range cases {
+		if got := pushesOrOpensPR(tc.title, tc.cmd); got != tc.want {
+			t.Errorf("pushesOrOpensPR(%q, %q) = %v, want %v", tc.title, tc.cmd, got, tc.want)
+		}
+	}
+}
+
+// TestCheckHarnessDelivery (issue #1007): a push/PR unit is rejected
+// only when a repo destination delivers the branch.
+func TestCheckHarnessDelivery(t *testing.T) {
+	plan := Plan{Units: []PlanUnit{
+		{Title: "code", Artifacts: []string{"pkg/a.go"}, CheckCmd: "go test ./pkg/"},
+		{Title: "Open pull request", EvidenceOnly: true, CheckCmd: "gh pr view | awk 'END{exit NR<1}'"},
+	}}
+	err := checkPlanGates(plan, Mission{Kind: KindCoding, Environment: "go", PlanGate: PlanGateState{RepoDestination: true}})
+	if err == nil || !strings.Contains(err.Error(), `"Open pull request"`) || !strings.Contains(err.Error(), "the harness pushes the mission branch and opens the PR itself after all units pass") {
+		t.Fatalf("checkPlanGates with destination = %v, want the PR unit rejected", err)
+	}
+	if err := checkPlanGates(plan, Mission{Kind: KindCoding, Environment: "go"}); err != nil {
+		t.Fatalf("checkPlanGates without destination: %v", err)
+	}
+}
+
+// TestInstalledByWork covers the dependency-dir first-token rule.
+func TestInstalledByWork(t *testing.T) {
+	cases := []struct {
+		cmd  string
+		want bool
+	}{
+		{"vendor/bin/phpunit --filter X", true},
+		{"./vendor/bin/phpunit", true},
+		{"node_modules/.bin/vitest run", true},
+		{".venv/bin/pytest -q", true},
+		{"bin/console lint", true},
+		{"phpunit", false},
+		{"/vendor/bin/phpunit", false},
+		{"../vendor/bin/phpunit", false},
+		{"grep -q x a && vendor/bin/pint", false},
+		{"vendors/bin/phpunit", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		if got := installedByWork(tc.cmd); got != tc.want {
+			t.Errorf("installedByWork(%q) = %v, want %v", tc.cmd, got, tc.want)
+		}
+	}
+}
+
+// TestProbeAcceptsDependencyBinary (issue #1007): a gate naming
+// vendor/bin/phpunit in a fresh clone exits 127; that is the pre-work
+// state, not a missing tool.
+func TestProbeAcceptsDependencyBinary(t *testing.T) {
+	m := Mission{ID: "m1", Kind: KindCoding, Environment: "php"}
+	cmd := "vendor/bin/phpunit --filter UpgradeTest"
+	r := &nativeRunner{log: slog.Default(), sandbox: scriptedSandbox(map[string]int{cmd: 127}, "sh: 1: vendor/bin/phpunit: not found\n")}
+	plan := Plan{Units: []PlanUnit{{Title: "u", Artifacts: []string{"composer.lock"}, CheckCmd: cmd}}}
+	if err := r.probeCheckCmds(context.Background(), m, plan); err != nil {
+		t.Fatalf("probe rejected a dependency-dir binary: %v", err)
+	}
+}
+
+// The be8a2860 units are the plan shape that paused homelab mission
+// be8a2860 (issue #1007): four units at the workspace root, the last
+// one pushing and opening the PR.
+const be8a2860Upgrade = `{"title":"Upgrade Laravel dependencies","artifacts":["composer.json","composer.lock"],"criteria":["laravel/framework is on the target major","composer.lock matches composer.json"],"check_cmd":"grep -q '\"laravel/framework\": \"^11' composer.json"}`
+const be8a2860Tests = `{"title":"Run the test suite","artifacts":["test-results.txt"],"criteria":["the suite ran","no failures"],"check_cmd":"grep -q 'OK' test-results.txt"}`
+const be8a2860Report = `{"title":"Write the security report","artifacts":["SECURITY_REPORT.md"],"criteria":["lists fixed advisories","names remaining risks"],"check_cmd":"grep -qi 'advisor' SECURITY_REPORT.md"}`
+const be8a2860PR = `{"title":"Push branch and open pull request","evidence_only":true,"criteria":["branch pushed","PR open"],"check_cmd":"gh pr list --head mission/be8a2860 --json number --jq 'length' | awk '$1>=1'"}`
+
+// TestBe8a2860PlanShape is the regression fixture: with a repo
+// destination the only rejection is the PR unit; without that unit the
+// plan is accepted.
+func TestBe8a2860PlanShape(t *testing.T) {
+	m := Mission{ID: "be8a2860", Kind: KindCoding, Environment: "php", PlanGate: PlanGateState{RepoDestination: true}}
+	r := &nativeRunner{log: slog.Default(), sandbox: func(_ context.Context, _, _, _, _ string, _ time.Duration, out io.Writer) (int, error) {
+		_, _ = fmt.Fprint(out, "No such file or directory\n")
+		return 1, nil
+	}}
+	full := `{"units":[` + be8a2860Upgrade + `,` + be8a2860Tests + `,` + be8a2860Report + `,` + be8a2860PR + `]}`
+	_, err := r.acceptPlan(context.Background(), m, full)
+	if err == nil || !strings.Contains(err.Error(), `unit "Push branch and open pull request" pushes a branch or opens a pull request`) {
+		t.Fatalf("acceptPlan(full) = %v, want only the PR unit rejected", err)
+	}
+	noDest := m
+	noDest.PlanGate = PlanGateState{}
+	if _, err := r.acceptPlan(context.Background(), noDest, full); err != nil {
+		t.Fatalf("acceptPlan(full, no destination) = %v, want the PR unit to be the only defect", err)
+	}
+	trimmed := `{"units":[` + be8a2860Upgrade + `,` + be8a2860Tests + `,` + be8a2860Report + `]}`
+	plan, err := r.acceptPlan(context.Background(), m, trimmed)
+	if err != nil {
+		t.Fatalf("acceptPlan(without PR unit): %v", err)
+	}
+	if len(plan.Units) != 3 || plan.GranularityWaived {
+		t.Fatalf("accepted plan = %+v, want 3 units and no waiver", plan)
+	}
+}
+
+// TestPlanSessionRecoveryReplaysRejectedArgs (issue #1007): the
+// recovery turn quotes the rejected submit_plan JSON, and each attempt
+// runs acceptPlan once (one probe per attempt).
+func TestPlanSessionRecoveryReplaysRejectedArgs(t *testing.T) {
+	badCmd := "go test ./internal/core/... && grep -q Foo internal/core/a.go"
+	goodCmd := "grep -q 'func TestFoo' internal/core/a_test.go && go test ./internal/core/ -run TestFoo"
+	bad := `{"units":[{"title":"Foo","artifacts":["internal/core/a.go"],"criteria":["c1","c2"],"check_cmd":"` + badCmd + `"}]}`
+	good := `{"units":[{"title":"Foo","artifacts":["internal/core/a.go","internal/core/a_test.go"],"criteria":["c1","c2"],"check_cmd":"` + goodCmd + `"}]}`
+	calls := map[string]int{}
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, bad)},
+		{toolEndEvent(planToolName, good)},
+	}}
+	r := newTestRunner(agent)
+	r.sandbox = func(_ context.Context, _, _, _, command string, _ time.Duration, out io.Writer) (int, error) {
+		calls[command]++
+		if command == badCmd {
+			return 0, nil
+		}
+		_, _ = fmt.Fprint(out, "no test files")
+		return 1, nil
+	}
+	plan, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding, Environment: "go"}, "")
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if plan.Units[0].CheckCmd != goodCmd {
+		t.Fatalf("accepted check_cmd = %q, want the corrected gate", plan.Units[0].CheckCmd)
+	}
+	if calls[badCmd] != 1 || calls[goodCmd] != 1 {
+		t.Fatalf("probe calls = %v, want acceptPlan once per attempt", calls)
+	}
+	last := agent.requests[1].Messages[len(agent.requests[1].Messages)-1].Content
+	if !strings.Contains(last, "already exits 0") || !strings.Contains(last, "```json\n"+bad+"\n```") {
+		t.Fatalf("recovery message must carry the reason and the rejected JSON, got %q", last)
+	}
+}
+
+// TestPlanSessionWaivesSecondSplit (issue #1007): a split plan
+// rejected for granularity and resubmitted split is waived in the same
+// session; with the waiver spent the session fails.
+func TestPlanSessionWaivesSecondSplit(t *testing.T) {
+	split := `{"units":[{"title":"a","artifacts":["pkg/a.go"],"criteria":["c1","c2"],"check_cmd":"go test ./pkg/"},{"title":"b","artifacts":["pkg/b.go"],"criteria":["c1","c2"],"check_cmd":"go test ./pkg/"}]}`
+	run := func(gate PlanGateState) (Plan, error) {
+		agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+			{toolEndEvent(planToolName, split)},
+			{toolEndEvent(planToolName, split)},
+		}}
+		return newTestRunner(agent).PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding, Environment: "go", PlanGate: gate}, "")
+	}
+	plan, err := run(PlanGateState{})
+	if err != nil || !plan.GranularityWaived {
+		t.Fatalf("PlanSession = %+v, %v; want the resubmitted split waived", plan, err)
+	}
+	if _, err := run(PlanGateState{GranularityWaived: true}); err == nil || !strings.Contains(err.Error(), granularityMarker) {
+		t.Fatalf("PlanSession with waiver spent = %v, want the granularity rejection", err)
 	}
 }

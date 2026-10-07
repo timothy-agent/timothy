@@ -156,7 +156,11 @@ type Mission struct {
 	// toolchain install event, "" when none ran. Derived by the driver
 	// before the discover turn, never persisted or serialized.
 	ToolchainInstall string `json:"-"`
-	PendingPermission string `json:"pending_permission,omitempty"`
+	// PlanGate is plan-gate history derived by the driver from the
+	// event log and destinations before each plan turn (issue #1007),
+	// never persisted or serialized.
+	PlanGate          PlanGateState `json:"-"`
+	PendingPermission string        `json:"pending_permission,omitempty"`
 	// PendingPermissionTool/Args/Danger/Rationale describe the parked
 	// tool call for the UI — set alongside PendingPermission whenever a
 	// worker/reviewer/planner turn parks on stream.EventPermissionRequest,
@@ -586,6 +590,32 @@ type Plan struct {
 	// PlanSession after parsing, never persisted with the stored plan.
 	Provider string `json:"-"`
 	Model    string `json:"-"`
+	// GranularityWaived marks a plan accepted through the one
+	// granularity waiver (issue #1007); the driver records
+	// mission.plan_granularity_waived for it. Never persisted.
+	GranularityWaived bool `json:"-"`
+}
+
+// PlanGateState is what the plan gates know about earlier plan turns
+// of the mission and its delivery (issue #1007).
+type PlanGateState struct {
+	// GranularityRejected: an earlier plan attempt was rejected by
+	// checkUnitGranularity.
+	GranularityRejected bool
+	// GranularityWaived: the mission's one granularity waiver is spent.
+	GranularityWaived bool
+	// LastRejection is the reason the latest plan turn failed, empty
+	// once a plan turn succeeded after it.
+	LastRejection string
+	// RepoDestination: the result phase pushes the branch and opens
+	// the PR, so no unit may do either.
+	RepoDestination bool
+}
+
+// granularityWaivable reports whether the gate waives a granularity
+// rejection: one was already on record and no waiver was spent.
+func (g PlanGateState) granularityWaivable() bool {
+	return g.GranularityRejected && !g.GranularityWaived
 }
 
 // PlanAssumption is one ambiguity the planner resolved on its own,

@@ -3305,6 +3305,93 @@ func TestDriverFirstPlanDoesNotGetReplanNotes(t *testing.T) {
 	}
 }
 
+// TestDriverPlanRejectionReachesNextPlanSession (issue #1007): a plan
+// session that fails carries its reason into the next session's notes,
+// and the event log marks the granularity rejection for the waiver.
+func TestDriverPlanRejectionReachesNextPlanSession(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: KindGeneral, Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8, DiscoverNotes: "findings"})
+	reason := `mission runner: units "a", "b" all produce code files in pkg and the plan has only 2 of them, so ` + granularityMarker + `; merge them`
+	runner := &scriptedRunner{planErr: errors.New(reason)}
+	d := testDriver(store, runner)
+	ctx := context.Background()
+
+	if _, err := d.Advance(ctx, "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	m, _ := store.Get(ctx, "m1")
+	if g := d.planGateState(ctx, m); !g.GranularityRejected || g.LastRejection != reason {
+		t.Fatalf("planGateState = %+v, want the granularity rejection on record", g)
+	}
+
+	runner.planErr = nil
+	runner.plans = []Plan{{Units: []PlanUnit{{Title: "unit0"}}}}
+	if _, err := d.Advance(ctx, "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	if got := runner.planDiscoverNotes[1]; !strings.Contains(got, "findings") || !strings.Contains(got, "rejected by the harness: "+reason) {
+		t.Fatalf("second plan notes = %q, want the prior rejection reason", got)
+	}
+	m, _ = store.Get(ctx, "m1")
+	if g := d.planGateState(ctx, m); g.LastRejection != "" || !g.GranularityRejected {
+		t.Fatalf("planGateState after an accepted plan = %+v, want LastRejection cleared", g)
+	}
+}
+
+// TestDriverRecordsGranularityWaiver (issue #1007): a waived plan
+// records mission.plan_granularity_waived, which spends the waiver.
+func TestDriverRecordsGranularityWaiver(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Kind: KindGeneral, Phase: PhasePlan, Status: StatusWorking, MaxIterations: 8})
+	runner := &scriptedRunner{plans: []Plan{{GranularityWaived: true, Units: []PlanUnit{{Title: "a"}, {Title: "b"}}}}}
+	d := testDriver(store, runner)
+	ctx := context.Background()
+
+	if _, err := d.Advance(ctx, "m1"); err != nil {
+		t.Fatalf("Advance: %v", err)
+	}
+	n := 0
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.plan_granularity_waived" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("mission.plan_granularity_waived events = %d, want 1", n)
+	}
+	m, _ := store.Get(ctx, "m1")
+	if !d.planGateState(ctx, m).GranularityWaived {
+		t.Fatal("planGateState must report the waiver as spent")
+	}
+}
+
+// TestHasRepoDestination: a repo_url entry or a repo-kind row counts;
+// a kb entry or a non-repo row does not.
+func TestHasRepoDestination(t *testing.T) {
+	d := testDriver(newFakeStore(), &scriptedRunner{})
+	d.resolveGitHubPolicy = func(_ context.Context, id string) (GitHubPolicy, bool, error) {
+		return GitHubPolicy{}, id == "repo-row", nil
+	}
+	cases := []struct {
+		name    string
+		entries []DestinationEntry
+		want    bool
+	}{
+		{"none", nil, false},
+		{"kb only", []DestinationEntry{{Destination: DestinationKindKB, CollectionID: "c1"}}, false},
+		{"repo url", []DestinationEntry{{DestinationID: "x", RepoURL: "https://github.com/o/r"}}, true},
+		{"repo-kind row", []DestinationEntry{{DestinationID: "repo-row"}}, true},
+		{"webhook row", []DestinationEntry{{DestinationID: "hook"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := d.hasRepoDestination(context.Background(), Mission{Destinations: tc.entries}); got != tc.want {
+				t.Fatalf("hasRepoDestination = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestReplanNotesPinsOlderOperatorNote covers issue #357: an operator
 // steering note older than the last-3 window must still reach the
 // replan prompt, in both the first-time-plan and plan-exists branches.
