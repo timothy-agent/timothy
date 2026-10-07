@@ -21,10 +21,21 @@ type TestSummary struct {
 	Parsed   bool `json:"parsed"`
 }
 
+// ansiEscape matches OSC sequences (hyperlinks, titles), CSI sequences
+// (colors, cursor moves), charset selections and other two-byte escapes.
+var ansiEscape = regexp.MustCompile(`\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[()][0-9A-Za-z]|[=>@-Z\\-_])`)
+
+// stripANSI removes terminal escape sequences from command output. Some
+// runners (Collision) color output whatever NO_COLOR says.
+func stripANSI(s string) string {
+	return ansiEscape.ReplaceAllString(s, "")
+}
+
 // summaryPair matches "36 passed", "2 failing", "36 warnings", "40
 // examples", "0 failures" (pytest, Pest, jest, vitest, mocha, cargo,
-// rspec).
-var summaryPair = regexp.MustCompile(`(?i)\b(\d+)\s+(passed|passing|failed|failing|failures?|errors?|warnings?|examples?|tests?)\b`)
+// rspec). Collision's skipped, deprecated, risky, incomplete, todo and
+// notice counts mark a summary line without being counted.
+var summaryPair = regexp.MustCompile(`(?i)\b(\d+)\s+(passed|passing|failed|failing|failures?|errors?|warnings?|examples?|tests?|skipped|deprecated|risky|incomplete|todos?|notices?)\b`)
 
 // summaryKV matches PHPUnit's classic "Tests: 36, Assertions: 72,
 // Warnings: 36, Failures: 2." and jest's "Tests: 36 passed" prefix.
@@ -42,7 +53,9 @@ var (
 // parseTestSummary reads the last summary line in a test run's output.
 // Lines are scanned from the end so a runner's final totals win over
 // per-file lines. go test output is counted by package or test line.
+// Escape sequences are stripped first.
 func parseTestSummary(out string) TestSummary {
+	out = stripANSI(out)
 	lines := strings.Split(out, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := strings.TrimSpace(lines[i])

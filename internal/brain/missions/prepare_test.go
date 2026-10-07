@@ -248,6 +248,261 @@ func TestParseTestSummary(t *testing.T) {
 	}
 }
 
+// collisionRun is Collision's colored output for one passing file and
+// the given recap items, the way Symfony console renders it: gray
+// labels, bold colored counts, an OSC 8 file hyperlink.
+func collisionRun(recap string) string {
+	return "\n  \x1b[30;42;1m PASS \x1b[39;49;22m\x1b[39m Tests\\Unit\\ExampleTest\x1b[39m\n" +
+		"  \x1b[32;1m✓\x1b[39;22m\x1b[90m that true is true\x1b[39m \x1b[90m0.01s\x1b[39m\n" +
+		"  \x1b]8;;file:///app/tests/Unit/ExampleTest.php\x1b\\tests/Unit/ExampleTest.php\x1b]8;;\x1b\\\n\n" +
+		"  \x1b[90mTests:\x1b[39m    " + recap + "\x1b[90m (60 assertions)\x1b[39m\n" +
+		"  \x1b[90mDuration:\x1b[39m \x1b[39m0.52s\x1b[39m\n\n"
+}
+
+// TestParseTestSummaryCollision: Pest and `php artisan test` output
+// through Collision keeps its escapes whatever NO_COLOR says; the recap
+// parses after stripping, for every count Collision prints.
+func TestParseTestSummaryCollision(t *testing.T) {
+	item := func(color, s string) string { return "\x1b[" + color + ";1m" + s + "\x1b[39;22m" }
+	sep := "\x1b[90m,\x1b[39m "
+	cases := []struct {
+		name  string
+		recap string
+		want  TestSummary
+	}{
+		{"passed", item("32", "36 passed"), TestSummary{Passed: 36, Parsed: true}},
+		{"warnings only", item("33", "36 warnings"), TestSummary{Warnings: 36, Parsed: true}},
+		{"warnings and passed", item("33", "36 warnings") + sep + item("32", "2 passed"), TestSummary{Passed: 2, Warnings: 36, Parsed: true}},
+		{"every count", item("31", "1 failed") + sep + item("33", "2 deprecated") + sep + item("33", "1 warnings") + sep + item("33", "1 risky") + sep +
+			item("33", "1 notice") + sep + item("33", "1 incomplete") + sep + item("34", "1 todo") + sep + item("33", "2 skipped") + sep + item("32", "28 passed"),
+			TestSummary{Passed: 28, Failed: 1, Warnings: 1, Parsed: true}},
+		{"skipped only", item("33", "3 skipped"), TestSummary{Parsed: true}},
+		{"deprecated and passed", item("33", "2 deprecated") + sep + item("32", "34 passed"), TestSummary{Passed: 34, Parsed: true}},
+	}
+	for _, tc := range cases {
+		out := collisionRun(tc.recap)
+		for runner, prefix := range map[string]string{"php artisan test": "", "composer test": "\x1b[32m> @php artisan test\x1b[39m\n"} {
+			t.Run(tc.name+" via "+runner, func(t *testing.T) {
+				if got := parseTestSummary(prefix + out); got != tc.want {
+					t.Fatalf("parseTestSummary = %+v, want %+v", got, tc.want)
+				}
+			})
+		}
+	}
+}
+
+// TestStripANSI removes CSI, OSC (BEL and ST terminated), charset and
+// two-byte escapes and keeps the text, UTF-8 included.
+func TestStripANSI(t *testing.T) {
+	cases := map[string]string{
+		"\x1b[32;1m36 passed\x1b[39;22m":                    "36 passed",
+		"\x1b]8;;file:///a.php\x1b\\a.php\x1b]8;;\x1b\\":    "a.php",
+		"\x1b]0;title\x07done":                              "done",
+		"\x1b[1G\x1b[2K  - Installing psr/log (3.0.2): ...": "  - Installing psr/log (3.0.2): ...",
+		"\x1b(B\x1b[m✓ ok\x1b=":                             "✓ ok",
+		"plain\ntext":                                       "plain\ntext",
+	}
+	for in, want := range cases {
+		if got := stripANSI(in); got != want {
+			t.Errorf("stripANSI(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestPlanPrepareNpmNoLock: a root package.json without any node
+// lockfile takes the no-lockfile path; any root node lockfile, or a
+// nested package.json only, does not.
+func TestPlanPrepareNpmNoLock(t *testing.T) {
+	cases := []struct {
+		name          string
+		files         map[string]string
+		want          bool
+		wantProviders []string
+		wantLockfiles []string
+	}{
+		{
+			"laravel without an npm lockfile",
+			map[string]string{
+				"composer.json": `{"scripts":{"test":["@php artisan test"]}}`, "composer.lock": "{}", "package.json": `{"scripts":{"build":"vite build"}}`,
+				"artisan": "<?php\n", "phpunit.xml": "<phpunit/>", ".env.example": "APP_KEY=\n",
+			},
+			true, []string{"composer"}, []string{"composer.lock"},
+		},
+		{"package.json only", map[string]string{"package.json": "{}"}, true, nil, nil},
+		{"package-lock.json", map[string]string{"package.json": "{}", "package-lock.json": "{}"}, false, []string{"npm"}, []string{"package-lock.json"}},
+		{"npm-shrinkwrap.json", map[string]string{"package.json": "{}", "npm-shrinkwrap.json": "{}"}, false, nil, []string{"npm-shrinkwrap.json"}},
+		{"yarn.lock", map[string]string{"package.json": "{}", "yarn.lock": ""}, false, []string{"yarn"}, []string{"yarn.lock"}},
+		{"bun.lockb", map[string]string{"package.json": "{}", "bun.lockb": ""}, false, nil, nil},
+		{"nested package.json only", map[string]string{"go.mod": "module x\n", "web/package.json": "{}"}, false, nil, []string{"go.mod"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := writeTree(t, tc.files)
+			spec := planPrepare(dir, walkManifests(dir))
+			if spec.NpmNoLock != tc.want {
+				t.Errorf("NpmNoLock = %v, want %v", spec.NpmNoLock, tc.want)
+			}
+			if !reflect.DeepEqual(spec.Providers, tc.wantProviders) || !reflect.DeepEqual(spec.Lockfiles, tc.wantLockfiles) {
+				t.Errorf("Providers = %v, Lockfiles = %v, want %v and %v", spec.Providers, spec.Lockfiles, tc.wantProviders, tc.wantLockfiles)
+			}
+			if tc.want && spec.empty() {
+				t.Error("empty() = true with a package.json to install")
+			}
+		})
+	}
+}
+
+// npmNoLockFixture is the SumonMSelim/solid-principles-example-laravel
+// shape: composer.json and composer.lock, package.json with no
+// lockfile, artisan, phpunit.xml, an env template, plus an .npmrc.
+func npmNoLockFixture(t *testing.T) (Mission, string) {
+	t.Helper()
+	ws := t.TempDir()
+	wt := filepath.Join(ws, "wt")
+	if err := os.MkdirAll(wt, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"composer.json": `{"scripts":{"test":["@php artisan test"]}}`, "composer.lock": "{}",
+		"package.json": `{"scripts":{"build":"vite build"}}`, ".npmrc": "fund=false\n",
+		".env.example": "APP_KEY=\n", "artisan": "<?php\n", "phpunit.xml": "<phpunit/>",
+	} {
+		if err := os.WriteFile(filepath.Join(wt, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return Mission{ID: "m-nolock", Kind: KindCoding, Workspace: ws, EnvFacts: &EnvFacts{Manifests: walkManifests(wt)}}, wt
+}
+
+// TestPrepareWorkspaceNpmNoLock: package.json without a lockfile gets
+// node_modules installed without a lockfile in the worktree, and is
+// audited through a package-lock.json generated under the workspace,
+// labeled as harness-generated in the facts.
+func TestPrepareWorkspaceNpmNoLock(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "calls.log")
+	stubPrepareTools(t, logFile)
+	m, wt := npmNoLockFixture(t)
+	store := newFakeStore()
+	store.missions[m.ID] = m
+	p := &provisioner{store: store, log: slog.Default(), sandboxExec: fakeSandboxExec}
+
+	got := p.prepareWorkspace(context.Background(), m)
+	f := got.EnvFacts.Prepare
+	if f == nil {
+		t.Fatal("no prepare facts")
+	}
+	if !reflect.DeepEqual(f.Installed, []string{"composer", npmNoLockInstalled}) || !dirExists(wt, "node_modules") {
+		t.Errorf("Installed = %v", f.Installed)
+	}
+	if fileExists(wt, "package-lock.json") {
+		t.Error("package-lock.json written into the worktree")
+	}
+	npmDir := filepath.Join(m.Workspace, prepareDir, "npm")
+	if !fileExists(npmDir, "package-lock.json") || !fileExists(npmDir, "package.json") || !fileExists(npmDir, ".npmrc") {
+		t.Errorf("generated lockfile dir incomplete under %s", npmDir)
+	}
+	wantAudit := []AuditFact{{Path: "composer.lock", Packages: 1, Vulnerabilities: 1}, {Path: npmGeneratedLockLabel, Packages: 1, Vulnerabilities: 1}}
+	if !reflect.DeepEqual(f.Audit, wantAudit) {
+		t.Errorf("Audit = %+v, want %+v", f.Audit, wantAudit)
+	}
+	if len(f.Failures) != 0 {
+		t.Errorf("Failures = %v", f.Failures)
+	}
+	if f.Tests == nil || *f.Tests != (TestSummary{Passed: 36, Parsed: true}) {
+		t.Errorf("Tests = %+v", f.Tests)
+	}
+	var steps []string
+	for _, s := range f.Steps {
+		steps = append(steps, s.Name)
+	}
+	if want := []string{"tools", "deps:composer", "deps:npm (no lockfile)", "env-template", "test", "audit:npm-lockfile", "audit"}; !reflect.DeepEqual(steps, want) {
+		t.Errorf("steps = %v, want %v", steps, want)
+	}
+	calls, _ := os.ReadFile(logFile) //nolint:gosec // test-owned log path
+	for _, want := range []string{
+		"npm install --no-package-lock --no-audit --no-fund\n",
+		"npm install --package-lock-only --ignore-scripts --no-audit --no-fund\n",
+		"-L composer.lock -L " + filepath.Join(npmDir, "package-lock.json") + " --output-file ",
+	} {
+		if !strings.Contains(string(calls), want) {
+			t.Errorf("missing call %q in:\n%s", want, calls)
+		}
+	}
+	block := renderEnvFacts(got)
+	for _, want := range []string{"composer, npm (no lockfile)", npmGeneratedLockLabel + " 1 packages, 1 known advisories"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("facts block missing %q:\n%s", want, block)
+		}
+	}
+}
+
+// TestPrepareWorkspaceNpmNoLockFails: failing npm runs are facts; the
+// composer.lock audit still runs and the worktree gets no lockfile.
+func TestPrepareWorkspaceNpmNoLockFails(t *testing.T) {
+	stubPrepareTools(t, filepath.Join(t.TempDir(), "calls.log"))
+	t.Setenv("STUB_NPM_FAIL", "1")
+	m, wt := npmNoLockFixture(t)
+	store := newFakeStore()
+	store.missions[m.ID] = m
+	p := &provisioner{store: store, log: slog.Default(), sandboxExec: fakeSandboxExec}
+	f := p.prepareWorkspace(context.Background(), m).EnvFacts.Prepare
+	if f == nil {
+		t.Fatal("no prepare facts")
+	}
+	if !reflect.DeepEqual(f.Installed, []string{"composer"}) || fileExists(wt, "package-lock.json") {
+		t.Errorf("Installed = %v", f.Installed)
+	}
+	joined := strings.Join(f.Failures, "\n")
+	for _, want := range []string{"npm install without a lockfile failed", "package.json is not audited"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("Failures missing %q: %v", want, f.Failures)
+		}
+	}
+	if want := []AuditFact{{Path: "composer.lock", Packages: 1, Vulnerabilities: 1}}; !reflect.DeepEqual(f.Audit, want) {
+		t.Errorf("Audit = %+v, want %+v", f.Audit, want)
+	}
+}
+
+// TestBuildNpmCmdsRoundTrip runs both npm commands in a real shell: the
+// install leaves node_modules and no lockfile in the worktree; the
+// lockfile generation copies package.json and .npmrc into a quoted
+// directory outside it and writes the lockfile there only.
+func TestBuildNpmCmdsRoundTrip(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "calls.log")
+	stubPrepareTools(t, logFile)
+	wt := writeTree(t, map[string]string{"package.json": "{}", ".npmrc": "fund=false\n"})
+	run := func(command string) {
+		t.Helper()
+		cmd := exec.Command("/bin/sh", "-c", command) //nolint:gosec // test runs the harness-composed command
+		cmd.Dir = wt
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v: %s", command, err, out)
+		}
+	}
+	run(buildNpmNoLockInstallCmd())
+	if !dirExists(wt, "node_modules") || fileExists(wt, "package-lock.json") {
+		t.Fatal("install left no node_modules or wrote a lockfile into the worktree")
+	}
+	dir := filepath.Join(t.TempDir(), "it's a dir", "npm")
+	run(buildNpmLockfileCmd(dir))
+	run(buildNpmLockfileCmd(dir)) // a rerun starts from a clean directory
+	for _, name := range []string{"package.json", ".npmrc", "package-lock.json"} {
+		if !fileExists(dir, name) {
+			t.Errorf("%s missing in %s", name, dir)
+		}
+	}
+	if fileExists(wt, "package-lock.json") {
+		t.Error("lockfile generation wrote into the worktree")
+	}
+	if err := os.Remove(filepath.Join(wt, ".npmrc")); err != nil {
+		t.Fatal(err)
+	}
+	run(buildNpmLockfileCmd(dir))
+	if fileExists(dir, ".npmrc") || !fileExists(dir, "package-lock.json") {
+		t.Error("rerun without .npmrc kept a stale copy or lost the lockfile")
+	}
+}
+
 // TestParseOSVReport counts packages and advisory groups per lockfile
 // and relativizes paths under the worktree.
 func TestParseOSVReport(t *testing.T) {
@@ -271,8 +526,9 @@ func TestParseOSVReport(t *testing.T) {
 	}
 }
 
-// stubPrepareTools puts stub mise, php, composer and osv-scanner
+// stubPrepareTools puts stub mise, php, composer, npm and osv-scanner
 // binaries on PATH so composed commands round-trip through /bin/sh.
+// php artisan test prints Collision-style colored output.
 // mise handles `deps install <p>` (creates the provider's output, runs
 // the env-template script), `install`, `exec -- cmd...` and `run test`.
 // Every call is logged to logFile, one argv per line.
@@ -307,21 +563,42 @@ if [ "$1" = artisan ] && [ "$2" = key:generate ]; then
   sed -i.bak 's/^APP_KEY=$/APP_KEY=base64:stubkey/' .env && rm -f .env.bak; exit 0
 fi
 if [ "$1" = artisan ] && [ "$2" = test ]; then
-  if grep -q '^APP_KEY=base64:' .env 2>/dev/null; then echo "  Tests:    36 passed (72 assertions)"; exit 0; fi
-  echo "  Tests:    36 warnings (72 assertions)"; exit 0
+  printf '\n  \033[30;42;1m PASS \033[39;49;22m\033[39m Tests\\Unit\\ExampleTest\033[39m\n'
+  if grep -q '^APP_KEY=base64:' .env 2>/dev/null; then printf '\n  \033[90mTests:\033[39m    \033[32;1m36 passed\033[39;22m\033[90m (72 assertions)\033[39m\n  \033[90mDuration:\033[39m \033[39m0.52s\033[39m\n'; exit 0; fi
+  printf '\n  \033[90mTests:\033[39m    \033[33;1m36 warnings\033[39;22m\033[90m (72 assertions)\033[39m\n'; exit 0
 fi
 exit 1
 `)
 	write("composer", `#!/bin/sh
 printf '%s\n' "composer $*" >> "$STUB_LOG"
-[ "$1" = test ] && exec php artisan test
+[ "$1" = test ] && printf '\033[32m> @php artisan test\033[39m\n' && exec php artisan test
 exit 1
 `)
+	// npm writes package-lock.json unless told not to, like the real one.
+	write("npm", `#!/bin/sh
+printf '%s\n' "npm $*" >> "$STUB_LOG"
+[ -n "$STUB_NPM_FAIL" ] && { echo "npm ERR! stub failure" >&2; exit 1; }
+[ "$1" = install ] || exit 2
+case " $* " in
+  *" --package-lock-only "*) printf '{"lockfileVersion":3}' > package-lock.json; exit 0 ;;
+  *" --no-package-lock "*) mkdir -p node_modules; exit 0 ;;
+esac
+mkdir -p node_modules && printf '{"lockfileVersion":3}' > package-lock.json
+`)
+	// osv-scanner reports one package with one advisory per -L lockfile.
 	write("osv-scanner", `#!/bin/sh
 printf '%s\n' "osv-scanner $*" >> "$STUB_LOG"
 out=""
-while [ $# -gt 0 ]; do [ "$1" = --output-file ] && out="$2"; shift; done
-printf '{"results":[{"source":{"path":"%s/composer.lock"},"packages":[{"package":{"name":"a"},"groups":[{"ids":["GHSA-1"]}]}]},{"source":{"path":"%s/package-lock.json"},"packages":[]}]}' "$PWD" "$PWD" > "$out"
+res=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --output-file) out="$2"; shift ;;
+    -L) p="$2"; case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+        res="$res${res:+,}{\"source\":{\"path\":\"$p\"},\"packages\":[{\"package\":{\"name\":\"a\"},\"groups\":[{\"ids\":[\"GHSA-1\"]}]}]}"; shift ;;
+  esac
+  shift
+done
+printf '{"results":[%s]}' "$res" > "$out"
 exit 1
 `)
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -381,7 +658,7 @@ func TestPrepareWorkspaceLaravel(t *testing.T) {
 	if f.TestCmd != "composer test" || f.TestSource != "composer.json scripts.test" || f.Tests == nil || *f.Tests != (TestSummary{Passed: 36, Parsed: true}) {
 		t.Errorf("baseline = %q from %q, %+v", f.TestCmd, f.TestSource, f.Tests)
 	}
-	wantAudit := []AuditFact{{Path: "composer.lock", Packages: 1, Vulnerabilities: 1}, {Path: "package-lock.json"}}
+	wantAudit := []AuditFact{{Path: "composer.lock", Packages: 1, Vulnerabilities: 1}, {Path: "package-lock.json", Packages: 1, Vulnerabilities: 1}}
 	if !reflect.DeepEqual(f.Audit, wantAudit) {
 		t.Errorf("Audit = %+v, want %+v", f.Audit, wantAudit)
 	}
@@ -408,8 +685,8 @@ func TestPrepareWorkspaceLaravel(t *testing.T) {
 			}
 			_ = json.Unmarshal(e.Payload, &p)
 			steps = append(steps, p.Name)
-			if p.Name == "test" && !strings.Contains(p.Tail, "36 passed") {
-				t.Errorf("test step tail = %q", p.Tail)
+			if p.Name == "test" && (!strings.Contains(p.Tail, "Tests:    36 passed (72 assertions)") || strings.Contains(p.Tail, "\x1b")) {
+				t.Errorf("test step tail = %q, want the summary without escapes", p.Tail)
 			}
 		}
 	}
@@ -486,7 +763,7 @@ func TestPrepareWorkspaceFailuresContinue(t *testing.T) {
 	if tails != 2 {
 		t.Errorf("failed steps with tails = %d, want 2 (%+v)", tails, f.Steps)
 	}
-	if len(f.Audit) != 2 {
+	if len(f.Audit) != 1 {
 		t.Errorf("audit did not run after failures: %+v", f.Audit)
 	}
 	if block := renderEnvFacts(got); !strings.Contains(block, "Prepare failure: deps pnpm failed") || !strings.Contains(block, "inactive") {
