@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
@@ -175,7 +176,11 @@ func (p *Permissions) isExempt(tool string) bool {
 func (p *Permissions) Resolve(ctx context.Context, sessionID, tool string, args json.RawMessage) (Resolution, error) {
 	subject := callSubject(tool, args)
 
-	if reason := guardSubject(p.workspaceRoot, tool, subject); reason != "" {
+	sandbox := ""
+	if tool == "shell" {
+		sandbox = p.sandboxFor(ctx, sessionID)
+	}
+	if reason := guardSubject(p.workspaceRoot, sandbox, tool, subject); reason != "" {
 		return Resolution{
 			Decision:  DecisionDeny,
 			Subject:   subject,
@@ -258,8 +263,10 @@ const SandboxGrantTool = "__sandbox__"
 // file-scoped — confined to whatever paths the command names. Rules
 // NOT here (sudo, docker, git-push, pipe-to-shell, pkg-install, dd,
 // mkfs, opaque forms...) always keep the prompt: their blast radius
-// is not a path inside the sandbox.
+// is not a path inside the sandbox. lang-pkg-install (D-129) writes
+// only to the container's user-writable paths.
 var sandboxDowngradeable = map[string]bool{
+	"lang-pkg-install":   true,
 	"redirect-overwrite": true,
 	"append-redirect":    true,
 	"rm":                 true,
@@ -444,16 +451,19 @@ var guardPatterns = []struct {
 	exempt *regexp.Regexp
 	// hint is appended to the denial so the model can retry usefully.
 	hint string
+	// sandbox is the D-129 relaxation in a mission sandbox session.
+	sandbox sandboxRelax
 }{
 	{
 		name:    "env files",
 		pattern: regexp.MustCompile(`(?i)(^|/)\.env(\.[A-Za-z0-9._-]+)?$`),
 		// Committed templates carry variable names, not secrets.
-		exempt: regexp.MustCompile(`(?i)(^|/)\.env\.(example|sample|dist|template)$`),
-		hint:   " (templates such as .env.example are readable; export variables in the command instead of writing an env file)",
+		exempt:  regexp.MustCompile(`(?i)(^|/)\.env\.(example|sample|dist|template)$`),
+		hint:    " (templates such as .env.example are readable; export variables in the command instead of writing an env file)",
+		sandbox: relaxInRoot,
 	},
 	{name: "ssh keys", pattern: regexp.MustCompile(`(?i)(^|/)id_(rsa|ed25519|ecdsa|dsa)$`)},
-	{name: "key material", pattern: regexp.MustCompile(`(?i)\.(pem|key|p12|pfx|keystore)$`)},
+	{name: "key material", pattern: regexp.MustCompile(`(?i)\.(pem|key|p12|pfx|keystore)$`), sandbox: relaxInRootRead},
 }
 
 // sedRangeAddress matches a sed/awk range address such as
@@ -467,24 +477,182 @@ var sedRangeAddress = regexp.MustCompile(`^/([^/\\]|\\.)*/,/([^/\\]|\\.)*/!?[A-Z
 var guardPathPatterns = []struct {
 	name    string
 	pattern *regexp.Regexp
+	sandbox sandboxRelax
 }{
 	{name: "ssh keys", pattern: regexp.MustCompile(`(?i)(^|/)\.ssh(/|$)`)},
-	{name: "credential stores", pattern: regexp.MustCompile(`(?i)(^|/)(credentials?|secrets?)(/|\.[A-Za-z0-9]+)?$|(^|/)\.(aws|kube|gnupg)(/|$)|(^|/)\.(netrc|npmrc)$`)},
+	{name: "credential stores", pattern: regexp.MustCompile(`(?i)(^|/)(credentials?|secrets?)(/|\.[A-Za-z0-9]+)?$|(^|/)\.(aws|kube|gnupg)(/|$)|(^|/)\.(netrc|npmrc)$`), sandbox: relaxInRootRead},
 	{name: "home dotfiles", pattern: regexp.MustCompile(`^~/\.[A-Za-z]`)},
-	{name: "system dirs", pattern: regexp.MustCompile(`^/(etc|root|proc|sys|dev|boot|var/(run|lib))(/|$)`)},
+	{name: "system dirs", pattern: regexp.MustCompile(`^/(etc|root|proc|sys|dev|boot|var/(run|lib))(/|$)`), sandbox: relaxSystemRead},
 }
 
 // AllowedAbsPrefixes are absolute paths a shell command may name even
 // though they sit outside the workspace: stream plumbing only.
 var AllowedAbsPrefixes = []string{"/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"}
 
+// sandboxRelax names how a guard rule relaxes in a session with a
+// registered mission sandbox (D-129).
+//
+// D-129: a mission container runs as uid 65534 on a read-only rootfs
+// with no host secrets, and delegated executors (claude dontAsk, codex
+// bypass, opencode allow) already do all of the below in the same
+// container. The native worker gets parity: env files inside the
+// worktree, reads of committed credential-looking repo files, reads of
+// the container's own toolchain paths. Host paths (~, ~/.ssh, ~/.aws),
+// ssh keys, writes outside the worktree and chat sessions keep the rule.
+type sandboxRelax int
+
+const (
+	// The zero value relaxes nothing.
+	_ sandboxRelax = iota
+	// relaxInRoot: any command, token inside the sandbox root.
+	relaxInRoot
+	// relaxInRootRead: read-only command, token inside the sandbox root.
+	relaxInRootRead
+	// relaxSystemRead: read-only command, token is a sandbox read path.
+	relaxSystemRead
+)
+
+// sandboxReadPrefixes are absolute paths inside the mission container
+// a read-only command may name (D-129): toolchains, scratch, and the
+// non-secret HOME subdirs. HOME itself is left out so a recursive read
+// cannot walk into the executor auth state.
+var sandboxReadPrefixes = []string{"/usr", "/opt", "/tmp", "/home/sandbox/.mise", "/home/sandbox/.cache", "/home/sandbox/.local"}
+
+// sandboxReadFiles are single files under guarded dirs that are safe
+// to read in the container.
+var sandboxReadFiles = []string{"/etc/os-release"}
+
+// sandboxReadDenied stays off-limits under sandboxReadPrefixes: the
+// claude CLI's subscription auth state (sandboxd executorStateMountPath).
+var sandboxReadDenied = []string{"/home/sandbox/.claude"}
+
+// sandboxReadable reports whether an absolute token names a sandbox
+// read path, lexically cleaned.
+func sandboxReadable(tok string) bool {
+	if !strings.HasPrefix(tok, "/") {
+		return false
+	}
+	cleaned := path.Clean(tok)
+	if slices.Contains(sandboxReadFiles, cleaned) {
+		return true
+	}
+	for _, d := range sandboxReadDenied {
+		if cleaned == d || strings.HasPrefix(cleaned, d+"/") {
+			return false
+		}
+	}
+	for _, p := range sandboxReadPrefixes {
+		if cleaned == p || strings.HasPrefix(cleaned, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// readOnlyCommands never write a file named on their command line.
+// Tools with an output-file flag (sort -o, tree -o, xxd -r), a
+// command-running flag (rg --pre, find -exec) or a cwd effect (cd)
+// are left out on purpose.
+var readOnlyCommands = map[string]bool{
+	"cat": true, "head": true, "tail": true, "ls": true, "stat": true,
+	"file": true, "wc": true, "grep": true, "egrep": true, "fgrep": true,
+	"du": true, "readlink": true, "realpath": true, "diff": true,
+	"cmp": true, "md5sum": true, "sha1sum": true, "sha256sum": true,
+	"sha512sum": true, "which": true, "test": true, "strings": true,
+	"od": true, "hexdump": true,
+}
+
+// readOnlyCommand reports whether a command only reads: no danger or
+// opaque rule matches (so no redirect, mv, rm, substitution) and every
+// pipeline or list segment starts with a readOnlyCommands word.
+func readOnlyCommand(command string) bool {
+	if _, matched := ClassifyCommand(command); len(matched) > 0 {
+		return false
+	}
+	segments := commandSegments(command)
+	if len(segments) == 0 {
+		return false
+	}
+	for _, seg := range segments {
+		fields := strings.Fields(seg)
+		if len(fields) == 0 || !readOnlyCommands[fields[0]] {
+			return false
+		}
+	}
+	return true
+}
+
+// commandSegments splits a command on ; | & and newline outside quotes.
+func commandSegments(command string) []string {
+	var out []string
+	var cur strings.Builder
+	var quote rune
+	flush := func() {
+		if s := strings.TrimSpace(cur.String()); s != "" {
+			out = append(out, s)
+		}
+		cur.Reset()
+	}
+	for _, r := range command {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case strings.ContainsRune(";|&\n", r):
+			flush()
+			continue
+		}
+		cur.WriteRune(r)
+	}
+	flush()
+	return out
+}
+
+// inSandboxRoot reports whether a guard fragment names a path inside
+// the sandbox root. Relative fragments resolve against it (the mission
+// shell's cwd); the result is lexically cleaned, so ../ climbing out
+// does not count. A token the shell would expand ($HOME, ~, `...`)
+// never counts: where it lands is unknown here.
+func inSandboxRoot(sandbox, rawTok, frag string) bool {
+	if sandbox == "" || strings.ContainsAny(rawTok, "$~`") {
+		return false
+	}
+	p := frag
+	if !strings.HasPrefix(p, "/") {
+		p = path.Join(sandbox, p)
+	}
+	return pathWithin(path.Clean(sandbox), p)
+}
+
+// sandboxRelaxes reports whether rule relax lifts a guard match on frag.
+func sandboxRelaxes(relax sandboxRelax, sandbox, rawTok, frag string, readOnly func() bool) bool {
+	if sandbox == "" {
+		return false
+	}
+	switch relax {
+	case relaxInRoot:
+		return inSandboxRoot(sandbox, rawTok, frag)
+	case relaxInRootRead:
+		return inSandboxRoot(sandbox, rawTok, frag) && readOnly()
+	case relaxSystemRead:
+		return slices.Contains(sandboxReadFiles, path.Clean(frag)) && readOnly()
+	}
+	return false
+}
+
 // guardSubject applies the policy guard to shell commands. Other
 // tools have no path-bearing arguments yet; fetch_url has its own
-// network guard.
-func guardSubject(root, tool, subject string) string {
+// network guard. sandbox is the session's registered sandbox root, or
+// "" (chat and host sessions), which disables every D-129 relaxation.
+func guardSubject(root, sandbox, tool, subject string) string {
 	if tool != "shell" {
 		return ""
 	}
+	original := subject
+	readOnly := sync.OnceValue(func() bool { return readOnlyCommand(original) })
 	// Blank the allowed stream-plumbing paths first so /dev/null
 	// doesn't trip the system-dirs rule.
 	for _, p := range AllowedAbsPrefixes {
@@ -493,7 +661,8 @@ func guardSubject(root, tool, subject string) string {
 	for _, qt := range commandTokensQuoted(subject) {
 		for _, tok := range guardFragments(qt.text) {
 			for _, g := range guardPatterns {
-				if g.pattern.MatchString(tok) && (g.exempt == nil || !g.exempt.MatchString(tok)) {
+				if g.pattern.MatchString(tok) && (g.exempt == nil || !g.exempt.MatchString(tok)) &&
+					!sandboxRelaxes(g.sandbox, sandbox, qt.text, tok, readOnly) {
 					return "policy guard: " + g.name + " are off-limits" + g.hint
 				}
 			}
@@ -501,7 +670,7 @@ func guardSubject(root, tool, subject string) string {
 				continue
 			}
 			for _, g := range guardPathPatterns {
-				if g.pattern.MatchString(tok) {
+				if g.pattern.MatchString(tok) && !sandboxRelaxes(g.sandbox, sandbox, qt.text, tok, readOnly) {
 					return "policy guard: " + g.name + " are off-limits"
 				}
 			}
@@ -531,6 +700,9 @@ func guardSubject(root, tool, subject string) string {
 				continue
 			}
 			if pathWithin(root, tok) {
+				continue
+			}
+			if sandbox != "" && sandboxReadable(tok) && readOnly() {
 				continue
 			}
 			return fmt.Sprintf("policy guard: %s is outside the workspace %s — use paths under the workspace", tok, root)

@@ -162,7 +162,11 @@ Example: {"command": "wc -l notes.md"} → "42 notes.md"`,
 			// workspace pointing outside it would otherwise reach the
 			// shell unchecked. Re-check with symlinks resolved here,
 			// right before the command actually runs.
-			if err := tools.CheckCommandPaths(cfg.WorkspaceRoot, args.Command); err != nil {
+			check := tools.CheckCommandPaths
+			if cfg.Runner != nil {
+				check = tools.CheckSandboxCommandPaths
+			}
+			if err := check(cfg.WorkspaceRoot, args.Command); err != nil {
 				return "", err
 			}
 			if cfg.Runner != nil {
