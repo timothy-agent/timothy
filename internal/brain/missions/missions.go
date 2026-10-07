@@ -159,8 +159,8 @@ type Mission struct {
 	// PlanGate is plan-gate history derived by the driver from the
 	// event log and destinations before each plan turn (issue #1007),
 	// never persisted or serialized.
-	PlanGate PlanGateState `json:"-"`
-	PendingPermission string `json:"pending_permission,omitempty"`
+	PlanGate          PlanGateState `json:"-"`
+	PendingPermission string        `json:"pending_permission,omitempty"`
 	// PendingPermissionTool/Args/Danger/Rationale describe the parked
 	// tool call for the UI — set alongside PendingPermission whenever a
 	// worker/reviewer/planner turn parks on stream.EventPermissionRequest,
