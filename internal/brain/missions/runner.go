@@ -2016,7 +2016,7 @@ func reportInProgress(p ReviewPacket) bool {
 // (D-077), and assumptions. Kept as one shared string so
 // build/prove's unit parsing (parsePlan) never has to distinguish
 // which mode produced a plan.
-const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. If the unit's deliverable is a side effect rather than a file (a GitHub issue, an API call, external state that check_cmd can itself observe, e.g. `gh issue list --json number --jq 'length' | awk '$1>=8'`), set evidence_only=true instead and omit artifacts; check_cmd is still a gate, so it must fail against the workspace as it stands now and pass once the side effect exists. Never drop a deliverable the goal asks for just because it produces no file: use an evidence-only unit, or, if the sandbox genuinely cannot perform it (no credential, no tool in the allowlist), say so by calling submit_plan with infeasible=true and a reason naming exactly what cannot be done, or ask_user if it is ambiguous rather than achievable, instead of silently narrowing the plan to the parts that produce files. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). check_cmd is executed literally as `/bin/sh -c \"<check_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command). It is a gate, not a proof: it must FAIL against the workspace as it stands now and PASS once the unit's work exists, and the harness runs it once at plan acceptance to confirm the first half, rejecting a gate that already passes. For a unit whose artifacts are source files it must build, test or run them with the environment's toolchain (`go test ./pkg/...`, `python3 -m pytest tests/`, `npm test`); a grep against source only proves text is present, so greps may accompany the toolchain call but never stand alone. A toolchain call alone passes while the unit's files are still missing (`go test ./pkg/ -run TestX` exits 0 when no test file exists, `gofmt -l` prints nothing for absent files, pytest collects nothing), so anchor each code unit's check_cmd on a symbol the unit adds, e.g. `grep -q 'func TestBase62' internal/core/base62_test.go && go test ./internal/core/ -run TestBase62`. For document artifacts check CONTENT (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in check_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`; to assert a command prints nothing (gofmt -l, a linter) pipe it into `awk 'END{exit NR>0}'`, NEVER `grep -q '^$'`, which exits 1 on empty input. Do not add a separate final \"format and verify\" unit: put the toolchain call in every code unit's own check_cmd. For a small coding change (at most 8 source files, all in one directory or package), submit ONE unit covering all of them rather than one unit per file, since each extra unit costs a separate session and review round. The harness commits each unit's files itself after the worker turn, so criteria and check_cmd must judge file CONTENT only, never git status, staging, untracked, or uncommitted state. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
+const planUnitShapeRules = " Every unit must list at least one artifact, the workspace-relative file(s) the unit must produce (for a report-style goal, the report file itself is the artifact); the harness itself checks each exists and is non-empty, so name the real deliverables. If the unit's deliverable is a side effect rather than a file (a GitHub issue, an API call, external state that check_cmd can itself observe, e.g. `gh issue list --json number --jq 'length' | awk '$1>=8'`), set evidence_only=true instead and omit artifacts; check_cmd is still a gate, so it must fail against the workspace as it stands now and pass once the side effect exists. Never drop a deliverable the goal asks for just because it produces no file: use an evidence-only unit, or, if the sandbox genuinely cannot perform it (no credential, no tool in the allowlist), say so by calling submit_plan with infeasible=true and a reason naming exactly what cannot be done, or ask_user if it is ambiguous rather than achievable, instead of silently narrowing the plan to the parts that produce files. Every unit must also list 2 to 6 acceptance criteria: short single lines taken from the goal stating what the unit's output must satisfy (constraints, required content, format), because the reviewer judges the unit against these criteria rather than the goal text; name the artifact file in a criterion when judging it requires reading its contents. Optionally list scope: the workspace-relative files or directories the unit may touch (defaults to the artifact directories). check_cmd is executed literally as `/bin/sh -c \"<check_cmd>\"` in the mission's own workspace directory; it must be a real POSIX shell command (using binaries like grep, test, wc, NOT a tool name from your own tool list, which does not exist as a shell command). It is a gate, not a proof: it must FAIL against the workspace as it stands now and PASS once the unit's work exists, and the harness runs it once at plan acceptance to confirm the first half, rejecting a gate that already passes. For a unit whose artifacts are source files it must build, test or run them with the environment's toolchain (`go test ./pkg/...`, `python3 -m pytest tests/`, `npm test`); a grep against source only proves text is present, so greps may accompany the toolchain call but never stand alone. A toolchain call alone passes while the unit's files are still missing (`go test ./pkg/ -run TestX` exits 0 when no test file exists, `gofmt -l` prints nothing for absent files, pytest collects nothing), so anchor each code unit's check_cmd on a symbol the unit adds, e.g. `grep -q 'func TestBase62' internal/core/base62_test.go && go test ./internal/core/ -run TestBase62`. For document artifacts check CONTENT (e.g. grep -qi 'retry-after' summary.md), never a bare echo, which proves nothing. Never use command substitution ($(...) or backticks) in check_cmd; write the direct command instead; for a line-count check use awk, e.g. `awk 'END{exit NR<10}' report.md`, NEVER `test $(wc -l ...)`; to assert a command prints nothing (gofmt -l, a linter) pipe it into `awk 'END{exit NR>0}'`, NEVER `grep -q '^$'`, which exits 1 on empty input. Do not add a separate final \"format and verify\" unit: put the toolchain call in every code unit's own check_cmd. For a small coding change (at most 8 code files, all in one directory or package), submit ONE unit covering all of them rather than one unit per file, since each extra unit costs a separate session and review round; this merge rule covers code files only, so manifests, lockfiles, reports and evidence-only units may stay separate units. The harness commits each unit's files itself after the worker turn, so criteria and check_cmd must judge file CONTENT only, never git status, staging, untracked, or uncommitted state. Use paths relative to the workspace; never /tmp or any absolute path outside it, since the worker's shell is confined to the workspace. If the goal cannot be achieved as stated (it forbids the only possible action, contradicts what actually exists in the workspace, or is self-contradictory), do not invent a workaround plan: call submit_plan with infeasible=true and a reason instead of units. If the goal left something ambiguous and you resolved it silently, list it in assumptions with the default you chose (e.g. \"no language version was specified\" -> \"Python 3.12\", \"output format unspecified\" -> \"single markdown file\"); leave assumptions empty when nothing was ambiguous. End your turn with exactly one submit_plan tool call."
 
 // planBootstrapRule is the D-124 bootstrap instruction. It is appended
 // only when bootstrapAllowed: a planner offered it unconditionally
@@ -2130,7 +2130,13 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	// titles even when acceptPlan below rejects it, so a resubmission
 	// that silently drops one of them can be detected (D-123, issue
 	// #950) once a plan is finally accepted.
+	// Recovery re-run: either the tool call was missing entirely, or its
+	// arguments didn't decode as a valid Plan: either way, tell the
+	// model exactly what was wrong instead of silently repeating the
+	// identical prompt (which previously produced the identical failure
+	// on every retry).
 	var firstUnitTitles []string
+	recoverReason := "you did not call submit_plan"
 	if len(args) > 0 {
 		plan, planErr := r.acceptPlan(ctx, m, string(args))
 		if planErr == nil {
@@ -2138,23 +2144,21 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 			return plan, nil
 		}
 		firstUnitTitles = planUnitTitles(string(args))
-	}
-
-	// Recovery re-run: either the tool call was missing entirely, or its
-	// arguments didn't decode as a valid Plan: either way, tell the
-	// model exactly what was wrong instead of silently repeating the
-	// identical prompt (which previously produced the identical failure
-	// on every retry).
-	var recoverReason string
-	if len(args) == 0 {
-		recoverReason = "you did not call submit_plan"
-	} else if _, planErr := r.acceptPlan(ctx, m, string(args)); planErr != nil {
 		recoverReason = planErr.Error()
+		if strings.Contains(recoverReason, granularityMarker) {
+			m.PlanGate.GranularityRejected = true
+		}
+	}
+	recoverMsg := "[system] Your last turn did not produce a usable plan: " + recoverReason + "."
+	if len(args) > 0 {
+		// The rejected arguments ride along (issue #1007) so the planner
+		// edits its own plan instead of rewriting it from prose.
+		recoverMsg += " Your rejected submit_plan arguments were:\n```json\n" + NeutralizeSlot(string(args)) + "\n```\nFix the defect named above in them."
 	}
 	recoverReq := req
 	recoverReq.Messages = append(append([]provider.Message{}, req.Messages...),
 		provider.Message{Role: "assistant", Content: text},
-		provider.Message{Role: "user", Content: "[system] Your last turn did not produce a usable plan: " + recoverReason + ". You must end this turn with exactly one submit_plan tool call."},
+		provider.Message{Role: "user", Content: recoverMsg + " You must end this turn with exactly one submit_plan tool call."},
 	)
 	recoverRes, err := r.runTurn(ctx, recoverReq, planToolName, PhasePlan)
 	recoverText, recoverArgs := recoverRes.text, recoverRes.sentinelArgs
@@ -2172,6 +2176,10 @@ func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes
 	}
 	plan.Provider, plan.Model = recoverRes.provider, recoverRes.model
 	plan.ScopeDropped = droppedUnitTitles(firstUnitTitles, plan)
+	if m.PlanGate.RepoDestination {
+		// A dropped push/PR unit is delivered by the result phase, not lost.
+		plan.ScopeDropped = slices.DeleteFunc(plan.ScopeDropped, func(t string) bool { return pushesOrOpensPR(t, "") })
+	}
 	return plan, nil
 }
 

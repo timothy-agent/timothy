@@ -74,13 +74,40 @@ func checkPlanGates(plan Plan, m Mission) error {
 	if err := checkOwnArtifacts(plan); err != nil {
 		return err
 	}
+	if m.PlanGate.RepoDestination {
+		if err := checkHarnessDelivery(plan); err != nil {
+			return err
+		}
+	}
 	if m.Kind != KindCoding {
 		return nil
 	}
-	if err := checkUnitGranularity(plan, m); err != nil {
+	if err := checkUnitGranularity(plan, m); err != nil && !m.PlanGate.granularityWaivable() {
 		return err
 	}
 	return checkCodeFloor(plan, m.Environment)
+}
+
+// deliveryPattern matches a unit that pushes a branch or opens a pull
+// request. Kept narrow: a false match drops a real unit.
+var deliveryPattern = regexp.MustCompile(`(?i)\bgit\s+push\b|\bgh\s+pr\b|\b(open|create|raise|submit)(s|ing)?\s+(a\s+|the\s+)?(prs?|pull[ -]requests?)\b|\bpush(es|ing)?\s+(the\s+|a\s+)?(mission\s+|feature\s+)?branch\b`)
+
+// pushesOrOpensPR reports whether a unit's title or check_cmd delivers
+// the branch itself.
+func pushesOrOpensPR(title, checkCmd string) bool {
+	return deliveryPattern.MatchString(title) || deliveryPattern.MatchString(checkCmd)
+}
+
+// checkHarnessDelivery rejects a push or PR unit on a mission with a
+// repo destination (issue #1007): the result phase pushes the mission
+// branch and opens the PR, so such a unit can never pass a gate.
+func checkHarnessDelivery(plan Plan) error {
+	for _, u := range plan.Units {
+		if pushesOrOpensPR(u.Title, u.CheckCmd) {
+			return fmt.Errorf("mission runner: unit %q pushes a branch or opens a pull request, but this mission has a repository destination: the harness pushes the mission branch and opens the PR itself after all units pass, so drop that unit from the plan", u.Title)
+		}
+	}
+	return nil
 }
 
 // checkBootstrap enforces the bootstrap-unit contract (D-124, issue
@@ -114,28 +141,32 @@ func checkBootstrap(plan Plan, m Mission) error {
 // bootstrap and a reviewed evidence set (issue #720).
 const smallPlanArtifactCap = 8
 
+// granularityMarker is in every checkUnitGranularity rejection; the
+// driver finds an earlier rejection in the event log by it.
+const granularityMarker = "they are one unit of work"
+
 // checkUnitGranularity rejects a coding plan that splits a small
 // single-directory change into several units. Every extra unit pays
 // for another session bootstrap and another evidence set, and the files
 // share a package, so the work is one unit. Applies in transcribe mode
 // too (D-102): an operator's file list is not a unit split. A bootstrap
-// unit (D-124) is never merged: it must stay first and separate.
+// unit (D-124) is never merged: it must stay first and separate. Only
+// code artifacts count (issue #1007): units with none (manifests,
+// lockfiles, reports, evidence-only units) are left out of the merge.
 func checkUnitGranularity(plan Plan, m Mission) error {
-	units := make([]PlanUnit, 0, len(plan.Units))
-	for _, u := range plan.Units {
-		if !u.Bootstrap {
-			units = append(units, u)
-		}
-	}
-	if len(units) < 2 {
-		return nil
-	}
 	dir := ""
 	count := 0
-	titles := make([]string, 0, len(units))
-	for _, u := range units {
+	var titles []string
+	for _, u := range plan.Units {
+		if u.Bootstrap {
+			continue
+		}
+		code := 0
 		for _, a := range u.Artifacts {
-			count++
+			if !codeExtensions[strings.ToLower(filepath.Ext(strings.TrimSpace(a)))] {
+				continue
+			}
+			code++
 			d := path.Dir(cleanArtifact(a))
 			if dir == "" {
 				dir = d
@@ -143,15 +174,18 @@ func checkUnitGranularity(plan Plan, m Mission) error {
 				return nil
 			}
 		}
-		titles = append(titles, strconv.Quote(u.Title))
+		if code > 0 {
+			count += code
+			titles = append(titles, strconv.Quote(u.Title))
+		}
 	}
-	if count == 0 || count > smallPlanArtifactCap {
+	if len(titles) < 2 || count > smallPlanArtifactCap {
 		return nil
 	}
 	if dir == "." {
 		dir = "the workspace root"
 	}
-	return fmt.Errorf("mission runner: units %s all produce files in %s and the plan has only %d artifacts, so they are one unit of work; merge them into a single unit with the combined artifacts, criteria and one check_cmd covering all of them", strings.Join(titles, ", "), dir, count)
+	return fmt.Errorf("mission runner: units %s all produce code files in %s and the plan has only %d of them, so %s; merge them into a single unit with the combined artifacts, criteria and one check_cmd covering all of them", strings.Join(titles, ", "), dir, count, granularityMarker)
 }
 
 // checkOwnArtifacts rejects a unit whose every artifact is already
@@ -276,6 +310,10 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 				r.log.Info("plan probe: missing command accepted, bootstrap unit precedes it", "mission_id", m.ID, "unit", u.Title, "not_found", strings.TrimSpace(lastLine(res.Excerpt)))
 				continue
 			}
+			if installedByWork(u.CheckCmd) {
+				r.log.Info("plan probe: missing command accepted, it lives in a dependency dir the work installs", "mission_id", m.ID, "unit", u.Title, "not_found", strings.TrimSpace(lastLine(res.Excerpt)))
+				continue
+			}
 			env := m.Environment
 			if env == "" {
 				env = "sandbox"
@@ -284,6 +322,27 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 		}
 	}
 	return nil
+}
+
+// dependencyDirs hold binaries a dependency install puts in the
+// workspace (vendor/bin/phpunit, node_modules/.bin/vitest), absent in a
+// fresh clone.
+var dependencyDirs = []string{"vendor/", "node_modules/", ".venv/", "bin/"}
+
+// installedByWork reports whether cmd's first token is a
+// workspace-relative path under a dependency dir (issue #1007).
+func installedByWork(cmd string) bool {
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 || strings.HasPrefix(fields[0], "/") {
+		return false
+	}
+	p := path.Clean(fields[0])
+	for _, d := range dependencyDirs {
+		if strings.HasPrefix(p, d) {
+			return true
+		}
+	}
+	return false
 }
 
 // shellNotFound matches the shell's own report of a missing command
@@ -319,6 +378,9 @@ func (r *nativeRunner) acceptPlan(ctx context.Context, m Mission, raw string) (P
 	}
 	if err := r.probeCheckCmds(ctx, m, plan); err != nil {
 		return Plan{}, err
+	}
+	if m.Kind == KindCoding && m.PlanGate.granularityWaivable() && checkUnitGranularity(plan, m) != nil {
+		plan.GranularityWaived = true
 	}
 	return plan, nil
 }

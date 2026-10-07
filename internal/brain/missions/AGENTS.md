@@ -247,6 +247,17 @@ AGENTS.md so other work does not pay for it every session.
   a 60 s sandbox probe against the pre-work tree, a gate that already
   exits 0 or names a command the environment lacks. Verifying that the
   criteria are met is the reviewer's job, not the gate's.
+- Honest plans (issue #1007): the granularity merge counts code-extension
+  artifacts only and fires only when 2 or more units carry them in one
+  dir. With a granularity rejection on record (in-session, or a failed
+  plan `mission.turn` reason) a resubmitted split plan is waived once
+  per mission (`mission.plan_granularity_waived`). The probe accepts
+  exit 127 from a first token under `vendor/`, `node_modules/`, `.venv/`
+  or `bin/`. The recovery turn quotes the rejected `submit_plan` JSON,
+  and `replanNotes` carries the last failed plan turn's reason
+  (`Mission.PlanGate`, derived from events by `Driver.planGateState`).
+  With a repo destination a push/PR unit is rejected: the result phase
+  delivers the branch and the PR.
 - Per-criterion review rubric (issue #718): `review_verdict` carries
   `criteria` (unit index, criterion index, met/not_met/cannot_tell,
   evidence), optional so existing fixtures still parse and an unknown

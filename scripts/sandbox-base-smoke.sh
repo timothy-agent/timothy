@@ -26,6 +26,22 @@ case "$path" in
   *) echo "FAIL: mise shims not on PATH: $path" >&2; exit 1 ;;
 esac
 
+# Non-interactive, wide-output env (issue #1009): a Symfony console (php
+# artisan) wraps at $COLUMNS, so a 300-char line must come through whole
+# when php is present in the image.
+cols="$("${RUN[@]}" sh -c 'echo "$COLUMNS"')"
+ci="$("${RUN[@]}" sh -c 'echo "$CI"')"
+if [ "$cols" != "200" ] || [ "$ci" != "1" ]; then
+  echo "FAIL: COLUMNS='$cols' CI='$ci', want 200 and 1" >&2
+  exit 1
+fi
+echo "non-interactive env ok: COLUMNS=$cols CI=$ci"
+for v in MISE_AUTO_INSTALL MISE_EXEC_AUTO_INSTALL MISE_NOT_FOUND_AUTO_INSTALL; do
+  val="$("${RUN[@]}" sh -c "echo \"\$$v\"")"
+  [ "$val" = "false" ] || { echo "FAIL: $v = '$val', want false" >&2; exit 1; }
+done
+echo "mise auto-install off ok"
+
 trusted="$("${RUN[@]}" sh -c 'echo "$MISE_TRUSTED_CONFIG_PATHS"')"
 if [ "$trusted" != "/workspace" ]; then
   echo "FAIL: MISE_TRUSTED_CONFIG_PATHS = '$trusted', want /workspace" >&2
