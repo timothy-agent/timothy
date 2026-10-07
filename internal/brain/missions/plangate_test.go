@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -509,5 +510,43 @@ func TestPlanSessionWaivesSecondSplit(t *testing.T) {
 	}
 	if _, err := run(PlanGateState{GranularityWaived: true}); err == nil || !strings.Contains(err.Error(), granularityMarker) {
 		t.Fatalf("PlanSession with waiver spent = %v, want the granularity rejection", err)
+	}
+}
+
+// TestAcceptPlanScope (issue #1023): scope entries must be
+// workspace-relative; "." and "./" stay the whole tree.
+func TestAcceptPlanScope(t *testing.T) {
+	cases := []struct {
+		scope   string
+		want    string
+		wantErr bool
+	}{
+		{"/", "", true},
+		{"/abs/x", "", true},
+		{"../x", "", true},
+		{"a/../../x", "", true},
+		{".", ".", false},
+		{"./", "./", false},
+		{"src/", "src/", false},
+	}
+	r := &nativeRunner{log: slog.Default()}
+	m := Mission{Kind: KindGeneral}
+	for _, tc := range cases {
+		t.Run(tc.scope, func(t *testing.T) {
+			raw := `{"units":[{"title":"docs","artifacts":["CHANGELOG.md","CONTRIBUTING.md"],"scope":[` + strconv.Quote(tc.scope) + `],"criteria":["c1","c2"],"check_cmd":"grep -q x CHANGELOG.md"}]}`
+			plan, err := r.acceptPlan(context.Background(), m, raw)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), strconv.Quote(tc.scope)) || !strings.Contains(err.Error(), "workspace-relative") {
+					t.Fatalf("acceptPlan = %v, want rejection naming %q", err, tc.scope)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("acceptPlan: %v", err)
+			}
+			if got := plan.Units[0].Scope; len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("scope = %v, want [%s]", got, tc.want)
+			}
+		})
 	}
 }

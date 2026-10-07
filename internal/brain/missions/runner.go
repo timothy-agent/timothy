@@ -2353,6 +2353,11 @@ func parsePlan(raw string) (Plan, error) {
 			return Plan{}, fmt.Errorf("mission runner: plan_invalid: unit %q must list %d to %d acceptance criteria (one short line each, taken from the goal), got %d", u.Title, minUnitCriteria, maxUnitCriteria, len(u.Criteria))
 		}
 		u.Scope = trimNonEmpty(u.Scope)
+		for _, sc := range u.Scope {
+			if _, err := cleanRelPath(sc); err != nil {
+				return Plan{}, fmt.Errorf("mission runner: plan_invalid: unit %q scope entry %q must be a workspace-relative path inside the workspace (use \".\" for the whole tree): %w", u.Title, sc, err)
+			}
+		}
 		if len(u.Scope) == 0 {
 			u.Scope = defaultScope(u.Artifacts)
 		}
