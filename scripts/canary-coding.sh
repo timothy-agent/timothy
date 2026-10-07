@@ -70,6 +70,9 @@ create_resp="$(curl -sf "${auth[@]}" -X POST "${BASE_URL}/v1/missions" \
   -d "{\"goal\": \"${GOAL}\", \"kind\": \"coding\"}")"
 id="$(echo "${create_resp}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "canary-coding: mission ${id}"
+# shellcheck disable=SC1091
+source "${REPO_ROOT}/scripts/lib/canary-cancel.sh"
+canary_cancel_arm
 
 start=$(date +%s)
 phase=""
@@ -179,6 +182,7 @@ for artifact in ${ARTIFACTS}; do
 done
 
 echo "canary-coding: PASS"
+canary_cancel_disarm
 
 # Cleanup only runs once every check above has passed (set -e would
 # have already aborted the script on any failure) — a failed mission is
