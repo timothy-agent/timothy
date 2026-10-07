@@ -13,6 +13,7 @@ import (
 	"context"
 	"bytes"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -328,8 +329,37 @@ func (r *prepareRun) fail(msg string) {
 }
 
 // writeMiseLocal writes the harness config at the worktree root.
+// D-133: a copy of the rendered file goes under the prepare dir so
+// restoreMiseLocal can put it back if a worker deletes or overwrites it.
 func (r *prepareRun) writeMiseLocal(in miseLocalInput, repoKeys map[string]bool) error {
-	return os.WriteFile(filepath.Join(r.wt, miseLocalFile), []byte(renderMiseLocal(in, repoKeys)), 0o600)
+	body := []byte(renderMiseLocal(in, repoKeys))
+	if err := os.WriteFile(filepath.Join(r.wt, miseLocalFile), body, 0o600); err != nil {
+		return err
+	}
+	dir := filepath.Join(r.m.Workspace, prepareDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, miseLocalFile), body, 0o600)
+}
+
+// restoreMiseLocal rewrites the worktree's mise.local.toml from the copy
+// prepare kept when the file is missing or no longer starts with the
+// harness header. No copy (prepare never ran) means nothing to do.
+func restoreMiseLocal(workspace, wt string, log *slog.Logger) {
+	if workspace == "" || wt == "" {
+		return
+	}
+	body, err := os.ReadFile(filepath.Join(workspace, prepareDir, miseLocalFile)) //nolint:gosec // harness-owned path
+	if err != nil {
+		return
+	}
+	if cur, err := os.ReadFile(filepath.Join(wt, miseLocalFile)); err == nil && strings.HasPrefix(string(cur), miseLocalHeader) { //nolint:gosec // worktree root
+		return
+	}
+	if err := os.WriteFile(filepath.Join(wt, miseLocalFile), body, 0o600); err != nil { //nolint:gosec // worktree root
+		log.Warn("driver: restore "+miseLocalFile+" failed", "error", err)
+	}
 }
 
 // providerOutput is the directory a built-in provider must leave behind.
