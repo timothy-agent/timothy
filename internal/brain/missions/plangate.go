@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -72,6 +73,12 @@ func checkPlanGates(plan Plan, m Mission) error {
 		return err
 	}
 	if err := checkOwnArtifacts(plan); err != nil {
+		return err
+	}
+	if err := checkUntrackedAssumptions(plan); err != nil {
+		return err
+	}
+	if err := checkReportArtifacts(plan, m); err != nil {
 		return err
 	}
 	if m.PlanGate.RepoDestination {
@@ -214,6 +221,100 @@ func checkOwnArtifacts(plan Plan) error {
 		}
 	}
 	return nil
+}
+
+// reportExtensions are the file types an analysis or report lands in.
+var reportExtensions = map[string]bool{".md": true, ".markdown": true, ".txt": true, ".rst": true}
+
+// checkReportArtifacts keeps unrequested reports out of someone's
+// repository (D-134, issue #1039): on a coding mission over a repo
+// source, a unit may not list a new markdown or text file the goal does
+// not name. Existing files (README, CHANGELOG) and files whose base
+// name or top directory the goal names stay allowed.
+func checkReportArtifacts(plan Plan, m Mission) error {
+	if m.Kind != KindCoding || m.RepoURL() == "" {
+		return nil
+	}
+	goal := strings.ToLower(m.Goal)
+	for _, u := range plan.Units {
+		for _, a := range u.Artifacts {
+			p := cleanArtifact(a)
+			if !reportExtensions[strings.ToLower(path.Ext(p))] || !filepath.IsLocal(p) {
+				continue
+			}
+			if strings.Contains(goal, strings.ToLower(path.Base(p))) || goalNamesDir(goal, p) {
+				continue
+			}
+			if _, err := os.Lstat(filepath.Join(m.WorkRoot(), filepath.FromSlash(p))); err == nil {
+				continue
+			}
+			return fmt.Errorf("mission runner: unit %q lists %s as an artifact, but the goal names no such file and the repository does not have it; an analysis or report the goal did not ask to save as a file stays out of the repository: remove %s from the plan (drop the unit if that file is all it produces) and have the worker put the report text in mission_status's final_output on done, which the harness carries in the mission result and the pull request body", u.Title, p, p)
+		}
+	}
+	return nil
+}
+
+// goalNamesDir reports whether a nested artifact's top directory is a
+// word in the goal ("put the notes under docs/", "... under docs.").
+func goalNamesDir(goal, p string) bool {
+	top, _, nested := strings.Cut(p, "/")
+	if !nested {
+		return false
+	}
+	return regexp.MustCompile(`(^|[^\w.-])` + regexp.QuoteMeta(strings.ToLower(top)) + `($|[^\w.-]|\.(\s|$))`).MatchString(goal)
+}
+
+// untrackedClaim matches an assumption saying a file stays out of git.
+var untrackedClaim = regexp.MustCompile(`(?i)\buntracked\b|\bnot\s+(be\s+)?(tracked|committed)\b|\bnever\s+(be\s+)?committed\b|\buncommitted\b`)
+
+// pathToken matches a file-like token: a name with a letter-led
+// extension (never a version like 11.0), or a slash-separated path.
+var pathToken = regexp.MustCompile(`[\w.-]*[\w-]\.[A-Za-z][A-Za-z0-9]*\b|[\w.-]+(/[\w.-]+)+`)
+
+// isShellWordSep splits a check_cmd into words for path matching.
+func isShellWordSep(r rune) bool {
+	return strings.ContainsRune(" \t\n;&|()<>'\"=`", r)
+}
+
+// checkUntrackedAssumptions rejects a plan that assumes a file stays
+// untracked while a unit lists it in artifacts or scope or uses it in
+// check_cmd (D-134, issue #1039): CommitUnit stages untracked files
+// under a unit's artifacts and scope, so the assumption cannot hold.
+func checkUntrackedAssumptions(plan Plan) error {
+	for _, as := range plan.Assumptions {
+		text := strings.TrimSpace(as.Assumption + " " + as.Default)
+		if !untrackedClaim.MatchString(text) {
+			continue
+		}
+		for _, tok := range pathToken.FindAllString(text, -1) {
+			p := cleanArtifact(tok)
+			for _, u := range plan.Units {
+				where := ""
+				switch {
+				case listsPath(u.Artifacts, p):
+					where = "artifacts"
+				case listsPath(u.Scope, p):
+					where = "scope"
+				case listsPath(strings.FieldsFunc(u.CheckCmd, isShellWordSep), p):
+					where = "check_cmd"
+				}
+				if where != "" {
+					return fmt.Errorf("mission runner: plan assumption %q says %s stays untracked, but unit %q uses it in its %s, and the harness commits the files a unit declares; either keep %s out of that unit's artifacts, scope and check_cmd, or drop the assumption", text, p, u.Title, where, p)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// listsPath reports whether any non-blank entry of list cleans to p.
+func listsPath(list []string, p string) bool {
+	for _, s := range list {
+		if strings.TrimSpace(s) != "" && cleanArtifact(s) == p {
+			return true
+		}
+	}
+	return false
 }
 
 func cleanArtifact(a string) string {

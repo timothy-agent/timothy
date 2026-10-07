@@ -258,6 +258,19 @@ AGENTS.md so other work does not pay for it every session.
   (`Mission.PlanGate`, derived from events by `Driver.planGateState`).
   With a repo destination a push/PR unit is rejected: the result phase
   delivers the branch and the PR.
+- Report placement (D-134, issue #1039): on a coding mission over a
+  repo source, `checkReportArtifacts` rejects a new `.md`/`.markdown`/
+  `.txt`/`.rst` artifact whose base name the goal does not contain and
+  whose top directory the goal does not name as a word; files already
+  in the worktree pass. `checkUntrackedAssumptions` rejects an
+  assumption saying a path stays untracked / not committed while a
+  unit lists that exact path in artifacts or scope or as a check_cmd
+  word. A planned worker carries the report in mission_status's
+  `final_output`; the driver stores the latest non-empty one as
+  `missions.final_output`, the web Result panel prefers it over
+  `last_evidence`, and `PRBody` renders it in `<details>` (60k rune
+  cap). Delegated CLI results carry only a note, so a delegated worker
+  reaches it only through a text sentinel.
 - Environment facts (issue #1008): `renderEnvFacts` (envfacts.go)
   appends one deterministic block to the discover, plan, reviewer
   (native and delegated) and worker (native and delegated) prompts:

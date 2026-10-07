@@ -1850,6 +1850,13 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		if err := d.store.SetLastEvidence(ctx, m.ID, verdict.Evidence); err != nil {
 			d.log.Warn("driver: record evidence failed", "mission_id", m.ID, "error", err)
 		}
+		// D-134: a planned mission's report travels in final_output, not
+		// a repo file; the latest non-empty one is the mission's report.
+		if !m.RunsPlanless() && strings.TrimSpace(verdict.FinalOutput) != "" {
+			if err := d.store.SetFinalOutput(ctx, m.ID, verdict.FinalOutput); err != nil {
+				d.log.Warn("driver: record final output failed", "mission_id", m.ID, "error", err)
+			}
+		}
 		if m.RunsPlanless() {
 			// D-069/D-090: a planless mission (light, or
 			// flow=discover_build) has no plan/artifacts for
