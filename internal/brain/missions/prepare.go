@@ -117,6 +117,7 @@ func (p *provisioner) prepareWorkspace(ctx context.Context, m Mission) Mission {
 	r := &prepareRun{p: p, m: m, wt: wt, deadline: start.Add(prepareCeiling), facts: &PrepareFacts{}}
 	p.appendPrepareEvent(ctx, m.ID, "mission.prepare_started", map[string]any{
 		"providers": spec.Providers, "env_template": spec.EnvTemplate, "test_candidates": spec.TestCandidates, "lockfiles": spec.Lockfiles,
+		"npm_no_lockfile": spec.NpmNoLock,
 	})
 	r.run(ctx, spec)
 	payload := map[string]any{
@@ -173,6 +174,13 @@ func (r *prepareRun) run(ctx context.Context, spec prepareSpec) {
 			r.facts.Installed = append(r.facts.Installed, name)
 		}
 	}
+	if spec.NpmNoLock {
+		if _, _, ok := r.step(ctx, "deps:"+npmNoLockInstalled, buildNpmNoLockInstallCmd(), prepareDepsTimeout); ok && dirExists(r.wt, "node_modules") {
+			r.facts.Installed = append(r.facts.Installed, npmNoLockInstalled)
+		} else {
+			r.fail("npm install without a lockfile failed; node dependencies may need installing by hand")
+		}
+	}
 	if spec.EnvTemplate != "" {
 		if _, _, ok := r.step(ctx, envTemplateProvider, buildDepsCmd(envTemplateProvider), prepareEnvTimeout); ok && fileExists(r.wt, envFileName) {
 			r.facts.EnvFile = envFileName + " created from " + spec.EnvTemplate
@@ -190,7 +198,7 @@ func (r *prepareRun) run(ctx context.Context, spec prepareSpec) {
 			r.fail("rewriting " + miseLocalFile + " with the test task: " + err.Error())
 		}
 	}
-	r.audit(ctx, spec.Lockfiles)
+	r.audit(ctx, spec.Lockfiles, spec.NpmNoLock)
 }
 
 // baselineTest tries the ladder candidates in order until one exits 0;
@@ -221,13 +229,28 @@ func (r *prepareRun) baselineTest(ctx context.Context, candidates []testCandidat
 // audit runs osv-scanner over the lockfiles into a report file under the
 // workspace and reads the counts back. Exit 1 means advisories found,
 // 128 means no packages; both are results, anything else a failure.
-func (r *prepareRun) audit(ctx context.Context, lockfiles []string) {
-	if len(lockfiles) == 0 {
+// With npmNoLock a package-lock.json generated under the workspace joins
+// the scan.
+func (r *prepareRun) audit(ctx context.Context, lockfiles []string, npmNoLock bool) {
+	if len(lockfiles) == 0 && !npmNoLock {
 		return
 	}
 	dir := filepath.Join(r.m.Workspace, prepareDir)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		r.fail("audit: creating " + dir + ": " + err.Error())
+		return
+	}
+	generated := ""
+	if npmNoLock {
+		npmDir := filepath.Join(dir, "npm")
+		if _, _, ok := r.step(ctx, "audit:npm-lockfile", buildNpmLockfileCmd(npmDir), prepareAuditTimeout); ok && fileExists(npmDir, "package-lock.json") {
+			generated = filepath.Join(npmDir, "package-lock.json")
+			lockfiles = append(append([]string{}, lockfiles...), generated)
+		} else {
+			r.fail("generating a package-lock.json outside the worktree failed; package.json is not audited")
+		}
+	}
+	if len(lockfiles) == 0 {
 		return
 	}
 	outFile := filepath.Join(dir, "osv.json")
@@ -249,6 +272,11 @@ func (r *prepareRun) audit(ctx context.Context, lockfiles []string) {
 	if err != nil {
 		r.fail("audit: parsing the osv-scanner report: " + err.Error())
 		return
+	}
+	for i := range audit {
+		if generated != "" && audit[i].Path == generated {
+			audit[i].Path = npmGeneratedLockLabel
+		}
 	}
 	r.facts.Audit = audit
 }
@@ -274,7 +302,7 @@ func (r *prepareRun) step(ctx context.Context, name, command string, timeout tim
 	start := time.Now()
 	code, err := r.p.sandboxExec(ctx, r.m.ID, r.m.Environment, r.wt, command, timeout, &buf)
 	dur := time.Since(start)
-	out = buf.String()
+	out = stripANSI(buf.String())
 	ok = err == nil && (code == 0 || containsInt(okCodes, code))
 	tail := tailString(strings.TrimSpace(out), prepareTailCap)
 	payload := map[string]any{"name": name, "command": command, "exit_code": code, "duration_ms": dur.Milliseconds(), "tail": tail}
