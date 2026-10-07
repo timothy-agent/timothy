@@ -184,6 +184,16 @@ not-found and out-of-bounds into the same 404.
   package managers, sudo, docker, pipe-to-shell, ssh keys, home
   dotfiles, paths outside the worktree, and every chat or host
   session keep the original rules.
+- **Accepted (D-131):** package caches (npm, composer, pip, uv, Go,
+  Maven, Gradle, yarn, bun) and mise toolchains live on the optional
+  `sandbox-caches` and `sandbox-toolchains` volumes, shared read-write
+  by every mission. A mission running a hostile repo can plant cache
+  entries that a later mission's install reads. npm and Go check cached
+  packages against the lockfile's integrity hash or `go.sum`, so a
+  planted entry fails the install instead of running; composer, pip
+  without `--require-hashes`, Maven and Gradle check less and can serve
+  it. Remove the `sandbox-caches` mount from sandboxd to disable
+  sharing: each mission then caches in its own workspace dir.
 - **Open:** mission containers share one read-write workspace volume
   across missions, so missions are not isolated from each other's files
   (issue #749). Sandbox containers on the default bridge reach the bridge

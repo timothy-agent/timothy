@@ -192,8 +192,8 @@ func TestEnsureContainerNotFoundCreates(t *testing.T) {
 			if cfg.User != sandboxUser {
 				t.Errorf("create body: User = %q, want %q", cfg.User, sandboxUser)
 			}
-			if len(cfg.HostConfig.Mounts) != 1 || cfg.HostConfig.Mounts[0].Target != testMissionDir {
-				t.Errorf("create body: Mounts = %+v, want one mount at %s", cfg.HostConfig.Mounts, testMissionDir)
+			if len(cfg.HostConfig.Mounts) != 2 || cfg.HostConfig.Mounts[0].Target != testMissionDir || cfg.HostConfig.Mounts[1].Target != cachesMountPath {
+				t.Errorf("create body: Mounts = %+v, want the mission dir at %s and its cache dir at %s", cfg.HostConfig.Mounts, testMissionDir, cachesMountPath)
 			}
 			for _, e := range cfg.Env {
 				if len(e) >= len("DATABASE_URL") && e[:len("DATABASE_URL")] == "DATABASE_URL" {
@@ -308,8 +308,8 @@ func TestCreateContainerIncludesStateMountWhenPresent(t *testing.T) {
 	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
-	if len(gotMounts) != 2 {
-		t.Fatalf("create body: Mounts = %+v, want 2 (workspace + state)", gotMounts)
+	if len(gotMounts) != 3 {
+		t.Fatalf("create body: Mounts = %+v, want 3 (workspace + state + caches)", gotMounts)
 	}
 	found := false
 	for _, m := range gotMounts {
@@ -355,8 +355,8 @@ func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
 	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
-	if len(gotMounts) != 1 || gotMounts[0].Target != testMissionDir {
-		t.Fatalf("create body: Mounts = %+v, want exactly [mission workspace]", gotMounts)
+	if len(gotMounts) != 2 || gotMounts[0].Target != testMissionDir || gotMounts[1].Target != cachesMountPath {
+		t.Fatalf("create body: Mounts = %+v, want exactly [mission workspace, mission cache dir]", gotMounts)
 	}
 }
 
@@ -370,8 +370,8 @@ func TestCreateContainerToolchainsMount(t *testing.T) {
 		tm   mount.Mount
 		want int
 	}{
-		{"configured", tc, 2},
-		{"absent", mount.Mount{}, 1},
+		{"configured", tc, 3},
+		{"absent", mount.Mount{}, 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -436,6 +436,144 @@ func TestResolveMountToolchainsVolume(t *testing.T) {
 	}
 	if m.Source != "timothy_sandbox-toolchains" || m.Target != toolchainsMountPath {
 		t.Errorf("mount = %+v", m)
+	}
+}
+
+// createMounts runs createContainer against a fake daemon and returns
+// the Mounts it sent.
+func createMounts(t *testing.T, mgr *Manager) []mount.Mount {
+	t.Helper()
+	var gotMounts []mount.Mount
+	mgr.cli = newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/create":
+			var cfg struct {
+				HostConfig container.HostConfig
+			}
+			if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+				t.Fatalf("decode create body: %v", err)
+			}
+			gotMounts = cfg.HostConfig.Mounts
+			writeJSON(t, w, http.StatusCreated, container.CreateResponse{ID: "new1"})
+		case r.Method == http.MethodPost && r.URL.Path == "/v1.51/containers/new1/start":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
+		}
+	})
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+		t.Fatalf("createContainer: %v", err)
+	}
+	return gotMounts
+}
+
+// TestCreateContainerCachesMount covers D-131: ~/.cache is the shared
+// cache volume when configured, else the mission's own cache dir on the
+// workspace volume (volume subpath or bind source), never the HOME tmpfs.
+func TestCreateContainerCachesMount(t *testing.T) {
+	shared := mount.Mount{Type: mount.TypeVolume, Source: "timothy_sandbox-caches", Target: cachesMountPath}
+	tests := []struct {
+		name      string
+		workspace mount.Mount
+		caches    mount.Mount
+		want      mount.Mount
+	}{
+		{
+			name:      "shared volume",
+			workspace: mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath},
+			caches:    shared,
+			want:      shared,
+		},
+		{
+			name:      "absent, workspace volume",
+			workspace: mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath},
+			want: mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: cachesMountPath,
+				VolumeOptions: &mount.VolumeOptions{Subpath: "missions/coding/m1/.sandbox-cache"}},
+		},
+		{
+			name:      "absent, workspace bind",
+			workspace: mount.Mount{Type: mount.TypeBind, Source: "/srv/timothy/workspace", Target: workspaceMountPath},
+			want:      mount.Mount{Type: mount.TypeBind, Source: "/srv/timothy/workspace/missions/coding/m1/.sandbox-cache", Target: cachesMountPath},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := newTestManager(nil)
+			mgr.workspaceMount = tt.workspace
+			mgr.cachesMount = tt.caches
+			var got []mount.Mount
+			for _, m := range createMounts(t, mgr) {
+				if m.Target == cachesMountPath {
+					got = append(got, m)
+				}
+			}
+			if len(got) != 1 {
+				t.Fatalf("mounts at %s = %+v, want exactly one", cachesMountPath, got)
+			}
+			g := got[0]
+			if g.Type != tt.want.Type || g.Source != tt.want.Source {
+				t.Errorf("cache mount = %+v, want %+v", g, tt.want)
+			}
+			wantSub, gotSub := "", ""
+			if tt.want.VolumeOptions != nil {
+				wantSub = tt.want.VolumeOptions.Subpath
+			}
+			if g.VolumeOptions != nil {
+				gotSub = g.VolumeOptions.Subpath
+			}
+			if gotSub != wantSub {
+				t.Errorf("cache mount subpath = %q, want %q", gotSub, wantSub)
+			}
+		})
+	}
+}
+
+// TestResolveMountCachesVolume confirms resolveMount resolves the cache
+// volume from cachesVolumeMetaPath (D-131).
+func TestResolveMountCachesVolume(t *testing.T) {
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(t, w, http.StatusOK, container.InspectResponse{
+			Mounts: []container.MountPoint{
+				{Type: mount.TypeVolume, Name: "timothy_sandbox-caches", Destination: cachesVolumeMetaPath},
+			},
+		})
+	})
+	m, err := resolveMount(context.Background(), cli, cachesVolumeMetaPath, cachesMountPath)
+	if err != nil {
+		t.Fatalf("resolveMount: %v", err)
+	}
+	if m.Source != "timothy_sandbox-caches" || m.Target != cachesMountPath {
+		t.Errorf("mount = %+v", m)
+	}
+}
+
+// TestBaseImagePointsCachesAtCacheMount confirms every package cache
+// env in the base image (D-131) sits under cachesMountPath, so caches
+// follow the disk-backed mount instead of the HOME tmpfs.
+func TestBaseImagePointsCachesAtCacheMount(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "sandbox-base.Dockerfile"))
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+	df := strings.Join(strings.Fields(strings.ReplaceAll(string(raw), "\\\n", " ")), " ")
+	for _, kv := range []string{
+		"COMPOSER_CACHE_DIR=" + cachesMountPath + "/composer",
+		"npm_config_cache=" + cachesMountPath + "/npm",
+		"PIP_CACHE_DIR=" + cachesMountPath + "/pip",
+		"UV_CACHE_DIR=" + cachesMountPath + "/uv",
+		"GOMODCACHE=" + cachesMountPath + "/go-mod",
+		"GOCACHE=" + cachesMountPath + "/go-build",
+		"GOFLAGS=-modcacherw",
+		"MAVEN_OPTS=-Dmaven.repo.local=" + cachesMountPath + "/m2/repository",
+		"GRADLE_USER_HOME=" + cachesMountPath + "/gradle",
+		"YARN_CACHE_FOLDER=" + cachesMountPath + "/yarn",
+		"BUN_INSTALL_CACHE_DIR=" + cachesMountPath + "/bun",
+		"MISE_CACHE_DIR=" + cachesMountPath + "/mise",
+		"MISE_STATE_DIR=" + cachesMountPath + "/mise-state",
+	} {
+		if !strings.Contains(df, " "+kv+" ") {
+			t.Errorf("sandbox-base.Dockerfile ENV is missing %s", kv)
+		}
 	}
 }
 
@@ -799,7 +937,7 @@ func TestCreateContainerHardensRootfs(t *testing.T) {
 		}
 	}
 
-	for _, p := range []string{executorStateMountPath, toolchainsMountPath} {
+	for _, p := range []string{executorStateMountPath, toolchainsMountPath, cachesMountPath} {
 		if filepath.Dir(p) != sandboxHomePath {
 			t.Errorf("volume mount %q is not a direct child of %q; Docker would create its parents root-owned on the HOME tmpfs", p, sandboxHomePath)
 		}

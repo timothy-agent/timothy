@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -28,6 +29,52 @@ func TestListFilesSkipsGit(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Path != "real.txt" {
 		t.Fatalf("entries = %+v, want exactly [real.txt]", entries)
+	}
+}
+
+// TestWorkspaceWalksSkipSandboxCache covers D-131: the package cache dir
+// at the top of a worktree-less workspace never shows up in the file
+// listing, the archive or the reviewer's listing; a nested dir with the
+// same name is ordinary content.
+func TestWorkspaceWalksSkipSandboxCache(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{filepath.Join(SandboxCacheDirName, "pip"), filepath.Join("sub", SandboxCacheDirName)} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWriteFile(t, filepath.Join(root, "report.md"), "hello")
+	mustWriteFile(t, filepath.Join(root, SandboxCacheDirName, "pip", "wheel.whl"), "cache")
+	mustWriteFile(t, filepath.Join(root, "sub", SandboxCacheDirName, "kept.txt"), "kept")
+
+	entries, _, err := ListFiles(root, nil)
+	if err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	}
+	var paths []string
+	for _, e := range entries {
+		paths = append(paths, e.Path)
+	}
+	want := []string{"report.md", filepath.Join("sub", SandboxCacheDirName, "kept.txt")}
+	if len(paths) != len(want) || paths[0] != want[0] || paths[1] != want[1] {
+		t.Fatalf("ListFiles paths = %v, want %v", paths, want)
+	}
+
+	var buf bytes.Buffer
+	if err := WriteArchive(root, &buf); err != nil {
+		t.Fatalf("WriteArchive: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+	if len(zr.File) != 2 {
+		t.Fatalf("archive holds %d files, want 2 (cache skipped)", len(zr.File))
+	}
+
+	listing := ListWorkspace(root)
+	if strings.Contains(listing, "wheel.whl") || !strings.Contains(listing, "report.md") {
+		t.Fatalf("ListWorkspace = %q, want report.md and no cache entries", listing)
 	}
 }
 

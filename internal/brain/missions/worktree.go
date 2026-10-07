@@ -27,6 +27,12 @@ const (
 
 	unavailableCommit = "(unavailable)"
 
+	// SandboxCacheDirName (D-131) is the per-mission package cache dir
+	// in the workspace, beside the worktree. sandboxd mounts it at the
+	// sandbox's ~/.cache when the shared cache volume is absent
+	// (internal/sandboxd missionCacheDirName); keep both in sync.
+	SandboxCacheDirName = ".sandbox-cache"
+
 	// commitName/commitEmail are fixed, not the operator's real git
 	// identity — commits inside a mission worktree are machine-authored.
 	commitName  = "timothy"
@@ -96,6 +102,10 @@ func (w *Workspace) Provision(ctx context.Context, missionID, goal, name, kind, 
 	workspace = filepath.Join(w.root, kind, missionID)
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		return "", "", "", "", "", fmt.Errorf("worktree: provision: mkdir %s: %w", workspace, err)
+	}
+	// Docker requires the dir to exist before sandboxd can mount it.
+	if err := os.MkdirAll(filepath.Join(workspace, SandboxCacheDirName), 0o750); err != nil {
+		return "", "", "", "", "", fmt.Errorf("worktree: provision: mkdir cache dir: %w", err)
 	}
 
 	if !policyFor(kind, FlowFull).needsWorktree {

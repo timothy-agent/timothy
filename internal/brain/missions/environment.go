@@ -484,11 +484,20 @@ func buildToolchainInstallCmd(toolchains map[string]string) string {
 		}
 		b.WriteString(" && ")
 	}
-	b.WriteString("mise use --global")
+	use := "mise use --global"
 	for _, t := range tools {
-		b.WriteString(" " + shQuote(t+"@"+toolchains[t]))
+		use += " " + shQuote(t+"@"+toolchains[t])
 	}
+	b.WriteString(miseLocked(use))
 	return b.String()
+}
+
+// miseLocked wraps a harness mise install so it holds an exclusive lock
+// on the mise data dir (D-131): missions share the toolchains volume, and
+// two concurrent installs of one version collide on mise's shared
+// download file. /tmp stands in when MISE_DATA_DIR is unset.
+func miseLocked(cmd string) string {
+	return `(mkdir -p "${MISE_DATA_DIR:-/tmp}" && flock "${MISE_DATA_DIR:-/tmp}/.timothy-install.lock" ` + cmd + ")"
 }
 
 // buildPHPSelectCmd activates one baked PHP minor (D-127) by linking

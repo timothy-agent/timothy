@@ -2,4 +2,4 @@
 
 Environment facts (set by the harness; treat them as true and do not re-check them):
 - Credentials: the sandbox has no git or registry credentials; git push, gh and authenticated registry calls cannot work.
-- Sandbox limits: unprivileged user (no root, no sudo); read-only root filesystem, writable only in the workspace, HOME (tmpfs 1 GiB) and /tmp (tmpfs 512 MiB); memory 2 GiB including swap; 2 CPUs; 256 processes; 100 MiB per file; network on; no Docker socket.
+- Sandbox limits: unprivileged user (no root, no sudo); read-only root filesystem, writable only in the workspace, HOME (tmpfs 1 GiB; package caches in ~/.cache are on disk) and /tmp (tmpfs 512 MiB); memory 2 GiB including swap; 2 CPUs; 256 processes; 256 MiB per file; network on; no Docker socket.
