@@ -1,0 +1,14 @@
+
+
+Environment facts (set by the harness; treat them as true and do not re-check them):
+- Repository: https://github.com/o/mono, base branch develop, base commit fedcba987654.
+- Mission branch: feat/api, already checked out in the worktree.
+- Destination gitlab, mode push: the harness commits each unit and pushes `feat/api` after all units pass; do not plan, script or verify a push or PR; never create or switch branches.
+- Credentials: the sandbox has no git or registry credentials; git push, gh and authenticated registry calls cannot work.
+- Manifests and lockfiles (to depth 3, by directory):
+  - .: mise.toml
+  - backend: go.mod, go.sum
+  - frontend: package.json, pnpm-lock.yaml
+  - services/api: pom.xml
+- Sandbox limits: unprivileged user (no root, no sudo); read-only root filesystem, writable only in the workspace, HOME (tmpfs 1 GiB) and /tmp (tmpfs 512 MiB); memory 2 GiB including swap; 2 CPUs; 256 processes; 100 MiB per file; network on; no Docker socket.
+- Gap: Testcontainers is declared in services/api/pom.xml; it needs a Docker daemon and the sandbox has none, so tests that start containers cannot run here. If the goal depends on this, submit the plan as infeasible.

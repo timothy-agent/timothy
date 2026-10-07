@@ -57,7 +57,10 @@ var dangerRules = []dangerRule{
 	{name: "shred", score: 3, pattern: cmdWord("shred")},
 	{name: "find-exec", score: 3, pattern: regexp.MustCompile(`(^|[\s;|&(])find\s.*-(exec|delete)`)},
 	{name: "pipe-to-shell", score: 3, pattern: regexp.MustCompile(`(curl|wget|fetch)[^|;]*\|\s*(/[\w./-]*/)?(ba|z|da)?sh`)},
-	{name: "pkg-install", score: 3, pattern: regexp.MustCompile(`(apk\s+add|apt(-get)?\s+install|yum\s+install|dnf\s+install|brew\s+install|npm\s+i(nstall)?\s+(-g|--global)|pip3?\s+install|gem\s+install|cargo\s+install)`)},
+	{name: "pkg-install", score: 3, pattern: regexp.MustCompile(`(apk\s+add|apt(-get)?\s+install|yum\s+install|dnf\s+install|brew\s+install)`)},
+	// Language package managers install into user-writable paths, so a
+	// sandbox can confine them (D-129); system managers above cannot be.
+	{name: "lang-pkg-install", score: 3, pattern: regexp.MustCompile(`(npm\s+i(nstall)?\s+(-g|--global)|pip3?\s+install|gem\s+install|cargo\s+install)`)},
 	// Overwriting redirect, including one that leads the command
 	// (> file) — but not fd duplication or /dev/null (blanked below).
 	{name: "redirect-overwrite", score: 3, pattern: regexp.MustCompile(`(^|[^>])>([^>]|$)`)},

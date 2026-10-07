@@ -277,6 +277,11 @@ func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (M
 			}
 		}
 		p.installToolchains(ctx, m, workRoot)
+		baseBranch := baseUsed
+		if baseBranch == "" && repoURL != "" {
+			baseBranch = defaultBaseBranch(ctx, worktree)
+		}
+		m.EnvFacts = p.collectEnvFacts(ctx, m, workRoot, baseBranch)
 		if m.ParentMissionID != "" && missionPolicyFor(m).needsWorktree {
 			ref := baseUsed
 			if ref == "" {

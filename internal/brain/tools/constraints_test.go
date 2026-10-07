@@ -255,6 +255,47 @@ func TestCheckCommandPaths(t *testing.T) {
 	}
 }
 
+// TestCheckSandboxCommandPaths pins D-129 at exec time: a read-only
+// command run in the mission container may name the container's read
+// paths, a write there or a host path may not, and the host-side
+// CheckCommandPaths keeps refusing all of them.
+func TestCheckSandboxCommandPaths(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	tests := []struct {
+		command string
+		allowed bool
+	}{
+		{command: "ls /usr/local/bin", allowed: true},
+		{command: "cat /etc/os-release", allowed: true},
+		{command: "ls /opt/php | grep 8", allowed: true},
+		{command: "tail /home/sandbox/.cache/pip/log.txt", allowed: true},
+		{command: "ls /home/sandbox/.mise/installs", allowed: true},
+		{command: "grep -r token /home/sandbox"},
+		{command: "du -a /home"},
+		{command: "cp /usr/share/x /tmp/y"},
+		{command: "echo x > /tmp/y"},
+		{command: "cat /etc/passwd"},
+		{command: "cat /home/sandbox/.claude/.credentials.json"},
+		{command: "cat /workspace-other/notes"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.command, func(t *testing.T) {
+			t.Parallel()
+			err := CheckSandboxCommandPaths(root, tc.command)
+			if tc.allowed && err != nil {
+				t.Fatalf("CheckSandboxCommandPaths(%q) = %v, want nil", tc.command, err)
+			}
+			if !tc.allowed && !IsViolation(err) {
+				t.Fatalf("CheckSandboxCommandPaths(%q) = %v, want violation", tc.command, err)
+			}
+			if !IsViolation(CheckCommandPaths(root, tc.command)) {
+				t.Fatalf("CheckCommandPaths(%q) allowed a path outside the workspace", tc.command)
+			}
+		})
+	}
+}
+
 func TestCeilingFor(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

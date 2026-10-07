@@ -920,6 +920,11 @@ CREATE TABLE IF NOT EXISTS missions (
     -- mise version prefix, written with environment by
     -- store.SetEnvironment and installed before discover.
     toolchains            jsonb NOT NULL DEFAULT '{}',
+    -- Environment facts (issue #1008): base branch, repo destinations,
+    -- manifests, probed tool versions and gaps, collected at
+    -- provisioning by store.SetEnvFacts and rendered into every phase
+    -- prompt. NULL until collected.
+    env_facts             jsonb,
     -- FinalOutput is a light mission's verbatim final worker message
     -- (D-069), the deliverable itself, since destinations delivery has
     -- no other body content for a mission with no review/artifacts.

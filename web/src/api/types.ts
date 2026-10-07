@@ -770,6 +770,16 @@ export interface CriterionVerdict {
   evidence?: string
 }
 
+// EnvFacts mirrors missions.EnvFacts (issue #1008). A tool with no
+// version is not installed in the sandbox.
+export interface EnvFacts {
+  base_branch?: string
+  destinations?: { kind: string; mode?: string }[]
+  manifests?: string[]
+  tools?: { name: string; version?: string }[]
+  gaps?: string[]
+}
+
 // Mission is one long-running, agent-driven unit of work
 // (internal/brain/missions): discover -> plan -> build -> prove ->
 // result under a state machine.
@@ -892,6 +902,9 @@ export interface Mission {
   // toolchains maps tool -> version prefix the repo's marker files pin
   // (D-126); installed in the sandbox before discover.
   toolchains?: Record<string, string>
+  // env_facts (issue #1008) is what the harness probed at provisioning
+  // and tells every phase prompt; absent until collected.
+  env_facts?: EnvFacts
   // harness is the delegated CLI executor this coding mission's worker
   // turns run under (D-051): "" or absent is native in-process
   // dispatch, "claude-cli"/"pi"/"codex-cli"/"opencode"/"cursor-cli" name

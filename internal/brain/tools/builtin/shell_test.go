@@ -204,6 +204,36 @@ func TestShellRunnerStillRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestShellRunnerAllowsContainerReadPaths pins D-129: a Runner-backed
+// shell runs in the mission container, so a read-only command naming
+// the container's /usr reaches the Runner; the in-process shell still
+// refuses it.
+func TestShellRunnerAllowsContainerReadPaths(t *testing.T) {
+	t.Parallel()
+	runnerCalled := false
+	sandboxed := Shell(ShellConfig{
+		WorkspaceRoot: t.TempDir(),
+		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
+			runnerCalled = true
+			return "", nil
+		},
+	})
+	if _, err := runTool(t, sandboxed, "ls /usr/local/bin"); err != nil {
+		t.Fatalf("sandboxed read: %v", err)
+	}
+	if !runnerCalled {
+		t.Fatal("Runner was not called for a container read path")
+	}
+	if _, err := runTool(t, sandboxed, "cp x /usr/local/bin/"); err == nil || !strings.Contains(err.Error(), "outside the workspace") {
+		t.Fatalf("sandboxed write err = %v, want outside the workspace", err)
+	}
+
+	host := Shell(ShellConfig{WorkspaceRoot: t.TempDir()})
+	if _, err := runTool(t, host, "ls /usr/local/bin"); err == nil || !strings.Contains(err.Error(), "outside the workspace") {
+		t.Fatalf("host read err = %v, want outside the workspace", err)
+	}
+}
+
 // TestShellRunnerRespectsConfiguredMaxTimeout confirms MaxTimeout caps
 // a model-requested timeout_seconds independent of ShellTimeoutClamp —
 // ExtraTools (mission-scoped shells) bypass that middleware entirely,
