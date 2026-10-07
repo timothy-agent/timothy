@@ -88,6 +88,22 @@ describe('Memory queue', () => {
     )
   })
 
+  it('shows prior and proposed text side by side for a correction', async () => {
+    vi.mocked(listMemories).mockResolvedValue([
+      {
+        ...pendingMemory,
+        content: 'User lives in Berlin.',
+        supersedes: { id: 'old', content: 'User lives in Amsterdam.' },
+      },
+    ])
+    renderPage()
+    const comparison = await screen.findByTestId('supersede-comparison')
+    expect(within(comparison).getByText('Existing fact')).toBeInTheDocument()
+    expect(within(comparison).getByText('User lives in Amsterdam.')).toBeInTheDocument()
+    expect(within(comparison).getByText('Proposed correction')).toBeInTheDocument()
+    expect(within(comparison).getByText('User lives in Berlin.')).toBeInTheDocument()
+  })
+
   it('confirm resolves the card', async () => {
     renderPage()
     await screen.findByTestId('queue-card')

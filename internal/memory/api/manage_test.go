@@ -18,24 +18,27 @@ import (
 )
 
 type fakeManager struct {
-	memories      map[string]store.Memory
-	listed        []store.Memory
-	promoted      []string
-	rejected      []string
-	inserted      []store.Memory
-	superseded    map[string]string
-	nextID        int
-	entities      []store.Entity
-	edges         []store.EntityEdge
-	entityMems    map[string][]store.Memory
-	nearestID     string
-	nearestSim    float64
-	nearestStatus store.Status
-	nearestFound  bool
-	nearestErr    error
-	confirmed     []string
-	confirmErr    error
-	insertErr     error
+	memories             map[string]store.Memory
+	listed               []store.Memory
+	promoted             []string
+	rejected             []string
+	inserted             []store.Memory
+	superseded           map[string]string
+	confirmedSuperseding []string
+	correctedSuperseding []store.Memory
+	nextID               int
+	entities             []store.Entity
+	edges                []store.EntityEdge
+	entityMems           map[string][]store.Memory
+	nearestID            string
+	nearestSim           float64
+	nearestStatus        store.Status
+	nearestFound         bool
+	nearestErr           error
+	confirmed            []string
+	confirmErr           error
+	insertErr            error
+	contentsCalls        int
 }
 
 func newFakeManager() *fakeManager {
@@ -44,6 +47,24 @@ func newFakeManager() *fakeManager {
 
 func (f *fakeManager) ListByStatus(_ context.Context, status store.Status, types ...store.MemoryType) ([]store.Memory, error) {
 	return f.listed, nil
+}
+
+func (f *fakeManager) Get(_ context.Context, id string) (store.Memory, error) {
+	if m, ok := f.memories[id]; ok {
+		return m, nil
+	}
+	return store.Memory{}, store.ErrNotFound
+}
+
+func (f *fakeManager) Contents(_ context.Context, ids []string) (map[string]string, error) {
+	f.contentsCalls++
+	out := map[string]string{}
+	for _, id := range ids {
+		if m, ok := f.memories[id]; ok {
+			out[id] = m.Content
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeManager) Insert(_ context.Context, m store.Memory) (string, error) {
@@ -68,6 +89,16 @@ func (f *fakeManager) Confirm(_ context.Context, id string) error {
 func (f *fakeManager) Promote(_ context.Context, id string) error {
 	f.promoted = append(f.promoted, id)
 	return nil
+}
+
+func (f *fakeManager) ConfirmSuperseding(_ context.Context, id string) error {
+	f.confirmedSuperseding = append(f.confirmedSuperseding, id)
+	return nil
+}
+
+func (f *fakeManager) CorrectSuperseding(_ context.Context, id string, m store.Memory) (string, error) {
+	f.correctedSuperseding = append(f.correctedSuperseding, m)
+	return "corrected-" + id, nil
 }
 
 func (f *fakeManager) Reject(_ context.Context, id string) error {
@@ -119,6 +150,32 @@ func TestListDefaultsToPendingQueue(t *testing.T) {
 	}
 	if len(out.Memories) != 1 || out.Memories[0].ID != "p1" {
 		t.Fatalf("out = %+v", out)
+	}
+}
+
+func TestListIncludesSupersededFactForQueueComparison(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.listed = []store.Memory{{
+		ID: "candidate", Type: store.TypeSemantic, Content: "User lives in Berlin.",
+		Status: store.StatusPending, Supersedes: "old", CreatedAt: time.Now(),
+	}}
+	fm.memories["old"] = store.Memory{ID: "old", Content: "User lives in Amsterdam."}
+	req := httptest.NewRequest(http.MethodGet, "/v1/memories", nil)
+	rec := httptest.NewRecorder()
+	manageAPI(fm).handleList(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	var out struct {
+		Memories []memoryJSON `json:"memories"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Memories) != 1 || out.Memories[0].Supersedes == nil ||
+		out.Memories[0].Supersedes.ID != "old" || out.Memories[0].Supersedes.Content != "User lives in Amsterdam." {
+		t.Fatalf("memories = %+v, want the prior fact attached", out.Memories)
 	}
 }
 
@@ -216,6 +273,7 @@ func TestAddRejectedNearDuplicateFromUntrustedSourceIsDroppedAndLogged(t *testin
 	t.Parallel()
 	fm := newFakeManager()
 	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "rejected-1", 0.95, store.StatusRejected, true
+	fm.memories["rejected-1"] = store.Memory{ID: "rejected-1", Content: "User lives in Porto.", Status: store.StatusRejected}
 	var log bytes.Buffer
 	a := manageAPI(fm)
 	a.log = slog.New(slog.NewTextHandler(&log, nil))
@@ -245,6 +303,7 @@ func TestAddTrustedRestatementOfRejectedFactInsertsActive(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
 	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "rejected-1", 0.95, store.StatusRejected, true
+	fm.memories["rejected-1"] = store.Memory{ID: "rejected-1", Content: "User lives in Porto.", Status: store.StatusRejected}
 	req := httptest.NewRequest(http.MethodPost, "/v1/memories",
 		strings.NewReader(`{"content":"User lives in Porto.","trusted":true}`))
 	rec := httptest.NewRecorder()
@@ -264,6 +323,7 @@ func TestAddTrustedCredentialRestatementOfRejectedFactIsDropped(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
 	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "rejected-1", 0.95, store.StatusRejected, true
+	fm.memories["rejected-1"] = store.Memory{ID: "rejected-1", Content: "User lives in Porto.", Status: store.StatusRejected}
 	req := httptest.NewRequest(http.MethodPost, "/v1/memories",
 		strings.NewReader(`{"content":"The staging password is hunter2.","trusted":true}`))
 	rec := httptest.NewRecorder()
@@ -280,6 +340,7 @@ func TestAddPendingNearDuplicateReusesReviewItem(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
 	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "pending-1", 0.96, store.StatusPending, true
+	fm.memories["pending-1"] = store.Memory{ID: "pending-1", Content: "User lives in Porto.", Status: store.StatusPending}
 	req := httptest.NewRequest(http.MethodPost, "/v1/memories",
 		strings.NewReader(`{"content":"User lives in Porto.","trusted":false}`))
 	rec := httptest.NewRecorder()
@@ -297,6 +358,7 @@ func TestAddCleanNearDuplicatePromotesPendingMemory(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
 	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "pending-1", 0.96, store.StatusPending, true
+	fm.memories["pending-1"] = store.Memory{ID: "pending-1", Content: "User lives in Porto.", Status: store.StatusPending}
 	req := httptest.NewRequest(http.MethodPost, "/v1/memories",
 		strings.NewReader(`{"content":"User lives in Porto.","trusted":true}`))
 	rec := httptest.NewRecorder()
@@ -316,6 +378,7 @@ func TestAddActiveNearDuplicateConfirmsExistingMemory(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
 	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "active-1", 0.96, store.StatusActive, true
+	fm.memories["active-1"] = store.Memory{ID: "active-1", Content: "User lives in Porto.", Status: store.StatusActive}
 	req := httptest.NewRequest(http.MethodPost, "/v1/memories",
 		strings.NewReader(`{"content":"User lives in Porto.","trusted":true}`))
 	rec := httptest.NewRecorder()
@@ -335,6 +398,7 @@ func TestAddReviewRequiredActiveNearDuplicateStaysPending(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
 	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "active-1", 0.96, store.StatusActive, true
+	fm.memories["active-1"] = store.Memory{ID: "active-1", Content: "User lives in Porto.", Status: store.StatusActive}
 	req := httptest.NewRequest(http.MethodPost, "/v1/memories",
 		strings.NewReader(`{"content":"User lives in Porto.","trusted":false}`))
 	rec := httptest.NewRecorder()
@@ -447,6 +511,7 @@ func TestAddDuplicateConfirmationFailureStillSucceeds(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
 	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "active-1", 0.96, store.StatusActive, true
+	fm.memories["active-1"] = store.Memory{ID: "active-1", Content: "User lives in Porto.", Status: store.StatusActive}
 	fm.confirmErr = errors.New("confirmation unavailable")
 	var log bytes.Buffer
 	a := manageAPI(fm)
@@ -489,12 +554,43 @@ func resolve(t *testing.T, fm *fakeManager, id, body string) *httptest.ResponseR
 func TestResolveConfirm(t *testing.T) {
 	t.Parallel()
 	fm := newFakeManager()
+	fm.memories["m1"] = store.Memory{ID: "m1", Status: store.StatusPending}
 	rec := resolve(t, fm, "m1", `{"action":"confirm"}`)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d", rec.Code)
 	}
 	if len(fm.promoted) != 1 || fm.promoted[0] != "m1" {
 		t.Fatalf("promoted = %v", fm.promoted)
+	}
+}
+
+func TestResolveSupersedingConfirmationUsesAtomicTransition(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.memories["candidate"] = store.Memory{ID: "candidate", Status: store.StatusPending, Supersedes: "old"}
+	rec := resolve(t, fm, "candidate", `{"action":"confirm"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	if len(fm.confirmedSuperseding) != 1 || fm.confirmedSuperseding[0] != "candidate" || len(fm.promoted) != 0 {
+		t.Fatalf("atomic confirms = %v, ordinary promotes = %v", fm.confirmedSuperseding, fm.promoted)
+	}
+}
+
+func TestResolveEditedSupersedingCorrectionUsesAtomicTransition(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.memories["candidate"] = store.Memory{
+		ID: "candidate", Type: store.TypeSemantic, Content: "User lives in Berlin.",
+		Status: store.StatusPending, Supersedes: "old", CreatedAt: time.Now(),
+	}
+	rec := resolve(t, fm, "candidate", `{"action":"confirm","content":"User lives in Lisbon."}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	if len(fm.correctedSuperseding) != 1 || fm.correctedSuperseding[0].Content != "User lives in Lisbon." ||
+		fm.correctedSuperseding[0].Actor != store.ActorUser || len(fm.inserted) != 0 {
+		t.Fatalf("corrections = %+v inserted = %+v", fm.correctedSuperseding, fm.inserted)
 	}
 }
 
@@ -560,5 +656,87 @@ func TestChainEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"superseded_by":"m2"`) {
 		t.Fatalf("body = %s", rec.Body)
+	}
+}
+
+// A trusted, clean correction of an active fact supersedes it at once:
+// inserted pending, then confirmed through the supersede transaction.
+func TestAddTrustedCorrectionSupersedesActiveFact(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "active-1", 0.96, store.StatusActive, true
+	fm.memories["active-1"] = store.Memory{ID: "active-1", Content: "User lives in Amsterdam.", Status: store.StatusActive}
+	req := httptest.NewRequest(http.MethodPost, "/v1/memories",
+		strings.NewReader(`{"content":"User lives in Berlin.","trusted":true}`))
+	rec := httptest.NewRecorder()
+	manageAPI(fm).handleAdd(rec, req)
+	if rec.Code != http.StatusOK || len(fm.inserted) != 1 {
+		t.Fatalf("status=%d inserted=%d body=%s", rec.Code, len(fm.inserted), rec.Body)
+	}
+	if fm.inserted[0].Supersedes != "active-1" || !fm.inserted[0].RequireReview {
+		t.Fatalf("inserted = %+v, want pending row superseding active-1", fm.inserted[0])
+	}
+	if len(fm.confirmedSuperseding) != 1 || len(fm.confirmed) != 0 {
+		t.Fatalf("confirmedSuperseding=%v confirmed=%v, want one supersede and no reinforce", fm.confirmedSuperseding, fm.confirmed)
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"active"`) {
+		t.Fatalf("result = %s, want active status", rec.Body)
+	}
+}
+
+func TestAddUntrustedCorrectionQueuesSupersede(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "active-1", 0.96, store.StatusActive, true
+	fm.memories["active-1"] = store.Memory{ID: "active-1", Content: "User lives in Amsterdam.", Status: store.StatusActive}
+	req := httptest.NewRequest(http.MethodPost, "/v1/memories",
+		strings.NewReader(`{"content":"User lives in Berlin.","trusted":false}`))
+	rec := httptest.NewRecorder()
+	manageAPI(fm).handleAdd(rec, req)
+	if rec.Code != http.StatusOK || len(fm.inserted) != 1 || fm.inserted[0].Supersedes != "active-1" {
+		t.Fatalf("status=%d inserted=%+v body=%s", rec.Code, fm.inserted, rec.Body)
+	}
+	if len(fm.confirmedSuperseding) != 0 || !strings.Contains(rec.Body.String(), `"status":"pending"`) {
+		t.Fatalf("confirmedSuperseding=%v body=%s, want pending for review", fm.confirmedSuperseding, rec.Body)
+	}
+}
+
+// Promoting a pending correction from the add path supersedes rather
+// than leaving two active facts.
+func TestAddTrustedMatchOfPendingCorrectionSupersedes(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.nearestID, fm.nearestSim, fm.nearestStatus, fm.nearestFound = "pending-1", 0.96, store.StatusPending, true
+	fm.memories["pending-1"] = store.Memory{ID: "pending-1", Content: "User lives in Berlin.", Status: store.StatusPending, Supersedes: "active-1"}
+	req := httptest.NewRequest(http.MethodPost, "/v1/memories",
+		strings.NewReader(`{"content":"User lives in Berlin.","trusted":true}`))
+	rec := httptest.NewRecorder()
+	manageAPI(fm).handleAdd(rec, req)
+	if rec.Code != http.StatusOK || len(fm.promoted) != 0 || len(fm.confirmedSuperseding) != 1 {
+		t.Fatalf("status=%d promoted=%v confirmedSuperseding=%v", rec.Code, fm.promoted, fm.confirmedSuperseding)
+	}
+}
+
+// Review point: the queue resolves every supersede comparison in one
+// store call, not one Get per row.
+func TestListLoadsSupersededContentsInOneCall(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.memories["old-1"] = store.Memory{ID: "old-1", Content: "User lives in Amsterdam."}
+	fm.memories["old-2"] = store.Memory{ID: "old-2", Content: "User has 2 cats."}
+	fm.listed = []store.Memory{
+		{ID: "p1", Content: "User lives in Berlin.", Status: store.StatusPending, Supersedes: "old-1"},
+		{ID: "p2", Content: "User has 3 cats.", Status: store.StatusPending, Supersedes: "old-2"},
+		{ID: "p3", Content: "User likes tea.", Status: store.StatusPending},
+	}
+	rec := httptest.NewRecorder()
+	manageAPI(fm).handleList(rec, httptest.NewRequest(http.MethodGet, "/v1/memories", nil))
+	if rec.Code != http.StatusOK || fm.contentsCalls != 1 {
+		t.Fatalf("status=%d contentsCalls=%d", rec.Code, fm.contentsCalls)
+	}
+	for _, want := range []string{`"content":"User lives in Amsterdam."`, `"content":"User has 2 cats."`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("list body missing %s: %s", want, rec.Body)
+		}
 	}
 }

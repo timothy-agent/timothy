@@ -34,6 +34,7 @@ func New(db *pgpool.Pool, log *slog.Logger) *Store {
 const memoryColumns = `id, type, content, entity_refs, ` +
 	`COALESCE(source_session::text, ''), COALESCE(source_seq, 0), actor, ` +
 	`created_at, last_confirmed_at, COALESCE(superseded_by::text, ''), ` +
+	`COALESCE(supersedes::text, ''), ` +
 	`status, COALESCE(confidence, 0), retrieval_hits`
 
 // Insert stores a new memory and returns its id. Status is derived,
@@ -48,11 +49,11 @@ func (s *Store) Insert(ctx context.Context, m Memory) (string, error) {
 	}
 	var id string
 	err = db.QueryRow(ctx, `INSERT INTO memories
-		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence)
-		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9)
+		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence, supersedes)
+		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9, NULLIF($10, '')::uuid)
 		RETURNING id`,
 		m.Type, m.Content, m.Embedding.String(), refs(m.EntityRefs),
-		m.SourceSession, m.SourceSeq, actor(m.Actor), status, m.Confidence).Scan(&id)
+		m.SourceSession, m.SourceSeq, actor(m.Actor), status, m.Confidence, m.Supersedes).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("insert memory: %w", err)
 	}
@@ -69,6 +70,142 @@ func initialStatus(m Memory) Status {
 // Promote moves a pending memory to active.
 func (s *Store) Promote(ctx context.Context, id string) error {
 	return s.transition(ctx, id, StatusPending, StatusActive, true)
+}
+
+// ConfirmSuperseding activates a pending correction and retires the
+// active row it replaces in one transaction. A stale correction leaves
+// both rows untouched.
+func (s *Store) ConfirmSuperseding(ctx context.Context, id string) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("confirm superseding memory: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("confirm superseding memory begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var oldID string
+	err = tx.QueryRow(ctx, `SELECT COALESCE(supersedes::text, '') FROM memories
+		WHERE id = $1 AND status = $2 FOR UPDATE`, id, StatusPending).Scan(&oldID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("confirm superseding %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("confirm superseding %s: %w", id, err)
+	}
+	if oldID == "" {
+		return fmt.Errorf("confirm superseding %s: %w", id, ErrNotFound)
+	}
+
+	if err := retireHead(ctx, tx, oldID, id); err != nil {
+		return fmt.Errorf("confirm superseding old memory %s: %w", oldID, err)
+	}
+
+	tag, err := tx.Exec(ctx, `UPDATE memories
+		SET status = $2, last_confirmed_at = now()
+		WHERE id = $1 AND status = $3 AND supersedes = $4`,
+		id, StatusActive, StatusPending, oldID)
+	if err != nil {
+		return fmt.Errorf("activate superseding memory %s: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("activate superseding memory %s: %w", id, ErrNotFound)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("confirm superseding memory commit: %w", err)
+	}
+	return nil
+}
+
+// CorrectSuperseding inserts an edited, user-confirmed replacement and
+// appends it after the pending correction in the supersede chain.
+func (s *Store) CorrectSuperseding(ctx context.Context, id string, m Memory) (string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", fmt.Errorf("correct superseding memory: %w", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("correct superseding memory begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	var oldID string
+	err = tx.QueryRow(ctx, `SELECT COALESCE(supersedes::text, '') FROM memories
+		WHERE id = $1 AND status = $2 FOR UPDATE`, id, StatusPending).Scan(&oldID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("correct superseding %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return "", fmt.Errorf("correct superseding %s: %w", id, err)
+	}
+	if oldID == "" {
+		return "", fmt.Errorf("correct superseding %s: %w", id, ErrNotFound)
+	}
+
+	if err := retireHead(ctx, tx, oldID, id); err != nil {
+		return "", fmt.Errorf("correct superseding old memory %s: %w", oldID, err)
+	}
+
+	var newID string
+	err = tx.QueryRow(ctx, `INSERT INTO memories
+		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence)
+		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9)
+		RETURNING id`,
+		m.Type, m.Content, m.Embedding.String(), refs(m.EntityRefs),
+		m.SourceSession, m.SourceSeq, actor(m.Actor), StatusActive, m.Confidence).Scan(&newID)
+	if err != nil {
+		return "", fmt.Errorf("insert corrected memory: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx, `UPDATE memories
+		SET superseded_by = $2, status = $3
+		WHERE id = $1 AND status = $4 AND supersedes = $5`,
+		id, newID, StatusArchived, StatusPending, oldID)
+	if err != nil {
+		return "", fmt.Errorf("archive corrected proposal %s: %w", id, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return "", fmt.Errorf("archive corrected proposal %s: %w", id, ErrNotFound)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("correct superseding memory commit: %w", err)
+	}
+	return newID, nil
+}
+
+// retireHead archives the live end of oldID's supersede chain in favor
+// of newID. When an earlier correction already replaced oldID, the chain
+// is followed to the row that replaced it; when nothing in the chain is
+// still active, there is nothing to retire and the correction simply
+// activates.
+func retireHead(ctx context.Context, tx pgx.Tx, oldID, newID string) error {
+	seen := map[string]bool{}
+	for id := oldID; id != "" && !seen[id]; {
+		seen[id] = true
+		var status Status
+		var next string
+		err := tx.QueryRow(ctx, `SELECT status, COALESCE(superseded_by::text, '')
+			FROM memories WHERE id = $1 FOR UPDATE`, id).Scan(&status, &next)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if status == StatusActive {
+			_, err := tx.Exec(ctx, `UPDATE memories SET superseded_by = $2, status = $3
+				WHERE id = $1 AND status = $4`, id, newID, StatusArchived, StatusActive)
+			return err
+		}
+		if next == newID {
+			return nil
+		}
+		id = next
+	}
+	return nil
 }
 
 // Reject marks a pending memory rejected; it will never be retrieved.
@@ -111,10 +248,55 @@ func (s *Store) Get(ctx context.Context, id string) (Memory, error) {
 	}
 	row := db.QueryRow(ctx, `SELECT `+memoryColumns+` FROM memories WHERE id = $1`, id)
 	m, err := scanMemory(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Memory{}, fmt.Errorf("get memory %s: %w", id, ErrNotFound)
+	}
 	if err != nil {
 		return Memory{}, fmt.Errorf("get memory %s: %w", id, err)
 	}
 	return m, nil
+}
+
+// Contents returns the content of each id that exists, keyed by id, in
+// one query (the review queue's supersede comparison).
+func (s *Store) Contents(ctx context.Context, ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("memory contents: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT id::text, content FROM memories WHERE id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("memory contents: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, content string
+		if err := rows.Scan(&id, &content); err != nil {
+			return nil, fmt.Errorf("memory contents: %w", err)
+		}
+		out[id] = content
+	}
+	return out, rows.Err()
+}
+
+// HasPendingCorrection reports whether a pending row already proposes
+// to supersede id.
+func (s *Store) HasPendingCorrection(ctx context.Context, id string) (bool, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return false, fmt.Errorf("pending correction: %w", err)
+	}
+	var open bool
+	err = db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM memories WHERE supersedes = $1 AND status = $2)`,
+		id, StatusPending).Scan(&open)
+	if err != nil {
+		return false, fmt.Errorf("pending correction: %w", err)
+	}
+	return open, nil
 }
 
 // ListByStatus returns memories in a lifecycle stage, optionally
@@ -241,6 +423,28 @@ func (s *Store) NearestActive(ctx context.Context, embedding Vector) (id string,
 		return "", 0, "", false, fmt.Errorf("nearest active: %w", err)
 	}
 	return id, similarity, status, true, nil
+}
+
+// NearestActiveOnly returns the closest active memory. Extraction uses
+// this before the broader pending/rejected lookup so a pending proposal
+// cannot hide a correction to active knowledge.
+func (s *Store) NearestActiveOnly(ctx context.Context, embedding Vector) (id string, similarity float64, ok bool, err error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", 0, false, fmt.Errorf("nearest active memory: %w", err)
+	}
+	err = db.QueryRow(ctx, `SELECT id, 1 - (embedding <=> $1::vector)
+		FROM memories
+		WHERE status = $2 AND embedding IS NOT NULL
+		ORDER BY embedding <=> $1::vector
+		LIMIT 1`, embedding.String(), StatusActive).Scan(&id, &similarity)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("nearest active memory: %w", err)
+	}
+	return id, similarity, true, nil
 }
 
 // NearDupPairs returns every pair of active embedded memories of the
@@ -480,7 +684,7 @@ func scanMemory(r rowScanner) (Memory, error) {
 	var m Memory
 	err := r.Scan(&m.ID, &m.Type, &m.Content, &m.EntityRefs, &m.SourceSession,
 		&m.SourceSeq, &m.Actor, &m.CreatedAt, &m.LastConfirmedAt,
-		&m.SupersededBy, &m.Status, &m.Confidence, &m.RetrievalHits)
+		&m.SupersededBy, &m.Supersedes, &m.Status, &m.Confidence, &m.RetrievalHits)
 	return m, err
 }
 

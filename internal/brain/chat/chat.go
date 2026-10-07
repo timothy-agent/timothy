@@ -106,14 +106,21 @@ type Compactor interface {
 // goroutine, the wrapper owns timeout and error logging, and no
 // failure may touch the user-facing turn. route is "" for the normal
 // side-call route, or the sensitive route pin when the turn executed a
-// sensitive tool (see Service.sensitive).
-type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string, route string)
+// sensitive tool (see Service.sensitive). recalled carries the memory
+// contents injected into the turn, so their echoes are not re-stored.
+type MemoryExtract func(ctx context.Context, sessionID string, seq int64, text string, route string, recalled []string)
 
-// MemoryRetrieve returns the rendered long-term memory block for a
-// user message, or "" for nothing relevant. The wrapper owns timeout
-// and error handling; a failure returns "": a turn without memories
-// beats no turn.
-type MemoryRetrieve func(ctx context.Context, sessionID, query string) string
+// MemoryRecall carries both the rendered prompt block and its source
+// contents so extraction can fence assistant echoes of injected facts.
+type MemoryRecall struct {
+	Block    string
+	Contents []string
+}
+
+// MemoryRetrieve returns the rendered long-term memory block and its
+// source contents, or an empty value for nothing relevant. The wrapper
+// owns timeout and error handling; a turn without memories beats no turn.
+type MemoryRetrieve func(ctx context.Context, sessionID, query string) MemoryRecall
 
 // AttachmentStore is the slice of *attachments.Store chat needs: Get
 // validates a ref exists (400 before any event append), Open resolves
@@ -1523,9 +1530,11 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	if skillBody != "" {
 		system += "\n\n# Skill: " + skillHint + "\n\n" + skillBody
 	}
+	var memoryContents []string
 	if s.recall != nil && profile.Memory {
-		if block := s.recall(turnCtx, sessionID, userText); block != "" {
-			system += "\n\n" + block
+		if recall := s.recall(turnCtx, sessionID, userText); recall.Block != "" {
+			system += "\n\n" + recall.Block
+			memoryContents = append([]string(nil), recall.Contents...)
 		}
 	}
 
@@ -1596,7 +1605,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	// defer-equivalent (drainAndPersist, on every exit path) owns
 	// freeing it via turnDone.
 	out := make(chan stream.StreamEvent)
-	go s.relay(reqCtx, sessionID, userText, route, profile, needsTitle, sessionSensitive, start, bc, upstream, out)
+	go s.relay(reqCtx, sessionID, userText, route, profile, needsTitle, sessionSensitive, memoryContents, start, bc, upstream, out)
 	return sessionID, out, nil
 }
 
@@ -1625,7 +1634,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 // the still-live upstream to completion so the turn finishes and
 // persists normally, with every event still reaching bc for any /live
 // subscriber.
-func (s *Service) relay(reqCtx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, start time.Time, bc *turnBroadcaster, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
+func (s *Service) relay(reqCtx context.Context, sessionID, userText, route string, profile agents.Agent, needsTitle, sessionSensitive bool, memoryContents []string, start time.Time, bc *turnBroadcaster, upstream <-chan stream.StreamEvent, out chan<- stream.StreamEvent) {
 	var text, reasoning strings.Builder
 	var meta *stream.Meta
 	var usage *stream.Usage
@@ -1782,7 +1791,7 @@ func (s *Service) relay(reqCtx context.Context, sessionID, userText, route strin
 			notePermission(ev)
 			bc.publish(ev)
 		}
-		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool, mediaRefs)
+		s.persistTurn(sessionID, userText, route, profile, needsTitle, text.String(), segmentStarts, reasoning.String(), meta, usage, sawDone, flushed, turnSensitive || sessionSensitive, failure, ranTool, mediaRefs, memoryContents)
 		// Terminal persist is now durable: free the broadcaster (closes
 		// every live /live subscriber) and push the session signal, in
 		// that order: mirrors missions.Store's own "publish only after
@@ -1852,7 +1861,7 @@ func stampDuration(base *stream.Meta, start time.Time) *stream.Meta {
 	return &m
 }
 
-func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text string, segmentStarts []int, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool, mediaRefs []session.MediaRef) {
+func (s *Service) persistTurn(sessionID, userText, route string, profile agents.Agent, needsTitle bool, text string, segmentStarts []int, reasoning string, meta *stream.Meta, usage *stream.Usage, sawDone bool, flushed int, sensitive bool, failure *session.TurnFailed, ranTool bool, mediaRefs []session.MediaRef, memoryContents []string) {
 	if !sawDone {
 		// Abnormal end: keep the partial durable; the projection
 		// splices it into the next request. Skip when the periodic
@@ -2012,7 +2021,7 @@ func (s *Service) persistTurn(sessionID, userText, route string, profile agents.
 		} else if text != "" {
 			mtext += "\n\nassistant: " + text
 		}
-		go s.memory(context.Background(), sessionID, turnSeq, mtext, sensitiveRoute)
+		go s.memory(context.Background(), sessionID, turnSeq, mtext, sensitiveRoute, memoryContents)
 	}
 
 	if s.compactor != nil {

@@ -31,9 +31,12 @@ type Gateway interface {
 // Storer is the slice of the memory store extraction needs.
 type Storer interface {
 	Insert(ctx context.Context, m store.Memory) (string, error)
+	Get(ctx context.Context, id string) (store.Memory, error)
+	HasPendingCorrection(ctx context.Context, id string) (bool, error)
 	Promote(ctx context.Context, id string) error
 	Confirm(ctx context.Context, id string) error
 	UpsertEntity(ctx context.Context, typ, name string) (string, error)
+	NearestActiveOnly(ctx context.Context, embedding store.Vector) (id string, similarity float64, ok bool, err error)
 	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, status store.Status, ok bool, err error)
 }
 
@@ -50,12 +53,9 @@ const (
 	// the strict JSON contract more often than they meet it.
 	sideRoute = "summarize"
 
-	// NearDupSimilarity marks a candidate as restating known
-	// knowledge; exactDupSimilarity (or byte-equal content) drops it
-	// outright. Near-dups still insert - the consolidation job merges
-	// them by the same similarity measure.
-	NearDupSimilarity  = 0.95
-	exactDupSimilarity = 0.99
+	// NearDupSimilarity marks a candidate as a possible correction when
+	// its content differs from the closest known memory.
+	NearDupSimilarity = 0.95
 
 	// autoPromoteConfidence is the floor for episodic observations to
 	// skip the confirmation queue.
@@ -109,6 +109,11 @@ type Request struct {
 	// otherwise re-extracts as if it were a discovered fact about the
 	// user.
 	Deny []string `json:"deny,omitempty"`
+	// Recalled lists the memory contents injected into the source turn.
+	// A fact restating one is the assistant echoing it back, so it is
+	// neither stored nor counted as a confirmation; a correction of one
+	// still goes through.
+	Recalled []string `json:"recalled,omitempty"`
 }
 
 // Extractor runs the pipeline.
@@ -151,7 +156,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 
 	deny := denyText(req)
 	var ids []string
-	var batchEmbeddings []store.Vector // accepted so far, this run only
+	var batch []batchMemory // accepted so far, this run only
 	for i, f := range facts {
 		if f.ChangesBehavior != nil && !*f.ChangesBehavior {
 			// The model itself judged this fact wouldn't change future
@@ -165,6 +170,10 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			// bookkeeping the missions table already records, never a
 			// memory. Code enforces what the prompt asks for (D-011).
 			e.log.Info("memory dropped as source-header echo", "session_id", req.SessionID)
+			continue
+		}
+		if echoesRecalled(f.Content, req.Recalled) {
+			e.log.Info("memory dropped as echo of a recalled memory", "session_id", req.SessionID)
 			continue
 		}
 		if f.Type != string(store.TypeEpisodic) && boundedWindow(f.Content) {
@@ -182,44 +191,72 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			// fact twice (e.g. stated then restated in the same turn).
 			// Compare against facts already accepted earlier in this
 			// same run, before either the DB or NearestActive sees them.
-			if nearDupVector(emb, batchEmbeddings) {
+			if nearDupVector(emb, f.Content, batch) {
 				e.log.Info("memory dropped as intra-batch duplicate", "session_id", req.SessionID)
 				continue
 			}
-			dupID, sim, status, found, err := e.store.NearestActive(ctx, emb)
+		}
+
+		supersedes := ""
+		if len(emb) > 0 {
+			activeID, sim, found, err := e.store.NearestActiveOnly(ctx, emb)
 			if err != nil {
-				return ids, fmt.Errorf("extract: dedup: %w", err)
+				return ids, fmt.Errorf("extract: active dedup: %w", err)
 			}
 			if found && sim >= NearDupSimilarity {
-				if status == store.StatusRejected {
-					// The user already rejected this fact once; rejection
-					// is a durable teaching signal, so the candidate is
-					// dropped instead of re-proposed forever.
-					e.log.Info("memory dropped as near-duplicate of rejected fact",
-						"of", dupID, "similarity", sim, "session_id", req.SessionID)
+				active, err := e.store.Get(ctx, activeID)
+				if err != nil {
+					return ids, fmt.Errorf("extract: load duplicate: %w", err)
+				}
+				if !IsCorrection(f.Content, active.Content) {
+					// A restatement reinforces the existing row instead of
+					// inserting: repetition is a confidence signal, not new
+					// knowledge.
+					if err := e.store.Confirm(ctx, activeID); err != nil {
+						e.log.Warn("confirm on duplicate failed; fact still dropped", "of", activeID, "error", err)
+					}
+					e.log.Info("memory duplicate reinforced existing row",
+						"of", activeID, "similarity", sim, "session_id", req.SessionID)
 					continue
 				}
-				if status == store.StatusPending {
-					// A pending row already carries this fact awaiting
-					// confirmation; Confirm's UPDATE is active-only and
-					// would silently no-op here, so just skip the insert.
-					e.log.Info("memory duplicate matched pending row; skipped",
-						"of", dupID, "similarity", sim, "session_id", req.SessionID)
+				// One open correction per fact: later turns repeating the
+				// change must not stack more cards on the queue.
+				open, err := e.store.HasPendingCorrection(ctx, activeID)
+				if err != nil {
+					return ids, fmt.Errorf("extract: pending correction: %w", err)
+				}
+				if open {
+					e.log.Info("memory correction already pending; skipped",
+						"of", activeID, "session_id", req.SessionID)
 					continue
 				}
-				// Exact and near duplicates both reinforce the existing
-				// row instead of inserting: repetition is a confidence
-				// signal, not new knowledge. Inserting near-dups "for
-				// consolidation to merge later" flooded the confirmation
-				// queue with the same fact many times over.
-				if err := e.store.Confirm(ctx, dupID); err != nil {
-					e.log.Warn("confirm on duplicate failed; fact still dropped", "of", dupID, "error", err)
+				supersedes = activeID
+			} else {
+				dupID, sim, status, found, err := e.store.NearestActive(ctx, emb)
+				if err != nil {
+					return ids, fmt.Errorf("extract: dedup: %w", err)
 				}
-				e.log.Info("memory duplicate reinforced existing row",
-					"of", dupID, "similarity", sim, "session_id", req.SessionID)
-				continue
+				if found && sim >= NearDupSimilarity && status != store.StatusActive {
+					dup, err := e.store.Get(ctx, dupID)
+					if err != nil {
+						return ids, fmt.Errorf("extract: load duplicate: %w", err)
+					}
+					// A different fact that only embeds close to an
+					// unconfirmed or rejected one still reaches review.
+					if !IsCorrection(f.Content, dup.Content) {
+						if status == store.StatusRejected {
+							// Rejection is a durable teaching signal: a
+							// reworded re-proposal is dropped, never re-queued.
+							e.log.Info("memory dropped as near-duplicate of rejected fact",
+								"of", dupID, "similarity", sim, "session_id", req.SessionID)
+						} else {
+							e.log.Info("memory duplicate matched pending row; skipped",
+								"of", dupID, "similarity", sim, "session_id", req.SessionID)
+						}
+						continue
+					}
+				}
 			}
-			batchEmbeddings = append(batchEmbeddings, emb)
 		}
 
 		refs := make([]string, 0, len(f.Entities))
@@ -234,14 +271,17 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 		id, err := e.store.Insert(ctx, store.Memory{
 			Type: store.MemoryType(f.Type), Content: f.Content, Embedding: emb,
 			EntityRefs: refs, SourceSession: req.SessionID, SourceSeq: req.SourceSeq,
-			Confidence: f.Confidence,
+			Confidence: f.Confidence, Supersedes: supersedes,
 		})
 		if err != nil {
 			return ids, fmt.Errorf("extract: insert: %w", err)
 		}
 		ids = append(ids, id)
+		if len(emb) > 0 {
+			batch = append(batch, batchMemory{content: f.Content, embedding: emb})
+		}
 
-		if AutoPromote(f) {
+		if AutoPromote(f) && supersedes == "" {
 			if err := e.store.Promote(ctx, id); err != nil {
 				e.log.Warn("auto-promote failed; memory stays pending", "id", id, "error", err)
 			}
@@ -469,13 +509,76 @@ func denyText(req Request) []string {
 	return deny
 }
 
-// nearDupVector reports whether emb is a near-duplicate (by the same
-// NearDupSimilarity threshold as NearestActive) of any vector already
-// accepted this run. Batch sizes are small (maxFacts), so a linear
-// scan needs no index.
-func nearDupVector(emb store.Vector, accepted []store.Vector) bool {
+type batchMemory struct {
+	content   string
+	embedding store.Vector
+}
+
+// nearDupVector suppresses restatements within one model response, but
+// keeps an explicit change in negation polarity for user review. One
+// response does not swap its own facts, so a word swap here is a
+// paraphrase, not a correction.
+func nearDupVector(emb store.Vector, content string, accepted []batchMemory) bool {
 	for _, other := range accepted {
-		if cosineSimilarity(emb, other) >= NearDupSimilarity {
+		if cosineSimilarity(emb, other.embedding) >= NearDupSimilarity && !oppositeNegation(content, other.content) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsCorrection reports whether next changes the fact prev states rather
+// than restating it: a negation flip, or a meaningful word swapped for
+// another (a city, number or name). Rewording that only adds or drops
+// words, punctuation or stopwords is a restatement.
+func IsCorrection(next, prev string) bool {
+	if oppositeNegation(next, prev) {
+		return true
+	}
+	a, b := meaningfulWords(next), meaningfulWords(prev)
+	return hasWordNotIn(a, b) && hasWordNotIn(b, a)
+}
+
+func meaningfulWords(content string) map[string]bool {
+	words := map[string]bool{}
+	for _, w := range strings.Fields(strings.ToLower(content)) {
+		w = strings.TrimSuffix(strings.Trim(w, ".,;:'\"()!?"), "'s")
+		if meaningfulDenyWord(w) {
+			words[w] = true
+		}
+	}
+	return words
+}
+
+func hasWordNotIn(a, b map[string]bool) bool {
+	for w := range a {
+		if !b[w] {
+			return true
+		}
+	}
+	return false
+}
+
+// echoesRecalled reports whether content restates a memory injected
+// into the source turn without correcting it.
+func echoesRecalled(content string, recalled []string) bool {
+	for _, r := range recalled {
+		if !IsCorrection(content, r) && echoesDeny(content, []string{r}) {
+			return true
+		}
+	}
+	return false
+}
+
+func oppositeNegation(a, b string) bool {
+	return hasNegation(a) != hasNegation(b)
+}
+
+func hasNegation(content string) bool {
+	for _, word := range strings.Fields(strings.ToLower(content)) {
+		switch strings.Trim(word, ".,;:'\"()!?") {
+		case "not", "no", "never", "isn't", "aren't", "wasn't", "weren't",
+			"doesn't", "don't", "didn't", "can't", "cannot", "won't", "without":
 			return true
 		}
 	}
@@ -499,7 +602,7 @@ func cosineSimilarity(a, b store.Vector) float64 {
 }
 
 // echoesDeny reports whether content substantially restates any deny
-// line: most of the deny line's words (>70%) reappear in the fact.
+// line: most of the deny line's content words (>70%) reappear in the fact.
 // Word-overlap rather than substring, because extraction paraphrases
 // ("The user mandated a mission goal to create...") instead of quoting.
 func echoesDeny(content string, deny []string) bool {
@@ -508,16 +611,25 @@ func echoesDeny(content string, deny []string) bool {
 	}
 	words := map[string]bool{}
 	for _, w := range strings.Fields(strings.ToLower(content)) {
-		words[strings.Trim(w, ".,;:'\"()")] = true
+		word := strings.Trim(w, ".,;:'\"()")
+		if meaningfulDenyWord(word) {
+			words[word] = true
+		}
 	}
 	for _, d := range deny {
-		fields := strings.Fields(d)
+		var fields []string
+		for _, word := range strings.Fields(strings.ToLower(d)) {
+			word = strings.Trim(word, ".,;:'\"()")
+			if meaningfulDenyWord(word) {
+				fields = append(fields, word)
+			}
+		}
 		if len(fields) == 0 {
 			continue
 		}
 		hits := 0
 		for _, w := range fields {
-			if words[strings.Trim(w, ".,;:'\"()")] {
+			if words[w] {
 				hits++
 			}
 		}
@@ -526,4 +638,19 @@ func echoesDeny(content string, deny []string) bool {
 		}
 	}
 	return false
+}
+
+func meaningfulDenyWord(word string) bool {
+	switch word {
+	case "a", "an", "and", "are", "as", "at", "be", "been", "being",
+		"but", "by", "did", "do", "does", "for", "from", "had", "has",
+		"have", "he", "her", "hers", "him", "his", "i", "if", "in",
+		"into", "is", "it", "its", "me", "my", "of", "on", "or", "our",
+		"ours", "she", "that", "the", "their", "theirs", "them", "they",
+		"this", "those", "to", "us", "was", "we", "were", "what", "when",
+		"where", "which", "who", "with", "you", "your", "yours":
+		return false
+	default:
+		return word != ""
+	}
 }

@@ -15,10 +15,14 @@ import (
 // graph endpoints.
 type Manager interface {
 	ListByStatus(ctx context.Context, status store.Status, types ...store.MemoryType) ([]store.Memory, error)
+	Get(ctx context.Context, id string) (store.Memory, error)
+	Contents(ctx context.Context, ids []string) (map[string]string, error)
 	Insert(ctx context.Context, m store.Memory) (string, error)
 	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, status store.Status, ok bool, err error)
 	Confirm(ctx context.Context, id string) error
 	Promote(ctx context.Context, id string) error
+	ConfirmSuperseding(ctx context.Context, id string) error
+	CorrectSuperseding(ctx context.Context, id string, m store.Memory) (string, error)
 	Reject(ctx context.Context, id string) error
 	Supersede(ctx context.Context, oldID, newID string) error
 	Chain(ctx context.Context, id string) ([]store.Memory, error)
@@ -28,15 +32,21 @@ type Manager interface {
 }
 
 type memoryJSON struct {
-	ID            string  `json:"id"`
-	Type          string  `json:"type"`
-	Content       string  `json:"content"`
-	Status        string  `json:"status"`
-	Confidence    float32 `json:"confidence"`
-	Actor         string  `json:"actor"`
-	SourceSession string  `json:"source_session,omitempty"`
-	CreatedAt     string  `json:"created_at"`
-	SupersededBy  string  `json:"superseded_by,omitempty"`
+	ID            string          `json:"id"`
+	Type          string          `json:"type"`
+	Content       string          `json:"content"`
+	Status        string          `json:"status"`
+	Confidence    float32         `json:"confidence"`
+	Actor         string          `json:"actor"`
+	SourceSession string          `json:"source_session,omitempty"`
+	CreatedAt     string          `json:"created_at"`
+	SupersededBy  string          `json:"superseded_by,omitempty"`
+	Supersedes    *supersedesJSON `json:"supersedes,omitempty"`
+}
+
+type supersedesJSON struct {
+	ID      string `json:"id"`
+	Content string `json:"content"`
 }
 
 func toJSON(m store.Memory) memoryJSON {
@@ -66,9 +76,23 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
 	}
+	var previousIDs []string
+	for _, m := range memories {
+		if m.Supersedes != "" {
+			previousIDs = append(previousIDs, m.Supersedes)
+		}
+	}
+	previous, err := a.store.Contents(r.Context(), previousIDs)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "list_failed", err.Error())
+		return
+	}
 	out := make([]memoryJSON, len(memories))
 	for i, m := range memories {
 		out[i] = toJSON(m)
+		if content, ok := previous[m.Supersedes]; ok {
+			out[i].Supersedes = &supersedesJSON{ID: m.Supersedes, Content: content}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"memories": out})
@@ -131,7 +155,7 @@ func (a *API) handleAdd(w http.ResponseWriter, r *http.Request) {
 				return
 			case store.StatusPending:
 				if req.Trusted && !m.RequireReview {
-					if err := a.store.Promote(r.Context(), dupID); err != nil {
+					if err := a.activate(r.Context(), dupID); err != nil {
 						jsonError(w, http.StatusInternalServerError, "promote_failed", err.Error())
 						return
 					}
@@ -143,6 +167,17 @@ func (a *API) handleAdd(w http.ResponseWriter, r *http.Request) {
 				writeAddResult(w, dupID, string(store.StatusPending))
 				return
 			case store.StatusActive:
+				prev, err := a.store.Get(r.Context(), dupID)
+				if err != nil {
+					jsonError(w, http.StatusInternalServerError, "dedup_failed", err.Error())
+					return
+				}
+				// A correction supersedes the fact instead of reinforcing
+				// it, matching extraction.
+				if extract.IsCorrection(req.Content, prev.Content) {
+					m.Supersedes = dupID
+					break
+				}
 				if m.RequireReview {
 					break
 				}
@@ -157,9 +192,23 @@ func (a *API) handleAdd(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A clean correction inserts pending and then supersedes atomically,
+	// so the old fact never stays active beside its replacement.
+	activateCorrection := m.Supersedes != "" && !m.RequireReview
+	if activateCorrection {
+		m.RequireReview = true
+	}
 	id, err := a.store.Insert(r.Context(), m)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "insert_failed", err.Error())
+		return
+	}
+	if activateCorrection {
+		if err := a.store.ConfirmSuperseding(r.Context(), id); err != nil {
+			jsonError(w, http.StatusInternalServerError, "supersede_failed", err.Error())
+			return
+		}
+		writeAddResult(w, id, string(store.StatusActive))
 		return
 	}
 	status := store.StatusActive
@@ -167,6 +216,19 @@ func (a *API) handleAdd(w http.ResponseWriter, r *http.Request) {
 		status = store.StatusPending
 	}
 	writeAddResult(w, id, string(status))
+}
+
+// activate confirms a pending memory: a correction supersedes the fact
+// it replaces, anything else is promoted.
+func (a *API) activate(ctx context.Context, id string) error {
+	m, err := a.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if m.Supersedes != "" {
+		return a.store.ConfirmSuperseding(ctx, id)
+	}
+	return a.store.Promote(ctx, id)
 }
 
 func writeAddResult(w http.ResponseWriter, id, status string) {
@@ -194,7 +256,7 @@ func (a *API) handleResolve(w http.ResponseWriter, r *http.Request) {
 		if edited := strings.TrimSpace(req.Content); edited != "" {
 			err = a.confirmEdited(r.Context(), id, edited)
 		} else {
-			err = a.store.Promote(r.Context(), id)
+			err = a.activate(r.Context(), id)
 		}
 	case "reject":
 		err = a.store.Reject(r.Context(), id)
@@ -230,6 +292,10 @@ func (a *API) confirmEdited(ctx context.Context, id, content string) error {
 		a.log.Warn("edit embedding failed; stored without vector", "error", err)
 	} else {
 		m.Embedding = store.Vector(vecs[0])
+	}
+	if orig.Supersedes != "" {
+		_, err = a.store.CorrectSuperseding(ctx, id, m)
+		return err
 	}
 	newID, err := a.store.Insert(ctx, m)
 	if err != nil {

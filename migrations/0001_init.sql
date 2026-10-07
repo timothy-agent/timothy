@@ -293,6 +293,7 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at        timestamptz NOT NULL DEFAULT now(),
     last_confirmed_at timestamptz NOT NULL DEFAULT now(),
     superseded_by     uuid REFERENCES memories (id),
+    supersedes        uuid REFERENCES memories (id),
     status            text NOT NULL CHECK (status IN ('pending', 'active', 'rejected', 'archived')),
     confidence        real,
     tsv               tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED,

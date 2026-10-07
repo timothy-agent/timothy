@@ -37,9 +37,10 @@ func New(baseURL string) *Client {
 // can pick a source-appropriate extraction contract; empty means chat.
 // deny lists system-owned values (e.g. the operator's timezone) a
 // proposed fact must not restate; nil when there is nothing to deny.
-func (c *Client) Extract(ctx context.Context, sessionID string, sourceSeq int64, text, route, source string, deny []string) ([]string, error) {
+func (c *Client) Extract(ctx context.Context, sessionID string, sourceSeq int64, text, route, source string, deny, recalled []string) ([]string, error) {
 	body, err := json.Marshal(map[string]any{
-		"session_id": sessionID, "source_seq": sourceSeq, "text": text, "route": route, "source": source, "deny": deny,
+		"session_id": sessionID, "source_seq": sourceSeq, "text": text, "route": route, "source": source,
+		"deny": deny, "recalled": recalled,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("memclient: marshal: %w", err)

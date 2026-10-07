@@ -156,7 +156,7 @@ func TestExtractRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	ids, err := New(srv.URL).Extract(t.Context(), "s1", 42, "turn text", "", "chat", nil)
+	ids, err := New(srv.URL).Extract(t.Context(), "s1", 42, "turn text", "", "chat", nil, nil)
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
@@ -180,12 +180,36 @@ func TestExtractSendsDeny(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "", "chat", []string{"Europe/Amsterdam"}); err != nil {
+	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "", "chat", []string{"Europe/Amsterdam"}, nil); err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
 	deny, _ := got["deny"].([]any)
 	if len(deny) != 1 || deny[0] != "Europe/Amsterdam" {
 		t.Fatalf("request body deny = %v, want [Europe/Amsterdam]", got["deny"])
+	}
+}
+
+// TestExtractSendsRecalled pins the recalled pass-through: the turn's
+// injected memories reach memoryd separately from deny, so echoes are
+// fenced while corrections of them still go through.
+func TestExtractSendsRecalled(t *testing.T) {
+	t.Parallel()
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_ = json.NewEncoder(w).Encode(map[string]any{"memory_ids": []string{}})
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "", "chat", nil, []string{"User lives in Lisbon."}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	recalled, _ := got["recalled"].([]any)
+	if len(recalled) != 1 || recalled[0] != "User lives in Lisbon." {
+		t.Fatalf("request body recalled = %v, want [User lives in Lisbon.]", got["recalled"])
+	}
+	if deny, _ := got["deny"].([]any); len(deny) != 0 {
+		t.Fatalf("request body deny = %v, want empty", got["deny"])
 	}
 }
 
@@ -201,7 +225,7 @@ func TestExtractSendsRouteOverride(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "local", "chat", nil); err != nil {
+	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "local", "chat", nil, nil); err != nil {
 		t.Fatalf("Extract: %v", err)
 	}
 	if got["route"] != "local" {
@@ -216,7 +240,7 @@ func TestExtractSurfacesHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "", "", nil); err == nil {
+	if _, err := New(srv.URL).Extract(t.Context(), "s1", 1, "x", "", "", nil, nil); err == nil {
 		t.Fatal("Extract succeeded on 502, want error")
 	}
 }

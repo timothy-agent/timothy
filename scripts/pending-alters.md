@@ -4,6 +4,18 @@ Additive schema changes not yet applied to any live database. Safe to
 run before deploy; each entry stays here until confirmed applied on
 every live instance, then it's removed.
 
+## memories.supersedes (#959)
+
+```sql
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS supersedes uuid REFERENCES memories (id);
+```
+
+Points a pending correction at the active memory it would replace, so
+the review queue can show both texts and confirming it supersedes the old
+row. Edited in place in `0001_init.sql`, so existing databases need this
+ALTER before the first release that includes #959 starts; memory reads
+fail without it.
+
 ## missions.toolchains (#991)
 
 ```sql

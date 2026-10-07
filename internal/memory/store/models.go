@@ -49,6 +49,7 @@ type Memory struct {
 	RequireReview   bool
 	CreatedAt       time.Time
 	LastConfirmedAt time.Time
+	Supersedes      string
 	SupersededBy    string
 	Status          Status
 	Confidence      float32

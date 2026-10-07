@@ -755,14 +755,14 @@ func main() {
 		}
 		return nil
 	}
-	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) {
+	svc.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string, injectedMemories []string) {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {
 			return
 		}
 		deny := extractDeny(ctx)
 		ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
 		defer cancel()
-		if _, err := mc.Extract(ectx, sessionID, seq, text, route, "chat", deny); err != nil {
+		if _, err := mc.Extract(ectx, sessionID, seq, text, route, "chat", deny, injectedMemories); err != nil {
 			app.Log.Warn("turn memory extraction failed", "session_id", sessionID, "error", err)
 		}
 	})
@@ -779,7 +779,7 @@ func main() {
 			deny := extractDeny(ctx)
 			ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), extractBudget)
 			defer cancel()
-			if _, err := mc.Extract(ectx, sessionID, seq, text, route, "mission", deny); err != nil {
+			if _, err := mc.Extract(ectx, sessionID, seq, text, route, "mission", deny, nil); err != nil {
 				app.Log.Warn("mission memory extraction failed", "session_id", sessionID, "error", err)
 			}
 		})
@@ -793,22 +793,26 @@ func main() {
 		// never starve the summarize that follows it.
 		ectx, cancel := context.WithTimeout(ctx, preCompactExtractBudget)
 		defer cancel()
-		ids, err := mc.Extract(ectx, sessionID, seq, text, route, "compaction", deny)
+		ids, err := mc.Extract(ectx, sessionID, seq, text, route, "compaction", deny, nil)
 		if err != nil {
 			app.Log.Warn("pre-compaction extraction failed", "session_id", sessionID, "error", err)
 			return nil
 		}
 		return ids
 	})
-	svc.SetMemoryRetrieve(func(ctx context.Context, sessionID, query string) string {
+	svc.SetMemoryRetrieve(func(ctx context.Context, sessionID, query string) chat.MemoryRecall {
 		rctx, cancel := context.WithTimeout(ctx, retrieveBudget)
 		defer cancel()
 		memories, err := mc.Retrieve(rctx, sessionID, query, 0)
 		if err != nil {
 			app.Log.Warn("memory retrieval failed; turn continues without", "session_id", sessionID, "error", err)
-			return ""
+			return chat.MemoryRecall{}
 		}
-		return memclient.RenderBlock(memories)
+		contents := make([]string, len(memories))
+		for i, memory := range memories {
+			contents[i] = memory.Content
+		}
+		return chat.MemoryRecall{Block: memclient.RenderBlock(memories), Contents: contents}
 	})
 
 	attachmentStore := buildAttachments(app.DB, app.Log)

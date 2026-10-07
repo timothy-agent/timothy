@@ -66,7 +66,27 @@ function QueueCard({
           </Link>
         )}
       </div>
-      {editing ? (
+      {memory.supersedes ? (
+        <div className="grid gap-3 sm:grid-cols-2" data-testid="supersede-comparison">
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Existing fact</p>
+            <p className="text-sm leading-relaxed">{memory.supersedes.content}</p>
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs font-medium text-muted-foreground">Proposed correction</p>
+            {editing ? (
+              <Textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                rows={3}
+                data-testid="edit-content"
+              />
+            ) : (
+              <p className="text-sm leading-relaxed">{memory.content}</p>
+            )}
+          </div>
+        </div>
+      ) : editing ? (
         <Textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
