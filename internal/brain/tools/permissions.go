@@ -513,8 +513,10 @@ const (
 )
 
 // sandboxReadPrefixes are absolute paths inside the mission container
-// a read-only command may name (D-129): toolchains, scratch, HOME.
-var sandboxReadPrefixes = []string{"/usr", "/opt", "/tmp", "/home/sandbox"}
+// a read-only command may name (D-129): toolchains, scratch, and the
+// non-secret HOME subdirs. HOME itself is left out so a recursive read
+// cannot walk into the executor auth state.
+var sandboxReadPrefixes = []string{"/usr", "/opt", "/tmp", "/home/sandbox/.mise", "/home/sandbox/.cache", "/home/sandbox/.local"}
 
 // sandboxReadFiles are single files under guarded dirs that are safe
 // to read in the container.
