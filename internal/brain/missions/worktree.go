@@ -567,10 +567,14 @@ func cleanRelPaths(paths []string) ([]string, error) {
 	return out, nil
 }
 
+// harnessWrittenPaths are worktree-root files the prepare step writes
+// (D-130); never staged, whatever the unit's artifacts or scope say.
+var harnessWrittenPaths = map[string]bool{miseLocalFile: true, envFileName: true}
+
 // untrackedStagePaths keeps the untracked candidates that match an
 // artifact exactly, sit under a scope entry, or sit under an
 // artifact's parent dir (D-121). The workspace root never counts as an
-// artifact dir.
+// artifact dir. Harness-written files are never staged.
 func untrackedStagePaths(candidates, artifacts, scope []string) ([]string, error) {
 	cleanArtifacts, err := cleanRelPaths(artifacts)
 	if err != nil {
@@ -589,6 +593,9 @@ func untrackedStagePaths(candidates, artifacts, scope []string) ([]string, error
 	var out []string
 	for _, c := range candidates {
 		c = path.Clean(filepath.ToSlash(c))
+		if harnessWrittenPaths[c] {
+			continue
+		}
 		switch {
 		case containsPath(cleanArtifacts, c), underAny(c, cleanScope), underAny(c, artifactDirs):
 			out = append(out, c)

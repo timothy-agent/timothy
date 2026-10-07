@@ -1,0 +1,494 @@
+package missions
+
+// Prepare step planning (D-130, issue #1010): what the harness installs,
+// bootstraps, tests and audits for a coding mission, derived from the
+// worktree alone. The repo's own mise config has priority: mise.local.toml
+// (which mise loads over mise.toml) only carries keys the repo does not
+// declare, so a repo value is never overridden.
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+// miseLocalFile is the harness config at the worktree root. Never staged
+// (D-121) and never read as the repo's own config once it carries
+// miseLocalHeader.
+const miseLocalFile = "mise.local.toml"
+
+// miseLocalHeader is the first line of a harness-written mise.local.toml.
+const miseLocalHeader = "# Written by the Timothy harness before discover; not part of the repo."
+
+// osvScannerTool and osvScannerVersion pin the audit tool, installed by
+// mise's aqua backend from the registry compiled into mise.
+const (
+	osvScannerTool    = "aqua:google/osv-scanner"
+	osvScannerVersion = "2.6.0"
+)
+
+// envTemplateProvider names the custom deps provider that copies an env
+// template and generates a Laravel app key.
+const envTemplateProvider = "env-template"
+
+// envFileName is the env file the template provider creates.
+const envFileName = ".env"
+
+// envTemplateNames are the templates copied to envFileName, first hit wins.
+var envTemplateNames = []string{".env.example", ".env.dist", ".env.sample", ".env.template"}
+
+// depsProvider is one mise built-in deps provider: enabled when lockfile
+// sits at the worktree root; output, when set, must exist after a
+// successful run for the harness to count the install as done.
+type depsProvider struct {
+	name     string
+	lockfile string
+	output   string
+}
+
+// depsProviders in run order. One node provider at most: the first whose
+// lockfile exists wins. go and pip need no lockfile in mise; they are
+// enabled on their manifest.
+var depsProviders = []depsProvider{
+	{"composer", "composer.lock", "vendor"},
+	{"npm", "package-lock.json", "node_modules"},
+	{"pnpm", "pnpm-lock.yaml", "node_modules"},
+	{"yarn", "yarn.lock", "node_modules"},
+	{"bun", "bun.lock", "node_modules"},
+	{"uv", "uv.lock", ".venv"},
+	{"poetry", "poetry.lock", ".venv"},
+	{"bundler", "Gemfile.lock", "vendor/bundle"},
+	{"go", "go.sum", ""},
+	{"pip", "requirements.txt", ""},
+}
+
+// nodeProviders share node_modules; only one runs.
+var nodeProviders = map[string]bool{"npm": true, "pnpm": true, "yarn": true, "bun": true}
+
+// auditLockfiles are the lockfile basenames osv-scanner is pointed at.
+var auditLockfiles = map[string]bool{
+	"composer.lock": true, "package-lock.json": true, "npm-shrinkwrap.json": true,
+	"yarn.lock": true, "pnpm-lock.yaml": true, "bun.lock": true,
+	"go.mod": true, "poetry.lock": true, "uv.lock": true, "Pipfile.lock": true,
+	"requirements.txt": true, "Gemfile.lock": true, "Cargo.lock": true, "gradle.lockfile": true,
+}
+
+// repoMiseConfigs are the project config files mise reads from the
+// worktree root, in the order mise lists them.
+var repoMiseConfigs = []string{
+	".config/mise/config.toml", ".config/mise.toml", ".mise/config.toml", "mise/config.toml",
+	".mise.toml", "mise.toml",
+}
+
+// miseTaskFiles are the file-task locations a repo test task may live in.
+var miseTaskFiles = []string{"mise-tasks/test", ".mise/tasks/test", "mise/tasks/test", ".config/mise/tasks/test"}
+
+// testCandidate is one proposed baseline test command and where it came
+// from. miseTask means the command is `mise run test` on the repo's task.
+type testCandidate struct {
+	Cmd    string `json:"cmd"`
+	Source string `json:"source"`
+}
+
+// prepareSpec is everything the prepare step will do for one worktree.
+type prepareSpec struct {
+	Providers      []string
+	EnvTemplate    string // template basename, "" when none applies
+	Artisan        bool   // php artisan key:generate after the copy
+	TestCandidates []testCandidate
+	Lockfiles      []string // worktree-relative, sorted
+	RepoKeys       map[string]bool
+}
+
+// empty reports a spec with nothing to install, test or audit.
+func (s prepareSpec) empty() bool {
+	return len(s.Providers) == 0 && s.EnvTemplate == "" && len(s.TestCandidates) == 0 && len(s.Lockfiles) == 0
+}
+
+// planPrepare derives the spec from the worktree and its manifest list
+// (walkManifests output, depth 3). Providers and the env template look
+// at the root only; lockfiles for the audit come from the whole list.
+func planPrepare(worktree string, manifests []string) prepareSpec {
+	spec := prepareSpec{RepoKeys: repoMiseKeys(worktree)}
+	root := map[string]bool{}
+	for _, rel := range manifests {
+		if !strings.Contains(rel, "/") {
+			root[rel] = true
+		}
+		if auditLockfiles[path.Base(rel)] {
+			spec.Lockfiles = append(spec.Lockfiles, rel)
+		}
+	}
+	sort.Strings(spec.Lockfiles)
+	nodeTaken := false
+	for _, p := range depsProviders {
+		if !root[p.lockfile] || (nodeProviders[p.name] && nodeTaken) {
+			continue
+		}
+		if nodeProviders[p.name] {
+			nodeTaken = true
+		}
+		spec.Providers = append(spec.Providers, p.name)
+	}
+	if !fileExists(worktree, envFileName) {
+		for _, name := range envTemplateNames {
+			if fileExists(worktree, name) {
+				spec.EnvTemplate = name
+				break
+			}
+		}
+	}
+	spec.Artisan = fileExists(worktree, "artisan")
+	spec.TestCandidates = testLadder(worktree, root, spec.RepoKeys)
+	return spec
+}
+
+// fileExists reports a regular file at root/name.
+func fileExists(root, name string) bool {
+	st, err := os.Stat(filepath.Join(root, name))
+	return err == nil && st.Mode().IsRegular()
+}
+
+// repoMiseKeys returns the dotted keys every repo mise config at the
+// worktree root declares. A mise.local.toml not written by the harness
+// counts as the repo's.
+func repoMiseKeys(worktree string) map[string]bool {
+	keys := map[string]bool{}
+	if worktree == "" {
+		return keys
+	}
+	files := append([]string{}, repoMiseConfigs...)
+	if b, err := os.ReadFile(filepath.Join(worktree, miseLocalFile)); err == nil && !strings.HasPrefix(string(b), miseLocalHeader) { //nolint:gosec // worktree root
+		files = append(files, miseLocalFile)
+	}
+	for _, name := range files {
+		b, err := os.ReadFile(filepath.Join(worktree, filepath.FromSlash(name))) //nolint:gosec // worktree root
+		if err != nil {
+			continue
+		}
+		for k := range tomlKeys(string(b)) {
+			keys[k] = true
+		}
+	}
+	return keys
+}
+
+// tomlKeys lists the dotted keys a TOML document declares (tables, keys
+// and inline-table members) with every ancestor, enough to tell whether
+// a repo config sets a key the harness would otherwise fill. Values are
+// not parsed beyond skipping multi-line strings.
+func tomlKeys(src string) map[string]bool {
+	keys := map[string]bool{}
+	add := func(prefix, dotted string) {
+		parts := splitTOMLKey(dotted)
+		if prefix != "" {
+			parts = append(splitTOMLKey(prefix), parts...)
+		}
+		for i := range parts {
+			keys[strings.Join(parts[:i+1], ".")] = true
+		}
+	}
+	prefix := ""
+	lines := strings.Split(src, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			header := strings.TrimRight(line, "]")
+			header = strings.TrimLeft(header, "[")
+			if idx := strings.Index(header, "]"); idx >= 0 {
+				header = header[:idx]
+			}
+			prefix = strings.Join(splitTOMLKey(header), ".")
+			add("", prefix)
+			continue
+		}
+		key, value, ok := cutTOMLKey(line)
+		if !ok {
+			continue
+		}
+		add(prefix, key)
+		value = strings.TrimSpace(value)
+		switch {
+		case strings.HasPrefix(value, `"""`) || strings.HasPrefix(value, "'''"):
+			delim := value[:3]
+			if !strings.Contains(value[3:], delim) {
+				for i++; i < len(lines) && !strings.Contains(lines[i], delim); i++ {
+				}
+			}
+		case strings.HasPrefix(value, "{"):
+			inner := strings.TrimSuffix(strings.TrimPrefix(value, "{"), "}")
+			for _, member := range strings.Split(inner, ",") {
+				if k, _, ok := cutTOMLKey(strings.TrimSpace(member)); ok {
+					add(strings.Join(splitTOMLKey(strings.TrimPrefix(prefix+"."+key, ".")), "."), k)
+				}
+			}
+		}
+	}
+	return keys
+}
+
+// cutTOMLKey splits `key = value`, honoring a quoted key.
+func cutTOMLKey(line string) (key, value string, ok bool) {
+	if line == "" {
+		return "", "", false
+	}
+	if line[0] == '"' || line[0] == '\'' {
+		end := strings.IndexByte(line[1:], line[0])
+		if end < 0 {
+			return "", "", false
+		}
+		rest := strings.TrimSpace(line[end+2:])
+		if !strings.HasPrefix(rest, "=") {
+			return "", "", false
+		}
+		return line[:end+2], rest[1:], true
+	}
+	eq := strings.IndexByte(line, '=')
+	if eq < 0 {
+		return "", "", false
+	}
+	return strings.TrimSpace(line[:eq]), line[eq+1:], true
+}
+
+// splitTOMLKey splits a dotted key, keeping quoted segments whole and
+// unquoted.
+func splitTOMLKey(s string) []string {
+	var parts []string
+	var cur strings.Builder
+	var quote byte
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else {
+				cur.WriteByte(c)
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '.':
+			parts = append(parts, strings.TrimSpace(cur.String()))
+			cur.Reset()
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if p := strings.TrimSpace(cur.String()); p != "" || len(parts) > 0 {
+		parts = append(parts, p)
+	}
+	return parts
+}
+
+// npmDefaultTest is the placeholder `npm init` writes; not a test command.
+const npmDefaultTest = "no test specified"
+
+// makeTestTarget matches a Makefile test target line.
+var makeTestTarget = regexp.MustCompile(`(?m)^test\s*:`)
+
+// testLadder lists baseline test command candidates in source order:
+// repo mise task, manifest rules, Makefile target. The devcontainer and
+// CI-workflow sources are not implemented; the ladder is where they go.
+func testLadder(worktree string, root map[string]bool, repoKeys map[string]bool) []testCandidate {
+	var out []testCandidate
+	if repoKeys["tasks.test"] || anyFileExists(worktree, miseTaskFiles) {
+		out = append(out, testCandidate{Cmd: "mise run test", Source: "repo mise task"})
+	}
+	if root["composer.json"] && manifestScript(worktree, "composer.json", "test") {
+		out = append(out, testCandidate{Cmd: "composer test", Source: "composer.json scripts.test"})
+	}
+	if fileExists(worktree, "artisan") {
+		out = append(out, testCandidate{Cmd: "php artisan test", Source: "artisan"})
+	} else if fileExists(worktree, "phpunit.xml") || fileExists(worktree, "phpunit.xml.dist") {
+		out = append(out, testCandidate{Cmd: "vendor/bin/phpunit", Source: "phpunit.xml"})
+	}
+	if root["package.json"] && manifestScript(worktree, "package.json", "test") {
+		runner := "npm test"
+		switch {
+		case root["pnpm-lock.yaml"]:
+			runner = "pnpm test"
+		case root["yarn.lock"]:
+			runner = "yarn test"
+		case root["bun.lock"]:
+			runner = "bun test"
+		}
+		out = append(out, testCandidate{Cmd: runner, Source: "package.json scripts.test"})
+	}
+	if root["pyproject.toml"] || root["requirements.txt"] || root["setup.py"] || root["setup.cfg"] || root["Pipfile"] {
+		if fileExists(worktree, "pytest.ini") || fileExists(worktree, "conftest.py") || dirExists(worktree, "tests") || dirExists(worktree, "test") ||
+			fileMentions(filepath.Join(worktree, "pyproject.toml"), "pytest") {
+			runner := "python3 -m pytest -q"
+			switch {
+			case root["uv.lock"]:
+				runner = "uv run pytest -q"
+			case root["poetry.lock"]:
+				runner = "poetry run pytest -q"
+			}
+			out = append(out, testCandidate{Cmd: runner, Source: "pytest layout"})
+		}
+	}
+	if root["go.mod"] {
+		out = append(out, testCandidate{Cmd: "go test ./...", Source: "go.mod"})
+	}
+	if root["Cargo.toml"] {
+		out = append(out, testCandidate{Cmd: "cargo test", Source: "Cargo.toml"})
+	}
+	if root["Gemfile"] && fileMentions(filepath.Join(worktree, "Gemfile"), "rspec") {
+		out = append(out, testCandidate{Cmd: "bundle exec rspec", Source: "Gemfile rspec"})
+	}
+	if b, err := os.ReadFile(filepath.Join(worktree, "Makefile")); err == nil && makeTestTarget.Match(b) { //nolint:gosec // worktree root
+		out = append(out, testCandidate{Cmd: "make test", Source: "Makefile test target"})
+	}
+	return out
+}
+
+// anyFileExists reports whether any of names is a regular file under root.
+func anyFileExists(root string, names []string) bool {
+	for _, n := range names {
+		if fileExists(root, filepath.FromSlash(n)) {
+			return true
+		}
+	}
+	return false
+}
+
+// dirExists reports a directory at root/name.
+func dirExists(root, name string) bool {
+	st, err := os.Stat(filepath.Join(root, name))
+	return err == nil && st.IsDir()
+}
+
+// manifestScript reports whether the JSON manifest declares a non-empty
+// scripts.<name> that is not npm's placeholder.
+func manifestScript(worktree, manifest, name string) bool {
+	b, err := os.ReadFile(filepath.Join(worktree, manifest)) //nolint:gosec // worktree root
+	if err != nil {
+		return false
+	}
+	var doc struct {
+		Scripts map[string]json.RawMessage `json:"scripts"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return false
+	}
+	raw, ok := doc.Scripts[name]
+	if !ok {
+		return false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s != "" && !strings.Contains(s, npmDefaultTest)
+	}
+	var list []string
+	return json.Unmarshal(raw, &list) == nil && len(list) > 0
+}
+
+// miseLocalInput is what renderMiseLocal writes, after repo keys are
+// removed.
+type miseLocalInput struct {
+	Providers   []string
+	EnvTemplate string
+	Artisan     bool
+	TestCmd     string // raw command for tasks.test, "" for none yet
+	Lockfiles   []string
+}
+
+// renderMiseLocal renders the harness mise.local.toml: settings the
+// prepare step needs, the audit tool, the deps providers, the env
+// template provider and the test and audit tasks. Every key the repo
+// config already declares (repoKeys) is left out, so the repo's value
+// wins even though mise loads the local file over mise.toml.
+func renderMiseLocal(in miseLocalInput, repoKeys map[string]bool) string {
+	var b strings.Builder
+	b.WriteString(miseLocalHeader + "\n")
+	var settings []string
+	if !repoKeys["settings.experimental"] {
+		settings = append(settings, "experimental = true")
+	}
+	if !repoKeys["settings.disable_tools"] {
+		settings = append(settings, `disable_tools = ["php"]`)
+	}
+	if len(settings) > 0 {
+		b.WriteString("\n[settings]\n" + strings.Join(settings, "\n") + "\n")
+	}
+	if !repoKeys["tools."+osvScannerTool] && !repoKeys["tools.osv-scanner"] {
+		fmt.Fprintf(&b, "\n[tools]\n%q = %q\n", osvScannerTool, osvScannerVersion)
+	}
+	for _, p := range in.Providers {
+		if !repoKeys["deps."+p] {
+			fmt.Fprintf(&b, "\n[deps.%s]\n", p)
+		}
+	}
+	if in.EnvTemplate != "" && !repoKeys["deps."+envTemplateProvider] {
+		fmt.Fprintf(&b, "\n[deps.%s]\ndescription = %q\nsources = [%q]\noutputs = [%q]\nrun = %q\n",
+			envTemplateProvider, "copy "+in.EnvTemplate+" to "+envFileName, in.EnvTemplate, envFileName, buildEnvTemplateRun(in.EnvTemplate, in.Artisan))
+		if in.Artisan && containsString(in.Providers, "composer") {
+			b.WriteString(`depends = ["composer"]` + "\n")
+		}
+	}
+	if in.TestCmd != "" && !repoKeys["tasks.test"] {
+		fmt.Fprintf(&b, "\n[tasks.test]\nrun = %q\n", in.TestCmd)
+	}
+	if len(in.Lockfiles) > 0 && !repoKeys["tasks.audit"] {
+		fmt.Fprintf(&b, "\n[tasks.audit]\nrun = %q\n", buildAuditCmd(in.Lockfiles, ""))
+	}
+	return b.String()
+}
+
+// buildEnvTemplateRun is the env-template provider's shell: copy the
+// template when no env file exists, then generate the Laravel app key
+// when artisan is present. The key is generated only right after the
+// copy, so an env file the repo ships keeps its own key.
+func buildEnvTemplateRun(template string, artisan bool) string {
+	cmd := "if [ ! -f " + shQuote(envFileName) + " ]; then cp " + shQuote(template) + " " + shQuote(envFileName)
+	if artisan {
+		cmd += " && php artisan key:generate --no-interaction"
+	}
+	return cmd + "; fi"
+}
+
+// buildDepsCmd installs one mise deps provider.
+func buildDepsCmd(provider string) string {
+	return "mise deps install " + shQuote(provider)
+}
+
+// buildTestCmd runs a candidate under mise: a repo task as `mise run`,
+// anything else through `mise exec` so [env] reaches it.
+func buildTestCmd(c testCandidate) string {
+	if strings.HasPrefix(c.Cmd, "mise run ") {
+		return c.Cmd
+	}
+	return "mise exec -- sh -c " + shQuote(c.Cmd)
+}
+
+// buildAuditCmd runs osv-scanner over the lockfiles as JSON, into
+// outFile when set (the harness reads the file; a task prints to stdout).
+func buildAuditCmd(lockfiles []string, outFile string) string {
+	var b strings.Builder
+	b.WriteString("mise exec -- osv-scanner scan --format json --all-packages")
+	for _, l := range lockfiles {
+		b.WriteString(" -L " + shQuote(l))
+	}
+	if outFile != "" {
+		b.WriteString(" --output-file " + shQuote(outFile))
+	}
+	return b.String()
+}
+
+// containsString reports whether list holds s.
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}

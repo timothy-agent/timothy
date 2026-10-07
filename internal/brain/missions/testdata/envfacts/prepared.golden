@@ -1,0 +1,20 @@
+
+
+Environment facts (set by the harness; treat them as true and do not re-check them):
+- Repository: https://github.com/o/laravel-app, base branch main, base commit 0123456789ab.
+- Mission branch: chore/upgrade-dependencies, already checked out in the worktree.
+- Destination github, mode push_pr: the harness commits each unit, pushes `chore/upgrade-dependencies` and opens the PR after all units pass; do not plan, script or verify a push or PR; never create or switch branches.
+- Credentials: the sandbox has no git or registry credentials; git push, gh and authenticated registry calls cannot work.
+- Manifests and lockfiles (to depth 3, by directory):
+  - .: composer.json, composer.lock, package-lock.json, package.json
+- Toolchains the repo pins (the harness installs them through mise before discover): node 20, php 8.2.
+- Installed tools: composer (Composer version 2.8.1 2024-10-04 11:31:01); git (git version 2.39.5); node (v24.18.0); php (PHP 8.4.1 (cli)).
+- Not installed: docker, gh.
+- Workspace prepared by the harness with mise before discover; mise.local.toml at the worktree root is harness-owned, never edit or commit it.
+- Dependencies installed (mise deps): composer, npm. Do not reinstall them; a check_cmd must never run an install.
+- Env file: .env created from .env.example with a generated app key by the harness.
+- Baseline tests: `composer test` (from composer.json scripts.test) exits 0: 36 passed, 0 failed, 0 warnings. Run it as `mise run test`; it is the regression baseline.
+- Vulnerability audit (osv-scanner): composer.lock 112 packages, 2 known advisories; package-lock.json 300 packages, 0 known advisories. Re-run with `mise run audit` after a lockfile changes.
+- Prepare failure: deps pnpm failed; dependencies may need installing by hand
+  - deps:pnpm (exit 1, 3s): mise ERROR provider 'pnpm' is inactive (missing pnpm-lock.yaml)
+- Sandbox limits: unprivileged user (no root, no sudo); read-only root filesystem, writable only in the workspace, HOME (tmpfs 1 GiB) and /tmp (tmpfs 512 MiB); memory 2 GiB including swap; 2 CPUs; 256 processes; 100 MiB per file; network on; no Docker socket.

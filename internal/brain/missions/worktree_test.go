@@ -430,6 +430,11 @@ func TestUntrackedStagePaths(t *testing.T) {
 			[]string{"core.1"}, []string{"main.go"}, nil,
 			nil, false,
 		},
+		{
+			"harness-written files never stage, even named as artifacts",
+			[]string{"mise.local.toml", ".env", "src/a.go"}, []string{"mise.local.toml", ".env", "src/a.go"}, nil,
+			[]string{"src/a.go"}, false,
+		},
 		{"absolute artifact rejected", nil, []string{"/etc/passwd"}, nil, nil, true},
 		{"absolute scope rejected", nil, nil, []string{"/tmp/x"}, nil, true},
 		{"dot-dot escape rejected", nil, []string{"../outside.txt"}, nil, nil, true},
