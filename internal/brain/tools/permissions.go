@@ -440,11 +440,25 @@ func callSubject(tool string, args json.RawMessage) string {
 var guardPatterns = []struct {
 	name    string
 	pattern *regexp.Regexp
+	// exempt names harmless matches of pattern (nil = none).
+	exempt *regexp.Regexp
+	// hint is appended to the denial so the model can retry usefully.
+	hint string
 }{
-	{name: "env files", pattern: regexp.MustCompile(`(?i)(^|/)\.env(\.[A-Za-z0-9._-]+)?$`)},
+	{
+		name:    "env files",
+		pattern: regexp.MustCompile(`(?i)(^|/)\.env(\.[A-Za-z0-9._-]+)?$`),
+		// Committed templates carry variable names, not secrets.
+		exempt: regexp.MustCompile(`(?i)(^|/)\.env\.(example|sample|dist|template)$`),
+		hint:   " (templates such as .env.example are readable; export variables in the command instead of writing an env file)",
+	},
 	{name: "ssh keys", pattern: regexp.MustCompile(`(?i)(^|/)id_(rsa|ed25519|ecdsa|dsa)$`)},
 	{name: "key material", pattern: regexp.MustCompile(`(?i)\.(pem|key|p12|pfx|keystore)$`)},
 }
+
+// sedRangeAddress matches a sed/awk range address such as
+// /start/,/end/p. Quoted, it is program text, never a path.
+var sedRangeAddress = regexp.MustCompile(`^/([^/\\]|\\.)*/,/([^/\\]|\\.)*/!?[A-Za-z]*$`)
 
 // guardPathPatterns need directory context to be meaningful, so they
 // match only tokens carrying path syntax (see looksLikePath). Without
@@ -479,8 +493,8 @@ func guardSubject(root, tool, subject string) string {
 	for _, qt := range commandTokensQuoted(subject) {
 		for _, tok := range guardFragments(qt.text) {
 			for _, g := range guardPatterns {
-				if g.pattern.MatchString(tok) {
-					return "policy guard: " + g.name + " are off-limits"
+				if g.pattern.MatchString(tok) && (g.exempt == nil || !g.exempt.MatchString(tok)) {
+					return "policy guard: " + g.name + " are off-limits" + g.hint
 				}
 			}
 			if !looksLikePath(tok) {
@@ -502,7 +516,7 @@ func guardSubject(root, tool, subject string) string {
 			// path — skip it. Unquoted, the same text is still live
 			// shell syntax (e.g. /x/{a,b} brace-expands to real paths)
 			// and must stay checked.
-			if qt.quoted && strings.ContainsAny(tok, "^$[]{}\\+|") {
+			if qt.quoted && (strings.ContainsAny(tok, "^$[]{}\\+|") || sedRangeAddress.MatchString(tok)) {
 				continue
 			}
 			// A parent-directory reference in any path-like token can
