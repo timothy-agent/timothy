@@ -3,6 +3,7 @@ package missions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -506,6 +507,47 @@ func TestDriverDiscoverReinstallsToolchainsAfterRecreate(t *testing.T) {
 			m, _ := store.Get(context.Background(), "m1")
 			if got := strings.Contains(m.DiscoverNotes, "bootstrap unit"); got != tc.wantNote {
 				t.Fatalf("notes = %q, bootstrap note = %v, want %v", m.DiscoverNotes, got, tc.wantNote)
+			}
+		})
+	}
+}
+
+func TestInstallToolchainsPassesMiseGitHubToken(t *testing.T) {
+	gh := []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}}
+	tok := func(context.Context, string) (string, error) { return "tok", nil }
+	cases := []struct {
+		name    string
+		sources []SourceEntry
+		resolve CloneTokenResolver
+		wantEnv map[string]string
+	}{
+		{"github connector", gh, tok, map[string]string{"MISE_GITHUB_TOKEN": "tok"}},
+		{"no source", nil, tok, nil},
+		{"non-github source", []SourceEntry{{Source: "gitlab", RepoURL: "https://gitlab.com/o/r.git", ConnectorID: "conn1"}}, tok, nil},
+		{"resolver error", gh, func(context.Context, string) (string, error) { return "", errors.New("boom") }, nil},
+		{"empty token", gh, func(context.Context, string) (string, error) { return "", nil }, nil},
+		{"no resolver", gh, nil, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ex := &recordedExec{}
+			var gotEnv map[string]string
+			envCalls := 0
+			p := &provisioner{store: newFakeStore(), log: slog.Default(), sandboxExec: ex.exec, resolveCloneToken: c.resolve,
+				sandboxExecEnv: func(_ context.Context, _, _, _, _ string, env map[string]string, _ time.Duration, _ io.Writer) (int, error) {
+					envCalls++
+					gotEnv = env
+					return 0, nil
+				}}
+			m := Mission{ID: "m1", Toolchains: map[string]string{"python": "3.10"}, Sources: c.sources}
+			if _, failed := p.installToolchains(context.Background(), m, t.TempDir()); failed {
+				t.Fatal("install failed")
+			}
+			if !reflect.DeepEqual(gotEnv, c.wantEnv) {
+				t.Fatalf("env = %v, want %v", gotEnv, c.wantEnv)
+			}
+			if wantEnvCall := c.wantEnv != nil; (envCalls == 1) != wantEnvCall || (len(ex.cmds) == 1) == wantEnvCall {
+				t.Fatalf("envCalls = %d, plain cmds = %d, want env exec = %v", envCalls, len(ex.cmds), wantEnvCall)
 			}
 		})
 	}

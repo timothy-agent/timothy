@@ -27,6 +27,12 @@ case "$ver" in
   *) echo "FAIL: expected default PHP 8.4.x, got $ver" >&2; exit 1 ;;
 esac
 
+# Non-interactive env (issue #1009) reaches php under the sandbox's own
+# env, so a console app (Symfony reads COLUMNS) does not wrap at 80.
+cols="$("${VRUN[@]}" php -r 'echo getenv("COLUMNS"), "/", getenv("CI");')"
+[ "$cols" = "200/1" ] || { echo "FAIL: php sees COLUMNS/CI = '$cols', want 200/1" >&2; exit 1; }
+echo "php sees wide non-interactive env ok"
+
 for v in "${MINORS[@]}"; do
   got="$("${RUN[@]}" "php$v" -r 'echo PHP_VERSION;')"
   case "$got" in

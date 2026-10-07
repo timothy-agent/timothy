@@ -57,6 +57,10 @@ type provisioner struct {
 	// the clone.
 	resolveCloneToken CloneTokenResolver
 
+	// sandboxExecEnv runs the toolchain install with per-exec values
+	// (SetToolchainExecEnv) — nil-safe: unset installs without a token.
+	sandboxExecEnv sandboxExecEnv
+
 	// resolveCloneIdentity resolves a github-kind connector_id to the
 	// commit identity (name, email) ensureProvisioned sets as the
 	// clone's local git config (see SetCloneIdentityResolver) — nil-safe:
@@ -520,6 +524,26 @@ func (p *provisioner) grantSessionDefaults(ctx context.Context, m Mission) {
 	}
 }
 
+// toolchainExtraEnv is the per-exec addition for the toolchain install:
+// the mission's github connector token (github sources only) as MISE_GITHUB_TOKEN. nil when
+// there is no connector, resolver or token; a resolve failure only
+// logs, the install then runs unauthenticated.
+func (p *provisioner) toolchainExtraEnv(ctx context.Context, m Mission) map[string]string {
+	src, ok := m.GitHubSource()
+	if !ok || src.ConnectorID == "" || p.resolveCloneToken == nil || p.sandboxExecEnv == nil {
+		return nil
+	}
+	token, err := p.resolveCloneToken(ctx, src.ConnectorID)
+	if err != nil {
+		p.log.Warn("driver: resolve token for toolchain install failed; installing unauthenticated", "mission_id", m.ID, "error", err)
+		return nil
+	}
+	if token == "" {
+		return nil
+	}
+	return map[string]string{"MISE_GITHUB_TOKEN": token}
+}
+
 // installToolchains installs and globally activates m.Toolchains in the
 // mission's sandbox (D-126) and records mission.toolchain_installed or
 // mission.toolchain_install_failed. A failure never fails provisioning:
@@ -531,7 +555,14 @@ func (p *provisioner) installToolchains(ctx context.Context, m Mission, workRoot
 		return "", false
 	}
 	var out bytes.Buffer
-	code, err := p.sandboxExec(ctx, m.ID, m.Environment, workRoot, buildToolchainInstallCmd(m.Toolchains), toolchainInstallTimeout, &out)
+	cmd := buildToolchainInstallCmd(m.Toolchains)
+	var code int
+	var err error
+	if extra := p.toolchainExtraEnv(ctx, m); extra != nil {
+		code, err = p.sandboxExecEnv(ctx, m.ID, m.Environment, workRoot, cmd, extra, toolchainInstallTimeout, &out)
+	} else {
+		code, err = p.sandboxExec(ctx, m.ID, m.Environment, workRoot, cmd, toolchainInstallTimeout, &out)
+	}
 	if err == nil && code == 0 {
 		if aerr := p.store.AppendEvent(ctx, m.ID, "mission.toolchain_installed", map[string]any{"toolchains": m.Toolchains}); aerr != nil {
 			p.log.Warn("driver: record toolchain install failed", "mission_id", m.ID, "error", aerr)

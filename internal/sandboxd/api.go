@@ -91,6 +91,11 @@ var execEnvAllowlist = map[string]bool{
 	"CURSOR_API_KEY":             true,
 	"CURSOR_CONFIG_DIR":          true,
 	"AGENT_CLI_CREDENTIAL_STORE": true,
+	// MISE_GITHUB_TOKEN (issue #1009): set only by brain's toolchain
+	// install exec, from the mission's github connector, so mise
+	// downloads skip the unauthenticated rate limit. The shell tool
+	// sends no per-exec values.
+	"MISE_GITHUB_TOKEN": true,
 }
 
 // execEnvMaxValueLen bounds a single env value — generous for a token
