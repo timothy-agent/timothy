@@ -31,6 +31,7 @@ import type {
 import { ArtifactsSection } from '../components/missions/ArtifactsSection'
 import { CostDisplay } from '../components/missions/CostDisplay'
 import { DiscoverSection } from '../components/missions/DiscoverSection'
+import { EnvFactsSection } from '../components/missions/EnvFactsSection'
 import { FindingsSection } from '../components/missions/FindingsSection'
 import { GoalSection } from '../components/missions/GoalSection'
 import { HarnessIcon, harnessLabel } from '../components/missions/HarnessIcon'
@@ -945,6 +946,8 @@ export function MissionDetail() {
         </Panel>
 
         <GoalSection goal={mission.goal} />
+
+        {mission.env_facts && <EnvFactsSection facts={mission.env_facts} />}
 
         {mission.discover_notes && <DiscoverSection notes={mission.discover_notes} />}
 

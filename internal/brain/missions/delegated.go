@@ -397,7 +397,7 @@ func (r *delegatedRunner) runDelegatedReview(ctx context.Context, m Mission, pac
 	spec := executor.InvocationSpec{
 		MissionID: m.ID, Workdir: workRoot,
 		PromptPath:   filepath.Join(rdir, "prompt.md"),
-		SystemAppend: reviewSystemPrompt + delegatedReviewSystemAppend,
+		SystemAppend: reviewSystemPrompt + delegatedReviewSystemAppend + renderEnvFacts(m),
 		Model:        entry.Model, AuthMode: authMode, APIKey: apiKey, BaseURL: entry.BaseURL,
 		ResultSchema: reviewSchemaFor(adapter), RunBudget: r.effectiveRunBudget(ctx), Wire: entry.Wire,
 		StateDir: executorStateDir(m.Workspace, m.ReviewHarness),

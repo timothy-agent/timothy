@@ -406,7 +406,7 @@ func (s *Store) RepoPolicy(ctx context.Context, id string) (missions.GitHubPolic
 	if err := json.Unmarshal(d.Config, &cfg); err != nil {
 		return missions.GitHubPolicy{}, false, fmt.Errorf("%s config: %w", d.Kind, err)
 	}
-	return missions.GitHubPolicy{BranchPattern: cfg.BranchPattern, CommitStyle: cfg.CommitStyle}, true, nil
+	return missions.GitHubPolicy{BranchPattern: cfg.BranchPattern, CommitStyle: cfg.CommitStyle, Kind: d.Kind, Mode: cfg.Mode}, true, nil
 }
 
 // Create validates and inserts a destination row.

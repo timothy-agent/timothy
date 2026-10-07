@@ -258,6 +258,18 @@ AGENTS.md so other work does not pay for it every session.
   (`Mission.PlanGate`, derived from events by `Driver.planGateState`).
   With a repo destination a push/PR unit is rejected: the result phase
   delivers the branch and the PR.
+- Environment facts (issue #1008): `renderEnvFacts` (envfacts.go)
+  appends one deterministic block to the discover, plan, reviewer
+  (native and delegated) and worker (native and delegated) prompts:
+  repo URL, base branch and commit, mission branch, each repo
+  destination's kind and mode with the fixed delivery text, no
+  credentials, manifests and lockfiles to depth 3, probed tool versions
+  and absent tools, sandbox limits, and gaps (Testcontainers, a
+  Windows-only .NET solution) the planner may declare infeasible. The
+  probed part (`EnvFacts`) is collected once at provisioning and again
+  after a sandbox recreate (`provisioner.collectEnvFacts`, coding
+  missions only) and stored on `missions.env_facts`. The limit
+  constants mirror `internal/sandboxd/manager.go`; change both together.
 - Per-criterion review rubric (issue #718): `review_verdict` carries
   `criteria` (unit index, criterion index, met/not_met/cannot_tell,
   evidence), optional so existing fixtures still parse and an unknown

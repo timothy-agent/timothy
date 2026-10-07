@@ -219,6 +219,15 @@ func (f *fakeStore) SetToolchains(ctx context.Context, id string, toolchains map
 	return nil
 }
 
+func (f *fakeStore) SetEnvFacts(ctx context.Context, id string, facts EnvFacts) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	m := f.missions[id]
+	m.EnvFacts = &facts
+	f.missions[id] = m
+	return nil
+}
+
 // SetNameIfEmpty mirrors the real Store's empty-name guard — a second
 // call for a mission that already has a name is a no-op, not an
 // overwrite.

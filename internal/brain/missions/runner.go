@@ -1474,7 +1474,7 @@ func discoverMaxSteps(m Mission) int {
 // failure. provider/model (issue #507) are who served the turn that
 // produced the returned notes; empty when the turn errored.
 func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, servedProvider, servedModel string, err error) {
-	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + discoverToolchainNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m)
+	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + discoverToolchainNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m) + renderEnvFacts(m)
 	sc := contextBlocks(m.Sources, contextSession, "")
 	user := "Goal: " + NeutralizeSlot(m.Goal) + sc.head
 	if notes := progressWithOperatorNotes(m.Progress, progressRenderCap, nil); notes != "" {
@@ -1725,7 +1725,7 @@ const (
 // session (D-092): findings carry across rounds as mission state, so
 // no reviewer transcript is retained to anchor the next verdict.
 func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPacket) (ReviewVerdict, error) {
-	system := reviewSystemPrompt + reviewSystemToolCall
+	system := reviewSystemPrompt + reviewSystemToolCall + renderEnvFacts(m)
 	messages := []provider.Message{{Role: "user", Content: renderReviewContent(packet)}}
 
 	extra := append([]*tools.Tool{ReviewVerdictTool()}, r.missionTools(m)...)
@@ -2064,7 +2064,7 @@ func planSystemPrompt(hasPlan, bootstrap bool) string {
 // each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	skillsHint := r.skillsNudge(ctx, m)
-	system := planSystemPrompt(m.HasPlan, bootstrapAllowed(m, discoverNotes)) + r.execEnvironmentNote(ctx) + skillsHint + r.loadedSkillsForPlan(ctx, m, discoverNotes)
+	system := planSystemPrompt(m.HasPlan, bootstrapAllowed(m, discoverNotes)) + r.execEnvironmentNote(ctx) + skillsHint + r.loadedSkillsForPlan(ctx, m, discoverNotes) + renderEnvFacts(m)
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)
