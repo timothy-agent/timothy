@@ -165,7 +165,7 @@ sandbox-image:
 	docker build -f deploy/sandbox-java.Dockerfile -t timothy-sandbox-java:latest .
 	docker build -f deploy/sandbox-php.Dockerfile -t timothy-sandbox-php:latest .
 
-# Checks the base image has mise, a writable toolchain dir, and a reusable cache volume.
+# Checks the base image has mise, a writable toolchain dir, reusable toolchain and package cache volumes, and safe parallel installs.
 sandbox-base-smoke:
 	./scripts/sandbox-base-smoke.sh timothy-sandbox-base:latest
 

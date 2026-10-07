@@ -157,7 +157,7 @@ func (r *prepareRun) run(ctx context.Context, spec prepareSpec) {
 		r.fail("writing " + miseLocalFile + ": " + err.Error())
 		return
 	}
-	if _, _, ok := r.step(ctx, "tools", "mise install", prepareToolsTimeout); !ok {
+	if _, _, ok := r.step(ctx, "tools", miseLocked("mise install"), prepareToolsTimeout); !ok {
 		r.fail("mise install (tools from the repo config and osv-scanner) failed; the audit may be unavailable")
 	}
 	for _, name := range spec.Providers {

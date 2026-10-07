@@ -51,6 +51,9 @@ func ListFiles(workRoot string, declared map[string]bool) ([]FileEntry, bool, er
 			}
 			return nil
 		}
+		if isSandboxCacheDir(workRoot, path, d) {
+			return filepath.SkipDir
+		}
 		if d.IsDir() {
 			return nil
 		}
@@ -106,6 +109,13 @@ func OpenFile(workRoot, rel string) (*os.File, fs.FileInfo, error) {
 	return f, fi, nil
 }
 
+// isSandboxCacheDir reports the mission's package cache dir (D-131),
+// present at workRoot's top when workRoot is the workspace itself
+// (missions without a worktree). Cache contents are never deliverables.
+func isSandboxCacheDir(workRoot, path string, d fs.DirEntry) bool {
+	return d.IsDir() && path == filepath.Join(workRoot, SandboxCacheDirName)
+}
+
 // WriteArchive streams every regular file under workRoot (same .git
 // and symlink skip rules as ListFiles, uncapped) into w as a zip.
 func WriteArchive(workRoot string, w io.Writer) error {
@@ -119,6 +129,9 @@ func WriteArchive(workRoot string, w io.Writer) error {
 				return filepath.SkipDir
 			}
 			return nil
+		}
+		if isSandboxCacheDir(workRoot, path, d) {
+			return filepath.SkipDir
 		}
 		if d.IsDir() {
 			return nil

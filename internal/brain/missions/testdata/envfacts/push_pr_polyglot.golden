@@ -10,4 +10,4 @@ Environment facts (set by the harness; treat them as true and do not re-check th
 - Toolchains the repo pins (the harness installs them through mise before discover): node 20, php 8.2.
 - Installed tools: composer (Composer version 2.8.1 2024-10-04 11:31:01); git (git version 2.39.5); node (v24.18.0); php (PHP 8.4.1 (cli)).
 - Not installed: docker, gh.
-- Sandbox limits: unprivileged user (no root, no sudo); read-only root filesystem, writable only in the workspace, HOME (tmpfs 1 GiB) and /tmp (tmpfs 512 MiB); memory 2 GiB including swap; 2 CPUs; 256 processes; 100 MiB per file; network on; no Docker socket.
+- Sandbox limits: unprivileged user (no root, no sudo); read-only root filesystem, writable only in the workspace, HOME (tmpfs 1 GiB; package caches in ~/.cache are on disk) and /tmp (tmpfs 512 MiB); memory 2 GiB including swap; 2 CPUs; 256 processes; 256 MiB per file; network on; no Docker socket.

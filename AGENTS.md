@@ -122,6 +122,14 @@ once. sandboxd resolves it like the `.claude` state volume; absent means
 ephemeral toolchains. PHP does not go through mise: the php image bakes
 8.1 to 8.4 and a mission links its minor into `~/.local/bin` (D-127).
 
+D-131 (issue #1016): package caches live under `/home/sandbox/.cache`
+(cache env vars in `deploy/sandbox-base.Dockerfile`, mise state too).
+The optional `sandbox-caches` volume backs it, shared by all missions;
+absent, sandboxd mounts the mission's own `<workspace>/.sandbox-cache`
+(created at provision) there instead. Never the HOME tmpfs. Harness
+mise installs run under `miseLocked` (flock on the data dir): bare
+concurrent installs of one version can collide on mise's download file.
+
 ## Key invariants (enforce, never relax)
 
 - Append-only stores stay append-only: `session_events`,

@@ -274,6 +274,10 @@ services:
       # self-inspection like the mounts above; replicated rw at
       # /home/sandbox/.mise in mission containers. Optional.
       - sandbox-toolchains:/statevols/toolchains
+      # D-131 (issue #1016): package caches (npm, composer, pip, Go, ...).
+      # Same metadata-only pattern; replicated rw at /home/sandbox/.cache.
+      # Optional: without it each mission caches in its own workspace.
+      - sandbox-caches:/statevols/caches
       # Host meminfo — under LXC, lxcfs serves the guest's real memory
       # limit here, while this container's own /proc shows the
       # hypervisor's (Capacity's admission gate would otherwise read a
@@ -418,6 +422,8 @@ volumes:
   executor-claude-state:
   # D-125: mise toolchains shared across missions.
   sandbox-toolchains:
+  # D-131: package caches shared across missions.
+  sandbox-caches:
 
 networks:
   timothy:

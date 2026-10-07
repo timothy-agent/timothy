@@ -2,8 +2,10 @@
 # Smoke-test the base sandbox image: mise version, writable mise data dir,
 # /tmp and HOME executable under sandboxd's mounts,
 # shims on PATH, trusted config path, and that a toolchain installed into
-# a named volume is reused by a second container. Needs network (installs
-# python 3.10 and node 18 via mise).
+# a named volume is reused by a second container. Package caches (D-131)
+# point at the cache mount, are shared through a named volume, and
+# survive parallel npm and mise installs. Needs network (installs
+# python 3.10, node 18 and node 20 via mise, two small npm packages).
 # Usage: scripts/sandbox-base-smoke.sh [image]
 set -euo pipefail
 
@@ -120,3 +122,59 @@ if [ "$out" != "ok" ]; then
   exit 1
 fi
 echo "executors unaffected by node pin ok"
+
+# Package caches (D-131): every cache env points under ~/.cache, which
+# sandboxd mounts from the shared sandbox-caches volume.
+CACHE_DIR=/home/sandbox/.cache
+out="$("${RUN[@]}" sh -c 'echo "$npm_config_cache $COMPOSER_CACHE_DIR $PIP_CACHE_DIR $UV_CACHE_DIR $GOMODCACHE $GOCACHE $GRADLE_USER_HOME $YARN_CACHE_FOLDER $BUN_INSTALL_CACHE_DIR $MISE_CACHE_DIR $MISE_STATE_DIR"; npm config get cache')"
+for word in $out; do
+  case "$word" in
+    "$CACHE_DIR"/*) ;;
+    *) echo "FAIL: cache path outside $CACHE_DIR: $word (all: $out)" >&2; exit 1 ;;
+  esac
+done
+echo "cache envs ok"
+
+cvol="timothy-smoke-caches-$RANDOM$RANDOM"
+tvol="timothy-smoke-mise-par-$RANDOM$RANDOM"
+docker volume create "$cvol" >/dev/null
+docker volume create "$tvol" >/dev/null
+trap 'docker volume rm -f "$vol" "$cvol" "$tvol" >/dev/null 2>&1 || true; rm -rf "$fix"' EXIT
+CRUN=(docker run --rm -u 65534:65534 "${SANDBOX_MOUNTS[@]}" -v "$cvol:$CACHE_DIR" "$IMAGE")
+NPM_TRY='mkdir -p /tmp/p && cd /tmp/p && npm init -y >/dev/null && npm install --no-audit'
+
+# A second container on the same volume installs offline: the first
+# container's download is in the shared cache.
+"${CRUN[@]}" sh -c "$NPM_TRY is-number@7.0.0 >/dev/null" \
+  || { echo "FAIL: first npm install with the cache volume" >&2; exit 1; }
+"${CRUN[@]}" sh -c "$NPM_TRY --offline is-number@7.0.0 >/dev/null" \
+  || { echo "FAIL: second container missed the shared npm cache" >&2; exit 1; }
+echo "shared npm cache hit ok"
+
+# Two containers installing the same package into one cache at once:
+# both succeed and the cache still verifies (cacache writes atomically).
+"${CRUN[@]}" sh -c "$NPM_TRY is-odd@3.0.1 >/dev/null" & p1=$!
+"${CRUN[@]}" sh -c "$NPM_TRY is-odd@3.0.1 >/dev/null" & p2=$!
+wait "$p1" || { echo "FAIL: parallel npm install 1" >&2; exit 1; }
+wait "$p2" || { echo "FAIL: parallel npm install 2" >&2; exit 1; }
+"${CRUN[@]}" npm cache verify >/dev/null \
+  || { echo "FAIL: npm cache corrupt after parallel installs" >&2; exit 1; }
+echo "parallel npm installs ok"
+
+# Two containers installing the same mise tool version into one
+# toolchains volume at once. Bare mise is not safe here: both write the
+# same download file and one fails with a size mismatch. The harness
+# wraps its installs in flock on the data dir (miseLocked in
+# internal/brain/missions/environment.go); keep this command in sync.
+PRUN=(docker run --rm -u 65534:65534 "${SANDBOX_MOUNTS[@]}" -v "$tvol:$MISE_DIR" -v "$cvol:$CACHE_DIR" "$IMAGE")
+LOCKED='(mkdir -p "${MISE_DATA_DIR:-/tmp}" && flock "${MISE_DATA_DIR:-/tmp}/.timothy-install.lock" mise install node@20.18.0)'
+"${PRUN[@]}" sh -c "$LOCKED" >/dev/null 2>&1 & p1=$!
+"${PRUN[@]}" sh -c "$LOCKED" >/dev/null 2>&1 & p2=$!
+wait "$p1" || { echo "FAIL: parallel mise install 1" >&2; exit 1; }
+wait "$p2" || { echo "FAIL: parallel mise install 2" >&2; exit 1; }
+out="$("${PRUN[@]}" mise exec node@20.18.0 -- node --version)"
+if [ "$out" != "v20.18.0" ]; then
+  echo "FAIL: node after parallel mise installs = '$out', want v20.18.0" >&2
+  exit 1
+fi
+echo "parallel mise installs ok"
