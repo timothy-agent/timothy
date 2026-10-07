@@ -283,11 +283,18 @@ type recordedExec struct {
 	code  int
 	err   error
 	write string
+	// probes are the environment facts tool probes (issue #1008),
+	// kept out of cmds and envs; values are the image each ran on.
+	probes []string
 }
 
 func (r *recordedExec) exec(_ context.Context, _, environment, _, command string, _ time.Duration, out io.Writer) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if command == buildToolProbeCmd() {
+		r.probes = append(r.probes, environment)
+		return 0, nil
+	}
 	r.cmds = append(r.cmds, command)
 	r.envs = append(r.envs, environment)
 	_, _ = io.WriteString(out, r.write)
@@ -349,6 +356,12 @@ func TestProvisionInstallsDetectedToolchains(t *testing.T) {
 	}
 	if len(ex.cmds) != 1 || ex.cmds[0] != "mise use --global 'python@3.10'" || ex.envs[0] != "python" {
 		t.Fatalf("exec cmds = %q envs = %q, want one install on the python image", ex.cmds, ex.envs)
+	}
+	if !reflect.DeepEqual(ex.probes, []string{"python"}) {
+		t.Fatalf("tool probes = %q, want one on the python image", ex.probes)
+	}
+	if m.EnvFacts == nil || m.EnvFacts.BaseBranch != "main" || !reflect.DeepEqual(m.EnvFacts.Manifests, []string{"pyproject.toml"}) {
+		t.Fatalf("EnvFacts = %+v, want base branch main and pyproject.toml", m.EnvFacts)
 	}
 	if !slices.Contains(eventKinds(store, "m1"), "mission.toolchain_installed") {
 		t.Fatalf("events = %v, want mission.toolchain_installed", eventKinds(store, "m1"))
@@ -502,6 +515,9 @@ func TestDriverDiscoverReinstallsToolchainsAfterRecreate(t *testing.T) {
 			}
 			if len(ex.cmds) != 1 || ex.cmds[0] != "mise use --global 'python@3.10'" || ex.envs[0] != "python" {
 				t.Fatalf("exec cmds = %q envs = %q, want one install on the python image", ex.cmds, ex.envs)
+			}
+			if !reflect.DeepEqual(ex.probes, []string{"python"}) {
+				t.Fatalf("tool probes = %q, want a re-probe on the python image", ex.probes)
 			}
 			m, _ := store.Get(context.Background(), "m1")
 			if got := strings.Contains(m.DiscoverNotes, "bootstrap unit"); got != tc.wantNote {

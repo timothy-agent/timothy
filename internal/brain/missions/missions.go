@@ -152,6 +152,9 @@ type Mission struct {
 	// files (D-126), installed in the sandbox before discover. Written
 	// with Environment by Store.SetEnvironment.
 	Toolchains map[string]string `json:"toolchains,omitempty"`
+	// EnvFacts is the probed environment facts block (issue #1008),
+	// written by Store.SetEnvFacts at provisioning; nil before that.
+	EnvFacts *EnvFacts `json:"env_facts,omitempty"`
 	// ToolchainInstall is "installed" or "failed" from the latest
 	// toolchain install event, "" when none ran. Derived by the driver
 	// before the discover turn, never persisted or serialized.

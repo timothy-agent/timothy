@@ -618,6 +618,21 @@ describe('MissionDetail toolchains pill', () => {
   })
 })
 
+describe('MissionDetail environment facts', () => {
+  it('mounts the environment panel when facts exist', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, env_facts: { base_branch: 'main' } })
+    renderPage()
+    expect(await screen.findByRole('button', { name: 'Show environment' })).toBeTruthy()
+  })
+
+  it('omits the panel before facts are collected', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission })
+    renderPage()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByRole('button', { name: 'Show environment' })).toBeNull()
+  })
+})
+
 const githubDestinationRow: Destination = {
   id: 'dest-gh',
   name: 'origin repo',

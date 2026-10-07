@@ -2148,3 +2148,44 @@ func TestMissionsRoutingPatchStateGate(t *testing.T) {
 		t.Fatalf("mission.route_changed payload = %v, want %v", payload, want)
 	}
 }
+
+// TestMissionsGetReturnsEnvFacts: GET /v1/missions/{id} carries the
+// stored environment facts (issue #1008).
+func TestMissionsGetReturnsEnvFacts(t *testing.T) {
+	store := testMissionStore(t)
+	ctx := context.Background()
+	id, err := store.Create(ctx, missions.Mission{Goal: "itest-api-mission env facts", Kind: "coding"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	want := missions.EnvFacts{
+		BaseBranch:   "main",
+		Destinations: []missions.DestinationFact{{Kind: "github", Mode: "push_pr"}},
+		Manifests:    []string{"composer.json", "package.json"},
+		Tools:        []missions.ToolFact{{Name: "gh"}, {Name: "git", Version: "git version 2.39.5"}},
+	}
+	if err := store.SetEnvFacts(ctx, id, want); err != nil {
+		t.Fatalf("SetEnvFacts: %v", err)
+	}
+	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
+	a := &API{token: "tok", log: discard()}
+	m := mux(a)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+
+	req := httptest.NewRequest("GET", "/v1/missions/"+id, nil)
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET = %d %s, want 200", w.Code, w.Body.String())
+	}
+	var got struct {
+		EnvFacts *missions.EnvFacts `json:"env_facts"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.EnvFacts == nil || !reflect.DeepEqual(*got.EnvFacts, want) {
+		t.Fatalf("env_facts = %+v, want %+v", got.EnvFacts, want)
+	}
+}

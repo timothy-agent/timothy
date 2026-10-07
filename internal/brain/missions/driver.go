@@ -71,6 +71,7 @@ type driverStore interface {
 	SetDiscoverNotes(ctx context.Context, id, notes string) error
 	SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string, toolchains map[string]string) error
 	SetToolchains(ctx context.Context, id string, toolchains map[string]string) error
+	SetEnvFacts(ctx context.Context, id string, facts EnvFacts) error
 	SetNameIfEmpty(ctx context.Context, id, name string) error
 	SetArtifactRefs(ctx context.Context, id string, refs []ArtifactRef) error
 	SetDestinations(ctx context.Context, id string, entries []DestinationEntry) error
@@ -385,6 +386,9 @@ func (d *Driver) SetCapacityGate(gate capacityChecker) {
 type GitHubPolicy struct {
 	BranchPattern string
 	CommitStyle   string
+	// Kind and Mode (push | push_pr) feed the environment facts block.
+	Kind string
+	Mode string
 }
 
 // GitHubPolicyResolver resolves a destination id to its github row's
@@ -1498,7 +1502,14 @@ func (d *Driver) recreateSandboxIfEnvironmentChanged(ctx context.Context, before
 	if err := d.store.AppendEvent(ctx, before.ID, "mission.sandbox_recreated", map[string]any{"environment": after.Environment}); err != nil {
 		d.log.Warn("driver: record sandbox recreate failed", "mission_id", before.ID, "error", err)
 	}
-	if _, failed := d.provision.installToolchains(ctx, after, after.WorkRoot()); !failed {
+	_, failed := d.provision.installToolchains(ctx, after, after.WorkRoot())
+	// The new image carries other tools: probe the facts again.
+	baseBranch := ""
+	if after.EnvFacts != nil {
+		baseBranch = after.EnvFacts.BaseBranch
+	}
+	d.provision.collectEnvFacts(ctx, after, after.WorkRoot(), baseBranch)
+	if !failed {
 		return ""
 	}
 	return "Installing the toolchains for the " + after.Environment + " environment (" + toolchainSummary(after.Toolchains) + ") failed in the sandbox; the plan's first unit may be a " + bootstrapAllowance + " that installs the toolchain into the workspace."
@@ -2350,7 +2361,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 	p := WorkPacket{
 		Goal: m.Goal, Kind: m.Kind, Plan: m.Plan, Progress: m.Progress,
 		GitLog: gitLog, Iteration: m.Iteration, PromptOverlay: m.PromptOverlay,
-		ExecEnvironmentNote: execEnvironmentNote(loc), Sources: m.Sources,
+		ExecEnvironmentNote: execEnvironmentNote(loc) + renderEnvFacts(m), Sources: m.Sources,
 		Light: m.RunsPlanless(), Location: loc,
 		Findings: m.ReviewFindings, ReworkRound: m.ReworkRounds, MaxRounds: m.MaxIterations,
 	}

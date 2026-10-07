@@ -91,7 +91,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay,
 	pending_permission, auto_approve_tools, auto_approve_plan, last_evidence,
-	discover_notes, replan_used, automation_run_id, session_id, harness, review_harness, environment, environment_marker, toolchains,
+	discover_notes, replan_used, automation_run_id, session_id, harness, review_harness, environment, environment_marker, toolchains, env_facts,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow,
 	review_findings, rework_rounds, has_plan, executor_session_policy, harness_retries, origin_kind, unattended, tool_allowlist,
@@ -172,13 +172,14 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		flow                                                         string
 		reviewFindingsRaw                                            []byte
 		toolchainsRaw                                                []byte
+		envFactsRaw                                                  []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Branch, &m.BaseCommit, &plan, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment, &m.EnvironmentMarker, &toolchainsRaw,
+		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment, &m.EnvironmentMarker, &toolchainsRaw, &envFactsRaw,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -190,6 +191,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 	scanReviewFindings(&m, reviewFindingsRaw)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	_ = json.Unmarshal(toolchainsRaw, &m.Toolchains)
+	scanEnvFacts(&m, envFactsRaw)
 	_ = json.Unmarshal(destinationsRaw, &m.Destinations)
 	scanPendingPermission(&m, pendingPermissionRaw)
 	scanPendingInput(&m, pendingInputRaw)
@@ -262,13 +264,14 @@ func scanMission(row pgx.Row) (Mission, error) {
 		flow                                                         string
 		reviewFindingsRaw                                            []byte
 		toolchainsRaw                                                []byte
+		envFactsRaw                                                  []byte
 	)
 	if err := row.Scan(&m.ID, &m.Goal, &m.Name, &m.Kind, &agentID, &phase, &status, &m.PauseReason, &m.PauseMessage,
 		&m.Workspace, &m.Branch, &m.BaseCommit, &plan, &progress, &m.Iteration, &m.MaxIterations,
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment, &m.EnvironmentMarker, &toolchainsRaw,
+		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment, &m.EnvironmentMarker, &toolchainsRaw, &envFactsRaw,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -280,6 +283,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 	scanReviewFindings(&m, reviewFindingsRaw)
 	_ = json.Unmarshal(artifactRefsRaw, &m.ArtifactRefs)
 	_ = json.Unmarshal(toolchainsRaw, &m.Toolchains)
+	scanEnvFacts(&m, envFactsRaw)
 	_ = json.Unmarshal(destinationsRaw, &m.Destinations)
 	scanPendingPermission(&m, pendingPermissionRaw)
 	scanPendingInput(&m, pendingInputRaw)
@@ -1148,6 +1152,37 @@ func (s *Store) SetToolchains(ctx context.Context, id string, toolchains map[str
 		return fmt.Errorf("missions set toolchains: %w", err)
 	}
 	return nil
+}
+
+// SetEnvFacts persists a mission's environment facts (issue #1008),
+// replacing any earlier ones. No event: the facts are shown on the
+// mission itself.
+func (s *Store) SetEnvFacts(ctx context.Context, id string, facts EnvFacts) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("missions set env facts: %w", err)
+	}
+	raw, err := json.Marshal(facts)
+	if err != nil {
+		return fmt.Errorf("missions set env facts: %w", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET env_facts = $2, updated_at = now() WHERE id = $1`, id, raw); err != nil {
+		return fmt.Errorf("missions set env facts: %w", err)
+	}
+	return nil
+}
+
+// scanEnvFacts unmarshals the env_facts jsonb column; NULL leaves
+// Mission.EnvFacts nil.
+func scanEnvFacts(m *Mission, raw []byte) {
+	if raw == nil {
+		return
+	}
+	var f EnvFacts
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return
+	}
+	m.EnvFacts = &f
 }
 
 // Events returns a mission's full event log in seq order.
