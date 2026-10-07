@@ -55,6 +55,9 @@ create_resp="$(curl -sf "${auth[@]}" -X POST "${BASE_URL}/v1/missions" \
   -d "{\"goal\": \"${GOAL}\", \"kind\": \"general\"}")"
 id="$(echo "${create_resp}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "canary-research: mission ${id}"
+# shellcheck disable=SC1091
+source "${REPO_ROOT}/scripts/lib/canary-cancel.sh"
+canary_cancel_arm
 
 start=$(date +%s)
 phase=""
@@ -130,6 +133,7 @@ if failures:
     sys.exit(1)
 print("canary-research: deterministic checks PASS")
 PY
+canary_cancel_disarm
 
 # Cleanup runs on every PASS exit, including judge-skip paths — only a
 # FAIL leaves the mission in place for debugging. Tolerated as
