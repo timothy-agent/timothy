@@ -166,6 +166,22 @@ not-found and out-of-bounds into the same 404.
   allowlist, symlink-safe writes, download containment.
 - **Accepted:** the shell classifier is a best-effort regex, not a
   boundary; the container is the boundary. Stated in code and here.
+- **Accepted (D-129):** in a session with a registered mission sandbox,
+  the native worker's shell guard relaxes to match what the delegated
+  executors already do in the same container (claude `dontAsk`, codex
+  bypass, opencode `allow`). Language package installs (pip, gem,
+  cargo, global npm) no longer prompt; env files inside the worktree
+  can be read and written; committed repo files that look like
+  credentials or keys (`.npmrc`, `config/secrets.yml`, test `*.pem`)
+  can be read; read-only commands can name `/usr`, `/opt`, `/tmp`,
+  `/home/sandbox` and `/etc/os-release`. The container runs as uid
+  65534 on a read-only rootfs and never receives host secrets, so
+  these reach nothing the worker could not already reach. The one
+  secret the container does hold, the claude CLI auth state under
+  `/home/sandbox/.claude`, stays excluded from the read paths. System
+  package managers, sudo, docker, pipe-to-shell, ssh keys, home
+  dotfiles, paths outside the worktree, and every chat or host
+  session keep the original rules.
 - **Open:** mission containers share one read-write workspace volume
   across missions, so missions are not isolated from each other's files
   (issue #749). Sandbox containers on the default bridge reach the bridge
