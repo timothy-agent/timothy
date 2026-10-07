@@ -418,6 +418,23 @@ func Step(s StepState, in StepInput, cfg Config) Transition {
 	return t
 }
 
+// Pause causes (D-136, issue #1013): every pause event carries one in
+// its payload's "cause", finer than the PauseReason the status column
+// holds. The web label map (MissionDetail.tsx) mirrors them.
+const (
+	CauseMixedCurrency           = "mixed_currency"
+	CauseBudget                  = "budget"
+	CauseReviewInfra             = "review_infra"
+	CauseReviewBudget            = "review_budget"
+	CauseHarnessRetriesExhausted = "harness_retries_exhausted"
+	CauseConsecutiveFailures     = "consecutive_failures"
+	CauseStalledRetries          = "stalled_retries"
+	CauseFindingsUntouched       = "findings_untouched"
+	CauseReviewRoundsExhausted   = "review_rounds_exhausted"
+	CauseResultFailed            = "result_failed"
+	CausePlanApproval            = "plan_approval"
+)
+
 // stepInput is Step's budget brake and input switch, after cancel and
 // verification have been handled.
 func stepInput(s StepState, in StepInput, cfg Config) Transition {
@@ -426,13 +443,13 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 			return Transition{
 				Next: withPause(s, PauseMixedCurrency),
 				Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
-					"reason": string(PauseMixedCurrency),
+					"reason": string(PauseMixedCurrency), "cause": CauseMixedCurrency,
 					"detail": "spend recorded in a currency with no usable stored exchange rate to convert against the mission's budget",
 				}}},
 			}
 		}
 		if s.Spent >= *s.Budget {
-			payload := map[string]any{"reason": string(PauseBudget)}
+			payload := map[string]any{"reason": string(PauseBudget), "cause": CauseBudget}
 			if s.RateAsOf != "" {
 				payload["rate_as_of"] = s.RateAsOf
 			}
@@ -475,7 +492,7 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 	case InputReviewRework:
 		return stepReviewRework(s, in, cfg)
 	case InputReviewInfraFailure:
-		payload := map[string]any{"reason": string(PauseInfra), "detail": in.Reason}
+		payload := map[string]any{"reason": string(PauseInfra), "cause": CauseReviewInfra, "detail": in.Reason}
 		if in.Route != "" {
 			payload["route"] = in.Route
 		}
@@ -490,7 +507,7 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 		return Transition{
 			Next: withPause(s, PauseBudget),
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
-				"reason": string(PauseBudget), "detail": "review_tokens", "message": in.Reason,
+				"reason": string(PauseBudget), "cause": CauseReviewBudget, "detail": "review_tokens", "message": in.Reason,
 			}}},
 		}
 	case InputResultComplete:
@@ -589,7 +606,7 @@ func stepPhaseComplete(s StepState, in StepInput) Transition {
 	if s.Phase == PhasePlan && !s.AutoApprovePlan {
 		return Transition{
 			Next:   withPause(s, PauseApproval),
-			Events: []EventDraft{{Kind: "mission.plan_awaiting_approval", Payload: map[string]any{}}},
+			Events: []EventDraft{{Kind: "mission.plan_awaiting_approval", Payload: map[string]any{"cause": CausePlanApproval}}},
 		}
 	}
 	next, ok := nextPhase(s.Flow, s.Phase)
@@ -707,8 +724,8 @@ func harnessRetryExhausted(s StepState, in StepInput, cfg Config) (Transition, b
 	return Transition{
 		Next: withPause(s, PauseNoProgress),
 		Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
-			"reason": string(PauseNoProgress), "cause": "harness_retries_exhausted",
-			"harness_retries": s.HarnessRetries, "detail": in.Reason,
+			"reason": string(PauseNoProgress), "cause": CauseHarnessRetriesExhausted,
+			"phase": string(s.Phase), "harness_retries": s.HarnessRetries, "detail": in.Reason,
 		}}},
 	}, true
 }
@@ -748,7 +765,7 @@ func stepWorkerFailed(s StepState, in StepInput, cfg Config) Transition {
 	if s.ConsecutiveFailures >= cfg.BackoffFailures {
 		return Transition{
 			Next:   withPause(s, PauseBackoff),
-			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseBackoff), "detail": in.Reason}}},
+			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseBackoff), "cause": CauseConsecutiveFailures, "detail": in.Reason}}},
 		}
 	}
 	return Transition{Next: s, Events: []EventDraft{{Kind: "mission.retry", Payload: retryPayload("worker_failed", in)}}}
@@ -803,7 +820,7 @@ func stepWorkerRetry(s StepState, in StepInput, cfg Config) Transition {
 			}
 			return Transition{
 				Next:   withPause(s, PauseNoProgress),
-				Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseNoProgress), "detail": in.Reason}}},
+				Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseNoProgress), "cause": CauseStalledRetries, "detail": in.Reason}}},
 			}
 		}
 	}
@@ -1009,7 +1026,7 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 		return Transition{
 			Next: withPause(s, PauseNoProgress),
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
-				"reason": string(PauseNoProgress), "findings": findingIDs(stalled),
+				"reason": string(PauseNoProgress), "cause": CauseFindingsUntouched, "findings": findingIDs(stalled),
 				"detail": "worker left the named file untouched for " + fmt.Sprint(cfg.StallRounds) + " rounds: " + findingsSummary(stalled),
 			}}},
 		}
@@ -1018,7 +1035,7 @@ func stepReviewRework(s StepState, in StepInput, cfg Config) Transition {
 		return Transition{
 			Next: withPause(s, PauseReviewExhausted),
 			Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{
-				"reason": string(PauseReviewExhausted), "findings": findingIDs(open),
+				"reason": string(PauseReviewExhausted), "cause": CauseReviewRoundsExhausted, "findings": findingIDs(open),
 				"detail": fmt.Sprintf("%d rework rounds with findings still open: %s", s.ReworkRounds, findingsSummary(open)),
 			}}},
 		}
@@ -1217,7 +1234,7 @@ func stepResultComplete(s StepState) Transition {
 func stepResultFailed(s StepState, in StepInput) Transition {
 	return Transition{
 		Next:   withPause(s, PauseInfra),
-		Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "detail": in.Reason}}},
+		Events: []EventDraft{{Kind: "mission.paused", Payload: map[string]any{"reason": string(PauseInfra), "cause": CauseResultFailed, "detail": in.Reason}}},
 	}
 }
 

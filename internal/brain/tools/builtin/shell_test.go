@@ -80,15 +80,18 @@ func TestShellCapsOutput(t *testing.T) {
 	t.Parallel()
 	tool, _ := shellTool(t, 0)
 
-	got, err := runTool(t, tool, "yes x | head -c 200000")
+	got, err := runTool(t, tool, "yes x | head -c 200000; echo SUMMARY-LINE")
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if len(got) > shellMaxOutput+100 {
+	if len(got) > ShellHeadBytes+ShellTailBytes+100 {
 		t.Fatalf("output length %d exceeds cap", len(got))
 	}
-	if !strings.Contains(got, "[output capped]") {
+	if !strings.Contains(got, "bytes dropped]") {
 		t.Fatal("capped output missing marker")
+	}
+	if !strings.HasSuffix(strings.TrimSpace(got), "SUMMARY-LINE") {
+		t.Fatal("output tail lost")
 	}
 }
 
