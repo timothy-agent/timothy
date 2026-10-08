@@ -2,6 +2,7 @@ import { File, FileAudio, FileText, Image, LoaderCircle, Paperclip, X } from 'lu
 import { useRef } from 'react'
 import { toast } from 'sonner'
 import { uploadAttachment } from '../../api/client'
+import { uuid } from '../../lib/uuid'
 import {
   isMissionAttachmentFile,
   maxAttachmentBytes,
@@ -48,7 +49,7 @@ export function MissionAttachments({
         toast.error(`You can attach up to ${maxAttachments} files`)
         break
       }
-      const tempId = crypto.randomUUID()
+      const tempId = uuid()
       const placeholder: PendingAttachment = {
         id: tempId,
         mime: file.type,
