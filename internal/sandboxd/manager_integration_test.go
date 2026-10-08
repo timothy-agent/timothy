@@ -7,17 +7,67 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// brainUID is the uid/gid brain provisions mission directories as; a
+// directory the tests create and leave behind must belong to it.
+const brainUID = 65534
+
+// newMissionDir creates /workspace/missions/coding/<missionID> with the
+// .sandbox-cache dir brain provisions (D-131) and removes it when the
+// test ends. Parent dirs the test had to create are removed too, or
+// handed to brainUID when another mission dir still lives in them, so a
+// run never leaves a root-owned missions/coding behind. Skips when the
+// workspace volume is not writable here. Call it before registering the
+// container cleanup so the container is removed first.
+func newMissionDir(t *testing.T, missionID string) string {
+	t.Helper()
+	root := path.Join(workspaceMountPath, missionsDirName, "coding")
+	missionDir := path.Join(root, missionID)
+	var created []string // outermost first
+	for _, d := range []string{path.Dir(root), root} {
+		if _, err := os.Stat(d); errors.Is(err, fs.ErrNotExist) {
+			created = append(created, d)
+		}
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(missionDir); err != nil {
+			t.Errorf("remove %s: %v", missionDir, err)
+		}
+		for _, d := range slices.Backward(created) {
+			if err := os.Remove(d); err == nil || errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err := os.Chown(d, brainUID, brainUID); err != nil {
+				t.Errorf("chown %s: %v", d, err)
+			}
+			if fi, err := os.Stat(d); err == nil {
+				if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid == 0 {
+					t.Errorf("%s is left root-owned", d)
+				}
+			}
+		}
+		if _, err := os.Stat(missionDir); err == nil {
+			t.Errorf("%s still exists after cleanup", missionDir)
+		}
+	})
+	if err := os.MkdirAll(path.Join(missionDir, missionCacheDirName), 0o777); err != nil { //nolint:gosec // test fixture inside the test container's own workspace mount
+		t.Skipf("cannot create %s (workspace volume not mounted writable here): %v", missionDir, err)
+	}
+	return missionDir
 }
 
 // TestManagerLifecycle exercises the full path against a real Docker
@@ -36,15 +86,11 @@ func TestManagerLifecycle(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	missionID := "it-" + time.Now().UTC().Format("20060102-150405.000000000")
-	t.Cleanup(func() { _ = mgr.Remove(context.Background(), missionID) })
-
 	// D-107 mounts the mission's own workspace subdirectory, which
 	// Docker requires to exist; brain provisions it before any exec, so
 	// the test stands in for that here.
-	missionDir := "/workspace/missions/coding/" + missionID
-	if err := os.MkdirAll(missionDir, 0o777); err != nil { //nolint:gosec // test fixture inside the test container's own workspace mount
-		t.Skipf("cannot create %s (workspace volume not mounted writable here): %v", missionDir, err)
-	}
+	missionDir := newMissionDir(t, missionID)
+	t.Cleanup(func() { _ = mgr.Remove(context.Background(), missionID) })
 
 	t.Run("exec runs and captures output", func(t *testing.T) {
 		var out bytes.Buffer
@@ -162,12 +208,8 @@ func TestCoreUlimitPreventsDump(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	missionID := "it-core-" + time.Now().UTC().Format("20060102-150405.000000000")
+	missionDir := newMissionDir(t, missionID)
 	t.Cleanup(func() { _ = mgr.Remove(context.Background(), missionID) })
-
-	missionDir := "/workspace/missions/coding/" + missionID
-	if err := os.MkdirAll(missionDir, 0o777); err != nil { //nolint:gosec // test fixture inside the test container's own workspace mount
-		t.Skipf("cannot create %s (workspace volume not mounted writable here): %v", missionDir, err)
-	}
 
 	assertNoCoreFiles := func(t *testing.T) {
 		t.Helper()
@@ -254,12 +296,8 @@ func TestTwoOwnersOnOneDaemon(t *testing.T) {
 	}
 	a, b := newMgr("it-owner-a-"+run), newMgr("it-owner-b-"+run)
 	missionID := "it-owner-" + run
+	missionDir := newMissionDir(t, missionID)
 	t.Cleanup(func() { _ = a.Remove(context.Background(), missionID) })
-
-	missionDir := "/workspace/missions/coding/" + missionID
-	if err := os.MkdirAll(path.Join(missionDir, missionCacheDirName), 0o777); err != nil { //nolint:gosec // test fixture inside the test container's own workspace mount
-		t.Skipf("cannot create %s (workspace volume not mounted writable here): %v", missionDir, err)
-	}
 	var out bytes.Buffer
 	if _, err := a.Exec(ctx, missionID, "", missionDir, "true", 5*time.Second, &out); err != nil {
 		t.Fatalf("A Exec: %v", err)
