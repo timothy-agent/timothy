@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { Panel } from './panel'
 
 describe('Panel', () => {
+  it('forwards a tour anchor to the root', () => {
+    render(<Panel data-tour="page.panel">Body</Panel>)
+    expect(screen.getByText('Body').closest('[data-density]')).toHaveAttribute('data-tour', 'page.panel')
+  })
+
   it('defaults to comfortable density', () => {
     render(<Panel title="Goal">Body</Panel>)
     expect(screen.getByText('Body').closest('[data-density]')).toHaveAttribute('data-density', 'comfortable')

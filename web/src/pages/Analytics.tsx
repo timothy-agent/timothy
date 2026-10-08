@@ -37,6 +37,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../com
 import { PageShell } from '../components/timothy/page-shell'
 import { PageHeader } from '../components/timothy/page-header'
 import { Panel } from '../components/timothy/panel'
+import { TourOverlay } from '../onboarding/tour/TourOverlay'
+import { useTour } from '../onboarding/tour/useTour'
+import { analyticsTour } from '../onboarding/tours/analytics'
 import { useMarkVisited } from '../onboarding/useVisited'
 import { SegmentedControl } from '../components/timothy/segmented-control'
 import { Alert, AlertDescription } from '../components/ui/alert'
@@ -250,6 +253,7 @@ export function Analytics() {
   const [error, setError] = useState<string | null>(null)
   const [unpriced, setUnpriced] = useState<UnpricedGroup[]>([])
   const [prices, setPrices] = useState<CatalogPrice[]>([])
+  const tour = useTour(analyticsTour, { enabled: true })
 
   useEffect(() => {
     const { from, to, bucket } = rangeDates(range)
@@ -474,12 +478,14 @@ export function Analytics() {
         title="Analytics"
         description="Spend, tokens, and latency from the cost ledger."
         actions={
-          <SegmentedControl
-            aria-label="Range"
-            value={range}
-            onChange={setRange}
-            options={ranges.map((r) => ({ value: r.key, label: r.label }))}
-          />
+          <div data-tour="analytics.range">
+            <SegmentedControl
+              aria-label="Range"
+              value={range}
+              onChange={setRange}
+              options={ranges.map((r) => ({ value: r.key, label: r.label }))}
+            />
+          </div>
         }
       />
 
@@ -508,7 +514,7 @@ export function Analytics() {
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
         {tiles.map((t) => (
-          <Panel key={t.label}>
+          <Panel key={t.label} data-tour={t.label === spendLabel ? 'analytics.budget' : undefined}>
             <div className="text-xs text-muted-foreground">{t.label}</div>
             <div className="mt-1.5 text-2xl font-semibold tracking-tight">
               {t.value}
@@ -548,6 +554,7 @@ export function Analytics() {
 
       <Panel
         className="mt-6"
+        data-tour="analytics.providers"
         title="Spend by provider"
         actions={<ViewToggle view={costView} onChange={setCostView} title="Spend by provider" />}
       >
@@ -745,6 +752,7 @@ export function Analytics() {
         <ProviderCostTable rows={data?.providerTotals ?? []} />
         <BreakdownTable title="Cost breakdown by model" rows={data ? totals(data.byModel) : []} estimates={estimates} />
       </div>
+      <TourOverlay {...tour} />
     </PageShell>
   )
 }

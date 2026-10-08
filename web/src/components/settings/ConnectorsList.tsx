@@ -78,7 +78,10 @@ export function ConnectorsList() {
             calls go through the same permission prompts as everything else.
           </p>
           {connectors.length === 0 ? (
-            <EmptyState title="No connectors yet" description="Add one below." />
+            <EmptyState
+              title="No accounts connected"
+              description="Connect mail, calendar, GitHub or cloud so Timothy can read and act for you. Pick one below."
+            />
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {connectors.map((c) => (

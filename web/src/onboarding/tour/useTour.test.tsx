@@ -4,7 +4,7 @@ import type { OnboardingProgress } from '../../api/types'
 import { OnboardingContext } from '../context'
 import { onboardingState } from '../testing'
 import type { TourDef } from './types'
-import { useTour } from './useTour'
+import { requestTourRestart, useTour } from './useTour'
 
 afterEach(cleanup)
 
@@ -133,5 +133,21 @@ describe('useTour', () => {
     expect(state()).toHaveTextContent('off')
     fireEvent.click(screen.getByText('restart'))
     expect(state()).toHaveTextContent('A 1/2')
+  })
+
+  it('restarts a seen tour on a restart request for its page only', async () => {
+    renderTour({ progress: { tours_seen: { demo: 1 } } })
+    await frame()
+    act(() => requestTourRestart('other'))
+    expect(state()).toHaveTextContent('off')
+    act(() => requestTourRestart('demo'))
+    expect(state()).toHaveTextContent('A 1/2')
+  })
+
+  it('ignores a restart request while disabled', async () => {
+    renderTour({ enabled: false })
+    await frame()
+    act(() => requestTourRestart('demo'))
+    expect(state()).toHaveTextContent('off')
   })
 })

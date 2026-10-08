@@ -146,8 +146,11 @@ describe('Knowledge page', () => {
   it('shows an empty state with an explainer and create button', async () => {
     vi.mocked(listKbCollections).mockResolvedValue([])
     renderPage()
-    expect(await screen.findByText(/No collections yet/)).toBeTruthy()
-    expect(screen.getAllByRole('button', { name: 'New collection' }).length).toBeGreaterThan(0)
+    expect(await screen.findByText('No collections yet')).toBeTruthy()
+    expect(
+      screen.getByText('Upload documents and Timothy can search and quote them in chats and missions.'),
+    ).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: 'New collection' })).toHaveLength(2)
   })
 
   it('navigates to the auto-add page from the "Add to Knowledgebase" header action', async () => {

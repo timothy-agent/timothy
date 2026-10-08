@@ -35,7 +35,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { describeTrigger } from '../lib/cron'
 import { errText } from '../lib/errors'
 import { relativeTime } from '../lib/format'
+import { unmetKey } from '../onboarding/gateCopy'
 import { SetupGate } from '../onboarding/SetupGate'
+import { useOnboarding } from '../onboarding/context'
+import { TourOverlay } from '../onboarding/tour/TourOverlay'
+import { useTour } from '../onboarding/tour/useTour'
+import { automationsTour } from '../onboarding/tours/automations'
 import { useMarkVisited } from '../onboarding/useVisited'
 
 function Sparkline({ rows }: { rows: AutomationsStats['sparkline'] }) {
@@ -52,6 +57,8 @@ export function Automations() {
   const [agents, setAgents] = useState<AdminAgent[]>([])
   const [channelNames, setChannelNames] = useState<Record<string, string>>({})
   const [confirmDelete, setConfirmDelete] = useState<Automation | null>(null)
+  const { readiness } = useOnboarding()
+  const tour = useTour(automationsTour, { enabled: unmetKey(readiness, ['automations_enabled']) === null })
 
   const refresh = useCallback(() => {
     listAutomations()
@@ -109,7 +116,7 @@ export function Automations() {
         title="Automations"
         description="Triggers that start a mission on a cron or when you run them."
         actions={
-          <Button onClick={() => navigate('/automations/new')}>
+          <Button data-tour="automations.new" onClick={() => navigate('/automations/new')}>
             <Plus aria-hidden />
             New automation
           </Button>
@@ -130,12 +137,18 @@ export function Automations() {
 
           <TemplateGallery />
 
-          <Panel title="All automations" density="operational">
+          <Panel title="All automations" density="operational" data-tour="automations.list">
             {automations !== null && automations.length === 0 ? (
               <EmptyState
                 icon={Repeat}
                 title="No automations yet"
-                description="Create one, start from a template, or choose Make this recurring on a new mission."
+                description="Run a mission on a schedule or when something happens. Start from a template below or make a new one."
+                action={
+                  <Button onClick={() => navigate('/automations/new')}>
+                    <Plus aria-hidden />
+                    New automation
+                  </Button>
+                }
               />
             ) : (
               <Table>
@@ -232,6 +245,7 @@ export function Automations() {
         destructive
         onConfirm={() => void remove()}
       />
+      <TourOverlay {...tour} />
     </PageShell>
   )
 }

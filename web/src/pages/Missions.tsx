@@ -212,8 +212,13 @@ export function Missions() {
               icon={Inbox}
               title={
                 missions.length === 0
-                  ? 'No missions yet, create one to get started.'
+                  ? 'No missions yet'
                   : 'No missions match the current filters.'
+              }
+              description={
+                missions.length === 0
+                  ? 'A mission is a longer task Timothy works on by itself and reports back.'
+                  : undefined
               }
               action={
                 missions.length === 0 ? (
