@@ -30,6 +30,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
+	"github.com/SumonMSelim/timothy/internal/brain/onboarding"
 	"github.com/SumonMSelim/timothy/internal/brain/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
@@ -126,7 +127,7 @@ var memoryRoutePatterns = []string{
 // and automation attachment resolution; nil (no gateway wiring) makes
 // every image attachment fail with attachmentResolver's "could not be
 // described" error.
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, kbEnrich *kb.Enricher, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, automationStore *automations.Store, eventStore *events.Store, eventsKick func(), pdfService *pdfgen.Service, caption func(context.Context, string, []byte) string, channelStore *channels.Store, channelService *channels.Service) {
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, kbEnrich *kb.Enricher, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, automationStore *automations.Store, eventStore *events.Store, eventsKick func(), pdfService *pdfgen.Service, caption func(context.Context, string, []byte) string, channelStore *channels.Store, channelService *channels.Service, onboardingProbes onboarding.Probes) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates, pdfService: pdfService}
 	if missionStore != nil {
 		a.missionPerms = missionStore
@@ -162,6 +163,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	}
 	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister, autoLister)
 	a.registerSettings(srv.Handle, flags, whisperURL, pdfService != nil)
+	a.registerOnboarding(srv.Handle, flags, onboardingProbes)
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog, msft, secrets)
 	// Same nil-box guard as connLister above, for the deferred-tool

@@ -153,7 +153,7 @@ type prepareRun struct {
 // run executes the spec in order: config, tools, deps, env template,
 // baseline test, audit.
 func (r *prepareRun) run(ctx context.Context, spec prepareSpec) {
-	local := miseLocalInput{Providers: spec.Providers, EnvTemplate: spec.EnvTemplate, Artisan: spec.Artisan, Lockfiles: spec.Lockfiles}
+	local := miseLocalInput{Providers: spec.Providers, EnvTemplate: spec.EnvTemplate, Artisan: spec.Artisan, Lockfiles: spec.Lockfiles, OSVOffline: r.p.osvOffline}
 	if err := r.writeMiseLocal(local, spec.RepoKeys); err != nil {
 		r.fail("writing " + miseLocalFile + ": " + err.Error())
 		return
@@ -256,7 +256,7 @@ func (r *prepareRun) audit(ctx context.Context, lockfiles []string, npmNoLock bo
 	}
 	outFile := filepath.Join(dir, "osv.json")
 	_ = os.Remove(outFile)
-	code, _, ok := r.step(ctx, "audit", buildAuditCmd(lockfiles, outFile), prepareAuditTimeout, osvExitAdvisories, osvExitNoPackages)
+	code, _, ok := r.step(ctx, "audit", buildAuditCmd(lockfiles, outFile, r.p.osvOffline), prepareAuditTimeout, osvExitAdvisories, osvExitNoPackages)
 	switch {
 	case !ok:
 		r.fail("osv-scanner audit failed; vulnerability counts are unknown")

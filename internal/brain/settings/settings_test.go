@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -189,5 +190,35 @@ func TestEmailPollIntervalFloor(t *testing.T) {
 	}
 	if !knownValueKeys[ValueEmailPollSeconds] || !nonNegativeIntKeys[ValueEmailPollSeconds] {
 		t.Fatal("ValueEmailPollSeconds missing from knownValueKeys or nonNegativeIntKeys")
+	}
+}
+
+// TestJSONSettingsRejectUnknownKeys pins the JSON key class: only
+// registered keys read or write, and a bool or string key is not one.
+func TestJSONSettingsRejectUnknownKeys(t *testing.T) {
+	s := degradedStore(t)
+	ctx := context.Background()
+	for _, key := range []string{"not_a_real_key", KeyTools, ValueTimezone} {
+		var dst map[string]any
+		if _, err := s.JSON(ctx, key, &dst); err == nil || !strings.Contains(err.Error(), "unknown setting") {
+			t.Errorf("JSON(%q) err = %v, want unknown setting", key, err)
+		}
+		if err := s.SetJSON(ctx, key, map[string]any{}); err == nil || !strings.Contains(err.Error(), "unknown setting") {
+			t.Errorf("SetJSON(%q) err = %v, want unknown setting", key, err)
+		}
+	}
+}
+
+// TestJSONSettingsDegradedReturnsError confirms a database outage is an
+// error for JSON keys, not a silent default.
+func TestJSONSettingsDegradedReturnsError(t *testing.T) {
+	s := degradedStore(t)
+	var dst map[string]any
+	found, err := s.JSON(context.Background(), KeyOnboarding, &dst)
+	if err == nil || found {
+		t.Fatalf("JSON(degraded) = %v, %v; want error", found, err)
+	}
+	if err := s.SetJSON(context.Background(), KeyOnboarding, map[string]any{}); err == nil {
+		t.Fatal("SetJSON(degraded) err = nil, want error")
 	}
 }

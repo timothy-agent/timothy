@@ -35,6 +35,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { describeTrigger } from '../lib/cron'
 import { errText } from '../lib/errors'
 import { relativeTime } from '../lib/format'
+import { SetupGate } from '../onboarding/SetupGate'
 
 function Sparkline({ rows }: { rows: AutomationsStats['sparkline'] }) {
   const option = useMemo(() => sparklineOption(rows, cssVar('--good'), cssVar('--destructive')), [rows])
@@ -113,110 +114,112 @@ export function Automations() {
         }
       />
 
-      <div className="space-y-10">
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-          <StatTile label="Total" value={stats?.total ?? 'N/A'} />
-          <StatTile label="Enabled" value={stats?.enabled ?? 'N/A'} />
-          <StatTile label="Succeeded (7d)" value={stats?.succeeded_7d ?? 'N/A'} />
-          <StatTile label="Failed (7d)" value={stats?.failed_7d ?? 'N/A'} />
-          <StatTile label="Runs, 14 days" value={runs14d ?? 'N/A'}>
-            {stats && stats.sparkline.length > 0 && <Sparkline rows={stats.sparkline} />}
-          </StatTile>
-        </div>
+      <SetupGate requires={['automations_enabled']} variant="panel">
+        <div className="space-y-10">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+            <StatTile label="Total" value={stats?.total ?? 'N/A'} />
+            <StatTile label="Enabled" value={stats?.enabled ?? 'N/A'} />
+            <StatTile label="Succeeded (7d)" value={stats?.succeeded_7d ?? 'N/A'} />
+            <StatTile label="Failed (7d)" value={stats?.failed_7d ?? 'N/A'} />
+            <StatTile label="Runs, 14 days" value={runs14d ?? 'N/A'}>
+              {stats && stats.sparkline.length > 0 && <Sparkline rows={stats.sparkline} />}
+            </StatTile>
+          </div>
 
-        <TemplateGallery />
+          <TemplateGallery />
 
-        <Panel title="All automations" density="operational">
-          {automations !== null && automations.length === 0 ? (
-            <EmptyState
-              icon={Repeat}
-              title="No automations yet"
-              description="Create one, start from a template, or choose Make this recurring on a new mission."
-            />
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Agent</TableHead>
-                  <TableHead>Triggers</TableHead>
-                  <TableHead>Last run</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead>
-                    <span className="sr-only">Enabled</span>
-                  </TableHead>
-                  <TableHead>
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(automations ?? []).map((au) => {
-                  const { last_run_status: lastStatus, last_run_at: lastAt } = au.stats
-                  return (
-                    <TableRow key={au.id} data-automation-id={au.id}>
-                      <TableCell>
-                        <Link to={`/automations/${au.id}`} className="font-medium hover:underline">
-                          {au.name}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">{agentName(au.agent_id)}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1.5">
-                          {au.triggers.map((t) => (
-                            <Badge key={t.id} variant={t.enabled ? 'outline' : 'neutral'} size="sm">
-                              {describeTrigger(t, channelNames)}
-                            </Badge>
-                          ))}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {lastStatus ? (
-                          <div className="flex items-center gap-2">
-                            <StatusBadge status={automationRunStatus(lastStatus)} label={runStatusLabel[lastStatus]} size="sm" />
-                            {lastAt && <span className="text-xs text-muted-foreground">{relativeTime(lastAt)}</span>}
+          <Panel title="All automations" density="operational">
+            {automations !== null && automations.length === 0 ? (
+              <EmptyState
+                icon={Repeat}
+                title="No automations yet"
+                description="Create one, start from a template, or choose Make this recurring on a new mission."
+              />
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Agent</TableHead>
+                    <TableHead>Triggers</TableHead>
+                    <TableHead>Last run</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead>
+                      <span className="sr-only">Enabled</span>
+                    </TableHead>
+                    <TableHead>
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(automations ?? []).map((au) => {
+                    const { last_run_status: lastStatus, last_run_at: lastAt } = au.stats
+                    return (
+                      <TableRow key={au.id} data-automation-id={au.id}>
+                        <TableCell>
+                          <Link to={`/automations/${au.id}`} className="font-medium hover:underline">
+                            {au.name}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{agentName(au.agent_id)}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1.5">
+                            {au.triggers.map((t) => (
+                              <Badge key={t.id} variant={t.enabled ? 'outline' : 'neutral'} size="sm">
+                                {describeTrigger(t, channelNames)}
+                              </Badge>
+                            ))}
                           </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">Never</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{relativeTime(au.created_at)}</TableCell>
-                      <TableCell>
-                        <Switch
-                          checked={au.enabled}
-                          onCheckedChange={(enabled) => toggle(au, enabled)}
-                          aria-label={`${au.name} enabled`}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <IconButton label={`Actions for ${au.name}`} icon={Ellipsis} size="xs" tooltip={false} />
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => navigate(`/automations/${au.id}/edit`)}>
-                              <Pencil />
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => void runNow(au)} disabled={!au.enabled}>
-                              <Play />
-                              Run now
-                            </DropdownMenuItem>
-                            <DropdownMenuItem variant="destructive" onClick={() => setConfirmDelete(au)}>
-                              <Trash2 />
-                              Delete
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </Panel>
-      </div>
+                        </TableCell>
+                        <TableCell>
+                          {lastStatus ? (
+                            <div className="flex items-center gap-2">
+                              <StatusBadge status={automationRunStatus(lastStatus)} label={runStatusLabel[lastStatus]} size="sm" />
+                              {lastAt && <span className="text-xs text-muted-foreground">{relativeTime(lastAt)}</span>}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Never</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{relativeTime(au.created_at)}</TableCell>
+                        <TableCell>
+                          <Switch
+                            checked={au.enabled}
+                            onCheckedChange={(enabled) => toggle(au, enabled)}
+                            aria-label={`${au.name} enabled`}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <IconButton label={`Actions for ${au.name}`} icon={Ellipsis} size="xs" tooltip={false} />
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => navigate(`/automations/${au.id}/edit`)}>
+                                <Pencil />
+                                Edit
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => void runNow(au)} disabled={!au.enabled}>
+                                <Play />
+                                Run now
+                              </DropdownMenuItem>
+                              <DropdownMenuItem variant="destructive" onClick={() => setConfirmDelete(au)}>
+                                <Trash2 />
+                                Delete
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </Panel>
+        </div>
+      </SetupGate>
 
       <ConfirmDialog
         open={confirmDelete !== null}

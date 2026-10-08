@@ -179,6 +179,9 @@ services:
       # Non-empty enables the agentic workflows layer (D-070):
       # orchestration above missions. Off by default.
       WORKFLOWS_ENABLED: ${WORKFLOWS_ENABLED:-}
+      # Non-empty: osv-scanner audits use the local database in the
+      # sandbox-caches volume (make canary-ecosystems refreshes it).
+      MISSION_OSV_OFFLINE: ${MISSION_OSV_OFFLINE:-}
       # Compose-internal only: the model never sees this address.
       SEARXNG_URL: http://searxng:8080
       # Converts Gmail attachments (PDFs) and HTML-only email bodies to

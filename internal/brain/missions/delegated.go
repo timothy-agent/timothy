@@ -798,8 +798,10 @@ func newRunID() (string, error) {
 // result ladder (below) can map either onto the same WorkerVerdict.
 // additionalProperties:false is load-bearing: OpenAI's strict
 // structured-output validation (codex --output-schema) rejects any
-// schema without it.
-var resultSchemaJSON = json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["DONE","RETRY","BLOCKED"]},"note":{"type":"string"}},"required":["status","note"],"additionalProperties":false}`)
+// schema without it. final_output (D-134) is the report a goal asks
+// for when no unit lists a file for it, "" otherwise; required because
+// strict validation demands every property be listed there.
+var resultSchemaJSON = json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["DONE","RETRY","BLOCKED"]},"note":{"type":"string"},"final_output":{"type":"string"}},"required":["status","note","final_output"],"additionalProperties":false}`)
 
 // reviewSchemaFor is workerResultSchema's review counterpart (issue
 // #716): a reviewer that loses its tools to a schema cannot read the
@@ -829,12 +831,12 @@ func workerResultSchema(adapter executor.Adapter) json.RawMessage {
 // and that DONE means every acceptance criterion is met even though the
 // harness-side check_cmd/CheckArtifacts runs regardless of what it
 // reports.
-const delegatedSystemAppend = " You are running as a delegated coding CLI, not through mission_status. End your turn by producing the required structured output with status DONE, RETRY, or BLOCKED and a short note. Only report DONE when every acceptance criterion for the current unit is genuinely met: the harness independently verifies your artifacts and check_cmd regardless of what you report, so a false DONE only costs a wasted review round, never actually passes. The harness commits the unit's files itself after your turn, so never run git add, commit, reset, stash, or checkout."
+const delegatedSystemAppend = " You are running as a delegated coding CLI, not through mission_status. End your turn by producing the required structured output with status DONE, RETRY, or BLOCKED and a short note. Only report DONE when every acceptance criterion for the current unit is genuinely met: the harness independently verifies your artifacts and check_cmd regardless of what you report, so a false DONE only costs a wasted review round, never actually passes. The harness commits the unit's files itself after your turn, so never run git add, commit, reset, stash, or checkout. When the goal asks for an analysis or report and no unit lists a file for it, never write one into the repository: put the report text in the output's final_output field, and the harness carries it in the mission result and the PR body; otherwise leave final_output empty."
 
 // delegatedVerdictShapeAppend spells out the result contract for an
 // adapter that cannot be sent a schema (issue #716). The object must
 // come last so the adapter's trailing-JSON extraction finds it.
-const delegatedVerdictShapeAppend = " Finish your final message with a single JSON object on its own line and nothing after it: {\"status\": \"DONE\" | \"RETRY\" | \"BLOCKED\", \"note\": \"<one sentence>\"}. Do the unit's actual work with your tools first; the object reports what you did, it is never a substitute for doing it."
+const delegatedVerdictShapeAppend = " Finish your final message with a single JSON object on its own line and nothing after it: {\"status\": \"DONE\" | \"RETRY\" | \"BLOCKED\", \"note\": \"<one sentence>\", \"final_output\": \"<report or empty>\"}. Do the unit's actual work with your tools first; the object reports what you did, it is never a substitute for doing it."
 
 // delegatedAllowTools/delegatedDenyTools are the delegated worker's
 // static tool surface, passed as the CLI's own allow/deny flags at
@@ -1676,6 +1678,7 @@ func (r *delegatedRunner) finish(ctx context.Context, m Mission, run cliRun, st 
 		verdict = WorkerVerdict{
 			Outcome:  strings.ToLower(res.Status),
 			Evidence: res.Note, Analysis: res.Note, Question: res.Note, Note: res.Note,
+			FinalOutput: res.FinalOutput,
 		}
 	default:
 		if raw, sok := extractTextSentinel(st.textBuf.String(), missionStatusToolName); sok {
