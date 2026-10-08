@@ -176,6 +176,14 @@ function runsPlanless(mission: Mission): boolean {
   return !!mission.light || mission.flow === 'discover_build'
 }
 
+// resultText is the Result panel body: a planless mission's
+// final_output, else a planned mission's report (final_output, D-134)
+// or its last evidence.
+function resultText(mission: Mission): string {
+  if (runsPlanless(mission)) return mission.final_output ?? ''
+  return mission.final_output || (mission.last_evidence ?? '')
+}
+
 // latestPROpened finds the most recent mission.pr_opened event so the
 // PR chip persists across reloads — the timeline is the durable record
 // of a PR having been opened, the immediate POST response is only the
@@ -964,12 +972,12 @@ export function MissionDetail() {
           </Panel>
         )}
 
-        {isTerminal && (runsPlanless(mission) ? mission.final_output : mission.last_evidence) && (
+        {isTerminal && resultText(mission) && (
           <Panel
             title="Result"
-            actions={<CopyButton value={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''} label="Copy result" />}
+            actions={<CopyButton value={resultText(mission)} label="Copy result" />}
           >
-            <ResultSection evidence={(runsPlanless(mission) ? mission.final_output : mission.last_evidence) ?? ''} />
+            <ResultSection evidence={resultText(mission)} />
           </Panel>
         )}
 

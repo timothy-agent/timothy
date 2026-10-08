@@ -135,7 +135,9 @@ type Mission struct {
 	Flow Flow `json:"flow"`
 	// FinalOutput is a light mission's verbatim final worker message,
 	// set on the done transition (driver.go's runExecute) — the
-	// deliverable for destinations delivery and memory extraction.
+	// deliverable for destinations delivery and memory extraction. On a
+	// planned mission it is the report a worker carried in final_output
+	// (D-134), rendered into the PR body.
 	FinalOutput string `json:"final_output,omitempty"`
 	// Environment selects the per-language sandbox image (D-05x) a
 	// coding mission's container runs: "" is the base image. Unlike

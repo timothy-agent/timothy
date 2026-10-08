@@ -145,6 +145,10 @@ ENV MISE_CACHE_DIR=/home/sandbox/.cache/mise
 ENV MISE_STATE_DIR=/home/sandbox/.cache/mise-state
 ENV MISE_TRUSTED_CONFIG_PATHS=/workspace
 ENV MISE_YES=1
+# D-139 (issue #1014): mise reads the repo's .nvmrc, .node-version,
+# .python-version, .go-version, .ruby-version, .java-version, .sdkmanrc
+# and rust-toolchain.toml itself; idiomatic files are off by default.
+ENV MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS=node,python,go,ruby,java,rust
 # Non-interactive, wide-output exec environment (issue #1009): commands
 # run without a TTY, so runners must not wrap at 80 columns, prompt, watch
 # or colour. Image ENV merges with sandboxd's create-time PATH and HOME.

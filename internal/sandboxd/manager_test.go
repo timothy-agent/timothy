@@ -1041,7 +1041,8 @@ func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
 
 // TestBaseImageSetsNonInteractiveEnv confirms the base image carries the
 // non-interactive, wide-output ENV (issue #1009) that createContainer's
-// PATH/HOME-only Env merges with, and that mise never auto-installs.
+// PATH/HOME-only Env merges with, that mise never auto-installs, and
+// that mise reads the repo's idiomatic version files (D-139).
 func TestBaseImageSetsNonInteractiveEnv(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "sandbox-base.Dockerfile"))
 	if err != nil {
@@ -1054,6 +1055,7 @@ func TestBaseImageSetsNonInteractiveEnv(t *testing.T) {
 		"PIP_DISABLE_PIP_VERSION_CHECK=1", "PYTHONUNBUFFERED=1", "NPM_CONFIG_FUND=false",
 		"NPM_CONFIG_UPDATE_NOTIFIER=false", "MISE_AUTO_INSTALL=false",
 		"MISE_EXEC_AUTO_INSTALL=false", "MISE_NOT_FOUND_AUTO_INSTALL=false",
+		"MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS=node,python,go,ruby,java,rust",
 	} {
 		if !strings.Contains(df, " "+kv) {
 			t.Errorf("sandbox-base.Dockerfile ENV is missing %s", kv)
