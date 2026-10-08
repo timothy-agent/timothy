@@ -812,9 +812,8 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 		WorkspaceRoot: root,
 		MaxTimeout:    sandboxShellMaxTimeout,
 		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
-			var out strings.Builder
-			capped := &cappedStringWriter{w: &out, max: shellOutputCap}
-			exitCode, err := r.sandbox(ctx, missionID, environment, workdir, command, timeout, capped)
+			out := builtin.NewHeadTailWriter(builtin.ShellHeadBytes, builtin.ShellTailBytes)
+			exitCode, err := r.sandbox(ctx, missionID, environment, workdir, command, timeout, out)
 			if err != nil {
 				// The sandbox backend's contract mirrors runShell's: a
 				// timeout comes back as an error, everything else
@@ -823,9 +822,6 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 				return out.String(), err
 			}
 			result := out.String()
-			if capped.truncated {
-				result += "\n[output capped]"
-			}
 			if exitCode != 0 {
 				result = fmt.Sprintf("%s\n(exit status %d)", result, exitCode)
 			}
@@ -833,35 +829,6 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 		},
 	}
 	return builtin.Shell(shellCfg)
-}
-
-// shellOutputCap mirrors builtin.Shell's own output cap: the sandbox
-// backend's Runner must behave identically to the in-process path, not
-// let a runaway sandboxed command balloon memory.
-const shellOutputCap = 64 << 10
-
-// cappedStringWriter stops retaining bytes past max (writes still
-// succeed so the underlying exec can finish): the sandbox-Runner
-// analog of builtin.capWriter, kept separate because that type is
-// unexported in the builtin package.
-type cappedStringWriter struct {
-	w         *strings.Builder
-	max       int
-	truncated bool
-}
-
-func (c *cappedStringWriter) Write(p []byte) (int, error) {
-	if room := c.max - c.w.Len(); room > 0 {
-		if len(p) > room {
-			c.w.Write(p[:room])
-			c.truncated = true
-		} else {
-			c.w.Write(p)
-		}
-	} else if len(p) > 0 {
-		c.truncated = true
-	}
-	return len(p), nil
 }
 
 // belowFloor reports whether model matches the deny list.
