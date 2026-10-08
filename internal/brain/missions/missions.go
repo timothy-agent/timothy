@@ -137,20 +137,9 @@ type Mission struct {
 	// set on the done transition (driver.go's runExecute) — the
 	// deliverable for destinations delivery and memory extraction.
 	FinalOutput string `json:"final_output,omitempty"`
-	// Environment selects the per-language sandbox image (D-05x) a
-	// coding mission's container runs: "" is the base image. Unlike
-	// Harness, there is no settings default — precedence is explicit
-	// request -> repo markers right after the clone -> the discover
-	// turn's own report -> base (issue #495). Set by
-	// Store.SetEnvironment; the discover report may replace a
-	// marker-detected value once. General missions never set this.
-	Environment string `json:"environment,omitempty"`
-	// EnvironmentMarker records what set Environment: "" for an
-	// explicit operator value, "discover", or the repo marker file.
-	EnvironmentMarker string `json:"environment_marker,omitempty"`
 	// Toolchains maps tool -> version prefix pinned by the repo's marker
 	// files (D-126), installed in the sandbox before discover. Written
-	// with Environment by Store.SetEnvironment.
+	// by Store.SetToolchains.
 	Toolchains map[string]string `json:"toolchains,omitempty"`
 	// EnvFacts is the probed environment facts block (issue #1008),
 	// written by Store.SetEnvFacts at provisioning; nil before that.

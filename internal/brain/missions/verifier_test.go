@@ -195,7 +195,7 @@ func TestVerifyAllRestoresMiseLocal(t *testing.T) {
 			}
 			var seen string
 			v := &verifier{store: newFakeStore(), log: slog.Default(),
-				sandboxExec: func(_ context.Context, _, _, workdir, _ string, _ time.Duration, _ io.Writer) (int, error) {
+				sandboxExec: func(_ context.Context, _, workdir, _ string, _ time.Duration, _ io.Writer) (int, error) {
 					b, _ := os.ReadFile(filepath.Join(workdir, miseLocalFile)) //nolint:gosec // test path
 					seen = string(b)
 					return 0, nil

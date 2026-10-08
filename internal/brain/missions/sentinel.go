@@ -177,14 +177,9 @@ func DiscoverNotesTool() *tools.Tool {
 					"type": "string",
 					"description": "Everything the planner needs: what exists, what's relevant, constraints, unknowns."
 				},
-				"environment": {
-					"type": "string",
-					"enum": ["go", "node", "python", "java", "php", "base"],
-					"description": "The sandbox toolchain this project needs, judged from what is in the workspace or, for a new project, what the goal asks to build. Omit when unsure."
-				},
 				"stack": {
 					"type": "string",
-					"description": "The project's language/stack in a few words (e.g. \"Rust CLI\", \"Ruby on Rails\") when it is not one of the environment values, so the plan can bootstrap the toolchain."
+					"description": "The project's language/stack in a few words (e.g. \"Rust CLI\", \"Laravel + Vite\"), so the harness can tell whether the sandbox has its toolchain."
 				}
 			},
 			"required": ["findings"]
@@ -195,13 +190,12 @@ func DiscoverNotesTool() *tools.Tool {
 	}
 }
 
-// discoverReport is the parsed discover_notes call. Environment and
-// Stack are optional (issue #495): Environment names a sandbox image
-// key, Stack a language the sandbox has no image for.
+// discoverReport is the parsed discover_notes call. Stack is optional
+// (issue #495): the project's language, checked against the sandbox's
+// toolchains.
 type discoverReport struct {
-	Findings    string `json:"findings"`
-	Environment string `json:"environment"`
-	Stack       string `json:"stack"`
+	Findings string `json:"findings"`
+	Stack    string `json:"stack"`
 }
 
 // parseDiscoverFindings decodes a discover_notes tool call's arguments.
@@ -283,7 +277,7 @@ func parseWorkerVerdict(args json.RawMessage) (WorkerVerdict, error) {
 var sentinelAttrs = map[string][]string{
 	missionStatusToolName: {"outcome", "evidence", "analysis", "question", "handoff", "final_output"},
 	reviewVerdictToolName: {"decision"},
-	discoverNotesToolName: {"findings", "environment", "stack"},
+	discoverNotesToolName: {"findings", "stack"},
 }
 
 // sentinelDiscriminator names the field whose value is validated

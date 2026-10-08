@@ -28,7 +28,7 @@ Alpha releases with prebuilt images are available on the [Releases page](https:/
 | **One assistant, every model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider, all behind one interface. Pick which model handles chat, coding, research, or briefings, and let Timothy fail over to a backup when a provider has a bad day.                   |
 | **Give it real work**          | Hand Timothy a task (research a topic, write a report, fix a bug) and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done.                     |
 | **Results find you**           | Any task or schedule can deliver its result to Telegram, email, a webhook, or GitHub (a pushed branch or an opened pull request) the moment it finishes, files attached. No checking a dashboard: the answer lands where you already are.                               |
-| **It writes code safely**      | Coding tasks run in isolated per-language sandboxes (Go, Node, Python, Java, PHP), on their own git branch, with the work verified before you see it. It can also hand the coding work to a CLI agent you already use, Claude Code, Codex, Cursor, opencode, or pi, while keeping review and budgets in your hands. |
+| **It writes code safely**      | Coding tasks run in an isolated sandbox with the toolchains each repo pins (Go, Node, Python, Java, PHP, Ruby, Rust), on their own git branch, with the work verified before you see it. It can also hand the coding work to a CLI agent you already use, Claude Code, Codex, Cursor, opencode, or pi, while keeping review and budgets in your hands. |
 | **Your daily briefings**       | Wake up to a digest of your inbox, calendar, and spending, delivered to Telegram or email in your timezone, saying only what actually needs your attention. Schedule any task to run on your clock.                                                                     |
 | **Connected to your life**     | Gmail, Google Calendar, Docs, Drive, GitHub, Outlook, IMAP, CalDAV, and any MCP server. Timothy reads them when a task needs it, and asks before doing anything destructive.                                                                                            |
 | **Shape your own assistants**  | Create named agents with their own personality, favorite model, and exactly the tools and knowledge they need, nothing more. A briefing agent that reads only your mail and calendar can never touch your code or send a message on your behalf.                        |
@@ -131,7 +131,7 @@ Prerequisites:
    make sandbox-image
    ```
 
-   This builds the base image plus the per-language variants (`timothy-sandbox-{go,node,python,java,php}:latest`) that coding missions run in.
+   This builds the one image every mission runs in: build tools, PHP 8.1 to 8.4 with composer, and mise, which installs the node, python, go, java, ruby and rust versions a repo pins.
 
 3. (Linux only) Set `DOCKER_SOCK_GID` so `sandboxd` can use the Docker socket:
 

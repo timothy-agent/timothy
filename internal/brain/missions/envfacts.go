@@ -19,8 +19,7 @@ import (
 )
 
 // EnvFacts is the probed and scanned part of the facts block, collected
-// once at provisioning (and again after a sandbox recreate) and stored
-// on missions.env_facts. Repo URL, branch and base commit render from
+// at provisioning and stored on missions.env_facts. Repo URL, branch and base commit render from
 // the mission's own fields.
 type EnvFacts struct {
 	BaseBranch   string            `json:"base_branch,omitempty"`
@@ -245,23 +244,28 @@ func parseToolProbe(out string) []ToolFact {
 
 // collectEnvFacts gathers a coding mission's facts: base branch, repo
 // destinations, manifests, gaps and probed tools, and stores them.
-// Best effort: a failed probe leaves Tools empty, a failed store is
-// logged. Returns the facts it collected.
+// Facts recorded later (the prepare outcome, D-130) carry over from
+// m.EnvFacts, so a re-collect never drops them. Best effort: a failed
+// probe leaves Tools empty, a failed store is logged. Returns the facts
+// it stored.
 func (p *provisioner) collectEnvFacts(ctx context.Context, m Mission, workRoot, baseBranch string) *EnvFacts {
 	if m.Kind != KindCoding {
 		return nil
 	}
-	facts := &EnvFacts{BaseBranch: baseBranch, Destinations: p.repoDestinations(ctx, m)}
+	facts := &EnvFacts{}
+	if m.EnvFacts != nil {
+		*facts = *m.EnvFacts
+	}
+	facts.BaseBranch, facts.Destinations = baseBranch, p.repoDestinations(ctx, m)
+	facts.Manifests, facts.Gaps, facts.PHPNote, facts.Tools = nil, nil, "", nil
 	if wt := m.WorktreePath(); wt != "" {
 		facts.Manifests = walkManifests(wt)
 		facts.Gaps = detectEnvGaps(wt, facts.Manifests)
-		if m.Environment == "php" {
-			_, facts.PHPNote = composerPHP(wt)
-		}
+		_, facts.PHPNote = composerPHP(wt)
 	}
 	if p.sandboxExec != nil {
 		var out bytes.Buffer
-		code, err := p.sandboxExec(ctx, m.ID, m.Environment, workRoot, buildToolProbeCmd(), toolProbeTimeout, &out)
+		code, err := p.sandboxExec(ctx, m.ID, workRoot, buildToolProbeCmd(), toolProbeTimeout, &out)
 		if err != nil || code != 0 {
 			p.log.Warn("driver: tool probe failed; facts carry no tool versions", "mission_id", m.ID, "exit_code", code, "error", err)
 		} else {

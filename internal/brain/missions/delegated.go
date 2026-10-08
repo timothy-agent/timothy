@@ -159,10 +159,8 @@ type lastRunStateFunc func(ctx context.Context, missionID string) (*runState, er
 // sandboxExecEnv is the narrow slice of *sandboxclient.Client
 // delegatedRunner needs — kept as a function type (not a sandboxclient
 // import) so missions keeps no compile-time HTTP dependency, same
-// reasoning as the sandboxExec type above. environment (D-05x) only
-// matters on the mission's first exec, since a container's image is
-// fixed once created.
-type sandboxExecEnv func(ctx context.Context, missionID, environment, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error)
+// reasoning as the sandboxExec type above.
+type sandboxExecEnv func(ctx context.Context, missionID, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error)
 
 // cooldownKey identifies one chain entry for the in-memory failover
 // cooldown.
@@ -1008,7 +1006,7 @@ func (r *delegatedRunner) launchRun(ctx context.Context, m Mission, run cliRun, 
 
 	r.recordSpawned(ctx, m.ID, run, runID, rdir, decision)
 
-	if err := r.launch(ctx, m.ID, m.Environment, workRoot, rdir, inv, spec.RunBudget, isSteerer); err != nil {
+	if err := r.launch(ctx, m.ID, workRoot, rdir, inv, spec.RunBudget, isSteerer); err != nil {
 		r.recordDied(ctx, m.ID, run.phase, "spawn_failed", nil, err.Error())
 		// A sandbox that cannot start the CLI (image missing, sandboxd
 		// down) says nothing about the provider (issue #718): pause as
@@ -1046,7 +1044,7 @@ func (r *delegatedRunner) attemptResume(ctx context.Context, m Mission, workRoot
 	// sandbox after a restart, or the container itself was recycled).
 	var probe bytes.Buffer
 	probeCmd := fmt.Sprintf("cd %s && { [ -f exit_code ] || [ -f pid ]; }", shQuote(state.RunDir))
-	code, perr := r.sandboxExec(ctx, m.ID, m.Environment, workRoot, probeCmd, nil, launchTimeout, &probe)
+	code, perr := r.sandboxExec(ctx, m.ID, workRoot, probeCmd, nil, launchTimeout, &probe)
 	if perr != nil || code != 0 {
 		r.recordDied(ctx, m.ID, string(PhaseBuild), "lost_run", nil, "run directory or pid missing after restart")
 		return true, forcedRetryVerdict("the executor's run was lost across a restart"), "", nil
@@ -1117,7 +1115,7 @@ func (r *delegatedRunner) planSessionResume(ctx context.Context, m Mission, work
 	if !adapter.Capabilities().SupportsResume {
 		return resumeDecision{reason: resumeReasonAdapterUnsupported}
 	}
-	if !r.probeContainerMarker(ctx, m.ID, m.Environment, workRoot) {
+	if !r.probeContainerMarker(ctx, m.ID, workRoot) {
 		return resumeDecision{reason: resumeReasonContainerRecreated}
 	}
 	return resumeDecision{resume: true, sessionID: state.SessionID}
@@ -1131,13 +1129,13 @@ func (r *delegatedRunner) planSessionResume(ctx context.Context, m Mission, work
 // CLI. stdinMode is true for a Steerer adapter (issue #358): the CLI's
 // stdin stays open for the run's life via `tail -f steer.jsonl` so a
 // later mid-run steer command can still reach it.
-func (r *delegatedRunner) launch(ctx context.Context, missionID, environment, workdir, rdir string, inv executor.Invocation, runBudget time.Duration, stdinMode bool) error {
+func (r *delegatedRunner) launch(ctx context.Context, missionID, workdir, rdir string, inv executor.Invocation, runBudget time.Duration, stdinMode bool) error {
 	launchCmd, err := buildLaunchCmd(workdir, rdir, inv, runBudget, stdinMode)
 	if err != nil {
 		return err
 	}
 	var out bytes.Buffer
-	code, err := r.sandboxExec(ctx, missionID, environment, workdir, launchCmd, inv.Env, launchTimeout, &out)
+	code, err := r.sandboxExec(ctx, missionID, workdir, launchCmd, inv.Env, launchTimeout, &out)
 	if err != nil {
 		return err
 	}
@@ -1214,10 +1212,10 @@ func buildLaunchCmd(workdir, rdir string, inv executor.Invocation, runBudget tim
 // around (D-103, issue #499's "same sandbox container is still alive"
 // test); false means it was recreated from scratch (or the probe itself
 // failed, treated the same as recreated: never guess a resume is safe).
-func (r *delegatedRunner) probeContainerMarker(ctx context.Context, missionID, environment, workRoot string) bool {
+func (r *delegatedRunner) probeContainerMarker(ctx context.Context, missionID, workRoot string) bool {
 	var out bytes.Buffer
 	cmd := fmt.Sprintf("[ -f \"$HOME/%s\" ]", containerMarkerFile)
-	code, err := r.sandboxExec(ctx, missionID, environment, workRoot, cmd, nil, launchTimeout, &out)
+	code, err := r.sandboxExec(ctx, missionID, workRoot, cmd, nil, launchTimeout, &out)
 	return err == nil && code == 0
 }
 
@@ -1367,13 +1365,13 @@ func (r *delegatedRunner) pollRun(ctx context.Context, m Mission, run cliRun, wo
 	for {
 		select {
 		case <-ctx.Done():
-			r.killRun(context.WithoutCancel(ctx), m.ID, m.Environment, workRoot, rdir)
+			r.killRun(context.WithoutCancel(ctx), m.ID, workRoot, rdir)
 			r.recordDied(context.WithoutCancel(ctx), m.ID, run.phase, "ctx_cancelled", nil, ctx.Err().Error())
 			return st, runEndNoResult, -1, ctx.Err()
 		case <-ticker.C:
 		}
 
-		chunk, exitCode, hasExit, alive, worktree, err := r.pollOnce(ctx, m.ID, m.Environment, workRoot, rdir, runID, st.offset)
+		chunk, exitCode, hasExit, alive, worktree, err := r.pollOnce(ctx, m.ID, workRoot, rdir, runID, st.offset)
 		if err != nil {
 			st.infraRetries++
 			if st.infraRetries >= pollInfraRetries {
@@ -1428,7 +1426,7 @@ func (r *delegatedRunner) pollRun(ctx context.Context, m Mission, run cliRun, wo
 		}
 
 		if time.Since(st.lastByteMove) > r.idleTimeout {
-			r.killRun(ctx, m.ID, m.Environment, workRoot, rdir)
+			r.killRun(ctx, m.ID, workRoot, rdir)
 			r.recordEvent(ctx, m.ID, st, "executor.idle_killed", map[string]any{"idle_s": int(r.idleTimeout.Seconds()), "phase": run.phase})
 			return st, runEndIdle, -1, nil
 		}
@@ -1443,7 +1441,7 @@ func (r *delegatedRunner) pollRun(ctx context.Context, m Mission, run cliRun, wo
 func (r *delegatedRunner) closeStdin(ctx context.Context, m Mission, workRoot, rdir string) {
 	cmd := fmt.Sprintf("kill \"$(cat %s/stdin.pid)\" 2>/dev/null", shQuote(rdir))
 	var out bytes.Buffer
-	if code, err := r.sandboxExec(ctx, m.ID, m.Environment, workRoot, cmd, nil, launchTimeout, &out); err != nil || code != 0 {
+	if code, err := r.sandboxExec(ctx, m.ID, workRoot, cmd, nil, launchTimeout, &out); err != nil || code != 0 {
 		r.log.Warn("delegated runner: close stdin failed", "mission_id", m.ID, "error", err, "exit_code", code)
 	}
 }
@@ -1468,7 +1466,7 @@ func (r *delegatedRunner) injectSteering(ctx context.Context, m Mission, workRoo
 		line := steerer.SteerCommand("Operator steering note (mid-run): " + note)
 		cmd := fmt.Sprintf("printf '%%s\\n' %s >> %s/steer.jsonl", shQuote(line), shQuote(rdir))
 		var out bytes.Buffer
-		if code, err := r.sandboxExec(ctx, m.ID, m.Environment, workRoot, cmd, nil, launchTimeout, &out); err != nil || code != 0 {
+		if code, err := r.sandboxExec(ctx, m.ID, workRoot, cmd, nil, launchTimeout, &out); err != nil || code != 0 {
 			// Only the notes actually appended so far count toward the
 			// watermark - a note that failed to append must be retried on
 			// the next poll, never skipped.
@@ -1541,10 +1539,10 @@ type WorktreeSummary struct {
 // tailChunkCap), then a boundary marker, then EXITCODE:/ALIVE status,
 // then the WT: worktree summary, all in ONE exec so every field
 // reflects the same snapshot.
-func (r *delegatedRunner) pollOnce(ctx context.Context, missionID, environment, workRoot, rdir, runID string, offset int64) (chunk []byte, exitCode int, hasExit bool, alive bool, worktree *WorktreeSummary, err error) {
+func (r *delegatedRunner) pollOnce(ctx context.Context, missionID, workRoot, rdir, runID string, offset int64) (chunk []byte, exitCode int, hasExit bool, alive bool, worktree *WorktreeSummary, err error) {
 	cmd, boundary := buildPollCmd(workRoot, rdir, runID, offset)
 	var out bytes.Buffer
-	_, execErr := r.sandboxExec(ctx, missionID, environment, workRoot, cmd, nil, pollTimeout, &out)
+	_, execErr := r.sandboxExec(ctx, missionID, workRoot, cmd, nil, pollTimeout, &out)
 	if execErr != nil {
 		return nil, 0, false, false, nil, execErr
 	}
@@ -1641,13 +1639,13 @@ func (r *delegatedRunner) feedLines(ctx context.Context, parser executor.StreamP
 // killRun sends TERM to the process group, waits, then KILL — best
 // effort: a failed kill is logged, never fatal to the caller (the
 // caller is already on a failure/cancellation path itself).
-func (r *delegatedRunner) killRun(ctx context.Context, missionID, environment, workRoot, rdir string) {
+func (r *delegatedRunner) killRun(ctx context.Context, missionID, workRoot, rdir string) {
 	cmd := fmt.Sprintf(
 		`kill -TERM -"$(cat %s/pid)" 2>/dev/null; sleep 5; kill -KILL -"$(cat %s/pid)" 2>/dev/null`,
 		shQuote(rdir), shQuote(rdir),
 	)
 	var out bytes.Buffer
-	if _, err := r.sandboxExec(ctx, missionID, environment, workRoot, cmd, nil, killTimeout, &out); err != nil {
+	if _, err := r.sandboxExec(ctx, missionID, workRoot, cmd, nil, killTimeout, &out); err != nil {
 		r.log.Warn("delegated runner: kill run failed", "mission_id", missionID, "run_dir", rdir, "error", err)
 	}
 }
@@ -1758,7 +1756,7 @@ func (r *delegatedRunner) finishCommon(ctx context.Context, m Mission, run cliRu
 func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, run cliRun, workRoot, rdir string, st *pollState, start time.Time, exitCode int) (string, error) {
 	// Scrubbed before classification (D-110): every branch below
 	// persists the tail, and the signatures are phrases, never the key.
-	stderrTail := scrubSecret(r.readStderrTail(ctx, m.ID, m.Environment, workRoot, rdir), run.secret)
+	stderrTail := scrubSecret(r.readStderrTail(ctx, m.ID, workRoot, rdir), run.secret)
 	reason := fmt.Sprintf("executor exited (code %d) without a result event", exitCode)
 	if exitCode == -1 {
 		reason = "executor process was lost (no exit code, no result event)"
@@ -1805,10 +1803,10 @@ func (r *delegatedRunner) finishNoResult(ctx context.Context, m Mission, run cli
 // exec, only taken on the transport-death path, to check for an
 // auth-failure signature the result ladder must distinguish from a
 // generic forced retry.
-func (r *delegatedRunner) readStderrTail(ctx context.Context, missionID, environment, workRoot, rdir string) string {
+func (r *delegatedRunner) readStderrTail(ctx context.Context, missionID, workRoot, rdir string) string {
 	var out bytes.Buffer
 	cmd := fmt.Sprintf("cd %s && tail -c 2048 stderr.log 2>/dev/null", shQuote(rdir))
-	if _, err := r.sandboxExec(ctx, missionID, environment, workRoot, cmd, nil, pollTimeout, &out); err != nil {
+	if _, err := r.sandboxExec(ctx, missionID, workRoot, cmd, nil, pollTimeout, &out); err != nil {
 		return ""
 	}
 	return out.String()

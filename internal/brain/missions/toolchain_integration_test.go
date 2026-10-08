@@ -13,10 +13,9 @@ import (
 	"testing"
 )
 
-// TestSetEnvironmentPersistsToolchains: SetEnvironment writes the
-// toolchains column and the event payload carries them; SetToolchains
-// updates the column alone.
-func TestSetEnvironmentPersistsToolchains(t *testing.T) {
+// TestSetToolchainsPersists: SetToolchains writes the toolchains
+// column and Get reads it back.
+func TestSetToolchainsPersists(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
 
@@ -26,39 +25,6 @@ func TestSetEnvironmentPersistsToolchains(t *testing.T) {
 	}
 	if m, err := s.Get(ctx, id); err != nil || len(m.Toolchains) != 0 {
 		t.Fatalf("Get after Create = %v, %v, want no toolchains", m.Toolchains, err)
-	}
-	want := map[string]string{"python": "3.10"}
-	if err := s.SetEnvironment(ctx, id, "python", "pyproject.toml", nil, want); err != nil {
-		t.Fatalf("SetEnvironment: %v", err)
-	}
-	if m, _ := s.Get(ctx, id); !reflect.DeepEqual(m.Toolchains, want) {
-		t.Fatalf("Toolchains = %v, want %v", m.Toolchains, want)
-	}
-	events, err := s.Events(ctx, id)
-	if err != nil {
-		t.Fatalf("Events: %v", err)
-	}
-	var found bool
-	for _, e := range events {
-		if e.Kind != "mission.environment_detected" {
-			continue
-		}
-		found = true
-		var p struct {
-			Toolchains map[string]string `json:"toolchains"`
-		}
-		if err := json.Unmarshal(e.Payload, &p); err != nil || !reflect.DeepEqual(p.Toolchains, want) {
-			t.Fatalf("payload toolchains = %v, %v, want %v", p.Toolchains, err, want)
-		}
-	}
-	if !found {
-		t.Fatal("no mission.environment_detected event")
-	}
-	if err := s.SetEnvironment(ctx, id, "node", "discover", nil, nil); err != nil {
-		t.Fatalf("SetEnvironment override: %v", err)
-	}
-	if m, _ := s.Get(ctx, id); len(m.Toolchains) != 0 {
-		t.Fatalf("Toolchains after override with none = %v, want cleared", m.Toolchains)
 	}
 	if err := s.SetToolchains(ctx, id, map[string]string{"node": "18"}); err != nil {
 		t.Fatalf("SetToolchains: %v", err)
@@ -153,8 +119,8 @@ func TestProvisionToolchainInstallFailureEvent(t *testing.T) {
 // /bin/sh; this container has no /usr/bin/php7.4.
 func TestProvisionPHPToolchain(t *testing.T) {
 	m, _ := provisionWithRepo(t, map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`})
-	if m.Environment != "php" || !reflect.DeepEqual(m.Toolchains, map[string]string{"php": "8.1"}) {
-		t.Fatalf("env = %q, Toolchains = %v; want php with php 8.1", m.Environment, m.Toolchains)
+	if !reflect.DeepEqual(m.Toolchains, map[string]string{"php": "8.4"}) {
+		t.Fatalf("Toolchains = %v; want php 8.4, the newest baked minor ^8.0.2 allows", m.Toolchains)
 	}
 	m, store := provisionWithRepo(t, map[string]string{"composer.json": `{"require":{"php":"7.4.33"}}`})
 	if m.Workspace == "" {

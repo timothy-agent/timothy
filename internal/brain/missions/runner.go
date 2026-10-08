@@ -197,11 +197,8 @@ type parkNotifier interface {
 // sandboxExec is the narrow slice of *sandboxclient.Client nativeRunner
 // needs: kept as a function type (not an import of sandboxclient) so
 // missions has no compile-time dependency on Docker; the driver wires
-// the real *sandboxclient.Client.Exec in cmd/brain/main.go. environment
-// selects the mission's sandbox image (D-05x): only matters on the
-// mission's first exec, since a container's image is fixed once
-// created.
-type sandboxExec func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error)
+// the real *sandboxclient.Client.Exec in cmd/brain/main.go.
+type sandboxExec func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error)
 
 // nativeRunner is Phase 1's only Runner: every call is one loop.Agent
 // turn over the gateway, tagged with the mission's route/review_route
@@ -280,23 +277,6 @@ type nativeRunner struct {
 	// kbSearch/kbRead: a store wiring bug degrades to "no ask_user"
 	// rather than a panic.
 	askParker askUserParker
-
-	// environmentSink persists the discover turn's environment report
-	// (issue #495): nil means the report is ignored, same nil-safe
-	// contract as askParker.
-	environmentSink environmentSetter
-}
-
-// environmentSetter is the narrow slice of *Store DiscoverSession
-// writes the discover turn's environment report through.
-type environmentSetter interface {
-	SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string, toolchains map[string]string) error
-}
-
-// SetEnvironmentSink wires the store the discover turn's environment
-// report is written to, same setter pattern as SetAskParker.
-func (r *nativeRunner) SetEnvironmentSink(s environmentSetter) {
-	r.environmentSink = s
 }
 
 // SetAskParker wires the store ask_user parks against: a setter (not
@@ -807,13 +787,13 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 	if root == "" {
 		return nil
 	}
-	missionID, environment, workdir := m.ID, m.Environment, root
+	missionID, workdir := m.ID, root
 	shellCfg := builtin.ShellConfig{
 		WorkspaceRoot: root,
 		MaxTimeout:    sandboxShellMaxTimeout,
 		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
 			out := builtin.NewHeadTailWriter(builtin.ShellHeadBytes, builtin.ShellTailBytes)
-			exitCode, err := r.sandbox(ctx, missionID, environment, workdir, command, timeout, out)
+			exitCode, err := r.sandbox(ctx, missionID, workdir, command, timeout, out)
 			if err != nil {
 				// The sandbox backend's contract mirrors runShell's: a
 				// timeout comes back as an error, everything else
@@ -1441,7 +1421,7 @@ func discoverMaxSteps(m Mission) int {
 // failure. provider/model (issue #507) are who served the turn that
 // produced the returned notes; empty when the turn errored.
 func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, servedProvider, servedModel string, err error) {
-	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + r.discoverEnvironmentNudge(m) + discoverToolchainNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m) + renderEnvFacts(m)
+	system := "You are discovering one mission before it is planned. Investigate the goal: explore the workspace with shell (read-only, do not create or modify files; the build phase does the actual work), and use web search/fetch tools if available and relevant to the goal. If the goal is self-contained and needs no exploration, say so briefly. End your turn with exactly one discover_notes tool call whose findings field contains everything the planner needs: what exists, what's relevant, constraints, gotchas, unknowns." + discoverStackNudge(m) + discoverToolchainNudge(m) + toolDisciplineNote + r.kbDiscoverNudge(m) + r.execEnvironmentNote(ctx) + r.skillsNudge(ctx, m) + renderEnvFacts(m)
 	sc := contextBlocks(m.Sources, contextSession, "")
 	user := "Goal: " + NeutralizeSlot(m.Goal) + sc.head
 	if notes := progressWithOperatorNotes(m.Progress, progressRenderCap, nil); notes != "" {
@@ -1498,7 +1478,7 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 		return "", "", "", ErrAskedUser
 	}
 	if report, ok := tryParseFindings(res.sentinelArgs); ok {
-		return loadedSkillsMarker(res.loadedSkills) + r.applyDiscoverReport(ctx, m, report), res.provider, res.model, nil
+		return loadedSkillsMarker(res.loadedSkills) + applyDiscoverReport(m, report), res.provider, res.model, nil
 	}
 
 	// One recovery re-run, same ladder shape as RunWorker/PlanSession.
@@ -1513,7 +1493,7 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 		return "", "", "", err
 	}
 	if report, ok := tryParseFindings(recoverRes.sentinelArgs); ok {
-		return r.applyDiscoverReport(ctx, m, report), recoverRes.provider, recoverRes.model, nil
+		return applyDiscoverReport(m, report), recoverRes.provider, recoverRes.model, nil
 	}
 
 	// Neither turn produced a tool call: check for a text-form sentinel
@@ -1521,7 +1501,7 @@ func (r *nativeRunner) DiscoverSession(ctx context.Context, m Mission) (notes, s
 	combined := text + "\n" + recoverText
 	if raw, ok := extractTextSentinel(combined, discoverNotesToolName); ok {
 		if report, ok := tryParseFindings(raw); ok {
-			return r.applyDiscoverReport(ctx, m, report), recoverRes.provider, recoverRes.model, nil
+			return applyDiscoverReport(m, report), recoverRes.provider, recoverRes.model, nil
 		}
 	}
 
@@ -1544,15 +1524,14 @@ func tryParseFindings(args json.RawMessage) (discoverReport, bool) {
 	return report, true
 }
 
-// discoverEnvironmentNudge asks the discover turn to report the
-// project's toolchain while the mission has none yet or a repo marker
-// set it (issue #495); an operator's explicit pick or a discover-set
-// value is not up for debate.
-func (r *nativeRunner) discoverEnvironmentNudge(m Mission) string {
-	if m.Kind != KindCoding || (m.Environment != "" && (m.EnvironmentMarker == "" || m.EnvironmentMarker == "discover")) {
+// discoverStackNudge asks a coding mission's discover turn to name the
+// project's stack (issue #495), so the harness can check it against the
+// sandbox's toolchains.
+func discoverStackNudge(m Mission) string {
+	if m.Kind != KindCoding {
 		return ""
 	}
-	return " Also fill the environment field with the sandbox toolchain this project needs (from what is in the workspace, or what the goal asks to build); when the language is none of the listed values, leave environment empty and name it in the stack field."
+	return " Also fill the stack field with the project's language and framework in a few words (from what is in the workspace, or what the goal asks to build)."
 }
 
 // toolchainSummary renders toolchains as "node 18, python 3.10".
@@ -1585,48 +1564,37 @@ func discoverToolchainNudge(m Mission) string {
 	return ""
 }
 
-// applyDiscoverReport persists the report's environment when it is a
-// registered image key other than base and the mission has none yet or
-// a repo marker set a different one (issue #495); an operator-explicit
-// or discover-set value is kept. The driver recreates the sandbox
-// container afterwards. A stack the sandbox has no image for is prefixed onto
-// the findings so the planner budgets a bootstrap unit instead of
+// applyDiscoverReport prefixes a stack the sandbox has no toolchain for
+// onto the findings, so the planner budgets a bootstrap unit instead of
 // finding out at build time.
-func (r *nativeRunner) applyDiscoverReport(ctx context.Context, m Mission, report discoverReport) string {
-	if m.Kind == KindCoding && r.environmentSink != nil {
-		env := strings.ToLower(strings.TrimSpace(report.Environment))
-		overridable := m.Environment == "" ||
-			(m.EnvironmentMarker != "" && m.EnvironmentMarker != "discover" && env != m.Environment)
-		if env != "" && env != "base" && Environments[env] && overridable {
-			if m.Environment != "" {
-				r.log.Info("mission discover: overriding marker-detected environment", "mission_id", m.ID, "from", m.Environment, "to", env, "marker", m.EnvironmentMarker)
-			}
-			if err := r.environmentSink.SetEnvironment(ctx, m.ID, env, "discover", nil, detectMissionToolchains(m.WorkRoot(), env, m.Goal)); err != nil {
-				r.log.Warn("mission discover: set environment failed", "mission_id", m.ID, "environment", env, "error", err)
-			}
-		}
-	}
+func applyDiscoverReport(m Mission, report discoverReport) string {
 	stack := strings.TrimSpace(report.Stack)
 	if stack == "" {
 		return report.Findings
 	}
-	if m.ToolchainInstall != "failed" && (stackCoveredByEnvironment(stack, m.Environment, strings.ToLower(strings.TrimSpace(report.Environment))) || stackNeedsNoToolchain(stack)) {
+	if m.ToolchainInstall != "failed" && (stackCovered(stack, m.Toolchains) || stackNeedsNoToolchain(stack)) {
 		return report.Findings
 	}
 	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan's first unit must be a " + bootstrapAllowance + " that installs it into the workspace.\n\n%s", NeutralizeSlot(stack), report.Findings)
 }
 
-// stackWords maps an environment image to the words a discover stack
-// uses for the language it carries.
+// stackWords maps a toolchain to the words a discover stack uses for
+// its language.
 var stackWords = map[string][]string{
 	"go":     {"go", "golang"},
 	"node":   {"node", "nodejs", "javascript", "typescript"},
 	"python": {"python", "django", "flask", "fastapi"},
 	"java":   {"java", "kotlin", "spring", "gradle", "maven"},
 	"php":    {"php", "laravel", "symfony", "composer"},
+	"ruby":   {"ruby", "rails"},
+	"rust":   {"rust", "cargo"},
 }
 
-// noToolchainStackWords are stack words for formats the base image
+// imageToolchains are the toolchains the sandbox image carries with no
+// install (D-141): its own node and python3, and the baked PHP minors.
+var imageToolchains = []string{"node", "python", "php"}
+
+// noToolchainStackWords are stack words for formats the image
 // already handles, plus filler. A stack made only of these ("Markdown
 // documentation", "YAML config files") needs no bootstrap.
 var noToolchainStackWords = map[string]bool{
@@ -1661,13 +1629,18 @@ func stackWordList(stack string) []string {
 	})
 }
 
-// stackCoveredByEnvironment reports whether a discover stack names the
-// language of one of envs' images. Weak models fill stack even when the
-// image carries the toolchain; the bootstrap note must not follow.
-func stackCoveredByEnvironment(stack string, envs ...string) bool {
+// stackCovered reports whether a discover stack names the language of
+// a toolchain the image carries or the harness installed. Weak models
+// fill stack even when the sandbox has the toolchain; the bootstrap
+// note must not follow.
+func stackCovered(stack string, installed map[string]string) bool {
 	words := stackWordList(stack)
-	for _, env := range envs {
-		for _, want := range stackWords[env] {
+	tools := slices.Clone(imageToolchains)
+	for t := range installed {
+		tools = append(tools, t)
+	}
+	for _, tool := range tools {
+		for _, want := range stackWords[tool] {
 			if slices.Contains(words, want) {
 				return true
 			}

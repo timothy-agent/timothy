@@ -118,7 +118,7 @@ func FollowUpCreateRequest(parent Mission, goal string, sources []SourceEntry) C
 		RouteModel:      parent.RouteModel, PlanRouteModel: parent.PlanRouteModel, ReviewRouteModel: parent.ReviewRouteModel,
 		MaxIterations: parent.MaxIterations, BudgetAmount: parent.BudgetAmount, BudgetCurrency: parent.BudgetCurrency,
 		AutoApproveTools: &autoApproveTools, AutoApprovePlan: &autoApprovePlan,
-		Harness: parent.Harness, ReviewHarness: parent.ReviewHarness, Environment: parent.Environment,
+		Harness: parent.Harness, ReviewHarness: parent.ReviewHarness,
 		ExecutorSessionPolicy: parent.ExecutorSessionPolicy,
 		ToolAllowlist:         slices.Clone(parent.ToolAllowlist),
 		Flow:                  string(parent.Flow),
@@ -136,14 +136,14 @@ func FollowUpCreateRequest(parent Mission, goal string, sources []SourceEntry) C
 // always come from req, never the parent (D-061). Light or an explicit
 // Flow replaces the parent's flow. The parent's repo source is carried
 // when req.Sources has none. When req names a kind other than the
-// parent's, the kind-bound fields ValidateCreate checks (environment,
-// executor_session_policy, repo source, flow) are not inherited;
+// parent's, the kind-bound fields ValidateCreate checks
+// (executor_session_policy, repo source, flow) are not inherited;
 // harness needs no guard since ResolveHarness drops it off coding.
 func InheritParent(req CreateRequest, parent Mission) CreateRequest {
 	out := FollowUpCreateRequest(parent, req.Goal, req.Sources)
 	kindChanged := req.Kind != "" && req.Kind != parent.Kind
 	if kindChanged {
-		out.Environment, out.ExecutorSessionPolicy, out.Flow = "", "", ""
+		out.ExecutorSessionPolicy, out.Flow = "", ""
 	}
 	str := func(dst *string, v string) {
 		if v != "" {
@@ -163,7 +163,6 @@ func InheritParent(req CreateRequest, parent Mission) CreateRequest {
 	str(&out.BudgetCurrency, req.BudgetCurrency)
 	str(&out.Harness, req.Harness)
 	str(&out.ReviewHarness, req.ReviewHarness)
-	str(&out.Environment, req.Environment)
 	str(&out.ExecutorSessionPolicy, req.ExecutorSessionPolicy)
 	str(&out.ParentMissionID, req.ParentMissionID)
 	str(&out.AutomationRunID, req.AutomationRunID)

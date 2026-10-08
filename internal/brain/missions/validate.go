@@ -75,7 +75,7 @@ func validModelPin(pin string) bool {
 // automation runs and the workflows engine's spawnStep all
 // call into Driver.Create, and only the HTTP handler used to validate
 // anything (D-071). Callers
-// must resolve their own defaults (kind, route, environment auto-detect)
+// must resolve their own defaults (kind, route)
 // before calling: ValidateCreate rejects an empty route rather than
 // silently picking one, so a caller that wants "the default route"
 // resolves it first.
@@ -105,8 +105,6 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 		switch {
 		case m.Harness != "":
 			return fmt.Errorf("%w: harness is only valid for kind=coding missions", ErrInvalidMission)
-		case m.Environment != "":
-			return fmt.Errorf("%w: environment is only valid for kind=coding missions", ErrInvalidMission)
 		case m.ExecutorSessionPolicy != "":
 			return fmt.Errorf("%w: executor_session_policy is only valid for kind=coding missions", ErrInvalidMission)
 		case repoURL != "":
@@ -130,9 +128,6 @@ func ValidateCreate(ctx context.Context, m Mission, deps ValidateDeps) error {
 	case "", SessionPolicyResume, SessionPolicyFresh:
 	default:
 		return fmt.Errorf("%w: unknown executor_session_policy %q", ErrInvalidMission, m.ExecutorSessionPolicy)
-	}
-	if !ValidEnvironment(m.Environment) {
-		return fmt.Errorf("%w: unknown environment %q", ErrInvalidMission, m.Environment)
 	}
 	switch {
 	case repoURL != "" && connectorID == "":

@@ -60,7 +60,7 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 		EscalationRoute: "route-d", MaxIterations: 12, BudgetCurrency: "USD",
 		RouteModel: "P/m-a", PlanRouteModel: "P/m-c", ReviewRouteModel: "P/m-b",
 		AutoApproveTools: true, PromptOverlay: "be terse",
-		Harness: "claude-cli", Environment: "node", ExecutorSessionPolicy: SessionPolicyFresh,
+		Harness: "claude-cli", ExecutorSessionPolicy: SessionPolicyFresh,
 		ToolAllowlist: []string{"shell", "write_file", "web_search"},
 		Sources:       []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}},
 		Destinations: []DestinationEntry{
@@ -94,7 +94,7 @@ func TestCreateFollowUpCopiesParentSettings(t *testing.T) {
 	if child.Kind != "coding" || child.AgentID != "agent-1" || child.Route != "route-a" ||
 		child.ReviewRoute != "route-b" || child.PlanRoute != "route-c" || child.EscalationRoute != "route-d" ||
 		child.MaxIterations != 12 || child.AutoApproveTools != true || child.PromptOverlay != "be terse" ||
-		child.Harness != "claude-cli" || child.Environment != "node" || child.RepoURL() != "https://github.com/o/r.git" ||
+		child.Harness != "claude-cli" || child.RepoURL() != "https://github.com/o/r.git" ||
 		child.ConnectorID() != "conn1" ||
 		child.RouteModel != "P/m-a" || child.PlanRouteModel != "P/m-c" || child.ReviewRouteModel != "P/m-b" {
 		t.Fatalf("child did not inherit parent settings: %+v", child)
@@ -498,7 +498,7 @@ func inheritParentFixture() Mission {
 		RouteModel: "P/m-a", PlanRouteModel: "P/m-c", ReviewRouteModel: "P/m-b",
 		MaxIterations: 12, BudgetAmount: &budget, BudgetCurrency: "EUR",
 		AutoApproveTools: true, AutoApprovePlan: true,
-		Harness: "claude-cli", ReviewHarness: "codex-cli", Environment: "node",
+		Harness: "claude-cli", ReviewHarness: "codex-cli",
 		ExecutorSessionPolicy: SessionPolicyFresh, ToolAllowlist: []string{"shell", "write_file"},
 		Flow:         FlowFull,
 		Sources:      []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "conn1"}},
@@ -548,7 +548,6 @@ func TestInheritParentExplicitWins(t *testing.T) {
 		{"auto_approve_plan false", CreateRequest{AutoApprovePlan: &f}, func(r CreateRequest) bool { return !*r.AutoApprovePlan }},
 		{"harness native", CreateRequest{Harness: "native"}, func(r CreateRequest) bool { return r.Harness == "native" }},
 		{"review_harness native", CreateRequest{ReviewHarness: "native"}, func(r CreateRequest) bool { return r.ReviewHarness == "native" }},
-		{"environment", CreateRequest{Environment: "go"}, func(r CreateRequest) bool { return r.Environment == "go" }},
 		{"executor_session_policy", CreateRequest{ExecutorSessionPolicy: SessionPolicyResume}, func(r CreateRequest) bool { return r.ExecutorSessionPolicy == SessionPolicyResume }},
 		{"has_plan", CreateRequest{HasPlan: true}, func(r CreateRequest) bool { return r.HasPlan }},
 		{"flow", CreateRequest{Flow: string(FlowLight)}, func(r CreateRequest) bool { return r.Flow == string(FlowLight) }},
@@ -644,8 +643,8 @@ func validateInherited(t *testing.T, req CreateRequest) Mission {
 func TestInheritParentGeneralBodyUnderCodingParent(t *testing.T) {
 	parent := inheritParentFixture()
 	req := InheritParent(CreateRequest{Goal: "write the release notes", Kind: KindGeneral}, parent)
-	if req.Environment != "" || req.ExecutorSessionPolicy != "" || req.Flow != "" {
-		t.Fatalf("kind-bound fields inherited: env=%q policy=%q flow=%q", req.Environment, req.ExecutorSessionPolicy, req.Flow)
+	if req.ExecutorSessionPolicy != "" || req.Flow != "" {
+		t.Fatalf("kind-bound fields inherited: policy=%q flow=%q", req.ExecutorSessionPolicy, req.Flow)
 	}
 	for _, e := range req.Sources {
 		if e.Source == SourceKindGitHub {
@@ -690,8 +689,8 @@ func TestInheritParentSameKindInheritsKindBoundFields(t *testing.T) {
 // guard only skips inheritance: body values still apply.
 func TestInheritParentKindChangeExplicitFieldsStillWin(t *testing.T) {
 	parent := Mission{ID: "parent", Kind: KindGeneral, Flow: FlowLight, Phase: PhaseDone}
-	got := InheritParent(CreateRequest{Goal: "g", Kind: KindCoding, Environment: "go", ExecutorSessionPolicy: SessionPolicyFresh}, parent)
-	if got.Environment != "go" || got.ExecutorSessionPolicy != SessionPolicyFresh {
+	got := InheritParent(CreateRequest{Goal: "g", Kind: KindCoding, ExecutorSessionPolicy: SessionPolicyFresh}, parent)
+	if got.ExecutorSessionPolicy != SessionPolicyFresh {
 		t.Fatalf("explicit fields lost across a kind change: %+v", got)
 	}
 }

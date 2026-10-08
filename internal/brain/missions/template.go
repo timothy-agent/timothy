@@ -30,8 +30,9 @@ type MissionTemplate struct {
 	ReviewHarness string `json:"review_harness,omitempty"`
 	// Light missions (D-069) skip discover/plan/prove; kind=general only.
 	Light bool `json:"light,omitempty"`
-	// Environment selects a coding mission's sandbox image key.
-	Environment string `json:"environment,omitempty"`
+	// RemovedEnvironment is the removed sandbox image selector (D-141),
+	// accepted and dropped so older clients keep working.
+	RemovedEnvironment RemovedField `json:"environment,omitzero"`
 	// AutoApproveTools is copied onto the mission; unattended runs
 	// need the standing shell approval a UI-created mission gets.
 	AutoApproveTools bool `json:"auto_approve_tools"`
@@ -42,6 +43,14 @@ type MissionTemplate struct {
 	// (issue #359) and copied onto every mission's sources.
 	Attachments []SourceEntry `json:"attachments,omitempty"`
 }
+
+// RemovedField stands in for a request field the API no longer has: a
+// strict decoder still accepts it, any value is dropped, and omitzero
+// keeps it out of every response.
+type RemovedField struct{}
+
+// UnmarshalJSON drops the value.
+func (*RemovedField) UnmarshalJSON([]byte) error { return nil }
 
 // AgentDefaults is the slice of an agents row a new mission borrows
 // when its create request leaves the corresponding field empty
@@ -84,7 +93,7 @@ func TemplateCreateRequest(t MissionTemplate, name, agentID string, destinationI
 		Route: t.Route, ReviewRoute: t.ReviewRoute, PlanRoute: t.PlanRoute,
 		MaxIterations: t.MaxIterations, BudgetAmount: t.BudgetAmount, BudgetCurrency: t.BudgetCurrency,
 		AutoApproveTools: &autoApproveTools, AutoApprovePlan: &autoApprovePlan,
-		Harness: t.Harness, ReviewHarness: t.ReviewHarness, Environment: t.Environment,
+		Harness: t.Harness, ReviewHarness: t.ReviewHarness,
 		Light:           t.Light,
 		Sources:         t.Attachments,
 		Destinations:    destinations,

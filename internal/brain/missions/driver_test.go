@@ -199,17 +199,6 @@ func (f *fakeStore) SetDiscoverNotes(ctx context.Context, id, notes string) erro
 	return nil
 }
 
-func (f *fakeStore) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string, toolchains map[string]string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	m := f.missions[id]
-	m.Environment = environment
-	m.EnvironmentMarker = marker
-	m.Toolchains = toolchains
-	f.missions[id] = m
-	return nil
-}
-
 func (f *fakeStore) SetToolchains(ctx context.Context, id string, toolchains map[string]string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -333,7 +322,7 @@ type scriptedRunner struct {
 	discoverErr   error
 	// onDiscover runs inside DiscoverSession before the scripted notes
 	// return: lets a test stand in for the native runner's side effects
-	// (its environment sink write, issue #495).
+	// (a store write).
 	onDiscover func(ctx context.Context, m Mission)
 }
 
@@ -399,7 +388,7 @@ func (r *scriptedRunner) DiscoverSession(ctx context.Context, m Mission) (string
 // tests exercising check_cmd need the real exit code/output a plan's
 // check produces, not a mocked one, and don't care that it isn't
 // actually containerized.
-func fakeSandboxExec(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+func fakeSandboxExec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command) //nolint:gosec // test-only, command is test-authored
 	cmd.Dir = workdir
 	cmd.Stdout, cmd.Stderr = out, out
@@ -524,51 +513,18 @@ func TestDriverDiscoverStoresNotesAndAdvances(t *testing.T) {
 	}
 }
 
-// TestDriverDiscoverRecreatesSandboxOnEnvironmentChange covers issue
-// #495: when the discover turn set an environment on a mission that had
-// none, the driver removes the sandbox container (created on base by
-// discover's own shell calls) so the next exec recreates it on the new
-// image, and records mission.sandbox_recreated.
-func TestDriverDiscoverRecreatesSandboxOnEnvironmentChange(t *testing.T) {
+// TestDriverDiscoverKeepsSandboxAndPrepareFacts covers D-141: with one
+// sandbox image nothing recreates the container after discover, and the
+// prepare outcome on EnvFacts survives the discover turn.
+func TestDriverDiscoverKeepsSandboxAndPrepareFacts(t *testing.T) {
 	store := newFakeStore()
+	prepared := &PrepareFacts{Installed: []string{"npm"}, TestCmd: "npm test"}
 	store.put("m1", Mission{ID: "m1", Kind: KindCoding, Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
-		SessionID: "s1", Workspace: "/already/provisioned"})
+		SessionID: "s1", Workspace: "/already/provisioned", Toolchains: map[string]string{"node": "18"},
+		EnvFacts: &EnvFacts{BaseBranch: "main", Prepare: prepared}})
 	remover := &fakeSandboxRemover{}
 	runner := &scriptedRunner{
-		discoverNotes: []string{"fresh vite project"},
-		onDiscover: func(ctx context.Context, m Mission) {
-			_ = store.SetEnvironment(ctx, m.ID, "node", "discover", nil, nil)
-		},
-		plans: []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
-	}
-	d := NewDriver(store, runner, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, remover, slog.Default())
-
-	if _, err := d.Advance(context.Background(), "m1"); err != nil {
-		t.Fatalf("Advance: %v", err)
-	}
-	if got := remover.calls(); len(got) != 1 || got[0] != "m1" {
-		t.Fatalf("sandbox Remove calls = %v, want exactly [m1]", got)
-	}
-	found := false
-	for _, ev := range store.events["m1"] {
-		if ev.Kind == "mission.sandbox_recreated" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("events = %+v, want a mission.sandbox_recreated event", store.events["m1"])
-	}
-}
-
-// TestDriverDiscoverLeavesSandboxWhenEnvironmentUnchanged is the
-// counterpart: no environment change, no container churn.
-func TestDriverDiscoverLeavesSandboxWhenEnvironmentUnchanged(t *testing.T) {
-	store := newFakeStore()
-	store.put("m1", Mission{ID: "m1", Kind: KindCoding, Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
-		SessionID: "s1", Workspace: "/already/provisioned"})
-	remover := &fakeSandboxRemover{}
-	runner := &scriptedRunner{
-		discoverNotes: []string{"nothing to report"},
+		discoverNotes: []string{"vite app"},
 		plans:         []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
 	}
 	d := NewDriver(store, runner, nil, &fakeSessionCreator{}, &fakeGranter{}, nil, remover, slog.Default())
@@ -579,21 +535,40 @@ func TestDriverDiscoverLeavesSandboxWhenEnvironmentUnchanged(t *testing.T) {
 	if got := remover.calls(); len(got) != 0 {
 		t.Fatalf("sandbox Remove calls = %v, want none", got)
 	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.EnvFacts == nil || !reflect.DeepEqual(m.EnvFacts.Prepare, prepared) {
+		t.Fatalf("EnvFacts after discover = %+v, want the prepare facts kept", m.EnvFacts)
+	}
+	for _, ev := range store.events["m1"] {
+		if ev.Kind == "mission.sandbox_recreated" {
+			t.Fatalf("events = %+v, want no sandbox recreate", store.events["m1"])
+		}
+	}
 }
 
-// TestDriverProvisionDetectsEnvironmentFromRepoMarkers covers the
-// reported bug behind issue #495: a cloned repo's marker file decides
-// the environment right after the clone, before any sandbox exec.
-func TestDriverProvisionDetectsEnvironmentFromRepoMarkers(t *testing.T) {
+// TestDriverProvisionDetectsToolchainsWithoutEnvironment covers D-141:
+// provisioning reads every pin from the clone (node from .nvmrc, php
+// from composer.json for the baked minors, JDK 21 for an unpinned
+// pom.xml) with no image choice to make, so a polyglot repo gets all of
+// them in one mission.
+func TestDriverProvisionDetectsToolchainsWithoutEnvironment(t *testing.T) {
 	requireGitForPush(t)
 	bare := t.TempDir()
 	gitRun(t, bare, "init", "-q", "--bare", "-b", "main")
 	seed := t.TempDir()
 	gitRun(t, seed, "init", "-q", "-b", "main")
-	if err := os.WriteFile(filepath.Join(seed, "package.json"), []byte("{}"), 0o600); err != nil {
-		t.Fatal(err)
+	files := map[string]string{
+		"package.json":  "{}",
+		".nvmrc":        "18\n",
+		"composer.json": `{"require":{"php":"^8.2"}}`,
+		"pom.xml":       "<project/>",
 	}
-	gitRun(t, seed, "add", "package.json")
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(seed, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitRun(t, seed, "add", ".")
 	gitRun(t, seed, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", "seed")
 	gitRun(t, seed, "remote", "add", "origin", bare)
 	gitRun(t, seed, "push", "-q", "origin", "main")
@@ -613,8 +588,9 @@ func TestDriverProvisionDetectsEnvironmentFromRepoMarkers(t *testing.T) {
 		t.Fatalf("Advance: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
-	if m.Environment != "node" {
-		t.Fatalf("Environment = %q, want node from package.json (goal text mentioning \"go\" must not matter)", m.Environment)
+	want := map[string]string{"node": "18", "php": "8.4", "java": "21"}
+	if !reflect.DeepEqual(m.Toolchains, want) {
+		t.Fatalf("Toolchains = %v, want %v", m.Toolchains, want)
 	}
 }
 
