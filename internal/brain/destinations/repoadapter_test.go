@@ -906,6 +906,41 @@ func TestPRBodyReport(t *testing.T) {
 	}
 }
 
+// TestPRBodyDependencyEvidence (D-140, issue #1011) is a golden body
+// for a mission whose diff changed lockfiles: before and after test and
+// advisory counts as the harness measured them.
+func TestPRBodyDependencyEvidence(t *testing.T) {
+	before, after := 4, 1
+	m := missions.Mission{Goal: "Upgrade the dependencies", EnvFacts: &missions.EnvFacts{Lockfile: &missions.LockfileEvidence{
+		Lockfiles:   []string{"composer.lock", "package-lock.json"},
+		TestCmd:     "php artisan test",
+		TestsBefore: &missions.TestSummary{Passed: 36, Parsed: true},
+		TestsAfter:  &missions.TestSummary{Passed: 37, Parsed: true},
+		VulnsBefore: &before, VulnsAfter: &after,
+		Advisories: []string{"GHSA-xxxx-yyyy-zzzz"},
+	}}}
+	m.Plan.Units = []missions.PlanUnit{{Title: "upgrade composer", Passes: true}}
+	want := "Upgrade the dependencies\n\n" +
+		"## Dependency evidence\n\n" +
+		"Lockfiles changed: composer.lock, package-lock.json. Measured by the harness, not reported by the model.\n\n" +
+		"| | Before | After |\n|---|---|---|\n" +
+		"| Tests (`php artisan test`) | 36 passed, 0 failed, 0 warnings | 37 passed, 0 failed, 0 warnings |\n" +
+		"| Known advisories (osv-scanner) | 4 | 1 |\n" +
+		"\nRemaining advisories: GHSA-xxxx-yyyy-zzzz\n\n" +
+		"## Units\n\n- [x] upgrade composer\n\n"
+	if got := PRBody(m, false); got != want {
+		t.Fatalf("PRBody =\n%s\nwant\n%s", got, want)
+	}
+	m.EnvFacts.Lockfile = &missions.LockfileEvidence{Lockfiles: []string{"yarn.lock"}, TestExit: 1}
+	if got := PRBody(m, false); !strings.Contains(got, "| Tests | not measured | not measured |\n| Known advisories (osv-scanner) | not measured | not measured |\n") {
+		t.Fatalf("PRBody without a baseline:\n%s", got)
+	}
+	m.EnvFacts = &missions.EnvFacts{}
+	if got := PRBody(m, false); strings.Contains(got, "Dependency evidence") {
+		t.Fatalf("PRBody without lockfile evidence renders the section:\n%s", got)
+	}
+}
+
 func TestRepoAdapterAttributionDefaultsOn(t *testing.T) {
 	a := &RepoAdapter{}
 	if !a.attribution(context.Background()) {

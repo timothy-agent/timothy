@@ -176,7 +176,7 @@ const prReportCap = 60000
 // when attribution is on, a closing line crediting Timothy Agent with a
 // link to its repository.
 func PRBody(m missions.Mission, attribution bool) string {
-	body := m.Goal + "\n\n"
+	body := m.Goal + "\n\n" + prDependencyEvidence(m)
 	if len(m.Plan.Units) > 0 {
 		body += "## Units\n\n"
 		for _, u := range m.Plan.Units {

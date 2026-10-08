@@ -316,6 +316,21 @@ AGENTS.md so other work does not pay for it every session.
   `<workspace>/prepare/` when it is missing or lost its header. Not
   here: devcontainer and CI-workflow test sources, nested manifests,
   repo custom providers.
+- Lockfile evidence (D-140, issue #1011): when a coding mission's diff
+  against its base (`touchedFiles`, lockfiles included) changes a
+  lockfile (`lockfileNames`), `verifyAll` judges two harness criteria
+  for the units owning it (artifacts or scope, else the current unit):
+  the prepare baseline test command (`buildTestCmd`) exits 0 with no
+  fewer passed and no more failures or warnings, and the prepare audit
+  (`buildAuditCmd` into `<workspace>/prepare/osv-after.json`) finds no
+  more advisories than the baseline. Measured at most once per pass and
+  reused while HEAD, status and the uncommitted diff are unchanged;
+  `mission.lockfile_evidence` records it and `EnvFacts.Lockfile` stores
+  it. A failure is a `lockfile_evidence` check failure, so `passes`
+  stays false. A missing baseline is `not_measured`, never a failure.
+  Full review rounds get package-level lockfile summaries
+  (`lockfile_summary.go`: composer.lock and npm lockfiles parsed, others
+  a line count) and the criteria; the PR body gets a before/after table.
 - Per-criterion review rubric (issue #718): `review_verdict` carries
   `criteria` (unit index, criterion index, met/not_met/cannot_tell,
   evidence), optional so existing fixtures still parse and an unknown
