@@ -2025,7 +2025,7 @@ func TestMissionToolsSandboxRoutesShell(t *testing.T) {
 	dir := t.TempDir()
 	var gotMissionID, gotWorkdir, gotCommand string
 	r := newTestRunner(&scriptedAgent{})
-	r.sandbox = func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	r.sandbox = func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		gotMissionID, gotWorkdir, gotCommand = missionID, workdir, command
 		_, _ = out.Write([]byte("sandboxed output"))
 		return 3, nil
@@ -2051,7 +2051,7 @@ func TestMissionToolsSandboxRoutesShell(t *testing.T) {
 // a non-zero exit is not).
 func TestMissionToolsSandboxTimeoutPropagatesAsError(t *testing.T) {
 	r := newTestRunner(&scriptedAgent{})
-	r.sandbox = func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	r.sandbox = func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		return 124, errors.New("command timed out after 30s")
 	}
 	extraTools := r.missionTools(Mission{ID: "m1", Workspace: t.TempDir()})
@@ -2069,7 +2069,7 @@ func TestMissionToolsSandboxTimeoutPropagatesAsError(t *testing.T) {
 func TestMissionToolsSandboxCapsOutput(t *testing.T) {
 	r := newTestRunner(&scriptedAgent{})
 	over := strings.Repeat("x", 128<<10) + "SUMMARY-LINE"
-	r.sandbox = func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	r.sandbox = func(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		_, _ = out.Write([]byte(over))
 		return 0, nil
 	}
@@ -2369,70 +2369,8 @@ func TestDiscoverSessionIncludesAttachments(t *testing.T) {
 	}
 }
 
-// TestDiscoverSessionRecoversWhenSentinelMissingThenPresent mirrors
-// fakeEnvironmentSink records SetEnvironment calls.
-type fakeEnvironmentSink struct {
-	calls []string
-}
-
-func (f *fakeEnvironmentSink) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string, toolchains map[string]string) error {
-	f.calls = append(f.calls, id+":"+environment+":"+marker)
-	return nil
-}
-
-// TestDiscoverSessionReportsEnvironment covers issue #495: a coding
-// mission with no environment yet gets the discover turn's registered
-// value written through the sink; base and unknown keys never do.
-func TestDiscoverSessionReportsEnvironment(t *testing.T) {
-	cases := []struct {
-		name      string
-		mission   Mission
-		args      string
-		wantCalls []string
-	}{
-		{"registered key on an undecided coding mission", Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "build a vite app"},
-			`{"findings":"fresh repo","environment":"node"}`, []string{"m1:node:discover"}},
-		{"base is not a detection", Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "docs"},
-			`{"findings":"docs only","environment":"base"}`, nil},
-		{"unknown key ignored", Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "rust cli"},
-			`{"findings":"cargo project","environment":"rust"}`, nil},
-		{"operator-explicit value is kept", Mission{ID: "m1", Kind: KindCoding, Environment: "go", Route: "default", Goal: "x"},
-			`{"findings":"go module","environment":"node"}`, nil},
-		{"marker-detected value overridden when discover disagrees", Mission{ID: "m1", Kind: KindCoding, Environment: "node", EnvironmentMarker: "package.json", Route: "default", Goal: "x"},
-			`{"findings":"laravel app","environment":"php"}`, []string{"m1:php:discover"}},
-		{"marker-detected value kept when discover agrees", Mission{ID: "m1", Kind: KindCoding, Environment: "php", EnvironmentMarker: "composer.json", Route: "default", Goal: "x"},
-			`{"findings":"laravel app","environment":"php"}`, nil},
-		{"discover-set value is not overridden again", Mission{ID: "m1", Kind: KindCoding, Environment: "php", EnvironmentMarker: "discover", Route: "default", Goal: "x"},
-			`{"findings":"go module","environment":"go"}`, nil},
-		{"base does not override a marker", Mission{ID: "m1", Kind: KindCoding, Environment: "node", EnvironmentMarker: "package.json", Route: "default", Goal: "x"},
-			`{"findings":"docs","environment":"base"}`, nil},
-		{"empty report does not override a marker", Mission{ID: "m1", Kind: KindCoding, Environment: "node", EnvironmentMarker: "package.json", Route: "default", Goal: "x"},
-			`{"findings":"docs"}`, nil},
-		{"unregistered report does not override a marker", Mission{ID: "m1", Kind: KindCoding, Environment: "node", EnvironmentMarker: "package.json", Route: "default", Goal: "x"},
-			`{"findings":"cargo","environment":"rust"}`, nil},
-		{"general missions never set one", Mission{ID: "m1", Kind: "general", Route: "default", Goal: "x"},
-			`{"findings":"n/a","environment":"node"}`, nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			agent := &scriptedAgent{batches: [][]stream.StreamEvent{
-				{toolEndEvent(discoverNotesToolName, tc.args)},
-			}}
-			r := newTestRunner(agent)
-			sink := &fakeEnvironmentSink{}
-			r.SetEnvironmentSink(sink)
-			if _, _, _, err := r.DiscoverSession(context.Background(), tc.mission); err != nil {
-				t.Fatalf("DiscoverSession: %v", err)
-			}
-			if strings.Join(sink.calls, ",") != strings.Join(tc.wantCalls, ",") {
-				t.Fatalf("SetEnvironment calls = %v, want %v", sink.calls, tc.wantCalls)
-			}
-		})
-	}
-}
-
 // TestDiscoverSessionPrefixesUnsupportedStack confirms a stack the
-// sandbox has no image for lands at the top of the findings with the
+// sandbox has no toolchain for lands at the top of the findings with the
 // bootstrap instruction the planner needs (issue #495).
 func TestDiscoverSessionPrefixesUnsupportedStack(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
@@ -2451,24 +2389,32 @@ func TestDiscoverSessionPrefixesUnsupportedStack(t *testing.T) {
 	}
 }
 
-// TestDiscoverSessionDropsStackTheImageCovers: a stack naming the
-// mission's own image language gets no bootstrap note unless the
-// toolchain install failed (issue #992 E2E: "PHP 8.1 CLI" on php).
-func TestDiscoverSessionDropsStackTheImageCovers(t *testing.T) {
+// TestDiscoverSessionDropsStackTheSandboxCovers: a stack naming a
+// language the image carries (node, python, php) or the harness
+// installed gets no bootstrap note unless the toolchain install failed
+// (issue #992 E2E: "PHP 8.1 CLI"; D-141).
+func TestDiscoverSessionDropsStackTheSandboxCovers(t *testing.T) {
+	installed := func(tool, v string) Mission {
+		return Mission{Toolchains: map[string]string{tool: v}, ToolchainInstall: "installed"}
+	}
 	cases := []struct {
 		name     string
 		mission  Mission
 		args     string
 		wantNote bool
 	}{
-		{"php stack on php env", Mission{Environment: "php"}, `{"findings":"f","stack":"PHP 8.1 CLI script"}`, false},
-		{"laravel on php env after installed", Mission{Environment: "php", ToolchainInstall: "installed"}, `{"findings":"f","stack":"Laravel 10"}`, false},
-		{"stack matches the report's environment", Mission{}, `{"findings":"f","environment":"python","stack":"Django app"}`, false},
-		{"failed install keeps the note", Mission{Environment: "php", ToolchainInstall: "failed"}, `{"findings":"f","stack":"PHP 7.4"}`, true},
-		{"other language keeps the note", Mission{Environment: "php"}, `{"findings":"f","stack":"Rust CLI"}`, true},
-		{"django is not go", Mission{Environment: "go"}, `{"findings":"f","stack":"Django"}`, true},
+		{"php stack on the baked minors", Mission{}, `{"findings":"f","stack":"PHP 8.1 CLI script"}`, false},
+		{"laravel after php selected", installed("php", "8.1"), `{"findings":"f","stack":"Laravel 10"}`, false},
+		{"django on the image python", Mission{}, `{"findings":"f","stack":"Django app"}`, false},
+		{"vite on the image node", Mission{}, `{"findings":"f","stack":"Laravel + Vite, TypeScript"}`, false},
+		{"stale environment key ignored", Mission{}, `{"findings":"f","environment":"go","stack":"Rust CLI"}`, true},
+		{"failed install keeps the note", Mission{Toolchains: map[string]string{"php": "7.4"}, ToolchainInstall: "failed"}, `{"findings":"f","stack":"PHP 7.4"}`, true},
+		{"rust without a pin keeps the note", Mission{}, `{"findings":"f","stack":"Rust CLI"}`, true},
+		{"rust installed through mise", installed("rust", "stable"), `{"findings":"f","stack":"Rust CLI"}`, false},
+		{"go module with go installed", installed("go", "1.22"), `{"findings":"f","stack":"Go service"}`, false},
+		{"java without a jdk keeps the note", installed("go", "1.22"), `{"findings":"f","stack":"Spring Boot"}`, true},
 		{"markdown documentation needs no toolchain", Mission{}, `{"findings":"f","stack":"Markdown documentation"}`, false},
-		{"yaml config files need no toolchain", Mission{Environment: "base"}, `{"findings":"f","stack":"YAML config files"}`, false},
+		{"yaml config files need no toolchain", Mission{}, `{"findings":"f","stack":"YAML config files"}`, false},
 		{"rust with markdown docs keeps the note", Mission{}, `{"findings":"f","stack":"Rust CLI with markdown docs"}`, true},
 	}
 	for _, tc := range cases {
@@ -2488,6 +2434,7 @@ func TestDiscoverSessionDropsStackTheImageCovers(t *testing.T) {
 	}
 }
 
+// TestDiscoverSessionRecoversWhenSentinelMissingThenPresent mirrors
 // RunWorker's recovery ladder: a missing sentinel on the first turn
 // gets one recovery re-run before the sentinel is trusted.
 func TestDiscoverSessionRecoversWhenSentinelMissingThenPresent(t *testing.T) {

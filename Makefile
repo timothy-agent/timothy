@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts kb-eval sandbox-image sandbox-php-smoke sandbox-base-smoke canary-ecosystems
+	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke
 
 build:
 	$(GO_RUN) go build ./...
@@ -175,27 +175,16 @@ canary-ecosystems:
 kb-eval:
 	./scripts/kb-eval/kb-eval.sh
 
-# Builds the per-mission sandbox images: the base (python3/node/git/
-# bash — deploy/sandbox-base.Dockerfile) plus one variant per
-# "environment" (D-05x, sandboxd's image allowlist) FROM that base.
-# Not a compose service: sandboxes are containers brain creates
-# dynamically via the Docker Go SDK, not something `docker compose up`
-# runs on its own. Required before running any mission. timothy-sandbox
-# is tagged as an alias of the base image for back-compat with existing
-# canary scripts/compose references that predate the environment axis.
+# Builds the mission sandbox image, one for every mission (D-141,
+# deploy/sandbox.Dockerfile). Not a compose service: sandboxes are
+# containers brain creates dynamically via the Docker Go SDK, not
+# something `docker compose up` runs on its own. Required before running
+# any mission. SANDBOX_IMAGE tags a test build without replacing the
+# image the running stack uses.
+SANDBOX_IMAGE ?= timothy-sandbox:latest
 sandbox-image:
-	docker build -f deploy/sandbox-base.Dockerfile -t timothy-sandbox-base:latest .
-	docker tag timothy-sandbox-base:latest timothy-sandbox:latest
-	docker build -f deploy/sandbox-go.Dockerfile -t timothy-sandbox-go:latest .
-	docker build -f deploy/sandbox-node.Dockerfile -t timothy-sandbox-node:latest .
-	docker build -f deploy/sandbox-python.Dockerfile -t timothy-sandbox-python:latest .
-	docker build -f deploy/sandbox-java.Dockerfile -t timothy-sandbox-java:latest .
-	docker build -f deploy/sandbox-php.Dockerfile -t timothy-sandbox-php:latest .
+	docker build -f deploy/sandbox.Dockerfile -t $(SANDBOX_IMAGE) .
 
-# Checks the base image has mise, a writable toolchain dir, reusable toolchain and package cache volumes, and safe parallel installs.
-sandbox-base-smoke:
-	./scripts/sandbox-base-smoke.sh timothy-sandbox-base:latest
-
-# Checks the php variant has PHP 8.1 to 8.4, Laravel's extensions, minor selection, and composer.
-sandbox-php-smoke:
-	./scripts/sandbox-php-smoke.sh timothy-sandbox-php:latest
+# Checks PHP 8.1 to 8.4 with composer, build tools, mise, runtime installs under the sandbox limits, and the shared toolchain and cache volumes.
+sandbox-smoke:
+	./scripts/sandbox-smoke.sh $(SANDBOX_IMAGE)

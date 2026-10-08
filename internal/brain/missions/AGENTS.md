@@ -49,8 +49,8 @@ AGENTS.md so other work does not pay for it every session.
   as referenced context). The HTTP create path with `parent_mission_id`
   runs `InheritParent` (issue #923): a non-empty body field wins, an
   empty one inherits the parent's value, destinations never inherit,
-  and a kind override skips the kind-bound fields (environment,
-  executor_session_policy, repo source, flow).
+  and a kind override skips the kind-bound fields
+  (executor_session_policy, repo source, flow).
 - Mission attachments (issue #359): PDF/text converted via markitdown,
   images captioned via the vision route (`chat.CaptionImageOverGateway`),
   audio transcribed via the whisper sidecar, all ONCE at create (prompt-
@@ -201,19 +201,32 @@ AGENTS.md so other work does not pay for it every session.
   a harness `bootstrapAllowance` note, and `checkBootstrap` rejects a
   bootstrap unit on any other kind.
 - Repo toolchain versions (D-126, issue #991): `detectToolchainVersions`
-  (environment.go, marker-only, normalized to mise version selectors;
-  `detectMissionToolchains` falls back to versions the goal names) fills `missions.toolchains` alongside the environment. Brain installs
+  (toolchain.go, marker-only, normalized to mise version selectors;
+  `detectMissionToolchains` falls back to versions the goal names) fills `missions.toolchains`. Brain installs
   them with `mise use --global` through the sandbox exec path right
   after provisioning (`provisioner.installToolchains`, 10 minute
-  ceiling) and again after a discover-driven sandbox recreate, never
-  inside sandboxd's create call (30 s header timeout). A failure never
+  ceiling), never inside sandboxd's create call (30 s header timeout).
+  A failure never
   fails provisioning: `mission.toolchain_install_failed` carries the
   output tail and the discover nudge and notes allow a bootstrap unit
   (D-124). Executor CLIs keep the image's node via rewritten shebangs
-  in `deploy/sandbox-base.Dockerfile`.
+  in `deploy/sandbox.Dockerfile`.
+- One sandbox image (D-141, issue #1015): no `environment` field, no
+  per-language images, no discover-driven sandbox recreate. Unpinned
+  node, python and php run the image's own; a JVM build file with no
+  java pin installs JDK 21 (`defaultJava`), plus Maven (`pom.xml`, no
+  `mvnw`) or Gradle (no `gradlew`) through mise; rust installs the minimal
+  rustup profile (`toolSpec`). The discover report's `stack` is checked
+  against the image's toolchains plus the installed ones
+  (`stackCovered`); an uncovered stack gets the bootstrap note. The
+  create and automation APIs accept and drop a stale `environment` key
+  (`RemovedField`), and so does sandboxd's exec API, so a brain and
+  sandboxd version skew during a deploy cannot fail an exec.
+  `collectEnvFacts` starts from the stored facts, so
+  a re-collect never drops `EnvFacts.Prepare`.
 - Every ecosystem (D-139, issue #1014): detection reads node, python,
-  go, java, ruby and rust pins whatever the environment (a Laravel
-  repo's `.nvmrc` counts); php stays php-env only. The base image sets
+  go, java, ruby, rust and php pins (a Laravel repo's `.nvmrc`
+  counts). The image sets
   `MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS` so mise reads the repo's
   plain version files itself; Go reads them too for the facts and the
   pre-discover install, and alone parses what mise does not read
@@ -223,12 +236,12 @@ AGENTS.md so other work does not pay for it every session.
   `^`, one part less for `~=`, and mise resolves the newest match at
   install time from the index the install downloads anyway; a range
   with `<` keeps major.minor of its lower bound. The code floor keys on
-  the artifact's language (`codeExtensions` -> `toolchainByLanguage`),
-  not the environment: a unit passes with a call to the toolchain of
-  any language its source artifacts are in.
-- PHP minors (D-127, issue #992): the php image bakes 8.1 to 8.4
-  (default 8.4, `phpMinors` mirrors the Dockerfile). For the php env
-  only, `composerPHP` (phpversion.go) picks a minor:
+  the artifact's language (`codeExtensions` -> `toolchainByLanguage`):
+  a unit passes with a call to the toolchain of any language its
+  source artifacts are in.
+- PHP minors (D-127, issue #992): the image bakes 8.1 to 8.4
+  (default 8.4, `phpMinors` mirrors the Dockerfile). For any repo
+  with composer.json, `composerPHP` (phpversion.go) picks a minor:
   `config.platform.php` wins; otherwise the newest baked minor that
   composer.json's `require.php` and every composer.lock package's
   `require.php` (packages and packages-dev) allow (D-139), matched by
@@ -266,7 +279,7 @@ AGENTS.md so other work does not pay for it every session.
   (exits 1 on empty output), a coding unit with source artifacts and no
   toolchain call (`checkCodeFloor`, per artifact language), and, via
   a 60 s sandbox probe against the pre-work tree, a gate that already
-  exits 0 or names a command the environment lacks. Verifying that the
+  exits 0 or names a command the sandbox lacks. Verifying that the
   criteria are met is the reviewer's job, not the gate's.
 - Honest plans (issue #1007): the granularity merge counts code-extension
   artifacts only and fires only when 2 or more units carry them in one
@@ -303,9 +316,9 @@ AGENTS.md so other work does not pay for it every session.
   credentials, manifests and lockfiles to depth 3, probed tool versions
   and absent tools, sandbox limits, and gaps (Testcontainers, a
   Windows-only .NET solution) the planner may declare infeasible. The
-  probed part (`EnvFacts`) is collected once at provisioning and again
-  after a sandbox recreate (`provisioner.collectEnvFacts`, coding
-  missions only) and stored on `missions.env_facts`. The limit
+  probed part (`EnvFacts`) is collected once at provisioning
+  (`provisioner.collectEnvFacts`, coding missions only) and stored on
+  `missions.env_facts`. The limit
   constants mirror `internal/sandboxd/manager.go`; change both together.
 - Prepare step (D-130, issue #1010): `Driver.Advance` runs
   `provisioner.prepareWorkspace` (prepare.go) for a coding mission in

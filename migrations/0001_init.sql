@@ -904,21 +904,9 @@ CREATE TABLE IF NOT EXISTS missions (
     -- (statemachine.go's stepWorkerRetry/stepReviewRework) before a
     -- second identical stall pauses for a human, same as always.
     replan_used           boolean NOT NULL DEFAULT false,
-    -- Environment selects the per-language sandbox image (D-05x,
-    -- sandboxd's image allowlist) a coding mission's container runs.
-    -- Unlike harness, this has NO settings default: precedence is
-    -- explicit request -> auto-detect from repo markers at
-    -- provisioning (driver.go's ensureProvisioned) -> base ("").
-    -- Set by store.SetEnvironment; the discover report may replace a
-    -- marker-detected value once, never an explicit or discover-set
-    -- one. General missions never set this.
-    environment           text NOT NULL DEFAULT '',
-    -- The marker file that set environment ('' when the operator set
-    -- it explicitly, 'discover' when the discover report did).
-    environment_marker    text NOT NULL DEFAULT '',
     -- Toolchain versions from repo markers or the goal (D-126), tool ->
-    -- mise version prefix, written with environment by
-    -- store.SetEnvironment and installed before discover.
+    -- mise version prefix, written by store.SetToolchains and installed
+    -- before discover.
     toolchains            jsonb NOT NULL DEFAULT '{}',
     -- Environment facts (issue #1008): base branch, repo destinations,
     -- manifests, probed tool versions and gaps, collected at

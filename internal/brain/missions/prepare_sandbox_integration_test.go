@@ -16,18 +16,17 @@ import (
 	"time"
 )
 
-// Prepare step against the real sandbox images (D-130). Needs a docker
-// CLI, PREPARE_SANDBOX_IMAGE (the base image, npm fixture) and
-// optionally PREPARE_SANDBOX_PHP_IMAGE (the php image, Laravel-shaped
-// fixture), plus PREPARE_SANDBOX_WORKSPACE: a directory the Docker
-// daemon can bind-mount at the same path this process sees it. Network
+// Prepare step against the real sandbox image (D-130). Needs a docker
+// CLI, PREPARE_SANDBOX_IMAGE (the sandbox image, for the npm and
+// Laravel-shaped fixtures) and PREPARE_SANDBOX_WORKSPACE: a directory
+// the Docker daemon can bind-mount at the same path this process sees it. Network
 // is needed for mise, npm and the OSV database.
 
 // dockerRunExec is a sandboxExec over `docker run`: the workspace is
 // mounted at its own path, the command runs as the sandbox uid under
 // coreutils timeout, exactly as sandboxd execs it.
 func dockerRunExec(image string) sandboxExec {
-	return func(ctx context.Context, _, _, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	return func(ctx context.Context, _, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		ws := filepath.Dir(workdir)
 		secs := strconv.Itoa(int(timeout / time.Second))
 		cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "-u", "65534:65534", "-v", ws+":"+ws, "-w", workdir, image, //nolint:gosec // integration test over the sandbox image
@@ -90,7 +89,7 @@ func TestPrepareSandboxNpm(t *testing.T) {
 	run := dockerRunExec(image)
 	wt := m.WorktreePath()
 	var out strings.Builder
-	if code, err := run(context.Background(), m.ID, "", wt, "npm install --package-lock-only --ignore-scripts", 2*time.Minute, &out); err != nil || code != 0 {
+	if code, err := run(context.Background(), m.ID, wt, "npm install --package-lock-only --ignore-scripts", 2*time.Minute, &out); err != nil || code != 0 {
 		t.Fatalf("lockfile generation: %d %v\n%s", code, err, out.String())
 	}
 	store := newFakeStore()
@@ -118,7 +117,7 @@ func TestPrepareSandboxNpm(t *testing.T) {
 	if !strings.Contains(string(local), "[tasks.test]\nrun = \"npm test\"") {
 		t.Errorf("mise.local.toml lacks the test task:\n%s", local)
 	}
-	if code, err := run(context.Background(), m.ID, "", wt, "mise run test && mise run audit >/dev/null; test $? -le 1", time.Minute, &out); err != nil || code != 0 {
+	if code, err := run(context.Background(), m.ID, wt, "mise run test && mise run audit >/dev/null; test $? -le 1", time.Minute, &out); err != nil || code != 0 {
 		t.Errorf("mise run test/audit after prepare: %d %v\n%s", code, err, out.String())
 	}
 }
@@ -147,9 +146,9 @@ exit(1);
 // Prepare installs both, creates .env with an app key, and the baseline
 // reports 36 passed and 0 warnings.
 func TestPrepareSandboxLaravelShape(t *testing.T) {
-	image := os.Getenv("PREPARE_SANDBOX_PHP_IMAGE")
+	image := os.Getenv("PREPARE_SANDBOX_IMAGE")
 	if image == "" {
-		t.Skip("PREPARE_SANDBOX_PHP_IMAGE not set")
+		t.Skip("PREPARE_SANDBOX_IMAGE not set")
 	}
 	m := prepareFixture(t, map[string]string{
 		"composer.json": `{"name":"fixture/app","require":{"psr/log":"^3.0"},"scripts":{"test":["@php artisan test"]}}`,
@@ -160,7 +159,7 @@ func TestPrepareSandboxLaravelShape(t *testing.T) {
 	run := dockerRunExec(image)
 	wt := m.WorktreePath()
 	var out strings.Builder
-	if code, err := run(context.Background(), m.ID, "", wt, "composer update --no-install --no-interaction && npm install --package-lock-only --ignore-scripts", 3*time.Minute, &out); err != nil || code != 0 {
+	if code, err := run(context.Background(), m.ID, wt, "composer update --no-install --no-interaction && npm install --package-lock-only --ignore-scripts", 3*time.Minute, &out); err != nil || code != 0 {
 		t.Fatalf("lockfile generation: %d %v\n%s", code, err, out.String())
 	}
 	store := newFakeStore()
@@ -196,9 +195,9 @@ func TestPrepareSandboxLaravelShape(t *testing.T) {
 // lockfile generated under the workspace is audited with lodash's
 // advisories.
 func TestPrepareSandboxLaravelNoNpmLock(t *testing.T) {
-	image := os.Getenv("PREPARE_SANDBOX_PHP_IMAGE")
+	image := os.Getenv("PREPARE_SANDBOX_IMAGE")
 	if image == "" {
-		t.Skip("PREPARE_SANDBOX_PHP_IMAGE not set")
+		t.Skip("PREPARE_SANDBOX_IMAGE not set")
 	}
 	m := prepareFixture(t, map[string]string{
 		"composer.json": `{"name":"fixture/app","require":{"psr/log":"^3.0"},"scripts":{"test":["@php artisan test"]}}`,
@@ -210,7 +209,7 @@ func TestPrepareSandboxLaravelNoNpmLock(t *testing.T) {
 	run := dockerRunExec(image)
 	wt := m.WorktreePath()
 	var out strings.Builder
-	if code, err := run(context.Background(), m.ID, "", wt, "composer update --no-install --no-interaction", 3*time.Minute, &out); err != nil || code != 0 {
+	if code, err := run(context.Background(), m.ID, wt, "composer update --no-install --no-interaction", 3*time.Minute, &out); err != nil || code != 0 {
 		t.Fatalf("lockfile generation: %d %v\n%s", code, err, out.String())
 	}
 	store := newFakeStore()

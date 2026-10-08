@@ -28,7 +28,7 @@ func repoMission(t *testing.T, goal string) Mission {
 		t.Fatal(err)
 	}
 	return Mission{
-		ID: "m1", Kind: KindCoding, Environment: "php", Goal: goal, Workspace: ws,
+		ID: "m1", Kind: KindCoding, Goal: goal, Workspace: ws,
 		Sources: []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r.git", ConnectorID: "c1"}},
 	}
 }
@@ -218,7 +218,7 @@ func TestPlan048d389eShape(t *testing.T) {
 	m.ID = "048d389e"
 	m.PlanGate = PlanGateState{RepoDestination: true}
 	gitTrack(t, m.WorkRoot(), "composer.json", "composer.lock", "package.json")
-	r := &nativeRunner{log: slog.Default(), sandbox: func(_ context.Context, _, _, _, _ string, _ time.Duration, out io.Writer) (int, error) {
+	r := &nativeRunner{log: slog.Default(), sandbox: func(_ context.Context, _, _, _ string, _ time.Duration, out io.Writer) (int, error) {
 		_, _ = fmt.Fprint(out, "not done yet\n")
 		return 1, nil
 	}}

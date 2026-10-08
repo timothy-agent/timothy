@@ -32,7 +32,7 @@ MATRIX_FILE="${REPO_ROOT}/scripts/ecosystem-matrix.txt"
 RESULTS_ROOT="${CANARY_RESULTS_DIR:-${REPO_ROOT}/canary-results/ecosystems}"
 ONLY="${CANARY_ECOSYSTEM:-}"
 CACHES_VOLUME="${CANARY_CACHES_VOLUME:-timothy_sandbox-caches}"
-SANDBOX_IMAGE="${CANARY_SANDBOX_IMAGE:-timothy-sandbox-base:latest}"
+SANDBOX_IMAGE="${CANARY_SANDBOX_IMAGE:-timothy-sandbox:latest}"
 
 # shellcheck disable=SC1091
 source "${REPO_ROOT}/scripts/lib/ecosystem-matrix.sh"

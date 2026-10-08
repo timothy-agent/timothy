@@ -40,9 +40,9 @@ const sandboxUser = "65534:65534"
 // comment). The three user-prefix dirs come first so a tool a worker
 // installs with `npm install -g`, `pip install --user`, or `go install`
 // under the sandbox HOME is on PATH for every later exec in the same
-// container: sandbox-base.Dockerfile sets NPM_CONFIG_PREFIX to
-// /home/sandbox/.npm-global and adds .local/bin, sandbox-go.Dockerfile
-// adds go/bin. mise shims (D-125) precede them so a pinned toolchain
+// container: sandbox.Dockerfile sets NPM_CONFIG_PREFIX to
+// /home/sandbox/.npm-global and adds .local/bin; go/bin is `go
+// install`'s default target. mise shims (D-125) precede them so a pinned toolchain
 // wins; with no pin a shim falls through to the image's binary.
 const sandboxPath = "PATH=/home/sandbox/.mise/shims:/home/sandbox/.local/bin:/home/sandbox/.npm-global/bin:/home/sandbox/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -92,7 +92,7 @@ const (
 	// sandboxHomePath / tmpMountPath are the two paths that lose their
 	// writable backing under ReadonlyRootfs (D-106) and get a tmpfs
 	// instead. sandboxHomePath is the image's HOME
-	// (sandbox-base.Dockerfile); executorStateMountPath nests under it.
+	// (sandbox.Dockerfile); executorStateMountPath nests under it.
 	sandboxHomePath = "/home/sandbox"
 	tmpMountPath    = "/tmp"
 
@@ -104,14 +104,14 @@ const (
 
 	// toolchainsMountPath is where the toolchain cache volume is
 	// mounted, rw, in every mission container: mise's data dir
-	// (MISE_DATA_DIR in sandbox-base.Dockerfile), so installed
+	// (MISE_DATA_DIR in sandbox.Dockerfile), so installed
 	// toolchains survive across missions. A direct child of HOME: Docker
 	// creates missing parents of a mount point root-owned on the tmpfs,
 	// which would lock uid 65534 out of e.g. ~/.local (issue #995).
 	toolchainsMountPath = "/home/sandbox/.mise"
 
 	// cachesMountPath (D-131) holds the package manager caches: the
-	// image ENV (sandbox-base.Dockerfile) points composer, npm, pip, uv,
+	// image ENV (sandbox.Dockerfile) points composer, npm, pip, uv,
 	// Go, Maven, Gradle, yarn, bun and mise state here. Backed by the
 	// shared cache volume, or by the mission's own missionCacheDirName
 	// dir when that volume is absent; never by the HOME tmpfs, whose
@@ -199,82 +199,13 @@ const (
 // string-matching the error text.
 var ErrTimeout = errors.New("sandbox: command timed out")
 
-// environmentKeys is the D-05x allowlist of a mission's "environment"
-// key — the ONLY way an image is ever chosen; a request carries the
-// key, never a free-form image string (mirrors
-// internal/brain/missions.Environments, which the API validates
-// mission and automation requests against before this is ever reached). ""
-// and "base" both resolve to the operator-configured base image
-// (MISSION_SANDBOX_IMAGE) — "" is Manager's zero-value default for
-// back-compat with a caller that predates the environment axis, "base"
-// is the operator's explicit escape hatch out of auto-detection. Every
-// other key derives a variant image ref from the base ref (imageFor):
-// the base repository name gets "-<key>" appended, same tag —
-// timothy-sandbox:latest -> timothy-sandbox-go:latest (local `make
-// sandbox-image` convention) and
-// ghcr.io/timothy-agent/timothy-sandbox:0.1.0-alpha.21 ->
-// ghcr.io/timothy-agent/timothy-sandbox-go:0.1.0-alpha.21 (release
-// convention: deploy/sandbox-<key>.Dockerfile + release.yml publish
-// exactly these names).
-var environmentKeys = map[string]bool{
-	"go":     true,
-	"node":   true,
-	"python": true,
-	"java":   true,
-	"php":    true,
-}
-
-// ErrUnknownEnvironment reports an environment key outside
-// environmentKeys (and not "" or "base") — never silently falls back
-// to the base image, so a typo'd or stale key fails loudly instead of
-// running a mission's coding work in the wrong toolchain.
-var ErrUnknownEnvironment = errors.New("sandbox: unknown environment")
-
-// imageFor derives environment's image ref from baseImage — see
-// D-05x. baseImage is the operator-configured MISSION_SANDBOX_IMAGE
-// (back-compat default, and "base"'s explicit target). Digest refs
-// (baseImage containing "@") cannot be derived from and are rejected
-// for any variant environment.
-func imageFor(baseImage, environment string) (string, error) {
-	switch environment {
-	case "", "base":
-		return baseImage, nil
-	default:
-		if !environmentKeys[environment] {
-			return "", fmt.Errorf("%w: %q", ErrUnknownEnvironment, environment)
-		}
-		if strings.Contains(baseImage, "@") {
-			return "", fmt.Errorf("sandbox: variant environments require a tagged image ref, got digest %q", baseImage)
-		}
-		repo, tag := splitImageRef(baseImage)
-		variant := repo + "-" + environment
-		if tag == "" {
-			return variant, nil
-		}
-		return variant + ":" + tag, nil
-	}
-}
-
-// splitImageRef splits an image ref into repository and tag. The tag
-// separator is the last ":" occurring after the last "/", so a
-// registry-with-port ref (e.g. localhost:5000/timothy-sandbox) is never
-// split at the port colon. No tag present -> tag is "".
-func splitImageRef(image string) (repo, tag string) {
-	slash := strings.LastIndex(image, "/")
-	colon := strings.LastIndex(image, ":")
-	if colon <= slash {
-		return image, ""
-	}
-	return image[:colon], image[colon+1:]
-}
-
 // Manager creates, reuses, and tears down one Docker container per
 // mission on the same Docker daemon brain itself runs under (driven via
 // the mounted docker.sock). Safe for concurrent use.
 type Manager struct {
 	cli *client.Client
-	// baseImage is MISSION_SANDBOX_IMAGE — the image "", "base", and (via
-	// CheckImage) the boot-time health check all resolve to.
+	// baseImage is MISSION_SANDBOX_IMAGE, the one image every mission
+	// container runs (D-141) and the boot-time health check targets.
 	baseImage string
 	log       *slog.Logger
 
@@ -310,10 +241,8 @@ type Manager struct {
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per-mission ensureContainer lock
 
-	// pullMu (D-056) serializes ImagePull across missions — concurrent
-	// layer decompression for two different variant images spikes
-	// hundreds of MB each; serializing trades pull latency for bounded
-	// memory during the pull.
+	// pullMu (D-056) serializes ImagePull across missions, so concurrent
+	// first missions decompress the image's layers once, not in parallel.
 	pullMu sync.Mutex
 }
 
@@ -521,14 +450,10 @@ func (m *Manager) Ping(ctx context.Context) error {
 	return err
 }
 
-// CheckImage confirms the configured BASE sandbox image actually
-// exists locally — an operator who never ran `make sandbox-image`
-// would otherwise see every mission shell call fail opaquely instead
-// of a clear boot-time health signal. Variant images (go/node/...) are
-// not checked here: an operator who never runs a mission in that
-// environment need not have it locally yet, and createContainer pulls
-// a missing variant on demand instead (ErrUnknownEnvironment is for an
-// unrecognized key, not a missing image).
+// CheckImage confirms the configured sandbox image actually exists
+// locally: an operator who never ran `make sandbox-image` would
+// otherwise see every mission shell call fail opaquely instead of a
+// clear boot-time health signal.
 func (m *Manager) CheckImage(ctx context.Context) error {
 	_, err := m.cli.ImageInspect(ctx, m.baseImage)
 	return err
@@ -565,20 +490,15 @@ func (m *Manager) missionLock(missionID string) *sync.Mutex {
 // reboot or an OOM-killed PID 1; since D-106 a restart also empties the
 // HOME and /tmp tmpfs, so packages the worker installed outside
 // /workspace do not survive it, only the mounted volumes do), Running
-// (reuse as-is). environment
-// (D-05x) only matters on the absent path — a container's image is
-// fixed for its whole life, so ensureContainer never checks it against
-// an already-running/existing container; the mission row's own
-// Environment field is what's sticky, not anything read back from
-// Docker.
+// (reuse as-is).
 // workdir scopes the workspace mount to this mission's own directory
-// on the absent path only (D-107), same as environment: a container's
-// mounts are fixed for its whole life. The scope CHECK, though, runs on
+// on the absent path only (D-107): a container's mounts are fixed for
+// its whole life. The scope CHECK, though, runs on
 // every path (D-116): reuse and restart-in-place hand workdir straight
 // to Docker's WorkingDir, and those branches carry the vast majority of
 // execs, so gating only the create path would leave the invariant
 // unenforced for all but a mission's first command.
-func (m *Manager) ensureContainer(ctx context.Context, missionID, environment, workdir string) (string, error) {
+func (m *Manager) ensureContainer(ctx context.Context, missionID, workdir string) (string, error) {
 	if _, err := missionWorkspaceDir(workdir, missionID); err != nil {
 		return "", err
 	}
@@ -601,7 +521,7 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID, environment, w
 		}
 		return insp.Container.ID, nil
 	case errdefs.IsNotFound(err):
-		id, createErr := m.createContainer(ctx, missionID, name, environment, workdir)
+		id, createErr := m.createContainer(ctx, missionID, name, workdir)
 		if createErr == nil {
 			return id, nil
 		}
@@ -630,11 +550,8 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID, environment, w
 	}
 }
 
-func (m *Manager) createContainer(ctx context.Context, missionID, name, environment, workdir string) (string, error) {
-	image, err := imageFor(m.baseImage, environment)
-	if err != nil {
-		return "", err
-	}
+func (m *Manager) createContainer(ctx context.Context, missionID, name, workdir string) (string, error) {
+	image := m.baseImage
 	workspaceMount, err := m.missionMount(workdir, missionID)
 	if err != nil {
 		return "", err
@@ -647,7 +564,7 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 	cfg := &container.Config{
 		Image: image,
 		// PATH/HOME only (the rest comes from the image ENV, see
-		// sandbox-base.Dockerfile) — deliberately NOT os.Environ(): the whole point
+		// sandbox.Dockerfile), deliberately NOT os.Environ(): the whole point
 		// of the sandbox is that a model-authored command never sees
 		// brain's DATABASE_URL/TIMOTHY_MASTER_KEY/API tokens. Anything
 		// beyond this (e.g. an executor's ANTHROPIC_* credentials) is
@@ -717,7 +634,7 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		// Tmpfs (D-106): /tmp is the shell's scratch space, and
 		// /home/sandbox is the sandbox HOME that `npm install -g`
 		// (NPM_CONFIG_PREFIX), `pip install --user`, and the caches under
-		// it all write to (sandbox-base.Dockerfile). Both were the
+		// it all write to (sandbox.Dockerfile). Both were the
 		// writable layer before. nosuid,nodev,exec: Docker mounts tmpfs
 		// noexec unless told otherwise, which breaks `go test` (it runs
 		// its test binary from /tmp) and binaries installed under HOME
@@ -754,12 +671,9 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, environm
 		if !errdefs.IsNotFound(err) {
 			return "", fmt.Errorf("sandbox: create container %s: %w", name, err)
 		}
-		// Image not pulled locally yet (variant images especially are
-		// built/pushed at release time, not baked into every deployment) —
-		// pull it once and retry create exactly once. pullMu (D-056)
-		// serializes this across concurrent missions: two different
-		// variant images decompressing layers at once spikes hundreds of
-		// MB each, and this trades pull latency for bounded memory.
+		// Image not pulled locally yet: pull it once and retry create
+		// exactly once. pullMu (D-056) serializes this across concurrent
+		// missions, trading pull latency for bounded memory.
 		if err := m.pullImage(ctx, image, missionID); err != nil {
 			return "", err
 		}
@@ -799,9 +713,7 @@ func (m *Manager) pullImage(ctx context.Context, image, missionID string) error 
 	return nil
 }
 
-// Exec runs command in missionID's sandbox container (environment
-// selects its image, D-05x, on first creation only — see
-// ensureContainer), streaming combined stdout+stderr to out, and
+// Exec runs command in missionID's sandbox container, streaming combined stdout+stderr to out, and
 // returns the exit code. Timeout is enforced by wrapping the command in
 // the container's own `timeout` binary — Docker has no ExecKill API,
 // so cancelling ctx only closes the attach stream, it does not stop
@@ -813,8 +725,8 @@ func (m *Manager) pullImage(ctx context.Context, image, missionID string) error 
 // container gone, attach failed) or a timeout (mirroring
 // builtin.Shell's contract: a command that ran and exited non-zero is
 // reported via exitCode, not err).
-func (m *Manager) Exec(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
-	return m.ExecEnv(ctx, missionID, environment, workdir, command, nil, timeout, out)
+func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
+	return m.ExecEnv(ctx, missionID, workdir, command, nil, timeout, out)
 }
 
 // ExecEnv is Exec plus per-exec environment variables (D-053) — env
@@ -822,8 +734,8 @@ func (m *Manager) Exec(ctx context.Context, missionID, environment, workdir, com
 // layer); this method trusts it and passes it straight to Docker's
 // ExecCreate. Existing Exec callers are unaffected: they route through
 // here with env == nil.
-func (m *Manager) ExecEnv(ctx context.Context, missionID, environment, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
-	containerID, err := m.ensureContainer(ctx, missionID, environment, workdir)
+func (m *Manager) ExecEnv(ctx context.Context, missionID, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
+	containerID, err := m.ensureContainer(ctx, missionID, workdir)
 	if err != nil {
 		return 0, err
 	}

@@ -664,13 +664,10 @@ func TestMissionsAnswerResumesMission(t *testing.T) {
 	}
 }
 
-// TestMissionsCreateLeavesEnvironmentForDetection covers issue #495: a
-// coding mission created without an explicit environment stays "" in
-// both the create response and the row, even when the goal text
-// mentions a language — detection happens against the real workspace
-// (repo markers after the clone, then the discover turn), never from
-// goal keywords, which misread "go ahead" as the Go toolchain.
-func TestMissionsCreateLeavesEnvironmentForDetection(t *testing.T) {
+// TestMissionsCreateIgnoresRemovedEnvironment covers D-141 end to end:
+// an older client still sending environment creates the mission, and
+// neither the create response nor a later read carries the field.
+func TestMissionsCreateIgnoresRemovedEnvironment(t *testing.T) {
 	store := testMissionStore(t)
 
 	driver := missions.NewDriver(store, errRunner{}, nil, nil, nil, nil, nil, discard())
@@ -678,7 +675,7 @@ func TestMissionsCreateLeavesEnvironmentForDetection(t *testing.T) {
 	m := mux(a)
 	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
-	body := `{"goal":"itest-api-mission go ahead and write a CLI that parses logs","kind":"coding"}`
+	body := `{"goal":"itest-api-mission write a CLI that parses logs","kind":"coding","environment":"php"}`
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
@@ -691,23 +688,27 @@ func TestMissionsCreateLeavesEnvironmentForDetection(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
-	if created.Environment != "" {
-		t.Fatalf("create response environment = %q, want empty (no goal-keyword detection)", created.Environment)
+	if strings.Contains(w.Body.String(), `"environment"`) {
+		t.Fatalf("create response carries environment: %s", w.Body.String())
 	}
 
 	got, err := store.Get(context.Background(), created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Environment != "" {
-		t.Fatalf("stored environment = %q, want empty until the workspace decides it", got.Environment)
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Goal != "itest-api-mission write a CLI that parses logs" || strings.Contains(string(raw), `"environment"`) {
+		t.Fatalf("stored mission = %s, want the goal and no environment", raw)
 	}
 }
 
 // TestMissionsCreateCarriesPlanRoute confirms a create request's
 // plan_route reaches the created mission row (both the create
 // response and a subsequent store read) — mirrors
-// TestMissionsCreateLeavesEnvironmentForDetection's round-trip
+// TestMissionsCreateIgnoresRemovedEnvironment's round-trip
 // shape for the new field.
 func TestMissionsCreateCarriesPlanRoute(t *testing.T) {
 	store := testMissionStore(t)

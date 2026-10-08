@@ -30,7 +30,7 @@ func bootstrapPlan() Plan {
 // unit, and still a rejection otherwise; "already exits 0" applies to
 // every unit regardless.
 func TestProbeCheckCmdsBootstrap(t *testing.T) {
-	m := Mission{ID: "m1", Kind: KindCoding, Environment: "php"}
+	m := Mission{ID: "m1", Kind: KindCoding}
 	noBootstrap := Plan{Units: []PlanUnit{{Title: "Add feature", Artifacts: []string{"app/a.php"}, CheckCmd: laterCheck}}}
 	cases := []struct {
 		name    string
@@ -149,11 +149,11 @@ func TestPlanSessionAcceptsBootstrapPlan(t *testing.T) {
 		`{"title":"Add feature","artifacts":["app/a.php"],"criteria":["c1","c2"],"check_cmd":"./.tools/php/bin/php artisan test"}]}`
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, good)}}}
 	r := newTestRunner(agent)
-	r.sandbox = func(_ context.Context, _, _, _, _ string, _ time.Duration, out io.Writer) (int, error) {
+	r.sandbox = func(_ context.Context, _, _, _ string, _ time.Duration, out io.Writer) (int, error) {
 		_, _ = out.Write([]byte("sh: 1: ./.tools/php/bin/php: not found\n"))
 		return 127, nil
 	}
-	plan, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding, Environment: "php"}, "")
+	plan, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding}, "")
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -177,7 +177,6 @@ func TestPlanPromptBootstrapRule(t *testing.T) {
 		{"general mission with a stack note", KindGeneral, stackNote, false},
 		{"coding mission without stack note", KindCoding, "go.mod at the root", false},
 		{"coding mission with stack note", KindCoding, stackNote, true},
-		{"coding mission after failed recreate install", KindCoding, "findings\n\nInstalling the toolchains for the python environment (python 3.10) failed in the sandbox; the plan's first unit may be a " + bootstrapAllowance + " that installs the toolchain into the workspace.", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

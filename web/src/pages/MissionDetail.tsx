@@ -45,7 +45,6 @@ import { ResultSection } from '../components/missions/ResultSection'
 import { ReviewRoutePicker } from '../components/missions/ReviewRoutePicker'
 import { TimelineSection } from '../components/missions/TimelineSection'
 import { ModelBadge } from '../components/ModelBadge'
-import { envIcon } from '../components/icons/EnvIcons'
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -851,20 +850,6 @@ export function MissionDetail() {
                     {executorSpawn.model}
                   </Badge>
                 )}
-                {mission.environment &&
-                  (() => {
-                    const EnvIcon = envIcon(mission.environment)
-                    const label = `${mission.environment} environment`
-                    return (
-                      <Badge
-                        variant="secondary"
-                        aria-label={EnvIcon ? label : undefined}
-                        title={EnvIcon ? label : "Sandbox environment this mission's container runs"}
-                      >
-                        {EnvIcon ? <EnvIcon /> : `env · ${mission.environment}`}
-                      </Badge>
-                    )
-                  })()}
                 {mission.toolchains && Object.keys(mission.toolchains).length > 0 && (
                   <Badge variant="secondary" title="Toolchain versions pinned by the repo, installed in the sandbox">
                     {Object.entries(mission.toolchains)

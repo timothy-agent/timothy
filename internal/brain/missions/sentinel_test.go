@@ -141,18 +141,19 @@ func TestParseDiscoverFindingsCaseInsensitiveKey(t *testing.T) {
 	if report.Findings != "found an existing config loader to reuse" {
 		t.Fatalf("parseDiscoverFindings = %q", report.Findings)
 	}
-	if report.Environment != "" || report.Stack != "" {
-		t.Fatalf("parseDiscoverFindings environment/stack = %q/%q, want empty when omitted", report.Environment, report.Stack)
+	if report.Stack != "" {
+		t.Fatalf("parseDiscoverFindings stack = %q, want empty when omitted", report.Stack)
 	}
 }
 
-func TestParseDiscoverFindingsEnvironmentAndStack(t *testing.T) {
+// A stale "environment" key from the removed field (D-141) is ignored.
+func TestParseDiscoverFindingsStackIgnoresEnvironment(t *testing.T) {
 	report, err := parseDiscoverFindings([]byte(`{"findings":"vite app","environment":"node","stack":"Rust CLI"}`))
 	if err != nil {
 		t.Fatalf("parseDiscoverFindings: %v", err)
 	}
-	if report.Environment != "node" || report.Stack != "Rust CLI" {
-		t.Fatalf("parseDiscoverFindings environment/stack = %q/%q, want node/Rust CLI", report.Environment, report.Stack)
+	if report.Findings != "vite app" || report.Stack != "Rust CLI" {
+		t.Fatalf("parseDiscoverFindings = %+v, want vite app / Rust CLI", report)
 	}
 }
 

@@ -37,7 +37,6 @@ type CreateRequest struct {
 
 	Harness               string
 	ReviewHarness         string
-	Environment           string
 	ExecutorSessionPolicy string
 	HasPlan               bool
 
@@ -214,7 +213,7 @@ func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (
 		RouteModel: req.RouteModel, PlanRouteModel: req.PlanRouteModel, ReviewRouteModel: req.ReviewRouteModel,
 		MaxIterations: maxIterations, BudgetAmount: req.BudgetAmount, BudgetCurrency: budgetCurrency,
 		AutoApproveTools: autoApproveTools, AutoApprovePlan: autoApprovePlan, PromptOverlay: promptOverlay,
-		Harness: harness, ReviewHarness: reviewHarness, Environment: req.Environment,
+		Harness: harness, ReviewHarness: reviewHarness,
 		ExecutorSessionPolicy:    req.ExecutorSessionPolicy,
 		HasPlan:                  req.HasPlan,
 		ParentMissionID:          req.ParentMissionID,

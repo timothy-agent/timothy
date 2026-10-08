@@ -24,7 +24,7 @@ jobs:
   # SBOM generation per image is future work, deliberately not here yet
   # (issue #435 scoped it out).
 
-  # Decides which of the 8 images actually need a rebuild for this
+  # Decides which images actually need a rebuild for this
   # tag. Diffs against the previous release tag (not the previous
   # commit): a service skipped across several no-op releases in a row
   # must still be compared against the last tag that actually built
@@ -72,7 +72,7 @@ jobs:
           changed '^pdfgen-svc/' && echo "pdfgen=true" >> "$GITHUB_OUTPUT" || echo "pdfgen=false" >> "$GITHUB_OUTPUT"
           changed '^ocr-svc/' && echo "ocr=true" >> "$GITHUB_OUTPUT" || echo "ocr=false" >> "$GITHUB_OUTPUT"
           changed '^whisper-svc/' && echo "whisper=true" >> "$GITHUB_OUTPUT" || echo "whisper=false" >> "$GITHUB_OUTPUT"
-          changed '^deploy/sandbox-.*\.Dockerfile$' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
+          changed '^deploy/sandbox\.Dockerfile$' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
 
   images:
     needs: diff
@@ -124,6 +124,12 @@ jobs:
             dockerfile: whisper-svc/Dockerfile
             build-args: |
               WHISPER_MODEL=large-v3
+          # D-141: one mission sandbox image, amd64 and arm64 like the
+          # services. The release compose pins MISSION_SANDBOX_IMAGE to
+          # this tag, so an unchanged image is copied forward below.
+          - name: sandbox
+            context: .
+            dockerfile: deploy/sandbox.Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: fromJSON(needs.diff.outputs[matrix.name])
@@ -186,147 +192,9 @@ jobs:
             --tag ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${{ steps.version.outputs.value }} \
             ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${prev_version}
 
-  # Sandbox family: five variants FROM the base, so the base must be
-  # pushed before any variant builds — buildx can't resolve a
-  # cross-arch base from the local docker store the way single-stage
-  # images can. A matrix job's legs run in parallel with no ordering
-  # between them, so this is a single sequential job instead of a
-  # matrix leg. The family is all-or-nothing: any sandbox-*.Dockerfile
-  # change rebuilds and re-pushes all six images together, even if
-  # only one variant actually changed — simpler than tracking which
-  # variants use which lines of the base, and rebuilds are cheap
-  # relative to the base's own apt/node layers being cached.
-  #
-  # timothy-sandbox keeps publishing the base image (back-compat
-  # alias, matches the local `make sandbox-image` tagging convention
-  # of tagging the base as both timothy-sandbox-base and
-  # timothy-sandbox) rather than renaming it — nothing outside this
-  # workflow needs to change to keep pulling the base under its
-  # original name.
-  #
-  # Unlike service images, the family's copy-forward lives inside this
-  # same job (per-step ifs) rather than a matrix conditional: the
-  # release compose pins MISSION_SANDBOX_IMAGE to the release version
-  # and sandboxd derives variant refs from it, so every release MUST
-  # have all six sandbox tags — a skipped job would leave them
-  # dangling and break the first mission of each environment.
-  sandbox-images:
-    needs: diff
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
-      id-token: write
-      attestations: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - id: version
-        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - id: sha
-        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
-        if: fromJSON(needs.diff.outputs.sandbox)
-      - name: Setup Docker Buildx
-        if: fromJSON(needs.diff.outputs.sandbox)
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Copy forward unchanged family
-        if: needs.diff.outputs.prev_tag != '' && !fromJSON(needs.diff.outputs.sandbox)
-        run: |
-          prev_version="${{ needs.diff.outputs.prev_tag }}"
-          prev_version="${prev_version#v}"
-          for name in sandbox sandbox-base sandbox-go sandbox-node sandbox-python sandbox-java sandbox-php; do
-            docker buildx imagetools create \
-              --tag ghcr.io/${{ github.repository_owner }}/timothy-$name:${{ steps.version.outputs.value }} \
-              ghcr.io/${{ github.repository_owner }}/timothy-$name:${prev_version}
-          done
-      - name: Build and push base
-        id: base
-        if: fromJSON(needs.diff.outputs.sandbox)
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: deploy/sandbox-base.Dockerfile
-          build-args: |
-            GIT_SHA=${{ steps.sha.outputs.short }}
-            APP_VERSION=${{ steps.version.outputs.value }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/timothy-sandbox:${{ steps.version.outputs.value }}
-            ghcr.io/${{ github.repository_owner }}/timothy-sandbox-base:${{ steps.version.outputs.value }}
-      # One build, two names, one digest: attest under both so a pull by
-      # either name verifies.
-      - name: Attest base provenance
-        if: fromJSON(needs.diff.outputs.sandbox)
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/timothy-sandbox-base
-          subject-digest: ${{ steps.base.outputs.digest }}
-          push-to-registry: true
-      - name: Attest base alias provenance
-        if: fromJSON(needs.diff.outputs.sandbox)
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/timothy-sandbox
-          subject-digest: ${{ steps.base.outputs.digest }}
-          push-to-registry: true
-      - name: Build and push variants
-        if: fromJSON(needs.diff.outputs.sandbox)
-        run: |
-          for lang in go node python java php; do
-            docker buildx build \
-              --file deploy/sandbox-$lang.Dockerfile \
-              --build-arg SANDBOX_BASE=ghcr.io/${{ github.repository_owner }}/timothy-sandbox-base:${{ steps.version.outputs.value }} \
-              --build-arg GIT_SHA=${{ steps.sha.outputs.short }} \
-              --build-arg APP_VERSION=${{ steps.version.outputs.value }} \
-              --platform linux/amd64,linux/arm64 \
-              --push \
-              --tag ghcr.io/${{ github.repository_owner }}/timothy-sandbox-$lang:${{ steps.version.outputs.value }} \
-              .
-          done
-      # attest-build-provenance takes one subject per call, so the five
-      # variants are attested by a matrix job (sandbox-variant-attest)
-      # rather than five near-identical steps here.
-
-  # Attests the five sandbox variants built by the loop above. Skipped
-  # on a copy-forward release: those digests keep the attestation made
-  # when they were first built.
-  sandbox-variant-attest:
-    needs: [diff, sandbox-images]
-    if: fromJSON(needs.diff.outputs.sandbox)
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
-      id-token: write
-      attestations: write
-    strategy:
-      matrix:
-        lang: [go, node, python, java, php]
-    steps:
-      - id: version
-        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - id: digest
-        run: |
-          ref="ghcr.io/${{ github.repository_owner }}/timothy-sandbox-${{ matrix.lang }}:${{ steps.version.outputs.value }}"
-          echo "value=$(docker buildx imagetools inspect "$ref" --format '{{.Manifest.Digest}}')" >> "$GITHUB_OUTPUT"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-name: ghcr.io/${{ github.repository_owner }}/timothy-sandbox-${{ matrix.lang }}
-          subject-digest: ${{ steps.digest.outputs.value }}
-          push-to-registry: true
-
   release:
-    needs: [images, sandbox-images]
-    if: needs.images.result == 'success' && needs.sandbox-images.result == 'success'
+    needs: [images]
+    if: needs.images.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write

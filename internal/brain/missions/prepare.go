@@ -301,7 +301,7 @@ func (r *prepareRun) step(ctx context.Context, name, command string, timeout tim
 	}
 	var buf bytes.Buffer
 	start := time.Now()
-	code, err := r.p.sandboxExec(ctx, r.m.ID, r.m.Environment, r.wt, command, timeout, &buf)
+	code, err := r.p.sandboxExec(ctx, r.m.ID, r.wt, command, timeout, &buf)
 	dur := time.Since(start)
 	out = stripANSI(buf.String())
 	ok = err == nil && (code == 0 || containsInt(okCodes, code))

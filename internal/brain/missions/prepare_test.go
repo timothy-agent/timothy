@@ -802,7 +802,7 @@ func TestPrepareWorkspaceSkips(t *testing.T) {
 	store := newFakeStore()
 	log := slog.Default()
 	ran := false
-	run := func(context.Context, string, string, string, string, time.Duration, io.Writer) (int, error) {
+	run := func(context.Context, string, string, string, time.Duration, io.Writer) (int, error) {
 		ran = true
 		return 0, nil
 	}

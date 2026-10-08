@@ -129,7 +129,7 @@ func TestEnsureContainerRunningReusesInPlace(t *testing.T) {
 		}
 	})
 	mgr := newTestManager(cli)
-	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
+	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestEnsureContainerExitedRestarts(t *testing.T) {
 		}
 	})
 	mgr := newTestManager(cli)
-	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
+	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestEnsureContainerNotFoundCreates(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
+	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestEnsureContainerCreateConflictReinspects(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
+	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestCreateContainerIncludesStateMountWhenPresent(t *testing.T) {
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	mgr.stateMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_executor-claude-state", Target: executorStateMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if len(gotMounts) != 3 {
@@ -359,7 +359,7 @@ func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	// mgr.stateMount left zero-value: not configured.
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if len(gotMounts) != 2 || gotMounts[0].Target != testMissionDir || gotMounts[1].Target != cachesMountPath {
@@ -408,7 +408,7 @@ func TestCreateContainerToolchainsMount(t *testing.T) {
 			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 			mgr.toolchainsMount = tt.tm
 
-			if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+			if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
 				t.Fatalf("createContainer: %v", err)
 			}
 			if len(gotMounts) != tt.want {
@@ -468,7 +468,7 @@ func createMounts(t *testing.T, mgr *Manager) []mount.Mount {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	return gotMounts
@@ -558,7 +558,7 @@ func TestResolveMountCachesVolume(t *testing.T) {
 // env in the base image (D-131) sits under cachesMountPath, so caches
 // follow the disk-backed mount instead of the HOME tmpfs.
 func TestBaseImagePointsCachesAtCacheMount(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "sandbox-base.Dockerfile"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "sandbox.Dockerfile"))
 	if err != nil {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
@@ -579,78 +579,8 @@ func TestBaseImagePointsCachesAtCacheMount(t *testing.T) {
 		"MISE_STATE_DIR=" + cachesMountPath + "/mise-state",
 	} {
 		if !strings.Contains(df, " "+kv+" ") {
-			t.Errorf("sandbox-base.Dockerfile ENV is missing %s", kv)
+			t.Errorf("sandbox.Dockerfile ENV is missing %s", kv)
 		}
-	}
-}
-
-// TestImageFor covers D-05x's environment->image derivation: "" and
-// "base" both resolve to the operator-configured base image; every
-// other allowlisted key derives a variant ref from the base ref
-// (repository + "-<key>", same tag); a digest base or an unrecognized
-// key is a loud error, never a silent fallback.
-func TestImageFor(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name        string
-		baseImage   string
-		environment string
-		want        string
-		wantErr     bool
-	}{
-		{name: "empty", baseImage: "timothy-sandbox:latest", environment: "", want: "timothy-sandbox:latest"},
-		{name: "base", baseImage: "timothy-sandbox:latest", environment: "base", want: "timothy-sandbox:latest"},
-		{name: "go", baseImage: "timothy-sandbox:latest", environment: "go", want: "timothy-sandbox-go:latest"},
-		{name: "node", baseImage: "timothy-sandbox:latest", environment: "node", want: "timothy-sandbox-node:latest"},
-		{name: "python", baseImage: "timothy-sandbox:latest", environment: "python", want: "timothy-sandbox-python:latest"},
-		{name: "java", baseImage: "timothy-sandbox:latest", environment: "java", want: "timothy-sandbox-java:latest"},
-		{name: "php", baseImage: "timothy-sandbox:latest", environment: "php", want: "timothy-sandbox-php:latest"},
-		{
-			name:        "ghcr versioned",
-			baseImage:   "ghcr.io/timothy-agent/timothy-sandbox:0.1.0-alpha.21",
-			environment: "go",
-			want:        "ghcr.io/timothy-agent/timothy-sandbox-go:0.1.0-alpha.21",
-		},
-		{
-			name:        "registry with port",
-			baseImage:   "localhost:5000/timothy-sandbox:v1",
-			environment: "go",
-			want:        "localhost:5000/timothy-sandbox-go:v1",
-		},
-		{
-			name:        "untagged base",
-			baseImage:   "timothy-sandbox",
-			environment: "go",
-			want:        "timothy-sandbox-go",
-		},
-		{
-			name:        "digest base rejected",
-			baseImage:   "x@sha256:abc",
-			environment: "go",
-			wantErr:     true,
-		},
-		{name: "unknown env", baseImage: "timothy-sandbox:latest", environment: "ruby", wantErr: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got, err := imageFor(tc.baseImage, tc.environment)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("imageFor(%q, %q) = %q, nil, want an error", tc.baseImage, tc.environment, got)
-				}
-				if tc.environment == "ruby" && !errors.Is(err, ErrUnknownEnvironment) {
-					t.Errorf("imageFor(%q, %q) error = %v, want ErrUnknownEnvironment", tc.baseImage, tc.environment, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("imageFor(%q, %q): %v", tc.baseImage, tc.environment, err)
-			}
-			if got != tc.want {
-				t.Errorf("imageFor(%q, %q) = %q, want %q", tc.baseImage, tc.environment, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -696,7 +626,7 @@ func TestEnsureContainerPullsMissingImage(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
+	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
 	}
@@ -732,7 +662,7 @@ func TestEnsureContainerPullFailureNamesImage(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	_, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
+	_, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err == nil {
 		t.Fatal("ensureContainer: want error when pull fails, got nil")
 	}
@@ -808,7 +738,7 @@ func TestEnsureContainerConcurrentPullsDoNotOverlap(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir)
+			_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir)
 			errs[i] = err
 		}(i)
 	}
@@ -854,7 +784,7 @@ func TestCreateContainerHardensResources(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if gotHostConfig.MemorySwap != sandboxMemoryBytes {
@@ -906,7 +836,7 @@ func TestCreateContainerHardensRootfs(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 
@@ -1024,7 +954,7 @@ func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
-	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", testWorkdir); err != nil {
+	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
 		t.Fatalf("createContainer: %v", err)
 	}
 	if !slices.Contains(gotEnv, sandboxPath) {
@@ -1044,7 +974,7 @@ func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
 // PATH/HOME-only Env merges with, that mise never auto-installs, and
 // that mise reads the repo's idiomatic version files (D-139).
 func TestBaseImageSetsNonInteractiveEnv(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "sandbox-base.Dockerfile"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "sandbox.Dockerfile"))
 	if err != nil {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
@@ -1058,7 +988,7 @@ func TestBaseImageSetsNonInteractiveEnv(t *testing.T) {
 		"MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS=node,python,go,ruby,java,rust",
 	} {
 		if !strings.Contains(df, " "+kv) {
-			t.Errorf("sandbox-base.Dockerfile ENV is missing %s", kv)
+			t.Errorf("sandbox.Dockerfile ENV is missing %s", kv)
 		}
 	}
 	if strings.Contains(df, "MISE_GITHUB_TOKEN") {
@@ -1309,7 +1239,7 @@ func TestCreateContainerRejectsUnscopedWorkdir(t *testing.T) {
 	})
 	mgr := newTestManager(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-	_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", "", workspaceMountPath)
+	_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", workspaceMountPath)
 	if !errors.Is(err, ErrWorkspaceScope) {
 		t.Fatalf("err = %v, want ErrWorkspaceScope", err)
 	}
@@ -1340,7 +1270,7 @@ func TestEnsureContainerRejectsUnscopedWorkdirOnEveryPath(t *testing.T) {
 			})
 			mgr := newTestManager(cli)
 			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-			if _, err := mgr.ensureContainer(context.Background(), "m1", "", tc.workdir); !errors.Is(err, ErrWorkspaceScope) {
+			if _, err := mgr.ensureContainer(context.Background(), "m1", tc.workdir); !errors.Is(err, ErrWorkspaceScope) {
 				t.Fatalf("err = %v, want ErrWorkspaceScope", err)
 			}
 		})
@@ -1448,7 +1378,7 @@ func TestEnsureContainerRefusesForeignContainer(t *testing.T) {
 			})
 			mgr := newTestManager(cli)
 			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
-			id, err := mgr.ensureContainer(context.Background(), "m1", "", testWorkdir)
+			id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 			if tc.wantForeign {
 				if !errors.Is(err, ErrForeignContainer) {
 					t.Fatalf("err = %v, want ErrForeignContainer", err)

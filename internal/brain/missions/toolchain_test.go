@@ -32,72 +32,71 @@ func writeMarkers(t *testing.T, files map[string]string) string {
 func TestDetectToolchainVersions(t *testing.T) {
 	cases := []struct {
 		name  string
-		env   string
 		files map[string]string
 		want  map[string]string
 	}{
-		{"no markers", "", nil, map[string]string{}},
-		{".python-version", "python", map[string]string{".python-version": "3.10\n"}, map[string]string{"python": "3.10"}},
-		{".python-version comment and pypy skipped", "python", map[string]string{".python-version": "# pin\npypy3.9\n"}, map[string]string{}},
-		{"runtime.txt", "python", map[string]string{"runtime.txt": "python-3.10.4\n"}, map[string]string{"python": "3.10.4"}},
-		{"pyproject range", "python", map[string]string{"pyproject.toml": "[project]\nrequires-python = \">=3.10,<3.11\"\n"}, map[string]string{"python": "3.10"}},
-		{"pyproject compatible release", "python", map[string]string{"pyproject.toml": "[project]\nrequires-python = '~=3.10'\n"}, map[string]string{"python": "3"}},
-		{"pyproject open lower bound with patch", "python", map[string]string{"pyproject.toml": "requires-python = \">=3.9.2\"\n"}, map[string]string{"python": "latest"}},
-		{"pyproject wildcard", "python", map[string]string{"pyproject.toml": "requires-python = \"==3.10.*\"\n"}, map[string]string{"python": "3.10"}},
-		{"pyproject exclusion skipped", "python", map[string]string{"pyproject.toml": "requires-python = \"!=3.9.*\"\n"}, map[string]string{}},
-		{"python precedence", "python", map[string]string{".python-version": "3.11", "runtime.txt": "python-3.9.1", "pyproject.toml": "requires-python = \">=3.8\""}, map[string]string{"python": "3.11"}},
-		{"runtime.txt beats pyproject", "python", map[string]string{"runtime.txt": "python-3.9.1", "pyproject.toml": "requires-python = \">=3.8\""}, map[string]string{"python": "3.9.1"}},
-		{"nvmrc with v", "node", map[string]string{".nvmrc": "v18.20.4\n"}, map[string]string{"node": "18.20.4"}},
-		{"nvmrc lts skipped", "node", map[string]string{".nvmrc": "lts/*\n"}, map[string]string{}},
-		{".node-version", "node", map[string]string{".node-version": "20\n"}, map[string]string{"node": "20"}},
-		{"engines range", "node", map[string]string{"package.json": `{"engines":{"node":">=18 <19"}}`}, map[string]string{"node": "18"}},
-		{"engines caret", "node", map[string]string{"package.json": `{"engines":{"node":"^18"}}`}, map[string]string{"node": "18"}},
-		{"engines x-range", "node", map[string]string{"package.json": `{"engines":{"node":"18.x"}}`}, map[string]string{"node": "18"}},
-		{"engines alternatives skipped", "node", map[string]string{"package.json": `{"engines":{"node":"^16 || ^18"}}`}, map[string]string{}},
-		{"engines upper bound only skipped", "node", map[string]string{"package.json": `{"engines":{"node":"<19"}}`}, map[string]string{}},
-		{"bad package.json", "node", map[string]string{"package.json": `{`}, map[string]string{}},
-		{"nvmrc beats engines", "node", map[string]string{".nvmrc": "20", "package.json": `{"engines":{"node":">=18"}}`}, map[string]string{"node": "20"}},
-		{"go.mod", "go", map[string]string{"go.mod": "module x\n\ngo 1.22.3\n\ntoolchain go1.23.0\n"}, map[string]string{"go": "1.22.3"}},
-		{"go.mod minor only", "go", map[string]string{"go.mod": "module x\ngo 1.22\n"}, map[string]string{"go": "1.22"}},
-		{".tool-versions", "", map[string]string{".tool-versions": "python 3.10.4 3.9.1\nnodejs 18.20.4 # lts\ngolang 1.22\nruby system\n"}, map[string]string{"python": "3.10.4", "node": "18.20.4", "go": "1.22"}},
-		{".mise.toml string, list and table", "java", map[string]string{".mise.toml": "[env]\nX = \"1\"\n\n[tools]\npython = \"3.12\"\nnode = [\"20\", \"18\"]\ngo = { version = \"1.22\" }\n"}, map[string]string{"python": "3.12", "node": "20", "go": "1.22"}},
-		{"language marker beats tool-versions", "python", map[string]string{".python-version": "3.11", ".tool-versions": "python 3.9"}, map[string]string{"python": "3.11"}},
-		{"tool-versions beats mise.toml", "", map[string]string{".tool-versions": "python 3.9", ".mise.toml": "[tools]\npython = \"3.12\"\nnode = \"20\"\n"}, map[string]string{"python": "3.9", "node": "20"}},
-		{"python env reads node markers too", "python", map[string]string{".nvmrc": "18", ".python-version": "3.10"}, map[string]string{"python": "3.10", "node": "18"}},
-		{"go env reads python markers too", "go", map[string]string{".python-version": "3.10", "go.mod": "go 1.22"}, map[string]string{"go": "1.22", "python": "3.10"}},
-		{"base env reads every language marker", "base", map[string]string{".python-version": "3.10", ".nvmrc": "18"}, map[string]string{"python": "3.10", "node": "18"}},
-		{"laravel repo with nvmrc", "php", map[string]string{"composer.json": `{"require":{"php":"^8.2","laravel/framework":"^11.0"}}`, "package.json": `{"scripts":{"build":"vite build"}}`, ".nvmrc": "20\n"}, map[string]string{"php": "8.4", "node": "20"}},
-		{"node env reads every other ecosystem", "node", map[string]string{".nvmrc": "22", ".go-version": "1.23", ".java-version": "21", ".ruby-version": "3.3.5", "rust-toolchain.toml": "[toolchain]\nchannel = \"1.80\"\n", "pyproject.toml": "requires-python = \">=3.10\""}, map[string]string{"node": "22", "go": "1.23", "java": "21", "ruby": "3.3.5", "rust": "1.80", "python": "latest"}},
-		{".go-version beats go.mod", "go", map[string]string{".go-version": "1.23.2\n", "go.mod": "go 1.21"}, map[string]string{"go": "1.23.2"}},
-		{".ruby-version with ruby- prefix", "", map[string]string{".ruby-version": "ruby-3.2.2\n"}, map[string]string{"ruby": "3.2.2"}},
-		{"rust channel name left to mise", "", map[string]string{"rust-toolchain.toml": "[toolchain]\nchannel = \"stable\"\n"}, map[string]string{}},
-		{".sdkmanrc left to mise", "java", map[string]string{".sdkmanrc": "java=17.0.2-tem\n"}, map[string]string{}},
-		{"mise.toml without dot", "", map[string]string{"mise.toml": "[tools]\njava = \"21\"\nnode = \"22\"\n"}, map[string]string{"java": "21", "node": "22"}},
-		{"hostile version rejected", "", map[string]string{".tool-versions": "python 3.10;rm\nnode $(x)\n"}, map[string]string{"python": "3.10"}},
-		{"hostile tool name rejected", "", map[string]string{".tool-versions": "py$thon 3.10\n"}, map[string]string{}},
-		{"ruby and java read, unsupported and php outside php env dropped", "", map[string]string{".tool-versions": "ruby 3.3.0\nphp 8.2\nerlang 26.2\n", ".mise.toml": "[tools]\njava = \"21\"\n"}, map[string]string{"ruby": "3.3.0", "java": "21"}},
-		{"composer require caret takes newest baked minor", "php", map[string]string{"composer.json": `{"require":{"php":"^8.1"}}`}, map[string]string{"php": "8.4"}},
-		{"composer platform beats require", "php", map[string]string{"composer.json": `{"require":{"php":"^8.1"},"config":{"platform":{"php":"8.3.12"}}}`}, map[string]string{"php": "8.3"}},
-		{"composer laravel 9 lower bound takes newest baked minor", "php", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`}, map[string]string{"php": "8.4"}},
-		{"composer unbaked exact kept for the install to report", "php", map[string]string{"composer.json": `{"require":{"php":"7.4.33"}}`}, map[string]string{"php": "7.4"}},
-		{"composer alternatives matched", "php", map[string]string{"composer.json": `{"require":{"php":"^7.4|^8.0"}}`}, map[string]string{"php": "8.4"}},
-		{"composer hyphen range skipped", "php", map[string]string{"composer.json": `{"require":{"php":"8.0 - 8.2"}}`}, map[string]string{}},
-		{"composer lock caps php", "php", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`, "composer.lock": `{"packages":[{"name":"a/a","require":{"php":">=8.0,<8.3"}}]}`}, map[string]string{"php": "8.2"}},
-		{"composer without php constraint", "php", map[string]string{"composer.json": `{"require":{"laravel/framework":"^12.0"}}`}, map[string]string{}},
-		{"bad composer.json", "php", map[string]string{"composer.json": `{`}, map[string]string{}},
-		{"php tool-versions in php env", "php", map[string]string{".tool-versions": "php 8.2.10\n"}, map[string]string{"php": "8.2"}},
-		{"composer beats tool-versions", "php", map[string]string{"composer.json": `{"require":{"php":"~8.3.1"}}`, ".tool-versions": "php 8.1\n"}, map[string]string{"php": "8.3"}},
-		{"php ignored outside php env", "base", map[string]string{"composer.json": `{"require":{"php":"^8.1"}}`, ".mise.toml": "[tools]\nphp = \"8.2\"\n"}, map[string]string{}},
+		{"no markers", nil, map[string]string{}},
+		{".python-version", map[string]string{".python-version": "3.10\n"}, map[string]string{"python": "3.10"}},
+		{".python-version comment and pypy skipped", map[string]string{".python-version": "# pin\npypy3.9\n"}, map[string]string{}},
+		{"runtime.txt", map[string]string{"runtime.txt": "python-3.10.4\n"}, map[string]string{"python": "3.10.4"}},
+		{"pyproject range", map[string]string{"pyproject.toml": "[project]\nrequires-python = \">=3.10,<3.11\"\n"}, map[string]string{"python": "3.10"}},
+		{"pyproject compatible release", map[string]string{"pyproject.toml": "[project]\nrequires-python = '~=3.10'\n"}, map[string]string{"python": "3"}},
+		{"pyproject open lower bound with patch", map[string]string{"pyproject.toml": "requires-python = \">=3.9.2\"\n"}, map[string]string{"python": "latest"}},
+		{"pyproject wildcard", map[string]string{"pyproject.toml": "requires-python = \"==3.10.*\"\n"}, map[string]string{"python": "3.10"}},
+		{"pyproject exclusion skipped", map[string]string{"pyproject.toml": "requires-python = \"!=3.9.*\"\n"}, map[string]string{}},
+		{"python precedence", map[string]string{".python-version": "3.11", "runtime.txt": "python-3.9.1", "pyproject.toml": "requires-python = \">=3.8\""}, map[string]string{"python": "3.11"}},
+		{"runtime.txt beats pyproject", map[string]string{"runtime.txt": "python-3.9.1", "pyproject.toml": "requires-python = \">=3.8\""}, map[string]string{"python": "3.9.1"}},
+		{"nvmrc with v", map[string]string{".nvmrc": "v18.20.4\n"}, map[string]string{"node": "18.20.4"}},
+		{"nvmrc lts skipped", map[string]string{".nvmrc": "lts/*\n"}, map[string]string{}},
+		{".node-version", map[string]string{".node-version": "20\n"}, map[string]string{"node": "20"}},
+		{"engines range", map[string]string{"package.json": `{"engines":{"node":">=18 <19"}}`}, map[string]string{"node": "18"}},
+		{"engines caret", map[string]string{"package.json": `{"engines":{"node":"^18"}}`}, map[string]string{"node": "18"}},
+		{"engines x-range", map[string]string{"package.json": `{"engines":{"node":"18.x"}}`}, map[string]string{"node": "18"}},
+		{"engines alternatives skipped", map[string]string{"package.json": `{"engines":{"node":"^16 || ^18"}}`}, map[string]string{}},
+		{"engines upper bound only skipped", map[string]string{"package.json": `{"engines":{"node":"<19"}}`}, map[string]string{}},
+		{"bad package.json", map[string]string{"package.json": `{`}, map[string]string{}},
+		{"nvmrc beats engines", map[string]string{".nvmrc": "20", "package.json": `{"engines":{"node":">=18"}}`}, map[string]string{"node": "20"}},
+		{"go.mod", map[string]string{"go.mod": "module x\n\ngo 1.22.3\n\ntoolchain go1.23.0\n"}, map[string]string{"go": "1.22.3"}},
+		{"go.mod minor only", map[string]string{"go.mod": "module x\ngo 1.22\n"}, map[string]string{"go": "1.22"}},
+		{".tool-versions", map[string]string{".tool-versions": "python 3.10.4 3.9.1\nnodejs 18.20.4 # lts\ngolang 1.22\nruby system\n"}, map[string]string{"python": "3.10.4", "node": "18.20.4", "go": "1.22"}},
+		{".mise.toml string, list and table", map[string]string{".mise.toml": "[env]\nX = \"1\"\n\n[tools]\npython = \"3.12\"\nnode = [\"20\", \"18\"]\ngo = { version = \"1.22\" }\n"}, map[string]string{"python": "3.12", "node": "20", "go": "1.22"}},
+		{"language marker beats tool-versions", map[string]string{".python-version": "3.11", ".tool-versions": "python 3.9"}, map[string]string{"python": "3.11"}},
+		{"tool-versions beats mise.toml", map[string]string{".tool-versions": "python 3.9", ".mise.toml": "[tools]\npython = \"3.12\"\nnode = \"20\"\n"}, map[string]string{"python": "3.9", "node": "20"}},
+		{"python env reads node markers too", map[string]string{".nvmrc": "18", ".python-version": "3.10"}, map[string]string{"python": "3.10", "node": "18"}},
+		{"go env reads python markers too", map[string]string{".python-version": "3.10", "go.mod": "go 1.22"}, map[string]string{"go": "1.22", "python": "3.10"}},
+		{"base env reads every language marker", map[string]string{".python-version": "3.10", ".nvmrc": "18"}, map[string]string{"python": "3.10", "node": "18"}},
+		{"laravel repo with nvmrc", map[string]string{"composer.json": `{"require":{"php":"^8.2","laravel/framework":"^11.0"}}`, "package.json": `{"scripts":{"build":"vite build"}}`, ".nvmrc": "20\n"}, map[string]string{"php": "8.4", "node": "20"}},
+		{"node env reads every other ecosystem", map[string]string{".nvmrc": "22", ".go-version": "1.23", ".java-version": "21", ".ruby-version": "3.3.5", "rust-toolchain.toml": "[toolchain]\nchannel = \"1.80\"\n", "pyproject.toml": "requires-python = \">=3.10\""}, map[string]string{"node": "22", "go": "1.23", "java": "21", "ruby": "3.3.5", "rust": "1.80", "python": "latest"}},
+		{".go-version beats go.mod", map[string]string{".go-version": "1.23.2\n", "go.mod": "go 1.21"}, map[string]string{"go": "1.23.2"}},
+		{".ruby-version with ruby- prefix", map[string]string{".ruby-version": "ruby-3.2.2\n"}, map[string]string{"ruby": "3.2.2"}},
+		{"rust channel name left to mise", map[string]string{"rust-toolchain.toml": "[toolchain]\nchannel = \"stable\"\n"}, map[string]string{}},
+		{".sdkmanrc left to mise", map[string]string{".sdkmanrc": "java=17.0.2-tem\n"}, map[string]string{}},
+		{"mise.toml without dot", map[string]string{"mise.toml": "[tools]\njava = \"21\"\nnode = \"22\"\n"}, map[string]string{"java": "21", "node": "22"}},
+		{"hostile version rejected", map[string]string{".tool-versions": "python 3.10;rm\nnode $(x)\n"}, map[string]string{"python": "3.10"}},
+		{"hostile tool name rejected", map[string]string{".tool-versions": "py$thon 3.10\n"}, map[string]string{}},
+		{"ruby, java and php read, unsupported dropped", map[string]string{".tool-versions": "ruby 3.3.0\nphp 8.2\nerlang 26.2\n", ".mise.toml": "[tools]\njava = \"21\"\n"}, map[string]string{"ruby": "3.3.0", "java": "21", "php": "8.2"}},
+		{"composer require caret takes newest baked minor", map[string]string{"composer.json": `{"require":{"php":"^8.1"}}`}, map[string]string{"php": "8.4"}},
+		{"composer platform beats require", map[string]string{"composer.json": `{"require":{"php":"^8.1"},"config":{"platform":{"php":"8.3.12"}}}`}, map[string]string{"php": "8.3"}},
+		{"composer laravel 9 lower bound takes newest baked minor", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`}, map[string]string{"php": "8.4"}},
+		{"composer unbaked exact kept for the install to report", map[string]string{"composer.json": `{"require":{"php":"7.4.33"}}`}, map[string]string{"php": "7.4"}},
+		{"composer alternatives matched", map[string]string{"composer.json": `{"require":{"php":"^7.4|^8.0"}}`}, map[string]string{"php": "8.4"}},
+		{"composer hyphen range skipped", map[string]string{"composer.json": `{"require":{"php":"8.0 - 8.2"}}`}, map[string]string{}},
+		{"composer lock caps php", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`, "composer.lock": `{"packages":[{"name":"a/a","require":{"php":">=8.0,<8.3"}}]}`}, map[string]string{"php": "8.2"}},
+		{"composer without php constraint", map[string]string{"composer.json": `{"require":{"laravel/framework":"^12.0"}}`}, map[string]string{}},
+		{"bad composer.json", map[string]string{"composer.json": `{`}, map[string]string{}},
+		{"php tool-versions", map[string]string{".tool-versions": "php 8.2.10\n"}, map[string]string{"php": "8.2"}},
+		{"composer beats tool-versions", map[string]string{"composer.json": `{"require":{"php":"~8.3.1"}}`, ".tool-versions": "php 8.1\n"}, map[string]string{"php": "8.3"}},
+		{"php read for every repo, composer first", map[string]string{"composer.json": `{"require":{"php":"^8.1"}}`, ".mise.toml": "[tools]\nphp = \"8.2\"\n"}, map[string]string{"php": "8.4"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := detectToolchainVersions(writeMarkers(t, tc.files), tc.env)
+			got := detectToolchainVersions(writeMarkers(t, tc.files))
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("detectToolchainVersions = %v, want %v", got, tc.want)
 			}
 		})
 	}
-	if got := detectToolchainVersions("", ""); len(got) != 0 {
+	if got := detectToolchainVersions(""); len(got) != 0 {
 		t.Fatalf("empty worktree = %v, want none", got)
 	}
 }
@@ -129,19 +128,60 @@ func TestGoalToolchainVersions(t *testing.T) {
 
 func TestDetectMissionToolchainsGoalFallback(t *testing.T) {
 	dir := writeMarkers(t, map[string]string{".python-version": "3.11"})
-	got := detectMissionToolchains(dir, "", "Python 3.10 API with a Node 18 frontend")
+	got := detectMissionToolchains(dir, "Python 3.10 API with a Node 18 frontend")
 	want := map[string]string{"python": "3.11", "node": "18"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("marker must win, goal fills the rest: got %v, want %v", got, want)
 	}
-	if got := detectMissionToolchains("", "python", "a CLI tool"); len(got) != 0 {
+	if got := detectMissionToolchains("", "a CLI tool"); len(got) != 0 {
 		t.Fatalf("no marker, no goal version = %v, want none", got)
 	}
-	if got := detectMissionToolchains("", "php", "Laravel on PHP 8.2"); !reflect.DeepEqual(got, map[string]string{"php": "8.2"}) {
-		t.Fatalf("php env goal = %v, want php 8.2", got)
+	if got := detectMissionToolchains("", "port the PHP 8.2 app to Node 20"); !reflect.DeepEqual(got, map[string]string{"php": "8.2", "node": "20"}) {
+		t.Fatalf("goal php and node = %v, want both (D-141: every repo can select a baked minor)", got)
 	}
-	if got := detectMissionToolchains("", "node", "port the PHP 8.2 app to Node 20"); !reflect.DeepEqual(got, map[string]string{"node": "20"}) {
-		t.Fatalf("non-php env must drop the goal's php: got %v", got)
+}
+
+// TestDetectMissionToolchainsNoPinFallback covers D-141's fallbacks:
+// node, python and php left unpinned use the image's own; a JVM build
+// file with no java pin installs JDK 21, what the removed java image
+// baked, and a pin always wins over that default.
+func TestDetectMissionToolchainsNoPinFallback(t *testing.T) {
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  map[string]string
+	}{
+		{"unpinned node uses the image node", map[string]string{"package.json": `{"scripts":{"test":"vitest"}}`}, map[string]string{}},
+		{"unpinned python uses the image python", map[string]string{"requirements.txt": "django\n"}, map[string]string{}},
+		{"maven repo without mvnw gets jdk 21 and maven", map[string]string{"pom.xml": "<project/>"}, map[string]string{"java": "21", "maven": "3"}},
+		{"maven repo with mvnw uses the wrapper", map[string]string{"pom.xml": "<project/>", "mvnw": "#!/bin/sh\n"}, map[string]string{"java": "21"}},
+		{"gradle kotlin dsl without gradlew gets gradle", map[string]string{"build.gradle.kts": ""}, map[string]string{"java": "21", "gradle": "latest"}},
+		{"gradle repo with gradlew uses the wrapper", map[string]string{"build.gradle": "", "gradlew": "#!/bin/sh\n"}, map[string]string{"java": "21"}},
+		{"java pin beats the default", map[string]string{"build.gradle": "", "gradlew": "", ".java-version": "17\n"}, map[string]string{"java": "17"}},
+		{"maven pin beats the default", map[string]string{"pom.xml": "", ".tool-versions": "maven 3.8.8\n"}, map[string]string{"java": "21", "maven": "3.8.8"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detectMissionToolchains(writeMarkers(t, tc.files), "fix the bug"); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("detectMissionToolchains = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestToolchainInstallCmdPerMission covers the D-141 regression: two
+// missions with different node pins on one shared toolchains volume
+// each activate their own version. The install is `mise use --global`,
+// whose config lands in the mission container's own HOME (a tmpfs),
+// while only the installed versions are shared on the volume.
+func TestToolchainInstallCmdPerMission(t *testing.T) {
+	a := buildToolchainInstallCmd(detectMissionToolchains(writeMarkers(t, map[string]string{".nvmrc": "18\n"}), "x"))
+	b := buildToolchainInstallCmd(detectMissionToolchains(writeMarkers(t, map[string]string{".nvmrc": "20\n"}), "x"))
+	if !strings.Contains(a, "mise use --global 'node@18'") || !strings.Contains(b, "mise use --global 'node@20'") {
+		t.Fatalf("install commands = %q / %q, want node@18 and node@20", a, b)
+	}
+	if got := detectMissionToolchains(writeMarkers(t, map[string]string{"package.json": "{}"}), "x"); len(got) != 0 {
+		t.Fatalf("no pin = %v, want nothing to install so the image node runs", got)
 	}
 }
 
@@ -201,11 +241,7 @@ func TestBe8a2860RepoDetectsPHPAndNode(t *testing.T) {
 		".env.example":      "APP_KEY=\n",
 		"artisan":           "<?php\n",
 	})
-	env, _, _ := detectEnvironmentFromMarkers(dir)
-	if env != "php" {
-		t.Fatalf("environment = %q, want php", env)
-	}
-	got := detectMissionToolchains(dir, env, "Audit the dependencies, upgrade them and open a PR")
+	got := detectMissionToolchains(dir, "Audit the dependencies, upgrade them and open a PR")
 	if want := map[string]string{"php": "8.4", "node": "22"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("toolchains = %v, want %v", got, want)
 	}
@@ -432,7 +468,8 @@ func TestBuildToolchainInstallCmdRoundTrip(t *testing.T) {
 		want []string
 	}{
 		{"sorted", map[string]string{"python": "3.10", "node": "18"}, []string{"use", "--global", "node@18", "python@3.10"}},
-		{"every ecosystem and latest", map[string]string{"node": "latest", "ruby": "3.3", "java": "21", "rust": "1.80", "go": "1.23"}, []string{"use", "--global", "go@1.23", "java@21", "node@latest", "ruby@3.3", "rust@1.80"}},
+		{"every ecosystem and latest", map[string]string{"node": "latest", "ruby": "3.3", "java": "21", "rust": "1.80", "go": "1.23"}, []string{"use", "--global", "go@1.23", "java@21", "node@latest", "ruby@3.3", "rust[profile=minimal]@1.80"}},
+		{"jvm build tools next to the jdk", map[string]string{"java": "21", "maven": "3", "gradle": "latest"}, []string{"use", "--global", "gradle@latest", "java@21", "maven@3"}},
 		{"quote in version survives as one arg", map[string]string{"python": "3.10'; touch pwned; '"}, []string{"use", "--global", "python@3.10'; touch pwned; '"}},
 	}
 	for _, tc := range cases {
@@ -508,24 +545,22 @@ func TestMiseLockedSerializesRoundTrip(t *testing.T) {
 type recordedExec struct {
 	mu    sync.Mutex
 	cmds  []string
-	envs  []string
 	code  int
 	err   error
 	write string
-	// probes are the environment facts tool probes (issue #1008),
-	// kept out of cmds and envs; values are the image each ran on.
-	probes []string
+	// probes counts the environment facts tool probes (issue #1008),
+	// kept out of cmds.
+	probes int
 }
 
-func (r *recordedExec) exec(_ context.Context, _, environment, _, command string, _ time.Duration, out io.Writer) (int, error) {
+func (r *recordedExec) exec(_ context.Context, _, _, command string, _ time.Duration, out io.Writer) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if command == buildToolProbeCmd() {
-		r.probes = append(r.probes, environment)
+		r.probes++
 		return 0, nil
 	}
 	r.cmds = append(r.cmds, command)
-	r.envs = append(r.envs, environment)
 	_, _ = io.WriteString(out, r.write)
 	return r.code, r.err
 }
@@ -583,11 +618,11 @@ func TestProvisionInstallsDetectedToolchains(t *testing.T) {
 	if !reflect.DeepEqual(m.Toolchains, map[string]string{"python": "3.10"}) {
 		t.Fatalf("Toolchains = %v, want python 3.10", m.Toolchains)
 	}
-	if len(ex.cmds) != 1 || ex.cmds[0] != miseLocked("mise use --global 'python@3.10'") || ex.envs[0] != "python" {
-		t.Fatalf("exec cmds = %q envs = %q, want one install on the python image", ex.cmds, ex.envs)
+	if len(ex.cmds) != 1 || ex.cmds[0] != miseLocked("mise use --global 'python@3.10'") {
+		t.Fatalf("exec cmds = %q, want one python install", ex.cmds)
 	}
-	if !reflect.DeepEqual(ex.probes, []string{"python"}) {
-		t.Fatalf("tool probes = %q, want one on the python image", ex.probes)
+	if ex.probes != 1 {
+		t.Fatalf("tool probes = %d, want one", ex.probes)
 	}
 	if m.EnvFacts == nil || m.EnvFacts.BaseBranch != "main" || !reflect.DeepEqual(m.EnvFacts.Manifests, []string{"pyproject.toml"}) {
 		t.Fatalf("EnvFacts = %+v, want base branch main and pyproject.toml", m.EnvFacts)
@@ -673,86 +708,11 @@ func TestDiscoverToolchainNudge(t *testing.T) {
 func TestDiscoverSessionCarriesToolchainNudge(t *testing.T) {
 	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(discoverNotesToolName, `{"findings":"ok"}`)}}}
 	r := newTestRunner(agent)
-	m := Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "x", Environment: "python", Toolchains: map[string]string{"python": "3.10"}, ToolchainInstall: "installed"}
+	m := Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "x", Toolchains: map[string]string{"python": "3.10"}, ToolchainInstall: "installed"}
 	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(agent.requests[0].System, "Toolchains installed: python 3.10. Do not reinstall them.") {
 		t.Fatalf("system prompt lacks the toolchain nudge:\n%s", agent.requests[0].System)
-	}
-}
-
-// TestDiscoverOverrideRedetectsToolchains covers the discover report
-// replacing a marker-detected environment: the sink receives the
-// toolchains detected for the NEW environment from the worktree. Every
-// language pin is kept (D-139); php only in the php environment.
-func TestDiscoverOverrideRedetectsToolchains(t *testing.T) {
-	ws := t.TempDir()
-	dir := filepath.Join(ws, "wt")
-	if err := os.Mkdir(dir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string]string{".python-version": "3.10", ".nvmrc": "18", "composer.json": `{"require":{"php":"^8.2"}}`} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(discoverNotesToolName, `{"findings":"django","environment":"python"}`)}}}
-	r := newTestRunner(agent)
-	sink := &toolchainSink{}
-	r.SetEnvironmentSink(sink)
-	m := Mission{ID: "m1", Kind: KindCoding, Route: "default", Goal: "x", Environment: "node", EnvironmentMarker: "package.json", Workspace: ws}
-	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(sink.toolchains, map[string]string{"python": "3.10", "node": "18"}) {
-		t.Fatalf("toolchains for the new environment = %v, want python 3.10 and node 18, no php", sink.toolchains)
-	}
-}
-
-type toolchainSink struct{ toolchains map[string]string }
-
-func (s *toolchainSink) SetEnvironment(_ context.Context, _, _, _ string, _ []string, toolchains map[string]string) error {
-	s.toolchains = toolchains
-	return nil
-}
-
-// TestDriverDiscoverReinstallsToolchainsAfterRecreate covers the
-// recreate path: new container, toolchains installed again, and a
-// failed install lands in the notes the planner reads.
-func TestDriverDiscoverReinstallsToolchainsAfterRecreate(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		code     int
-		wantNote bool
-	}{{"ok", 0, false}, {"failed", 1, true}} {
-		t.Run(tc.name, func(t *testing.T) {
-			store := newFakeStore()
-			store.put("m1", Mission{ID: "m1", Kind: KindCoding, Phase: PhaseDiscover, Status: StatusWorking, MaxIterations: 8, AutoApprovePlan: true,
-				SessionID: "s1", Workspace: "/already/provisioned"})
-			remover := &fakeSandboxRemover{}
-			ex := &recordedExec{code: tc.code}
-			runner := &scriptedRunner{
-				discoverNotes: []string{"django app"},
-				onDiscover: func(ctx context.Context, m Mission) {
-					_ = store.SetEnvironment(ctx, m.ID, "python", "discover", nil, map[string]string{"python": "3.10"})
-				},
-				plans: []Plan{{Units: []PlanUnit{{Title: "only unit"}}}},
-			}
-			d := NewDriver(store, runner, nil, &fakeSessionCreator{}, &fakeGranter{}, ex.exec, remover, slog.Default())
-			if _, err := d.Advance(context.Background(), "m1"); err != nil {
-				t.Fatalf("Advance: %v", err)
-			}
-			if len(ex.cmds) != 1 || ex.cmds[0] != miseLocked("mise use --global 'python@3.10'") || ex.envs[0] != "python" {
-				t.Fatalf("exec cmds = %q envs = %q, want one install on the python image", ex.cmds, ex.envs)
-			}
-			if !reflect.DeepEqual(ex.probes, []string{"python"}) {
-				t.Fatalf("tool probes = %q, want a re-probe on the python image", ex.probes)
-			}
-			m, _ := store.Get(context.Background(), "m1")
-			if got := strings.Contains(m.DiscoverNotes, "bootstrap unit"); got != tc.wantNote {
-				t.Fatalf("notes = %q, bootstrap note = %v, want %v", m.DiscoverNotes, got, tc.wantNote)
-			}
-		})
 	}
 }

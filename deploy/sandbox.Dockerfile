@@ -7,13 +7,15 @@
 # PID 1 under tini via --init at runtime, reused across a mission's
 # turns), not a service — no ENTRYPOINT beyond that.
 #
-# This base image (tag timothy-sandbox-base) carries the tools every
-# mission needs regardless of language: node (for the headless claude
-# CLI executor) and general POSIX tooling. Per-language toolchains
-# (go, java, php, ...) live in sandbox-<lang>.Dockerfile variants
-# FROM this image — see the "environment" axis (D-05x, sandboxd).
-# The base also carries mise for per-repo toolchain versions (issue #990).
+# D-141 (issue #1015): one image (tag timothy-sandbox) for every
+# mission. It carries node (the executor CLIs need it), python3,
+# build tools and common -dev libraries, PHP 8.1 to 8.4 with composer,
+# and mise. node, python, go, java, ruby and rust versions a repo pins
+# install through mise onto the shared toolchains volume (D-125); PHP
+# stays baked because mise only builds it from source (D-127).
 FROM node:24.18.0-slim AS node-dist
+
+FROM composer:2.8.12 AS composer-dist
 
 FROM debian:stable-slim
 
@@ -118,6 +120,40 @@ RUN case "${TARGETARCH}" in \
     && rm -rf /tmp/mise /tmp/mise.tar.gz \
     && mise --version
 
+# Build tools and the -dev libraries native extensions and gems link
+# against (pg, sqlite3, openssl, zlib, nokogiri, psych, ffi, mbstring,
+# zip), so a dependency install compiles without root. python3-venv for
+# `python3 -m venv` on the image python.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config python3-venv \
+    libpq-dev libsqlite3-dev libssl-dev zlib1g-dev libxml2-dev \
+    libyaml-dev libffi-dev libonig-dev libzip-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# PHP 8.1 to 8.4 from the Sury apt repo, which tracks PHP independently
+# of the Debian release; 8.4 is the default and a mission selects
+# another minor by linking it into ~/.local/bin (D-127; phpMinors in
+# internal/brain/missions/toolchain.go mirrors this list). The key is
+# downloaded to a file, then installed as a keyring.
+RUN . /etc/os-release \
+    && curl -fsSL -o /tmp/sury.gpg https://packages.sury.org/php/apt.gpg \
+    && install -m 0644 /tmp/sury.gpg /usr/share/keyrings/sury-php.gpg \
+    && rm /tmp/sury.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ ${VERSION_CODENAME} main" \
+        > /etc/apt/sources.list.d/sury-php.list \
+    && apt-get update \
+    && pkgs="" && for v in 8.1 8.2 8.3 8.4; do \
+        for e in cli mbstring xml sqlite3 curl zip intl bcmath mysql pgsql gd redis; do pkgs="$pkgs php$v-$e"; done; \
+    done \
+    && apt-get install -y --no-install-recommends $pkgs \
+    && update-alternatives --set php /usr/bin/php8.4 \
+    && update-alternatives --set phar /usr/bin/phar8.4 \
+    && update-alternatives --set phar.phar /usr/bin/phar.phar8.4 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Composer phar from the official image.
+COPY --from=composer-dist /usr/bin/composer /usr/local/bin/composer
+
 # Same numeric uid/gid as brain's alpine "nobody" (65534) — both sides
 # write the shared workspace volume as the same owner. Debian's built-in
 # nobody has HOME=/nonexistent, which breaks pip/npm; give it a real,
@@ -149,6 +185,13 @@ ENV MISE_YES=1
 # .python-version, .go-version, .ruby-version, .java-version, .sdkmanrc
 # and rust-toolchain.toml itself; idiomatic files are off by default.
 ENV MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS=node,python,go,ruby,java,rust
+# D-141: ruby installs from mise's precompiled builds, never compiled.
+# rustup and cargo homes sit on the toolchains volume with mise's own
+# installs, not on the HOME tmpfs.
+ENV MISE_RUBY_COMPILE=false \
+    MISE_RUSTUP_HOME=/home/sandbox/.mise/rustup \
+    MISE_CARGO_HOME=/home/sandbox/.mise/cargo \
+    COMPOSER_HOME=/home/sandbox/.composer
 # Non-interactive, wide-output exec environment (issue #1009): commands
 # run without a TTY, so runners must not wrap at 80 columns, prompt, watch
 # or colour. Image ENV merges with sandboxd's create-time PATH and HOME.

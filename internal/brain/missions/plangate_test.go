@@ -119,7 +119,7 @@ func TestCheckPlanGatesGeneralKindSkipsFloor(t *testing.T) {
 // scriptedSandbox is a sandboxExec whose exit code is chosen by the
 // command text, so a probe test can stage each outcome.
 func scriptedSandbox(codes map[string]int, output string) sandboxExec {
-	return func(_ context.Context, _, _, _, command string, _ time.Duration, out io.Writer) (int, error) {
+	return func(_ context.Context, _, _, command string, _ time.Duration, out io.Writer) (int, error) {
 		_, _ = fmt.Fprint(out, output)
 		return codes[command], nil
 	}
@@ -129,7 +129,7 @@ func scriptedSandbox(codes map[string]int, output string) sandboxExec {
 // already passes is rejected, a missing command is rejected, an
 // ordinary failure (artifacts not there yet) is the expected state.
 func TestProbeCheckCmds(t *testing.T) {
-	m := Mission{ID: "m1", Kind: KindCoding, Environment: "go"}
+	m := Mission{ID: "m1", Kind: KindCoding}
 	mk := func(cmd string) Plan {
 		return Plan{Units: []PlanUnit{{Title: "u", Artifacts: []string{"a.go"}, CheckCmd: cmd}}}
 	}
@@ -149,7 +149,7 @@ func TestProbeCheckCmds(t *testing.T) {
 		plan := Plan{Units: []PlanUnit{{Title: "u", Artifacts: []string{"tests/Feature/ATest.php"}, CheckCmd: cmd}}}
 		err := r.probeCheckCmds(context.Background(), m, plan)
 		if err == nil || !strings.Contains(err.Error(), "function test_xxx") {
-			t.Fatalf("probe = %v, want the php anchor recipe in a go-environment mission", err)
+			t.Fatalf("probe = %v, want the php anchor recipe", err)
 		}
 	})
 	t.Run("missing command", func(t *testing.T) {
@@ -191,7 +191,7 @@ func TestPlanSessionRejectsEmptyOutputGate(t *testing.T) {
 		{toolEndEvent(planToolName, good)},
 	}}
 	r := newTestRunner(agent)
-	plan, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding, Environment: "go"}, "")
+	plan, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding}, "")
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestPlanSessionRejectsGrepOnlyCodeGate(t *testing.T) {
 		{toolEndEvent(planToolName, bad)},
 	}}
 	r := newTestRunner(agent)
-	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding, Environment: "go"}, "")
+	_, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding}, "")
 	if err == nil || !strings.Contains(err.Error(), "go test") {
 		t.Fatalf("PlanSession = %v, want a rejection pointing at go test", err)
 	}
@@ -344,7 +344,7 @@ func TestGranularityWaiver(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := Mission{Kind: KindCoding, Environment: "go", PlanGate: tc.gate}
+			m := Mission{Kind: KindCoding, PlanGate: tc.gate}
 			err := checkPlanGates(split, m)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("checkPlanGates = %v, wantErr %v", err, tc.wantErr)
@@ -400,11 +400,11 @@ func TestCheckHarnessDelivery(t *testing.T) {
 		{Title: "code", Artifacts: []string{"pkg/a.go"}, CheckCmd: "go test ./pkg/"},
 		{Title: "Open pull request", EvidenceOnly: true, CheckCmd: "gh pr view | awk 'END{exit NR<1}'"},
 	}}
-	err := checkPlanGates(plan, Mission{Kind: KindCoding, Environment: "go", PlanGate: PlanGateState{RepoDestination: true}})
+	err := checkPlanGates(plan, Mission{Kind: KindCoding, PlanGate: PlanGateState{RepoDestination: true}})
 	if err == nil || !strings.Contains(err.Error(), `"Open pull request"`) || !strings.Contains(err.Error(), "the harness pushes the mission branch and opens the PR itself after all units pass") {
 		t.Fatalf("checkPlanGates with destination = %v, want the PR unit rejected", err)
 	}
-	if err := checkPlanGates(plan, Mission{Kind: KindCoding, Environment: "go"}); err != nil {
+	if err := checkPlanGates(plan, Mission{Kind: KindCoding}); err != nil {
 		t.Fatalf("checkPlanGates without destination: %v", err)
 	}
 }
@@ -438,7 +438,7 @@ func TestInstalledByWork(t *testing.T) {
 // vendor/bin/phpunit in a fresh clone exits 127; that is the pre-work
 // state, not a missing tool.
 func TestProbeAcceptsDependencyBinary(t *testing.T) {
-	m := Mission{ID: "m1", Kind: KindCoding, Environment: "php"}
+	m := Mission{ID: "m1", Kind: KindCoding}
 	cmd := "vendor/bin/phpunit --filter UpgradeTest"
 	r := &nativeRunner{log: slog.Default(), sandbox: scriptedSandbox(map[string]int{cmd: 127}, "sh: 1: vendor/bin/phpunit: not found\n")}
 	plan := Plan{Units: []PlanUnit{{Title: "u", Artifacts: []string{"composer.lock"}, CheckCmd: cmd}}}
@@ -459,8 +459,8 @@ const be8a2860PR = `{"title":"Push branch and open pull request","evidence_only"
 // destination the only rejection is the PR unit; without that unit the
 // plan is accepted.
 func TestBe8a2860PlanShape(t *testing.T) {
-	m := Mission{ID: "be8a2860", Kind: KindCoding, Environment: "php", PlanGate: PlanGateState{RepoDestination: true}}
-	r := &nativeRunner{log: slog.Default(), sandbox: func(_ context.Context, _, _, _, _ string, _ time.Duration, out io.Writer) (int, error) {
+	m := Mission{ID: "be8a2860", Kind: KindCoding, PlanGate: PlanGateState{RepoDestination: true}}
+	r := &nativeRunner{log: slog.Default(), sandbox: func(_ context.Context, _, _, _ string, _ time.Duration, out io.Writer) (int, error) {
 		_, _ = fmt.Fprint(out, "No such file or directory\n")
 		return 1, nil
 	}}
@@ -498,7 +498,7 @@ func TestPlanSessionRecoveryReplaysRejectedArgs(t *testing.T) {
 		{toolEndEvent(planToolName, good)},
 	}}
 	r := newTestRunner(agent)
-	r.sandbox = func(_ context.Context, _, _, _, command string, _ time.Duration, out io.Writer) (int, error) {
+	r.sandbox = func(_ context.Context, _, _, command string, _ time.Duration, out io.Writer) (int, error) {
 		calls[command]++
 		if command == badCmd {
 			return 0, nil
@@ -506,7 +506,7 @@ func TestPlanSessionRecoveryReplaysRejectedArgs(t *testing.T) {
 		_, _ = fmt.Fprint(out, "no test files")
 		return 1, nil
 	}
-	plan, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding, Environment: "go"}, "")
+	plan, err := r.PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding}, "")
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
 	}
@@ -532,7 +532,7 @@ func TestPlanSessionWaivesSecondSplit(t *testing.T) {
 			{toolEndEvent(planToolName, split)},
 			{toolEndEvent(planToolName, split)},
 		}}
-		return newTestRunner(agent).PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding, Environment: "go", PlanGate: gate}, "")
+		return newTestRunner(agent).PlanSession(context.Background(), Mission{ID: "m1", Route: "default", Kind: KindCoding, PlanGate: gate}, "")
 	}
 	plan, err := run(PlanGateState{})
 	if err != nil || !plan.GranularityWaived {

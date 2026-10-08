@@ -114,16 +114,23 @@ work on missions should read it too.
 
 ## Sandbox toolchain cache
 
-D-125 (issue #990): the base sandbox image carries mise (shims on PATH,
+D-141 (issue #1015): one sandbox image (`deploy/sandbox.Dockerfile`,
+tag `timothy-sandbox`) for every mission, no per-mission image choice.
+It carries node, python3, build tools, common -dev libs, PHP 8.1 to 8.4
+with composer, and mise; node, python, go, java, ruby (precompiled) and
+rust (minimal profile) versions a repo pins install through mise.
+
+D-125 (issue #990): mise in the image (shims on PATH,
 `MISE_TRUSTED_CONFIG_PATHS=/workspace`). The optional `sandbox-toolchains`
-named volume holds mise's data dir (`/home/sandbox/.mise`)
+named volume holds mise's data dir (`/home/sandbox/.mise`, rustup and
+cargo homes too)
 and is shared by all mission containers so per-repo toolchains install
 once. sandboxd resolves it like the `.claude` state volume; absent means
-ephemeral toolchains. PHP does not go through mise: the php image bakes
+ephemeral toolchains. PHP does not go through mise: the image bakes
 8.1 to 8.4 and a mission links its minor into `~/.local/bin` (D-127).
 
 D-131 (issue #1016): package caches live under `/home/sandbox/.cache`
-(cache env vars in `deploy/sandbox-base.Dockerfile`, mise state too).
+(cache env vars in `deploy/sandbox.Dockerfile`, mise state too).
 The optional `sandbox-caches` volume backs it, shared by all missions;
 absent, sandboxd mounts the mission's own `<workspace>/.sandbox-cache`
 (created at provision) there instead. Never the HOME tmpfs. Harness
