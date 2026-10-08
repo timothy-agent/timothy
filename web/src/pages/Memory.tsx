@@ -26,6 +26,7 @@ import {
 } from '../components/ui/select'
 import { Textarea } from '../components/ui/textarea'
 import { notifyMemoryChanged } from '../lib/memory'
+import { useMarkVisited } from '../onboarding/useVisited'
 
 // QueueCard is one pending memory awaiting the user's verdict.
 function QueueCard({
@@ -349,6 +350,7 @@ export function KnowledgeRedirect() {
 }
 
 export function Memory() {
+  useMarkVisited('memory')
   const [tab, setTab] = useState<(typeof tabs)[number]['id']>('queue')
 
   return (

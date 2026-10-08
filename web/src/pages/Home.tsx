@@ -11,6 +11,7 @@ import { Card } from '../components/ui/card'
 import { usePendingMemories } from '../lib/memory'
 import { useOnboarding } from '../onboarding/context'
 import { unmetKey } from '../onboarding/gateCopy'
+import { SetupChecklist } from '../onboarding/SetupChecklist'
 import { SetupGate } from '../onboarding/SetupGate'
 
 const agentKey = 'timothy.agent'
@@ -108,6 +109,10 @@ export function Home() {
             agentKnowledge={agentKnowledge}
           />
         </div>
+      </div>
+
+      <div className="mt-10 w-full max-w-4xl empty:hidden">
+        <SetupChecklist />
       </div>
 
       <div className="mt-14 w-full max-w-4xl">
