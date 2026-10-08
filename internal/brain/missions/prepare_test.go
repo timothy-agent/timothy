@@ -554,6 +554,10 @@ case "$1" in
     esac ;;
   exec) shift; [ "$1" = "--" ] && shift; exec "$@" ;;
   run) echo "ran task $2"; exit 0 ;;
+  daemons)
+    if [ "$2" = start ] && [ "$3" = "$STUB_DAEMON_FAIL" ]; then echo "pitchfork error: $3 not ready" >&2; exit 1; fi
+    echo "pitchfork $2 $3"; exit 0 ;;
+  env) printf 'mise WARN stub\n{"DATABASE_URL":"postgresql://postgres@127.0.0.1:5432/postgres","PGHOST":"127.0.0.1","PGPORT":"5432","PGUSER":"postgres","PGDATABASE":"postgres","REDIS_URL":"redis://127.0.0.1:6379","PATH":"/x"}\n'; exit 0 ;;
 esac
 exit 2
 `)

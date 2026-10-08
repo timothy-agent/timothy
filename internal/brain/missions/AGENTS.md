@@ -334,6 +334,24 @@ AGENTS.md so other work does not pay for it every session.
   `<workspace>/prepare/` when it is missing or lost its header. Not
   here: devcontainer and CI-workflow test sources, nested manifests,
   repo custom providers.
+- Test databases (D-142, issue #1017): `detectServices` (daemons.go)
+  reads CI workflow and GitLab services, compose images, Rails
+  `config/database.yml`, Django settings and Laravel `phpunit.xml` over
+  the env template for PostgreSQL and Redis. Each need becomes a mise
+  `[daemons.<preset>]` table in `mise.local.toml` (unless the repo
+  declares it) with `port = "auto"` and `data_dir` under
+  `/tmp/timothy-daemons`, plus `pitchfork` in `[tools]` (without it
+  `mise daemons stop` finds no version). mise's default data dir is
+  under `MISE_STATE_DIR` on the shared cache volume; the /tmp tmpfs
+  makes the data die with the container. Prepare starts each daemon
+  before the baseline test (`daemon:<name>` steps), reads the
+  connection variables from `mise env --json` onto
+  `EnvFacts.Prepare.Services`, and the harness `tasks.test` lists them
+  under `daemons` so `mise run test` restarts them after a sandbox
+  restart. A daemon that does not start is stopped, dropped from
+  `mise.local.toml` and recorded; the facts say "no database service;
+  use sqlite where the project supports it". No limit change: both
+  presets idle at about 110 MiB and 30 tasks. MySQL waits for a preset.
 - Per-criterion review rubric (issue #718): `review_verdict` carries
   `criteria` (unit index, criterion index, met/not_met/cannot_tell,
   evidence), optional so existing fixtures still parse and an unknown
