@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -460,7 +462,8 @@ func CommitMessage(unitTitle, goal, body, style string) string {
 }
 
 // Rollback discards uncommitted work: `git checkout -- .` + `git clean
-// -fd` for coding missions, no-op otherwise.
+// -fd` for coding missions, no-op otherwise. D-133: the clean keeps
+// every harnessWrittenPaths file, which prepare wrote untracked.
 func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
 	if !policyFor(kind, FlowFull).needsWorktree || worktree == "" {
 		return nil
@@ -470,7 +473,11 @@ func (w *Workspace) Rollback(ctx context.Context, worktree, kind string) error {
 	if out, err := runGit(cctx, worktree, "checkout", "--", "."); err != nil {
 		return fmt.Errorf("worktree: rollback checkout: %w: %s", err, out)
 	}
-	if out, err := runGit(cctx, worktree, "clean", "-fd"); err != nil {
+	cleanArgs := []string{"clean", "-fd"}
+	for _, p := range slices.Sorted(maps.Keys(harnessWrittenPaths)) {
+		cleanArgs = append(cleanArgs, "-e", "/"+p)
+	}
+	if out, err := runGit(cctx, worktree, cleanArgs...); err != nil {
 		return fmt.Errorf("worktree: rollback clean: %w: %s", err, out)
 	}
 	return nil
