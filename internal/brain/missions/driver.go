@@ -351,6 +351,7 @@ func (d *Driver) SetAutomationGrants(fn func(ctx context.Context, m Mission) []s
 // is, e.g. across one smoke-matrix run.
 func (d *Driver) SetOSVOffline(offline bool) {
 	d.provision.osvOffline = offline
+	d.verify.osvOffline = offline
 }
 
 // agentName resolves a mission's agent to its display name for the
