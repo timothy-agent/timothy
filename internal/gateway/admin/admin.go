@@ -689,7 +689,7 @@ func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 		return "", fmt.Errorf("admin create: %w", err)
 	}
 	a.audit(ctx, "create", "provider", id, nil, p)
-	a.bootstrapRoutes(ctx, router.ProviderRow{ID: id, Kind: p.Kind, ExcludeFromBootstrap: p.ExcludeFromBootstrap}, candidates)
+	a.bootstrapRoutes(ctx, router.ProviderRow{ID: id, Kind: p.Kind, DefaultModel: p.DefaultModel, ExcludeFromBootstrap: p.ExcludeFromBootstrap}, candidates)
 	a.reload(ctx)
 	return id, nil
 }
