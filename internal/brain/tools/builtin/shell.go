@@ -1,7 +1,6 @@
 package builtin
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,7 +13,6 @@ import (
 
 const (
 	shellDefaultTimeout = 30 * time.Second
-	shellMaxOutput      = 64 << 10
 )
 
 // ShellConfig fixes where and how long commands run. The workspace
@@ -186,16 +184,13 @@ func runShell(ctx context.Context, dir string, timeout time.Duration, command st
 	// here (danger-classified commands always prompt).
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command) //nolint:gosec // see above
 	cmd.Dir = dir
-	var buf bytes.Buffer
-	cmd.Stdout = &capWriter{w: &buf, max: shellMaxOutput}
+	buf := NewHeadTailWriter(ShellHeadBytes, ShellTailBytes)
+	cmd.Stdout = buf
 	cmd.Stderr = cmd.Stdout
 	cmd.WaitDelay = 2 * time.Second
 
 	err := cmd.Run()
 	out := buf.String()
-	if buf.Len() >= shellMaxOutput {
-		out += "\n[output capped]"
-	}
 
 	switch {
 	case ctx.Err() == context.DeadlineExceeded:
@@ -210,23 +205,4 @@ func runShell(ctx context.Context, dir string, timeout time.Duration, command st
 		return out, fmt.Errorf("run command: %w", err)
 	}
 	return out, nil
-}
-
-// capWriter stops writing (silently succeeding) once max bytes are
-// kept, so runaway commands can't balloon memory while still letting
-// the process finish.
-type capWriter struct {
-	w   *bytes.Buffer
-	max int
-}
-
-func (c *capWriter) Write(p []byte) (int, error) {
-	if room := c.max - c.w.Len(); room > 0 {
-		if len(p) > room {
-			c.w.Write(p[:room])
-		} else {
-			c.w.Write(p)
-		}
-	}
-	return len(p), nil
 }
