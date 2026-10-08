@@ -321,6 +321,22 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// HasAssistantReply reports whether any web or API session holds an
+// assistant turn, the setup checklist's "first chat" signal.
+func (s *Store) HasAssistantReply(ctx context.Context) (bool, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return false, fmt.Errorf("session: has reply: %w", err)
+	}
+	var ok bool
+	if err := db.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM session_events e JOIN sessions s ON s.id = e.session_id
+		WHERE e.kind = $1 AND s.origin_kind IN ('web', 'api'))`, KindAssistantTurn).Scan(&ok); err != nil {
+		return false, fmt.Errorf("session: has reply: %w", err)
+	}
+	return ok, nil
+}
+
 // SetTitleIfEmpty writes an auto-generated title without clobbering a
 // user-chosen one.
 func (s *Store) SetTitleIfEmpty(ctx context.Context, id, title string) error {

@@ -43,6 +43,9 @@ import type {
   MissionFile,
   MissionUsage,
   Notification,
+  Onboarding,
+  OnboardingProgress,
+  OnboardingProgressPatch,
   PendingPermission,
   ProviderHealth,
   ReferenceKind,
@@ -63,6 +66,19 @@ export function getToken(): string {
 
 export function setToken(token: string) {
   localStorage.setItem(tokenKey, token.trim())
+  for (const listener of tokenListeners) listener()
+}
+
+// subscribeTokenChanged fires after setToken stores a value, so data
+// that was skipped while no token existed (setup readiness) can load
+// without waiting for a navigation.
+const tokenListeners = new Set<() => void>()
+
+export function subscribeTokenChanged(listener: () => void): () => void {
+  tokenListeners.add(listener)
+  return () => {
+    tokenListeners.delete(listener)
+  }
 }
 
 // consumeTokenFragment reads a `#token=...` value from the URL fragment
@@ -1273,6 +1289,21 @@ export async function patchSettings(changes: Record<string, boolean>): Promise<v
   await request<void>('/v1/admin/settings', {
     method: 'PATCH',
     body: JSON.stringify(changes),
+  })
+}
+
+// getOnboarding returns live setup readiness and the stored progress.
+export async function getOnboarding(): Promise<Onboarding> {
+  const o = await request<Onboarding>('/v1/admin/onboarding')
+  return { readiness: o.readiness, progress: o.progress ?? {} }
+}
+
+// patchOnboarding merges a progress patch server-side and returns the
+// merged progress.
+export async function patchOnboarding(patch: OnboardingProgressPatch): Promise<OnboardingProgress> {
+  return request<OnboardingProgress>('/v1/admin/onboarding', {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
   })
 }
 

@@ -246,6 +246,7 @@ export function MissionForm({
   initial,
   initialGoal,
   parentMissionId,
+  createDisabled = false,
   onDone,
   onCancel,
 }: {
@@ -262,6 +263,8 @@ export function MissionForm({
   // parentMissionId, when set, is included on the create payload:
   // makes this a follow-up mission (see CreateMissionInput).
   parentMissionId?: string
+  // createDisabled blocks Create while a setup gate is unmet.
+  createDisabled?: boolean
   onDone: (missionId: string) => void
   onCancel: () => void
 }) {
@@ -1483,7 +1486,7 @@ export function MissionForm({
           <Button variant="outline" disabled={busy} onClick={onCancel}>
             Cancel
           </Button>
-          <Button disabled={!canSubmit || busy} onClick={() => void submit()}>
+          <Button disabled={!canSubmit || busy || createDisabled} onClick={() => void submit()}>
             Create mission
           </Button>
         </div>

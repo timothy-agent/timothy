@@ -27,6 +27,7 @@ import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
 import { errText, isTimothyAuthDetail, isTimothyAuthError } from '../../lib/errors'
+import { useOnboarding } from '../../onboarding/context'
 
 const area = settingsArea('providers')
 
@@ -77,6 +78,7 @@ type AnthropicAuthMode = 'api_key' | 'oauth'
 export function ProviderAdd() {
   const { presetId } = useParams()
   const navigate = useNavigate()
+  const { refresh: refreshOnboarding } = useOnboarding()
   const preset = providerPresets.find((p) => p.id === presetId)
   const defaultBackend = useDefaultSecretBackend()
 
@@ -271,6 +273,7 @@ export function ProviderAdd() {
         enabled: true,
       })
       toast.success('Provider added', { description: `${name.trim()} is ready for coding missions.` })
+      void refreshOnboarding()
       navigate('/settings/providers')
     } catch (err) {
       toast.error('Could not add provider', { description: errText(err) })
@@ -365,6 +368,7 @@ export function ProviderAdd() {
         ...(Object.keys(options).length > 0 ? { options } : {}),
       })
       toast.success('Provider added', { description: `${name.trim()} is connected and ready to route to.` })
+      void refreshOnboarding()
       navigate('/settings/providers')
     } catch (err) {
       toast.error('Could not add provider', { description: errText(err) })

@@ -199,6 +199,15 @@ func (c *Client) RouteForRole(ctx context.Context, role string) (string, bool, e
 	return name, ok, nil
 }
 
+// InvalidateRoutes drops the memoized roles and resolves so the next
+// lookup reads the gateway's current routing: setup readiness calls it
+// so a provider added seconds ago shows up without waiting out the TTL.
+func (c *Client) InvalidateRoutes() {
+	c.mu.Lock()
+	c.roles, c.rolesExp, c.resolved = nil, time.Time{}, nil
+	c.mu.Unlock()
+}
+
 // ResolvedRouteEntry is one chain entry as reported by the gateway's
 // resolve endpoint (D-051 rework: harness is now the caller's ResolveRoute
 // arg, not a per-entry field). CredentialRef is a NAME, never a

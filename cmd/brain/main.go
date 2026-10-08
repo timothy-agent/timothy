@@ -38,6 +38,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/brain/memclient"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
+	"github.com/SumonMSelim/timothy/internal/brain/onboarding"
 	"github.com/SumonMSelim/timothy/internal/brain/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/brain/sandboxclient"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
@@ -1033,11 +1034,48 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService)
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
+		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags))
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
 		os.Exit(1)
+	}
+}
+
+// onboardingProbes wires setup readiness to existing deps; a nil store
+// leaves its probe nil, which reads as false/0.
+func onboardingProbes(gwc *gwclient.Client, sandbox *sandboxclient.Client, sessions *session.Store, missionStore *missions.Store, conns *connectors.Manager, channelStore *channels.Store, kbStore *kb.Store, automationStore *automations.Store, flags *settings.Store) onboarding.Probes {
+	p := onboarding.Probes{
+		Invalidate:         gwc.InvalidateRoutes,
+		GatewayReady:       gwc.Ready,
+		RouteForRole:       gwc.RouteForRole,
+		ResolveRoute:       gwc.ResolveRoute,
+		SandboxHealth:      sandbox.Health,
+		HasAssistantReply:  sessions.HasAssistantReply,
+		CountKBCollections: countOf(kbStore.ListCollections),
+		AutomationsEnabled: func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyAutomations) },
+	}
+	if missionStore != nil {
+		p.HasSucceededMission = missionStore.HasSucceeded
+	}
+	if conns != nil {
+		p.CountConnectors = countOf(conns.Store().List)
+	}
+	if channelStore != nil {
+		p.CountChannels = countOf(channelStore.List)
+	}
+	if automationStore != nil {
+		p.CountAutomations = countOf(automationStore.List)
+	}
+	return p
+}
+
+// countOf adapts a list lookup to a count probe.
+func countOf[T any](list func(context.Context) ([]T, error)) func(context.Context) (int, error) {
+	return func(ctx context.Context) (int, error) {
+		items, err := list(ctx)
+		return len(items), err
 	}
 }
 

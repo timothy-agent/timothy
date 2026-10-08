@@ -28,6 +28,7 @@ import { SegmentedControl } from '../timothy/segmented-control'
 import { connectedAs, secretDestination } from './util'
 import { errText, isTimothyAuthError } from '../../lib/errors'
 import { slugify } from '../../lib/slugify'
+import { useOnboarding } from '../../onboarding/context'
 
 const area = settingsArea('connectors')
 
@@ -86,6 +87,7 @@ function tokenRefFor(kind: string, refBase: string): string {
 export function ConnectorAdd() {
   const { presetId } = useParams()
   const navigate = useNavigate()
+  const { refresh: refreshOnboarding } = useOnboarding()
   const preset = connectorPresets.find((p) => p.id === presetId)
   const defaultBackend = useDefaultSecretBackend()
 
@@ -365,6 +367,7 @@ export function ConnectorAdd() {
           ? `${name.trim()} is connected; its identity is ready for mission use.`
           : `${name.trim()} is connected and tools are servable.`,
       })
+      void refreshOnboarding()
       navigate('/settings/connectors')
     } catch (err) {
       toast.error('Could not enable connector', { description: errText(err) })

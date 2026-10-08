@@ -35,6 +35,11 @@ vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn(() => vi.fn()) }))
 
 import { getTranscript } from '../api/client'
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 beforeEach(() => {
   // jsdom lacks scrollIntoView; the message list calls it on update.
   Element.prototype.scrollIntoView = vi.fn()
