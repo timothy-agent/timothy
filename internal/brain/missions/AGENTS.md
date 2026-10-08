@@ -295,8 +295,11 @@ AGENTS.md so other work does not pay for it every session.
   stored (Collision colors whatever NO_COLOR says). Every outcome lands on
   `EnvFacts.Prepare` and renders in the facts block; a failure is a
   fact, never a mission failure. `mise.local.toml` and `.env` are never
-  staged (`harnessWrittenPaths`). Not here: devcontainer and
-  CI-workflow test sources, nested manifests, repo custom providers.
+  staged (`harnessWrittenPaths`). `Rollback` keeps them (D-133), and
+  `verifyAll` rewrites `mise.local.toml` from the copy in
+  `<workspace>/prepare/` when it is missing or lost its header. Not
+  here: devcontainer and CI-workflow test sources, nested manifests,
+  repo custom providers.
 - Per-criterion review rubric (issue #718): `review_verdict` carries
   `criteria` (unit index, criterion index, met/not_met/cannot_tell,
   evidence), optional so existing fixtures still parse and an unknown
