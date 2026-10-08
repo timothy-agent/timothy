@@ -2062,13 +2062,13 @@ func TestMissionToolsSandboxTimeoutPropagatesAsError(t *testing.T) {
 	}
 }
 
-// TestMissionToolsSandboxCapsOutput confirms cappedStringWriter bounds
+// TestMissionToolsSandboxCapsOutput confirms the head/tail writer bounds
 // the sandbox Runner's output the same way builtin.Shell's local path
 // caps its own: a runaway sandboxed command must not balloon memory
 // or context just because the local exec path isn't the one running.
 func TestMissionToolsSandboxCapsOutput(t *testing.T) {
 	r := newTestRunner(&scriptedAgent{})
-	over := strings.Repeat("x", shellOutputCap+1024)
+	over := strings.Repeat("x", 128<<10) + "SUMMARY-LINE"
 	r.sandbox = func(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 		_, _ = out.Write([]byte(over))
 		return 0, nil
@@ -2080,10 +2080,13 @@ func TestMissionToolsSandboxCapsOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(out, "[output capped]") {
+	if !strings.Contains(out, "bytes dropped]") {
 		t.Fatalf("output not marked as capped: %q", out[:min(200, len(out))])
 	}
-	if len(out) > shellOutputCap+len("\n[output capped]") {
+	if !strings.HasSuffix(out, "SUMMARY-LINE") {
+		t.Fatal("output tail lost")
+	}
+	if len(out) > builtin.ShellHeadBytes+builtin.ShellTailBytes+100 {
 		t.Fatalf("output length %d exceeds cap plus marker", len(out))
 	}
 }
