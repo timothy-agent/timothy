@@ -30,3 +30,6 @@ docs/
 .DS_Store
 .claude/
 .cursor/
+
+# Onboarding canary output (make canary-onboarding)
+web/e2e/.out/
