@@ -71,6 +71,16 @@ beforeEach(() => {
 })
 
 describe('Connectors tab', () => {
+  it('shows the empty state with the preset tiles as the action', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([])
+    renderTab()
+    expect(await screen.findByText('No accounts connected')).toBeTruthy()
+    expect(
+      screen.getByText('Connect mail, calendar, GitHub or cloud so Timothy can read and act for you. Pick one below.'),
+    ).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Gmail' })).toBeTruthy()
+  })
+
   it('renders configured cards and the preset tile grid', async () => {
     renderTab()
     expect(await screen.findByText('Your connectors · 1')).toBeTruthy()

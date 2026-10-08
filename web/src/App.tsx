@@ -54,6 +54,8 @@ import { KnowledgeRedirect, Memory } from './pages/Memory'
 import { MissionDetail } from './pages/MissionDetail'
 import { Missions } from './pages/Missions'
 import { NewMission } from './pages/NewMission'
+import { HelpMenu } from './onboarding/HelpMenu'
+import { useHelpActions } from './onboarding/helpActions'
 import { OnboardingProvider } from './onboarding/OnboardingProvider'
 import { SetupRing } from './onboarding/SetupRing'
 import { useOnboarding } from './onboarding/context'
@@ -198,6 +200,7 @@ function AppSidebar({
                             <SidebarMenuSubButton
                               asChild
                               isActive={pathname.startsWith(`/settings/${area.key}`)}
+                              data-tour={`settings.${area.key}`}
                             >
                               <Link to={`/settings/${area.key}`}>
                                 <span>{area.label}</span>
@@ -289,11 +292,14 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
           </span>
         ))}
       </nav>
+      <div className="ml-auto">
+        <HelpMenu />
+      </div>
       <button
         type="button"
         onClick={onOpenPalette}
         aria-label="Search or jump to…"
-        className="ml-auto flex min-w-52 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-muted-foreground transition hover:border-zinc-400 dark:hover:border-zinc-600"
+        className="flex min-w-52 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-muted-foreground transition hover:border-zinc-400 dark:hover:border-zinc-600"
       >
         <Search className="size-3.5" />
         <span>Search or jump to…</span>
@@ -312,6 +318,7 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
   const navigate = useNavigate()
   const { sessions } = useSessions()
   const recent = useMemo(() => sessions.slice(0, 8), [sessions])
+  const help = useHelpActions()
 
   const go = (href: string) => {
     onOpenChange(false)
@@ -345,6 +352,23 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
             ))}
           </CommandGroup>
         )}
+        <CommandGroup heading="Help">
+          {help.map((a) => (
+            <CommandItem
+              key={a.id}
+              value={a.label}
+              disabled={a.disabled}
+              onSelect={() => {
+                onOpenChange(false)
+                if (a.href) window.open(a.href, '_blank', 'noopener,noreferrer')
+                else a.run?.()
+              }}
+            >
+              <a.icon />
+              <span>{a.label}</span>
+            </CommandItem>
+          ))}
+        </CommandGroup>
       </CommandList>
     </CommandDialog>
   )

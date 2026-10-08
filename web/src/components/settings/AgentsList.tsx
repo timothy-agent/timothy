@@ -62,7 +62,16 @@ export function AgentsList() {
             description="Who serves a session: a prompt overlay, a model chain (route), skill and tool allowlists, and whether long-term memory participates. The default agent serves new sessions unless the composer picks another."
           />
           {agents.length === 0 ? (
-            <EmptyState title="No agents configured yet" description="Add one to serve sessions." />
+            <EmptyState
+              title="No agents yet"
+              description="An agent is a named assistant with its own instructions, model and tools. The default agent already serves chats."
+              action={
+                <Button onClick={() => navigate('/settings/agents/new')}>
+                  <Plus />
+                  New agent
+                </Button>
+              }
+            />
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {agents.map((a) => (

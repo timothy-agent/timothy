@@ -54,6 +54,7 @@ function renderList() {
     <MemoryRouter initialEntries={['/settings/agents']}>
       <Routes>
         <Route path="/settings/agents" element={<AgentsList />} />
+        <Route path="/settings/agents/new" element={<p>new agent page</p>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -208,6 +209,10 @@ describe('AgentsList', () => {
     vi.mocked(listAgents).mockResolvedValue([])
     renderList()
 
-    expect(await screen.findByText('No agents configured yet')).toBeTruthy()
+    const title = await screen.findByText('No agents yet')
+    const empty = title.parentElement as HTMLElement
+    expect(within(empty).getByText(/An agent is a named assistant/)).toBeTruthy()
+    fireEvent.click(within(empty).getByRole('button', { name: 'New agent' }))
+    expect(await screen.findByText('new agent page')).toBeTruthy()
   })
 })

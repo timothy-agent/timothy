@@ -62,7 +62,10 @@ export function ChannelsList() {
             approve them here.
           </p>
           {channels.length === 0 ? (
-            <EmptyState title="No channels yet" description="Add one below." />
+            <EmptyState
+              title="No channels yet"
+              description="A channel lets you talk to Timothy from Telegram or email. Pick one below."
+            />
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {channels.map((c) => (
