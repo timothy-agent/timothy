@@ -186,6 +186,9 @@ type Event struct {
 type Result struct {
 	Status string // DONE | RETRY | BLOCKED
 	Note   string
+	// FinalOutput is the optional report a worker carries instead of a
+	// repo file (D-134).
+	FinalOutput string
 }
 
 // StreamParser turns one raw output line into zero or one normalized Event.

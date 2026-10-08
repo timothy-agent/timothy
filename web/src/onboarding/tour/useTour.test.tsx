@@ -53,6 +53,12 @@ function renderTour({
 
 const state = () => screen.getByTestId('state')
 const frame = () => act(() => new Promise<void>((r) => requestAnimationFrame(() => r())))
+// The tour starts from a rAF callback outside act, so the effect that
+// attaches the key listener can still be pending when the text lands.
+async function shown(text: string) {
+  await waitFor(() => expect(state()).toHaveTextContent(text))
+  await act(async () => {})
+}
 
 describe('useTour', () => {
   it('starts when unseen and enabled, skipping steps with no anchor', async () => {
@@ -101,7 +107,7 @@ describe('useTour', () => {
 
   it('skips on Escape and records the version', async () => {
     const { updateProgress } = renderTour()
-    await waitFor(() => expect(state()).toHaveTextContent('A 1/2'))
+    await shown('A 1/2')
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(state()).toHaveTextContent('off')
     expect(updateProgress).toHaveBeenCalledWith({ tours_seen: { demo: 1 } })
@@ -109,7 +115,7 @@ describe('useTour', () => {
 
   it('moves with the arrow keys and Enter', async () => {
     renderTour()
-    await waitFor(() => expect(state()).toHaveTextContent('A 1/2'))
+    await shown('A 1/2')
     fireEvent.keyDown(window, { key: 'ArrowRight' })
     expect(state()).toHaveTextContent('B 2/2')
     fireEvent.keyDown(window, { key: 'ArrowLeft' })
@@ -128,7 +134,7 @@ describe('useTour', () => {
 
   it('restart reactivates a finished tour', async () => {
     renderTour()
-    await waitFor(() => expect(state()).toHaveTextContent('A 1/2'))
+    await shown('A 1/2')
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(state()).toHaveTextContent('off')
     fireEvent.click(screen.getByText('restart'))

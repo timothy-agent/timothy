@@ -1060,7 +1060,8 @@ func (s *Store) SetLastEvidence(ctx context.Context, id, evidence string) error 
 }
 
 // SetFinalOutput stores a light mission's verbatim final worker
-// message (D-069) — mission state, not an event.
+// message (D-069), or a planned mission's report (D-134): mission
+// state, not an event.
 func (s *Store) SetFinalOutput(ctx context.Context, id, text string) error {
 	db, err := s.db.Get()
 	if err != nil {
