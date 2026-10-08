@@ -1,6 +1,7 @@
 package missions
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -511,10 +512,34 @@ const (
 type CriterionVerdict struct {
 	// Unit is the criterion's plan index; Criterion its zero-based
 	// index in that unit's criteria list.
-	Unit      int    `json:"unit"`
-	Criterion int    `json:"criterion"`
-	Status    string `json:"status"`
-	Evidence  string `json:"evidence,omitempty"`
+	Unit      int          `json:"unit"`
+	Criterion int          `json:"criterion"`
+	Status    string       `json:"status"`
+	Evidence  evidenceText `json:"evidence,omitempty"`
+}
+
+// evidenceText is a criterion's evidence. A string decodes as itself;
+// any other JSON value is kept as its compact JSON text and null reads
+// as empty, so a reviewer that wraps evidence in an object does not
+// fail the round.
+type evidenceText string
+
+func (e *evidenceText) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		*e = evidenceText(s)
+		return nil
+	}
+	if string(bytes.TrimSpace(b)) == "null" {
+		*e = ""
+		return nil
+	}
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, b); err != nil {
+		return err
+	}
+	*e = evidenceText(buf.String())
+	return nil
 }
 
 // ReviewVerdict is the parsed review_verdict call.
@@ -724,7 +749,7 @@ func criteriaFindings(plan Plan, units []int, criteria []CriterionVerdict, open 
 			continue
 		}
 		status := c.Status
-		if status == CriterionNotMet && strings.TrimSpace(c.Evidence) == "" {
+		if status == CriterionNotMet && strings.TrimSpace(string(c.Evidence)) == "" {
 			status = CriterionCannotTell
 		}
 		if status == CriterionNotMet {
@@ -737,7 +762,7 @@ func criteriaFindings(plan Plan, units []int, criteria []CriterionVerdict, open 
 			Unit:     c.Unit,
 			Title:    title,
 			Detail:   "criterion not met",
-			Evidence: c.Evidence,
+			Evidence: string(c.Evidence),
 			Severity: SeverityBlocking,
 		}
 		if status == CriterionCannotTell {

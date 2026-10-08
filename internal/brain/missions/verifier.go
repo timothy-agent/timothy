@@ -36,6 +36,7 @@ type verifier struct {
 // any other exec error aborts the pass as an infrastructure failure.
 func (v *verifier) verifyAll(ctx context.Context, m Mission, seenURLs []string, citations bool) ([]UnitVerification, error) {
 	workRoot := m.WorkRoot()
+	restoreMiseLocal(m.Workspace, m.WorktreePath(), v.log)
 	current := firstUnverified(m.Plan)
 	checkCitations := citations && missionPolicyFor(m).checksCitations
 	// D-140: a lockfile change gates its owning units on evidence
