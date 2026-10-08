@@ -475,6 +475,56 @@ func TestStreamHeadersFlushBeforeFirstProviderEvent(t *testing.T) {
 	}
 }
 
+// TestStreamClientCancelRecordsCancelled pins D-135: a caller hanging
+// up mid-stream aborts the provider call, books it cancelled, and never
+// fails over to the next chain entry.
+func TestStreamClientCancelRecordsCancelled(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{})
+	providerGone := make(chan struct{})
+	blocking := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
+		w.(http.Flusher).Flush()
+		close(entered)
+		<-r.Context().Done()
+		close(providerGone)
+	}))
+	t.Cleanup(blocking.Close)
+	a, rec := newAPI(snapshotFor(t, blocking.URL, oaiFail(t).URL))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(
+		`{"route":"coding","mission_id":"m-1","messages":[{"role":"user","content":"hi"}]}`)).WithContext(ctx)
+	done := make(chan struct{})
+	go func() {
+		a.handleStream(httptest.NewRecorder(), req)
+		close(done)
+	}()
+	<-entered
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleStream did not return after the client cancelled")
+	}
+	select {
+	case <-providerGone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("provider stream was not closed after the client cancelled")
+	}
+
+	entries := rec.all()
+	if len(entries) != 1 {
+		t.Fatalf("ledger entries = %d (%+v), want 1 (no failover after cancel)", len(entries), entries)
+	}
+	if e := entries[0]; e.Status != "cancelled" || e.Provider != "one" || e.MissionID != "m-1" {
+		t.Fatalf("entry = %+v, want status cancelled for provider one", e)
+	}
+	if got := testutil.ToFloat64(a.providerCalls.WithLabelValues("two", "coding", "error")); got != 0 {
+		t.Fatalf("provider_calls_total{two,coding,error} = %v, want 0", got)
+	}
+}
+
 func TestStreamFailoverToSecondProvider(t *testing.T) {
 	t.Parallel()
 	a, rec := newAPI(snapshotFor(t, oaiFail(t).URL, oaiOK(t, "backup").URL))
