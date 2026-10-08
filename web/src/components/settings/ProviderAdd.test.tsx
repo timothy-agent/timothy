@@ -822,6 +822,17 @@ describe('ProviderAdd embedded mode', () => {
     expect(screen.queryByText('providers list')).not.toBeInTheDocument()
   })
 
+  it('sends no credential ref for a keyless preset', async () => {
+    renderEmbedded()
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+    expect(vi.mocked(validateProvider).mock.calls[0][0]).toMatchObject({ credential_ref: '' })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({ credential_ref: '' })
+    expect(setSecret).not.toHaveBeenCalled()
+  })
+
   it('Cancel calls onCancel instead of navigating', async () => {
     const { onCancel } = renderEmbedded()
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
