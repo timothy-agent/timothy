@@ -491,6 +491,12 @@ func main() {
 		missionDriver.SetValidateDeps(deps)
 		missionDriver.SetResolveDeps(missionResolve)
 	}
+	// MISSION_OSV_OFFLINE non-empty: osv-scanner audits scan the local
+	// database in the sandbox caches volume, refreshed once per day by
+	// make canary-ecosystems (issue #1018). Off by default.
+	if missionDriver != nil && os.Getenv("MISSION_OSV_OFFLINE") != "" {
+		missionDriver.SetOSVOffline(true)
+	}
 	// WORKFLOWS_ENABLED gates the orchestration-above-missions layer
 	// (D-070, slice 1): requires missions to already be enabled
 	// (WORKSPACES set), since a workflow step is just a follow-up

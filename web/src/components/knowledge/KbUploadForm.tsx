@@ -6,6 +6,7 @@ import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Textarea } from '../ui/textarea'
 import { errText } from '../../lib/errors'
+import { uuid } from '../../lib/uuid'
 import { useOnboarding } from '../../onboarding/context'
 import { unmetKey } from '../../onboarding/gateCopy'
 import { SetupGate } from '../../onboarding/SetupGate'
@@ -65,7 +66,7 @@ export function KbUploadForm({
   const uploadFiles = async (files: File[]) => {
     if (blocked) return
     for (const file of files) {
-      const key = crypto.randomUUID()
+      const key = uuid()
       setUploading((prev) => ({ ...prev, [key]: true }))
       try {
         const doc = await uploadFile(file)

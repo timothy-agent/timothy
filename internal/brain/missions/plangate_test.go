@@ -41,33 +41,54 @@ func TestEmptyOutputIdiom(t *testing.T) {
 	}
 }
 
-// TestCheckCodeFloor covers the toolchain requirement per environment:
-// a unit that produces source must build, test or run it; document
-// units and unknown environments stay permissive.
+// TestCheckCodeFloor covers the toolchain requirement per language
+// (D-139): a unit that produces source must build, test or run it with
+// that language's toolchain; document units stay permissive.
 func TestCheckCodeFloor(t *testing.T) {
+	const grepOnly = "never builds, tests or runs"
 	cases := []struct {
 		name      string
-		env       string
 		artifacts []string
 		cmd       string
 		wantErr   string
 	}{
-		{"go grep only", "go", []string{"internal/core/a.go"}, `grep -q 'func Foo' internal/core/a.go`, "never builds, tests or runs"},
-		{"go test first", "go", []string{"internal/core/a.go"}, `go test ./internal/core/... && grep -q Foo internal/core/a.go`, ""},
-		{"go vet counts", "go", []string{"a.go"}, `GOTOOLCHAIN=auto go vet ./... && grep -q x a.go`, ""},
-		{"go doc unit", "go", []string{"docs/DESIGN.md"}, `grep -q '## Scheme' docs/DESIGN.md`, ""},
-		{"python grep only", "python", []string{"app/a.py"}, `grep -q 'def main' app/a.py`, "never builds, tests or runs"},
-		{"python pytest", "python", []string{"app/a.py"}, `python3 -m pytest tests/ -q`, ""},
-		{"node vitest", "node", []string{"src/a.ts"}, `npx vitest run src`, ""},
-		{"node grep only", "node", []string{"src/a.ts"}, `grep -q export src/a.ts`, "never builds, tests or runs"},
-		{"unknown env accepts any toolchain", "", []string{"a.py"}, `pytest tests`, ""},
-		{"unknown env still needs one", "", []string{"a.py"}, `grep -q def a.py`, "never builds, tests or runs"},
-		{"wrong env toolchain rejected", "go", []string{"a.go"}, `npm test`, "never builds, tests or runs"},
+		{"go grep only", []string{"internal/core/a.go"}, `grep -q 'func Foo' internal/core/a.go`, grepOnly},
+		{"go test first", []string{"internal/core/a.go"}, `go test ./internal/core/... && grep -q Foo internal/core/a.go`, ""},
+		{"go vet counts", []string{"a.go"}, `GOTOOLCHAIN=auto go vet ./... && grep -q x a.go`, ""},
+		{"go doc unit", []string{"docs/DESIGN.md"}, `grep -q '## Scheme' docs/DESIGN.md`, ""},
+		{"python grep only", []string{"app/a.py"}, `grep -q 'def main' app/a.py`, grepOnly},
+		{"python pytest", []string{"app/a.py"}, `python3 -m pytest tests/ -q`, ""},
+		{"python bare pytest", []string{"a.py"}, `pytest tests`, ""},
+		{"node vitest", []string{"src/a.ts"}, `npx vitest run src`, ""},
+		{"node grep only", []string{"src/a.ts"}, `grep -q export src/a.ts`, grepOnly},
+		{"go unit with node toolchain rejected", []string{"a.go"}, `npm test`, "go test ./<package>/..."},
+		{"php grep only", []string{"app/Models/User.php"}, `grep -q 'class User' app/Models/User.php`, "vendor/bin/phpunit"},
+		{"php phpunit", []string{"app/Models/User.php"}, `vendor/bin/phpunit --filter UserTest`, ""},
+		{"php pest", []string{"tests/Feature/UserTest.php"}, `./vendor/bin/pest tests/Feature/UserTest.php`, ""},
+		{"php artisan test", []string{"app/a.php"}, `grep -q x app/a.php && php artisan test --filter=A`, ""},
+		{"php artisan test via bootstrap path", []string{"app/a.php"}, `./.tools/php/bin/php artisan test`, ""},
+		{"php composer test", []string{"src/A.php"}, `composer test`, ""},
+		{"php composer run test", []string{"src/A.php"}, `composer run-script test`, ""},
+		{"php artisan migrate is not a test", []string{"app/a.php"}, `php artisan migrate`, grepOnly},
+		{"java grep only", []string{"src/main/java/App.java"}, `grep -q 'class App' src/main/java/App.java`, "./mvnw test"},
+		{"java mvn", []string{"src/main/java/App.java"}, `mvn -q test`, ""},
+		{"java mvnw", []string{"src/main/java/App.java"}, `./mvnw -q test -Dtest=AppTest`, ""},
+		{"kotlin gradlew", []string{"src/main/kotlin/App.kt"}, `./gradlew test`, ""},
+		{"kotlin grep only", []string{"src/main/kotlin/App.kt"}, `grep -q fun src/main/kotlin/App.kt`, grepOnly},
+		{"ruby grep only", []string{"lib/a.rb"}, `grep -q 'def a' lib/a.rb`, "bundle exec rspec"},
+		{"ruby rspec", []string{"lib/a.rb"}, `bundle exec rspec spec/a_spec.rb`, ""},
+		{"ruby bin rspec", []string{"lib/a.rb"}, `bin/rspec`, ""},
+		{"ruby rake test", []string{"lib/a.rb"}, `rake test`, ""},
+		{"rust grep only", []string{"src/lib.rs"}, `grep -q 'fn a' src/lib.rs`, "cargo test"},
+		{"rust cargo test", []string{"src/lib.rs"}, `cargo test a`, ""},
+		{"rust cargo toolchain override", []string{"src/lib.rs"}, `cargo +nightly test`, ""},
+		{"polyglot unit accepts either toolchain", []string{"app/a.php", "resources/js/app.ts"}, `npm test`, ""},
+		{"polyglot unit names the first language", []string{"app/a.php", "resources/js/app.ts"}, `grep -q x app/a.php`, "vendor/bin/phpunit"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			plan := Plan{Units: []PlanUnit{{Title: "u", Artifacts: tc.artifacts, CheckCmd: tc.cmd}}}
-			err := checkCodeFloor(plan, tc.env)
+			err := checkCodeFloor(plan)
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("checkCodeFloor: %v", err)
@@ -120,6 +141,15 @@ func TestProbeCheckCmds(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "`go test ./...`") || !strings.Contains(err.Error(), "func TestXxx") {
 			t.Fatalf("rejection must quote the gate and give the go anchor recipe, got %v", err)
+		}
+	})
+	t.Run("anchor recipe follows the artifact language", func(t *testing.T) {
+		cmd := "vendor/bin/phpunit"
+		r := &nativeRunner{log: slog.Default(), sandbox: scriptedSandbox(map[string]int{cmd: 0}, "OK")}
+		plan := Plan{Units: []PlanUnit{{Title: "u", Artifacts: []string{"tests/Feature/ATest.php"}, CheckCmd: cmd}}}
+		err := r.probeCheckCmds(context.Background(), m, plan)
+		if err == nil || !strings.Contains(err.Error(), "function test_xxx") {
+			t.Fatalf("probe = %v, want the php anchor recipe in a go-environment mission", err)
 		}
 	})
 	t.Run("missing command", func(t *testing.T) {

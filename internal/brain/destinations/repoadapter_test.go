@@ -880,6 +880,65 @@ func TestPRBody(t *testing.T) {
 	if off := PRBody(m, false); strings.Contains(off, "Timothy Agent") {
 		t.Errorf("PRBody(attribution=false) still carries the attribution line:\n%s", off)
 	}
+	if strings.Contains(got, "<details>") {
+		t.Errorf("PRBody without a report renders a report section:\n%s", got)
+	}
+}
+
+// TestPRBodyReport (D-134, issue #1039): the mission's report rides in
+// the PR body collapsed, before the attribution line, and is capped.
+func TestPRBodyReport(t *testing.T) {
+	m := missions.Mission{Goal: "Upgrade dependencies", FinalOutput: "## Advisories\n\n- CVE-2025-1 fixed\n"}
+	m.Plan.Units = []missions.PlanUnit{{Title: "upgrade", Passes: true}}
+	got := PRBody(m, true)
+	want := "<details>\n<summary>Report</summary>\n\n## Advisories\n\n- CVE-2025-1 fixed\n\n</details>\n\n_PR was created by"
+	if !strings.Contains(got, want) {
+		t.Fatalf("PRBody missing collapsed report %q in:\n%s", want, got)
+	}
+	if !strings.Contains(got, "- [x] upgrade\n") {
+		t.Fatalf("PRBody lost the unit list:\n%s", got)
+	}
+
+	m.FinalOutput = strings.Repeat("é", prReportCap+10)
+	long := PRBody(m, false)
+	if !strings.Contains(long, "_(report truncated)_") || strings.Count(long, "é") != prReportCap {
+		t.Fatalf("long report not capped at %d runes", prReportCap)
+	}
+}
+
+// TestPRBodyDependencyEvidence (D-140, issue #1011) is a golden body
+// for a mission whose diff changed lockfiles: before and after test and
+// advisory counts as the harness measured them.
+func TestPRBodyDependencyEvidence(t *testing.T) {
+	before, after := 4, 1
+	m := missions.Mission{Goal: "Upgrade the dependencies", EnvFacts: &missions.EnvFacts{Lockfile: &missions.LockfileEvidence{
+		Lockfiles:   []string{"composer.lock", "package-lock.json"},
+		TestCmd:     "php artisan test",
+		TestsBefore: &missions.TestSummary{Passed: 36, Parsed: true},
+		TestsAfter:  &missions.TestSummary{Passed: 37, Parsed: true},
+		VulnsBefore: &before, VulnsAfter: &after,
+		Advisories: []string{"GHSA-xxxx-yyyy-zzzz"},
+	}}}
+	m.Plan.Units = []missions.PlanUnit{{Title: "upgrade composer", Passes: true}}
+	want := "Upgrade the dependencies\n\n" +
+		"## Dependency evidence\n\n" +
+		"Lockfiles changed: composer.lock, package-lock.json. Measured by the harness, not reported by the model.\n\n" +
+		"| | Before | After |\n|---|---|---|\n" +
+		"| Tests (`php artisan test`) | 36 passed, 0 failed, 0 warnings | 37 passed, 0 failed, 0 warnings |\n" +
+		"| Known advisories (osv-scanner) | 4 | 1 |\n" +
+		"\nRemaining advisories: GHSA-xxxx-yyyy-zzzz\n\n" +
+		"## Units\n\n- [x] upgrade composer\n\n"
+	if got := PRBody(m, false); got != want {
+		t.Fatalf("PRBody =\n%s\nwant\n%s", got, want)
+	}
+	m.EnvFacts.Lockfile = &missions.LockfileEvidence{Lockfiles: []string{"yarn.lock"}, TestExit: 1}
+	if got := PRBody(m, false); !strings.Contains(got, "| Tests | not measured | not measured |\n| Known advisories (osv-scanner) | not measured | not measured |\n") {
+		t.Fatalf("PRBody without a baseline:\n%s", got)
+	}
+	m.EnvFacts = &missions.EnvFacts{}
+	if got := PRBody(m, false); strings.Contains(got, "Dependency evidence") {
+		t.Fatalf("PRBody without lockfile evidence renders the section:\n%s", got)
+	}
 }
 
 func TestRepoAdapterAttributionDefaultsOn(t *testing.T) {

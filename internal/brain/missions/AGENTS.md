@@ -201,7 +201,7 @@ AGENTS.md so other work does not pay for it every session.
   a harness `bootstrapAllowance` note, and `checkBootstrap` rejects a
   bootstrap unit on any other kind.
 - Repo toolchain versions (D-126, issue #991): `detectToolchainVersions`
-  (environment.go, marker-only, normalized to mise-acceptable prefixes;
+  (environment.go, marker-only, normalized to mise version selectors;
   `detectMissionToolchains` falls back to versions the goal names) fills `missions.toolchains` alongside the environment. Brain installs
   them with `mise use --global` through the sandbox exec path right
   after provisioning (`provisioner.installToolchains`, 10 minute
@@ -211,10 +211,31 @@ AGENTS.md so other work does not pay for it every session.
   output tail and the discover nudge and notes allow a bootstrap unit
   (D-124). Executor CLIs keep the image's node via rewritten shebangs
   in `deploy/sandbox-base.Dockerfile`.
+- Every ecosystem (D-139, issue #1014): detection reads node, python,
+  go, java, ruby and rust pins whatever the environment (a Laravel
+  repo's `.nvmrc` counts); php stays php-env only. The base image sets
+  `MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS` so mise reads the repo's
+  plain version files itself; Go reads them too for the facts and the
+  pre-discover install, and alone parses what mise does not read
+  (`engines.node`, `requires-python`, composer.json). `.sdkmanrc` is
+  mise-only. An open lower bound never installs its floor:
+  `normalizeToolVersion` emits `latest` for `>=`, the caret prefix for
+  `^`, one part less for `~=`, and mise resolves the newest match at
+  install time from the index the install downloads anyway; a range
+  with `<` keeps major.minor of its lower bound. The code floor keys on
+  the artifact's language (`codeExtensions` -> `toolchainByLanguage`),
+  not the environment: a unit passes with a call to the toolchain of
+  any language its source artifacts are in.
 - PHP minors (D-127, issue #992): the php image bakes 8.1 to 8.4
   (default 8.4, `phpMinors` mirrors the Dockerfile). For the php env
-  only, composer.json `config.platform.php` then `require.php` picks a
-  minor; a lower bound selects the lowest baked minor that satisfies it.
+  only, `composerPHP` (phpversion.go) picks a minor:
+  `config.platform.php` wins; otherwise the newest baked minor that
+  composer.json's `require.php` and every composer.lock package's
+  `require.php` (packages and packages-dev) allow (D-139), matched by
+  `phpSatisfies` (`|`/`||`, `^`, `~`, comparison ranges, wildcards).
+  When no baked minor satisfies the lock it falls back to composer.json
+  alone and `EnvFacts.PHPNote` names the blocking packages; a
+  constraint no baked minor satisfies keeps its own minor.
   `buildPHPSelectCmd` links `php`, `phar`, `phar.phar` from
   `/usr/bin/<name><minor>` into `/home/sandbox/.local/bin` as the
   sandbox uid. No root exec: the rootfs is read-only with all caps
@@ -243,7 +264,7 @@ AGENTS.md so other work does not pay for it every session.
   pending-alters rename runs) is a gate, never a proof. `acceptPlan`
   rejects, with one planner recovery turn: the `| grep -q '^$'` idiom
   (exits 1 on empty output), a coding unit with source artifacts and no
-  toolchain call (`checkCodeFloor`, per sandbox environment), and, via
+  toolchain call (`checkCodeFloor`, per artifact language), and, via
   a 60 s sandbox probe against the pre-work tree, a gate that already
   exits 0 or names a command the environment lacks. Verifying that the
   criteria are met is the reviewer's job, not the gate's.
@@ -258,6 +279,22 @@ AGENTS.md so other work does not pay for it every session.
   (`Mission.PlanGate`, derived from events by `Driver.planGateState`).
   With a repo destination a push/PR unit is rejected: the result phase
   delivers the branch and the PR.
+- Report placement (D-134, issue #1039): on a coding mission over a
+  repo source, `checkReportArtifacts` rejects a new `.md`/`.markdown`/
+  `.txt`/`.rst` artifact whose base name the goal does not contain and
+  whose top directory the goal does not name as a word; files already
+  in the worktree pass. `checkUntrackedAssumptions` rejects an
+  assumption saying a path stays untracked / not committed while a
+  unit lists that exact path in artifacts or scope or as a check_cmd
+  word, matched per clause. A claim clause naming no path that says
+  "lockfile" (or whose assumption does) covers every known lockfile
+  name a unit uses that git does not track yet (`trackedIn`); tracked
+  lockfiles stay allowed. A planned worker carries the report in
+  `final_output` (mission_status natively, the optional field of the
+  delegated result object otherwise); the driver stores the latest
+  non-empty one as `missions.final_output`, the web Result panel
+  prefers it over `last_evidence`, and `PRBody` renders it in
+  `<details>` (60k rune cap).
 - Environment facts (issue #1008): `renderEnvFacts` (envfacts.go)
   appends one deterministic block to the discover, plan, reviewer
   (native and delegated) and worker (native and delegated) prompts:
@@ -300,6 +337,21 @@ AGENTS.md so other work does not pay for it every session.
   `<workspace>/prepare/` when it is missing or lost its header. Not
   here: devcontainer and CI-workflow test sources, nested manifests,
   repo custom providers.
+- Lockfile evidence (D-140, issue #1011): when a coding mission's diff
+  against its base (`touchedFiles`, lockfiles included) changes a
+  lockfile (`lockfileNames`), `verifyAll` judges two harness criteria
+  for the units owning it (artifacts or scope, else the current unit):
+  the prepare baseline test command (`buildTestCmd`) exits 0 with no
+  fewer passed and no more failures or warnings, and the prepare audit
+  (`buildAuditCmd` into `<workspace>/prepare/osv-after.json`) finds no
+  more advisories than the baseline. Measured at most once per pass and
+  reused while HEAD, status and the uncommitted diff are unchanged;
+  `mission.lockfile_evidence` records it and `EnvFacts.Lockfile` stores
+  it. A failure is a `lockfile_evidence` check failure, so `passes`
+  stays false. A missing baseline is `not_measured`, never a failure.
+  Full review rounds get package-level lockfile summaries
+  (`lockfile_summary.go`: composer.lock and npm lockfiles parsed, others
+  a line count) and the criteria; the PR body gets a before/after table.
 - Per-criterion review rubric (issue #718): `review_verdict` carries
   `criteria` (unit index, criterion index, met/not_met/cannot_tell,
   evidence), optional so existing fixtures still parse and an unknown
