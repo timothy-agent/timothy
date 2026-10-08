@@ -53,7 +53,7 @@ const opencodeDefaultBaseURL = "https://api.openai.com/v1"
 // opencode has no --json-schema flag, so this sentence is the only
 // verdict channel (spec.ResultSchema is intentionally never passed to
 // opencode's argv or config).
-const opencodeVerdictInstruction = "End your final message with a single line containing only a JSON object of the form {\"status\":\"DONE\"|\"RETRY\"|\"BLOCKED\",\"note\":\"...\"} and nothing after it."
+const opencodeVerdictInstruction = "End your final message with a single line containing only a JSON object of the form {\"status\":\"DONE\"|\"RETRY\"|\"BLOCKED\",\"note\":\"...\",\"final_output\":\"...\"} and nothing after it (final_output is optional: the report the goal asks for when no unit lists a file for it)."
 
 // BuildInvocation validates spec and translates it to an opencode CLI
 // argv + env. The prompt never rides the argv directly - PromptFile
@@ -409,7 +409,8 @@ func (opencodeAdapter) ParseResult(ev Event) (Result, bool) {
 	}
 	var v struct {
 		Status string `json:"status"`
-		Note   string `json:"note"`
+		Note        string `json:"note"`
+		FinalOutput string `json:"final_output"`
 	}
 	if err := json.Unmarshal(ev.Result, &v); err != nil {
 		return Result{}, false
@@ -417,7 +418,7 @@ func (opencodeAdapter) ParseResult(ev Event) (Result, bool) {
 	status := strings.ToUpper(v.Status)
 	switch status {
 	case "DONE", "RETRY", "BLOCKED":
-		return Result{Status: status, Note: v.Note}, true
+		return Result{Status: status, Note: v.Note, FinalOutput: v.FinalOutput}, true
 	default:
 		return Result{}, false
 	}

@@ -880,6 +880,30 @@ func TestPRBody(t *testing.T) {
 	if off := PRBody(m, false); strings.Contains(off, "Timothy Agent") {
 		t.Errorf("PRBody(attribution=false) still carries the attribution line:\n%s", off)
 	}
+	if strings.Contains(got, "<details>") {
+		t.Errorf("PRBody without a report renders a report section:\n%s", got)
+	}
+}
+
+// TestPRBodyReport (D-134, issue #1039): the mission's report rides in
+// the PR body collapsed, before the attribution line, and is capped.
+func TestPRBodyReport(t *testing.T) {
+	m := missions.Mission{Goal: "Upgrade dependencies", FinalOutput: "## Advisories\n\n- CVE-2025-1 fixed\n"}
+	m.Plan.Units = []missions.PlanUnit{{Title: "upgrade", Passes: true}}
+	got := PRBody(m, true)
+	want := "<details>\n<summary>Report</summary>\n\n## Advisories\n\n- CVE-2025-1 fixed\n\n</details>\n\n_PR was created by"
+	if !strings.Contains(got, want) {
+		t.Fatalf("PRBody missing collapsed report %q in:\n%s", want, got)
+	}
+	if !strings.Contains(got, "- [x] upgrade\n") {
+		t.Fatalf("PRBody lost the unit list:\n%s", got)
+	}
+
+	m.FinalOutput = strings.Repeat("é", prReportCap+10)
+	long := PRBody(m, false)
+	if !strings.Contains(long, "_(report truncated)_") || strings.Count(long, "é") != prReportCap {
+		t.Fatalf("long report not capped at %d runes", prReportCap)
+	}
 }
 
 // TestPRBodyDependencyEvidence (D-140, issue #1011) is a golden body

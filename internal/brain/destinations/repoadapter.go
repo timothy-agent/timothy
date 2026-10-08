@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
@@ -166,9 +167,14 @@ func (a *RepoAdapter) pushWith(ctx context.Context, m missions.Mission, auth mis
 	return host, nil
 }
 
+// prReportCap keeps the report inside GitHub's 65536-character PR body
+// limit with room for the goal and units.
+const prReportCap = 60000
+
 // PRBody composes the pull request's markdown body: goal, unit list
-// with pass state, and, when attribution is on, a closing line
-// crediting Timothy Agent with a link to its repository.
+// with pass state, the mission's report collapsed when it has one, and,
+// when attribution is on, a closing line crediting Timothy Agent with a
+// link to its repository.
 func PRBody(m missions.Mission, attribution bool) string {
 	body := m.Goal + "\n\n" + prDependencyEvidence(m)
 	if len(m.Plan.Units) > 0 {
@@ -181,6 +187,13 @@ func PRBody(m missions.Mission, attribution bool) string {
 			body += fmt.Sprintf("- %s %s\n", mark, u.Title)
 		}
 		body += "\n"
+	}
+	// D-134: the mission's report rides in the PR, never in the repo.
+	if report := strings.TrimSpace(m.FinalOutput); report != "" {
+		if r := []rune(report); len(r) > prReportCap {
+			report = string(r[:prReportCap]) + "\n\n_(report truncated)_"
+		}
+		body += "<details>\n<summary>Report</summary>\n\n" + report + "\n\n</details>\n\n"
 	}
 	if attribution {
 		body += "_PR was created by [Timothy Agent](https://github.com/timothy-agent/timothy)._\n"
