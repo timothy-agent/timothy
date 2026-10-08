@@ -6,7 +6,13 @@ import { Analytics, sortGroupsByTotal } from './Analytics'
 import * as echartsCore from 'echarts/core'
 import { formatDuration } from '../lib/format'
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 vi.mock('../api/client', () => ({
+  getToken: vi.fn(() => ''),
   catalogPrices: vi.fn(),
   usageBudget: vi.fn(),
   usageCache: vi.fn(),

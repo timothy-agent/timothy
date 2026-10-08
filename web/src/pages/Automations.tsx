@@ -36,6 +36,7 @@ import { describeTrigger } from '../lib/cron'
 import { errText } from '../lib/errors'
 import { relativeTime } from '../lib/format'
 import { SetupGate } from '../onboarding/SetupGate'
+import { useMarkVisited } from '../onboarding/useVisited'
 
 function Sparkline({ rows }: { rows: AutomationsStats['sparkline'] }) {
   const option = useMemo(() => sparklineOption(rows, cssVar('--good'), cssVar('--destructive')), [rows])
@@ -44,6 +45,7 @@ function Sparkline({ rows }: { rows: AutomationsStats['sparkline'] }) {
 
 // Automations is the dashboard: run stats, templates and every automation.
 export function Automations() {
+  useMarkVisited('automations')
   const navigate = useNavigate()
   const [automations, setAutomations] = useState<Automation[] | null>(null)
   const [stats, setStats] = useState<AutomationsStats | null>(null)
