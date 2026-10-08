@@ -303,7 +303,7 @@ func (v *verifier) auditAfter(ctx context.Context, m Mission, wt string, e *Lock
 	}
 	outFile := filepath.Join(dir, "osv-after.json")
 	_ = os.Remove(outFile)
-	code, out, timedOut, err := v.exec(ctx, m, wt, buildAuditCmd(lockfiles, outFile), prepareAuditTimeout)
+	code, out, timedOut, err := v.exec(ctx, m, wt, buildAuditCmd(lockfiles, outFile, v.osvOffline), prepareAuditTimeout)
 	switch {
 	case err != nil:
 		return fmt.Errorf("lockfile evidence: audit: %w", err)

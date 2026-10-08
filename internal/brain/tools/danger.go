@@ -154,14 +154,19 @@ func ClassifyCommand(command string) (DangerLevel, []string) {
 	scored = harmlessRedirects.ReplaceAllString(scored, " ")
 	// D-137: a quoted > is text (awk/grep/jq), not a redirect.
 	unquoted := blankQuoted(scored)
+	// D-138: also match with quotes and backslashes removed, so 'rm',
+	// \rm and r''m are seen as rm.
+	dequoted := dequote(scored)
 	score := 0
 	var matched []string
 	for _, r := range dangerRules {
-		target := scored
+		var hit bool
 		if r.name == "redirect-overwrite" || r.name == "append-redirect" {
-			target = unquoted
+			hit = r.pattern.MatchString(unquoted)
+		} else {
+			hit = r.pattern.MatchString(scored) || r.pattern.MatchString(dequoted)
 		}
-		if r.pattern.MatchString(target) {
+		if hit {
 			score += r.score
 			matched = append(matched, r.name)
 		}
@@ -170,6 +175,44 @@ func ClassifyCommand(command string) (DangerLevel, []string) {
 		return DangerDestructive, matched
 	}
 	return DangerSafe, matched
+}
+
+// dequote joins quoted and escaped pieces the way the shell builds a
+// word. A quoted segment holding whitespace or a separator is an
+// argument string, not a command word, and is kept verbatim. An
+// unterminated quote returns s as is.
+func dequote(s string) string {
+	var out strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case '\\':
+			if i+1 < len(s) {
+				i++
+				out.WriteByte(s[i])
+			}
+		case '\'', '"':
+			end := i + 1
+			for end < len(s) && s[end] != c {
+				if c == '"' && s[end] == '\\' {
+					end++
+				}
+				end++
+			}
+			if end >= len(s) {
+				return s
+			}
+			if seg := s[i : end+1]; strings.ContainsAny(seg, " \t\n;|&(`") {
+				out.WriteString(seg)
+			} else {
+				out.WriteString(s[i+1 : end])
+			}
+			i = end
+		default:
+			out.WriteByte(c)
+		}
+	}
+	return out.String()
 }
 
 // blankQuoted replaces single- and double-quoted segments with spaces

@@ -21,6 +21,8 @@ type verifier struct {
 	store       driverStore
 	sandboxExec sandboxExec
 	log         *slog.Logger
+	// osvOffline: see Driver.SetOSVOffline.
+	osvOffline bool
 }
 
 // verifyAll runs the harness checks for every plan unit and returns one
