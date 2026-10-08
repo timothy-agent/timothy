@@ -173,7 +173,8 @@ test('fresh install reaches a finished sample mission', async ({ page }) => {
     await page.goto('/')
     await expect(page.getByText('Done: Send your first chat')).toBeVisible({ timeout: 30_000 })
     await page.getByRole('button', { name: 'Run a sample mission' }).click()
-    await expect(page).toHaveURL(/\/missions\/[0-9a-f-]+$/, { timeout: 30_000 })
+    // Create waits on mission name generation, up to 30s on a slow local model.
+    await expect(page).toHaveURL(/\/missions\/[0-9a-f-]+$/, { timeout: 90_000 })
     missionId = new URL(page.url()).pathname.split('/').pop() ?? ''
     console.log(`canary-onboarding: sample mission ${missionId}`)
   })
