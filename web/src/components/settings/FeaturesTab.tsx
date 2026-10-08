@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { getSettings, listKbCollections, listRoutes, patchSettings, patchSettingValues } from '../../api/client'
 import type { AdminRoute, KbCollection } from '../../api/types'
 import { CURRENCIES } from '../../lib/currencies'
+import { listTimezones } from '../../lib/timezones'
 import { getNotificationSoundEnabled, setNotificationSoundEnabled } from '../../lib/sound'
 import { Button } from '../ui/button'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../ui/command'
@@ -21,32 +22,6 @@ import { SettingFlagRow } from './SettingFlagRow'
 import { SettingValueCard } from './SettingValueCard'
 
 const area = settingsArea('features')
-
-// FALLBACK_TIMEZONES stands in for Intl.supportedValuesOf('timeZone')
-// when that API is unavailable (older test environments): a short,
-// common list, not an attempt to cover every IANA zone.
-const FALLBACK_TIMEZONES = [
-  'UTC',
-  'Europe/Amsterdam',
-  'Europe/London',
-  'Europe/Berlin',
-  'America/New_York',
-  'America/Los_Angeles',
-  'America/Chicago',
-  'Asia/Kolkata',
-  'Asia/Dhaka',
-  'Asia/Tokyo',
-  'Asia/Shanghai',
-  'Australia/Sydney',
-]
-
-function listTimezones(): string[] {
-  try {
-    return Intl.supportedValuesOf('timeZone')
-  } catch {
-    return FALLBACK_TIMEZONES
-  }
-}
 
 const featureCopy: Record<string, { label: string; description: string }> = {
   tools_enabled: {
