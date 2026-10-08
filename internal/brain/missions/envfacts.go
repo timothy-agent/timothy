@@ -30,6 +30,8 @@ type EnvFacts struct {
 	// Tools are sorted by name; an empty Version means not installed.
 	Tools []ToolFact `json:"tools,omitempty"`
 	Gaps  []string   `json:"gaps,omitempty"`
+	// PHPNote says composer.lock rejects every baked PHP minor (D-139).
+	PHPNote string `json:"php_note,omitempty"`
 	// Prepare is the prepare step's outcome (D-130), nil until it ran.
 	Prepare *PrepareFacts `json:"prepare,omitempty"`
 }
@@ -253,6 +255,9 @@ func (p *provisioner) collectEnvFacts(ctx context.Context, m Mission, workRoot, 
 	if wt := m.WorktreePath(); wt != "" {
 		facts.Manifests = walkManifests(wt)
 		facts.Gaps = detectEnvGaps(wt, facts.Manifests)
+		if m.Environment == "php" {
+			_, facts.PHPNote = composerPHP(wt)
+		}
 	}
 	if p.sandboxExec != nil {
 		var out bytes.Buffer
@@ -353,6 +358,9 @@ func renderEnvFacts(m Mission) string {
 	}
 	if len(m.Toolchains) > 0 {
 		fmt.Fprintf(&b, "- Toolchains the repo pins (the harness installs them through mise before discover): %s.\n", NeutralizeSlot(toolchainSummary(m.Toolchains)))
+	}
+	if facts.PHPNote != "" {
+		fmt.Fprintf(&b, "- PHP version: %s\n", NeutralizeSlot(facts.PHPNote))
 	}
 	if len(facts.Tools) > 0 {
 		var have, absent []string

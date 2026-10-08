@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -162,7 +161,7 @@ func countSourceFiles(root string) map[string]int {
 //	java    .java-version, .tool-versions, mise toml
 //	ruby    .ruby-version, .tool-versions, mise toml
 //	rust    rust-toolchain.toml channel, .tool-versions, mise toml
-//	php     composer.json config.platform.php then require.php, .tool-versions, mise toml
+//	php     composer.json config.platform.php, else require.php within composer.lock (composerPHP), .tool-versions, mise toml
 //
 // D-139 (issue #1014): every marker is read whatever the environment, so
 // a Laravel repo's .nvmrc counts. php alone stays php-env only, since
@@ -216,16 +215,8 @@ func detectToolchainVersions(worktree, env string) map[string]string {
 		set("rust", m[1])
 	}
 	if env == "php" {
-		var composer struct {
-			Require map[string]string `json:"require"`
-			Config  struct {
-				Platform map[string]string `json:"platform"`
-			} `json:"config"`
-		}
-		if json.Unmarshal([]byte(readMarker(worktree, "composer.json")), &composer) == nil {
-			set("php", composer.Config.Platform["php"])
-			set("php", composer.Require["php"])
-		}
+		v, _ := composerPHP(worktree)
+		set("php", v)
 	}
 	for tool, v := range parseToolVersions(readMarker(worktree, ".tool-versions")) {
 		set(tool, v)
@@ -361,75 +352,6 @@ func caretPrefix(parts []string) string {
 		}
 	}
 	return strings.Join(parts, ".")
-}
-
-// normalizePHPVersion reduces a composer php constraint to a minor. An
-// open lower bound ("^8.0.2", ">=7.4", "~8.1") selects the newest baked
-// minor that satisfies it (D-139), which is the image default; with an
-// upper bound ("<") it keeps the lowest one (D-127). An exact or
-// wildcard pin, or a bound no baked minor satisfies, keeps its own
-// minor, which the install then reports. Alternatives ("|" or "||")
-// are not guessed at.
-func normalizePHPVersion(c string) (string, bool) {
-	c = strings.TrimSpace(c)
-	if c == "" || strings.Contains(c, "|") {
-		return "", false
-	}
-	m := versionClauseRe.FindStringSubmatch(c)
-	if m == nil {
-		return "", false
-	}
-	parts := strings.Split(m[2], ".")
-	if len(parts) == 1 {
-		parts = append(parts, "0")
-	}
-	minor := parts[0] + "." + parts[1]
-	lowerBound := m[1] == "^" || m[1] == ">=" || (m[1] == "~" && len(strings.Split(m[2], ".")) <= 2)
-	if !lowerBound {
-		return minor, true
-	}
-	open := !strings.Contains(c, "<")
-	pick := ""
-	for _, b := range phpMinors {
-		bMajor, _, _ := strings.Cut(b, ".")
-		ok := bMajor == parts[0] && minorNumber(b) >= minorNumber(minor)
-		if m[1] == ">=" && open && majorNumber(bMajor) > majorNumber(parts[0]) {
-			ok = true
-		}
-		if !ok {
-			continue
-		}
-		pick = b
-		if !open {
-			break
-		}
-	}
-	if pick == "" {
-		return minor, true
-	}
-	return pick, true
-}
-
-// majorNumber parses a major version, -1 when unparsable.
-func majorNumber(s string) int {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return -1
-	}
-	return n
-}
-
-// minorNumber returns the minor of a "major.minor" string, -1 when unparsable.
-func minorNumber(v string) int {
-	_, after, ok := strings.Cut(v, ".")
-	if !ok {
-		return -1
-	}
-	n, err := strconv.Atoi(after)
-	if err != nil {
-		return -1
-	}
-	return n
 }
 
 // readMarker returns a marker file's contents, "" when it is absent,

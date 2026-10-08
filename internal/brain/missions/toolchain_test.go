@@ -80,7 +80,9 @@ func TestDetectToolchainVersions(t *testing.T) {
 		{"composer platform beats require", "php", map[string]string{"composer.json": `{"require":{"php":"^8.1"},"config":{"platform":{"php":"8.3.12"}}}`}, map[string]string{"php": "8.3"}},
 		{"composer laravel 9 lower bound takes newest baked minor", "php", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`}, map[string]string{"php": "8.4"}},
 		{"composer unbaked exact kept for the install to report", "php", map[string]string{"composer.json": `{"require":{"php":"7.4.33"}}`}, map[string]string{"php": "7.4"}},
-		{"composer alternatives skipped", "php", map[string]string{"composer.json": `{"require":{"php":"^7.4|^8.0"}}`}, map[string]string{}},
+		{"composer alternatives matched", "php", map[string]string{"composer.json": `{"require":{"php":"^7.4|^8.0"}}`}, map[string]string{"php": "8.4"}},
+		{"composer hyphen range skipped", "php", map[string]string{"composer.json": `{"require":{"php":"8.0 - 8.2"}}`}, map[string]string{}},
+		{"composer lock caps php", "php", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`, "composer.lock": `{"packages":[{"name":"a/a","require":{"php":">=8.0,<8.3"}}]}`}, map[string]string{"php": "8.2"}},
 		{"composer without php constraint", "php", map[string]string{"composer.json": `{"require":{"laravel/framework":"^12.0"}}`}, map[string]string{}},
 		{"bad composer.json", "php", map[string]string{"composer.json": `{`}, map[string]string{}},
 		{"php tool-versions in php env", "php", map[string]string{".tool-versions": "php 8.2.10\n"}, map[string]string{"php": "8.2"}},
@@ -186,11 +188,13 @@ func TestNormalizeToolVersion(t *testing.T) {
 
 // TestBe8a2860RepoDetectsPHPAndNode is the be8a2860 regression: the
 // Laravel + Vite repo detected as php used to drop its .nvmrc, so the
-// npm side ran on the image's node.
+// npm side ran on the image's node. Its composer.lock allows 8.4, so php
+// is the newest baked minor.
 func TestBe8a2860RepoDetectsPHPAndNode(t *testing.T) {
 	dir := writeMarkers(t, map[string]string{
-		"composer.json":     `{"require":{"php":"^8.2","laravel/framework":"^11.0"},"scripts":{"test":["@php artisan test"]}}`,
-		"composer.lock":     "{}",
+		"composer.json": `{"require":{"php":"^8.2","laravel/framework":"^11.0"},"scripts":{"test":["@php artisan test"]}}`,
+		"composer.lock": `{"packages":[{"name":"laravel/framework","require":{"php":"^8.2"}},{"name":"symfony/console","require":{"php":">=8.2"}}],` +
+			`"packages-dev":[{"name":"phpunit/phpunit","require":{"php":">=8.2"}}]}`,
 		"package.json":      `{"private":true,"type":"module","scripts":{"build":"vite build"},"devDependencies":{"vite":"^5.0"}}`,
 		"package-lock.json": "{}",
 		".nvmrc":            "22\n",
@@ -220,14 +224,17 @@ func TestNormalizePHPVersion(t *testing.T) {
 		{"^8", "8.4", true},
 		{">=7.4", "8.4", true},
 		{"^7.4", "7.4", true},
-		{">=8.1 <8.3", "8.1", true},
-		{">=8.0,<8.4", "8.1", true},
+		{">=8.1 <8.3", "8.2", true},
+		{">=8.0,<8.4", "8.3", true},
 		{"8.2.*", "8.2", true},
+		{"8.2.10", "8.2", true},
 		{"8.0.30", "8.0", true},
 		{"^8.5", "8.5", true},
-		{"^7.4|^8.0", "", false},
-		{"^7.4 || ^8.0", "", false},
-		{"<9", "", false},
+		{"^7.4|^8.0", "8.4", true},
+		{"^7.3 || ~8.1.0", "8.1", true},
+		{"<9", "8.4", true},
+		{"8.0 - 8.2", "", false},
+		{"lts", "", false},
 		{"", "", false},
 	}
 	for _, tc := range cases {
@@ -235,6 +242,104 @@ func TestNormalizePHPVersion(t *testing.T) {
 		if got != tc.want || ok != tc.ok {
 			t.Errorf("normalizePHPVersion(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+// TestPHPSatisfies covers the composer constraint forms as composer
+// writes them, matched against a baked minor at its newest patch.
+func TestPHPSatisfies(t *testing.T) {
+	cases := []struct {
+		constraint, minor string
+		sat, ok           bool
+	}{
+		{"^8.1", "8.4", true, true},
+		{"^8.1", "8.0", false, true},
+		{"^7.2.5|^8.0", "8.4", true, true},
+		{"^7.2.5 || ^8.0", "8.2", true, true},
+		{"^7.3", "8.1", false, true},
+		{"~8.1", "8.4", true, true},
+		{"~8.1.0", "8.2", false, true},
+		{"~8.1.0", "8.1", true, true},
+		{">=8.0,<8.4", "8.3", true, true},
+		{">=8.0,<8.4", "8.4", false, true},
+		{">=8.0 <8.4", "8.4", false, true},
+		{">= 8.0, < 8.3", "8.3", false, true},
+		{">=8.1.3", "8.1", true, true},
+		{"<=8.2", "8.2", false, true},
+		{">8.1", "8.1", true, true},
+		{"8.2.*", "8.2", true, true},
+		{"8.2.*", "8.3", false, true},
+		{"8.*", "8.4", true, true},
+		{"*", "8.1", true, true},
+		{"!=8.2.1", "8.2", true, true},
+		{">=8.1@dev", "8.4", true, true},
+		{"8.0 - 8.2", "8.1", false, false},
+		{"", "8.1", false, false},
+	}
+	for _, tc := range cases {
+		sat, ok := phpSatisfies(tc.constraint, tc.minor)
+		if sat != tc.sat || ok != tc.ok {
+			t.Errorf("phpSatisfies(%q, %s) = %v, %v; want %v, %v", tc.constraint, tc.minor, sat, ok, tc.sat, tc.ok)
+		}
+	}
+}
+
+// TestComposerPHP covers the composer.lock-aware choice: the newest
+// baked minor composer.json and every locked package allow, platform
+// winning outright, and the composer.json-only fallback with a note.
+func TestComposerPHP(t *testing.T) {
+	lock := func(pkgs, dev string) string {
+		return `{"packages":[` + pkgs + `],"packages-dev":[` + dev + `]}`
+	}
+	cases := []struct {
+		name     string
+		files    map[string]string
+		want     string
+		wantNote string
+	}{
+		{"no lock takes newest baked", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`}, "8.4", ""},
+		{"laravel 9 lock capped below 8.4", map[string]string{
+			"composer.json": `{"require":{"php":"^8.0.2","laravel/framework":"^9.19"}}`,
+			"composer.lock": lock(`{"name":"laravel/framework","require":{"php":"^8.0.2"}},{"name":"nesbot/carbon","require":{"php":">=7.1.8,<8.4"}}`,
+				`{"name":"phpunit/phpunit","require":{"php":">=8.0 <8.3"}}`),
+		}, "8.2", ""},
+		{"dev package caps too", map[string]string{
+			"composer.json": `{"require":{"php":"^8.1"}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"php":"^8.1"}}`, `{"name":"b/b","require":{"php":"~8.1.0"}}`),
+		}, "8.1", ""},
+		{"composer alternatives in lock", map[string]string{
+			"composer.json": `{"require":{"php":"^8.1"}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"php":"^7.4|~8.2.0"}}`, ``),
+		}, "8.2", ""},
+		{"platform wins over lock", map[string]string{
+			"composer.json": `{"require":{"php":"^8.1"},"config":{"platform":{"php":"8.3.12"}}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"php":"<8.2"}}`, ``),
+		}, "8.3", ""},
+		{"no baked minor satisfies the lock", map[string]string{
+			"composer.json": `{"require":{"php":"^8.1"}}`,
+			"composer.lock": lock(`{"name":"old/pkg","require":{"php":"^7.4"}},{"name":"ok/pkg","require":{"php":">=8.0"}}`, ``),
+		}, "8.4", "composer install from the lock may fail until these are updated: old/pkg (^7.4)."},
+		{"lock packages without php requirement", map[string]string{
+			"composer.json": `{"require":{"php":"^8.2"}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"ext-json":"*"}}`, ``),
+		}, "8.4", ""},
+		{"unparsable lock constraint ignored", map[string]string{
+			"composer.json": `{"require":{"php":"^8.2"}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"php":"8.0 - 8.3"}}`, ``),
+		}, "8.4", ""},
+		{"bad lock json ignored", map[string]string{"composer.json": `{"require":{"php":"^8.2"}}`, "composer.lock": `{`}, "8.4", ""},
+		{"no php constraint", map[string]string{"composer.json": `{"require":{"laravel/framework":"^11.0"}}`, "composer.lock": lock(`{"name":"a/a","require":{"php":"<8.2"}}`, ``)}, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, note := composerPHP(writeMarkers(t, tc.files))
+			if got != tc.want {
+				t.Fatalf("composerPHP = %q, want %q", got, tc.want)
+			}
+			if tc.wantNote == "" && note != "" || tc.wantNote != "" && !strings.HasSuffix(note, tc.wantNote) {
+				t.Fatalf("note = %q, want suffix %q", note, tc.wantNote)
+			}
+		})
 	}
 }
 

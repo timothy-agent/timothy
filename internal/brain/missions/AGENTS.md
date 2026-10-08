@@ -228,9 +228,14 @@ AGENTS.md so other work does not pay for it every session.
   any language its source artifacts are in.
 - PHP minors (D-127, issue #992): the php image bakes 8.1 to 8.4
   (default 8.4, `phpMinors` mirrors the Dockerfile). For the php env
-  only, composer.json `config.platform.php` then `require.php` picks a
-  minor; an open lower bound selects the newest baked minor that
-  satisfies it (D-139), one with an upper bound the lowest.
+  only, `composerPHP` (phpversion.go) picks a minor:
+  `config.platform.php` wins; otherwise the newest baked minor that
+  composer.json's `require.php` and every composer.lock package's
+  `require.php` (packages and packages-dev) allow (D-139), matched by
+  `phpSatisfies` (`|`/`||`, `^`, `~`, comparison ranges, wildcards).
+  When no baked minor satisfies the lock it falls back to composer.json
+  alone and `EnvFacts.PHPNote` names the blocking packages; a
+  constraint no baked minor satisfies keeps its own minor.
   `buildPHPSelectCmd` links `php`, `phar`, `phar.phar` from
   `/usr/bin/<name><minor>` into `/home/sandbox/.local/bin` as the
   sandbox uid. No root exec: the rootfs is read-only with all caps
