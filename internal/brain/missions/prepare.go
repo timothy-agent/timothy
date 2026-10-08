@@ -233,7 +233,8 @@ func (r *prepareRun) startServices(ctx context.Context, services []serviceNeed) 
 }
 
 // recordServiceEnv reads the started services' connection variables
-// from `mise env --json` onto their facts.
+// from `mise env --json` and their observed listen addresses onto their
+// facts.
 func (r *prepareRun) recordServiceEnv(ctx context.Context) {
 	var up bool
 	for _, s := range r.facts.Services {
@@ -249,6 +250,17 @@ func (r *prepareRun) recordServiceEnv(ctx context.Context) {
 	for i, s := range r.facts.Services {
 		if p, found := presetByName(s.Name); found && s.OK {
 			r.facts.Services[i].Env = parseDaemonEnv(out, p)
+		}
+	}
+	if _, out, ok = r.step(ctx, "daemons:listen", buildListenProbeCmd(), prepareEnvTimeout); !ok {
+		return
+	}
+	for i, s := range r.facts.Services {
+		if port := servicePort(s); s.OK && port > 0 {
+			r.facts.Services[i].Listen = parseListenAddrs(out, port)
+			if exposed := nonLoopback(r.facts.Services[i].Listen); len(exposed) > 0 {
+				r.p.log.Warn("driver: test service listens beyond loopback", "mission_id", r.m.ID, "service", s.Name, "addrs", exposed)
+			}
 		}
 	}
 }

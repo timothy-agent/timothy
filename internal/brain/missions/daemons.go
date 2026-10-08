@@ -6,13 +6,19 @@ package missions
 // the repo config does) and prepare starts it before the baseline test.
 // The daemons run as processes in the mission container under the
 // existing limits (measured idle: about 110 MiB and 30 tasks for both).
+// Both presets listen on 127.0.0.1 only and have no auth; prepare
+// records the observed listen addresses and the facts warn when a
+// repo-declared daemon binds anything else.
 // data_dir sits on the /tmp tmpfs, so a removed or restarted container
 // takes the data with it; mise's default data dir is under
 // MISE_STATE_DIR on the shared cache volume, which outlives missions.
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -36,7 +42,8 @@ type daemonPreset struct {
 	name string
 	// defaultMajor is used unless a source pins a newer major.
 	defaultMajor int
-	// envKeys are the connection variables the preset exports.
+	// envKeys are the connection variables the preset exports, plus the
+	// <NAME>_PORT a repo-declared custom daemon with a port exports.
 	envKeys []string
 	// noService is the facts line when the preset cannot start.
 	noService string
@@ -44,8 +51,8 @@ type daemonPreset struct {
 
 // daemonPresets in render order.
 var daemonPresets = []daemonPreset{
-	{"postgres", 17, []string{"DATABASE_URL", "PGHOST", "PGPORT", "PGUSER", "PGDATABASE"}, "no database service; use sqlite where the project supports it"},
-	{"redis", 8, []string{"REDIS_URL"}, "no redis service; use the project's non-redis cache, queue and session drivers where it supports them"},
+	{"postgres", 17, []string{"DATABASE_URL", "PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "POSTGRES_PORT"}, "no database service; use sqlite where the project supports it"},
+	{"redis", 8, []string{"REDIS_URL", "REDIS_PORT"}, "no redis service; use the project's non-redis cache, queue and session drivers where it supports them"},
 }
 
 // presetByName returns the preset named name.
@@ -73,6 +80,10 @@ type ServiceFact struct {
 	Source  string            `json:"source"`
 	OK      bool              `json:"ok"`
 	Env     map[string]string `json:"env,omitempty"`
+	// Listen is the observed listen addresses on the service port.
+	// The presets bind 127.0.0.1 with no auth; a repo-declared daemon
+	// may not, so a non-loopback address is warned about in the facts.
+	Listen []string `json:"listen,omitempty"`
 }
 
 // imageRef matches a postgres, postgis or redis image reference ending a
@@ -278,6 +289,84 @@ func buildDaemonEnvCmd() string {
 	return "mise env --json"
 }
 
+// buildListenProbeCmd prints the kernel's TCP socket tables; tcp6 is
+// absent when IPv6 is disabled.
+func buildListenProbeCmd() string {
+	return "cat /proc/net/tcp && { cat /proc/net/tcp6 2>/dev/null || true; }"
+}
+
+// servicePort is the TCP port a started service's variables name, 0
+// when unknown.
+func servicePort(s ServiceFact) int {
+	raw := s.Env["PGPORT"]
+	if u := s.Env["REDIS_URL"]; raw == "" && u != "" {
+		if parsed, err := url.Parse(u); err == nil {
+			raw = parsed.Port()
+		}
+	}
+	if raw == "" {
+		raw = s.Env[strings.ToUpper(s.Name)+"_PORT"]
+	}
+	n, _ := strconv.Atoi(raw)
+	return n
+}
+
+// tcpListen is the /proc/net/tcp* state of a listening socket.
+const tcpListen = "0A"
+
+// parseListenAddrs returns the addresses with a listening socket on port
+// in /proc/net/tcp and tcp6 output, sorted and deduplicated.
+func parseListenAddrs(out string, port int) []string {
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 || f[3] != tcpListen {
+			continue
+		}
+		hexAddr, hexPort, ok := strings.Cut(f[1], ":")
+		if !ok {
+			continue
+		}
+		if p, err := strconv.ParseUint(hexPort, 16, 16); err != nil || int(p) != port {
+			continue
+		}
+		if ip := procNetIP(hexAddr); ip != nil {
+			seen[ip.String()] = true
+		}
+	}
+	addrs := make([]string, 0, len(seen))
+	for a := range seen {
+		addrs = append(addrs, a)
+	}
+	sort.Strings(addrs)
+	return addrs
+}
+
+// procNetIP decodes a /proc/net address: 32-bit words in host (little
+// endian) byte order, one word for IPv4, four for IPv6.
+func procNetIP(h string) net.IP {
+	b, err := hex.DecodeString(h)
+	if err != nil || (len(b) != net.IPv4len && len(b) != net.IPv6len) {
+		return nil
+	}
+	ip := make(net.IP, len(b))
+	for i := 0; i < len(b); i += 4 {
+		ip[i], ip[i+1], ip[i+2], ip[i+3] = b[i+3], b[i+2], b[i+1], b[i]
+	}
+	return ip
+}
+
+// nonLoopback returns the addresses that are not loopback.
+func nonLoopback(addrs []string) []string {
+	var out []string
+	for _, a := range addrs {
+		if ip := net.ParseIP(a); ip == nil || !ip.IsLoopback() {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // parseDaemonEnv picks the preset's connection variables out of
 // `mise env --json` output, ignoring any text around the JSON object.
 func parseDaemonEnv(out string, p daemonPreset) map[string]string {
@@ -324,6 +413,10 @@ func renderServiceFacts(services []ServiceFact) string {
 		}
 		fmt.Fprintf(&b, "- Test service %s %s (needed by %s) runs in the sandbox as a mise daemon, no password: %s. `mise exec` and `mise run` export these; point the project's own test settings at them. `mise daemons start %s` restarts it after a sandbox restart; its data is temporary.\n",
 			s.Name, NeutralizeSlot(s.Version), NeutralizeSlot(s.Source), strings.Join(vars, ", "), s.Name)
+		if exposed := nonLoopback(s.Listen); len(exposed) > 0 {
+			fmt.Fprintf(&b, "- Warning: test service %s listens on %s, not only loopback, with no password; other hosts on the sandbox network can reach it. Bind it to 127.0.0.1 before running anything that stores real data.\n",
+				s.Name, NeutralizeSlot(strings.Join(exposed, ", ")))
+		}
 	}
 	return b.String()
 }

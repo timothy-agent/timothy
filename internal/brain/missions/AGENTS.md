@@ -350,7 +350,11 @@ AGENTS.md so other work does not pay for it every session.
   under `daemons` so `mise run test` restarts them after a sandbox
   restart. A daemon that does not start is stopped, dropped from
   `mise.local.toml` and recorded; the facts say "no database service;
-  use sqlite where the project supports it". No limit change: both
+  use sqlite where the project supports it". Both presets have no auth
+  and bind 127.0.0.1 only (a peer container on the bridge cannot
+  connect); prepare reads `/proc/net/tcp*` for each service port into
+  `ServiceFact.Listen`, and the facts warn when a repo-declared daemon
+  listens beyond loopback. No limit change: both
   presets idle at about 110 MiB and 30 tasks. MySQL waits for a preset.
 - Per-criterion review rubric (issue #718): `review_verdict` carries
   `criteria` (unit index, criterion index, met/not_met/cannot_tell,

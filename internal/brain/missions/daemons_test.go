@@ -120,6 +120,63 @@ func TestParseDaemonEnv(t *testing.T) {
 	}
 }
 
+// TestParseListenAddrs decodes listening sockets on one port from
+// /proc/net/tcp and tcp6, skipping other ports and non-listen states.
+func TestParseListenAddrs(t *testing.T) {
+	out := `  sl  local_address rem_address   st tx_queue rx_queue
+   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00:00000000 00000000 65534
+   1: 00000000:18EB 00000000:0000 0A 00000000:00000000 00:00000000 00000000 65534
+   2: 0100007F:BD9A 0100007F:1538 06 00000000:00000000 03:0000176B 00000000 0
+   3: 030011AC:1538 00000000:0000 01 00000000:00000000 00:00000000 00000000 0
+  sl  local_address                         remote_address                        st
+   0: 00000000000000000000000001000000:1538 00000000000000000000000000000000:0000 0A 0
+   1: 00000000000000000000000000000000:18EB 00000000000000000000000000000000:0000 0A 0
+`
+	if got := parseListenAddrs(out, 5432); !reflect.DeepEqual(got, []string{"127.0.0.1", "::1"}) {
+		t.Errorf("5432 = %v", got)
+	}
+	if got := parseListenAddrs(out, 6379); !reflect.DeepEqual(got, []string{"0.0.0.0", "::"}) {
+		t.Errorf("6379 = %v", got)
+	}
+	if got := nonLoopback([]string{"127.0.0.1", "::1", "0.0.0.0", "172.17.0.3"}); !reflect.DeepEqual(got, []string{"0.0.0.0", "172.17.0.3"}) {
+		t.Errorf("nonLoopback = %v", got)
+	}
+	if got := servicePort(ServiceFact{Env: map[string]string{"REDIS_URL": "redis://127.0.0.1:6380"}}); got != 6380 {
+		t.Errorf("redis port = %d", got)
+	}
+	if got := servicePort(ServiceFact{Env: map[string]string{"PGPORT": "5433"}}); got != 5433 {
+		t.Errorf("postgres port = %d", got)
+	}
+	if got := servicePort(ServiceFact{Name: "redis", Env: map[string]string{"REDIS_PORT": "6390"}}); got != 6390 {
+		t.Errorf("custom daemon port = %d", got)
+	}
+}
+
+// TestRenderServiceFactsExposed: a service listening beyond loopback
+// gets a warning line; a loopback-only one does not.
+func TestRenderServiceFactsExposed(t *testing.T) {
+	loop := ServiceFact{Name: "postgres", Version: "17", Source: "ci", OK: true, Env: map[string]string{"PGPORT": "5432"}, Listen: []string{"127.0.0.1"}}
+	if got := renderServiceFacts([]ServiceFact{loop}); strings.Contains(got, "Warning") {
+		t.Errorf("loopback service warned:\n%s", got)
+	}
+	open := ServiceFact{Name: "redis", Version: "8", Source: "mise.toml", OK: true, Env: map[string]string{"REDIS_URL": "redis://127.0.0.1:6379"}, Listen: []string{"0.0.0.0", "127.0.0.1"}}
+	if got := renderServiceFacts([]ServiceFact{open}); !strings.Contains(got, "Warning: test service redis listens on 0.0.0.0, not only loopback") {
+		t.Errorf("exposed service not warned:\n%s", got)
+	}
+}
+
+// TestBuildListenProbeCmdRoundTrip: the probe prints the TCP table
+// header through a real shell.
+func TestBuildListenProbeCmdRoundTrip(t *testing.T) {
+	if _, err := os.Stat("/proc/net/tcp"); err != nil {
+		t.Skip("no /proc/net/tcp")
+	}
+	out, err := exec.Command("/bin/sh", "-c", buildListenProbeCmd()).CombinedOutput() //nolint:gosec // test runs the harness-composed command
+	if err != nil || !strings.Contains(string(out), "local_address") {
+		t.Fatalf("probe: %v: %s", err, out)
+	}
+}
+
 // laravelPostgresFixture is laravelFixture with a pgsql template and a
 // redis queue.
 func laravelPostgresFixture(t *testing.T) (Mission, string) {
@@ -150,7 +207,7 @@ func TestPrepareWorkspaceServices(t *testing.T) {
 	for _, s := range f.Steps {
 		steps = append(steps, s.Name)
 	}
-	if want := []string{"tools", "deps:composer", "deps:npm", "env-template", "daemon:postgres", "daemon:redis", "daemons:env", "test", "audit"}; !reflect.DeepEqual(steps, want) {
+	if want := []string{"tools", "deps:composer", "deps:npm", "env-template", "daemon:postgres", "daemon:redis", "daemons:env", "daemons:listen", "test", "audit"}; !reflect.DeepEqual(steps, want) {
 		t.Errorf("steps = %v, want %v", steps, want)
 	}
 	if len(f.Services) != 2 || !f.Services[0].OK || !f.Services[1].OK || f.Services[0].Env["PGHOST"] != "127.0.0.1" || f.Services[1].Env["REDIS_URL"] != "redis://127.0.0.1:6379" || f.Services[0].Env["PATH"] != "" {
