@@ -649,3 +649,41 @@ func TestCriteriaFindingsNotMetWithoutEvidenceIsCannotTell(t *testing.T) {
 		t.Fatalf("findings = %+v, want one minor cannot_tell finding", got)
 	}
 }
+
+// TestParseReviewVerdictEvidenceShape pins issue #960: a criterion's
+// evidence of any JSON shape decodes (non-strings as compact JSON text),
+// and a wrong-typed required field errors with the field's name.
+func TestParseReviewVerdictEvidenceShape(t *testing.T) {
+	tests := []struct {
+		name         string
+		args         string
+		wantEvidence string
+		wantErr      string
+	}{
+		{"string", `{"decision":"approve","criteria":[{"unit":0,"criterion":0,"status":"met","evidence":"a.go:1"}]}`, "a.go:1", ""},
+		{"object", `{"decision":"approve","criteria":[{"unit":0,"criterion":0,"status":"met","evidence":{"file": "a.go", "line": 1}}]}`, `{"file":"a.go","line":1}`, ""},
+		{"array", `{"decision":"approve","criteria":[{"unit":0,"criterion":0,"status":"met","evidence":["a.go:1", "b.go:2"]}]}`, `["a.go:1","b.go:2"]`, ""},
+		{"number", `{"decision":"approve","criteria":[{"unit":0,"criterion":0,"status":"met","evidence":42}]}`, "42", ""},
+		{"null", `{"decision":"approve","criteria":[{"unit":0,"criterion":0,"status":"met","evidence":null}]}`, "", ""},
+		{"missing", `{"decision":"approve","criteria":[{"unit":0,"criterion":0,"status":"met"}]}`, "", ""},
+		{"decision wrong type", `{"decision":{"value":"approve"}}`, "", "decision"},
+		{"status wrong type", `{"decision":"approve","criteria":[{"unit":0,"criterion":0,"status":true}]}`, "", "status"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			v, err := parseReviewVerdict([]byte(tc.args))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want one naming %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseReviewVerdict: %v", err)
+			}
+			if got := string(v.Criteria[0].Evidence); got != tc.wantEvidence {
+				t.Fatalf("evidence = %q, want %q", got, tc.wantEvidence)
+			}
+		})
+	}
+}
