@@ -4,6 +4,57 @@ import (
 	"testing"
 )
 
+// D-138: a quoted or escaped command word is still the command.
+func TestClassifyCommandQuotedWord(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		command  string
+		want     DangerLevel
+		wantRule string
+	}{
+		{`'rm' -rf x`, DangerDestructive, "rm"},
+		{`"rm" -rf x`, DangerDestructive, "rm"},
+		{`\rm -rf x`, DangerDestructive, "rm"},
+		{`r''m -rf x`, DangerDestructive, "rm"},
+		{`ls; 'rm' x`, DangerDestructive, "rm"},
+		{`'rmdir' d`, DangerDestructive, "rmdir"},
+		{`'sudo' x`, DangerDestructive, "sudo"},
+		{`'docker' rm -f web`, DangerDestructive, "docker"},
+		{`"git" push`, DangerDestructive, "git-push"},
+		{`git 'push' origin`, DangerDestructive, "git-push"},
+		{`'git' clean -fd`, DangerDestructive, "git-clean"},
+		{`"git" reset --hard`, DangerDestructive, "git-reset-hard"},
+		{`'dd' if=/dev/zero of=x`, DangerDestructive, "dd"},
+		{`'mv' a b && 'kill' 1`, DangerDestructive, "mv"},
+		{`\kill 1 && \mv a b`, DangerDestructive, "kill"},
+		// Quoted arguments keep today's result.
+		{`grep 'rm -rf' notes.txt`, DangerSafe, ""},
+		{`echo "git push"`, DangerSafe, ""},
+		{`grep 'a b' f`, DangerSafe, ""},
+		// Whitespace before rm inside the quotes already matched before D-138.
+		{`echo "sudo rm x"`, DangerDestructive, "rm"},
+		{`echo 'unterminated rm`, DangerDestructive, "rm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			t.Parallel()
+			got, rules := ClassifyCommand(tt.command)
+			if got != tt.want {
+				t.Fatalf("ClassifyCommand(%q) = %v (%v), want %v", tt.command, got, rules, tt.want)
+			}
+			if tt.wantRule == "" {
+				return
+			}
+			for _, r := range rules {
+				if r == tt.wantRule {
+					return
+				}
+			}
+			t.Fatalf("ClassifyCommand(%q) rules %v missing %s", tt.command, rules, tt.wantRule)
+		})
+	}
+}
+
 func TestClassifyCommand(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
