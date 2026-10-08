@@ -295,8 +295,11 @@ AGENTS.md so other work does not pay for it every session.
   stored (Collision colors whatever NO_COLOR says). Every outcome lands on
   `EnvFacts.Prepare` and renders in the facts block; a failure is a
   fact, never a mission failure. `mise.local.toml` and `.env` are never
-  staged (`harnessWrittenPaths`). Not here: devcontainer and
-  CI-workflow test sources, nested manifests, repo custom providers.
+  staged (`harnessWrittenPaths`). `Rollback` keeps them (D-133), and
+  `verifyAll` rewrites `mise.local.toml` from the copy in
+  `<workspace>/prepare/` when it is missing or lost its header. Not
+  here: devcontainer and CI-workflow test sources, nested manifests,
+  repo custom providers.
 - Per-criterion review rubric (issue #718): `review_verdict` carries
   `criteria` (unit index, criterion index, met/not_met/cannot_tell,
   evidence), optional so existing fixtures still parse and an unknown
@@ -343,4 +346,13 @@ AGENTS.md so other work does not pay for it every session.
   files stage only under the unit's artifacts, scope, or an artifact's
   parent dir (never the workspace root). Left-out untracked files are
   reported in `mission.commit_skipped_paths`.
+- Output tail and pause causes (D-136, issue #1013): shell output (native
+  and sandbox runner) keeps its first 24 KB and last 40 KB with a
+  `[N bytes dropped]` marker (`builtin.HeadTailWriter`), never head only.
+  Every `mission.paused` payload (and `mission.plan_awaiting_approval`)
+  carries a `cause` (`Cause*` in statemachine.go), finer than
+  `PauseReason`; `harness_retries_exhausted` also carries `phase`. The web
+  banner (`web/src/lib/pauseCause.ts`) labels it, e.g. "plan rejected 3
+  times" plus the last rejection. A new pause path adds a cause and a
+  label.
 - `make canary` is the regression gate for any harness change.

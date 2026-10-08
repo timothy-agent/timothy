@@ -55,6 +55,57 @@ func TestClassifyCommandQuotedWord(t *testing.T) {
 	}
 }
 
+// D-137: quoted > is text; only unquoted redirects match the redirect rules.
+func TestClassifyCommandQuotedRedirect(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		command  string
+		wantRule string // "" = no redirect rule may match
+		want     DangerLevel
+	}{
+		{"awk single gt", `awk '$1>5' f`, "", DangerSafe},
+		{"awk single gte", `awk 'NR>=6{print}' f`, "", DangerSafe},
+		{"awk single append text", `awk '{print ">>"}' f`, "", DangerSafe},
+		{"grep double gt", `grep "a>b" f`, "", DangerSafe},
+		{"grep double gte", `grep -E "x>=y" f`, "", DangerSafe},
+		{"jq single gt", `jq '.[] | select(.n > 3)' f`, "", DangerSafe},
+		{"escaped quote in double", `grep "a\"b>c" f`, "", DangerSafe},
+		{"backslash in single is literal", `grep 'a\' f > out`, "redirect-overwrite", DangerDestructive},
+		{"real overwrite", `echo x > f`, "redirect-overwrite", DangerDestructive},
+		{"real append", `cmd >> log`, "append-redirect", DangerSafe},
+		{"redirect after quoted gt", `awk 'NR>1' f > out`, "redirect-overwrite", DangerDestructive},
+		{"other rules keep raw string", `grep 'a>b' f; rm -rf x`, "", DangerDestructive},
+		{"other rules see quoted text", `echo 'x' && sudo rm 'a>b'`, "", DangerDestructive},
+		{"unterminated single", `awk 'NR>=6 f`, "redirect-overwrite", DangerDestructive},
+		{"unterminated double", `grep "a>b f`, "redirect-overwrite", DangerDestructive},
+		{
+			"c207ed3d check_cmd",
+			`test -s docs/FAQ.md && awk '/^## /{h++} END{exit !(h==2 && NR>=6 && NR<=40)}' docs/FAQ.md && grep -qi faq docs/FAQ.md`,
+			"", DangerSafe,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, rules := ClassifyCommand(tt.command)
+			if got != tt.want {
+				t.Fatalf("ClassifyCommand(%q) = %v (%v), want %v", tt.command, got, rules, tt.want)
+			}
+			has := map[string]bool{}
+			for _, r := range rules {
+				has[r] = true
+			}
+			if tt.wantRule == "" && (has["redirect-overwrite"] || has["append-redirect"]) {
+				t.Fatalf("ClassifyCommand(%q) matched a redirect rule: %v", tt.command, rules)
+			}
+			if tt.wantRule != "" && !has[tt.wantRule] {
+				t.Fatalf("ClassifyCommand(%q) rules %v missing %s", tt.command, rules, tt.wantRule)
+			}
+		})
+	}
+}
+
 func TestClassifyCommand(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

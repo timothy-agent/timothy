@@ -812,9 +812,8 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 		WorkspaceRoot: root,
 		MaxTimeout:    sandboxShellMaxTimeout,
 		Runner: func(ctx context.Context, command string, timeout time.Duration) (string, error) {
-			var out strings.Builder
-			capped := &cappedStringWriter{w: &out, max: shellOutputCap}
-			exitCode, err := r.sandbox(ctx, missionID, environment, workdir, command, timeout, capped)
+			out := builtin.NewHeadTailWriter(builtin.ShellHeadBytes, builtin.ShellTailBytes)
+			exitCode, err := r.sandbox(ctx, missionID, environment, workdir, command, timeout, out)
 			if err != nil {
 				// The sandbox backend's contract mirrors runShell's: a
 				// timeout comes back as an error, everything else
@@ -823,9 +822,6 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 				return out.String(), err
 			}
 			result := out.String()
-			if capped.truncated {
-				result += "\n[output capped]"
-			}
 			if exitCode != 0 {
 				result = fmt.Sprintf("%s\n(exit status %d)", result, exitCode)
 			}
@@ -833,35 +829,6 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 		},
 	}
 	return builtin.Shell(shellCfg)
-}
-
-// shellOutputCap mirrors builtin.Shell's own output cap: the sandbox
-// backend's Runner must behave identically to the in-process path, not
-// let a runaway sandboxed command balloon memory.
-const shellOutputCap = 64 << 10
-
-// cappedStringWriter stops retaining bytes past max (writes still
-// succeed so the underlying exec can finish): the sandbox-Runner
-// analog of builtin.capWriter, kept separate because that type is
-// unexported in the builtin package.
-type cappedStringWriter struct {
-	w         *strings.Builder
-	max       int
-	truncated bool
-}
-
-func (c *cappedStringWriter) Write(p []byte) (int, error) {
-	if room := c.max - c.w.Len(); room > 0 {
-		if len(p) > room {
-			c.w.Write(p[:room])
-			c.truncated = true
-		} else {
-			c.w.Write(p)
-		}
-	} else if len(p) > 0 {
-		c.truncated = true
-	}
-	return len(p), nil
 }
 
 // belowFloor reports whether model matches the deny list.
@@ -1804,7 +1771,24 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 	}
 	verdict, err := parseReviewVerdict(args)
 	if err != nil {
-		return ReviewVerdict{}, fmt.Errorf("mission runner: parse review_verdict: %w", err)
+		// A malformed field gets one corrective turn naming it, never an
+		// immediate failed round.
+		fixReq := req
+		fixReq.Messages = append(append([]provider.Message{}, req.Messages...),
+			provider.Message{Role: "assistant", Content: text},
+			provider.Message{Role: "user", Content: fmt.Sprintf("[system] Your review_verdict call was rejected: %v. Call review_verdict again with the field fixed.", err)},
+		)
+		fixRes, fixErr := r.runTurn(ctx, fixReq, reviewVerdictToolName, PhaseProve)
+		if fixErr != nil {
+			return ReviewVerdict{}, fixErr
+		}
+		if len(fixRes.sentinelArgs) == 0 {
+			return ReviewVerdict{}, fmt.Errorf("mission runner: parse review_verdict: %w", err)
+		}
+		servedProvider, servedModel = fixRes.provider, fixRes.model
+		if verdict, err = parseReviewVerdict(fixRes.sentinelArgs); err != nil {
+			return ReviewVerdict{}, fmt.Errorf("mission runner: parse review_verdict: %w", err)
+		}
 	}
 	verdict.Provider, verdict.Model = servedProvider, servedModel
 	return verdict, nil

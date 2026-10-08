@@ -152,14 +152,21 @@ func ClassifyCommand(command string) (DangerLevel, []string) {
 
 	scored := ifsExpansion.ReplaceAllString(command, " ")
 	scored = harmlessRedirects.ReplaceAllString(scored, " ")
+	// D-137: a quoted > is text (awk/grep/jq), not a redirect.
+	unquoted := blankQuoted(scored)
 	// D-138: also match with quotes and backslashes removed, so 'rm',
-	// \rm and r''m are seen as rm. Redirect rules stay on the raw string.
+	// \rm and r''m are seen as rm.
 	dequoted := dequote(scored)
 	score := 0
 	var matched []string
 	for _, r := range dangerRules {
-		redirect := r.name == "redirect-overwrite" || r.name == "append-redirect"
-		if r.pattern.MatchString(scored) || (!redirect && r.pattern.MatchString(dequoted)) {
+		var hit bool
+		if r.name == "redirect-overwrite" || r.name == "append-redirect" {
+			hit = r.pattern.MatchString(unquoted)
+		} else {
+			hit = r.pattern.MatchString(scored) || r.pattern.MatchString(dequoted)
+		}
+		if hit {
 			score += r.score
 			matched = append(matched, r.name)
 		}
@@ -206,4 +213,31 @@ func dequote(s string) string {
 		}
 	}
 	return out.String()
+}
+
+// blankQuoted replaces single- and double-quoted segments with spaces
+// (POSIX: no escapes in single quotes; backslash escapes in double
+// quotes and outside quotes). An unterminated quote returns s as is.
+func blankQuoted(s string) string {
+	b := []byte(s)
+	var quote byte
+	start := 0
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		switch {
+		case c == '\\' && quote != '\'':
+			i++
+		case quote == 0 && (c == '\'' || c == '"'):
+			quote, start = c, i
+		case quote != 0 && c == quote:
+			for j := start; j <= i; j++ {
+				b[j] = ' '
+			}
+			quote = 0
+		}
+	}
+	if quote != 0 {
+		return s
+	}
+	return string(b)
 }

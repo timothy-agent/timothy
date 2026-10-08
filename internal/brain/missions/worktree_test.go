@@ -369,6 +369,51 @@ func TestProvisionSelfInitRollbackAndCommitUnit(t *testing.T) {
 	}
 }
 
+// TestRollbackKeepsHarnessWrittenFiles proves the post-review clean
+// (D-133) leaves every harnessWrittenPaths file alone, byte for byte,
+// while other untracked files, including same-named ones below the
+// root, are still removed.
+func TestRollbackKeepsHarnessWrittenFiles(t *testing.T) {
+	requireGit(t)
+	w := newTestWorkspace(t)
+	ctx := context.Background()
+
+	_, worktree, _, _, _, err := w.Provision(ctx, "mission-keep", "Add a feature", "", "coding", "", nil, nil, "", "")
+	if err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+	keep := map[string]string{miseLocalFile: miseLocalHeader + "\n[tasks.test]\n", envFileName: "APP_KEY=x\n"}
+	for name, body := range keep {
+		if err := os.WriteFile(filepath.Join(worktree, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(worktree, "sub"), 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	drop := []string{"scratch.txt", filepath.Join("sub", miseLocalFile), filepath.Join("sub", envFileName)}
+	for _, name := range drop {
+		if err := os.WriteFile(filepath.Join(worktree, name), []byte("x"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	if err := w.Rollback(ctx, worktree, "coding"); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	for name, body := range keep {
+		got, err := os.ReadFile(filepath.Join(worktree, name)) //nolint:gosec // test path
+		if err != nil || string(got) != body {
+			t.Fatalf("%s after rollback = %q, %v; want unchanged", name, got, err)
+		}
+	}
+	for _, name := range drop {
+		if _, err := os.Stat(filepath.Join(worktree, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s survived rollback: err=%v", name, err)
+		}
+	}
+}
+
 // TestCommitUnitSkipsWhenNothingChanged proves CommitUnit (D-099) makes
 // no commit on a clean worktree and reports errNothingToCommit, so HEAD
 // stays put and gitLogSince the base still counts only turns that
