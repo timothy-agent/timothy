@@ -740,6 +740,7 @@ export function Composer({
               />
               <IconButton
                 label="Attach image"
+                data-tour="chat.attach"
                 icon={Paperclip}
                 variant="ghost"
                 size="sm"
