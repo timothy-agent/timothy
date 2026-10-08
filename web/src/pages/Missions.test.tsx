@@ -14,6 +14,11 @@ vi.mock('../api/client', () => ({
 
 vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 import { listMissions, listNotifications } from '../api/client'
 import { subscribeEvents } from '../lib/events'
 

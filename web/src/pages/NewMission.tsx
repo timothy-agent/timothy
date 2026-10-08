@@ -6,6 +6,9 @@ import { MissionForm } from '../components/missions/MissionForm'
 import { useOnboarding } from '../onboarding/context'
 import { unmetKey } from '../onboarding/gateCopy'
 import { SetupGate } from '../onboarding/SetupGate'
+import { TourOverlay } from '../onboarding/tour/TourOverlay'
+import { useTour } from '../onboarding/tour/useTour'
+import { missionNewTour } from '../onboarding/tours/missionNew'
 
 // missionToInitial narrows a parent mission down to the fields a
 // follow-up seeds (see MissionForm's initial prop) — goal is
@@ -58,6 +61,11 @@ export function NewMission() {
       .finally(() => setParentLoading(false))
   }, [parentID])
 
+  // The form mounts only once the parent loads, so the tour waits too.
+  const tour = useTour(missionNewTour, {
+    enabled: !parentLoading && !sandboxBlocked && unmetKey(readiness, ['chat_route']) === null,
+  })
+
   return (
     <div className="mx-auto w-full max-w-full px-8 py-6">
       <div>
@@ -86,6 +94,7 @@ export function NewMission() {
           </SetupGate>
         )}
       </div>
+      <TourOverlay {...tour} />
     </div>
   )
 }

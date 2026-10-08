@@ -209,7 +209,10 @@ function AppSidebar({
                     )}
                   </SidebarMenuItem>
                 ) : (
-                  <SidebarMenuItem key={item.href}>
+                  <SidebarMenuItem
+                    key={item.href}
+                    data-tour={item.href === '/chat' ? 'chat.permissions' : undefined}
+                  >
                     <SidebarMenuButton asChild isActive={isActive(pathname, item.href)} tooltip={item.label}>
                       <Link to={item.href}>
                         <item.icon />
@@ -229,7 +232,7 @@ function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
+        <div data-tour="chat.sessions" className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
           <SessionList />
         </div>
       </SidebarContent>

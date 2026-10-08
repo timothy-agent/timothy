@@ -37,6 +37,9 @@ import { useSessions } from '../lib/sessions'
 import { useOnboarding } from '../onboarding/context'
 import { unmetKey } from '../onboarding/gateCopy'
 import { SetupGate } from '../onboarding/SetupGate'
+import { TourOverlay } from '../onboarding/tour/TourOverlay'
+import { useTour } from '../onboarding/tour/useTour'
+import { chatTour } from '../onboarding/tours/chat'
 import { fromTranscript, type ChatItem } from '../lib/transcript'
 import { uuid } from '../lib/uuid'
 import type { ChatIntent } from './Home'
@@ -71,6 +74,8 @@ export function Chat({
   const { refresh } = useSessions()
   const { readiness } = useOnboarding()
   const chatBlocked = unmetKey(readiness, ['chat_route']) !== null
+  // Research reuses this page with a locked skill; the tour is chat's own.
+  const tour = useTour(chatTour, { enabled: !chatBlocked && !lockedSkillHint })
   const agents = useAgents()
   const [items, setItems] = useState<ChatItem[]>([])
   const [draft, setDraft] = useState('')
@@ -803,6 +808,7 @@ export function Chat({
           />
           {chatBlocked && <SetupGate requires={['chat_route']} variant="banner" />}
           <form
+            data-tour="chat.composer"
             onSubmit={(e) => {
               e.preventDefault()
               send()
@@ -836,6 +842,7 @@ export function Chat({
             </p>
           </form>
         </div>
+        <TourOverlay {...tour} />
       </div>
     </TooltipProvider>
   )
