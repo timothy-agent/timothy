@@ -1918,6 +1918,13 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		if err := d.store.SetLastEvidence(ctx, m.ID, verdict.Evidence); err != nil {
 			d.log.Warn("driver: record evidence failed", "mission_id", m.ID, "error", err)
 		}
+		// D-134: a planned mission's report travels in final_output, not
+		// a repo file; the latest non-empty one is the mission's report.
+		if !m.RunsPlanless() && strings.TrimSpace(verdict.FinalOutput) != "" {
+			if err := d.store.SetFinalOutput(ctx, m.ID, verdict.FinalOutput); err != nil {
+				d.log.Warn("driver: record final output failed", "mission_id", m.ID, "error", err)
+			}
+		}
 		if m.RunsPlanless() {
 			// D-069/D-090: a planless mission (light, or
 			// flow=discover_build) has no plan/artifacts for
@@ -2202,6 +2209,13 @@ func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, idx []int, uni
 		packet.UnitFiles = make([][]string, len(units))
 		for i, u := range units {
 			packet.UnitFiles[i] = insideScope(changedFiles, u.Scope)
+		}
+		// D-140: changedFiles leaves lockfiles out with the diff.
+		if lockfiles := changedLockfiles(touchedFiles(ctx, wt, m.BaseCommit)); len(lockfiles) > 0 {
+			packet.Lockfiles = lockfileSummaries(ctx, wt, m.BaseCommit, lockfiles)
+			if m.EnvFacts != nil && m.EnvFacts.Lockfile != nil {
+				packet.LockfileEvidence = renderLockfileEvidence(m.EnvFacts.Lockfile)
+			}
 		}
 	}
 	if artifacts := reviewArtifacts(units, packet.Diff != ""); len(artifacts) > 0 {
