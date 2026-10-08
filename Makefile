@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible kb-eval sandbox-image sandbox-php-smoke sandbox-base-smoke
+	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-ecosystems kb-eval sandbox-image sandbox-php-smoke sandbox-base-smoke
 
 build:
 	$(GO_RUN) go build ./...
@@ -138,6 +138,16 @@ canary-executor:
 # `make sandbox-image` run first.
 canary-impossible:
 	./scripts/canary-impossible.sh
+
+# Ecosystem smoke matrix (issue #1018), manual only: one dependency
+# audit mission per pinned fork in scripts/ecosystem-matrix.txt, one at
+# a time, per-stage results under canary-results/ecosystems/. Needs the
+# stack up, gh with push access to the timothy-agent forks,
+# CANARY_GITHUB_CONNECTOR_ID and CANARY_GITHUB_DESTINATION_ID.
+# CANARY_ECOSYSTEM=<name> runs one row; brain with MISSION_OSV_OFFLINE
+# set audits against the database refreshed once per run day.
+canary-ecosystems:
+	./scripts/canary-ecosystems.sh
 
 # Retrieval regression gate (issue #412): ingests a curated fixture set
 # into a dedicated collection, runs a fixed query set through the real
