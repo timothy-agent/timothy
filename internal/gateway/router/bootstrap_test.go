@@ -210,3 +210,37 @@ func TestBootstrapChainIgnoresResearchRoute(t *testing.T) {
 		t.Fatal("research route bootstrapped; it must stay hand-configured")
 	}
 }
+
+func TestBootstrapChainPrefersDefaultModelForChatRoles(t *testing.T) {
+	candidates := []catalog.Model{
+		priced("cheap", 1, "chat", false),
+		priced("embed-1", 0.1, "embedding", false),
+		priced("see", 3, "chat", true),
+	}
+	tests := []struct {
+		name         string
+		defaultModel string
+		wantChat     string
+	}{
+		{"validated chat model wins", "see", "see"},
+		{"model unknown to the catalog counts as chat", "glm-4.7-flash:latest", "glm-4.7-flash:latest"},
+		{"embedding default falls back to cheapest", "embed-1", "cheap"},
+		{"empty default falls back to cheapest", "", "cheap"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := BootstrapChain(ProviderRow{ID: "p1", DefaultModel: tc.defaultModel}, map[string][]ChainEntry{}, candidates)
+			for _, route := range []string{"default", "summarize"} {
+				if chain := got[route]; len(chain) != 1 || chain[0].Model != tc.wantChat {
+					t.Fatalf("%s chain = %+v, want single %q entry", route, chain, tc.wantChat)
+				}
+			}
+			if chain := got["embedding"]; len(chain) != 1 || chain[0].Model != "embed-1" {
+				t.Fatalf("embedding chain = %+v, want embed-1 regardless of default_model", chain)
+			}
+			if chain := got["vision"]; len(chain) != 1 || chain[0].Model != "see" {
+				t.Fatalf("vision chain = %+v, want see regardless of default_model", chain)
+			}
+		})
+	}
+}

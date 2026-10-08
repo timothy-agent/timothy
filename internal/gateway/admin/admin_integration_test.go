@@ -228,10 +228,12 @@ func TestProviderCRUDAuditsAndReloads(t *testing.T) {
 	name = renamed
 
 	// A rename colliding with another provider's name is refused.
+	// Opted out of bootstrap: its default_model would otherwise seed the
+	// chat routes and block the delete below.
 	otherID, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "crud-other", Kind: "api", Driver: "openaicompat",
 		BaseURL: "https://example.invalid/v1", DefaultModel: "m1",
-		CredentialRef: "SOME_ENV_NAME",
+		CredentialRef: "SOME_ENV_NAME", ExcludeFromBootstrap: true,
 	})
 	if err != nil {
 		t.Fatalf("Create other: %v", err)
@@ -991,7 +993,7 @@ func TestDeleteSecretRefusesWhileProviderReferencesIt(t *testing.T) {
 	id, err := adm.Create(ctx, Provider{
 		Name: adminMarker + "guard-provider", Kind: "api", Driver: "openaicompat",
 		BaseURL: "https://example.invalid/v1", DefaultModel: "m1", CredentialRef: ref,
-		Enabled: false,
+		Enabled: false, ExcludeFromBootstrap: true,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
