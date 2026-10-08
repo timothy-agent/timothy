@@ -10,6 +10,7 @@ import type { BudgetStatus, MemoryItem, UsageSummary } from '../api/types'
 // once here; each describe's beforeEach sets only the resolved values it
 // cares about.
 vi.mock('../api/client', () => ({
+  getToken: vi.fn(() => ''),
   listAgents: vi.fn(),
   listRoutes: vi.fn(),
   getSettings: vi.fn(),

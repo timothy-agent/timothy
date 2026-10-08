@@ -55,6 +55,7 @@ import { MissionDetail } from './pages/MissionDetail'
 import { Missions } from './pages/Missions'
 import { NewMission } from './pages/NewMission'
 import { OnboardingProvider } from './onboarding/OnboardingProvider'
+import { SetupRing } from './onboarding/SetupRing'
 import { useOnboarding } from './onboarding/context'
 import { shouldRedirectToWelcome } from './onboarding/wizard/wizardState'
 import { Research } from './pages/Research'
@@ -235,6 +236,7 @@ function AppSidebar({
 
       <SidebarFooter>
         <SidebarMenu>
+          <SetupRing />
           <SidebarMenuItem>
             <SidebarMenuButton onClick={onCycleTheme} tooltip={themeLabel[theme]}>
               <ThemeIcon />
