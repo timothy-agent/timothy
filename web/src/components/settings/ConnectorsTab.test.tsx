@@ -29,6 +29,11 @@ import {
 } from '../../api/client'
 import { toast } from 'sonner'
 
+vi.mock('../../onboarding/context', async () => {
+  const { onboardingState } = await import('../../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 const calendarConnector: AdminConnector = {
   id: 'c1',
   name: 'google-calendar',

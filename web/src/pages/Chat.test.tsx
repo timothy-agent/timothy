@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatStreamOptions } from '../api/client'
-import type { ChatEvent, ChatRequest } from '../api/types'
+import type { ChatEvent, ChatRequest, Readiness } from '../api/types'
 import type { Signal } from '../lib/events'
 import { Chat } from './Chat'
 
@@ -53,6 +53,13 @@ import {
 import { subscribeEvents } from '../lib/events'
 import { toast } from 'sonner'
 
+// undefined readiness means a fully set-up instance.
+const onboarding = vi.hoisted(() => ({ readiness: undefined as Readiness | null | undefined }))
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState(onboarding.readiness) }
+})
+
 // captureSubscribe grabs the onSignal callback subscribeEvents was
 // last called with, so a test can fire a "session" signal directly
 // instead of driving a real SSE stream: same helper shape as
@@ -89,6 +96,7 @@ function openMenu(name: string) {
 afterEach(cleanup)
 beforeEach(() => {
   vi.clearAllMocks()
+  onboarding.readiness = undefined
   localStorage.clear()
   // jsdom lacks scrollIntoView; the message list calls it on update.
   Element.prototype.scrollIntoView = vi.fn()
@@ -107,6 +115,27 @@ beforeEach(() => {
     },
   )
   vi.mocked(stopTurn).mockResolvedValue(undefined)
+})
+
+describe('Chat setup gate', () => {
+  it('disables the composer and shows the setup banner when chat has no model', async () => {
+    const { readyReadiness } = await import('../onboarding/testing')
+    onboarding.readiness = { ...readyReadiness, chat_route: false }
+    renderChat()
+
+    expect(screen.getByText('Timothy has no model for chat yet')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Add a provider' })).toHaveAttribute('href', '/settings/providers')
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(chatStream).not.toHaveBeenCalled()
+  })
+
+  it('shows no banner when chat is ready', () => {
+    renderChat()
+    expect(screen.queryByText('Timothy has no model for chat yet')).not.toBeInTheDocument()
+  })
 })
 
 describe('Chat route picker', () => {

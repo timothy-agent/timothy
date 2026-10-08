@@ -387,3 +387,38 @@ func TestReadyMissingRoutingCheckReportsNotReady(t *testing.T) {
 		t.Fatal("Ready() = true, want false when an older gateway build reports no routing check at all")
 	}
 }
+
+func TestInvalidateRoutesDropsMemoizedRouting(t *testing.T) {
+	t.Parallel()
+	hits := map[string]int{}
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		hits[r.URL.Path]++
+		switch r.URL.Path {
+		case "/v1/routes/roles":
+			_, _ = fmt.Fprint(w, `{"roles":{"default":"main"}}`)
+		default:
+			_, _ = fmt.Fprint(w, `{"route":"main","entries":[]}`)
+		}
+	})
+	for range 2 {
+		if _, _, err := c.RouteForRole(t.Context(), "default"); err != nil {
+			t.Fatalf("RouteForRole: %v", err)
+		}
+		if _, err := c.ResolveRoute(t.Context(), "main", ""); err != nil {
+			t.Fatalf("ResolveRoute: %v", err)
+		}
+	}
+	if hits["/v1/routes/roles"] != 1 || hits["/v1/routes/main/resolve"] != 1 {
+		t.Fatalf("hits before invalidate = %+v, want one each", hits)
+	}
+	c.InvalidateRoutes()
+	if _, _, err := c.RouteForRole(t.Context(), "default"); err != nil {
+		t.Fatalf("RouteForRole after invalidate: %v", err)
+	}
+	if _, err := c.ResolveRoute(t.Context(), "main", ""); err != nil {
+		t.Fatalf("ResolveRoute after invalidate: %v", err)
+	}
+	if hits["/v1/routes/roles"] != 2 || hits["/v1/routes/main/resolve"] != 2 {
+		t.Fatalf("hits after invalidate = %+v, want two each", hits)
+	}
+}

@@ -420,3 +420,43 @@ func TestPermissionTimeoutSecondsSetting(t *testing.T) {
 		t.Fatalf("PermissionTimeoutSeconds after clear = %d, want 0", got)
 	}
 }
+
+// TestJSONSettingRoundTrip writes and reads the onboarding JSON object,
+// checks the bool and string loaders ignore it, and that it is audited.
+func TestJSONSettingRoundTrip(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	var got map[string]any
+	found, err := s.JSON(ctx, KeyOnboarding, &got)
+	if err != nil || found {
+		t.Fatalf("JSON(absent) = %v, %v; want not found", found, err)
+	}
+	want := map[string]any{"visited": []any{"chat"}}
+	if err := s.SetJSON(ctx, KeyOnboarding, want); err != nil {
+		t.Fatalf("SetJSON: %v", err)
+	}
+	found, err = s.JSON(ctx, KeyOnboarding, &got)
+	if err != nil || !found {
+		t.Fatalf("JSON = %v, %v; want found", found, err)
+	}
+	if v, ok := got["visited"].([]any); !ok || len(v) != 1 || v[0] != "chat" {
+		t.Fatalf("JSON = %v, want %v", got, want)
+	}
+	if _, ok := s.AllValues(ctx)[KeyOnboarding]; ok {
+		t.Fatal("onboarding leaked into AllValues")
+	}
+	if _, ok := s.All(ctx)[KeyOnboarding]; ok {
+		t.Fatal("onboarding leaked into All")
+	}
+
+	db, _ := s.db.Get()
+	var n int
+	if err := db.QueryRow(ctx, `SELECT COUNT(*) FROM admin_audit
+		WHERE entity = 'setting' AND entity_id = $1`, KeyOnboarding).Scan(&n); err != nil {
+		t.Fatalf("audit query: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("no audit row for the onboarding write")
+	}
+}

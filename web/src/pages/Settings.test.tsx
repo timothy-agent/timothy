@@ -66,6 +66,11 @@ import {
   validateProvider,
 } from '../api/client'
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 const openaiProvider: AdminProvider = {
   id: 'p1',
   name: 'OpenAI',

@@ -37,6 +37,11 @@ import {
   uploadKbDocument,
 } from '../api/client'
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 const productDocs: KbCollection = {
   id: 'c1',
   name: 'product-docs',
