@@ -36,6 +36,11 @@ import {
   runAutomationNow,
 } from '../api/client'
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 const stats: AutomationsStats = {
   total: 4,
   enabled: 3,

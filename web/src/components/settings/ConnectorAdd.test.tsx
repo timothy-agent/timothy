@@ -25,6 +25,11 @@ import {
 } from '../../api/client'
 import { toast } from 'sonner'
 
+vi.mock('../../onboarding/context', async () => {
+  const { onboardingState } = await import('../../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 function renderPage(presetId: string) {
   return render(
     <TooltipProvider>

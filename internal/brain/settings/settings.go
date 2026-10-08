@@ -6,12 +6,15 @@ package settings
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
@@ -263,6 +266,12 @@ var knownValueKeys = map[string]bool{
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
 	ValueOutboundHostAllowlist: true, ValueGitHubPollSeconds: true, ValueEmailPollSeconds: true,
 }
+
+// KeyOnboarding holds the setup checklist and tour progress as one
+// JSON object; JSON keys are opaque documents the API owns, never cached.
+const KeyOnboarding = "onboarding"
+
+var knownJSONKeys = map[string]bool{KeyOnboarding: true}
 
 // nonNegativeIntKeys are the settings whose value must parse as an
 // integer >= 0 when set.
@@ -715,6 +724,42 @@ func (s *Store) SetValue(ctx context.Context, key, value string) error {
 		}
 	}
 	return s.write(ctx, key, s.Value(ctx, key), value)
+}
+
+// JSON decodes one JSON-object setting into dst straight from the
+// table; found is false for an absent row.
+func (s *Store) JSON(ctx context.Context, key string, dst any) (bool, error) {
+	if !knownJSONKeys[key] {
+		return false, fmt.Errorf("unknown setting %q", key)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return false, fmt.Errorf("settings: %w", err)
+	}
+	var raw []byte
+	err = db.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, key).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("settings: %w", err)
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return false, fmt.Errorf("settings: decode %s: %w", key, err)
+	}
+	return true, nil
+}
+
+// SetJSON stores one JSON-object setting and audits the change.
+func (s *Store) SetJSON(ctx context.Context, key string, v any) error {
+	if !knownJSONKeys[key] {
+		return fmt.Errorf("unknown setting %q", key)
+	}
+	var before json.RawMessage
+	if _, err := s.JSON(ctx, key, &before); err != nil {
+		return err
+	}
+	return s.write(ctx, key, before, v)
 }
 
 // write upserts one row (value marshaled to jsonb), audits before →

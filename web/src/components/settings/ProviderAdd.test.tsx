@@ -30,6 +30,11 @@ import {
   validateProvider,
 } from '../../api/client'
 
+vi.mock('../../onboarding/context', async () => {
+  const { onboardingState } = await import('../../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 const glm: AdminProvider = {
   id: 'p1',
   name: 'GLM (Z.ai)',
