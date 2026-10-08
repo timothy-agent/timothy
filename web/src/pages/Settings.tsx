@@ -11,6 +11,9 @@ import { RoutesTab } from '../components/settings/RoutesTab'
 import { SecretsTab } from '../components/settings/SecretsTab'
 import { SettingsNav } from '../components/settings/SettingsNav'
 import { settingsAreas, type SettingsAreaKey } from '../components/settings/settingsAreas'
+import { TourOverlay } from '../onboarding/tour/TourOverlay'
+import { useTour } from '../onboarding/tour/useTour'
+import { settingsTour } from '../onboarding/tours/settings'
 
 export { settingsAreas }
 
@@ -53,13 +56,17 @@ function KnowledgeRedirect() {
 }
 
 export function Settings() {
+  const tour = useTour(settingsTour, { enabled: true })
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="providers" replace />} />
-      <Route path="knowledge/*" element={<KnowledgeRedirect />} />
-      {settingsAreas.map((area) => (
-        <Route key={area.key} path={`${area.key}/*`} element={<SettingsPage area={area} />} />
-      ))}
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/" element={<Navigate to="providers" replace />} />
+        <Route path="knowledge/*" element={<KnowledgeRedirect />} />
+        {settingsAreas.map((area) => (
+          <Route key={area.key} path={`${area.key}/*`} element={<SettingsPage area={area} />} />
+        ))}
+      </Routes>
+      <TourOverlay {...tour} />
+    </>
   )
 }

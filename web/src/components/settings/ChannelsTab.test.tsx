@@ -128,6 +128,7 @@ describe('Channels settings', () => {
   it('shows the empty state and the Telegram and Slack add tiles', async () => {
     renderTab()
     expect(await screen.findByText('No channels yet')).toBeTruthy()
+    expect(screen.getByText('A channel lets you talk to Timothy from Telegram or email. Pick one below.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Telegram' }).getAttribute('href')).toBe('/settings/channels/new')
     expect(screen.getByRole('link', { name: 'Slack' }).getAttribute('href')).toBe('/settings/channels/new?kind=slack')
   })

@@ -49,6 +49,11 @@ vi.mock('../api/client', async (importOriginal) => {
   }
 })
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 import {
   availableModels,
   getSecretBackendConfig,

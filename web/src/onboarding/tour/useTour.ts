@@ -22,6 +22,14 @@ function liveSteps(def: TourDef): TourStep[] {
   })
 }
 
+const restartEvent = 'timothy:tour-restart'
+
+// requestTourRestart starts the named page's tour again if that page is
+// mounted with its tour enabled.
+export function requestTourRestart(page: string) {
+  window.dispatchEvent(new CustomEvent(restartEvent, { detail: page }))
+}
+
 function isEditable(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false
   return el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
@@ -72,6 +80,15 @@ export function useTour(def: TourDef, { enabled }: { enabled: boolean }): Tour {
     closed.current = false
     start()
   }, [start])
+
+  useEffect(() => {
+    if (!enabled) return
+    const onRestart = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === def.page) restart()
+    }
+    window.addEventListener(restartEvent, onRestart)
+    return () => window.removeEventListener(restartEvent, onRestart)
+  }, [enabled, def.page, restart])
 
   const shown = active && enabled
 

@@ -10,10 +10,14 @@ import { Card } from '../ui/card'
 import { errText } from '../../lib/errors'
 import { EmptyState } from '../timothy/empty-state'
 import { Eyebrow, PageHeader } from '../timothy/page-header'
+import { TourOverlay } from '../../onboarding/tour/TourOverlay'
+import { useTour } from '../../onboarding/tour/useTour'
+import { knowledgeTour } from '../../onboarding/tours/knowledge'
 
 export function KnowledgeCollectionsList() {
   const [collections, setCollections] = useState<KbCollection[]>([])
   const navigate = useNavigate()
+  const tour = useTour(knowledgeTour, { enabled: true })
 
   const refresh = useCallback(() => {
     listKbCollections()
@@ -33,7 +37,7 @@ export function KnowledgeCollectionsList() {
               <CloudUpload />
               Add to Knowledgebase
             </Button>
-            <Button onClick={() => navigate('/knowledge/new')}>
+            <Button data-tour="knowledge.new" onClick={() => navigate('/knowledge/new')}>
               <Plus />
               New collection
             </Button>
@@ -46,11 +50,11 @@ export function KnowledgeCollectionsList() {
       </h2>
 
       {collections.length === 0 ? (
-        <div className="rounded-md border border-dashed border-border">
+        <div data-tour="knowledge.list" className="rounded-md border border-dashed border-border">
           <EmptyState
             icon={Library}
-            title="No collections yet."
-            description="Create one and upload documents so agents can search them for grounded answers."
+            title="No collections yet"
+            description="Upload documents and Timothy can search and quote them in chats and missions."
             action={
               <Button onClick={() => navigate('/knowledge/new')}>
                 <Plus />
@@ -60,7 +64,7 @@ export function KnowledgeCollectionsList() {
           />
         </div>
       ) : (
-        <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div data-tour="knowledge.list" className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {collections.map((c) => (
             <Card key={c.id} interactive asChild className="flex flex-col gap-3 text-left">
               <button type="button" onClick={() => navigate(`/knowledge/${c.id}`)} aria-label={c.name}>
@@ -83,6 +87,7 @@ export function KnowledgeCollectionsList() {
           ))}
         </div>
       )}
+      <TourOverlay {...tour} />
     </>
   )
 }
