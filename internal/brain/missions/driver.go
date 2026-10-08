@@ -346,6 +346,14 @@ func (d *Driver) SetAutomationGrants(fn func(ctx context.Context, m Mission) []s
 	d.provision.automationGrants = fn
 }
 
+// SetOSVOffline makes osv-scanner audits use the local database
+// (issue #1018): vulnerability counts stay fixed while the database
+// is, e.g. across one smoke-matrix run.
+func (d *Driver) SetOSVOffline(offline bool) {
+	d.provision.osvOffline = offline
+	d.verify.osvOffline = offline
+}
+
 // agentName resolves a mission's agent to its display name for the
 // mission.turn event payload (issue #473). Empty agentID or an unwired/
 // missing resolver both return "" rather than erroring: a label is a

@@ -38,6 +38,7 @@ import { useOnboarding } from '../onboarding/context'
 import { unmetKey } from '../onboarding/gateCopy'
 import { SetupGate } from '../onboarding/SetupGate'
 import { fromTranscript, type ChatItem } from '../lib/transcript'
+import { uuid } from '../lib/uuid'
 import type { ChatIntent } from './Home'
 
 const agentKey = 'timothy.agent'
@@ -306,7 +307,7 @@ export function Chat({
         const last = next[next.length - 1]
         if (last && (last.role === 'interrupted' || last.role === 'assistant'))
           next[next.length - 1] = { id: last.id, role: 'assistant', ...emptyAssistant() }
-        else next.push({ id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() })
+        else next.push({ id: uuid(), role: 'assistant', ...emptyAssistant() })
         return next
       })
     }
@@ -393,7 +394,7 @@ export function Chat({
     setReferences([])
     setStreaming(true)
     setPin(true) // sending always re-follows the answer
-    const userItemId = crypto.randomUUID()
+    const userItemId = uuid()
     if (ready.length > 0) {
       localUrlsRef.current.set(userItemId, new Map(ready.map((a) => [a.id, a.previewUrl])))
     }
@@ -414,7 +415,7 @@ export function Chat({
             ? readyDocuments.map((a) => ({ id: a.id, mime: a.mime, name: a.name }))
             : undefined,
       },
-      { id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() },
+      { id: uuid(), role: 'assistant', ...emptyAssistant() },
     ])
 
     const controller = new AbortController()
@@ -527,7 +528,7 @@ export function Chat({
       const next = [...prev]
       const last = next[next.length - 1]
       if (last?.role === 'assistant') next[next.length - 1] = { ...emptyAssistant(), id: last.id, role: 'assistant' }
-      else next.push({ id: crypto.randomUUID(), role: 'assistant', ...emptyAssistant() })
+      else next.push({ id: uuid(), role: 'assistant', ...emptyAssistant() })
       return next
     })
 
