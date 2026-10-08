@@ -66,6 +66,7 @@ import { StatusBadge } from '../components/timothy/status-badge'
 import { missionStatus } from '../components/timothy/status'
 import { playAlertSound } from '../lib/alertSound'
 import { subscribeEvents } from '../lib/events'
+import { pauseCauseLabel, pauseDetailText, type PausePayload } from '../lib/pauseCause'
 import { compact, euDateTime, formatDuration, missionDisplayName, money, relativeTime } from '../lib/format'
 
 // MetaLine renders the mission metadata as one dot-separated row; falsy
@@ -405,22 +406,22 @@ export function MissionDetail() {
   // it on every transition — see store.go's ApplyTransition comment);
   // the actual detail only lives in the mission.paused event itself,
   // so pull it from the most recent one while still paused.
-  const pauseDetail =
+  const pausePayload: PausePayload | undefined =
     mission.status === 'paused'
       ? (() => {
           for (let i = events.length - 1; i >= 0; i--) {
             if (events[i].kind === 'mission.paused') {
               const payload = events[i].payload
-              if (payload && typeof payload === 'object' && 'detail' in payload) {
-                const detail = (payload as { detail?: unknown }).detail
-                return typeof detail === 'string' ? detail : undefined
-              }
-              return undefined
+              return payload && typeof payload === 'object' ? (payload as PausePayload) : undefined
             }
           }
           return undefined
         })()
       : undefined
+  const pauseDetail = pauseDetailText(pausePayload)
+  const pauseTitle =
+    pauseCauseLabel(pausePayload) ??
+    (mission.pause_reason ? (pauseReasonLabels[mission.pause_reason] ?? mission.pause_reason) : '')
 
   const resume = async () => {
     setBusy(true)
@@ -674,7 +675,7 @@ export function MissionDetail() {
 
       {mission.status === 'paused' && mission.pause_reason && (
         <Alert tone="warning" className="mt-4">
-          <AlertTitle>Paused: {pauseReasonLabels[mission.pause_reason] ?? mission.pause_reason}</AlertTitle>
+          <AlertTitle>Paused: {pauseTitle}</AlertTitle>
           {pauseDetail && <AlertDescription>{pauseDetail}</AlertDescription>}
         </Alert>
       )}
