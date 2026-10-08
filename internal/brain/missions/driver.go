@@ -2135,6 +2135,13 @@ func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, idx []int, uni
 		for i, u := range units {
 			packet.UnitFiles[i] = insideScope(changedFiles, u.Scope)
 		}
+		// D-140: changedFiles leaves lockfiles out with the diff.
+		if lockfiles := changedLockfiles(touchedFiles(ctx, wt, m.BaseCommit)); len(lockfiles) > 0 {
+			packet.Lockfiles = lockfileSummaries(ctx, wt, m.BaseCommit, lockfiles)
+			if m.EnvFacts != nil && m.EnvFacts.Lockfile != nil {
+				packet.LockfileEvidence = renderLockfileEvidence(m.EnvFacts.Lockfile)
+			}
+		}
 	}
 	if artifacts := reviewArtifacts(units, packet.Diff != ""); len(artifacts) > 0 {
 		packet.Artifacts = ReadArtifacts(m.WorkRoot(), artifacts)

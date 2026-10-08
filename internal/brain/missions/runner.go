@@ -1962,6 +1962,14 @@ func renderReviewContent(p ReviewPacket) string {
 		b.WriteString(p.DiffStat)
 		b.WriteString("\n")
 	}
+	if p.Lockfiles != "" {
+		b.WriteString("\nLockfile changes by package (raw lockfile hunks are left out of the diff):\n")
+		b.WriteString(NeutralizeSlot(p.Lockfiles))
+	}
+	if p.LockfileEvidence != "" {
+		b.WriteString("\nHarness lockfile evidence:\n")
+		b.WriteString(p.LockfileEvidence)
+	}
 	if p.Diff != "" {
 		if p.FindingsOnly {
 			b.WriteString("\nDiff since the last review (restricted to the finding files and the affected units' scope):\n")

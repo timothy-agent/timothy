@@ -38,6 +38,12 @@ func (v *verifier) verifyAll(ctx context.Context, m Mission, seenURLs []string, 
 	workRoot := m.WorkRoot()
 	current := firstUnverified(m.Plan)
 	checkCitations := citations && missionPolicyFor(m).checksCitations
+	// D-140: a lockfile change gates its owning units on evidence
+	// measured at most once per pass.
+	lockfiles := v.missionLockfiles(ctx, m)
+	owners := lockfileOwners(m.Plan.Units, lockfiles, current)
+	var evidence *LockfileEvidence
+	measured := false
 	var out []UnitVerification
 	for i, u := range m.Plan.Units {
 		res := UnitVerification{Unit: i}
@@ -67,6 +73,18 @@ func (v *verifier) verifyAll(ctx context.Context, m Mission, seenURLs []string, 
 				payload["exit_code"], payload["output_sha256"] = r.ExitCode, r.OutputSHA256
 			}
 		}
+		if res.Passed && owners[i] {
+			if !measured {
+				var err error
+				if evidence, err = v.lockfileEvidence(ctx, m, lockfiles); err != nil {
+					return nil, fmt.Errorf("driver: verify unit %d: %w", i, err)
+				}
+				measured = true
+			}
+			if evidence != nil && !evidence.Met() {
+				res.Passed, res.Check, res.Excerpt = false, lockfileCheck, renderLockfileEvidence(evidence)
+			}
+		}
 		payload["passed"], payload["check"] = res.Passed, res.Check
 		if !res.Passed {
 			payload["excerpt"] = truncate(res.Excerpt, 500)
@@ -77,6 +95,20 @@ func (v *verifier) verifyAll(ctx context.Context, m Mission, seenURLs []string, 
 		out = append(out, res)
 	}
 	return out, nil
+}
+
+// missionLockfiles lists the lockfiles a coding mission's diff against
+// its base changes. Stored evidence is cleared once none is changed.
+func (v *verifier) missionLockfiles(ctx context.Context, m Mission) []string {
+	wt := m.WorktreePath()
+	if m.Kind != KindCoding || wt == "" || m.EnvFacts == nil || m.BaseCommit == "" || m.BaseCommit == unavailableCommit {
+		return nil
+	}
+	lockfiles := changedLockfiles(touchedFiles(ctx, wt, m.BaseCommit))
+	if len(lockfiles) == 0 && m.EnvFacts.Lockfile != nil {
+		v.storeLockfileEvidence(ctx, m, nil)
+	}
+	return lockfiles
 }
 
 // artifactsExcerpt explains a CheckArtifacts failure and shows what

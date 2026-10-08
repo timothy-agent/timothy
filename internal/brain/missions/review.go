@@ -177,6 +177,10 @@ type ReviewPacket struct {
 	// on every round, full or findings-only, so the verdict must
 	// address whether that means part of the goal is unfinished.
 	ScopeDropped []string
+	// Lockfiles (D-140) summarizes each changed lockfile by package;
+	// LockfileEvidence is the harness criteria outcome. Full rounds only.
+	Lockfiles        string
+	LockfileEvidence string
 }
 
 // findingFiles lists the distinct files the findings name, in order.
