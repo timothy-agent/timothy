@@ -8,7 +8,13 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }))
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 vi.mock('../api/client', () => ({
+  getToken: vi.fn(() => ''),
   listMemories: vi.fn(),
   addMemory: vi.fn(),
   resolveMemory: vi.fn(),

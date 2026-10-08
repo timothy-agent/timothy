@@ -7,6 +7,7 @@ import { TooltipProvider } from '../components/ui/tooltip'
 import { Automations } from './Automations'
 
 vi.mock('../api/client', () => ({
+  getToken: vi.fn(() => ''),
   listAutomations: vi.fn(),
   automationsStats: vi.fn(),
   listAutomationTemplates: vi.fn(),

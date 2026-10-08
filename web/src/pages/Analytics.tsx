@@ -37,6 +37,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../com
 import { PageShell } from '../components/timothy/page-shell'
 import { PageHeader } from '../components/timothy/page-header'
 import { Panel } from '../components/timothy/panel'
+import { useMarkVisited } from '../onboarding/useVisited'
 import { SegmentedControl } from '../components/timothy/segmented-control'
 import { Alert, AlertDescription } from '../components/ui/alert'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table'
@@ -243,6 +244,7 @@ function useSeriesSelection(keys: string[]) {
 }
 
 export function Analytics() {
+  useMarkVisited('analytics')
   const [range, setRange] = useState('today')
   const [data, setData] = useState<Loaded | null>(null)
   const [error, setError] = useState<string | null>(null)
