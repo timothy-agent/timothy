@@ -4137,3 +4137,53 @@ func TestDelegatedAllowlistGap(t *testing.T) {
 		})
 	}
 }
+
+// TestRunReviewObjectEvidenceFixture reproduces the alpha.102 canary
+// payload (issue #960): criteria evidence as an object no longer fails
+// the round.
+func TestRunReviewObjectEvidenceFixture(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(reviewVerdictToolName, `{"decision":"approve","criteria":[{"unit":0,"criterion":0,"status":"met","evidence":{"file":"main.go","quote":"func main()"}}]}`)},
+	}}
+	r := newTestRunner(agent)
+	v, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"})
+	if err != nil {
+		t.Fatalf("RunReview: %v", err)
+	}
+	if !v.Approved || len(v.Criteria) != 1 || v.Criteria[0].Evidence != `{"file":"main.go","quote":"func main()"}` {
+		t.Fatalf("verdict = %+v", v)
+	}
+}
+
+// TestRunReviewMalformedFieldAsksAgain: a wrong-typed decision gets one
+// corrective turn naming the field instead of failing the round.
+func TestRunReviewMalformedFieldAsksAgain(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(reviewVerdictToolName, `{"decision":{"value":"approve"}}`)},
+		{toolEndEvent(reviewVerdictToolName, `{"decision":"approve"}`)},
+	}}
+	r := newTestRunner(agent)
+	v, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"})
+	if err != nil {
+		t.Fatalf("RunReview: %v", err)
+	}
+	if !v.Approved || len(agent.requests) != 2 {
+		t.Fatalf("verdict = %+v after %d turns, want approved after 2", v, len(agent.requests))
+	}
+	msgs := agent.requests[1].Messages
+	if last := msgs[len(msgs)-1].Content; !strings.Contains(last, "decision") {
+		t.Fatalf("corrective message %q does not name the field", last)
+	}
+}
+
+// TestRunReviewMalformedFieldTwiceFails: the second malformed answer
+// surfaces the parse error.
+func TestRunReviewMalformedFieldTwiceFails(t *testing.T) {
+	bad := toolEndEvent(reviewVerdictToolName, `{"decision":["approve"]}`)
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{{bad}, {bad}}}
+	r := newTestRunner(agent)
+	_, err := r.RunReview(context.Background(), Mission{ID: "m1", ReviewRoute: "default"}, ReviewPacket{Goal: "goal"})
+	if err == nil || !strings.Contains(err.Error(), "decision") {
+		t.Fatalf("err = %v, want a parse error naming decision", err)
+	}
+}

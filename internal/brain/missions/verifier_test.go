@@ -154,6 +154,64 @@ func TestVerifyAllCitationsOnlyForUnverifiedUnits(t *testing.T) {
 	}
 }
 
+// TestVerifyAllRestoresMiseLocal covers D-133: a mise.local.toml that a
+// worker deleted or overwrote is rewritten from prepare's copy before
+// any check_cmd runs; a healthy one and a mission without prepare are
+// left alone.
+func TestVerifyAllRestoresMiseLocal(t *testing.T) {
+	saved := miseLocalHeader + "\n[tasks.test]\nrun = \"true\"\n"
+	edited := miseLocalHeader + "\n# edited\n"
+	overwritten := "[tasks.test]\nrun = \"false\"\n"
+	tests := []struct {
+		name    string
+		saved   bool
+		current *string
+		want    string // "" means the file must not exist
+	}{
+		{name: "deleted", saved: true, want: saved},
+		{name: "header lost", saved: true, current: &overwritten, want: saved},
+		{name: "healthy", saved: true, current: &edited, want: edited},
+		{name: "no prepare copy", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ws := t.TempDir()
+			wt := filepath.Join(ws, "wt")
+			if err := os.MkdirAll(wt, 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if tt.saved {
+				if err := os.MkdirAll(filepath.Join(ws, prepareDir), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(ws, prepareDir, miseLocalFile), []byte(saved), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.current != nil {
+				if err := os.WriteFile(filepath.Join(wt, miseLocalFile), []byte(*tt.current), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var seen string
+			v := &verifier{store: newFakeStore(), log: slog.Default(),
+				sandboxExec: func(_ context.Context, _, _, workdir, _ string, _ time.Duration, _ io.Writer) (int, error) {
+					b, _ := os.ReadFile(filepath.Join(workdir, miseLocalFile)) //nolint:gosec // test path
+					seen = string(b)
+					return 0, nil
+				}}
+			m := Mission{ID: "m1", Kind: "coding", Workspace: ws, Plan: Plan{Units: []PlanUnit{{Title: "u", CheckCmd: "mise run test"}}}}
+
+			if _, err := v.verifyAll(context.Background(), m, nil, false); err != nil {
+				t.Fatalf("verifyAll: %v", err)
+			}
+			if seen != tt.want {
+				t.Fatalf("mise.local.toml seen by check = %q, want %q", seen, tt.want)
+			}
+		})
+	}
+}
+
 // TestRunVerifyTimedHungCommandCountsAsFailed confirms a check_cmd that
 // outlives its timeout is reported as a failed result naming the
 // timeout, never as an infrastructure error (the driver would otherwise
