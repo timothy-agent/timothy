@@ -1771,7 +1771,24 @@ func (r *nativeRunner) RunReview(ctx context.Context, m Mission, packet ReviewPa
 	}
 	verdict, err := parseReviewVerdict(args)
 	if err != nil {
-		return ReviewVerdict{}, fmt.Errorf("mission runner: parse review_verdict: %w", err)
+		// A malformed field gets one corrective turn naming it, never an
+		// immediate failed round.
+		fixReq := req
+		fixReq.Messages = append(append([]provider.Message{}, req.Messages...),
+			provider.Message{Role: "assistant", Content: text},
+			provider.Message{Role: "user", Content: fmt.Sprintf("[system] Your review_verdict call was rejected: %v. Call review_verdict again with the field fixed.", err)},
+		)
+		fixRes, fixErr := r.runTurn(ctx, fixReq, reviewVerdictToolName, PhaseProve)
+		if fixErr != nil {
+			return ReviewVerdict{}, fixErr
+		}
+		if len(fixRes.sentinelArgs) == 0 {
+			return ReviewVerdict{}, fmt.Errorf("mission runner: parse review_verdict: %w", err)
+		}
+		servedProvider, servedModel = fixRes.provider, fixRes.model
+		if verdict, err = parseReviewVerdict(fixRes.sentinelArgs); err != nil {
+			return ReviewVerdict{}, fmt.Errorf("mission runner: parse review_verdict: %w", err)
+		}
 	}
 	verdict.Provider, verdict.Model = servedProvider, servedModel
 	return verdict, nil
