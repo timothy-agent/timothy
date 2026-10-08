@@ -361,6 +361,26 @@ func TestVerifyAllLockfileEvidencePassesAndIsReused(t *testing.T) {
 	}
 }
 
+// TestVerifyAllLockfileAuditOffline: with osvOffline set, the after
+// audit scans the local database like prepare's before audit.
+func TestVerifyAllLockfileAuditOffline(t *testing.T) {
+	m := lockfileFixture(t,
+		map[string]string{"composer.lock": composerBefore, "run-tests.sh": "echo 'Tests:    36 passed'\n"},
+		map[string]string{"composer.lock": composerAfter},
+		&TestSummary{Passed: 36, Parsed: true}, 0)
+	argsLog := fakeOSV(t, osvReportJSON(filepath.Join(m.WorktreePath(), "composer.lock"), 0), 0)
+	v, _ := lockfileVerifier()
+	v.osvOffline = true
+
+	if _, err := v.verifyAll(context.Background(), m, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := os.ReadFile(argsLog) //nolint:gosec // test temp file
+	if !strings.Contains(string(args), "--offline-vulnerabilities") {
+		t.Fatalf("osv-scanner args = %q, want --offline-vulnerabilities", args)
+	}
+}
+
 // TestVerifyAllNoLockfileChangeRunsNothing: a diff without a lockfile
 // adds no criteria and runs no tests.
 func TestVerifyAllNoLockfileChangeRunsNothing(t *testing.T) {

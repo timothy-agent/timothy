@@ -49,6 +49,10 @@ type provisioner struct {
 	// is pre-approved for (see Driver.SetAutomationGrants); nil grants none.
 	automationGrants func(ctx context.Context, m Mission) []string
 
+	// osvOffline makes prepare's audit scan the sandbox's local
+	// osv-scanner database instead of the live API (see SetOSVOffline).
+	osvOffline bool
+
 	// resolveCloneToken resolves a github-kind connector_id to the PAT
 	// that authenticates ensureProvisioned's clone (see SetCloneTokenResolver)
 	// — nil-safe: unset means a mission with repo_url set fails

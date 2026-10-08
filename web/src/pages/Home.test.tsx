@@ -15,6 +15,11 @@ vi.mock('../api/client', () => ({
 import type { AdminRoute } from '../api/types'
 import { listAgents, listKbCollections, listMemories, listRoutes } from '../api/client'
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 let landed: { pathname: string; state: ChatIntent | null } | null = null
 
 function ChatProbe() {

@@ -4,6 +4,11 @@ import type { KbDocument } from '../../api/types'
 import { toast } from 'sonner'
 import { KbUploadForm, markdownFile, parseUrls } from './KbUploadForm'
 
+vi.mock('../../onboarding/context', async () => {
+  const { onboardingState } = await import('../../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 afterEach(cleanup)

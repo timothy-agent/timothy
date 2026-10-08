@@ -175,3 +175,12 @@ describe('ProvidersList catalog status line', () => {
     expect(await screen.findByText(/Model catalog: 100 models, synced/)).toBeInTheDocument()
   })
 })
+
+describe('ProvidersList empty state', () => {
+  it('links to the setup guide', async () => {
+    vi.mocked(listProviders).mockResolvedValue([])
+    vi.mocked(providersHealth).mockResolvedValue([])
+    renderPage()
+    expect(await screen.findByRole('link', { name: 'Open the setup guide' })).toHaveAttribute('href', '/welcome')
+  })
+})

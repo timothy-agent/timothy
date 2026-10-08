@@ -405,6 +405,20 @@ func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
 }
 
+// HasSucceeded reports whether any mission reached PhaseDone, the
+// setup checklist's "first mission" signal.
+func (s *Store) HasSucceeded(ctx context.Context) (bool, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return false, fmt.Errorf("missions has succeeded: %w", err)
+	}
+	var ok bool
+	if err := db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM missions WHERE phase = $1)`, string(PhaseDone)).Scan(&ok); err != nil {
+		return false, fmt.Errorf("missions has succeeded: %w", err)
+	}
+	return ok, nil
+}
+
 // Get returns one mission by id.
 func (s *Store) Get(ctx context.Context, id string) (Mission, error) {
 	db, err := s.db.Get()

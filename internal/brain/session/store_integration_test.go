@@ -454,3 +454,15 @@ func TestListQueryMatchesTitleOnlySession(t *testing.T) {
 	}
 	t.Fatalf("title-only session %s missing from query results", id)
 }
+
+func TestHasAssistantReply(t *testing.T) {
+	s, id := integrationStore(t)
+	ctx := t.Context()
+	if _, err := s.Append(ctx, id, KindAssistantTurn, map[string]any{"text": "hi"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	ok, err := s.HasAssistantReply(ctx)
+	if err != nil || !ok {
+		t.Fatalf("HasAssistantReply = %v, %v; want true", ok, err)
+	}
+}
