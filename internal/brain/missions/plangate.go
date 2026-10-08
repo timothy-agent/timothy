@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,20 +28,27 @@ var emptyOutputIdiom = regexp.MustCompile(`\|\s*grep(\s+-\w+)*\s+(['"]?)\^\$(['"
 // banned, so `[ -z "$(...)" ]` is not available to it).
 const emptyOutputHint = "awk 'END{exit NR>0}'"
 
-// codeExtensions marks artifacts a check_cmd must build, test or run
-// rather than only grep.
-var codeExtensions = map[string]bool{
-	".go": true, ".py": true,
-	".js": true, ".mjs": true, ".cjs": true, ".jsx": true, ".ts": true, ".tsx": true,
+// codeExtensions maps artifacts a check_cmd must build, test or run
+// rather than only grep to their language. D-139 (issue #1014): the
+// code floor keys on the artifact's language, not the sandbox
+// environment, so polyglot repos gate every unit on its own toolchain.
+var codeExtensions = map[string]string{
+	".go": "go", ".py": "python",
+	".js": "node", ".mjs": "node", ".cjs": "node", ".jsx": "node", ".ts": "node", ".tsx": "node",
+	".php": "php", ".rb": "ruby", ".java": "jvm", ".kt": "jvm", ".rs": "rust",
 }
 
-// toolchainByEnv recognises an invocation of the environment's own
-// toolchain (sandboxd's go/node/python variants). The alternation is a
-// floor, not a full grammar: any one match satisfies checkCodeFloor.
-var toolchainByEnv = map[string]*regexp.Regexp{
+// toolchainByLanguage recognises an invocation of a language's
+// toolchain. The alternation is a floor, not a full grammar: any one
+// match satisfies checkCodeFloor.
+var toolchainByLanguage = map[string]*regexp.Regexp{
 	"go":     regexp.MustCompile(`(^|[\s;&|(])go\s+(test|vet|build|run)\b`),
 	"python": regexp.MustCompile(`(^|[\s;&|(])(pytest\b|python3?\s+(-m\s+(pytest|unittest)\b|\S+\.py\b))`),
 	"node":   regexp.MustCompile(`(^|[\s;&|(])(npm\s+(run\s+)?test\b|npx\s+(vitest|jest|mocha|tsc)\b|node\s+(--test\b|\S+\.[cm]?js\b)|(yarn|pnpm)\s+test\b|tsc\b)`),
+	"php":    regexp.MustCompile(`(^|[\s;&|(])(\S*/)?(phpunit\b|pest\b|php\s+(artisan\s+test\b|\S+\.php\b)|composer\s+(run(-script)?\s+)?test\b)`),
+	"jvm":    regexp.MustCompile(`(^|[\s;&|(])(\./)?(mvnw?|gradlew?)(\s|$)`),
+	"ruby":   regexp.MustCompile(`(^|[\s;&|(])(\S*/)?(rspec\b|bundle\s+exec\s+\S|rake\s+(test|spec)\b|rails\s+test\b|ruby\s+\S+\.rb\b)`),
+	"rust":   regexp.MustCompile(`(^|[\s;&|(])cargo\s+(\+\S+\s+)?(test|build|check|run|nextest)\b`),
 }
 
 // toolchainExample is what the rejection tells the planner to reach for.
@@ -48,6 +56,10 @@ var toolchainExample = map[string]string{
 	"go":     "go test ./<package>/...",
 	"python": "python3 -m pytest <tests>",
 	"node":   "npm test",
+	"php":    "vendor/bin/phpunit (or php artisan test, composer test)",
+	"jvm":    "./mvnw test (or ./gradlew test)",
+	"ruby":   "bundle exec rspec",
+	"rust":   "cargo test",
 }
 
 // anchorExample is the "fails before, passes after" shape for a unit
@@ -58,6 +70,10 @@ var anchorExample = map[string]string{
 	"go":     "grep -q 'func TestXxx' <pkg>/xxx_test.go && go test ./<pkg>/ -run TestXxx",
 	"python": "grep -q 'def test_xxx' tests/test_xxx.py && python3 -m pytest tests/test_xxx.py -q",
 	"node":   "grep -q 'test(' src/xxx.test.ts && npx vitest run src/xxx.test.ts",
+	"php":    "grep -q 'function test_xxx' tests/Feature/XxxTest.php && vendor/bin/phpunit tests/Feature/XxxTest.php",
+	"jvm":    "grep -q 'void xxx' src/test/java/XxxTest.java && ./mvnw -q test -Dtest=XxxTest",
+	"ruby":   "grep -q 'describe Xxx' spec/xxx_spec.rb && bundle exec rspec spec/xxx_spec.rb",
+	"rust":   "grep -q 'fn xxx' src/xxx.rs && cargo test xxx",
 }
 
 // checkPlanGates runs the static gate checks parsePlan cannot: they
@@ -85,7 +101,7 @@ func checkPlanGates(plan Plan, m Mission) error {
 	if err := checkUnitGranularity(plan, m); err != nil && !m.PlanGate.granularityWaivable() {
 		return err
 	}
-	return checkCodeFloor(plan, m.Environment)
+	return checkCodeFloor(plan)
 }
 
 // deliveryPattern matches a unit that pushes a branch or opens a pull
@@ -163,7 +179,7 @@ func checkUnitGranularity(plan Plan, m Mission) error {
 		}
 		code := 0
 		for _, a := range u.Artifacts {
-			if !codeExtensions[strings.ToLower(filepath.Ext(strings.TrimSpace(a)))] {
+			if codeLanguage(a) == "" {
 				continue
 			}
 			code++
@@ -223,41 +239,39 @@ func cleanArtifact(a string) string {
 // checkCodeFloor requires every unit that produces source files to
 // build, test or run them in its check_cmd. Grep against source proves
 // text is present, never that code works; a worker can satisfy it by
-// adding a comment, and one did.
-func checkCodeFloor(plan Plan, environment string) error {
+// adding a comment, and one did. A call to the toolchain of any
+// language the unit's source artifacts are in satisfies it (D-139).
+func checkCodeFloor(plan Plan) error {
 	for _, u := range plan.Units {
-		if !producesCode(u.Artifacts) {
+		langs := codeLanguages(u.Artifacts)
+		if len(langs) == 0 || invokesToolchain(u.CheckCmd, langs) {
 			continue
 		}
-		if invokesToolchain(u.CheckCmd, environment) {
-			continue
-		}
-		example := toolchainExample[environment]
-		if example == "" {
-			example = "the environment's test command"
-		}
-		return fmt.Errorf("mission runner: unit %q produces source files but its check_cmd never builds, tests or runs them; start it with %s (greps may follow, they never stand alone)", u.Title, example)
+		return fmt.Errorf("mission runner: unit %q produces source files but its check_cmd never builds, tests or runs them; start it with %s (greps may follow, they never stand alone)", u.Title, toolchainExample[langs[0]])
 	}
 	return nil
 }
 
-func producesCode(artifacts []string) bool {
-	for _, a := range artifacts {
-		if codeExtensions[strings.ToLower(filepath.Ext(strings.TrimSpace(a)))] {
-			return true
-		}
-	}
-	return false
+// codeLanguage is the language of a source artifact, "" for any other file.
+func codeLanguage(artifact string) string {
+	return codeExtensions[strings.ToLower(filepath.Ext(strings.TrimSpace(artifact)))]
 }
 
-// invokesToolchain accepts the environment's own toolchain, or any
-// known one when the environment is unset or unknown.
-func invokesToolchain(cmd, environment string) bool {
-	if re, ok := toolchainByEnv[environment]; ok {
-		return re.MatchString(cmd)
+// codeLanguages lists the languages of the source artifacts, in artifact order.
+func codeLanguages(artifacts []string) []string {
+	var out []string
+	for _, a := range artifacts {
+		if l := codeLanguage(a); l != "" && !slices.Contains(out, l) {
+			out = append(out, l)
+		}
 	}
-	for _, re := range toolchainByEnv {
-		if re.MatchString(cmd) {
+	return out
+}
+
+// invokesToolchain reports whether cmd calls the toolchain of any of langs.
+func invokesToolchain(cmd string, langs []string) bool {
+	for _, l := range langs {
+		if toolchainByLanguage[l].MatchString(cmd) {
 			return true
 		}
 	}
@@ -300,7 +314,10 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 		}
 		switch {
 		case res.Passed:
-			anchor := anchorExample[m.Environment]
+			anchor := ""
+			if langs := codeLanguages(u.Artifacts); len(langs) > 0 {
+				anchor = anchorExample[langs[0]]
+			}
 			if anchor == "" {
 				anchor = "grep -q '<symbol the unit adds>' <artifact> && <toolchain call>"
 			}

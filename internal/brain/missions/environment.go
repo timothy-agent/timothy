@@ -152,29 +152,31 @@ func countSourceFiles(root string) map[string]int {
 
 // detectToolchainVersions reads the toolchain versions the repo pins
 // (D-126, issue #991) from marker files only: nothing is executed. The
-// result maps tool -> a mise-acceptable version prefix, empty when
+// result maps tool -> a version selector mise accepts, empty when
 // nothing is pinned. First hit per tool wins:
 //
 //	tool    markers, in order
-//	python  .python-version, runtime.txt, pyproject.toml requires-python, .tool-versions, .mise.toml
-//	node    .nvmrc, .node-version, package.json engines.node, .tool-versions, .mise.toml
-//	go      go.mod go directive, .tool-versions, .mise.toml
-//	php     composer.json config.platform.php then require.php, .tool-versions, .mise.toml
+//	python  .python-version, runtime.txt, pyproject.toml requires-python, .tool-versions, mise toml
+//	node    .nvmrc, .node-version, package.json engines.node, .tool-versions, mise toml
+//	go      .go-version, go.mod go directive, .tool-versions, mise toml
+//	java    .java-version, .tool-versions, mise toml
+//	ruby    .ruby-version, .tool-versions, mise toml
+//	rust    rust-toolchain.toml channel, .tool-versions, mise toml
+//	php     composer.json config.platform.php then require.php, .tool-versions, mise toml
 //
-// Other tools are ignored: mise builds most of them from source, which
-// the sandbox cannot do inside the install ceiling. php is kept only
-// for the php env, whose image bakes the minors (D-127).
-//
-// The language markers apply when env is that language or "" / "base";
-// .tool-versions and .mise.toml apply for every env. A constraint is
-// reduced to a prefix mise accepts (">=3.10,<3.11" -> "3.10", "^18" ->
-// "18", "v18.20.4" -> "18.20.4"); one that cannot be reduced is skipped.
+// D-139 (issue #1014): every marker is read whatever the environment, so
+// a Laravel repo's .nvmrc counts. php alone stays php-env only, since
+// only that image bakes the minors (D-127). mise reads the plain version
+// files itself (MISE_IDIOMATIC_VERSION_FILE_ENABLE_TOOLS in the base
+// image); they are read here too so the facts and the pre-discover
+// install match. .sdkmanrc is left to mise: its vendor suffixes have no
+// mapping here. A constraint is reduced by normalizeToolVersion; one
+// that cannot be reduced is skipped.
 func detectToolchainVersions(worktree, env string) map[string]string {
 	out := map[string]string{}
 	if worktree == "" {
 		return out
 	}
-	all := env == "" || env == "base"
 	set := func(tool, constraint string) {
 		if _, ok := out[tool]; ok {
 			return
@@ -187,31 +189,31 @@ func detectToolchainVersions(worktree, env string) map[string]string {
 			out[tool] = v
 		}
 	}
-	if all || env == "python" {
-		set("python", firstLine(worktree, ".python-version"))
-		if m := runtimeTxtRe.FindStringSubmatch(firstLine(worktree, "runtime.txt")); m != nil {
-			set("python", m[1])
-		}
-		if m := requiresPythonRe.FindStringSubmatch(readMarker(worktree, "pyproject.toml")); m != nil {
-			set("python", m[1])
-		}
+	set("python", firstLine(worktree, ".python-version"))
+	if m := runtimeTxtRe.FindStringSubmatch(firstLine(worktree, "runtime.txt")); m != nil {
+		set("python", m[1])
 	}
-	if all || env == "node" {
-		set("node", firstLine(worktree, ".nvmrc"))
-		set("node", firstLine(worktree, ".node-version"))
-		var pkg struct {
-			Engines struct {
-				Node string `json:"node"`
-			} `json:"engines"`
-		}
-		if json.Unmarshal([]byte(readMarker(worktree, "package.json")), &pkg) == nil {
-			set("node", pkg.Engines.Node)
-		}
+	if m := requiresPythonRe.FindStringSubmatch(readMarker(worktree, "pyproject.toml")); m != nil {
+		set("python", m[1])
 	}
-	if all || env == "go" {
-		if m := goDirectiveRe.FindStringSubmatch(readMarker(worktree, "go.mod")); m != nil {
-			set("go", m[1])
-		}
+	set("node", firstLine(worktree, ".nvmrc"))
+	set("node", firstLine(worktree, ".node-version"))
+	var pkg struct {
+		Engines struct {
+			Node string `json:"node"`
+		} `json:"engines"`
+	}
+	if json.Unmarshal([]byte(readMarker(worktree, "package.json")), &pkg) == nil {
+		set("node", pkg.Engines.Node)
+	}
+	set("go", firstLine(worktree, ".go-version"))
+	if m := goDirectiveRe.FindStringSubmatch(readMarker(worktree, "go.mod")); m != nil {
+		set("go", m[1])
+	}
+	set("java", firstLine(worktree, ".java-version"))
+	set("ruby", strings.TrimPrefix(firstLine(worktree, ".ruby-version"), "ruby-"))
+	if m := rustChannelRe.FindStringSubmatch(readMarker(worktree, "rust-toolchain.toml")); m != nil {
+		set("rust", m[1])
 	}
 	if env == "php" {
 		var composer struct {
@@ -228,8 +230,10 @@ func detectToolchainVersions(worktree, env string) map[string]string {
 	for tool, v := range parseToolVersions(readMarker(worktree, ".tool-versions")) {
 		set(tool, v)
 	}
-	for tool, v := range parseMiseToml(readMarker(worktree, ".mise.toml")) {
-		set(tool, v)
+	for _, name := range []string{".mise.toml", "mise.toml"} {
+		for tool, v := range parseMiseToml(readMarker(worktree, name)) {
+			set(tool, v)
+		}
 	}
 	if env != "php" {
 		delete(out, "php")
@@ -238,9 +242,12 @@ func detectToolchainVersions(worktree, env string) map[string]string {
 }
 
 // supportedToolchains are the tools mise installs from prebuilt
-// binaries, plus php, which is selected from the minors the php image
-// bakes (D-127).
-var supportedToolchains = map[string]bool{"python": true, "node": true, "go": true, "php": true}
+// binaries (ruby from mise's precompiled builds, rust through rustup),
+// plus php, which is selected from the minors the php image bakes
+// (D-127).
+var supportedToolchains = map[string]bool{
+	"python": true, "node": true, "go": true, "java": true, "ruby": true, "rust": true, "php": true,
+}
 
 // phpMinors are the PHP minors deploy/sandbox-php.Dockerfile bakes, ascending.
 var phpMinors = []string{"8.1", "8.2", "8.3", "8.4"}
@@ -258,6 +265,7 @@ var (
 	runtimeTxtRe     = regexp.MustCompile(`^python-(\S+)`)
 	requiresPythonRe = regexp.MustCompile(`(?m)^\s*requires-python\s*=\s*["']([^"']+)["']`)
 	goDirectiveRe    = regexp.MustCompile(`(?m)^go\s+(\d+\.\d+(?:\.\d+)?)\s*$`)
+	rustChannelRe    = regexp.MustCompile(`(?m)^\s*channel\s*=\s*["']([^"']+)["']`)
 	miseToolLineRe   = regexp.MustCompile(`^["']?([A-Za-z0-9_-]+)["']?\s*=\s*(.+)$`)
 	quotedRe         = regexp.MustCompile(`["']([^"']+)["']`)
 	goalToolchainRe  = regexp.MustCompile(`(?i)\b(?:python\s*v?([23]\.\d+(?:\.\d+)?)|node(?:\.?js)?\s*v?(\d{2}(?:\.\d+){0,2})|go(?:lang)?\s*v?(1\.\d+(?:\.\d+)?)|php\s*v?([5-8]\.\d+)(?:\.\d+)?)\b`)
@@ -304,10 +312,16 @@ func goalToolchainVersions(goal string) map[string]string {
 	return out
 }
 
-// normalizeToolVersion reduces a version constraint to a prefix mise
-// accepts. An operator constraint keeps at most major.minor (a lower
-// bound is not an exact pin); alternatives ("||"), upper-only and
-// exclusion constraints are not guessed at.
+// normalizeToolVersion reduces a version constraint to a selector mise
+// accepts. D-139 (issue #1014): an open lower bound never installs its
+// floor. ">=" with no upper bound becomes "latest", "^" keeps up to the
+// leftmost non-zero part ("^20.5" -> "20") and "~=" drops the last part
+// ("~=3.11" -> "3"); mise then picks the newest release that satisfies
+// the bound from the same version index the install downloads anyway,
+// so no extra lookup can fail. A range with an upper bound ("<"), "~"
+// and wildcards keep at most major.minor of the lower bound;
+// alternatives ("||"), upper-only and exclusion constraints are not
+// guessed at.
 func normalizeToolVersion(c string) (string, bool) {
 	c = strings.TrimSpace(c)
 	if c == "" || strings.Contains(c, "||") {
@@ -317,9 +331,18 @@ func normalizeToolVersion(c string) (string, bool) {
 	if m == nil {
 		return "", false
 	}
-	v := m[2]
-	if (m[1] != "" && m[1] != "==" && m[1] != "=") || m[3] != "" {
-		if parts := strings.Split(v, "."); len(parts) > 2 {
+	op, v := m[1], m[2]
+	parts := strings.Split(v, ".")
+	open := !strings.Contains(c, "<")
+	switch {
+	case op == ">=" && open:
+		return "latest", true
+	case op == "^" && open:
+		v = caretPrefix(parts)
+	case op == "~=" && open && len(parts) > 1:
+		v = strings.Join(parts[:len(parts)-1], ".")
+	case (op != "" && op != "==" && op != "=") || m[3] != "":
+		if len(parts) > 2 {
 			v = strings.Join(parts[:2], ".")
 		}
 	}
@@ -329,12 +352,24 @@ func normalizeToolVersion(c string) (string, bool) {
 	return v, true
 }
 
-// normalizePHPVersion reduces a composer php constraint to a minor. A
-// lower bound ("^8.0.2", ">=8.1", "~8.1") selects the lowest baked
-// minor of the same major that satisfies it, so a Laravel 9 "^8.0.2"
-// runs on 8.1; an exact or wildcard pin keeps its own minor even when
-// the image lacks it, which the install then reports. Alternatives
-// ("|" or "||") are not guessed at.
+// caretPrefix is the prefix a caret range spans: up to and including
+// the leftmost non-zero part ("18.2" -> "18", "0.2.3" -> "0.2").
+func caretPrefix(parts []string) string {
+	for i, p := range parts {
+		if p != "0" {
+			return strings.Join(parts[:i+1], ".")
+		}
+	}
+	return strings.Join(parts, ".")
+}
+
+// normalizePHPVersion reduces a composer php constraint to a minor. An
+// open lower bound ("^8.0.2", ">=7.4", "~8.1") selects the newest baked
+// minor that satisfies it (D-139), which is the image default; with an
+// upper bound ("<") it keeps the lowest one (D-127). An exact or
+// wildcard pin, or a bound no baked minor satisfies, keeps its own
+// minor, which the install then reports. Alternatives ("|" or "||")
+// are not guessed at.
 func normalizePHPVersion(c string) (string, bool) {
 	c = strings.TrimSpace(c)
 	if c == "" || strings.Contains(c, "|") {
@@ -353,13 +388,35 @@ func normalizePHPVersion(c string) (string, bool) {
 	if !lowerBound {
 		return minor, true
 	}
-	want := minorNumber(minor)
+	open := !strings.Contains(c, "<")
+	pick := ""
 	for _, b := range phpMinors {
-		if strings.HasPrefix(b, parts[0]+".") && minorNumber(b) >= want {
-			return b, true
+		bMajor, _, _ := strings.Cut(b, ".")
+		ok := bMajor == parts[0] && minorNumber(b) >= minorNumber(minor)
+		if m[1] == ">=" && open && majorNumber(bMajor) > majorNumber(parts[0]) {
+			ok = true
+		}
+		if !ok {
+			continue
+		}
+		pick = b
+		if !open {
+			break
 		}
 	}
-	return minor, true
+	if pick == "" {
+		return minor, true
+	}
+	return pick, true
+}
+
+// majorNumber parses a major version, -1 when unparsable.
+func majorNumber(s string) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 // minorNumber returns the minor of a "major.minor" string, -1 when unparsable.
