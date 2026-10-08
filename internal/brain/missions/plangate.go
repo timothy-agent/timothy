@@ -9,9 +9,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,20 +29,27 @@ var emptyOutputIdiom = regexp.MustCompile(`\|\s*grep(\s+-\w+)*\s+(['"]?)\^\$(['"
 // banned, so `[ -z "$(...)" ]` is not available to it).
 const emptyOutputHint = "awk 'END{exit NR>0}'"
 
-// codeExtensions marks artifacts a check_cmd must build, test or run
-// rather than only grep.
-var codeExtensions = map[string]bool{
-	".go": true, ".py": true,
-	".js": true, ".mjs": true, ".cjs": true, ".jsx": true, ".ts": true, ".tsx": true,
+// codeExtensions maps artifacts a check_cmd must build, test or run
+// rather than only grep to their language. D-139 (issue #1014): the
+// code floor keys on the artifact's language, not the sandbox
+// environment, so polyglot repos gate every unit on its own toolchain.
+var codeExtensions = map[string]string{
+	".go": "go", ".py": "python",
+	".js": "node", ".mjs": "node", ".cjs": "node", ".jsx": "node", ".ts": "node", ".tsx": "node",
+	".php": "php", ".rb": "ruby", ".java": "jvm", ".kt": "jvm", ".rs": "rust",
 }
 
-// toolchainByEnv recognises an invocation of the environment's own
-// toolchain (sandboxd's go/node/python variants). The alternation is a
-// floor, not a full grammar: any one match satisfies checkCodeFloor.
-var toolchainByEnv = map[string]*regexp.Regexp{
+// toolchainByLanguage recognises an invocation of a language's
+// toolchain. The alternation is a floor, not a full grammar: any one
+// match satisfies checkCodeFloor.
+var toolchainByLanguage = map[string]*regexp.Regexp{
 	"go":     regexp.MustCompile(`(^|[\s;&|(])go\s+(test|vet|build|run)\b`),
 	"python": regexp.MustCompile(`(^|[\s;&|(])(pytest\b|python3?\s+(-m\s+(pytest|unittest)\b|\S+\.py\b))`),
 	"node":   regexp.MustCompile(`(^|[\s;&|(])(npm\s+(run\s+)?test\b|npx\s+(vitest|jest|mocha|tsc)\b|node\s+(--test\b|\S+\.[cm]?js\b)|(yarn|pnpm)\s+test\b|tsc\b)`),
+	"php":    regexp.MustCompile(`(^|[\s;&|(])(\S*/)?(phpunit\b|pest\b|php\s+(artisan\s+test\b|\S+\.php\b)|composer\s+(run(-script)?\s+)?test\b)`),
+	"jvm":    regexp.MustCompile(`(^|[\s;&|(])(\./)?(mvnw?|gradlew?)(\s|$)`),
+	"ruby":   regexp.MustCompile(`(^|[\s;&|(])(\S*/)?(rspec\b|bundle\s+exec\s+\S|rake\s+(test|spec)\b|rails\s+test\b|ruby\s+\S+\.rb\b)`),
+	"rust":   regexp.MustCompile(`(^|[\s;&|(])cargo\s+(\+\S+\s+)?(test|build|check|run|nextest)\b`),
 }
 
 // toolchainExample is what the rejection tells the planner to reach for.
@@ -48,6 +57,10 @@ var toolchainExample = map[string]string{
 	"go":     "go test ./<package>/...",
 	"python": "python3 -m pytest <tests>",
 	"node":   "npm test",
+	"php":    "vendor/bin/phpunit (or php artisan test, composer test)",
+	"jvm":    "./mvnw test (or ./gradlew test)",
+	"ruby":   "bundle exec rspec",
+	"rust":   "cargo test",
 }
 
 // anchorExample is the "fails before, passes after" shape for a unit
@@ -58,6 +71,10 @@ var anchorExample = map[string]string{
 	"go":     "grep -q 'func TestXxx' <pkg>/xxx_test.go && go test ./<pkg>/ -run TestXxx",
 	"python": "grep -q 'def test_xxx' tests/test_xxx.py && python3 -m pytest tests/test_xxx.py -q",
 	"node":   "grep -q 'test(' src/xxx.test.ts && npx vitest run src/xxx.test.ts",
+	"php":    "grep -q 'function test_xxx' tests/Feature/XxxTest.php && vendor/bin/phpunit tests/Feature/XxxTest.php",
+	"jvm":    "grep -q 'void xxx' src/test/java/XxxTest.java && ./mvnw -q test -Dtest=XxxTest",
+	"ruby":   "grep -q 'describe Xxx' spec/xxx_spec.rb && bundle exec rspec spec/xxx_spec.rb",
+	"rust":   "grep -q 'fn xxx' src/xxx.rs && cargo test xxx",
 }
 
 // checkPlanGates runs the static gate checks parsePlan cannot: they
@@ -74,6 +91,12 @@ func checkPlanGates(plan Plan, m Mission) error {
 	if err := checkOwnArtifacts(plan); err != nil {
 		return err
 	}
+	if err := checkUntrackedAssumptions(plan, trackedIn(m.WorkRoot())); err != nil {
+		return err
+	}
+	if err := checkReportArtifacts(plan, m); err != nil {
+		return err
+	}
 	if m.PlanGate.RepoDestination {
 		if err := checkHarnessDelivery(plan); err != nil {
 			return err
@@ -85,7 +108,7 @@ func checkPlanGates(plan Plan, m Mission) error {
 	if err := checkUnitGranularity(plan, m); err != nil && !m.PlanGate.granularityWaivable() {
 		return err
 	}
-	return checkCodeFloor(plan, m.Environment)
+	return checkCodeFloor(plan)
 }
 
 // deliveryPattern matches a unit that pushes a branch or opens a pull
@@ -163,7 +186,7 @@ func checkUnitGranularity(plan Plan, m Mission) error {
 		}
 		code := 0
 		for _, a := range u.Artifacts {
-			if !codeExtensions[strings.ToLower(filepath.Ext(strings.TrimSpace(a)))] {
+			if codeLanguage(a) == "" {
 				continue
 			}
 			code++
@@ -216,6 +239,151 @@ func checkOwnArtifacts(plan Plan) error {
 	return nil
 }
 
+// reportExtensions are the file types an analysis or report lands in.
+var reportExtensions = map[string]bool{".md": true, ".markdown": true, ".txt": true, ".rst": true}
+
+// checkReportArtifacts keeps unrequested reports out of someone's
+// repository (D-134, issue #1039): on a coding mission over a repo
+// source, a unit may not list a new markdown or text file the goal does
+// not name. Existing files (README, CHANGELOG) and files whose base
+// name or top directory the goal names stay allowed.
+func checkReportArtifacts(plan Plan, m Mission) error {
+	if m.Kind != KindCoding || m.RepoURL() == "" {
+		return nil
+	}
+	goal := strings.ToLower(m.Goal)
+	for _, u := range plan.Units {
+		for _, a := range u.Artifacts {
+			p := cleanArtifact(a)
+			if !reportExtensions[strings.ToLower(path.Ext(p))] || !filepath.IsLocal(p) {
+				continue
+			}
+			if strings.Contains(goal, strings.ToLower(path.Base(p))) || goalNamesDir(goal, p) {
+				continue
+			}
+			if _, err := os.Lstat(filepath.Join(m.WorkRoot(), filepath.FromSlash(p))); err == nil {
+				continue
+			}
+			return fmt.Errorf("mission runner: unit %q lists %s as an artifact, but the goal names no such file and the repository does not have it; an analysis or report the goal did not ask to save as a file stays out of the repository: remove %s from the plan (drop the unit if that file is all it produces) and have the worker put the report text in mission_status's final_output on done, which the harness carries in the mission result and the pull request body", u.Title, p, p)
+		}
+	}
+	return nil
+}
+
+// goalNamesDir reports whether a nested artifact's top directory is a
+// word in the goal ("put the notes under docs/", "... under docs.").
+func goalNamesDir(goal, p string) bool {
+	top, _, nested := strings.Cut(p, "/")
+	if !nested {
+		return false
+	}
+	return regexp.MustCompile(`(^|[^\w.-])` + regexp.QuoteMeta(strings.ToLower(top)) + `($|[^\w.-]|\.(\s|$))`).MatchString(goal)
+}
+
+// untrackedClaim matches an assumption saying a file stays out of git.
+var untrackedClaim = regexp.MustCompile(`(?i)\buntracked\b|\bnot\s+(be\s+)?(tracked|committed)\b|\bnever\s+(be\s+)?committed\b|\buncommitted\b`)
+
+// pathToken matches a file-like token: a name with a letter-led
+// extension (never a version like 11.0), or a slash-separated path.
+var pathToken = regexp.MustCompile(`[\w.-]*[\w-]\.[A-Za-z][A-Za-z0-9]*\b|[\w.-]+(/[\w.-]+)+`)
+
+// isShellWordSep splits a check_cmd into words for path matching.
+func isShellWordSep(r rune) bool {
+	return strings.ContainsRune(" \t\n;&|()<>'\"=`", r)
+}
+
+// clauseSep splits assumption text into clauses, so a path named in one
+// clause ("the fix must land in package.json") is not read as the
+// subject of an untracked claim in another.
+var clauseSep = regexp.MustCompile(`;|\.\s|\.$|\n`)
+
+// lockfileWord matches a claim about "the lockfile".
+var lockfileWord = regexp.MustCompile(`(?i)\block\s?files?\b`)
+
+// knownLockfiles are the base names a pathless "lockfile" claim covers.
+var knownLockfiles = map[string]bool{
+	"package-lock.json": true, "npm-shrinkwrap.json": true, "yarn.lock": true, "pnpm-lock.yaml": true,
+	"bun.lock": true, "bun.lockb": true, "composer.lock": true, "poetry.lock": true, "uv.lock": true,
+	"Pipfile.lock": true, "Gemfile.lock": true, "Cargo.lock": true, "go.sum": true,
+}
+
+// checkUntrackedAssumptions rejects a plan that assumes a file stays
+// untracked while a unit lists it in artifacts or scope or uses it in
+// check_cmd (D-134, issue #1039): CommitUnit stages untracked files
+// under a unit's artifacts and scope, so the assumption cannot hold.
+// A claim clause that names no path but says "lockfile" (or whose
+// assumption does) covers every
+// known lockfile tracked reports as not tracked yet; a tracked one is
+// committed as an ordinary edit.
+func checkUntrackedAssumptions(plan Plan, tracked func(p string) bool) error {
+	for _, as := range plan.Assumptions {
+		text := strings.TrimSpace(as.Assumption + "; " + as.Default)
+		for _, field := range []string{as.Assumption, as.Default} {
+			for _, clause := range clauseSep.Split(field, -1) {
+				if !untrackedClaim.MatchString(clause) {
+					continue
+				}
+				toks := pathToken.FindAllString(clause, -1)
+				for _, tok := range toks {
+					want := cleanArtifact(tok)
+					if u, where, p := unitPathUse(plan, func(p string) bool { return p == want }); where != "" {
+						return fmt.Errorf("mission runner: plan assumption %q says %s stays untracked, but unit %q uses it in its %s, and the harness commits the files a unit declares; either keep %s out of that unit's artifacts, scope and check_cmd, or drop the assumption", text, p, u, where, p)
+					}
+				}
+				// The assumption field is the topic a bare default clause
+				// ("stays untracked") speaks about.
+				if len(toks) > 0 || !lockfileWord.MatchString(clause) && !lockfileWord.MatchString(as.Assumption) {
+					continue
+				}
+				untrackedLock := func(p string) bool { return knownLockfiles[path.Base(p)] && !tracked(p) }
+				if u, where, p := unitPathUse(plan, untrackedLock); where != "" {
+					return fmt.Errorf("mission runner: plan assumption %q says the lockfile stays untracked, but unit %q uses %s in its %s and the repository does not track it, and the harness commits the files a unit declares; either keep %s out of that unit's artifacts, scope and check_cmd (put the fix in the manifest), or drop the assumption", text, u, p, where, p)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// unitPathUse finds the first unit with an artifact, scope entry or
+// check_cmd word whose cleaned path match accepts.
+func unitPathUse(plan Plan, match func(p string) bool) (unit, where, p string) {
+	for _, u := range plan.Units {
+		for _, l := range []struct {
+			where   string
+			entries []string
+		}{
+			{"artifacts", u.Artifacts},
+			{"scope", u.Scope},
+			{"check_cmd", strings.FieldsFunc(u.CheckCmd, isShellWordSep)},
+		} {
+			for _, e := range l.entries {
+				if strings.TrimSpace(e) == "" {
+					continue
+				}
+				if c := cleanArtifact(e); match(c) {
+					return u.Title, l.where, c
+				}
+			}
+		}
+	}
+	return "", "", ""
+}
+
+// trackedIn reports whether git tracks p in the worktree at root; any
+// git failure (no repository) reads as untracked.
+func trackedIn(root string) func(p string) bool {
+	return func(p string) bool {
+		if root == "" || !filepath.IsLocal(p) {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), gitOpTimeout)
+		defer cancel()
+		_, err := runGit(ctx, root, "ls-files", "--error-unmatch", "--", p)
+		return err == nil
+	}
+}
+
 func cleanArtifact(a string) string {
 	return path.Clean(filepath.ToSlash(strings.TrimSpace(a)))
 }
@@ -223,41 +391,39 @@ func cleanArtifact(a string) string {
 // checkCodeFloor requires every unit that produces source files to
 // build, test or run them in its check_cmd. Grep against source proves
 // text is present, never that code works; a worker can satisfy it by
-// adding a comment, and one did.
-func checkCodeFloor(plan Plan, environment string) error {
+// adding a comment, and one did. A call to the toolchain of any
+// language the unit's source artifacts are in satisfies it (D-139).
+func checkCodeFloor(plan Plan) error {
 	for _, u := range plan.Units {
-		if !producesCode(u.Artifacts) {
+		langs := codeLanguages(u.Artifacts)
+		if len(langs) == 0 || invokesToolchain(u.CheckCmd, langs) {
 			continue
 		}
-		if invokesToolchain(u.CheckCmd, environment) {
-			continue
-		}
-		example := toolchainExample[environment]
-		if example == "" {
-			example = "the environment's test command"
-		}
-		return fmt.Errorf("mission runner: unit %q produces source files but its check_cmd never builds, tests or runs them; start it with %s (greps may follow, they never stand alone)", u.Title, example)
+		return fmt.Errorf("mission runner: unit %q produces source files but its check_cmd never builds, tests or runs them; start it with %s (greps may follow, they never stand alone)", u.Title, toolchainExample[langs[0]])
 	}
 	return nil
 }
 
-func producesCode(artifacts []string) bool {
-	for _, a := range artifacts {
-		if codeExtensions[strings.ToLower(filepath.Ext(strings.TrimSpace(a)))] {
-			return true
-		}
-	}
-	return false
+// codeLanguage is the language of a source artifact, "" for any other file.
+func codeLanguage(artifact string) string {
+	return codeExtensions[strings.ToLower(filepath.Ext(strings.TrimSpace(artifact)))]
 }
 
-// invokesToolchain accepts the environment's own toolchain, or any
-// known one when the environment is unset or unknown.
-func invokesToolchain(cmd, environment string) bool {
-	if re, ok := toolchainByEnv[environment]; ok {
-		return re.MatchString(cmd)
+// codeLanguages lists the languages of the source artifacts, in artifact order.
+func codeLanguages(artifacts []string) []string {
+	var out []string
+	for _, a := range artifacts {
+		if l := codeLanguage(a); l != "" && !slices.Contains(out, l) {
+			out = append(out, l)
+		}
 	}
-	for _, re := range toolchainByEnv {
-		if re.MatchString(cmd) {
+	return out
+}
+
+// invokesToolchain reports whether cmd calls the toolchain of any of langs.
+func invokesToolchain(cmd string, langs []string) bool {
+	for _, l := range langs {
+		if toolchainByLanguage[l].MatchString(cmd) {
 			return true
 		}
 	}
@@ -300,7 +466,10 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 		}
 		switch {
 		case res.Passed:
-			anchor := anchorExample[m.Environment]
+			anchor := ""
+			if langs := codeLanguages(u.Artifacts); len(langs) > 0 {
+				anchor = anchorExample[langs[0]]
+			}
 			if anchor == "" {
 				anchor = "grep -q '<symbol the unit adds>' <artifact> && <toolchain call>"
 			}

@@ -1,0 +1,14 @@
+# Ecosystem smoke matrix (issue #1018), read by scripts/canary-ecosystems.sh.
+# One row per reference repo, fields separated by |:
+#   name|ecosystem|upstream|fork|branch|sha|osv ecosystems|reason
+# fork is the timothy-agent copy the mission clones and opens its PR on;
+# branch is the fork's default branch, reset to sha before every run.
+# osv ecosystems are the offline database names the audit needs.
+# Grow by one row per new failure class: pnpm workspace, Django +
+# Postgres, Laravel + Vite, Spring Gradle, Rust crate.
+laravel|php|SumonMSelim/solid-principles-example-laravel|timothy-agent/solid-principles-example-laravel|main|cc9632faa2f4fb26c68fc232f63e24d86cc6dbd1|Packagist npm|Trigger repo of epic #1019 (mission be8a2860): Laravel with Vite, composer.lock plus a package.json without a lockfile, and an env template.
+node|node|cheeriojs/cheerio|timothy-agent/cheerio|main|50b5d5ce49f7863ed70c82dad2652bc8cb147859|npm|cheerio v1.0.0 (2024-08): popular npm library, Vitest suite, package-lock.json; locks undici 6.19.5, which predates the fix for CVE-2025-22150.
+python|python|pydantic/pydantic-settings|timothy-agent/pydantic-settings|main|18747409238dbba5c4ba9779c46353648f79f7ca|PyPI|pydantic-settings v2.9.1 (2025-04): small, maintained library managed with uv (uv.lock) and a pytest suite; the lock is 18 months old.
+go|go|labstack/echo|timothy-agent/echo|master|88c379ff77278f553a0f3c44d27786b5a450b6e9|Go|echo v4.12.0 (2024-04): popular Go web framework with a fast go test suite; golang.org/x/crypto v0.22.0 and x/net v0.24.0 have known advisories, and golang-jwt/jwt v3 has no fixed v3 release.
+maven|java|jhy/jsoup|timothy-agent/jsoup|master|19e8539fbfae80432fc4d8e9b562a39f786f547e|Maven|jsoup 1.18.1 (2024-07): single-module Maven project without a wrapper and a JUnit 5 suite; test-scope Jetty 9.4.55 is end of life with open advisories.
+rails|ruby|lobsters/lobsters|timothy-agent/lobsters|main|1f64e6783cd7c1ee46ce9e4ed1f4cbc56d5fd4bf|RubyGems|Lobsters (2026-05-14): real Rails 8 app on SQLite with an RSpec suite; database.yml ships only as a sample and the Gemfile.lock is five months old.

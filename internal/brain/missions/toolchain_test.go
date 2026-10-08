@@ -41,8 +41,8 @@ func TestDetectToolchainVersions(t *testing.T) {
 		{".python-version comment and pypy skipped", "python", map[string]string{".python-version": "# pin\npypy3.9\n"}, map[string]string{}},
 		{"runtime.txt", "python", map[string]string{"runtime.txt": "python-3.10.4\n"}, map[string]string{"python": "3.10.4"}},
 		{"pyproject range", "python", map[string]string{"pyproject.toml": "[project]\nrequires-python = \">=3.10,<3.11\"\n"}, map[string]string{"python": "3.10"}},
-		{"pyproject compatible release", "python", map[string]string{"pyproject.toml": "[project]\nrequires-python = '~=3.10'\n"}, map[string]string{"python": "3.10"}},
-		{"pyproject lower bound with patch", "python", map[string]string{"pyproject.toml": "requires-python = \">=3.9.2\"\n"}, map[string]string{"python": "3.9"}},
+		{"pyproject compatible release", "python", map[string]string{"pyproject.toml": "[project]\nrequires-python = '~=3.10'\n"}, map[string]string{"python": "3"}},
+		{"pyproject open lower bound with patch", "python", map[string]string{"pyproject.toml": "requires-python = \">=3.9.2\"\n"}, map[string]string{"python": "latest"}},
 		{"pyproject wildcard", "python", map[string]string{"pyproject.toml": "requires-python = \"==3.10.*\"\n"}, map[string]string{"python": "3.10"}},
 		{"pyproject exclusion skipped", "python", map[string]string{"pyproject.toml": "requires-python = \"!=3.9.*\"\n"}, map[string]string{}},
 		{"python precedence", "python", map[string]string{".python-version": "3.11", "runtime.txt": "python-3.9.1", "pyproject.toml": "requires-python = \">=3.8\""}, map[string]string{"python": "3.11"}},
@@ -63,21 +63,30 @@ func TestDetectToolchainVersions(t *testing.T) {
 		{".mise.toml string, list and table", "java", map[string]string{".mise.toml": "[env]\nX = \"1\"\n\n[tools]\npython = \"3.12\"\nnode = [\"20\", \"18\"]\ngo = { version = \"1.22\" }\n"}, map[string]string{"python": "3.12", "node": "20", "go": "1.22"}},
 		{"language marker beats tool-versions", "python", map[string]string{".python-version": "3.11", ".tool-versions": "python 3.9"}, map[string]string{"python": "3.11"}},
 		{"tool-versions beats mise.toml", "", map[string]string{".tool-versions": "python 3.9", ".mise.toml": "[tools]\npython = \"3.12\"\nnode = \"20\"\n"}, map[string]string{"python": "3.9", "node": "20"}},
-		{"python env ignores node markers", "python", map[string]string{".nvmrc": "18", ".python-version": "3.10"}, map[string]string{"python": "3.10"}},
-		{"go env ignores python markers", "go", map[string]string{".python-version": "3.10", "go.mod": "go 1.22"}, map[string]string{"go": "1.22"}},
+		{"python env reads node markers too", "python", map[string]string{".nvmrc": "18", ".python-version": "3.10"}, map[string]string{"python": "3.10", "node": "18"}},
+		{"go env reads python markers too", "go", map[string]string{".python-version": "3.10", "go.mod": "go 1.22"}, map[string]string{"go": "1.22", "python": "3.10"}},
 		{"base env reads every language marker", "base", map[string]string{".python-version": "3.10", ".nvmrc": "18"}, map[string]string{"python": "3.10", "node": "18"}},
+		{"laravel repo with nvmrc", "php", map[string]string{"composer.json": `{"require":{"php":"^8.2","laravel/framework":"^11.0"}}`, "package.json": `{"scripts":{"build":"vite build"}}`, ".nvmrc": "20\n"}, map[string]string{"php": "8.4", "node": "20"}},
+		{"node env reads every other ecosystem", "node", map[string]string{".nvmrc": "22", ".go-version": "1.23", ".java-version": "21", ".ruby-version": "3.3.5", "rust-toolchain.toml": "[toolchain]\nchannel = \"1.80\"\n", "pyproject.toml": "requires-python = \">=3.10\""}, map[string]string{"node": "22", "go": "1.23", "java": "21", "ruby": "3.3.5", "rust": "1.80", "python": "latest"}},
+		{".go-version beats go.mod", "go", map[string]string{".go-version": "1.23.2\n", "go.mod": "go 1.21"}, map[string]string{"go": "1.23.2"}},
+		{".ruby-version with ruby- prefix", "", map[string]string{".ruby-version": "ruby-3.2.2\n"}, map[string]string{"ruby": "3.2.2"}},
+		{"rust channel name left to mise", "", map[string]string{"rust-toolchain.toml": "[toolchain]\nchannel = \"stable\"\n"}, map[string]string{}},
+		{".sdkmanrc left to mise", "java", map[string]string{".sdkmanrc": "java=17.0.2-tem\n"}, map[string]string{}},
+		{"mise.toml without dot", "", map[string]string{"mise.toml": "[tools]\njava = \"21\"\nnode = \"22\"\n"}, map[string]string{"java": "21", "node": "22"}},
 		{"hostile version rejected", "", map[string]string{".tool-versions": "python 3.10;rm\nnode $(x)\n"}, map[string]string{"python": "3.10"}},
 		{"hostile tool name rejected", "", map[string]string{".tool-versions": "py$thon 3.10\n"}, map[string]string{}},
-		{"unsupported tools ignored", "", map[string]string{".tool-versions": "ruby 3.3.0\nphp 8.2\n", ".mise.toml": "[tools]\njava = \"21\"\n"}, map[string]string{}},
-		{"composer require caret", "php", map[string]string{"composer.json": `{"require":{"php":"^8.1"}}`}, map[string]string{"php": "8.1"}},
+		{"ruby and java read, unsupported and php outside php env dropped", "", map[string]string{".tool-versions": "ruby 3.3.0\nphp 8.2\nerlang 26.2\n", ".mise.toml": "[tools]\njava = \"21\"\n"}, map[string]string{"ruby": "3.3.0", "java": "21"}},
+		{"composer require caret takes newest baked minor", "php", map[string]string{"composer.json": `{"require":{"php":"^8.1"}}`}, map[string]string{"php": "8.4"}},
 		{"composer platform beats require", "php", map[string]string{"composer.json": `{"require":{"php":"^8.1"},"config":{"platform":{"php":"8.3.12"}}}`}, map[string]string{"php": "8.3"}},
-		{"composer laravel 9 lower bound clamps to baked", "php", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`}, map[string]string{"php": "8.1"}},
+		{"composer laravel 9 lower bound takes newest baked minor", "php", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`}, map[string]string{"php": "8.4"}},
 		{"composer unbaked exact kept for the install to report", "php", map[string]string{"composer.json": `{"require":{"php":"7.4.33"}}`}, map[string]string{"php": "7.4"}},
-		{"composer alternatives skipped", "php", map[string]string{"composer.json": `{"require":{"php":"^7.4|^8.0"}}`}, map[string]string{}},
+		{"composer alternatives matched", "php", map[string]string{"composer.json": `{"require":{"php":"^7.4|^8.0"}}`}, map[string]string{"php": "8.4"}},
+		{"composer hyphen range skipped", "php", map[string]string{"composer.json": `{"require":{"php":"8.0 - 8.2"}}`}, map[string]string{}},
+		{"composer lock caps php", "php", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`, "composer.lock": `{"packages":[{"name":"a/a","require":{"php":">=8.0,<8.3"}}]}`}, map[string]string{"php": "8.2"}},
 		{"composer without php constraint", "php", map[string]string{"composer.json": `{"require":{"laravel/framework":"^12.0"}}`}, map[string]string{}},
 		{"bad composer.json", "php", map[string]string{"composer.json": `{`}, map[string]string{}},
 		{"php tool-versions in php env", "php", map[string]string{".tool-versions": "php 8.2.10\n"}, map[string]string{"php": "8.2"}},
-		{"composer beats tool-versions", "php", map[string]string{"composer.json": `{"require":{"php":"^8.3"}}`, ".tool-versions": "php 8.1\n"}, map[string]string{"php": "8.3"}},
+		{"composer beats tool-versions", "php", map[string]string{"composer.json": `{"require":{"php":"~8.3.1"}}`, ".tool-versions": "php 8.1\n"}, map[string]string{"php": "8.3"}},
 		{"php ignored outside php env", "base", map[string]string{"composer.json": `{"require":{"php":"^8.1"}}`, ".mise.toml": "[tools]\nphp = \"8.2\"\n"}, map[string]string{}},
 	}
 	for _, tc := range cases {
@@ -136,24 +145,96 @@ func TestDetectMissionToolchainsGoalFallback(t *testing.T) {
 	}
 }
 
+// TestNormalizeToolVersion is the D-139 resolution table: an open lower
+// bound resolves to a selector mise reads as the newest satisfying
+// release, never the floor; upper-bounded ranges keep major.minor of
+// the lower bound; what cannot be reduced is skipped.
+func TestNormalizeToolVersion(t *testing.T) {
+	cases := []struct {
+		in, want string
+		ok       bool
+	}{
+		{">=3.8", "latest", true},
+		{">= 16", "latest", true},
+		{">=3.8, !=3.9.*", "latest", true},
+		{"^20", "20", true},
+		{"^20.11.1", "20", true},
+		{"^0.2.3", "0.2", true},
+		{"^0.0.3", "0.0.3", true},
+		{"~=3.11", "3", true},
+		{"~=3.11.2", "3.11", true},
+		{"~18.2.1", "18.2", true},
+		{"<3.13", "", false},
+		{">=3.10,<3.11", "3.10", true},
+		{">=18 <19", "18", true},
+		{"^18 <18.5", "18", true},
+		{"~=3.11, <3.13", "3.11", true},
+		{"==3.10.*", "3.10", true},
+		{"18.x", "18", true},
+		{"3.12.4", "3.12.4", true},
+		{"v18.20.4", "18.20.4", true},
+		{"^16 || ^18", "", false},
+		{"!=3.9.*", "", false},
+		{"lts/*", "", false},
+		{"", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := normalizeToolVersion(tc.in)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("normalizeToolVersion(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestBe8a2860RepoDetectsPHPAndNode is the be8a2860 regression: the
+// Laravel + Vite repo detected as php used to drop its .nvmrc, so the
+// npm side ran on the image's node. Its composer.lock allows 8.4, so php
+// is the newest baked minor.
+func TestBe8a2860RepoDetectsPHPAndNode(t *testing.T) {
+	dir := writeMarkers(t, map[string]string{
+		"composer.json": `{"require":{"php":"^8.2","laravel/framework":"^11.0"},"scripts":{"test":["@php artisan test"]}}`,
+		"composer.lock": `{"packages":[{"name":"laravel/framework","require":{"php":"^8.2"}},{"name":"symfony/console","require":{"php":">=8.2"}}],` +
+			`"packages-dev":[{"name":"phpunit/phpunit","require":{"php":">=8.2"}}]}`,
+		"package.json":      `{"private":true,"type":"module","scripts":{"build":"vite build"},"devDependencies":{"vite":"^5.0"}}`,
+		"package-lock.json": "{}",
+		".nvmrc":            "22\n",
+		".env.example":      "APP_KEY=\n",
+		"artisan":           "<?php\n",
+	})
+	env, _, _ := detectEnvironmentFromMarkers(dir)
+	if env != "php" {
+		t.Fatalf("environment = %q, want php", env)
+	}
+	got := detectMissionToolchains(dir, env, "Audit the dependencies, upgrade them and open a PR")
+	if want := map[string]string{"php": "8.4", "node": "22"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("toolchains = %v, want %v", got, want)
+	}
+}
+
 func TestNormalizePHPVersion(t *testing.T) {
 	cases := []struct {
 		in, want string
 		ok       bool
 	}{
-		{"^8.1", "8.1", true},
-		{">=8.2", "8.2", true},
-		{"~8.1", "8.1", true},
+		{"^8.1", "8.4", true},
+		{">=8.2", "8.4", true},
+		{"~8.1", "8.4", true},
 		{"~8.1.3", "8.1", true},
-		{"^8.0.2", "8.1", true},
-		{"^8", "8.1", true},
-		{">=7.4", "7.4", true},
+		{"^8.0.2", "8.4", true},
+		{"^8", "8.4", true},
+		{">=7.4", "8.4", true},
+		{"^7.4", "7.4", true},
+		{">=8.1 <8.3", "8.2", true},
+		{">=8.0,<8.4", "8.3", true},
 		{"8.2.*", "8.2", true},
+		{"8.2.10", "8.2", true},
 		{"8.0.30", "8.0", true},
 		{"^8.5", "8.5", true},
-		{"^7.4|^8.0", "", false},
-		{"^7.4 || ^8.0", "", false},
-		{"<9", "", false},
+		{"^7.4|^8.0", "8.4", true},
+		{"^7.3 || ~8.1.0", "8.1", true},
+		{"<9", "8.4", true},
+		{"8.0 - 8.2", "", false},
+		{"lts", "", false},
 		{"", "", false},
 	}
 	for _, tc := range cases {
@@ -161,6 +242,104 @@ func TestNormalizePHPVersion(t *testing.T) {
 		if got != tc.want || ok != tc.ok {
 			t.Errorf("normalizePHPVersion(%q) = %q, %v; want %q, %v", tc.in, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+// TestPHPSatisfies covers the composer constraint forms as composer
+// writes them, matched against a baked minor at its newest patch.
+func TestPHPSatisfies(t *testing.T) {
+	cases := []struct {
+		constraint, minor string
+		sat, ok           bool
+	}{
+		{"^8.1", "8.4", true, true},
+		{"^8.1", "8.0", false, true},
+		{"^7.2.5|^8.0", "8.4", true, true},
+		{"^7.2.5 || ^8.0", "8.2", true, true},
+		{"^7.3", "8.1", false, true},
+		{"~8.1", "8.4", true, true},
+		{"~8.1.0", "8.2", false, true},
+		{"~8.1.0", "8.1", true, true},
+		{">=8.0,<8.4", "8.3", true, true},
+		{">=8.0,<8.4", "8.4", false, true},
+		{">=8.0 <8.4", "8.4", false, true},
+		{">= 8.0, < 8.3", "8.3", false, true},
+		{">=8.1.3", "8.1", true, true},
+		{"<=8.2", "8.2", false, true},
+		{">8.1", "8.1", true, true},
+		{"8.2.*", "8.2", true, true},
+		{"8.2.*", "8.3", false, true},
+		{"8.*", "8.4", true, true},
+		{"*", "8.1", true, true},
+		{"!=8.2.1", "8.2", true, true},
+		{">=8.1@dev", "8.4", true, true},
+		{"8.0 - 8.2", "8.1", false, false},
+		{"", "8.1", false, false},
+	}
+	for _, tc := range cases {
+		sat, ok := phpSatisfies(tc.constraint, tc.minor)
+		if sat != tc.sat || ok != tc.ok {
+			t.Errorf("phpSatisfies(%q, %s) = %v, %v; want %v, %v", tc.constraint, tc.minor, sat, ok, tc.sat, tc.ok)
+		}
+	}
+}
+
+// TestComposerPHP covers the composer.lock-aware choice: the newest
+// baked minor composer.json and every locked package allow, platform
+// winning outright, and the composer.json-only fallback with a note.
+func TestComposerPHP(t *testing.T) {
+	lock := func(pkgs, dev string) string {
+		return `{"packages":[` + pkgs + `],"packages-dev":[` + dev + `]}`
+	}
+	cases := []struct {
+		name     string
+		files    map[string]string
+		want     string
+		wantNote string
+	}{
+		{"no lock takes newest baked", map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`}, "8.4", ""},
+		{"laravel 9 lock capped below 8.4", map[string]string{
+			"composer.json": `{"require":{"php":"^8.0.2","laravel/framework":"^9.19"}}`,
+			"composer.lock": lock(`{"name":"laravel/framework","require":{"php":"^8.0.2"}},{"name":"nesbot/carbon","require":{"php":">=7.1.8,<8.4"}}`,
+				`{"name":"phpunit/phpunit","require":{"php":">=8.0 <8.3"}}`),
+		}, "8.2", ""},
+		{"dev package caps too", map[string]string{
+			"composer.json": `{"require":{"php":"^8.1"}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"php":"^8.1"}}`, `{"name":"b/b","require":{"php":"~8.1.0"}}`),
+		}, "8.1", ""},
+		{"composer alternatives in lock", map[string]string{
+			"composer.json": `{"require":{"php":"^8.1"}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"php":"^7.4|~8.2.0"}}`, ``),
+		}, "8.2", ""},
+		{"platform wins over lock", map[string]string{
+			"composer.json": `{"require":{"php":"^8.1"},"config":{"platform":{"php":"8.3.12"}}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"php":"<8.2"}}`, ``),
+		}, "8.3", ""},
+		{"no baked minor satisfies the lock", map[string]string{
+			"composer.json": `{"require":{"php":"^8.1"}}`,
+			"composer.lock": lock(`{"name":"old/pkg","require":{"php":"^7.4"}},{"name":"ok/pkg","require":{"php":">=8.0"}}`, ``),
+		}, "8.4", "composer install from the lock may fail until these are updated: old/pkg (^7.4)."},
+		{"lock packages without php requirement", map[string]string{
+			"composer.json": `{"require":{"php":"^8.2"}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"ext-json":"*"}}`, ``),
+		}, "8.4", ""},
+		{"unparsable lock constraint ignored", map[string]string{
+			"composer.json": `{"require":{"php":"^8.2"}}`,
+			"composer.lock": lock(`{"name":"a/a","require":{"php":"8.0 - 8.3"}}`, ``),
+		}, "8.4", ""},
+		{"bad lock json ignored", map[string]string{"composer.json": `{"require":{"php":"^8.2"}}`, "composer.lock": `{`}, "8.4", ""},
+		{"no php constraint", map[string]string{"composer.json": `{"require":{"laravel/framework":"^11.0"}}`, "composer.lock": lock(`{"name":"a/a","require":{"php":"<8.2"}}`, ``)}, "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, note := composerPHP(writeMarkers(t, tc.files))
+			if got != tc.want {
+				t.Fatalf("composerPHP = %q, want %q", got, tc.want)
+			}
+			if tc.wantNote == "" && note != "" || tc.wantNote != "" && !strings.HasSuffix(note, tc.wantNote) {
+				t.Fatalf("note = %q, want suffix %q", note, tc.wantNote)
+			}
+		})
 	}
 }
 
@@ -253,6 +432,7 @@ func TestBuildToolchainInstallCmdRoundTrip(t *testing.T) {
 		want []string
 	}{
 		{"sorted", map[string]string{"python": "3.10", "node": "18"}, []string{"use", "--global", "node@18", "python@3.10"}},
+		{"every ecosystem and latest", map[string]string{"node": "latest", "ruby": "3.3", "java": "21", "rust": "1.80", "go": "1.23"}, []string{"use", "--global", "go@1.23", "java@21", "node@latest", "ruby@3.3", "rust@1.80"}},
 		{"quote in version survives as one arg", map[string]string{"python": "3.10'; touch pwned; '"}, []string{"use", "--global", "python@3.10'; touch pwned; '"}},
 	}
 	for _, tc := range cases {
@@ -504,14 +684,15 @@ func TestDiscoverSessionCarriesToolchainNudge(t *testing.T) {
 
 // TestDiscoverOverrideRedetectsToolchains covers the discover report
 // replacing a marker-detected environment: the sink receives the
-// toolchains detected for the NEW environment from the worktree.
+// toolchains detected for the NEW environment from the worktree. Every
+// language pin is kept (D-139); php only in the php environment.
 func TestDiscoverOverrideRedetectsToolchains(t *testing.T) {
 	ws := t.TempDir()
 	dir := filepath.Join(ws, "wt")
 	if err := os.Mkdir(dir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	for name, body := range map[string]string{".python-version": "3.10", ".nvmrc": "18"} {
+	for name, body := range map[string]string{".python-version": "3.10", ".nvmrc": "18", "composer.json": `{"require":{"php":"^8.2"}}`} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -524,8 +705,8 @@ func TestDiscoverOverrideRedetectsToolchains(t *testing.T) {
 	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(sink.toolchains, map[string]string{"python": "3.10"}) {
-		t.Fatalf("toolchains for the new environment = %v, want python 3.10 only", sink.toolchains)
+	if !reflect.DeepEqual(sink.toolchains, map[string]string{"python": "3.10", "node": "18"}) {
+		t.Fatalf("toolchains for the new environment = %v, want python 3.10 and node 18, no php", sink.toolchains)
 	}
 }
 
