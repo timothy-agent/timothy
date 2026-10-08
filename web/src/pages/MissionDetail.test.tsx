@@ -1116,6 +1116,35 @@ describe('MissionDetail', () => {
     expect(screen.getByText('3 rework rounds with findings still open: F1 missing validation')).toBeTruthy()
   })
 
+  it('names a plan-phase harness retry pause and shows the last rejection (be8a2860)', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'plan',
+      status: 'paused',
+      pause_reason: 'no_progress',
+    })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.paused',
+        payload: {
+          reason: 'no_progress',
+          cause: 'harness_retries_exhausted',
+          phase: 'plan',
+          harness_retries: 3,
+          detail: 'plan_invalid: unit 2 has no criteria',
+        },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('Paused: plan rejected 3 times')).toBeTruthy()
+    expect(screen.getByText('Last rejection: plan_invalid: unit 2 has no criteria')).toBeTruthy()
+  })
+
   it('omits the pause detail once the mission has been resumed', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'idle', pause_reason: '' })
     vi.mocked(missionEvents).mockResolvedValue([
