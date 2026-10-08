@@ -272,7 +272,20 @@ type Driver struct {
 	// no-ops instead of starting a competing loop.
 	drivingMu sync.Mutex
 	driving   map[string]bool
+
+	// turns holds the cancel func of each mission's in-flight Advance
+	// (D-135): Signal(InputCancel) fires it so the running turn's model
+	// calls stop with the cancel.
+	turnsMu sync.Mutex
+	turns   map[string]*turnCancel
 }
+
+// turnCancel is one registered Advance; the pointer tells a release
+// apart from a later registration for the same mission.
+type turnCancel struct{ cancel context.CancelCauseFunc }
+
+// errMissionCancelled is the cause a cancel signal puts on the turn's ctx.
+var errMissionCancelled = errors.New("mission cancelled")
 
 func NewDriver(store driverStore, runner Runner, workspace *Workspace, sessions sessionCreator, perms sessionGranter, sandboxExec sandboxExec, sandboxRemove sandboxRemover, log *slog.Logger) *Driver {
 	return &Driver{
@@ -283,6 +296,7 @@ func NewDriver(store driverStore, runner Runner, workspace *Workspace, sessions 
 		verify:       verifier{store: store, sandboxExec: sandboxExec, log: log},
 		cfg:          DefaultConfig,
 		driving:      map[string]bool{},
+		turns:        map[string]*turnCancel{},
 		retryDelayFn: retryDelay,
 	}
 }
@@ -973,7 +987,51 @@ func (d *Driver) grantSessionDefaults(ctx context.Context, m Mission) {
 // calls for, then persists the resulting transition and returns
 // whether the mission can be Advanced again immediately (false on
 // terminal, paused, waiting_for_input, or idle).
+//
+// D-135: the round runs on a ctx Signal(InputCancel) cancels, so a
+// cancel stops the turn's model calls, delegated run and prepare exec.
+// The cancel transition is already committed by then; the unwinding
+// round writes nothing more.
 func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err error) {
+	tctx, release := d.trackTurn(ctx, id)
+	defer release()
+	canContinue, err = d.advance(tctx, id)
+	if errors.Is(context.Cause(tctx), errMissionCancelled) {
+		return false, nil
+	}
+	return canContinue, err
+}
+
+// trackTurn registers a cancelable ctx for id's round. Registration
+// precedes advance's first read, so a cancel either reaches this ctx or
+// commits before that read and is seen there as terminal.
+func (d *Driver) trackTurn(ctx context.Context, id string) (context.Context, func()) {
+	tctx, cancel := context.WithCancelCause(ctx)
+	tc := &turnCancel{cancel: cancel}
+	d.turnsMu.Lock()
+	d.turns[id] = tc
+	d.turnsMu.Unlock()
+	return tctx, func() {
+		d.turnsMu.Lock()
+		if d.turns[id] == tc {
+			delete(d.turns, id)
+		}
+		d.turnsMu.Unlock()
+		cancel(nil)
+	}
+}
+
+// cancelTurn cancels id's in-flight round, if any.
+func (d *Driver) cancelTurn(id string) {
+	d.turnsMu.Lock()
+	tc := d.turns[id]
+	d.turnsMu.Unlock()
+	if tc != nil {
+		tc.cancel(errMissionCancelled)
+	}
+}
+
+func (d *Driver) advance(ctx context.Context, id string) (canContinue bool, err error) {
 	m, err := d.store.Get(ctx, id)
 	if err != nil {
 		return false, fmt.Errorf("driver advance: %w", err)
@@ -1023,12 +1081,19 @@ func (d *Driver) Advance(ctx context.Context, id string) (canContinue bool, err 
 	// and outside any model turn; a brain restart mid-prepare resumes here.
 	if m.Phase == PhaseDiscover {
 		m = d.provision.prepareWorkspace(ctx, m)
+		if errors.Is(context.Cause(ctx), errMissionCancelled) {
+			return false, nil
+		}
 	}
 
 	before := m.Status
 	turnStart := time.Now()
 	in, err := d.runPhase(ctx, m)
 	turnMs := time.Since(turnStart).Milliseconds()
+	if errors.Is(context.Cause(ctx), errMissionCancelled) {
+		d.log.Info("driver: mission cancelled mid-turn, turn aborted", "mission_id", id, "phase", m.Phase)
+		return false, nil
+	}
 	if err != nil && errors.Is(err, ErrAskedUser) {
 		// The turn already parked (nativeRunner.askUserTool's Execute
 		// recorded pending_input and incremented asks_used before ending
@@ -1234,6 +1299,9 @@ func (d *Driver) Signal(ctx context.Context, id string, input Input) error {
 	t := Step(d.toStepState(ctx, m), StepInput{Input: input}, d.config(ctx))
 	if err := d.store.ApplyTransition(ctx, id, t); err != nil {
 		return fmt.Errorf("driver: signal: apply transition: %w", err)
+	}
+	if input == InputCancel {
+		d.cancelTurn(id)
 	}
 	if t.Next.Phase.Terminal() {
 		d.runTerminalHooks(id)
@@ -1850,6 +1918,13 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		if err := d.store.SetLastEvidence(ctx, m.ID, verdict.Evidence); err != nil {
 			d.log.Warn("driver: record evidence failed", "mission_id", m.ID, "error", err)
 		}
+		// D-134: a planned mission's report travels in final_output, not
+		// a repo file; the latest non-empty one is the mission's report.
+		if !m.RunsPlanless() && strings.TrimSpace(verdict.FinalOutput) != "" {
+			if err := d.store.SetFinalOutput(ctx, m.ID, verdict.FinalOutput); err != nil {
+				d.log.Warn("driver: record final output failed", "mission_id", m.ID, "error", err)
+			}
+		}
 		if m.RunsPlanless() {
 			// D-069/D-090: a planless mission (light, or
 			// flow=discover_build) has no plan/artifacts for
@@ -2134,6 +2209,13 @@ func (d *Driver) fullReviewPacket(ctx context.Context, m Mission, idx []int, uni
 		packet.UnitFiles = make([][]string, len(units))
 		for i, u := range units {
 			packet.UnitFiles[i] = insideScope(changedFiles, u.Scope)
+		}
+		// D-140: changedFiles leaves lockfiles out with the diff.
+		if lockfiles := changedLockfiles(touchedFiles(ctx, wt, m.BaseCommit)); len(lockfiles) > 0 {
+			packet.Lockfiles = lockfileSummaries(ctx, wt, m.BaseCommit, lockfiles)
+			if m.EnvFacts != nil && m.EnvFacts.Lockfile != nil {
+				packet.LockfileEvidence = renderLockfileEvidence(m.EnvFacts.Lockfile)
+			}
 		}
 	}
 	if artifacts := reviewArtifacts(units, packet.Diff != ""); len(artifacts) > 0 {

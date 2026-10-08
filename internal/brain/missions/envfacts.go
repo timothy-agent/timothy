@@ -34,6 +34,9 @@ type EnvFacts struct {
 	PHPNote string `json:"php_note,omitempty"`
 	// Prepare is the prepare step's outcome (D-130), nil until it ran.
 	Prepare *PrepareFacts `json:"prepare,omitempty"`
+	// Lockfile is the latest lockfile evidence (D-140), nil while the
+	// diff changes no lockfile.
+	Lockfile *LockfileEvidence `json:"lockfile_evidence,omitempty"`
 }
 
 // DestinationFact is one repo destination the result phase delivers to.
