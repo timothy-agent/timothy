@@ -113,9 +113,10 @@ func TestProvisionToolchainInstallFailureEvent(t *testing.T) {
 	t.Fatal("no mission.toolchain_install_failed event")
 }
 
-// TestProvisionPHPToolchain: a php repo records the composer minor, and
-// a minor the image lacks yields a failure event naming it while the
-// mission still provisions. The selection itself runs through the real
+// TestProvisionPHPToolchain: a php repo records the newest baked minor
+// its composer constraint allows (D-139), and a minor the image lacks
+// yields a failure event naming it while the mission still provisions.
+// The selection itself runs through the real
 // /bin/sh; this container has no /usr/bin/php7.4.
 func TestProvisionPHPToolchain(t *testing.T) {
 	m, _ := provisionWithRepo(t, map[string]string{"composer.json": `{"require":{"php":"^8.0.2"}}`})
