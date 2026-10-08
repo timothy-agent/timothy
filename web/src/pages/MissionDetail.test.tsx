@@ -580,29 +580,6 @@ describe('MissionDetail harness pill', () => {
   })
 })
 
-describe('MissionDetail environment pill', () => {
-  it('shows an icon-only pill, with the env name as the accessible name/tooltip, when the environment has a known icon', async () => {
-    vi.mocked(getMission).mockResolvedValue({ ...baseMission, environment: 'go' })
-    renderPage()
-    const pill = await screen.findByLabelText('go environment')
-    expect(pill).toHaveAttribute('title', 'go environment')
-    expect(pill.querySelector('svg')).toBeTruthy()
-    expect(screen.queryByText('env · go')).toBeNull()
-  })
-
-  it('falls back to text for an environment with no icon (e.g. base), never rendering an empty pill', async () => {
-    vi.mocked(getMission).mockResolvedValue({ ...baseMission, environment: 'base' })
-    renderPage()
-    expect(await screen.findByText('env · base')).toBeTruthy()
-  })
-
-  it('omits the environment pill when mission.environment is empty', async () => {
-    renderPage()
-    await screen.findByRole('heading', { name: 'Fix the login bug' })
-    expect(screen.queryByText(/^env ·/)).toBeNull()
-  })
-})
-
 describe('MissionDetail toolchains pill', () => {
   it('lists the pinned toolchains sorted by tool', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, toolchains: { python: '3.10', node: '18' } })

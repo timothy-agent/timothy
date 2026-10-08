@@ -868,51 +868,18 @@ describe('MissionForm: harness select placement', () => {
   })
 })
 
-describe('MissionForm: environment select', () => {
-  it('shows the environment select for a coding mission, defaulted to Auto-detect', async () => {
-    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(await screen.findByText('General · scratch workspace'))
-
-    expect(screen.getByLabelText('Environment')).toBeInTheDocument()
-    expect(screen.getByLabelText('Environment')).toHaveTextContent('Auto-detect')
-  })
-
-  it('omits the environment select for a general mission', async () => {
-    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    expect(await screen.findByText('General · scratch workspace')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Environment')).toBeNull()
-  })
-
-  it('submits the picked environment for a coding mission, and omits it when left on Auto-detect', async () => {
+describe('MissionForm: one sandbox image (D-141)', () => {
+  it('has no environment select and sends no environment for a coding mission', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm6' } as Mission)
     renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
     fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
     fireEvent.click(await screen.findByText('General · scratch workspace'))
-    fireEvent.click(screen.getByLabelText('Environment'))
-    fireEvent.click(await screen.findByText('Go'))
+    expect(screen.queryByLabelText('Environment')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
 
-    await waitFor(() =>
-      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ environment: 'go' })),
-    )
-  })
-
-  it('omits environment from the create payload when left on Auto-detect', async () => {
-    vi.mocked(createMission).mockResolvedValue({ id: 'm7' } as Mission)
-    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
-
-    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
-    fireEvent.click(await screen.findByText('General · scratch workspace'))
-    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
-
-    await waitFor(() =>
-      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ environment: undefined })),
-    )
+    await waitFor(() => expect(createMission).toHaveBeenCalled())
+    expect(vi.mocked(createMission).mock.calls[0][0]).not.toHaveProperty('environment')
   })
 })
 

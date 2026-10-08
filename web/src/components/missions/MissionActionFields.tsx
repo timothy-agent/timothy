@@ -1,7 +1,6 @@
 import type { AdminRoute, Destination, MissionTemplate } from '../../api/types'
 import { CURRENCIES } from '../../lib/currencies'
 import { type PendingAttachment } from '../Composer'
-import { envIcon } from '../icons/EnvIcons'
 import { Field } from '../timothy/field'
 import { SegmentedControl } from '../timothy/segmented-control'
 import { Checkbox } from '../ui/checkbox'
@@ -10,14 +9,7 @@ import { Label } from '../ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { Textarea } from '../ui/textarea'
 import { MissionAttachments } from './MissionAttachments'
-import {
-  ENVIRONMENT_AUTO,
-  environmentChoices,
-  EXECUTOR_DEFAULT,
-  executorChoices,
-  reviewHarnessChoices,
-  ROUTE_DEFAULT,
-} from './MissionForm'
+import { EXECUTOR_DEFAULT, executorChoices, reviewHarnessChoices, ROUTE_DEFAULT } from './MissionForm'
 
 const numberOrUndefined = (v: string) => (v === '' ? undefined : Number(v))
 
@@ -174,29 +166,6 @@ export function MissionActionFields({
                       {c.label}
                     </SelectItem>
                   ))}
-                </SelectContent>
-              </Select>
-            )}
-          </Field>
-          <Field label="Environment" optional>
-            {(p) => (
-              <Select
-                value={value.environment || ENVIRONMENT_AUTO}
-                onValueChange={(v) => set({ environment: v === ENVIRONMENT_AUTO ? '' : v })}
-              >
-                <SelectTrigger {...p} className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {environmentChoices.map((c) => {
-                    const EnvIcon = envIcon(c.value)
-                    return (
-                      <SelectItem key={c.value} value={c.value}>
-                        {EnvIcon && <EnvIcon />}
-                        {c.label}
-                      </SelectItem>
-                    )
-                  })}
                 </SelectContent>
               </Select>
             )}

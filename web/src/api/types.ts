@@ -894,11 +894,6 @@ export interface Mission {
   // "approval") once the plan phase produces a plan, until an operator
   // approves, replans, or sends it back to discover.
   auto_approve_plan: boolean
-  // environment is the sandbox image key (D-05x) this coding mission's
-  // container runs: "" means base, resolved server-side at create
-  // time (explicit request > repo markers > goal keyword > base).
-  // General missions never set this.
-  environment?: string
   // toolchains maps tool -> version prefix the repo's marker files pin
   // (D-126); installed in the sandbox before discover.
   toolchains?: Record<string, string>
@@ -1375,7 +1370,6 @@ export interface MissionTemplate {
   harness?: string
   // review_harness is copied onto every started mission as-is (issue #582).
   review_harness?: string
-  environment?: string
   // destination_ids names operator-created destinations the started
   // missions deliver their outcome digest to.
   destination_ids?: string[]

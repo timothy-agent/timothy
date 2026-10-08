@@ -1322,11 +1322,6 @@ export interface CreateMissionInput {
   // review round runs as a read-only delegated CLI (issue #582): omit
   // (or "") for the native reviewer, "native" to force it.
   review_harness?: string
-  // environment selects the sandbox image key (D-05x) a coding
-  // mission's container runs: omit (or "") to auto-detect (repo
-  // markers, then a goal-keyword heuristic, falling back to base).
-  // Only valid when kind === 'coding'.
-  environment?: string
   // repo_url is a GitHub repo's https clone URL: when set, the mission
   // clones it instead of self-initializing an empty repo. Requires
   // connector_id (a github-kind connector's PAT authenticates the
@@ -1451,8 +1446,8 @@ export async function listMissions(opts?: {
 }
 
 // createMission returns the full created mission (not just its id) so
-// a server-resolved field decided at create time: e.g. auto-detected
-// environment (D-05x): is available without a follow-up GET.
+// a server-resolved field decided at create time is available without
+// a follow-up GET.
 export async function createMission(input: CreateMissionInput): Promise<Mission> {
   return request<Mission>('/v1/missions', {
     method: 'POST',
