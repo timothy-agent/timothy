@@ -228,6 +228,7 @@ export function MissionForm({
   initial,
   initialGoal,
   parentMissionId,
+  createDisabled = false,
   onDone,
   onCancel,
 }: {
@@ -244,6 +245,8 @@ export function MissionForm({
   // parentMissionId, when set, is included on the create payload:
   // makes this a follow-up mission (see CreateMissionInput).
   parentMissionId?: string
+  // createDisabled blocks Create while a setup gate is unmet.
+  createDisabled?: boolean
   onDone: (missionId: string) => void
   onCancel: () => void
 }) {
@@ -802,6 +805,7 @@ export function MissionForm({
         <GoalTextarea
             id="mission-goal"
             aria-label="Goal"
+            data-tour="missions.form.goal"
             value={goal}
             onChange={onGoalChange}
             references={references}
@@ -823,7 +827,7 @@ export function MissionForm({
           </button>
         )}
         {kind === 'general' && (
-          <label htmlFor="mission-light" className="flex items-start gap-2 text-sm">
+          <label htmlFor="mission-light" data-tour="missions.form.flow" className="flex items-start gap-2 text-sm">
             <input
               id="mission-light"
               type="checkbox"
@@ -1437,7 +1441,11 @@ export function MissionForm({
           <Button variant="outline" disabled={busy} onClick={onCancel}>
             Cancel
           </Button>
-          <Button disabled={!canSubmit || busy} onClick={() => void submit()}>
+          <Button
+            data-tour="missions.form.create"
+            disabled={!canSubmit || busy || createDisabled}
+            onClick={() => void submit()}
+          >
             Create mission
           </Button>
         </div>

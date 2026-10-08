@@ -422,6 +422,7 @@ type miseLocalInput struct {
 	Artisan     bool
 	TestCmd     string // raw command for tasks.test, "" for none yet
 	Lockfiles   []string
+	OSVOffline  bool
 	// Services are the daemons that started (or are about to start);
 	// tasks.test lists them so `mise run test` starts them first.
 	Services []serviceNeed
@@ -481,7 +482,7 @@ func renderMiseLocal(in miseLocalInput, repoKeys map[string]bool) string {
 		fmt.Fprintf(&b, "run = %q\n", in.TestCmd)
 	}
 	if len(in.Lockfiles) > 0 && !repoKeys["tasks.audit"] {
-		fmt.Fprintf(&b, "\n[tasks.audit]\nrun = %q\n", buildAuditCmd(in.Lockfiles, ""))
+		fmt.Fprintf(&b, "\n[tasks.audit]\nrun = %q\n", buildAuditCmd(in.Lockfiles, "", in.OSVOffline))
 	}
 	return b.String()
 }
@@ -532,9 +533,13 @@ func buildTestCmd(c testCandidate) string {
 
 // buildAuditCmd runs osv-scanner over the lockfiles as JSON, into
 // outFile when set (the harness reads the file; a task prints to stdout).
-func buildAuditCmd(lockfiles []string, outFile string) string {
+// offline scans against the local database only (issue #1018).
+func buildAuditCmd(lockfiles []string, outFile string, offline bool) string {
 	var b strings.Builder
 	b.WriteString("mise exec -- osv-scanner scan --format json --all-packages")
+	if offline {
+		b.WriteString(" --offline-vulnerabilities")
+	}
 	for _, l := range lockfiles {
 		b.WriteString(" -L " + shQuote(l))
 	}

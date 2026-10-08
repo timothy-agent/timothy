@@ -3,6 +3,12 @@ import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { getMission, type CreateMissionInput } from '../api/client'
 import type { Mission } from '../api/types'
 import { MissionForm } from '../components/missions/MissionForm'
+import { useOnboarding } from '../onboarding/context'
+import { unmetKey } from '../onboarding/gateCopy'
+import { SetupGate } from '../onboarding/SetupGate'
+import { TourOverlay } from '../onboarding/tour/TourOverlay'
+import { useTour } from '../onboarding/tour/useTour'
+import { missionNewTour } from '../onboarding/tours/missionNew'
 
 // missionToInitial narrows a parent mission down to the fields a
 // follow-up seeds (see MissionForm's initial prop) — goal is
@@ -27,6 +33,8 @@ function missionToInitial(m: Mission): Partial<CreateMissionInput> {
 
 export function NewMission() {
   const navigate = useNavigate()
+  const { readiness } = useOnboarding()
+  const sandboxBlocked = unmetKey(readiness, ['sandbox']) !== null
   const [searchParams] = useSearchParams()
   const parentID = searchParams.get('parent') ?? undefined
   // A shortlist pick carries its goal text through router state
@@ -53,6 +61,11 @@ export function NewMission() {
       .finally(() => setParentLoading(false))
   }, [parentID])
 
+  // The form mounts only once the parent loads, so the tour waits too.
+  const tour = useTour(missionNewTour, {
+    enabled: !parentLoading && !sandboxBlocked && unmetKey(readiness, ['chat_route']) === null,
+  })
+
   return (
     <div className="mx-auto w-full max-w-full px-8 py-6">
       <div>
@@ -68,15 +81,20 @@ export function NewMission() {
         {parentLoading ? (
           <p className="text-sm text-muted-foreground">Loading parent mission…</p>
         ) : (
-          <MissionForm
-            initial={parent ? missionToInitial(parent) : undefined}
-            initialGoal={pickedOptionGoal}
-            parentMissionId={parent?.id}
-            onCancel={() => navigate(-1)}
-            onDone={(id) => navigate(`/missions/${id}`)}
-          />
+          <SetupGate requires={['chat_route']} variant="panel">
+            <SetupGate requires={['sandbox']} variant="banner" />
+            <MissionForm
+              initial={parent ? missionToInitial(parent) : undefined}
+              initialGoal={pickedOptionGoal}
+              parentMissionId={parent?.id}
+              createDisabled={sandboxBlocked}
+              onCancel={() => navigate(-1)}
+              onDone={(id) => navigate(`/missions/${id}`)}
+            />
+          </SetupGate>
         )}
       </div>
+      <TourOverlay {...tour} />
     </div>
   )
 }

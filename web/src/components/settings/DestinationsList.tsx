@@ -68,7 +68,10 @@ export function DestinationsList() {
             delivers there once it finishes.
           </p>
           {destinations.length === 0 ? (
-            <EmptyState title="No destinations yet" description="Add one below." />
+            <EmptyState
+              title="No destinations yet"
+              description="A destination is where mission results go: a GitHub pull request, an email, a file. Pick one below."
+            />
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {destinations.map((d) => (

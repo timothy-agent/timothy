@@ -15,6 +15,8 @@ interface PanelProps {
   // Extra classes on the body wrapper, e.g. `flex flex-1 flex-col` so a
   // chart child can stretch to the panel's height.
   bodyClassName?: string
+  // Page tour anchor.
+  'data-tour'?: string
 }
 
 // Bounded region of related content on a page: settings group, mission
@@ -39,6 +41,7 @@ export function Panel({
   children,
   className,
   bodyClassName,
+  'data-tour': dataTour,
 }: PanelProps) {
   const hasHeader = title || description || actions || leading
   // A collapsed section passes false/null children: no body, no body padding.
@@ -46,7 +49,7 @@ export function Panel({
   const Heading = headingLevel
 
   return (
-    <div data-density={density} className={cn('rounded-md border border-border bg-card', className)}>
+    <div data-density={density} data-tour={dataTour} className={cn('rounded-md border border-border bg-card', className)}>
       {hasHeader && (
         <div
           className={cn(

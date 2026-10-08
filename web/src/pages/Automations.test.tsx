@@ -7,6 +7,7 @@ import { TooltipProvider } from '../components/ui/tooltip'
 import { Automations } from './Automations'
 
 vi.mock('../api/client', () => ({
+  getToken: vi.fn(() => ''),
   listAutomations: vi.fn(),
   automationsStats: vi.fn(),
   listAutomationTemplates: vi.fn(),
@@ -35,6 +36,11 @@ import {
   patchAutomation,
   runAutomationNow,
 } from '../api/client'
+
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
 
 const stats: AutomationsStats = {
   total: 4,
@@ -103,8 +109,16 @@ describe('Automations page', () => {
   })
 
   it('shows an empty state with no automations', async () => {
-    renderPage()
-    expect(await screen.findByText('No automations yet')).toBeInTheDocument()
+    const { router } = renderPage()
+    const title = await screen.findByText('No automations yet')
+    const empty = title.parentElement as HTMLElement
+    expect(
+      within(empty).getByText(
+        'Run a mission on a schedule or when something happens. Start from a template below or make a new one.',
+      ),
+    ).toBeInTheDocument()
+    fireEvent.click(within(empty).getByRole('button', { name: 'New automation' }))
+    await waitFor(() => expect(router.state.location.pathname).toBe('/automations/new'))
   })
 
   it('renders a table row with agent, trigger badges, last run and created', async () => {

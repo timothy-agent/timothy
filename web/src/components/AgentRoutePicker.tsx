@@ -48,6 +48,7 @@ export function AgentRoutePicker({
     <DropdownMenu>
       <DropdownMenuTrigger
         aria-label="Agent and route"
+        data-tour="chat.picker"
         className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
       >
         {isAuto && !currentRoute ? (

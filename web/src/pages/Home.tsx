@@ -9,6 +9,10 @@ import { EmptyState } from '../components/timothy/empty-state'
 import { Badge } from '../components/ui/badge'
 import { Card } from '../components/ui/card'
 import { usePendingMemories } from '../lib/memory'
+import { useOnboarding } from '../onboarding/context'
+import { unmetKey } from '../onboarding/gateCopy'
+import { SetupChecklist } from '../onboarding/SetupChecklist'
+import { SetupGate } from '../onboarding/SetupGate'
 
 const agentKey = 'timothy.agent'
 const routeKey = 'timothy.route'
@@ -36,6 +40,8 @@ export function Home() {
   const navigate = useNavigate()
   const pending = usePendingMemories()
   const agents = useAgents()
+  const { readiness } = useOnboarding()
+  const chatBlocked = unmetKey(readiness, ['chat_route']) !== null
   const [draft, setDraft] = useState('')
   const [agent, setAgent] = useState(() => localStorage.getItem(agentKey) ?? '')
   const [route, setRoute] = useState(() => localStorage.getItem(routeKey) ?? '')
@@ -59,7 +65,7 @@ export function Home() {
   const send = () => {
     const message = draft.trim()
     const ready = attachments.filter((a) => !a.uploading)
-    if (!message && ready.length === 0) return
+    if ((!message && ready.length === 0) || chatBlocked) return
     navigate('/chat', {
       state: {
         send: message,
@@ -84,6 +90,7 @@ export function Home() {
           Ask anything. Chats remember what matters.
         </p>
         <div className="mt-8 text-left">
+          {chatBlocked && <SetupGate requires={['chat_route']} variant="banner" />}
           <Composer
             draft={draft}
             onDraft={setDraft}
@@ -93,6 +100,7 @@ export function Home() {
             route={route}
             onRoute={pickRoute}
             autoFocus
+            disabled={chatBlocked}
             placeholder="Ask anything…"
             attachments={attachments}
             onAttachments={setAttachments}
@@ -101,6 +109,10 @@ export function Home() {
             agentKnowledge={agentKnowledge}
           />
         </div>
+      </div>
+
+      <div className="mt-10 w-full max-w-4xl empty:hidden">
+        <SetupChecklist />
       </div>
 
       <div className="mt-14 w-full max-w-4xl">

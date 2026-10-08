@@ -26,6 +26,10 @@ import {
 } from '../components/ui/select'
 import { Textarea } from '../components/ui/textarea'
 import { notifyMemoryChanged } from '../lib/memory'
+import { TourOverlay } from '../onboarding/tour/TourOverlay'
+import { useTour } from '../onboarding/tour/useTour'
+import { memoryTour } from '../onboarding/tours/memory'
+import { useMarkVisited } from '../onboarding/useVisited'
 
 // QueueCard is one pending memory awaiting the user's verdict.
 function QueueCard({
@@ -271,7 +275,12 @@ function Browser() {
         <div className="flex items-center gap-2">
           <Eyebrow>Browse</Eyebrow>
           <Select value={status} onValueChange={(v) => setStatus(v as MemoryItem['status'])}>
-            <SelectTrigger className="h-8 w-32" data-testid="status-filter" aria-label="Filter by status">
+            <SelectTrigger
+              className="h-8 w-32"
+              data-testid="status-filter"
+              data-tour="memory.status"
+              aria-label="Filter by status"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -349,22 +358,39 @@ export function KnowledgeRedirect() {
 }
 
 export function Memory() {
+  useMarkVisited('memory')
   const [tab, setTab] = useState<(typeof tabs)[number]['id']>('queue')
+  const tour = useTour(memoryTour, { enabled: true })
 
   return (
     <PageShell>
       <PageHeader
         title="Memory"
         actions={
-          <SegmentedControl
-            aria-label="Memory view"
-            value={tab}
-            onChange={(v) => setTab(v as (typeof tabs)[number]['id'])}
-            options={tabs.map((t) => ({ value: t.id, label: t.label }))}
-          />
+          <div data-tour="memory.view">
+            <SegmentedControl
+              aria-label="Memory view"
+              value={tab}
+              onChange={(v) => setTab(v as (typeof tabs)[number]['id'])}
+              options={tabs.map((t) => ({ value: t.id, label: t.label }))}
+            />
+          </div>
         }
       />
-      {tab === 'queue' ? <Queue /> : tab === 'browser' ? <Browser /> : <GraphTab />}
+      {/* The queue is the pending review on load; the status filter
+          carries that anchor in the browser view. */}
+      <div>
+        {tab === 'queue' ? (
+          <div data-tour="memory.status">
+            <Queue />
+          </div>
+        ) : tab === 'browser' ? (
+          <Browser />
+        ) : (
+          <GraphTab />
+        )}
+      </div>
+      <TourOverlay {...tour} />
     </PageShell>
   )
 }

@@ -151,7 +151,9 @@ describe('Destinations tab', () => {
     renderTab()
     expect(await screen.findByText('Your destinations')).toBeTruthy()
     expect(screen.getByText('No destinations yet')).toBeTruthy()
-    expect(screen.getByText('Add one below.')).toBeTruthy()
+    expect(
+      screen.getByText('A destination is where mission results go: a GitHub pull request, an email, a file. Pick one below.'),
+    ).toBeTruthy()
     expect(screen.getByRole('link', { name: /^Email/ })).toBeTruthy()
     expect(screen.getByRole('link', { name: /^Webhook/ })).toBeTruthy()
   })

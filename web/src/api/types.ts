@@ -1565,3 +1565,52 @@ export interface ExecutionPlanPhase {
   skip_reason: string
   entries: ExecutionPlanEntry[]
 }
+
+// Readiness is live setup state from GET /v1/admin/onboarding; never
+// stored, recomputed on every request.
+export interface Readiness {
+  gateway_ready: boolean
+  chat_route: boolean
+  summarize_route: boolean
+  embedding_route: boolean
+  vision_route: boolean
+  sandbox: boolean
+  first_chat: boolean
+  first_mission: boolean
+  connectors: number
+  channels: number
+  kb_collections: number
+  automations: number
+  automations_enabled: boolean
+}
+
+// ReadinessKey is a boolean readiness key a SetupGate can require.
+export type ReadinessKey =
+  | 'gateway_ready'
+  | 'chat_route'
+  | 'summarize_route'
+  | 'embedding_route'
+  | 'vision_route'
+  | 'sandbox'
+  | 'first_chat'
+  | 'first_mission'
+  | 'automations_enabled'
+
+// OnboardingProgress is the operator's stored setup state. As a PATCH
+// body, wizard 'pending' clears it and a tours_seen value of 0 deletes
+// that page's entry.
+export interface OnboardingProgress {
+  wizard?: '' | 'skipped' | 'done'
+  checklist_dismissed?: boolean
+  tours_seen?: Record<string, number>
+  visited?: string[]
+}
+
+export type OnboardingProgressPatch = Omit<OnboardingProgress, 'wizard'> & {
+  wizard?: 'pending' | 'skipped' | 'done'
+}
+
+export interface Onboarding {
+  readiness: Readiness
+  progress: OnboardingProgress
+}

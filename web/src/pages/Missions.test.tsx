@@ -14,6 +14,11 @@ vi.mock('../api/client', () => ({
 
 vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 import { listMissions, listNotifications } from '../api/client'
 import { subscribeEvents } from '../lib/events'
 
@@ -342,7 +347,8 @@ describe('Missions board', () => {
   it('shows a no-missions empty state with a working create button', async () => {
     vi.mocked(listMissions).mockResolvedValue([])
     const router = renderPage()
-    const heading = await screen.findByText('No missions yet, create one to get started.')
+    const heading = await screen.findByText('No missions yet')
+    expect(screen.getByText('A mission is a longer task Timothy works on by itself and reports back.')).toBeTruthy()
 
     const createButton = heading.closest('div')?.querySelector('button')
     expect(createButton).toBeTruthy()

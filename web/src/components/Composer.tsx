@@ -27,6 +27,7 @@ import {
   useReferenceSearch,
 } from '../lib/references'
 import { skillLabels } from '../lib/skills'
+import { uuid } from '../lib/uuid'
 import {
   getTranscribeLanguage,
   setTranscribeLanguage,
@@ -525,7 +526,7 @@ export function Composer({
         toast.error(`You can attach up to ${maxAttachments} files`)
         break
       }
-      const tempId = crypto.randomUUID()
+      const tempId = uuid()
       const previewUrl = URL.createObjectURL(file)
       const placeholder: PendingAttachment = {
         id: tempId,
@@ -739,6 +740,7 @@ export function Composer({
               />
               <IconButton
                 label="Attach image"
+                data-tour="chat.attach"
                 icon={Paperclip}
                 variant="ghost"
                 size="sm"

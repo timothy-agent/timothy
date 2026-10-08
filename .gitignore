@@ -21,6 +21,9 @@ __pycache__/
 # Local-only development docs
 docs/
 
+# Canary run results (scripts/canary-ecosystems.sh)
+/canary-results/
+
 # Database dumps from scripts/backup-db.sh (real data, plus secret ciphertext)
 /backups/
 
@@ -30,3 +33,6 @@ docs/
 .DS_Store
 .claude/
 .cursor/
+
+# Onboarding canary output (make canary-onboarding)
+web/e2e/.out/

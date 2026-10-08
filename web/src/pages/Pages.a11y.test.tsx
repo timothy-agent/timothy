@@ -10,6 +10,7 @@ import type { BudgetStatus, MemoryItem, UsageSummary } from '../api/types'
 // once here; each describe's beforeEach sets only the resolved values it
 // cares about.
 vi.mock('../api/client', () => ({
+  getToken: vi.fn(() => ''),
   listAgents: vi.fn(),
   listRoutes: vi.fn(),
   getSettings: vi.fn(),
@@ -85,6 +86,11 @@ import { Analytics } from './Analytics'
 import { Home } from './Home'
 import { Knowledge } from './Knowledge'
 import { Memory } from './Memory'
+
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
 
 const axeOptions = { rules: { 'color-contrast': { enabled: false } } }
 // The Composer's hidden file input has no label, pre-existing and

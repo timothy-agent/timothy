@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
-	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible kb-eval sandbox-image sandbox-smoke
+	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke
 
 build:
 	$(GO_RUN) go build ./...
@@ -138,6 +138,33 @@ canary-executor:
 # `make sandbox-image` run first.
 canary-impossible:
 	./scripts/canary-impossible.sh
+
+# Fresh-install onboarding gate (issue #1062): starts a second compose
+# project (timothy-onboarding, ports 8310/3310, its own volumes) and
+# walks it in Playwright from the token link through the welcome
+# wizard, first chat and sample mission to the setup checklist, then
+# tears it down. Manual, not CI: needs CANARY_PROVIDER_KEY for a hosted
+# preset (CANARY_PROVIDER_PRESET, default openai) or a reachable host
+# Ollama (CANARY_PROVIDER_PRESET=ollama CANARY_MODEL=<pulled model>).
+# The dev stack on 8300/3300 is never touched.
+canary-onboarding:
+	./scripts/canary-onboarding.sh
+
+# Script self-tests. Runs canary-onboarding.sh --dry-run in a bash
+# container and checks the commands it would run (project, ports,
+# image) carry no secret value.
+test-scripts:
+	docker run --rm -v $(CURDIR):/src -w /src bash:5.3 ./scripts/canary-onboarding-dry-run.test.sh
+
+# Ecosystem smoke matrix (issue #1018), manual only: one dependency
+# audit mission per pinned fork in scripts/ecosystem-matrix.txt, one at
+# a time, per-stage results under canary-results/ecosystems/. Needs the
+# stack up, gh with push access to the timothy-agent forks,
+# CANARY_GITHUB_CONNECTOR_ID and CANARY_GITHUB_DESTINATION_ID.
+# CANARY_ECOSYSTEM=<name> runs one row; brain with MISSION_OSV_OFFLINE
+# set audits against the database refreshed once per run day.
+canary-ecosystems:
+	./scripts/canary-ecosystems.sh
 
 # Retrieval regression gate (issue #412): ingests a curated fixture set
 # into a dedicated collection, runs a fixed query set through the real

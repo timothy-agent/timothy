@@ -309,6 +309,15 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 			Effort:                req.Effort,
 		}, prices, send)
 
+		// D-135: the caller hung up (a mission cancel, a chat stop). The
+		// aborted call books as cancelled and the chain never advances,
+		// so no provider is called for a request nobody reads.
+		if r.Context().Err() != nil && res.entry.Status != "ok" {
+			res.entry.Status, res.entry.ErrorCode = "cancelled", "client_cancelled"
+			a.recordAttempt(r.Context(), res.entry)
+			return
+		}
+
 		if res.failedOver() {
 			// The client only ever sees error codes (see chain-exhausted
 			// note below); the raw reason is server-side log only, or

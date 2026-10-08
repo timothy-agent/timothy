@@ -31,6 +31,11 @@ import {
   listSecretRefs,
 } from '../../api/client'
 
+vi.mock('../../onboarding/context', async () => {
+  const { onboardingState } = await import('../../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 const githubConnector: AdminConnector = {
   id: 'gh1',
   name: 'personal-gh',

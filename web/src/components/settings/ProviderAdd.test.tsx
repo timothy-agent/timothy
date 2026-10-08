@@ -30,6 +30,11 @@ import {
   validateProvider,
 } from '../../api/client'
 
+vi.mock('../../onboarding/context', async () => {
+  const { onboardingState } = await import('../../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 const glm: AdminProvider = {
   id: 'p1',
   name: 'GLM (Z.ai)',
@@ -775,5 +780,124 @@ describe('ProviderAdd Timothy auth failures', () => {
     expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()
     expect(screen.queryByText(/Failed after 0 ms/)).not.toBeInTheDocument()
     expect(screen.queryByText(/missing or invalid bearer token/)).not.toBeInTheDocument()
+  })
+})
+
+describe('ProviderAdd embedded mode', () => {
+  beforeEach(() => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 9, model: 'qwen2.5:7b' })
+    vi.mocked(createProvider).mockResolvedValue('p-new')
+  })
+
+  function renderEmbedded(onCreated = vi.fn(), onCancel = vi.fn()) {
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={['/welcome']}>
+          <Routes>
+            <Route
+              path="/welcome"
+              element={<ProviderAdd presetId="ollama" embedded onCreated={onCreated} onCancel={onCancel} />}
+            />
+            <Route path="/settings/providers" element={<p>providers list</p>} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
+    )
+    return { onCreated, onCancel }
+  }
+
+  it('renders the form without the page header', async () => {
+    renderEmbedded()
+    await screen.findByPlaceholderText('model id')
+    expect(screen.queryByRole('heading', { name: 'Add Ollama' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Settings' })).not.toBeInTheDocument()
+  })
+
+  it('hands the created id to onCreated instead of navigating', async () => {
+    const { onCreated } = renderEmbedded()
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith('p-new', 'Ollama'))
+    expect(screen.queryByText('providers list')).not.toBeInTheDocument()
+  })
+
+  it('sends no credential ref for a keyless preset', async () => {
+    renderEmbedded()
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+    expect(vi.mocked(validateProvider).mock.calls[0][0]).toMatchObject({ credential_ref: '' })
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({ credential_ref: '' })
+    expect(setSecret).not.toHaveBeenCalled()
+  })
+
+  it('Cancel calls onCancel instead of navigating', async () => {
+    const { onCancel } = renderEmbedded()
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    expect(onCancel).toHaveBeenCalled()
+    expect(screen.queryByText('providers list')).not.toBeInTheDocument()
+  })
+})
+
+describe('ProviderAdd page mode after create', () => {
+  it('navigates to the provider list', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 9, model: 'qwen2.5:7b' })
+    vi.mocked(createProvider).mockResolvedValue('p-new')
+    render(
+      <TooltipProvider>
+        <MemoryRouter initialEntries={['/settings/providers/new/ollama']}>
+          <Routes>
+            <Route path="/settings/providers/new/:presetId" element={<ProviderAdd />} />
+            <Route path="/settings/providers" element={<p>providers list</p>} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>,
+    )
+    expect(await screen.findByRole('heading', { name: 'Add Ollama' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+    expect(await screen.findByText('providers list')).toBeInTheDocument()
+  })
+})
+
+describe('ProviderAdd Ollama help', () => {
+  const linuxHint = /extra_hosts/
+
+  it('shows the address note for Ollama only', async () => {
+    renderPage('ollama')
+    expect(await screen.findByText(/Same machine as Timothy\? Keep the default address\./)).toBeInTheDocument()
+    cleanup()
+    renderPage('openai')
+    await screen.findByPlaceholderText('model id')
+    expect(screen.queryByText(/Same machine as Timothy/)).not.toBeInTheDocument()
+  })
+
+  it('shows the Linux hint when a test against host.docker.internal fails', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: false, latency_ms: 0, model: 'qwen2.5:7b', detail: 'connection refused' })
+    renderPage('ollama')
+    expect(screen.queryByText(linuxHint)).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText(linuxHint)).toBeInTheDocument()
+  })
+
+  it('hides the Linux hint when the test passes', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 9, model: 'qwen2.5:7b' })
+    renderPage('ollama')
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+    expect(screen.queryByText(linuxHint)).not.toBeInTheDocument()
+  })
+
+  it('hides the Linux hint when the failing address is not host.docker.internal', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: false, latency_ms: 0, model: 'qwen2.5:7b', detail: 'connection refused' })
+    renderPage('ollama')
+    fireEvent.click(await screen.findByText('Advanced: base URL'))
+    fireEvent.change(screen.getByPlaceholderText('https://…/v1'), { target: { value: 'http://192.168.1.20:11434/v1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^Failed after/)
+    expect(screen.queryByText(linuxHint)).not.toBeInTheDocument()
   })
 })

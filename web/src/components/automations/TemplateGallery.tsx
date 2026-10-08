@@ -44,7 +44,7 @@ export function TemplateGallery() {
   if (templates.length === 0) return null
 
   return (
-    <section>
+    <section data-tour="automations.templates">
       <SectionHeader title="Start from a template" description="Nothing is saved until you create it." />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {templates.map((t) => {

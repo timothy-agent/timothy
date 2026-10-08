@@ -47,6 +47,12 @@ func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry, candidates 
 	out := map[string][]ChainEntry{}
 	for _, sr := range SystemRoles {
 		model, ok := CheapestCapable(candidates, sr.Capability)
+		// The operator validated default_model against the live
+		// provider; the catalog's cheapest chat row may not exist there
+		// (an Ollama host serves only what is pulled).
+		if sr.Capability == "chat" && defaultModelServesChat(p.DefaultModel, candidates) {
+			model, ok = p.DefaultModel, true
+		}
 		if !ok {
 			continue
 		}
@@ -122,4 +128,19 @@ func alreadyChained(chain []ChainEntry, providerID, model string) bool {
 		}
 	}
 	return false
+}
+
+// defaultModelServesChat reports whether a provider's default_model can
+// seed the chat roles: set, and not a catalog embedding model. A model
+// the catalog does not know counts as chat.
+func defaultModelServesChat(model string, candidates []catalog.Model) bool {
+	if model == "" {
+		return false
+	}
+	for _, m := range candidates {
+		if m.ID == model || m.ModelKey == model {
+			return modelHasCapability(m, "chat")
+		}
+	}
+	return true
 }

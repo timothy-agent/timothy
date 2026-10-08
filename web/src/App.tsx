@@ -54,9 +54,16 @@ import { KnowledgeRedirect, Memory } from './pages/Memory'
 import { MissionDetail } from './pages/MissionDetail'
 import { Missions } from './pages/Missions'
 import { NewMission } from './pages/NewMission'
+import { HelpMenu } from './onboarding/HelpMenu'
+import { useHelpActions } from './onboarding/helpActions'
+import { OnboardingProvider } from './onboarding/OnboardingProvider'
+import { SetupRing } from './onboarding/SetupRing'
+import { useOnboarding } from './onboarding/context'
+import { shouldRedirectToWelcome } from './onboarding/wizard/wizardState'
 import { Research } from './pages/Research'
 import { Settings, settingsAreas } from './pages/Settings'
 import { DesignSystem } from './pages/DesignSystem'
+import { Welcome } from './pages/Welcome'
 
 // Analytics pulls in ECharts (a large dependency), so it stays a
 // lazily-loaded chunk rather than bundling into the initial app load.
@@ -193,6 +200,7 @@ function AppSidebar({
                             <SidebarMenuSubButton
                               asChild
                               isActive={pathname.startsWith(`/settings/${area.key}`)}
+                              data-tour={`settings.${area.key}`}
                             >
                               <Link to={`/settings/${area.key}`}>
                                 <span>{area.label}</span>
@@ -204,7 +212,10 @@ function AppSidebar({
                     )}
                   </SidebarMenuItem>
                 ) : (
-                  <SidebarMenuItem key={item.href}>
+                  <SidebarMenuItem
+                    key={item.href}
+                    data-tour={item.href === '/chat' ? 'chat.permissions' : undefined}
+                  >
                     <SidebarMenuButton asChild isActive={isActive(pathname, item.href)} tooltip={item.label}>
                       <Link to={item.href}>
                         <item.icon />
@@ -224,13 +235,14 @@ function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
+        <div data-tour="chat.sessions" className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[opacity,visibility] duration-150 ease-out group-data-[collapsible=icon]:invisible group-data-[collapsible=icon]:opacity-0">
           <SessionList />
         </div>
       </SidebarContent>
 
       <SidebarFooter>
         <SidebarMenu>
+          <SetupRing />
           <SidebarMenuItem>
             <SidebarMenuButton onClick={onCycleTheme} tooltip={themeLabel[theme]}>
               <ThemeIcon />
@@ -280,11 +292,14 @@ function TopBar({ onOpenPalette }: { onOpenPalette: () => void }) {
           </span>
         ))}
       </nav>
+      <div className="ml-auto">
+        <HelpMenu />
+      </div>
       <button
         type="button"
         onClick={onOpenPalette}
         aria-label="Search or jump to…"
-        className="ml-auto flex min-w-52 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-muted-foreground transition hover:border-zinc-400 dark:hover:border-zinc-600"
+        className="flex min-w-52 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs text-muted-foreground transition hover:border-zinc-400 dark:hover:border-zinc-600"
       >
         <Search className="size-3.5" />
         <span>Search or jump to…</span>
@@ -303,6 +318,7 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
   const navigate = useNavigate()
   const { sessions } = useSessions()
   const recent = useMemo(() => sessions.slice(0, 8), [sessions])
+  const help = useHelpActions()
 
   const go = (href: string) => {
     onOpenChange(false)
@@ -336,6 +352,23 @@ function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (
             ))}
           </CommandGroup>
         )}
+        <CommandGroup heading="Help">
+          {help.map((a) => (
+            <CommandItem
+              key={a.id}
+              value={a.label}
+              disabled={a.disabled}
+              onSelect={() => {
+                onOpenChange(false)
+                if (a.href) window.open(a.href, '_blank', 'noopener,noreferrer')
+                else a.run?.()
+              }}
+            >
+              <a.icon />
+              <span>{a.label}</span>
+            </CommandItem>
+          ))}
+        </CommandGroup>
       </CommandList>
     </CommandDialog>
   )
@@ -354,6 +387,18 @@ function LegacyEditScheduleRedirect() {
   return <Navigate to={`/automations/${id}/edit`} replace />
 }
 
+// WelcomeRedirect sends a fresh install from Home to the setup wizard.
+function WelcomeRedirect() {
+  const { readiness, progress } = useOnboarding()
+  const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const redirect = shouldRedirectToWelcome(readiness, progress, pathname)
+  useEffect(() => {
+    if (redirect) navigate('/welcome', { replace: true })
+  }, [redirect, navigate])
+  return null
+}
+
 function App() {
   const [tokenOpen, setTokenOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -361,6 +406,7 @@ function App() {
   const pendingMemories = usePendingMemories()
   const pendingPermissions = usePendingPermissions()
   const navigate = useNavigate()
+  const { pathname } = useLocation()
 
   useEffect(() => {
     if (getToken() === '') setTokenOpen(true)
@@ -458,78 +504,88 @@ function App() {
   return (
     <TooltipProvider delayDuration={300}>
       <SessionsProvider>
-        <LogoSprite />
-        <ConnectorLogoSprite />
-        <Toaster richColors closeButton theme={theme} />
-        <SidebarProvider className="min-h-dvh">
-          <AppSidebar
-            pendingMemories={pendingMemories}
-            pendingPermissions={pendingPermissions.filter((p) => p.origin_kind === 'chat').length}
-            theme={theme}
-            onCycleTheme={cycleTheme}
-            onToken={openToken}
-          />
-          <SidebarInset className="min-w-0 bg-dot-grid">
-            <TopBar onOpenPalette={() => setPaletteOpen(true)} />
-            <div className="min-h-0 min-w-0 flex-1 overflow-hidden px-4">
-              <Routes>
-                <Route path="/" element={<Home />} />
-                {/* One route pattern serves new chats and resumes:
-                    switching between them must re-render, not remount,
-                    so an in-flight stream survives adopting its new
-                    session URL. */}
-                <Route
-                  path="/chat/:id?"
-                  element={
-                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
-                      <Chat onNeedToken={openToken} />
-                    </div>
-                  }
-                />
-                <Route
-                  path="/research/:id?"
-                  element={
-                    <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
-                      <Research onNeedToken={openToken} />
-                    </div>
-                  }
-                />
-                <Route path="/sessions/:id" element={<LegacySessionRedirect />} />
-                <Route
-                  path="/analytics"
-                  element={
-                    <Suspense fallback={<div className="p-8 text-sm text-muted-foreground">Loading…</div>}>
-                      <Analytics />
-                    </Suspense>
-                  }
-                />
-                {/* Old bookmarks: the page lived at /dashboard before the rename. */}
-                <Route path="/dashboard" element={<Navigate to="/analytics" replace />} />
-                <Route path="/missions" element={<Missions />} />
-                <Route path="/missions/new" element={<NewMission />} />
-                {/* Old bookmark: schedule editing lived under /missions before automations got their own page. */}
-                <Route
-                  path="/missions/schedules/:id/edit"
-                  element={<LegacyEditScheduleRedirect />}
-                />
-                <Route path="/missions/:id" element={<MissionDetail />} />
-                <Route path="/automations" element={<Automations />} />
-                <Route path="/automations/new" element={<AutomationEditor mode="create" />} />
-                <Route path="/automations/:id/edit" element={<AutomationEditor mode="edit" />} />
-                <Route path="/automations/:id" element={<AutomationDetail />} />
-                <Route path="/knowledge/*" element={<Knowledge />} />
-                <Route path="/memory/knowledge/*" element={<KnowledgeRedirect />} />
-                <Route path="/memory/*" element={<Memory />} />
-                <Route path="/settings/*" element={<Settings />} />
-                {/* Old bookmark: Settings lived at one page with ?tab= before sub-routes. */}
-                <Route path="/settings" element={<Navigate to="/settings/providers" replace />} />
-                <Route path="/design" element={<DesignSystem />} />
-              </Routes>
-            </div>
-            <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
-          </SidebarInset>
-        </SidebarProvider>
-        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <OnboardingProvider>
+          <LogoSprite />
+          <ConnectorLogoSprite />
+          <Toaster richColors closeButton theme={theme} />
+          <WelcomeRedirect />
+          {pathname === '/welcome' ? (
+            <>
+              <Welcome />
+              <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
+            </>
+          ) : (
+            <SidebarProvider className="min-h-dvh">
+              <AppSidebar
+                pendingMemories={pendingMemories}
+                pendingPermissions={pendingPermissions.filter((p) => p.origin_kind === 'chat').length}
+                theme={theme}
+                onCycleTheme={cycleTheme}
+                onToken={openToken}
+              />
+              <SidebarInset className="min-w-0 bg-dot-grid">
+                <TopBar onOpenPalette={() => setPaletteOpen(true)} />
+                <div className="min-h-0 min-w-0 flex-1 overflow-hidden px-4">
+                  <Routes>
+                    <Route path="/" element={<Home />} />
+                    {/* One route pattern serves new chats and resumes:
+                        switching between them must re-render, not remount,
+                        so an in-flight stream survives adopting its new
+                        session URL. */}
+                    <Route
+                      path="/chat/:id?"
+                      element={
+                        <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
+                          <Chat onNeedToken={openToken} />
+                        </div>
+                      }
+                    />
+                    <Route
+                      path="/research/:id?"
+                      element={
+                        <div className="mx-auto flex h-full w-full max-w-full flex-col px-4">
+                          <Research onNeedToken={openToken} />
+                        </div>
+                      }
+                    />
+                    <Route path="/sessions/:id" element={<LegacySessionRedirect />} />
+                    <Route
+                      path="/analytics"
+                      element={
+                        <Suspense fallback={<div className="p-8 text-sm text-muted-foreground">Loading…</div>}>
+                          <Analytics />
+                        </Suspense>
+                      }
+                    />
+                    {/* Old bookmarks: the page lived at /dashboard before the rename. */}
+                    <Route path="/dashboard" element={<Navigate to="/analytics" replace />} />
+                    <Route path="/missions" element={<Missions />} />
+                    <Route path="/missions/new" element={<NewMission />} />
+                    {/* Old bookmark: schedule editing lived under /missions before automations got their own page. */}
+                    <Route
+                      path="/missions/schedules/:id/edit"
+                      element={<LegacyEditScheduleRedirect />}
+                    />
+                    <Route path="/missions/:id" element={<MissionDetail />} />
+                    <Route path="/automations" element={<Automations />} />
+                    <Route path="/automations/new" element={<AutomationEditor mode="create" />} />
+                    <Route path="/automations/:id/edit" element={<AutomationEditor mode="edit" />} />
+                    <Route path="/automations/:id" element={<AutomationDetail />} />
+                    <Route path="/knowledge/*" element={<Knowledge />} />
+                    <Route path="/memory/knowledge/*" element={<KnowledgeRedirect />} />
+                    <Route path="/memory/*" element={<Memory />} />
+                    <Route path="/settings/*" element={<Settings />} />
+                    {/* Old bookmark: Settings lived at one page with ?tab= before sub-routes. */}
+                    <Route path="/settings" element={<Navigate to="/settings/providers" replace />} />
+                    <Route path="/design" element={<DesignSystem />} />
+                  </Routes>
+                </div>
+                <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
+              </SidebarInset>
+            </SidebarProvider>
+          )}
+          <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        </OnboardingProvider>
       </SessionsProvider>
     </TooltipProvider>
   )

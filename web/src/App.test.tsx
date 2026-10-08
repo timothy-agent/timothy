@@ -136,6 +136,24 @@ describe('Settings sidebar submenu', () => {
   })
 })
 
+describe('Help', () => {
+  it('shows the help button in the top bar', () => {
+    renderAt('/')
+    expect(screen.getByRole('button', { name: 'Help' })).toBeInTheDocument()
+  })
+
+  it('lists the help actions in the command palette', async () => {
+    Element.prototype.scrollIntoView = vi.fn()
+    renderAt('/memory')
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('Help')).toBeInTheDocument()
+    for (const name of ['Setup checklist', "Restart this page's tour", 'Restart welcome', 'README on GitHub']) {
+      expect(within(dialog).getByRole('option', { name })).toBeInTheDocument()
+    }
+  })
+})
+
 describe('API token dialog', () => {
   it('opens when a request is unauthorized', async () => {
     vi.stubGlobal(
