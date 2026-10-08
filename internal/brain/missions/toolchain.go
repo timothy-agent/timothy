@@ -95,6 +95,7 @@ func detectToolchainVersions(worktree string) map[string]string {
 // (D-127).
 var supportedToolchains = map[string]bool{
 	"python": true, "node": true, "go": true, "java": true, "ruby": true, "rust": true, "php": true,
+	"maven": true, "gradle": true,
 }
 
 // phpMinors are the PHP minors deploy/sandbox.Dockerfile bakes, ascending.
@@ -124,7 +125,8 @@ var (
 // as fallback: a tool no marker pins takes the version the goal names
 // ("a Django app on Python 3.10", "Node 18"). Nothing pinned anywhere
 // leaves the image's own node, python3 and php 8.4. D-141: a JVM build
-// file with no java pin gets JDK 21, what the removed java image baked.
+// file with no java pin gets JDK 21, what the removed java image baked,
+// plus Maven or Gradle when the repo has no wrapper script.
 func detectMissionToolchains(worktree, goal string) map[string]string {
 	out := detectToolchainVersions(worktree)
 	for tool, v := range goalToolchainVersions(goal) {
@@ -132,19 +134,42 @@ func detectMissionToolchains(worktree, goal string) map[string]string {
 			out[tool] = v
 		}
 	}
-	if _, ok := out["java"]; !ok && worktree != "" {
-		for _, f := range []string{"pom.xml", "build.gradle", "build.gradle.kts"} {
-			if fi, err := os.Stat(filepath.Join(worktree, f)); err == nil && !fi.IsDir() {
-				out["java"] = defaultJava
-				break
-			}
+	if worktree == "" {
+		return out
+	}
+	maven := isFile(worktree, "pom.xml")
+	gradle := isFile(worktree, "build.gradle") || isFile(worktree, "build.gradle.kts")
+	setDefault := func(tool, v string) {
+		if _, ok := out[tool]; !ok {
+			out[tool] = v
 		}
+	}
+	if maven || gradle {
+		setDefault("java", defaultJava)
+	}
+	// A build tool with no wrapper script in the repo comes from mise.
+	if maven && !isFile(worktree, "mvnw") {
+		setDefault("maven", defaultMaven)
+	}
+	if gradle && !isFile(worktree, "gradlew") {
+		setDefault("gradle", defaultGradle)
 	}
 	return out
 }
 
-// defaultJava is the JDK major a JVM repo with no pin installs.
-const defaultJava = "21"
+// Defaults a JVM repo with no pin installs: the JDK the removed java
+// image baked, and the current Maven 3 and Gradle releases.
+const (
+	defaultJava   = "21"
+	defaultMaven  = "3"
+	defaultGradle = "latest"
+)
+
+// isFile reports whether name is a regular file at the worktree root.
+func isFile(worktree, name string) bool {
+	fi, err := os.Stat(filepath.Join(worktree, name))
+	return err == nil && fi.Mode().IsRegular()
+}
 
 // goalToolchainVersions returns the first version the goal names per
 // tool. Patterns are strict (python 2.x/3.x, go 1.x and php need a

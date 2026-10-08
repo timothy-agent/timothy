@@ -184,7 +184,17 @@ type execRequest struct {
 	Command        string            `json:"command"`
 	TimeoutSeconds int               `json:"timeout_seconds"`
 	Env            map[string]string `json:"env,omitempty"`
+	// RemovedEnvironment is the removed image selector (D-141), accepted
+	// and dropped so an older brain keeps working during a deploy.
+	RemovedEnvironment removedField `json:"environment,omitzero"`
 }
+
+// removedField accepts any JSON value and drops it; omitzero keeps it
+// off the wire.
+type removedField struct{}
+
+// UnmarshalJSON drops the value.
+func (*removedField) UnmarshalJSON([]byte) error { return nil }
 
 // handleExec streams command's combined stdout+stderr as SSE. Pre-stream
 // failures (bad request, at-capacity, ensure failure) are plain JSON

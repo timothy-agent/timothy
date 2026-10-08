@@ -210,6 +210,36 @@ func TestHandleExecUnknownFieldRejected(t *testing.T) {
 	}
 }
 
+// TestHandleExecIgnoresRemovedEnvironment covers D-141's deploy skew:
+// an older brain still sending environment gets past decoding (here it
+// stops at the workdir check instead), and the field never re-encodes.
+func TestHandleExecIgnoresRemovedEnvironment(t *testing.T) {
+	t.Parallel()
+	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected daemon call: %s %s", r.Method, r.URL.Path)
+	})
+	mgr := newTestManager(cli)
+	for _, env := range []string{`"php"`, `"base"`, `{"any":"shape"}`} {
+		body := `{"workdir":"relative","command":"true","timeout_seconds":5,"environment":` + env + `}`
+		rec := httptest.NewRecorder()
+		testAPI(mgr).handleExec(rec, execReq(validUUID, body))
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "workdir") {
+			t.Fatalf("environment %s: status %d body %q, want the workdir check, not a decode error", env, rec.Code, rec.Body.String())
+		}
+	}
+	var req execRequest
+	if err := json.Unmarshal([]byte(`{"workdir":"/workspace","command":"true","environment":"go"}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	out, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "environment") {
+		t.Fatalf("re-encoded request carries environment: %s", out)
+	}
+}
+
 // TestHandleExecTimeoutClampVisibleInArgv confirms an out-of-range
 // timeout_seconds is clamped server-side before ever reaching the
 // daemon: the fake records ExecCreate's Cmd argv (the "timeout N ..."

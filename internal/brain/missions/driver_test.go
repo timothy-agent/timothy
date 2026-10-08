@@ -548,9 +548,9 @@ func TestDriverDiscoverKeepsSandboxAndPrepareFacts(t *testing.T) {
 
 // TestDriverProvisionDetectsToolchainsWithoutEnvironment covers D-141:
 // provisioning reads every pin from the clone (node from .nvmrc, php
-// from composer.json for the baked minors, JDK 21 for an unpinned
-// pom.xml) with no image choice to make, so a polyglot repo gets all of
-// them in one mission.
+// from composer.json for the baked minors, JDK 21 and Maven for an
+// unpinned pom.xml with no mvnw) with no image choice to make, so a
+// polyglot repo gets all of them in one mission.
 func TestDriverProvisionDetectsToolchainsWithoutEnvironment(t *testing.T) {
 	requireGitForPush(t)
 	bare := t.TempDir()
@@ -588,7 +588,7 @@ func TestDriverProvisionDetectsToolchainsWithoutEnvironment(t *testing.T) {
 		t.Fatalf("Advance: %v", err)
 	}
 	m, _ := store.Get(context.Background(), "m1")
-	want := map[string]string{"node": "18", "php": "8.4", "java": "21"}
+	want := map[string]string{"node": "18", "php": "8.4", "java": "21", "maven": "3"}
 	if !reflect.DeepEqual(m.Toolchains, want) {
 		t.Fatalf("Toolchains = %v, want %v", m.Toolchains, want)
 	}

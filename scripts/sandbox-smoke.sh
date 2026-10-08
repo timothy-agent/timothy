@@ -6,8 +6,8 @@
 # PATH, trusted config path, and that a toolchain installed into a named
 # volume is reused by a second container. Package caches (D-131) point
 # at the cache mount, are shared through a named volume, and survive
-# parallel npm and mise installs. java@21, ruby@3.3 and rust@stable
-# install under sandboxd's limits, two containers with different node
+# parallel npm and mise installs. java@21, ruby@3.3, rust@stable, maven
+# and gradle install under sandboxd's limits, two containers with different node
 # pins share one toolchains volume, and no pin falls back to the image
 # node. Needs network (mise runtimes, two small npm packages).
 # SANDBOX_SMOKE_LARAVEL=1 also creates and tests a Laravel 10 app on
@@ -280,4 +280,15 @@ out="$(docker run --rm -u 65534:65534 "${LIMITS[@]}" "${SANDBOX_MOUNTS[@]}" -v "
 case "$out" in
   *'version "21'*'ruby 3.3.'*'rustc '*'cargo '*) printf 'runtimes under sandbox limits ok:\n%s\n' "$out" ;;
   *) echo "FAIL: java@21 ruby@3.3 rust@stable under the sandbox limits: $out" >&2; exit 1 ;;
+esac
+
+# Maven and Gradle for a repo with no wrapper script install next to the
+# JDK, the same `mise use --global` the harness runs (D-141).
+out="$(docker run --rm -u 65534:65534 "${LIMITS[@]}" "${SANDBOX_MOUNTS[@]}" -v "$rvol:$MISE_DIR" -v "$cvol:$CACHE_DIR" "$IMAGE" sh -c '
+  mise use --global java@21 maven@3 gradle@latest >/dev/null 2>&1 || { echo "mise use failed"; exit 1; }
+  mvn -v 2>&1 | head -n 1
+  gradle --version 2>&1 | grep -m 1 "^Gradle "')"
+case "$out" in
+  *'Apache Maven 3.'*'Gradle '*) printf 'jvm build tools under sandbox limits ok:\n%s\n' "$out" ;;
+  *) echo "FAIL: maven@3 gradle@latest under the sandbox limits: $out" >&2; exit 1 ;;
 esac

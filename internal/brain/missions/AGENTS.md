@@ -214,12 +214,15 @@ AGENTS.md so other work does not pay for it every session.
 - One sandbox image (D-141, issue #1015): no `environment` field, no
   per-language images, no discover-driven sandbox recreate. Unpinned
   node, python and php run the image's own; a JVM build file with no
-  java pin installs JDK 21 (`defaultJava`); rust installs the minimal
+  java pin installs JDK 21 (`defaultJava`), plus Maven (`pom.xml`, no
+  `mvnw`) or Gradle (no `gradlew`) through mise; rust installs the minimal
   rustup profile (`toolSpec`). The discover report's `stack` is checked
   against the image's toolchains plus the installed ones
   (`stackCovered`); an uncovered stack gets the bootstrap note. The
   create and automation APIs accept and drop a stale `environment` key
-  (`RemovedField`). `collectEnvFacts` starts from the stored facts, so
+  (`RemovedField`), and so does sandboxd's exec API, so a brain and
+  sandboxd version skew during a deploy cannot fail an exec.
+  `collectEnvFacts` starts from the stored facts, so
   a re-collect never drops `EnvFacts.Prepare`.
 - Every ecosystem (D-139, issue #1014): detection reads node, python,
   go, java, ruby, rust and php pins (a Laravel repo's `.nvmrc`

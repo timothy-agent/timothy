@@ -153,9 +153,12 @@ func TestDetectMissionToolchainsNoPinFallback(t *testing.T) {
 	}{
 		{"unpinned node uses the image node", map[string]string{"package.json": `{"scripts":{"test":"vitest"}}`}, map[string]string{}},
 		{"unpinned python uses the image python", map[string]string{"requirements.txt": "django\n"}, map[string]string{}},
-		{"maven repo gets jdk 21", map[string]string{"pom.xml": "<project/>"}, map[string]string{"java": "21"}},
-		{"gradle kotlin dsl gets jdk 21", map[string]string{"build.gradle.kts": ""}, map[string]string{"java": "21"}},
-		{"java pin beats the default", map[string]string{"build.gradle": "", ".java-version": "17\n"}, map[string]string{"java": "17"}},
+		{"maven repo without mvnw gets jdk 21 and maven", map[string]string{"pom.xml": "<project/>"}, map[string]string{"java": "21", "maven": "3"}},
+		{"maven repo with mvnw uses the wrapper", map[string]string{"pom.xml": "<project/>", "mvnw": "#!/bin/sh\n"}, map[string]string{"java": "21"}},
+		{"gradle kotlin dsl without gradlew gets gradle", map[string]string{"build.gradle.kts": ""}, map[string]string{"java": "21", "gradle": "latest"}},
+		{"gradle repo with gradlew uses the wrapper", map[string]string{"build.gradle": "", "gradlew": "#!/bin/sh\n"}, map[string]string{"java": "21"}},
+		{"java pin beats the default", map[string]string{"build.gradle": "", "gradlew": "", ".java-version": "17\n"}, map[string]string{"java": "17"}},
+		{"maven pin beats the default", map[string]string{"pom.xml": "", ".tool-versions": "maven 3.8.8\n"}, map[string]string{"java": "21", "maven": "3.8.8"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -466,6 +469,7 @@ func TestBuildToolchainInstallCmdRoundTrip(t *testing.T) {
 	}{
 		{"sorted", map[string]string{"python": "3.10", "node": "18"}, []string{"use", "--global", "node@18", "python@3.10"}},
 		{"every ecosystem and latest", map[string]string{"node": "latest", "ruby": "3.3", "java": "21", "rust": "1.80", "go": "1.23"}, []string{"use", "--global", "go@1.23", "java@21", "node@latest", "ruby@3.3", "rust[profile=minimal]@1.80"}},
+		{"jvm build tools next to the jdk", map[string]string{"java": "21", "maven": "3", "gradle": "latest"}, []string{"use", "--global", "gradle@latest", "java@21", "maven@3"}},
 		{"quote in version survives as one arg", map[string]string{"python": "3.10'; touch pwned; '"}, []string{"use", "--global", "python@3.10'; touch pwned; '"}},
 	}
 	for _, tc := range cases {
