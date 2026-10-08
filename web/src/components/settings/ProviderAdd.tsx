@@ -210,6 +210,9 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   // plain kind='api' key flow.
   const isCli = (isAnthropic && anthropicAuth === 'oauth') || isCursor
   const wantsKey = preset.requiresKey
+  // A keyless preset (Ollama) stores no secret, so it must not name a
+  // reference either: the gateway treats an unresolved ref as unhealthy.
+  const credentialRef = wantsKey ? ref.trim() : ''
 
   // Bedrock always splits into access key id / secret access key,
   // every backend now writes through the raw value Timothy is given,
@@ -325,7 +328,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
         kind: 'api',
         driver: preset.driver,
         base_url: baseURL.trim(),
-        credential_ref: ref.trim(),
+        credential_ref: credentialRef,
         headers: {},
         ...(isBedrock ? { options: { region } } : {}),
       }
@@ -373,7 +376,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
         kind: 'api',
         driver: preset.driver,
         base_url: baseURL.trim(),
-        credential_ref: ref.trim(),
+        credential_ref: credentialRef,
         headers: {},
         default_model: trimmedModel,
         enabled: true,
