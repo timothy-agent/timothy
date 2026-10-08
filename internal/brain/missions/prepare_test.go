@@ -436,6 +436,31 @@ func TestPrepareWorkspaceNpmNoLock(t *testing.T) {
 	}
 }
 
+// TestPrepareWorkspaceOSVOffline: with osvOffline set, the harness
+// audit and the mise audit task both scan the local database only, and
+// the counts are still read back (issue #1018).
+func TestPrepareWorkspaceOSVOffline(t *testing.T) {
+	logFile := filepath.Join(t.TempDir(), "calls.log")
+	stubPrepareTools(t, logFile)
+	m, wt := npmNoLockFixture(t)
+	store := newFakeStore()
+	store.missions[m.ID] = m
+	p := &provisioner{store: store, log: slog.Default(), sandboxExec: fakeSandboxExec, osvOffline: true}
+
+	got := p.prepareWorkspace(context.Background(), m)
+	if f := got.EnvFacts.Prepare; f == nil || len(f.Audit) != 2 || len(f.Failures) != 0 {
+		t.Fatalf("prepare facts = %+v", got.EnvFacts.Prepare)
+	}
+	calls, _ := os.ReadFile(logFile) //nolint:gosec // test-owned log path
+	if !strings.Contains(string(calls), "--all-packages --offline-vulnerabilities -L composer.lock") {
+		t.Errorf("audit not offline:\n%s", calls)
+	}
+	local, _ := os.ReadFile(filepath.Join(wt, miseLocalFile)) //nolint:gosec // test-owned path
+	if !strings.Contains(string(local), "--offline-vulnerabilities") {
+		t.Errorf("audit task not offline:\n%s", local)
+	}
+}
+
 // TestPrepareWorkspaceNpmNoLockFails: failing npm runs are facts; the
 // composer.lock audit still runs and the worktree gets no lockfile.
 func TestPrepareWorkspaceNpmNoLockFails(t *testing.T) {
@@ -865,8 +890,15 @@ func TestBuildTestCmdRoundTrip(t *testing.T) {
 	if got := buildTestCmd(testCandidate{Cmd: "mise run test"}); got != "mise run test" {
 		t.Fatalf("buildTestCmd(task) = %q", got)
 	}
-	if got := buildAuditCmd([]string{"a's.lock", "b.lock"}, "/w/out.json"); got != `mise exec -- osv-scanner scan --format json --all-packages -L 'a'\''s.lock' -L 'b.lock' --output-file '/w/out.json'` {
+	if got := buildAuditCmd([]string{"a's.lock", "b.lock"}, "/w/out.json", false); got != `mise exec -- osv-scanner scan --format json --all-packages -L 'a'\''s.lock' -L 'b.lock' --output-file '/w/out.json'` {
 		t.Fatalf("buildAuditCmd = %s", got)
+	}
+	if got := buildAuditCmd([]string{"b.lock"}, "", true); got != `mise exec -- osv-scanner scan --format json --all-packages --offline-vulnerabilities -L 'b.lock'` {
+		t.Fatalf("buildAuditCmd(offline) = %s", got)
+	}
+	in := miseLocalInput{Lockfiles: []string{"uv.lock"}, OSVOffline: true}
+	if got := renderMiseLocal(in, nil); !strings.Contains(got, `--offline-vulnerabilities -L 'uv.lock'`) {
+		t.Fatalf("renderMiseLocal(offline) lacks the offline audit task:\n%s", got)
 	}
 }
 

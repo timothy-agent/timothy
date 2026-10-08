@@ -27,6 +27,7 @@ import { TestStatus } from './TestStatus'
 import { useDefaultSecretBackend } from './useDefaultSecretBackend'
 import { probeFailureText, responsesSuffix, secretDestination, stripPaste } from './util'
 import { errText, isTimothyAuthDetail, isTimothyAuthError } from '../../lib/errors'
+import { useOnboarding } from '../../onboarding/context'
 
 const area = settingsArea('providers')
 
@@ -68,15 +69,27 @@ function presetLitellmProvider(presetId: string): string {
 // OAuth token, which creates a kind='cli' row instead.
 type AnthropicAuthMode = 'api_key' | 'oauth'
 
+interface ProviderAddProps {
+  // presetId overrides the URL param.
+  presetId?: string
+  // embedded renders the form alone, without the page chrome.
+  embedded?: boolean
+  // onCreated and onCancel replace the navigation back to the list.
+  onCreated?: (id: string, name: string) => void
+  onCancel?: () => void
+}
+
 // ProviderAdd is its own page (not a dialog): connecting a provider is
 // a create action, and validation runs a real one-token completion
 // against the unsaved config, a provider is born working or not at
 // all. The Add button stays disabled until that test has passed;
 // editing any field after a passing test re-locks it, since the
 // config it validated no longer matches what's on screen.
-export function ProviderAdd() {
-  const { presetId } = useParams()
+export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCancel }: ProviderAddProps = {}) {
+  const params = useParams()
+  const presetId = presetIdProp ?? params.presetId
   const navigate = useNavigate()
+  const { refresh: refreshOnboarding } = useOnboarding()
   const preset = providerPresets.find((p) => p.id === presetId)
   const defaultBackend = useDefaultSecretBackend()
 
@@ -257,7 +270,7 @@ export function ProviderAdd() {
     setBusy(true)
     try {
       await setSecret(ref.trim(), trimmedKey)
-      await createProvider({
+      const id = await createProvider({
         name: name.trim(),
         kind: 'cli',
         // Anthropic's preset.driver is 'anthropic' (its api-kind
@@ -271,7 +284,9 @@ export function ProviderAdd() {
         enabled: true,
       })
       toast.success('Provider added', { description: `${name.trim()} is ready for coding missions.` })
-      navigate('/settings/providers')
+      void refreshOnboarding()
+      if (onCreated) onCreated(id, name.trim())
+      else navigate('/settings/providers')
     } catch (err) {
       toast.error('Could not add provider', { description: errText(err) })
     } finally {
@@ -353,7 +368,7 @@ export function ProviderAdd() {
         ...(isBedrock ? { region } : {}),
         ...(litellmProvider ? { litellm_provider: litellmProvider } : {}),
       }
-      await createProvider({
+      const id = await createProvider({
         name: name.trim(),
         kind: 'api',
         driver: preset.driver,
@@ -364,8 +379,10 @@ export function ProviderAdd() {
         enabled: true,
         ...(Object.keys(options).length > 0 ? { options } : {}),
       })
-      toast.success('Provider added', { description: `${name.trim()} is connected and ready to route to.` })
-      navigate('/settings/providers')
+      toast.success('Provider added', { description: `${name.trim()} is connected and ready to use.` })
+      void refreshOnboarding()
+      if (onCreated) onCreated(id, name.trim())
+      else navigate('/settings/providers')
     } catch (err) {
       toast.error('Could not add provider', { description: errText(err) })
     } finally {
@@ -385,19 +402,14 @@ export function ProviderAdd() {
         ? 'failed'
         : 'gate'
 
-  return (
-    <PageShell width="form">
-      <PageHeader
-        title={`Add ${preset.name}`}
-        description={`driver: ${preset.driver}`}
-        meta={<ProviderLogo preset={preset} className="size-9" />}
-        breadcrumbs={[
-          { label: 'Settings', href: '/settings' },
-          { label: area.label, href: '/settings/providers' },
-          { label: `Add ${preset.name}` },
-        ]}
-      />
-
+  const form = (
+    <>
+      {preset.id === 'ollama' && (
+        <p className="mb-4 text-sm text-muted-foreground">
+          Same machine as Timothy? Keep the default address. Another machine? Enter its address, for example
+          http://192.168.1.20:11434/v1.
+        </p>
+      )}
       <Form onSubmit={(e) => e.preventDefault()}>
         <FieldGroup>
           <Field label="Name (unique)">
@@ -716,9 +728,18 @@ export function ProviderAdd() {
             }
           />
         )}
+        {!isCli && testState === 'failed' && baseURL.includes('host.docker.internal') && (
+          <p className="text-sm text-muted-foreground">
+            On a Linux server, Docker needs{' '}
+            <code className="rounded-md bg-muted px-1 py-0.5 font-mono text-xs">
+              extra_hosts: ["host.docker.internal:host-gateway"]
+            </code>{' '}
+            on the gateway service for this address to resolve.
+          </p>
+        )}
 
         <FormActions>
-          <Button variant="outline" disabled={busy} onClick={() => navigate('/settings/providers')}>
+          <Button variant="outline" disabled={busy} onClick={() => (onCancel ? onCancel() : navigate('/settings/providers'))}>
             Cancel
           </Button>
           <Button disabled={(!isCli && !tested) || busy} onClick={() => void (isCli ? submitCli() : submit())}>
@@ -726,6 +747,24 @@ export function ProviderAdd() {
           </Button>
         </FormActions>
       </Form>
+    </>
+  )
+
+  if (embedded) return form
+
+  return (
+    <PageShell width="form">
+      <PageHeader
+        title={`Add ${preset.name}`}
+        description={`driver: ${preset.driver}`}
+        meta={<ProviderLogo preset={preset} className="size-9" />}
+        breadcrumbs={[
+          { label: 'Settings', href: '/settings' },
+          { label: area.label, href: '/settings/providers' },
+          { label: `Add ${preset.name}` },
+        ]}
+      />
+      {form}
     </PageShell>
   )
 }

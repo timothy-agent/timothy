@@ -52,7 +52,7 @@ const piDefaultAnthropicBaseURL = "https://api.anthropic.com"
 // final message ends with the DONE/RETRY/BLOCKED verdict line — pi has
 // no --json-schema flag, so this sentence is the only verdict channel
 // (spec.ResultSchema is intentionally never passed to pi's argv or env).
-const piVerdictInstruction = " End your final message with a single line containing only a JSON object of the form {\"status\":\"DONE\"|\"RETRY\"|\"BLOCKED\",\"note\":\"...\"} and nothing after it."
+const piVerdictInstruction = " End your final message with a single line containing only a JSON object of the form {\"status\":\"DONE\"|\"RETRY\"|\"BLOCKED\",\"note\":\"...\",\"final_output\":\"...\"} and nothing after it (final_output is optional: the report the goal asks for when no unit lists a file for it)."
 
 // piSchemaInstruction replaces piVerdictInstruction when spec.ResultSchema
 // is set (issue #582): the final line must be one JSON object matching
@@ -523,7 +523,8 @@ func (piAdapter) ParseResult(ev Event) (Result, bool) {
 	}
 	var v struct {
 		Status string `json:"status"`
-		Note   string `json:"note"`
+		Note        string `json:"note"`
+		FinalOutput string `json:"final_output"`
 	}
 	if err := json.Unmarshal(ev.Result, &v); err != nil {
 		return Result{}, false
@@ -531,7 +532,7 @@ func (piAdapter) ParseResult(ev Event) (Result, bool) {
 	status := strings.ToUpper(v.Status)
 	switch status {
 	case "DONE", "RETRY", "BLOCKED":
-		return Result{Status: status, Note: v.Note}, true
+		return Result{Status: status, Note: v.Note, FinalOutput: v.FinalOutput}, true
 	default:
 		return Result{}, false
 	}

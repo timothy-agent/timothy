@@ -80,7 +80,7 @@ var promptSites = map[string]func(t *testing.T, m Mission) string{
 		return lastUserMessage(t, agent)
 	},
 	"plan": func(t *testing.T, m Mission) string {
-		agent := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, `{"units":[{"title":"u","artifacts":["out.md"],"criteria":["c1","c2"],"check_cmd":"grep -q done out.md"}]}`)}}}
+		agent := &scriptedAgent{batches: [][]stream.StreamEvent{{toolEndEvent(planToolName, `{"units":[{"title":"u","artifacts":["out.json"],"criteria":["c1","c2"],"check_cmd":"grep -q done out.json"}]}`)}}}
 		if _, err := newTestRunner(agent).PlanSession(context.Background(), m, "discovery notes"); err != nil {
 			t.Fatalf("PlanSession: %v", err)
 		}

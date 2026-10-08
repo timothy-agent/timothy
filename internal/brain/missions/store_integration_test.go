@@ -2327,3 +2327,23 @@ func TestSetEnvironmentEventCandidates(t *testing.T) {
 		}
 	}
 }
+
+func TestHasSucceeded(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	id, err := s.Create(ctx, Mission{Goal: marker + "succeeded", Kind: "general", Route: "default"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE missions SET phase = $2, status = $3 WHERE id = $1`, id, string(PhaseDone), string(StatusDone)); err != nil {
+		t.Fatalf("mark done: %v", err)
+	}
+	ok, err := s.HasSucceeded(ctx)
+	if err != nil || !ok {
+		t.Fatalf("HasSucceeded = %v, %v; want true", ok, err)
+	}
+}

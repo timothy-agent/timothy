@@ -12,6 +12,11 @@ vi.mock('../components/missions/MissionForm', () => ({
 
 import { getMission } from '../api/client'
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 afterEach(cleanup)
 
 describe('NewMission', () => {

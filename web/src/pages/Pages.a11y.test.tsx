@@ -86,6 +86,11 @@ import { Home } from './Home'
 import { Knowledge } from './Knowledge'
 import { Memory } from './Memory'
 
+vi.mock('../onboarding/context', async () => {
+  const { onboardingState } = await import('../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 const axeOptions = { rules: { 'color-contrast': { enabled: false } } }
 // The Composer's hidden file input has no label, pre-existing and
 // outside this migration's scope (same exemption as Chat.a11y.test.tsx).

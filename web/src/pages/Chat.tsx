@@ -34,6 +34,9 @@ import {
 import { agentPhaseFromState } from '../lib/chatUi'
 import { subscribeEvents } from '../lib/events'
 import { useSessions } from '../lib/sessions'
+import { useOnboarding } from '../onboarding/context'
+import { unmetKey } from '../onboarding/gateCopy'
+import { SetupGate } from '../onboarding/SetupGate'
 import { fromTranscript, type ChatItem } from '../lib/transcript'
 import type { ChatIntent } from './Home'
 
@@ -65,6 +68,8 @@ export function Chat({
   const navigate = useNavigate()
   const location = useLocation()
   const { refresh } = useSessions()
+  const { readiness } = useOnboarding()
+  const chatBlocked = unmetKey(readiness, ['chat_route']) !== null
   const agents = useAgents()
   const [items, setItems] = useState<ChatItem[]>([])
   const [draft, setDraft] = useState('')
@@ -382,7 +387,7 @@ export function Chat({
     // ones ride the request; the composer's cap+toast already stops a
     // user from expecting an in-flight one to count.
     const ready = sentAttachments.filter((a) => !a.uploading)
-    if ((!message && ready.length === 0) || streaming) return
+    if ((!message && ready.length === 0) || streaming || chatBlocked) return
     setDraft('')
     setAttachments([])
     setReferences([])
@@ -795,6 +800,7 @@ export function Chat({
             }
             className="mb-2"
           />
+          {chatBlocked && <SetupGate requires={['chat_route']} variant="banner" />}
           <form
             onSubmit={(e) => {
               e.preventDefault()
@@ -812,7 +818,7 @@ export function Chat({
               hidePicker={Boolean(lockedSkillHint)}
               skillHint={skillHint}
               onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}
-              disabled={streaming}
+              disabled={streaming || chatBlocked}
               streaming={streaming}
               onStop={stop}
               placeholder={placeholder}

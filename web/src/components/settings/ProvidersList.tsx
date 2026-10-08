@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { catalogStatus, listProviders, patchProvider, providersHealth, refreshCatalog } from '../../api/client'
 import type { AdminProvider, CatalogSyncStatus, ProviderHealth } from '../../api/types'
@@ -48,7 +48,15 @@ export function ProvidersList() {
         <section className="space-y-4">
           <SectionHeader title={providers.length > 0 ? `Your providers · ${providers.length}` : 'Your providers'} />
           {providers.length === 0 ? (
-            <EmptyState title="No providers configured yet" description="Add one below to route work to it." />
+            <EmptyState
+              title="No providers configured yet"
+              description="Add one below so Timothy has a model to answer with."
+              action={
+                <Button asChild variant="outline" size="sm">
+                  <Link to="/welcome">Open the setup guide</Link>
+                </Button>
+              }
+            />
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {providers.map((p) => (

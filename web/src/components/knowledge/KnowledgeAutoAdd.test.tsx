@@ -11,6 +11,11 @@ vi.mock('../../api/client', () => ({
 
 import { addKbDocumentFromUrlAuto, uploadKbDocumentAuto } from '../../api/client'
 
+vi.mock('../../onboarding/context', async () => {
+  const { onboardingState } = await import('../../onboarding/testing')
+  return { useOnboarding: () => onboardingState() }
+})
+
 const doc: KbDocument = {
   id: 'd1',
   collection_id: 'c-classified',
