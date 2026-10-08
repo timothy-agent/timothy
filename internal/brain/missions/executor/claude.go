@@ -372,7 +372,8 @@ func (claudeAdapter) ParseResult(ev Event) (Result, bool) {
 	}
 	var v struct {
 		Status string `json:"status"`
-		Note   string `json:"note"`
+		Note        string `json:"note"`
+		FinalOutput string `json:"final_output"`
 	}
 	if err := json.Unmarshal(ev.Result, &v); err != nil {
 		return Result{}, false
@@ -380,7 +381,7 @@ func (claudeAdapter) ParseResult(ev Event) (Result, bool) {
 	status := strings.ToUpper(v.Status)
 	switch status {
 	case "DONE", "RETRY", "BLOCKED":
-		return Result{Status: status, Note: v.Note}, true
+		return Result{Status: status, Note: v.Note, FinalOutput: v.FinalOutput}, true
 	default:
 		return Result{}, false
 	}

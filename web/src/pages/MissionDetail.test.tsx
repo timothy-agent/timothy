@@ -1305,6 +1305,20 @@ describe('MissionDetail', () => {
     expect(screen.queryByText('worker evidence text')).toBeNull()
   })
 
+  it('renders a planned mission report from final_output over last_evidence', async () => {
+    vi.mocked(getMission).mockResolvedValue({
+      ...baseMission,
+      phase: 'done',
+      status: 'done',
+      last_evidence: 'worker evidence text',
+      final_output: 'the security analysis report',
+    })
+    renderPage()
+    expect(await screen.findByRole('heading', { level: 2, name: 'Result' })).toBeTruthy()
+    expect(screen.getByText('the security analysis report')).toBeTruthy()
+    expect(screen.queryByText('worker evidence text')).toBeNull()
+  })
+
   it('omits the Result section for a light mission with no final_output', async () => {
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,
