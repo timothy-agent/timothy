@@ -18,6 +18,9 @@ import {
   SelectValue,
 } from '../components/ui/select'
 import { subscribeEvents } from '../lib/events'
+import { TourOverlay } from '../onboarding/tour/TourOverlay'
+import { useTour } from '../onboarding/tour/useTour'
+import { missionsTour } from '../onboarding/tours/missions'
 
 type KindFilter = 'all' | Mission['kind']
 type SourceFilter = 'all' | 'manual' | 'automated'
@@ -45,6 +48,7 @@ export function Missions() {
   const [harnessFilter, setHarnessFilter] = useState('all')
   const [modelFilter, setModelFilter] = useState('all')
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
+  const tour = useTour(missionsTour, { enabled: true })
 
   const refresh = useCallback(() => {
     listMissions().then(setMissions, () => undefined)
@@ -102,7 +106,11 @@ export function Missions() {
       <PageHeader
         title="Missions"
         description="Long-running tasks that plan, execute, and review their own work."
-        actions={<Button onClick={() => navigate('/missions/new')}>New mission</Button>}
+        actions={
+          <Button data-tour="missions.new" onClick={() => navigate('/missions/new')}>
+            New mission
+          </Button>
+        }
       />
 
       {unread.length > 0 && (
@@ -136,7 +144,7 @@ export function Missions() {
         </div>
       )}
 
-      <div className="mb-4 flex flex-wrap items-center gap-2">
+      <div data-tour="missions.filters" className="mb-4 flex flex-wrap items-center gap-2">
         <Select value={kindFilter} onValueChange={(v) => setKindFilter(v as KindFilter)}>
           <SelectTrigger size="sm" aria-label="Filter by kind">
             <SelectValue />
@@ -216,6 +224,7 @@ export function Missions() {
           </div>
         )}
       </div>
+      <TourOverlay {...tour} />
     </PageShell>
   )
 }
