@@ -1,6 +1,6 @@
 module github.com/SumonMSelim/timothy
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
@@ -24,7 +24,7 @@ require (
 	github.com/teambition/rrule-go v1.8.2
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 	golang.org/x/sync v0.23.0
 )
 
