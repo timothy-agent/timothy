@@ -10,7 +10,6 @@ vi.mock('../../api/client', () => ({
   availableModels: vi.fn(),
   catalogModelsForProvider: vi.fn(),
   deleteProvider: vi.fn(),
-  deleteSecret: vi.fn(),
   listProviders: vi.fn(),
   listSecretBackends: vi.fn(),
   listSecretRefs: vi.fn(),
@@ -24,7 +23,6 @@ import {
   availableModels,
   catalogModelsForProvider,
   deleteProvider,
-  deleteSecret,
   listProviders,
   listSecretBackends,
   listSecretRefs,
@@ -515,19 +513,16 @@ describe('ProviderEdit credential_ref and litellm_provider fields', () => {
   })
 })
 
-describe('ProviderEdit credential panel clear/save', () => {
+describe('ProviderEdit credential panel', () => {
   const withRef = { ...openaicompatProvider, credential_ref: 'OLLAMA_API_KEY' }
 
-  it('clears a configured key and refreshes secret status', async () => {
+  it('offers no clear control for a configured key', async () => {
     vi.mocked(listProviders).mockResolvedValue([withRef])
     vi.mocked(secretStatus).mockResolvedValue({ configured: true, backend: 'db' })
-    vi.mocked(deleteSecret).mockResolvedValue()
     renderPage('p2')
 
-    const clearButton = await screen.findByRole('button', { name: 'clear' })
-    fireEvent.click(clearButton)
-
-    await waitFor(() => expect(deleteSecret).toHaveBeenCalledWith('OLLAMA_API_KEY'))
+    expect(await screen.findByPlaceholderText('paste new key to rotate')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /clear/i })).toBeNull()
   })
 
   it('shows the key panel for a kind=cli provider and writes under its credential_ref', async () => {
