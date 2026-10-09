@@ -348,6 +348,9 @@ type StepInput struct {
 	// expiry (a cooled-down executor entry, issue #704), is written to
 	// the pause payload so autoResumeInfra waits for it; zero otherwise.
 	Until time.Time
+	// Cause overrides CauseReviewInfra on InputReviewInfraFailure
+	// (CauseModelFloor); empty keeps it.
+	Cause string
 	// ReviewRoute/ReviewRouteModel are the new values an
 	// InputRouteChange writes (D-100).
 	ReviewRoute      string
@@ -433,6 +436,7 @@ const (
 	CauseReviewRoundsExhausted   = "review_rounds_exhausted"
 	CauseResultFailed            = "result_failed"
 	CausePlanApproval            = "plan_approval"
+	CauseModelFloor              = "model_floor"
 )
 
 // stepInput is Step's budget brake and input switch, after cancel and
@@ -492,7 +496,14 @@ func stepInput(s StepState, in StepInput, cfg Config) Transition {
 	case InputReviewRework:
 		return stepReviewRework(s, in, cfg)
 	case InputReviewInfraFailure:
-		payload := map[string]any{"reason": string(PauseInfra), "cause": CauseReviewInfra, "detail": in.Reason}
+		cause := CauseReviewInfra
+		if in.Cause != "" {
+			cause = in.Cause
+		}
+		payload := map[string]any{"reason": string(PauseInfra), "cause": cause, "detail": in.Reason}
+		if in.Model != "" {
+			payload["model"] = in.Model
+		}
 		if in.Route != "" {
 			payload["route"] = in.Route
 		}
