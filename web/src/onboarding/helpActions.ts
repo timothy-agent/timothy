@@ -6,8 +6,6 @@ import { useOnboarding } from './context'
 import { DOCS_URL } from './docsUrl'
 import { requestTourRestart } from './tour/useTour'
 
-export const readmeUrl = 'https://github.com/timothy-agent/timothy#readme'
-
 // tourPageFor maps a path to the page whose tour mounts there, or null.
 // List pages carry their tour on the index only, not on detail views.
 export function tourPageFor(pathname: string): string | null {
@@ -80,8 +78,6 @@ export function useHelpActions(): HelpAction[] {
         )
       },
     },
-    DOCS_URL
-      ? { id: 'docs', label: 'Docs', icon: BookOpen, href: DOCS_URL }
-      : { id: 'readme', label: 'README on GitHub', icon: BookOpen, href: readmeUrl },
+    { id: 'docs', label: 'Docs', icon: BookOpen, href: DOCS_URL },
   ]
 }

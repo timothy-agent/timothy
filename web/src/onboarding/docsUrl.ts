@@ -1,2 +1,2 @@
-// Empty until the docs site ships (issue #1063).
-export const DOCS_URL = ''
+// Public docs site, built from the timothy-agent/docs repository.
+export const DOCS_URL = 'https://timothy-agent.github.io/docs/'
