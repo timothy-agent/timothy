@@ -63,7 +63,7 @@ describe('KnowledgeAutoAdd', () => {
     vi.mocked(addKbDocumentFromUrlAuto).mockResolvedValue(doc)
     renderPage()
 
-    fireEvent.change(screen.getByPlaceholderText(/add a page or PDF by URL/), {
+    fireEvent.change(screen.getByPlaceholderText(/Add a page or PDF by URL/), {
       target: { value: 'https://example.com/article' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))

@@ -663,7 +663,7 @@ function ProviderCatalogPanel({ provider }: { provider: AdminProvider }) {
   const models = useCatalogSearch(q, search)
 
   return (
-    <Panel title={`Models · ${models.length}`} description="Every catalog model this provider can serve, with live pricing. Pick which one actually runs on the Routes page." density="operational">
+    <Panel title={`Models · ${models.length}`} description="Every catalog model this provider can serve, with live pricing. Pick which one actually runs on the Routing page." density="operational">
       <div className="p-3">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter by model id…" size="sm" />
       </div>

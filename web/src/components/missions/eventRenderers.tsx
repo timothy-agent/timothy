@@ -326,17 +326,17 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   },
   'executor.auth_failed': (p) => {
     const { harness } = p as ExecutorAuthFailedPayload
-    return <span className="text-destructive">{harness} auth failed — re-run the harness login</span>
+    return <span className="text-destructive">{harness} auth failed: re-run the harness login</span>
   },
   'executor.skipped': (p) => {
     const { reason, error, until, provider, model, skip_reasons } = p as ExecutorSkippedPayload
     return (
       <span className="text-warning">
         Harness skipped: {reason}
-        {reason === 'resolve_failed' && error ? ` — ${truncateForDisplay(error)}` : ''}
-        {reason === 'cooldown' && until ? ` — ${provider}/${model} until ${until}` : ''}
+        {reason === 'resolve_failed' && error ? `: ${truncateForDisplay(error)}` : ''}
+        {reason === 'cooldown' && until ? `: ${provider}/${model} until ${until}` : ''}
         {reason === 'no_usable_entry' && skip_reasons && skip_reasons.length > 0
-          ? ` — ${skip_reasons.join(', ')}`
+          ? `: ${skip_reasons.join(', ')}`
           : ''}
       </span>
     )
@@ -382,7 +382,7 @@ function formatExecutorCost(costUsd: number | null | undefined, billed: boolean,
     if (billed) return amount
     return subscriptionAuth ? `${amount} · subscription (not billed)` : `harness-reported ${amount}`
   }
-  return subscriptionAuth ? 'subscription — cost untracked' : 'cost unreported'
+  return subscriptionAuth ? 'subscription: cost untracked' : 'cost unreported'
 }
 
 // toolCallStatusClass colors a tool call trace entry by outcome, from

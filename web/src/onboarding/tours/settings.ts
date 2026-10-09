@@ -12,8 +12,8 @@ export const settingsTour: TourDef = {
     { target: 'settings.routes', title: 'Routing', body: 'Which model answers which kind of work, with fallbacks.', side: 'right' },
     { target: 'settings.secrets', title: 'Secret backends', body: 'Where keys are stored. The database backend works out of the box.', side: 'right' },
     { target: 'settings.credentials', title: 'Credentials', body: 'Every stored key by name. Values never show.', side: 'right' },
-    { target: 'settings.destinations', title: 'Destinations', body: 'Where mission results go: GitHub pull requests, email, files.', side: 'right' },
-    { target: 'settings.channels', title: 'Channels', body: 'Talk to Timothy from Telegram or email.', side: 'right' },
+    { target: 'settings.destinations', title: 'Destinations', body: 'Where mission results go: pull requests, email, webhooks and channels.', side: 'right' },
+    { target: 'settings.channels', title: 'Channels', body: 'Talk to Timothy from Telegram, Slack or email.', side: 'right' },
     { target: 'settings.features', title: 'Features', body: 'Switches and defaults for the whole instance.', side: 'right' },
   ],
 }

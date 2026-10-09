@@ -884,7 +884,7 @@ describe('MissionDetail', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
     await waitFor(() => expect(answerMissionPermission).toHaveBeenCalledWith('m1', 'once'))
-    expect(await screen.findByText('Approved — command running…')).toBeTruthy()
+    expect(await screen.findByText('Approved. Command running…')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull()
 
@@ -907,7 +907,7 @@ describe('MissionDetail', () => {
     })
     sub.fireSignal({ kind: 'mission', id: 'm1' })
     expect(await screen.findByRole('button', { name: 'Allow once' })).toBeTruthy()
-    expect(screen.queryByText('Approved — command running…')).toBeNull()
+    expect(screen.queryByText('Approved. Command running…')).toBeNull()
   })
 
   it('reverts to actionable and shows an error toast when the decision POST fails', async () => {
@@ -925,7 +925,7 @@ describe('MissionDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
     await waitFor(() => expect(answerMissionPermission).toHaveBeenCalled())
     expect(await screen.findByRole('button', { name: 'Allow once' })).toBeTruthy()
-    expect(screen.queryByText('Approved — command running…')).toBeNull()
+    expect(screen.queryByText('Approved. Command running…')).toBeNull()
   })
 
   it('treats a still-pending permission as answered when the events already show a later permission_answered', async () => {
@@ -954,7 +954,7 @@ describe('MissionDetail', () => {
       },
     ])
     renderPage()
-    expect(await screen.findByText('Answered — waiting for the worker to continue…')).toBeTruthy()
+    expect(await screen.findByText('Answered. Waiting for the worker to continue…')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
   })
 

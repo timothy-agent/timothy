@@ -274,10 +274,10 @@ func microsoftTokenError(resp *http.Response) error {
 	var e microsoftOAuthErrorBody
 	_ = json.Unmarshal(body, &e)
 	if e.Error == "invalid_grant" {
-		return fmt.Errorf("Microsoft authorization expired or was revoked — reconnect to re-authorize")
+		return fmt.Errorf("Microsoft authorization expired or was revoked. Reconnect to re-authorize")
 	}
 	if e.Error != "" {
-		return fmt.Errorf("Microsoft authorization failed (status %d, error %q) — reconnect to re-authorize", resp.StatusCode, e.Error)
+		return fmt.Errorf("Microsoft authorization failed (status %d, error %q). Reconnect to re-authorize", resp.StatusCode, e.Error)
 	}
 	return fmt.Errorf("Microsoft authorization failed (status %d)", resp.StatusCode)
 }

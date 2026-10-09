@@ -176,7 +176,7 @@ func TestGitLabGetRepoErrors(t *testing.T) {
 			handler: func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusUnauthorized)
 			},
-			wantErr: "token invalid or expired",
+			wantErr: "token invalid or expired. Replace the access token",
 		},
 		{
 			name: "string message is surfaced",

@@ -760,7 +760,7 @@ func (h *kbAPI) fetchURL(ctx context.Context, u *url.URL) ([]byte, string, error
 		// site refusing automated clients.
 		switch resp.StatusCode {
 		case 999, http.StatusForbidden, http.StatusTooManyRequests:
-			return nil, "", fmt.Errorf("http %d fetching %s: the site blocks automated access — save the page as a PDF and upload it instead", resp.StatusCode, u.Host)
+			return nil, "", fmt.Errorf("http %d fetching %s: the site blocks automated access. Save the page as a PDF and upload it instead", resp.StatusCode, u.Host)
 		}
 		return nil, "", fmt.Errorf("http %d fetching %s", resp.StatusCode, u.Host)
 	}

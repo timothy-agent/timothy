@@ -618,7 +618,7 @@ export interface AvailableModel {
 }
 
 // AdminAgent is one row of the agent registry (D-034): who serves a
-// session. Empty skills/tools = everything allowed; empty route = the
+// session. Empty skills/tools = none allowed; empty route = the
 // default chain.
 export interface AdminAgent {
   id: string

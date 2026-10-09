@@ -212,7 +212,7 @@ func (s *googleSource) rawAPI(ctx context.Context, method, apiURL string, body a
 // a body snippet, same discipline as googleTokenError.
 func googleAPIError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("Google authorization expired or was revoked — reconnect to re-authorize")
+		return fmt.Errorf("Google authorization expired or was revoked. Reconnect to re-authorize")
 	}
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	return fmt.Errorf("google api status %d: %s", resp.StatusCode, snippet)

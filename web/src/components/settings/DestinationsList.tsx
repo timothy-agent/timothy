@@ -70,7 +70,7 @@ export function DestinationsList() {
           {destinations.length === 0 ? (
             <EmptyState
               title="No destinations yet"
-              description="A destination is where mission results go: a GitHub pull request, an email, a file. Pick one below."
+              description="A destination is where mission results go: a pull request, an email, a webhook or a channel. Pick one below."
             />
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

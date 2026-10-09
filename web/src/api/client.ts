@@ -156,7 +156,7 @@ export function isTimothyAuthError(err: unknown): boolean {
 }
 
 export const timothyAuthErrorMessage =
-  "Timothy's API token is missing or invalid. Paste TIMOTHY_API_TOKEN from deploy/.env — this is not an LLM provider key."
+  "Timothy's API token is missing or invalid. Paste TIMOTHY_API_TOKEN from deploy/.env. This is not an LLM provider key."
 
 export function errorText(err: unknown): string {
   if (isTimothyAuthError(err)) return timothyAuthErrorMessage

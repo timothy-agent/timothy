@@ -46,7 +46,7 @@ func TestFetchURLBlockedStatus(t *testing.T) {
 		status  int
 		wantMsg string
 	}{
-		{"999 reads as bot block", 999, "blocks automated access"},
+		{"999 reads as bot block", 999, "blocks automated access. Save the page as a PDF and upload it instead"},
 		{"500 stays bare", http.StatusInternalServerError, "http 500 fetching"},
 	}
 	for _, tc := range tests {

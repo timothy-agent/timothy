@@ -497,13 +497,13 @@ func TestMicrosoftTokenErrorMapping(t *testing.T) {
 			name:   "invalid_grant expired refresh token",
 			status: http.StatusBadRequest,
 			body:   `{"error":"invalid_grant","error_description":"AADSTS700084: expired"}`,
-			want:   "Microsoft authorization expired or was revoked — reconnect to re-authorize",
+			want:   "Microsoft authorization expired or was revoked. Reconnect to re-authorize",
 		},
 		{
 			name:   "other oauth error keeps status and code",
 			status: http.StatusBadRequest,
 			body:   `{"error":"invalid_client","error_description":"bad client"}`,
-			want:   `Microsoft authorization failed (status 400, error "invalid_client") — reconnect to re-authorize`,
+			want:   `Microsoft authorization failed (status 400, error "invalid_client"). Reconnect to re-authorize`,
 		},
 		{
 			name:   "generic 500 with no parseable error",
@@ -530,7 +530,7 @@ func TestMicrosoftAPIErrorMapping(t *testing.T) {
 	t.Parallel()
 	resp := &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"bad token"}}`))}
 	err := microsoftAPIError(resp)
-	if err.Error() != "Microsoft authorization expired or was revoked — reconnect to re-authorize" {
+	if err.Error() != "Microsoft authorization expired or was revoked. Reconnect to re-authorize" {
 		t.Fatalf("microsoftAPIError = %q", err.Error())
 	}
 

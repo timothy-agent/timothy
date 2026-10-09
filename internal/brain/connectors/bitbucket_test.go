@@ -152,7 +152,7 @@ func TestBitbucketStatusErrorMapping(t *testing.T) {
 		body   string
 		want   string
 	}{
-		{"401 fixed message", http.StatusUnauthorized, `{"type":"error","error":{"message":"Bad token"}}`, "bitbucket: token invalid or expired — replace the access token"},
+		{"401 fixed message", http.StatusUnauthorized, `{"type":"error","error":{"message":"Bad token"}}`, "bitbucket: token invalid or expired. Replace the access token"},
 		{"json message", http.StatusForbidden, `{"type":"error","error":{"message":"insufficient scope"}}`, "bitbucket: status 403: insufficient scope"},
 		{"plain text 404", http.StatusNotFound, "Not Found", "bitbucket: status 404: Not Found"},
 		{"html body", http.StatusBadGateway, "<html><body>gateway</body></html>", "bitbucket: status 502"},

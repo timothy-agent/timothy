@@ -420,7 +420,7 @@ func autoResumeBackoff(ctx context.Context, d signaler, store backoffStore, noti
 		}
 		if n >= exhaustedAfter {
 			if notify != nil {
-				msg := fmt.Sprintf("this mission has paused for backoff %d times and will not auto-resume again — it needs a human look", n)
+				msg := fmt.Sprintf("this mission has paused for backoff %d times and will not auto-resume again. It needs a human look", n)
 				if err := notify.NotifyMessage(ctx, m.ID, "auto_resume_exhausted", msg); err != nil {
 					log.Warn("auto-resume backoff sweep: notify failed", "mission_id", m.ID, "error", err)
 				}
@@ -474,7 +474,7 @@ func autoResumeInfra(ctx context.Context, d signaler, store pausedByReasonStore,
 		}
 		if n >= exhaustedAfter {
 			if notify != nil {
-				msg := fmt.Sprintf("this mission has paused for infra failure %d times and will not auto-resume again — it needs a human look", n)
+				msg := fmt.Sprintf("this mission has paused for infra failure %d times and will not auto-resume again. It needs a human look", n)
 				if err := notify.NotifyMessage(ctx, m.ID, "auto_resume_exhausted", msg); err != nil {
 					log.Warn("auto-resume infra sweep: notify failed", "mission_id", m.ID, "error", err)
 				}

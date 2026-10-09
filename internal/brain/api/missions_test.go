@@ -1233,7 +1233,7 @@ func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 		case "codex-cli":
 			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
 				{ProviderName: "zai", Model: "glm-4.7", Usable: false,
-					SkipReason: "endpoint does not serve /v1/responses — run Test connection on the provider to re-probe"},
+					SkipReason: "endpoint does not serve /v1/responses. Run Test connection on the provider to re-probe"},
 			}}, nil
 		case "opencode":
 			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
@@ -1265,7 +1265,7 @@ func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 	if !ok {
 		t.Fatal("codex-cli option missing (executor.Registered() should include it)")
 	}
-	wantReason := "endpoint does not serve /v1/responses — run Test connection on the provider to re-probe"
+	wantReason := "endpoint does not serve /v1/responses. Run Test connection on the provider to re-probe"
 	if codex.Usable || codex.Reason != wantReason {
 		t.Fatalf("codex-cli option = %+v, want unusable with the entry's own skip_reason %q", codex, wantReason)
 	}

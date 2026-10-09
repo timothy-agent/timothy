@@ -17,7 +17,7 @@ func TestIsRetryable(t *testing.T) {
 		{"gateway unreachable", "gwclient: gateway unreachable: dial tcp: i/o timeout", true},
 		{"timeout", "embedding failed: context deadline exceeded", true},
 		{"connection reset", "memclient: memoryd http 500: read: connection reset by peer", true},
-		{"stale restart", "ingestion interrupted by a restart — re-ingest to retry", true},
+		{"stale restart", "ingestion interrupted by a restart. Re-ingest to retry", true},
 		{"unexpected EOF", "embedding failed: unexpected EOF", true},
 		{"unsupported format", "unsupported content type \"application/zip\" at example.com: only html, pdf, markdown, and plain text", false},
 		{"empty document", "document produced no chunks", false},

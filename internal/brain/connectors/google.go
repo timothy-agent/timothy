@@ -310,11 +310,11 @@ func googleTokenError(resp *http.Response) error {
 	var e googleOAuthErrorBody
 	_ = json.Unmarshal(body, &e)
 	if e.Error == "invalid_grant" {
-		return fmt.Errorf("Google authorization expired or was revoked — reconnect to re-authorize. " +
+		return fmt.Errorf("Google authorization expired or was revoked. Reconnect to re-authorize. " +
 			"(Testing-mode OAuth apps expire grants roughly weekly.)")
 	}
 	if e.Error != "" {
-		return fmt.Errorf("Google authorization failed (status %d, error %q) — reconnect to re-authorize", resp.StatusCode, e.Error)
+		return fmt.Errorf("Google authorization failed (status %d, error %q). Reconnect to re-authorize", resp.StatusCode, e.Error)
 	}
 	return fmt.Errorf("Google authorization failed (status %d)", resp.StatusCode)
 }
