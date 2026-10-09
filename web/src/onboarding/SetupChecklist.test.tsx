@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Mission, OnboardingProgress, Readiness } from '../api/types'
@@ -96,6 +96,23 @@ describe('SetupChecklist', () => {
     const input = vi.mocked(createMission).mock.calls[0][0]
     expect(input.goal).toContain('Run tag: onboarding-')
     expect(input).toMatchObject({ kind: 'general', light: true })
+  })
+
+  it('shows a preparing state when the sample mission is slow to start', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(createMission).mockReturnValue(new Promise(() => {}))
+      renderChecklist({ ...readyReadiness, first_mission: false })
+      fireEvent.click(screen.getByRole('button', { name: 'Run a sample mission' }))
+
+      await act(() => vi.advanceTimersByTimeAsync(1999))
+      expect(screen.getByRole('button', { name: 'Run a sample mission' })).toBeDisabled()
+
+      await act(() => vi.advanceTimersByTimeAsync(1))
+      expect(screen.getByRole('button', { name: 'Preparing mission…' })).toBeDisabled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('shows a toast when the sample mission fails', async () => {
