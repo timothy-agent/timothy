@@ -30,7 +30,7 @@ import (
 type Destination struct {
 	ID            string          `json:"id"`
 	Name          string          `json:"name"`
-	Kind          string          `json:"kind"` // email | webhook | channel | github | bitbucket
+	Kind          string          `json:"kind"` // email | webhook | channel | github | bitbucket | gitlab
 	Config        json.RawMessage `json:"config"`
 	CredentialRef string          `json:"credential_ref"`
 	Enabled       bool            `json:"enabled"`
@@ -203,7 +203,7 @@ func validate(ctx context.Context, conns connectorLookup, channels ChannelLookup
 	case "channel":
 		return validateChannel(ctx, channels, d)
 	default:
-		return fmt.Errorf("unsupported kind %q (only email, webhook, channel, github, bitbucket in this release)", d.Kind)
+		return fmt.Errorf("unsupported kind %q (only email, webhook, channel, github, bitbucket, gitlab in this release)", d.Kind)
 	}
 	return nil
 }
