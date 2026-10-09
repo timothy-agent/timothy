@@ -210,7 +210,7 @@ func TestSecretsListerFailureIsGeneric(t *testing.T) {
 			var buf bytes.Buffer
 			a := &API{token: "tok", log: slog.New(slog.NewTextHandler(&buf, nil))}
 			m := http.NewServeMux()
-			a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, tt.conns, tt.dests, nil)
+			a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, tt.conns, tt.dests, nil, nil)
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			req.Header.Set("Authorization", "Bearer tok")
 			w := httptest.NewRecorder()

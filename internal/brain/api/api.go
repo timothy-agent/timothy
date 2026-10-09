@@ -161,7 +161,12 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if automationStore != nil {
 		autoLister = automationStore
 	}
-	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister, autoLister)
+	// Same nil-box guard for *channels.Store.
+	var chanLister channelLister
+	if channelStore != nil {
+		chanLister = channelStore
+	}
+	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister, autoLister, chanLister)
 	a.registerSettings(srv.Handle, flags, whisperURL, pdfService != nil)
 	a.registerOnboarding(srv.Handle, flags, onboardingProbes)
 	a.registerAgents(srv.Handle, agentReg)

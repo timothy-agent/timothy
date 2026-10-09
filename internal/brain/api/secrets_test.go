@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
+	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -70,6 +71,17 @@ func (f *fakeAutomationLister) List(context.Context) ([]automations.Automation, 
 	return f.rows, f.err
 }
 
+// fakeChannelLister stubs channels.Store's List for the same reason;
+// no DB needed to test the merge/guard logic.
+type fakeChannelLister struct {
+	rows []channels.Channel
+	err  error
+}
+
+func (f *fakeChannelLister) List(context.Context) ([]channels.Channel, error) {
+	return f.rows, f.err
+}
+
 // listSecrets GETs the directory and returns referents by ref name.
 func listSecrets(t *testing.T, m *http.ServeMux) map[string][]referenceInfo {
 	t.Helper()
@@ -107,7 +119,7 @@ func TestListSecretsMergesProviderAndConnectorReferents(t *testing.T) {
 		{Name: "no-cred", CredentialRef: ""},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -165,7 +177,7 @@ func TestListSecretsPropagatesGatewayFailure(t *testing.T) {
 	gw := &fakeGatewaySecrets{listErr: errors.New("gateway down")}
 	conns := &fakeConnectorLister{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -190,7 +202,7 @@ func TestListSecretsCountsGoogleClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_id":"x.apps.googleusercontent.com","client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -230,7 +242,7 @@ func TestDeleteSecretRefusesGoogleClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_secret_ref":"GMAIL_GOOGLE_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/GMAIL_GOOGLE_CLIENT_SECRET", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -258,7 +270,7 @@ func TestListSecretsCountsMicrosoftClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_id":"x","client_secret_ref":"OUTLOOK_MICROSOFT_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -298,7 +310,7 @@ func TestDeleteSecretRefusesMicrosoftClientSecretRef(t *testing.T) {
 			Config: json.RawMessage(`{"client_secret_ref":"OUTLOOK_MICROSOFT_CLIENT_SECRET"}`)},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/OUTLOOK_MICROSOFT_CLIENT_SECRET", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -321,7 +333,7 @@ func TestDeleteSecretRefusesWhenConnectorReferencesIt(t *testing.T) {
 		{Name: "github-mcp", CredentialRef: "GITHUB_PAT"},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/GITHUB_PAT", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -351,7 +363,7 @@ func TestDeleteSecretForwardsOrphanedRefToGateway(t *testing.T) {
 	gw := &fakeGatewaySecrets{}
 	conns := &fakeConnectorLister{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/ORPHAN_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -376,7 +388,7 @@ func TestDeleteSecretPropagatesGatewayInUseRefusal(t *testing.T) {
 	gw := &fakeGatewaySecrets{deleteErr: errors.New("SOME_KEY is referenced by provider(s) [openai]: in use"), deleteCode: http.StatusConflict}
 	conns := &fakeConnectorLister{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, conns, nil, nil)
+	a.registerSecrets(m.Handle, gw, conns, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/SOME_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -397,7 +409,7 @@ func TestSecretsRoutesCoexistWithAdminProxy(t *testing.T) {
 	a := &API{token: "tok", log: discard()}
 	m := http.NewServeMux()
 	a.registerAdmin(m.Handle, http.NotFoundHandler())
-	a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, &fakeConnectorLister{}, nil, nil)
+	a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, &fakeConnectorLister{}, nil, nil, nil)
 }
 
 // TestRegisterSecretsMountsWithoutConnectors pins that a nil connector
@@ -409,7 +421,7 @@ func TestRegisterSecretsMountsWithoutConnectors(t *testing.T) {
 	a := &API{token: "tok", log: discard()}
 	gw := &fakeGatewaySecrets{}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, nil, nil)
+	a.registerSecrets(m.Handle, gw, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/SOME_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -428,7 +440,7 @@ func TestRegisterSecretsUnmountedWithoutGatewayOrConnectors(t *testing.T) {
 	t.Parallel()
 	a := &API{token: "tok", log: discard()}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, nil, nil, nil, nil)
+	a.registerSecrets(m.Handle, nil, nil, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -454,7 +466,7 @@ func TestListSecretsIncludesDestinationReferent(t *testing.T) {
 		{Name: "webhook-sink", Kind: "webhook", CredentialRef: ""},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, dests, nil)
+	a.registerSecrets(m.Handle, gw, nil, dests, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -491,7 +503,7 @@ func TestDeleteSecretRefusesWhenDestinationReferencesIt(t *testing.T) {
 		{Name: "alerts-bot", Kind: "telegram", CredentialRef: "TELEGRAM_DEST_REF"}, //nolint:gosec // ref name, not a secret value
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, dests, nil)
+	a.registerSecrets(m.Handle, gw, nil, dests, nil, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/TELEGRAM_DEST_REF", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -529,7 +541,7 @@ func TestListSecretsSkipsDestinationsWithoutCredentialRef(t *testing.T) {
 		{Name: "email-out", Kind: "email", CredentialRef: ""},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, dests, nil)
+	a.registerSecrets(m.Handle, gw, nil, dests, nil, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/admin/secrets", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -569,7 +581,7 @@ func TestListSecretsIncludesAutomationTriggerReferent(t *testing.T) {
 		}},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+	a.registerSecrets(m.Handle, gw, nil, nil, autos, nil)
 
 	got := listSecrets(t, m)
 	cases := map[string][]referenceInfo{
@@ -605,7 +617,7 @@ func TestListSecretsAutomationReferentDeduped(t *testing.T) {
 		}},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+	a.registerSecrets(m.Handle, gw, nil, nil, autos, nil)
 
 	got := listSecrets(t, m)["HOOK_KEY"]
 	want := []referenceInfo{
@@ -630,7 +642,7 @@ func TestDeleteSecretRefusesWhenAutomationTriggerReferencesIt(t *testing.T) {
 		}},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+	a.registerSecrets(m.Handle, gw, nil, nil, autos, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/HOOK_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -665,7 +677,7 @@ func TestDeleteSecretForwardsWhenOnlyCronTriggers(t *testing.T) {
 		{Name: "nightly", Triggers: []automations.Trigger{{Kind: automations.TriggerCron}}},
 	}}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+	a.registerSecrets(m.Handle, gw, nil, nil, autos, nil)
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/HOOK_KEY", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -686,7 +698,7 @@ func TestListSecretsAutomationListerError(t *testing.T) {
 	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{{RefName: "HOOK_KEY"}}}
 	autos := &fakeAutomationLister{err: errors.New("db down")}
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, nil, autos)
+	a.registerSecrets(m.Handle, gw, nil, nil, autos, nil)
 
 	for _, method := range []string{http.MethodGet, http.MethodDelete} {
 		path := "/v1/admin/secrets"
@@ -699,6 +711,132 @@ func TestListSecretsAutomationListerError(t *testing.T) {
 		m.ServeHTTP(w, req)
 		if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "automations_failed") {
 			t.Fatalf("%s status = %d body = %s, want 500 automations_failed", method, w.Code, w.Body)
+		}
+	}
+	if gw.deletedRef != "" {
+		t.Fatalf("gateway DeleteSecret called with %q, want never called", gw.deletedRef)
+	}
+}
+
+// channelRows covers every channel token field: telegram and slack
+// credential_ref, slack config.app_token_ref, a disabled channel, a
+// slack channel reusing one ref for both tokens, and an email channel
+// (no token ref; its password lives on the imap connector).
+var channelRows = []channels.Channel{
+	{Name: "tg-bot", Kind: channels.KindTelegram, CredentialRef: "TG_TOKEN", Enabled: true},
+	{Name: "team-slack", Kind: channels.KindSlack, CredentialRef: "SLACK_BOT", Config: channels.Config{AppTokenRef: "SLACK_APP"}, Enabled: true},
+	{Name: "old-bot", Kind: channels.KindTelegram, CredentialRef: "OLD_TOKEN", Enabled: false},
+	{Name: "one-ref-slack", Kind: channels.KindSlack, CredentialRef: "SHARED_SLACK", Config: channels.Config{AppTokenRef: "SHARED_SLACK"}, Enabled: true},
+	{Name: "inbox", Kind: channels.KindEmail, Config: channels.Config{ConnectorID: "11111111-1111-1111-1111-111111111111"}, Enabled: true},
+}
+
+// TestListSecretsIncludesChannelReferents pins that every channel
+// token ref lists its channel, one referent per channel and ref.
+func TestListSecretsIncludesChannelReferents(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{
+		{RefName: "TG_TOKEN"}, {RefName: "SLACK_BOT"}, {RefName: "SLACK_APP"},
+		{RefName: "OLD_TOKEN"}, {RefName: "SHARED_SLACK"}, {RefName: "ORPHAN_KEY"},
+	}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, nil, nil, &fakeChannelLister{rows: channelRows})
+
+	got := listSecrets(t, m)
+	for _, tt := range []struct {
+		ref  string
+		want []referenceInfo
+	}{
+		{"TG_TOKEN", []referenceInfo{{Kind: "channel", Name: "tg-bot", Role: "credential"}}},
+		{"SLACK_BOT", []referenceInfo{{Kind: "channel", Name: "team-slack", Role: "credential"}}},
+		{"SLACK_APP", []referenceInfo{{Kind: "channel", Name: "team-slack", Role: "credential"}}},
+		{"OLD_TOKEN", []referenceInfo{{Kind: "channel", Name: "old-bot", Role: "credential"}}},
+		{"SHARED_SLACK", []referenceInfo{{Kind: "channel", Name: "one-ref-slack", Role: "credential"}}},
+		{"ORPHAN_KEY", []referenceInfo{}},
+	} {
+		if len(got[tt.ref]) != len(tt.want) {
+			t.Fatalf("%s referenced_by = %+v, want %+v", tt.ref, got[tt.ref], tt.want)
+		}
+		for i := range tt.want {
+			if got[tt.ref][i] != tt.want[i] {
+				t.Fatalf("%s referenced_by = %+v, want %+v", tt.ref, got[tt.ref], tt.want)
+			}
+		}
+	}
+}
+
+// TestDeleteSecretChannelGuard pins that a ref behind any channel token
+// field refuses deletion naming the channel, without asking the
+// gateway, while an unreferenced ref is forwarded.
+func TestDeleteSecretChannelGuard(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		name, ref, channel string
+	}{
+		{"telegram bot token", "TG_TOKEN", "tg-bot"},
+		{"slack bot token", "SLACK_BOT", "team-slack"},
+		{"slack app token", "SLACK_APP", "team-slack"},
+		{"disabled channel", "OLD_TOKEN", "old-bot"},
+		{"orphan forwarded", "ORPHAN_KEY", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			a := &API{token: "tok", log: discard()}
+			gw := &fakeGatewaySecrets{}
+			m := http.NewServeMux()
+			a.registerSecrets(m.Handle, gw, nil, nil, nil, &fakeChannelLister{rows: channelRows})
+
+			req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/"+tt.ref, nil)
+			req.Header.Set("Authorization", "Bearer tok")
+			w := httptest.NewRecorder()
+			m.ServeHTTP(w, req)
+
+			if tt.channel == "" {
+				if w.Code != http.StatusNoContent || gw.deletedRef != tt.ref {
+					t.Fatalf("status = %d deleted = %q, want 204 forwarded to gateway", w.Code, gw.deletedRef)
+				}
+				return
+			}
+			if w.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409", w.Code)
+			}
+			if gw.deletedRef != "" {
+				t.Fatalf("gateway DeleteSecret called with %q, want never called", gw.deletedRef)
+			}
+			var body struct {
+				Error   string `json:"error"`
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.Error != "in_use" || !strings.Contains(body.Message, "channel(s) "+tt.channel) {
+				t.Fatalf("body = %+v, want in_use naming channel %s", body, tt.channel)
+			}
+		})
+	}
+}
+
+// TestSecretsChannelListerError surfaces a failed channel lookup as 500
+// on GET and DELETE; DELETE never forwards.
+func TestSecretsChannelListerError(t *testing.T) {
+	t.Parallel()
+	a := &API{token: "tok", log: discard()}
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{{RefName: "TG_TOKEN"}}}
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, nil, nil, &fakeChannelLister{err: errors.New("db down")})
+
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		path := "/v1/admin/secrets"
+		if method == http.MethodDelete {
+			path += "/TG_TOKEN"
+		}
+		req := httptest.NewRequest(method, path, nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "channels_failed") {
+			t.Fatalf("%s status = %d body = %s, want 500 channels_failed", method, w.Code, w.Body)
 		}
 	}
 	if gw.deletedRef != "" {
