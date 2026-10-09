@@ -1122,6 +1122,32 @@ describe('MissionDetail', () => {
     expect(screen.getByText('Last rejection: plan_invalid: unit 2 has no criteria')).toBeTruthy()
   })
 
+  it('names the model on a mission floor pause, not an infrastructure error (#1090)', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'infra' })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.paused',
+        payload: {
+          reason: 'infra',
+          cause: 'model_floor',
+          model: 'qwen2.5:7b',
+          detail: 'mission turn served by a below-floor model: qwen2.5:7b',
+        },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('Paused: qwen2.5:7b is below the mission floor')).toBeTruthy()
+    expect(
+      screen.getByText('This model can chat but cannot run missions. Pick a stronger model for missions in Settings, then resume.'),
+    ).toBeTruthy()
+    expect(screen.queryByText('Paused: infrastructure error')).toBeNull()
+  })
+
   it('omits the pause detail once the mission has been resumed', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'idle', pause_reason: '' })
     vi.mocked(missionEvents).mockResolvedValue([

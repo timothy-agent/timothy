@@ -32,7 +32,7 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('VerifyStep', () => {
   it('shows the latency and moves on after a passing check', async () => {
-    vi.mocked(testProvider).mockResolvedValue({ ok: true, latency_ms: 42, model: 'qwen2.5:7b' })
+    vi.mocked(testProvider).mockResolvedValue({ ok: true, latency_ms: 42, model: 'qwen3:8b' })
     const onNext = vi.fn()
     render(<Harness onNext={onNext} onBack={() => {}} />)
     expect(screen.getByText('Checking the connection...')).toBeInTheDocument()
