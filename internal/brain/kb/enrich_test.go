@@ -57,6 +57,68 @@ func TestExtractImageLinksDedupsAndSkipsNonHTTP(t *testing.T) {
 	}
 }
 
+func TestExtractImageLinksParentheses(t *testing.T) {
+	tests := []struct {
+		name string
+		md   string
+		want string
+	}{
+		{
+			name: "escaped parens",
+			md:   `![x](https://imgopt.infoq.com/fit-in/3000x4000/filters:quality\(85\)/filters:no_upscale\(\)/a.png)`,
+			want: "https://imgopt.infoq.com/fit-in/3000x4000/filters:quality(85)/filters:no_upscale()/a.png",
+		},
+		{
+			name: "balanced unescaped parens",
+			md:   "![x](https://upload.wikimedia.org/wikipedia/commons/a/ab/Cat_(animal).jpg)",
+			want: "https://upload.wikimedia.org/wikipedia/commons/a/ab/Cat_(animal).jpg",
+		},
+		{
+			name: "escaped parens with title",
+			md:   `![x](https://example.com/q\(1\).png "a title")`,
+			want: "https://example.com/q(1).png",
+		},
+		{
+			name: "text after link on same line",
+			md:   "![x](https://example.com/a.png) and (a note) after",
+			want: "https://example.com/a.png",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			refs := extractImageLinks(tt.md + "\nnext line")
+			if len(refs) != 1 || refs[0].url != tt.want {
+				t.Fatalf("refs = %+v, want one ref %q", refs, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnrichMarkdownFetchesUnescapedURL(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pngBytes())
+	}))
+	defer srv.Close()
+
+	e := &Enricher{
+		Fetch:   srv.Client(),
+		Caption: fakeCaptioner("a photo", false),
+		Enabled: alwaysEnabled,
+		Log:     discardLog(),
+	}
+	md := `![x](` + srv.URL + `/filters:quality\(85\)/a.png)` + "\nafter"
+	_, stats := e.EnrichMarkdown(context.Background(), md)
+	if stats.Captioned != 1 {
+		t.Fatalf("stats = %+v, want Captioned=1", stats)
+	}
+	if gotPath != "/filters:quality(85)/a.png" {
+		t.Fatalf("fetched path = %q, want escapes removed", gotPath)
+	}
+}
+
 func TestEnrichMarkdownDisabledIsNoop(t *testing.T) {
 	e := &Enricher{Enabled: func(context.Context) bool { return false }, Log: discardLog()}
 	md := "![x](https://example.com/a.png)"
