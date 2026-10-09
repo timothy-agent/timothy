@@ -33,6 +33,35 @@ import (
 // succeed.
 var ErrModelFloor = errors.New("mission turn served by a below-floor model")
 
+// ModelFloorError is ErrModelFloor carrying the model that served the turn.
+type ModelFloorError struct{ Model string }
+
+func (e *ModelFloorError) Error() string { return ErrModelFloor.Error() + ": " + e.Model }
+func (e *ModelFloorError) Unwrap() error { return ErrModelFloor }
+
+// ParseModelFloor splits MISSION_MODEL_FLOOR (comma-separated model-name
+// substrings) into a deny list; empty input disables the floor.
+func ParseModelFloor(raw string) []string {
+	var floor []string
+	for _, s := range strings.Split(raw, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			floor = append(floor, s)
+		}
+	}
+	return floor
+}
+
+// BelowModelFloor reports whether model contains any floor substring,
+// case-insensitively. web/src/lib/modelFloor.ts mirrors it.
+func BelowModelFloor(floor []string, model string) bool {
+	for _, deny := range floor {
+		if deny != "" && strings.Contains(strings.ToLower(model), strings.ToLower(deny)) {
+			return true
+		}
+	}
+	return false
+}
+
 // ErrPromptTooLong reports that a mission turn's prompt was rejected
 // for exceeding the model's context window: the driver drops or
 // shrinks the reviewer session and retries rather than treating it as
@@ -813,12 +842,7 @@ func (r *nativeRunner) missionShell(m Mission) *tools.Tool {
 
 // belowFloor reports whether model matches the deny list.
 func (r *nativeRunner) belowFloor(model string) bool {
-	for _, deny := range r.modelFloorDeny {
-		if deny != "" && strings.Contains(strings.ToLower(model), strings.ToLower(deny)) {
-			return true
-		}
-	}
-	return false
+	return BelowModelFloor(r.modelFloorDeny, model)
 }
 
 // turnResult is runTurn's outcome: the full assistant text, the
@@ -1022,7 +1046,7 @@ func (r *nativeRunner) runTurn(ctx context.Context, req loop.Request, sentinelTo
 		return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("mission runner: stream ended without a terminal event")
 	}
 	if servedModel != "" && r.belowFloor(servedModel) {
-		return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, fmt.Errorf("%w: %s", ErrModelFloor, servedModel)
+		return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, &ModelFloorError{Model: servedModel}
 	}
 	return turnResult{text: b.String(), sentinelArgs: sentinelArgs, seenURLs: seenURLs, loadedSkills: loadedSkills, finalSeg: finalB.String(), askedUser: askedUser, provider: servedProvider, model: servedModel}, nil
 }

@@ -1120,12 +1120,13 @@ func (d *Driver) advance(ctx context.Context, id string) (canContinue bool, err 
 		d.log.Error("driver: phase run failed", "mission_id", id, "phase", m.Phase,
 			"route", phaseRoute(m), "agent", d.agentName(ctx, m.AgentID), "error", err)
 		var unavailable *ExecutorUnavailableError
+		var floor *ModelFloorError
 		switch {
-		case errors.Is(err, ErrModelFloor):
+		case errors.As(err, &floor):
 			// A below-floor fallback model served this turn: it cannot
 			// drive tool-using work, so retrying just burns iterations.
 			// Pause immediately as infra with the model named.
-			in = StepInput{Input: InputReviewInfraFailure, Reason: err.Error()}
+			in = StepInput{Input: InputReviewInfraFailure, Cause: CauseModelFloor, Model: floor.Model, Reason: err.Error()}
 		case errors.Is(err, ErrExecutorAuth):
 			// A delegated executor's own credential failed: retrying the
 			// same entry is futile, so pause immediately as infra instead

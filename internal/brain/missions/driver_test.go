@@ -3597,7 +3597,7 @@ func TestDriverForcedRetriesStallInsteadOfBurningIterations(t *testing.T) {
 func TestDriverModelFloorPausesImmediately(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8})
-	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: amazon.nova-lite-v1:0", ErrModelFloor)}
+	runner := &scriptedRunner{workerErr: fmt.Errorf("mission runner: %w", &ModelFloorError{Model: "amazon.nova-lite-v1:0"})}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -3606,6 +3606,10 @@ func TestDriverModelFloorPausesImmediately(t *testing.T) {
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
 		t.Fatalf("mission after below-floor turn = %s/%s, want paused/infra immediately", m.Status, m.PauseReason)
+	}
+	// Issue #1090: its own cause naming the model, never review_infra.
+	if cause, model := pausedPayloadField(t, store, "m1", "cause"), pausedPayloadField(t, store, "m1", "model"); cause != CauseModelFloor || model != "amazon.nova-lite-v1:0" {
+		t.Fatalf("pause cause/model = %q/%q, want %q/amazon.nova-lite-v1:0", cause, model, CauseModelFloor)
 	}
 }
 
