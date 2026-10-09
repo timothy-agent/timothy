@@ -32,6 +32,13 @@ const chatHint: Record<Channel['kind'], string> = {
   email: 'Email: the recipient',
 }
 
+// canSendMail matches the backend rule for an email destination: a
+// google connector with a gmail scope.
+function canSendMail(c: AdminConnector): boolean {
+  const scopes = (c.config.scopes as string[] | undefined) ?? []
+  return c.kind === 'google' && scopes.some((s) => s.includes('gmail'))
+}
+
 // DestinationKindFields renders the labelled fields for one destination
 // kind, shared by DestinationAdd and DestinationEdit so the field set
 // lives once. Every Select is labelled (contract 10.1). A channel
@@ -60,7 +67,7 @@ export function DestinationKindFields({
               </SelectTrigger>
               <SelectContent>
                 {connectors
-                  .filter((c) => c.kind === 'google')
+                  .filter(canSendMail)
                   .map((c) => (
                     <SelectItem key={c.id} value={c.id}>
                       {c.name}
