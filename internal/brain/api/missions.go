@@ -63,10 +63,7 @@ type missionAttachmentStore interface {
 // harness before create) and GET /v1/missions/execution-plan (the
 // full per-phase resolution preview) so the web UI never duplicates
 // gateway resolve logic.
-// nameMission generates a mission's short display name from its goal
-// (chat.TitleOverGateway, the same mechanism a chat session's title
-// uses) — nil (no gateway wiring) leaves every mission unnamed, same
-// as any generation failure. topModels resolves the top-served
+// topModels resolves the top-served
 // provider/model per mission id from the cost ledger (D-05x's
 // ledger.Aggregator.TopModelByMission) for the list response's
 // top_model decoration — nil (no ledger wiring) omits the field.
@@ -80,7 +77,7 @@ type missionAttachmentStore interface {
 // (a nil *attachments.Store boxed here would be a non-nil interface
 // value) happens once, at the call site, same shape as
 // chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, whisperURL string, caption func(context.Context, string, []byte) string) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, whisperURL string, caption func(context.Context, string, []byte) string) {
 	if store == nil {
 		return
 	}
@@ -109,7 +106,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 		}
 	}
 	resolver := &attachmentResolver{store: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: &http.Client{}, caption: caption, enrich: kbEnrich, log: a.log}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -178,10 +175,6 @@ type missionAPI struct {
 	// /v1/missions/executor-options and GET /v1/missions/execution-plan;
 	// nil (no gateway wiring) makes either endpoint 404.
 	resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error)
-	// nameMission generates a mission's short display name from its
-	// goal, fired async after create; nil (no gateway wiring) leaves
-	// every mission unnamed, same as any generation failure.
-	nameMission func(context.Context, string) string
 	// topModels resolves the top-served provider/model per mission id
 	// from the cost ledger; nil (no ledger wiring) omits top_model/
 	// top_model_provider from list/get responses entirely.
@@ -808,12 +801,8 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	created, err := h.store.Get(r.Context(), id)
 	if err != nil {
 		h.log.Warn("mission: re-read after create failed", "mission_id", id, "error", err)
-		h.generateName(id, req.Goal)
 		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 		return
-	}
-	if created.Name == "" {
-		h.generateName(id, req.Goal)
 	}
 	writeJSON(w, http.StatusCreated, h.decorateTopModels(r.Context(), []missions.Mission{sanitizeMission(created)})[0])
 }
@@ -941,32 +930,6 @@ func (h *missionAPI) resolveReferenceSources(ctx context.Context, refs []chat.Re
 		out = append(out, e)
 	}
 	return out, nil
-}
-
-// generateName fires the mission's one-shot naming call in the
-// background — never blocks or fails create, mirrors chat.autoTitle's
-// fire-and-forget shape exactly. Since issue #494 the driver names a
-// mission synchronously before cutting its branch, so this only runs
-// when create returned a still-unnamed row (driver naming unwired or
-// failed). Detached from the request context
-// (context.Background()) so a client disconnect right after create
-// doesn't cancel it; nameMission carries its own short timeout
-// (chat.TitleOverGateway). SetNameIfEmpty's own guard is what makes
-// this safe even if called twice for the same id.
-func (h *missionAPI) generateName(id, goal string) {
-	if h.nameMission == nil {
-		return
-	}
-	go func() {
-		name := h.nameMission(context.Background(), goal)
-		if name == "" {
-			h.log.Warn("mission: name generation returned empty", "mission_id", id)
-			return
-		}
-		if err := h.store.SetNameIfEmpty(context.Background(), id, name); err != nil {
-			h.log.Warn("mission: set name failed", "mission_id", id, "error", err)
-		}
-	}()
 }
 
 // classifyLight decides whether a general-kind goal is single-pass

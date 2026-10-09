@@ -1094,17 +1094,21 @@ func (s *Store) SetDiscoverNotes(ctx context.Context, id, notes string) error {
 // template name, or an earlier successful generation) — mirrors
 // session.Store.SetTitleIfEmpty exactly: a plain guarded UPDATE, not
 // state-machine/append-only, since name is display metadata about the
-// row, not a fact about what happened during the mission.
+// row, not a fact about what happened during the mission. A write
+// publishes a mission signal so an open page shows a late name.
 func (s *Store) SetNameIfEmpty(ctx context.Context, id, name string) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("missions set name: %w", err)
 	}
-	_, err = db.Exec(ctx,
+	tag, err := db.Exec(ctx,
 		`UPDATE missions SET name = $2, updated_at = now() WHERE id = $1 AND name = ''`,
 		id, name)
 	if err != nil {
 		return fmt.Errorf("missions set name: %w", err)
+	}
+	if tag.RowsAffected() > 0 && s.hub != nil {
+		s.hub.Publish(Signal{Kind: "mission", ID: id})
 	}
 	return nil
 }
