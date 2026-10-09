@@ -95,152 +95,20 @@ The installer resolves the newest release, installs into `~/timothy` (override w
 
 Prefer to inspect scripts before running them? Every release also ships `install.sh` as an asset: download it from the [releases page](https://github.com/timothy-agent/timothy/releases), read it, then `sh install.sh`.
 
-### Upgrading
+Everything else about running Timothy lives in the docs: [timothy-agent.github.io/docs](https://timothy-agent.github.io/docs/).
 
-Run the exact same command again:
+## Documentation
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/timothy-agent/timothy/main/deploy/release/install.sh | sh
-```
-
-The installer finds your existing install (`~/timothy`, `TIMOTHY_HOME`, or the directory you run it from), keeps all your secrets, bumps `TIMOTHY_VERSION` to the newest release, refreshes `docker-compose.yml`, pulls the new images (including the mission sandbox), and restarts the stack. Your data lives in Docker volumes and your secrets in `.env`; neither is touched. Database migrations run automatically when the new version starts. Downgrading is not supported once a newer version's migrations have run.
-
-The rest of this README covers building and running from source instead.
-
-## Build from source
-
-Prerequisites:
-
-- Docker (Desktop, or engine + compose plugin).
-
-1. Copy the env file and fill in the required values:
-
-   ```sh
-   cp deploy/env.example deploy/.env
-   ```
-
-   Open `deploy/.env` and set:
-
-   - `POSTGRES_PASSWORD`: compose refuses to start without it.
-   - `TIMOTHY_MASTER_KEY`: generate with `openssl rand -base64 32`. This is the root of trust for the encrypted secret store (provider API keys, OAuth tokens all live behind it). Compose hard-fails if it's blank. **Back this up**: losing it makes every stored secret unrecoverable.
-   - `TIMOTHY_API_TOKEN`: generate with `openssl rand -hex 32`. Bearer token for the API; if it's blank, every request 401s.
-
-2. Missions sandbox. `sandboxd` is a required service: `docker-compose.yml` fixes its `MISSION_SANDBOX_IMAGE` at `timothy-sandbox:latest`, and it refuses to start without that image built. `make up` builds it for you, but you can build it ahead of time:
-
-   ```sh
-   make sandbox-image
-   ```
-
-   This builds the one image every mission runs in: build tools, PHP 8.1 to 8.4 with composer, and mise, which installs the node, python, go, java, ruby and rust versions a repo pins.
-
-3. (Linux only) Set `DOCKER_SOCK_GID` so `sandboxd` can use the Docker socket:
-
-   ```sh
-   stat -c '%g' /var/run/docker.sock
-   ```
-
-   Put that number in `.env`. On Docker Desktop the default of `0` works as-is. Note: mounting `docker.sock` gives `sandboxd` root-equivalent access to the host. It's isolated on its own compose network, read-only, and runs with all capabilities dropped, but the socket itself is the trust boundary, so only run this on a host you control.
-
-4. Start the stack:
-
-   ```sh
-   make up
-   ```
-
-   Web UI: `http://localhost:3300`. API: `http://localhost:8300`.
-
-5. First login. There's no login page: the web UI auto-opens a settings dialog asking for an API token the first time it can't find one. Paste the `TIMOTHY_API_TOKEN` value from `deploy/.env`. It's stored in your browser's `localStorage`.
-
-6. Add a provider. A fresh install has zero LLM providers and no routing configured, so Timothy can't answer anything until you do this. Go to **Settings → Providers**, pick a preset tile (OpenAI, OpenAI Responses, Anthropic, Cursor, Bedrock, GLM, Grok, Ollama, or a custom OpenAI-compatible endpoint), fill in the form, and run the connection test before adding it. The API key you enter is encrypted into the secret store (default backend `db`, encrypted with `TIMOTHY_MASTER_KEY`); the database only ever holds a reference to it, never the raw value, and it never appears in `.env`, logs, or API responses. Creating your first provider automatically bootstraps the 4 routes Timothy needs to work (`default`, `summarize`, `embedding`, `vision`); routes are otherwise fully user-managed (create, edit chain/strategy, delete) from **Settings → Routing**.
-
-## Operating the stack
-
-```sh
-make up      # start (builds images as needed)
-make down    # stop
-make logs    # follow logs for all services
-```
-
-Rebuild and restart a single service after a code change:
-
-```sh
-make brain      # or gateway, memoryd, web, markitdown, whisper, pdfgen, sandboxd
-```
-
-### Backups
-
-Postgres has no host port, so backups go through the container. `scripts/backup-db.sh` does that and writes a gzipped dump outside the `pgdata` volume:
-
-```sh
-scripts/backup-db.sh                 # writes ./backups/timothy-<UTC timestamp>.sql.gz
-scripts/backup-db.sh /mnt/nas/timothy   # or point it somewhere off-host
-```
-
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `BACKUP_DIR` | `<repo>/backups` | Output directory; the first positional argument wins over it. |
-| `BACKUP_KEEP` | `14` | How many dumps to keep. Rotation is by count, so a stack that was off for a month still keeps its last good dumps. |
-
-The script takes no input, prints no secret values, and exits non-zero on any failure, so it runs unattended from cron:
-
-```sh
-15 3 * * * /path/to/timothy/scripts/backup-db.sh >> /var/log/timothy-backup.log 2>&1
-```
-
-Each run dumps the **whole database**. Never narrow it to `pg_dump -t <table>` to save space: a table-scoped dump silently drops the `secrets` table, and the restore then comes up with every provider and connector credential missing. The script refuses to write a dump that has no `secrets` table for exactly this reason.
-
-A complete backup is the dump **plus `TIMOTHY_MASTER_KEY` from `deploy/.env`**. The dump holds secrets only as ciphertext; without that key they are unrecoverable. Back the key up separately from the dumps, and never regenerate it: a new key orphans every secret already sealed with the old one.
-
-### Restoring onto a fresh host
-
-1. Put the repo and `deploy/.env` in place. The `.env` must carry the **same** `TIMOTHY_MASTER_KEY` as the instance the dump came from; `POSTGRES_PASSWORD` may be new.
-
-2. Start Postgres alone, so no service writes while the restore is running:
-
-   ```sh
-   docker compose -f deploy/docker-compose.yml up -d postgres
-   ```
-
-3. Load the dump. `ON_ERROR_STOP=1` makes a partial restore fail loudly instead of leaving a half-populated database:
-
-   ```sh
-   gunzip -c backups/timothy-<timestamp>.sql.gz \
-     | docker compose -f deploy/docker-compose.yml exec -T postgres \
-         sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U timothy -d timothy -v ON_ERROR_STOP=1'
-   ```
-
-   The dump recreates the schema, so restore into an empty database. If this Postgres already ran the stack once, drop and recreate first: `docker compose -f deploy/docker-compose.yml exec -T postgres sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U timothy -d postgres -c "DROP DATABASE timothy" -c "CREATE DATABASE timothy"'`.
-
-4. Check the data landed, including the secrets table:
-
-   ```sh
-   docker compose -f deploy/docker-compose.yml exec -T postgres \
-     sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U timothy -d timothy -c "select count(*) from secrets" -c "select count(*) from session_events"'
-   ```
-
-5. Bring up the rest of the stack:
-
-   ```sh
-   make up
-   ```
-
-6. Verify secrets actually decrypt, which is what proves the master key matches. Ask brain to run a provider connection test; it resolves the stored credential through the secret store:
-
-   ```sh
-   curl -s -H "Authorization: Bearer $TIMOTHY_API_TOKEN" http://localhost:8300/v1/admin/providers
-   curl -s -X POST -H "Authorization: Bearer $TIMOTHY_API_TOKEN" http://localhost:8300/v1/admin/providers/<id>/test
-   ```
-
-   A successful test means the ciphertext decrypted. A decrypt failure in `make logs` (gateway or brain) means the `TIMOTHY_MASTER_KEY` in `deploy/.env` is not the one that sealed these rows; restore the correct key rather than re-entering credentials, or every historical secret stays unreadable.
-
-### Upgrading a source build
-
-```sh
-git pull
-make up
-```
-
-Migrations are additive-only, never edited once applied, and run automatically at service startup; no separate migrate step.
+| Topic | Where |
+|-------|-------|
+| Requirements, quick start, build from source | [Install](https://timothy-agent.github.io/docs/install/) |
+| Upgrading, pending schema changes | [Upgrade](https://timothy-agent.github.io/docs/install/upgrade/) |
+| Backups and restoring onto a fresh host | [Backup and restore](https://timothy-agent.github.io/docs/install/backup-and-restore/) |
+| Sign in, welcome wizard, first chat, first mission | [First run](https://timothy-agent.github.io/docs/first-run/) |
+| Agents, routes, missions, memory, knowledge, automations | [Concepts](https://timothy-agent.github.io/docs/concepts/) |
+| Gmail, GitHub, Telegram and the rest | [Connectors and channels](https://timothy-agent.github.io/docs/connectors/) |
+| Every settings tab and field | [Settings reference](https://timothy-agent.github.io/docs/settings/) |
+| Something broke | [Troubleshooting](https://timothy-agent.github.io/docs/troubleshooting/) |
 
 ## Local development
 
