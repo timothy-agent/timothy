@@ -366,7 +366,7 @@ func (v *verifier) exec(ctx context.Context, m Mission, wt, command string, time
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var buf bytes.Buffer
-	code, err = v.sandboxExec(cctx, m.ID, m.Environment, wt, command, timeout, &buf)
+	code, err = v.sandboxExec(cctx, m.ID, wt, command, timeout, &buf)
 	if errors.Is(cctx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 		return code, stripANSI(buf.String()), true, nil
 	}

@@ -486,12 +486,9 @@ type createMissionRequest struct {
 	// worker run resumes the prior CLI session: "" or "resume" keeps
 	// resume, "fresh" starts every unit cold.
 	ExecutorSessionPolicy string `json:"executor_session_policy"`
-	// Environment selects the per-language sandbox image (D-05x) a
-	// coding mission's container runs: "" auto-detects from the repo at
-	// provisioning (falling back to base), a registered key forces that
-	// image. Unlike Harness there is no settings default. Rejected
-	// outright on kind=general.
-	Environment string `json:"environment"`
+	// RemovedEnvironment is the removed sandbox image selector (D-141),
+	// accepted and dropped so older clients keep working.
+	RemovedEnvironment missions.RemovedField `json:"environment,omitzero"`
 	// AutoApproveTools defaults true (a pointer so an omitted field is
 	// distinguishable from an explicit false) — missions run for hours
 	// unattended, so auto-approving DangerSafe shell calls is the
@@ -506,7 +503,7 @@ type createMissionRequest struct {
 	// RepoURL is a GitHub repo's https clone URL: when set, the mission
 	// clones it instead of self-initializing an empty repo. Mutually
 	// exclusive with a future repo_path option and coding-only, same as
-	// Harness/Environment. Requires ConnectorID — v1 has no anonymous
+	// Harness. Requires ConnectorID: v1 has no anonymous
 	// clone path.
 	RepoURL string `json:"repo_url"`
 	// ConnectorID names a github-kind connectors row whose PAT
@@ -635,7 +632,7 @@ func (r createMissionRequest) createRequest(parentMissionID string, sources []mi
 		RouteModel: r.RouteModel, PlanRouteModel: r.PlanRouteModel, ReviewRouteModel: r.ReviewRouteModel,
 		MaxIterations: r.MaxIterations, BudgetAmount: r.BudgetAmount, BudgetCurrency: r.BudgetCurrency,
 		AutoApproveTools: r.AutoApproveTools, AutoApprovePlan: r.AutoApprovePlan,
-		Harness: r.Harness, ReviewHarness: r.ReviewHarness, Environment: r.Environment,
+		Harness: r.Harness, ReviewHarness: r.ReviewHarness,
 		ExecutorSessionPolicy:    r.ExecutorSessionPolicy,
 		HasPlan:                  r.HasPlan,
 		Light:                    r.Light,
@@ -692,9 +689,6 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("destination_repo_urls names id(s) not in destination_ids: %s", strings.Join(unknown, ", ")))
 		return
 	}
-	// Environment stays "" unless the request names one: detection runs
-	// against the real workspace (repo markers after the clone, then
-	// the discover turn's report, issue #495), never against goal text.
 	// connector_id existence + kind check is a store lookup ValidateCreate
 	// can't perform (it takes no connectors dependency); repo_url's other
 	// shape rules (coding-only, requires connector_id) are ValidateCreate's.
@@ -805,11 +799,8 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	}
 	// Re-read rather than echo req/m back: Driver.Create's own
 	// provisioning (ensureProvisioned) can mutate the row before this
-	// handler ever sees it again — environment auto-detection in
-	// particular resolves before Create is called here, but the row is
-	// still the source of truth, and a future provisioning-time write
-	// must not silently go missing from the create response the way
-	// environment did before this fix. Best-effort: the mission was
+	// handler ever sees it again, and a provisioning-time write must not
+	// silently go missing from the create response. Best-effort: the mission was
 	// just created successfully, so a read failure here is surprising
 	// enough to log, but must not turn a successful create into an
 	// error response — id is still valid and GET /v1/missions/{id}

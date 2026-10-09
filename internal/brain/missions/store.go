@@ -91,7 +91,7 @@ const missionColumns = `id, goal, name, kind, agent_id, phase, status, pause_rea
 	consecutive_failures, last_gap_fingerprint, stall_count, budget_amount, budget_currency, route, review_route,
 	plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay,
 	pending_permission, auto_approve_tools, auto_approve_plan, last_evidence,
-	discover_notes, replan_used, automation_run_id, session_id, harness, review_harness, environment, environment_marker, toolchains, env_facts,
+	discover_notes, replan_used, automation_run_id, session_id, harness, review_harness, toolchains, env_facts,
 	parent_mission_id, sources, destinations, final_output, created_at, updated_at,
 	workflow_run_id, workflow_step, artifact_refs, permission_timeout_seconds, pending_input, asks_used, flow,
 	review_findings, rework_rounds, has_plan, executor_session_policy, harness_retries, origin_kind, unattended, tool_allowlist,
@@ -179,7 +179,7 @@ func scanMissionWithFailureReason(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment, &m.EnvironmentMarker, &toolchainsRaw, &envFactsRaw,
+		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &toolchainsRaw, &envFactsRaw,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -271,7 +271,7 @@ func scanMission(row pgx.Row) (Mission, error) {
 		&m.ConsecutiveFailures, &m.LastGapFingerprint, &m.StallCount, &m.BudgetAmount, &m.BudgetCurrency, &m.Route, &m.ReviewRoute,
 		&m.PlanRoute, &m.EscalationRoute, &m.RouteModel, &m.PlanRouteModel, &m.ReviewRouteModel, &m.PromptOverlay,
 		&pendingPermissionRaw, &m.AutoApproveTools, &m.AutoApprovePlan, &m.LastEvidence,
-		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &m.Environment, &m.EnvironmentMarker, &toolchainsRaw, &envFactsRaw,
+		&m.DiscoverNotes, &m.ReplanUsed, &automationRunID, &sessionID, &m.Harness, &m.ReviewHarness, &toolchainsRaw, &envFactsRaw,
 		&parentMission, &sourcesRaw, &destinationsRaw, &m.FinalOutput,
 		&m.CreatedAt, &m.UpdatedAt,
 		&workflowRunID, &m.WorkflowStep, &artifactRefsRaw, &permissionTimeoutSeconds,
@@ -388,9 +388,9 @@ func (s *Store) Create(ctx context.Context, m Mission) (string, error) {
 		origin = OriginAPI
 	}
 	err = db.QueryRow(ctx, `INSERT INTO missions
-			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, environment, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness, executor_session_policy, automation_run_id, origin_kind, unattended, tool_allowlist, channel_conversation_id)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, $21, NULLIF($22, '')::uuid, $23, $24, $25, NULLIF($26, '')::uuid, $27, $28, $29, $30, $31, $32, NULLIF($33, '')::uuid, $34, $35, $36, NULLIF($37, '')::uuid) RETURNING id`,
-		m.Goal, m.Name, m.Kind, m.AgentID, s.maxIterationsFor(ctx, m.MaxIterations), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.Environment, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy, m.AutomationRunID, origin, m.Unattended, toolAllowlist, m.ChannelConversationID,
+			(goal, name, kind, agent_id, max_iterations, budget_amount, budget_currency, route, review_route, plan_route, escalation_route, route_model, plan_route_model, review_route_model, prompt_overlay, plan, session_id, auto_approve_tools, auto_approve_plan, harness, parent_mission_id, sources, destinations, phase, workflow_run_id, workflow_step, permission_timeout_seconds, flow, has_plan, review_harness, executor_session_policy, automation_run_id, origin_kind, unattended, tool_allowlist, channel_conversation_id)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NULLIF($17, '')::uuid, $18, $19, $20, NULLIF($21, '')::uuid, $22, $23, $24, NULLIF($25, '')::uuid, $26, $27, $28, $29, $30, $31, NULLIF($32, '')::uuid, $33, $34, $35, NULLIF($36, '')::uuid) RETURNING id`,
+		m.Goal, m.Name, m.Kind, m.AgentID, s.maxIterationsFor(ctx, m.MaxIterations), m.BudgetAmount, budgetCurrency, m.Route, m.ReviewRoute, m.PlanRoute, m.EscalationRoute, m.RouteModel, m.PlanRouteModel, m.ReviewRouteModel, m.PromptOverlay, plan, m.SessionID, m.AutoApproveTools, m.AutoApprovePlan, m.Harness, m.ParentMissionID, sourcesJSON, destinationsJSON, phase, m.WorkflowRunID, m.WorkflowStep, m.PermissionTimeoutSeconds, flow, m.HasPlan, m.ReviewHarness, m.ExecutorSessionPolicy, m.AutomationRunID, origin, m.Unattended, toolAllowlist, m.ChannelConversationID,
 	).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("missions create: %w", err)
@@ -1109,51 +1109,8 @@ func (s *Store) SetNameIfEmpty(ctx context.Context, id, name string) error {
 	return nil
 }
 
-// SetEnvironment persists a coding mission's auto-detected sandbox
-// environment (D-05x) with the marker that set it and the toolchain
-// versions detected for it (D-126), and appends a
-// mission.environment_detected event. driver.go's ensureProvisioned
-// calls it when Environment is still "", and the discover report may
-// call it once more to replace a marker-detected value. Bypasses the state
-// machine like SetDiscoverNotes/SetLastEvidence: detection happens
-// mid-provisioning, not at an Advance boundary. candidates lists the
-// losing markers (always present in the payload, empty when none);
-// toolchains likewise.
-func (s *Store) SetEnvironment(ctx context.Context, id, environment, marker string, candidates []string, toolchains map[string]string) error {
-	db, err := s.db.Get()
-	if err != nil {
-		return fmt.Errorf("missions set environment: %w", err)
-	}
-	tx, err := db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("missions set environment begin: %w", err)
-	}
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	if toolchains == nil {
-		toolchains = map[string]string{}
-	}
-	tc, err := json.Marshal(toolchains)
-	if err != nil {
-		return fmt.Errorf("missions set environment: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE missions SET environment = $2, environment_marker = $3, toolchains = $4, updated_at = now() WHERE id = $1`,
-		id, environment, marker, tc); err != nil {
-		return fmt.Errorf("missions set environment: %w", err)
-	}
-	if candidates == nil {
-		candidates = []string{}
-	}
-	if err := appendEventTx(ctx, tx, id, "mission.environment_detected", map[string]any{
-		"environment": environment, "marker": marker, "candidates": candidates, "toolchains": toolchains,
-	}, "live"); err != nil {
-		return fmt.Errorf("missions set environment event: %w", err)
-	}
-	return tx.Commit(ctx)
-}
-
-// SetToolchains persists detected toolchain versions (D-126) for a
-// mission whose environment was not set by detection (an operator's
-// explicit pick, or no marker). No event: the install events carry them.
+// SetToolchains persists detected toolchain versions (D-126). No
+// event: the install events carry them.
 func (s *Store) SetToolchains(ctx context.Context, id string, toolchains map[string]string) error {
 	db, err := s.db.Get()
 	if err != nil {

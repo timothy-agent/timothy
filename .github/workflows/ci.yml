@@ -50,7 +50,8 @@ jobs:
               - 'web/**'
               - '.github/workflows/ci.yml'
             sandbox:
-              - 'deploy/sandbox-*.Dockerfile'
+              - 'deploy/sandbox.Dockerfile'
+              - 'scripts/sandbox-smoke.sh'
               - '.github/workflows/ci.yml'
             deploy:
               - 'deploy/**'
@@ -211,35 +212,23 @@ jobs:
   # CI red on churn unrelated to this repo. Scan for visibility
   # (uploaded as a run summary), don't block merges on it.
   #
-  # Builds the base plus all five language variants (each FROM the
-  # base built here in the same job — no ARG override needed, they
-  # resolve timothy-sandbox-base:latest from this runner's local
-  # image store). Only the base is scanned: the variants are thin
-  # apt/toolchain layers on top of it, so the base's scan already
-  # covers the CVE surface that matters.
+  # One image for every mission (D-141); the smoke runs the PHP minors,
+  # composer, build tools and mise runtime installs under the sandbox
+  # limits.
   sandbox-image:
     needs: changes
     if: needs.changes.outputs.sandbox == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - name: Build base image
-        run: docker build -f deploy/sandbox-base.Dockerfile -t timothy-sandbox-base:ci .
-      - name: Smoke test base image
-        run: ./scripts/sandbox-base-smoke.sh timothy-sandbox-base:ci
-      - name: Build variant images
-        run: |
-          for lang in go node python java php; do
-            docker build -f deploy/sandbox-$lang.Dockerfile \
-              --build-arg SANDBOX_BASE=timothy-sandbox-base:ci \
-              -t timothy-sandbox-$lang:ci .
-          done
-      - name: Smoke test php image
-        run: ./scripts/sandbox-php-smoke.sh timothy-sandbox-php:ci
-      - name: Scan base image (informational only)
+      - name: Build sandbox image
+        run: docker build -f deploy/sandbox.Dockerfile -t timothy-sandbox:ci .
+      - name: Smoke test sandbox image
+        run: ./scripts/sandbox-smoke.sh timothy-sandbox:ci
+      - name: Scan sandbox image (informational only)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: timothy-sandbox-base:ci
+          image-ref: timothy-sandbox:ci
           severity: CRITICAL,HIGH
           exit-code: "0"
           ignore-unfixed: true

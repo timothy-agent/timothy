@@ -156,7 +156,7 @@ func (s *fakeSandbox) lastLaunchCmd() string {
 	return s.lastLaunch
 }
 
-func (s *fakeSandbox) Exec(ctx context.Context, missionID, environment, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (int, error) {
+func (s *fakeSandbox) Exec(ctx context.Context, missionID, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (int, error) {
 	switch {
 	case strings.Contains(command, "setsid sh -c"):
 		return s.launch(command, env)
@@ -1250,7 +1250,7 @@ func TestDelegatedRunWorker_ReattachResumesWithoutRespawning(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	r.recordSpawned(context.Background(), m.ID, workerRun(m, entry, adapter, authMode, ""), runID, rdir, resumeDecision{reason: resumeReasonNoPriorRun})
-	if err := r.launch(context.Background(), m.ID, m.Environment, m.WorkRoot(), rdir, inv, time.Minute, false); err != nil {
+	if err := r.launch(context.Background(), m.ID, m.WorkRoot(), rdir, inv, time.Minute, false); err != nil {
 		t.Fatalf("launch: %v", err)
 	}
 	// One poll tick's worth of progress, then the "process" (this test's

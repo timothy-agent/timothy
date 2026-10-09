@@ -39,7 +39,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { SegmentedControl } from '../timothy/segmented-control'
 import { errText } from '../../lib/errors'
 import { gitKindMeta, isGitKind } from '../../lib/gitKinds'
-import { envIcon } from '../icons/EnvIcons'
 import { type PendingAttachment } from '../Composer'
 import { MissionAttachments } from './MissionAttachments'
 import { GoalTextarea } from './MissionReferences'
@@ -203,23 +202,6 @@ function defaultEscalationRouteLabel(): string {
   return 'Off (no escalation on failure)'
 }
 
-// Sentinel for the environment Select's "auto-detect" choice: wire
-// value stays '' (omit environment from the create payload) to match
-// the API's own empty-means-auto-detect semantics (D-05x).
-export const ENVIRONMENT_AUTO = '__auto__'
-
-// environmentChoices maps an environment Select value to its label:
-// mirrors sandboxd's image allowlist (internal/sandboxd/manager.go).
-export const environmentChoices: { value: string; label: string }[] = [
-  { value: ENVIRONMENT_AUTO, label: 'Auto-detect' },
-  { value: 'base', label: 'Base' },
-  { value: 'go', label: 'Go' },
-  { value: 'node', label: 'Node' },
-  { value: 'python', label: 'Python' },
-  { value: 'java', label: 'Java' },
-  { value: 'php', label: 'PHP' },
-]
-
 // lightSignalPattern matches goal text shaped like a lightweight
 // digest/summary ask (issue #447): conservative on purpose, since a
 // false positive wrongly forces light on while a false negative just
@@ -349,7 +331,6 @@ export function MissionForm({
   const [autoApprovePlan, setAutoApprovePlan] = useState(true)
   const [harness, setHarness] = useState(initial?.harness ?? '')
   const [reviewHarness, setReviewHarness] = useState(initial?.review_harness ?? '')
-  const [environment, setEnvironment] = useState(initial?.environment ?? '')
   const [executorOptions, setExecutorOptions] = useState<ExecutorOption[] | null>(null)
   const [executionPlan, setExecutionPlan] = useState<ExecutionPlanPhase[] | null>(null)
   // defaultHarnessName is settings' coding_executor value (the harness
@@ -759,7 +740,6 @@ export function MissionForm({
       auto_approve_plan: autoApprovePlan,
       harness: kind === 'coding' ? harness || undefined : undefined,
       review_harness: light ? undefined : reviewHarness || undefined,
-      environment: kind === 'coding' ? environment || undefined : undefined,
       repo_url: repoURL,
       connector_id: repoURL ? connectorID : undefined,
       parent_mission_id: parentMissionId,
@@ -790,7 +770,6 @@ export function MissionForm({
     auto_approve_tools: autoApproveTools,
     harness: kind === 'coding' ? harness || undefined : undefined,
     review_harness: light ? undefined : reviewHarness || undefined,
-    environment: kind === 'coding' ? environment || undefined : undefined,
     destination_ids: destinationIDs.length > 0 ? destinationIDs : undefined,
     light: kind === 'general' ? light : undefined,
     attachments:
@@ -1088,31 +1067,6 @@ export function MissionForm({
                       title={disabled ? opt?.reason : undefined}
                     >
                       {label}
-                    </SelectItem>
-                  )
-                })}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        {kind === 'coding' && (
-          <div className="space-y-1.5">
-            <Label htmlFor="mission-environment">Environment</Label>
-            <Select
-              value={environment || ENVIRONMENT_AUTO}
-              onValueChange={(v) => setEnvironment(v === ENVIRONMENT_AUTO ? '' : v)}
-            >
-              <SelectTrigger id="mission-environment" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {environmentChoices.map((c) => {
-                  const EnvIcon = envIcon(c.value)
-                  return (
-                    <SelectItem key={c.value} value={c.value}>
-                      {EnvIcon && <EnvIcon />}
-                      {c.label}
                     </SelectItem>
                   )
                 })}

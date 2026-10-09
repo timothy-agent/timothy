@@ -1522,7 +1522,6 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		nativeRunner.SetConnectorReads(missionConnectorReadsResolver(agentReg, conns))
 	}
 	nativeRunner.SetProgressReader(store)
-	nativeRunner.SetEnvironmentSink(store)
 	nativeRunner.SetLocation(flags.Location)
 	nativeRunner.SetAskParker(store)
 	// Automation missions get read_note/write_note scoped to their run's

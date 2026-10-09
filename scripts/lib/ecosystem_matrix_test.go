@@ -161,14 +161,14 @@ func TestMatrixCleanupRefusesDefaultBranch(t *testing.T) {
 
 func TestMatrixRefreshOSVDB(t *testing.T) {
 	logFile := setupStubs(t)
-	if out, err := runLib(t, `matrix_refresh_osv_db "$@"`, "timothy_sandbox-caches", "timothy-sandbox-base:latest", "2026-10-08", "npm", "PyPI"); err != nil {
+	if out, err := runLib(t, `matrix_refresh_osv_db "$@"`, "timothy_sandbox-caches", "timothy-sandbox:latest", "2026-10-08", "npm", "PyPI"); err != nil {
 		t.Fatalf("refresh: %v\n%s", err, out)
 	}
 	fetch, err := runLib(t, `printf '%s' "$MATRIX_OSV_FETCH"`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"docker", "run", "--rm", "-v", "timothy_sandbox-caches:/cache", "timothy-sandbox-base:latest", "sh", "-c", fetch, "sh", "/cache", "2026-10-08", "npm", "PyPI"}}
+	want := [][]string{{"docker", "run", "--rm", "-v", "timothy_sandbox-caches:/cache", "timothy-sandbox:latest", "sh", "-c", fetch, "sh", "/cache", "2026-10-08", "npm", "PyPI"}}
 	if got := calls(t, logFile); !reflect.DeepEqual(got, want) {
 		t.Fatalf("calls = %q\nwant %q", got, want)
 	}

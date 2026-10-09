@@ -249,31 +249,12 @@ func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (M
 			return m, err
 		}
 		m.Workspace, m.Branch, m.BaseCommit = workspace, branch, baseCommit
-		// Repo markers are the authoritative environment signal and are
-		// only readable now that the clone exists; this runs before any
-		// sandbox exec, so the container is created on the right image
-		// (its image is fixed at create, issue #495). A repo with no
-		// marker leaves "" for the discover turn to fill in.
+		// Repo markers are only readable now that the clone exists.
 		toolchains := map[string]string{}
 		if m.Kind == KindCoding {
-			toolchains = detectMissionToolchains(worktree, m.Environment, m.Goal)
+			toolchains = detectMissionToolchains(worktree, m.Goal)
 		}
-		setEnv := false
-		if m.Environment == "" {
-			if env, marker, candidates := detectEnvironmentFromMarkers(worktree); env != "" {
-				if m.Kind == KindCoding {
-					toolchains = detectMissionToolchains(worktree, env, m.Goal)
-				}
-				if err := p.store.SetEnvironment(ctx, m.ID, env, marker, candidates, toolchains); err != nil {
-					p.log.Warn("driver: set environment from markers failed", "mission_id", m.ID, "error", err)
-				} else {
-					m.Environment = env
-					m.Toolchains = toolchains
-					setEnv = true
-				}
-			}
-		}
-		if !setEnv && len(toolchains) > 0 {
+		if len(toolchains) > 0 {
 			if err := p.store.SetToolchains(ctx, m.ID, toolchains); err != nil {
 				p.log.Warn("driver: set toolchains failed", "mission_id", m.ID, "error", err)
 			} else {
@@ -540,7 +521,7 @@ func (p *provisioner) installToolchains(ctx context.Context, m Mission, workRoot
 		return "", false
 	}
 	var out bytes.Buffer
-	code, err := p.sandboxExec(ctx, m.ID, m.Environment, workRoot, buildToolchainInstallCmd(m.Toolchains), toolchainInstallTimeout, &out)
+	code, err := p.sandboxExec(ctx, m.ID, workRoot, buildToolchainInstallCmd(m.Toolchains), toolchainInstallTimeout, &out)
 	if err == nil && code == 0 {
 		if aerr := p.store.AppendEvent(ctx, m.ID, "mission.toolchain_installed", map[string]any{"toolchains": m.Toolchains}); aerr != nil {
 			p.log.Warn("driver: record toolchain install failed", "mission_id", m.ID, "error", aerr)

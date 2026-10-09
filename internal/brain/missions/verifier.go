@@ -65,7 +65,7 @@ func (v *verifier) verifyAll(ctx context.Context, m Mission, seenURLs []string, 
 			if u.CheckCmd == "" {
 				res.Passed, res.Check = true, "artifacts"
 			} else {
-				r, err := v.runVerify(ctx, m.ID, m.Environment, workRoot, u.CheckCmd)
+				r, err := v.runVerify(ctx, m.ID, workRoot, u.CheckCmd)
 				if err != nil {
 					return nil, fmt.Errorf("driver: verify unit %d: %w", i, err)
 				}
@@ -139,12 +139,10 @@ func failedUnits(verified []UnitVerification) []UnitVerification {
 
 // runVerify executes check_cmd via the mission's sandbox container,
 // the verify-side counterpart of nativeRunner routing shell/write_file
-// through the same backend. environment (D-05x) only matters on the
-// mission's first exec, since a container's image is fixed once
-// created.
-func (v *verifier) runVerify(ctx context.Context, missionID, environment, workRoot, verifyCmd string) (VerifyResult, error) {
+// through the same backend.
+func (v *verifier) runVerify(ctx context.Context, missionID, workRoot, verifyCmd string) (VerifyResult, error) {
 	backend := func(ctx context.Context, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
-		return v.sandboxExec(ctx, missionID, environment, workdir, command, timeout, out)
+		return v.sandboxExec(ctx, missionID, workdir, command, timeout, out)
 	}
 	return RunVerifyWithBackend(ctx, backend, workRoot, verifyCmd)
 }

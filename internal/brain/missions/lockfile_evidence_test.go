@@ -194,8 +194,8 @@ func lockfileFixture(t *testing.T, base, change map[string]string, tests *TestSu
 // miseShellExec runs the harness command through /bin/sh with the mise
 // exec prefix dropped (no mise in the test image): a real-shell round
 // trip of buildTestCmd and buildAuditCmd's quoting.
-func miseShellExec(ctx context.Context, missionID, environment, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
-	return fakeSandboxExec(ctx, missionID, environment, workdir, strings.TrimPrefix(command, "mise exec -- "), timeout, out)
+func miseShellExec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
+	return fakeSandboxExec(ctx, missionID, workdir, strings.TrimPrefix(command, "mise exec -- "), timeout, out)
 }
 
 // fakeOSV puts an osv-scanner on PATH that copies report to its

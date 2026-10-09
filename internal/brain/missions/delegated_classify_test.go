@@ -100,7 +100,7 @@ func TestDelegatedRunWorker_ProviderRejectionIsUnavailable(t *testing.T) {
 // infra with a short until and never cools the provider entry.
 func TestDelegatedRunWorker_SandboxLaunchErrorIsInfraNotCooldown(t *testing.T) {
 	sandbox := newFakeSandbox()
-	sandbox.launchErr = errors.New("sandboxclient: sandbox: pull image timothy-sandbox-go:latest: Error response from daemon: not found")
+	sandbox.launchErr = errors.New("sandboxclient: sandbox: pull image timothy-sandbox:latest: Error response from daemon: not found")
 	events := &fakeEventSink{}
 	entry := harnessEntry("subscription")
 	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}

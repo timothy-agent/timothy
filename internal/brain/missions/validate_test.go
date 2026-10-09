@@ -129,18 +129,6 @@ func TestValidateCreate(t *testing.T) {
 			m.ExecutorSessionPolicy = SessionPolicyFresh
 			return m
 		}, ValidateDeps{}, true},
-		{"environment on general", func(m Mission) Mission {
-			m.Environment = "go"
-			return m
-		}, ValidateDeps{}, true},
-		{"unknown environment on coding", func(m Mission) Mission {
-			m.Kind, m.Environment = "coding", "bogus"
-			return m
-		}, ValidateDeps{}, true},
-		{"valid environment on coding", func(m Mission) Mission {
-			m.Kind, m.Environment = "coding", "go"
-			return m
-		}, ValidateDeps{}, false},
 		{"repo_url on general", func(m Mission) Mission {
 			m.Kind = "general"
 			return withGitHubSource(m, "https://github.com/o/r", "")

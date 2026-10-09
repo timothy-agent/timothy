@@ -270,12 +270,12 @@ func (w *Workspace) cloneRepo(ctx context.Context, workspaceDir, dir, branch, re
 // dir's LOCAL git config at it so every subsequent commit is SSH-signed.
 //
 // Gap, deliberately not closed here (issue #796): user.signingkey is a
-// brain-absolute path and deploy/sandbox-base.Dockerfile installs
+// brain-absolute path and deploy/sandbox.Dockerfile installs
 // neither openssh-client nor ssh-keygen, so a delegated CLI that
 // commits INSIDE the sandbox on a signing-enabled clone would fail to
 // sign. The harness itself commits in the brain container, where both
 // exist, so no current path hits this. Closing it means adding
-// openssh-client to sandbox-base or passing -c commit.gpgsign=false
+// openssh-client to the sandbox image or passing -c commit.gpgsign=false
 // for delegated runs; both belong to their own issue.
 func setLocalSigning(ctx context.Context, workspaceDir, dir, privateKeyPEM string) error {
 	keyPath := filepath.Join(workspaceDir, signingKeyFileName)

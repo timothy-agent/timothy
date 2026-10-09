@@ -294,7 +294,7 @@ func TestCollectEnvFacts(t *testing.T) {
 			}
 			return GitHubPolicy{}, false, nil
 		},
-		sandboxExec: func(_ context.Context, _, _, _, command string, _ time.Duration, out io.Writer) (int, error) {
+		sandboxExec: func(_ context.Context, _, _, command string, _ time.Duration, out io.Writer) (int, error) {
 			gotCmd = command
 			_, _ = io.WriteString(out, "git\tgit version 2.39.5\ngh\t\n")
 			return 0, nil
@@ -326,13 +326,42 @@ func TestCollectEnvFacts(t *testing.T) {
 func TestCollectEnvFactsProbeFailure(t *testing.T) {
 	store := newFakeStore()
 	p := provisioner{store: store, log: slog.Default(),
-		sandboxExec: func(context.Context, string, string, string, string, time.Duration, io.Writer) (int, error) {
+		sandboxExec: func(context.Context, string, string, string, time.Duration, io.Writer) (int, error) {
 			return 1, nil
 		},
 	}
 	facts := p.collectEnvFacts(context.Background(), Mission{ID: "m1", Kind: KindCoding}, "", "")
 	if facts == nil || facts.Tools != nil {
 		t.Fatalf("facts = %+v, want facts without tools", facts)
+	}
+}
+
+// TestCollectEnvFactsKeepsPrepare: a re-collect refreshes the scanned and
+// probed facts but carries the prepare outcome (D-130) over, so the
+// facts block never loses the baseline once prepare ran. The removed
+// environment recreate path (D-141) used to drop it.
+func TestCollectEnvFactsKeepsPrepare(t *testing.T) {
+	store := newFakeStore()
+	prepared := &PrepareFacts{Installed: []string{"composer", "npm"}, TestCmd: "php artisan test", Failures: []string{"x"}}
+	m := Mission{ID: "m1", Kind: KindCoding, EnvFacts: &EnvFacts{
+		BaseBranch: "old", Tools: []ToolFact{{Name: "stale", Version: "1"}}, PHPNote: "stale note", Prepare: prepared,
+	}}
+	store.missions[m.ID] = m
+	p := provisioner{store: store, log: slog.Default(),
+		sandboxExec: func(context.Context, string, string, string, time.Duration, io.Writer) (int, error) {
+			return 1, nil
+		},
+	}
+	facts := p.collectEnvFacts(context.Background(), m, "", "main")
+	want := &EnvFacts{BaseBranch: "main", Prepare: prepared}
+	if !reflect.DeepEqual(facts, want) {
+		t.Fatalf("collectEnvFacts = %+v, want %+v", facts, want)
+	}
+	if stored := store.missions[m.ID].EnvFacts; !reflect.DeepEqual(stored, want) {
+		t.Fatalf("stored facts = %+v, want the prepare facts kept", stored)
+	}
+	if m.EnvFacts.BaseBranch != "old" {
+		t.Fatal("collectEnvFacts mutated the caller's facts")
 	}
 }
 

@@ -48,7 +48,7 @@ describe('MissionActionFields', () => {
     expect(screen.getByText(/Use \{\{event\.pr_url\}\} or \{\{notes\.name\}\}/)).toBeInTheDocument()
   })
 
-  it('shows harness and environment only for coding, light only for general', () => {
+  it('shows harness only for coding, light only for general', () => {
     const onChange = vi.fn()
     render(<Harness initial={{ goal: 'g', kind: 'general', light: true }} onChange={onChange} />)
     expect(screen.getByLabelText('Light mission')).toBeInTheDocument()
@@ -57,7 +57,6 @@ describe('MissionActionFields', () => {
     expect(last(onChange)).toMatchObject({ kind: 'coding', light: undefined })
     expect(screen.queryByLabelText('Light mission')).toBeNull()
     expect(screen.getByLabelText(/^Harness/)).toBeInTheDocument()
-    expect(screen.getByLabelText(/^Environment/)).toBeInTheDocument()
   })
 
   it('toggles a destination on and off', () => {
@@ -98,7 +97,6 @@ describe('normalizeTemplate', () => {
         kind: 'general',
         route: '',
         harness: 'claude-cli',
-        environment: 'go',
         light: true,
         review_harness: 'pi',
         destination_ids: [],
@@ -109,8 +107,8 @@ describe('normalizeTemplate', () => {
 
   it('keeps coding fields and a priced budget', () => {
     expect(
-      normalizeTemplate({ goal: 'g', kind: 'coding', harness: 'codex-cli', environment: 'go', light: true, budget_amount: 2 }),
-    ).toEqual({ goal: 'g', kind: 'coding', harness: 'codex-cli', environment: 'go', auto_approve_tools: true, budget_amount: 2, budget_currency: 'USD' })
+      normalizeTemplate({ goal: 'g', kind: 'coding', harness: 'codex-cli', light: true, budget_amount: 2 }),
+    ).toEqual({ goal: 'g', kind: 'coding', harness: 'codex-cli', auto_approve_tools: true, budget_amount: 2, budget_currency: 'USD' })
   })
 
   it('keeps an explicit auto-approve off and a template name', () => {

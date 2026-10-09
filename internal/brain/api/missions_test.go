@@ -2380,3 +2380,37 @@ func TestDestinationEntriesNormalizesBitbucketTargets(t *testing.T) {
 		})
 	}
 }
+
+// TestRemovedEnvironmentFieldIgnored covers D-141: the strict mission
+// and automation decoders accept the removed environment field from an
+// older client, drop its value, and never echo it back.
+func TestRemovedEnvironmentFieldIgnored(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		into any
+	}{
+		{"mission create", `{"goal":"g","kind":"coding","environment":"php"}`, &createMissionRequest{}},
+		{"automation create", `{"name":"n","action":{"kind":"mission","mission":{"goal":"g","kind":"coding","environment":"go"}}}`, &createAutomationRequest{}},
+		{"automation patch", `{"action":{"kind":"mission","mission":{"goal":"g","kind":"coding","environment":{"any":"shape"}}}}`, &patchAutomationRequest{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body))
+			if err := decodeStrict(r, tc.into); err != nil {
+				t.Fatalf("decodeStrict: %v", err)
+			}
+			out, err := json.Marshal(tc.into)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(out), "environment") {
+				t.Fatalf("re-encoded request still carries environment: %s", out)
+			}
+		})
+	}
+	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"goal":"g","enviroment":"php"}`))
+	if err := decodeStrict(r, &createMissionRequest{}); err == nil {
+		t.Fatal("a misspelled field must still be rejected")
+	}
+}

@@ -19,7 +19,6 @@ export function normalizeTemplate(t: MissionTemplate): MissionTemplate {
     auto_approve_tools: t.auto_approve_tools ?? true,
     harness: coding ? str(t.harness) : undefined,
     review_harness: light ? undefined : str(t.review_harness),
-    environment: coding ? str(t.environment) : undefined,
     destination_ids: t.destination_ids && t.destination_ids.length > 0 ? t.destination_ids : undefined,
     light: coding ? undefined : light,
     attachments: t.attachments && t.attachments.length > 0 ? t.attachments : undefined,

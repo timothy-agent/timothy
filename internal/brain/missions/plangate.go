@@ -31,8 +31,8 @@ const emptyOutputHint = "awk 'END{exit NR>0}'"
 
 // codeExtensions maps artifacts a check_cmd must build, test or run
 // rather than only grep to their language. D-139 (issue #1014): the
-// code floor keys on the artifact's language, not the sandbox
-// environment, so polyglot repos gate every unit on its own toolchain.
+// code floor keys on the artifact's language, not a sandbox image,
+// so polyglot repos gate every unit on its own toolchain.
 var codeExtensions = map[string]string{
 	".go": "go", ".py": "python",
 	".js": "node", ".mjs": "node", ".cjs": "node", ".jsx": "node", ".ts": "node", ".tsx": "node",
@@ -78,7 +78,7 @@ var anchorExample = map[string]string{
 }
 
 // checkPlanGates runs the static gate checks parsePlan cannot: they
-// need the mission's kind and environment.
+// need the mission's kind.
 func checkPlanGates(plan Plan, m Mission) error {
 	for _, u := range plan.Units {
 		if emptyOutputIdiom.MatchString(u.CheckCmd) {
@@ -448,7 +448,7 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 	}
 	workRoot := m.WorkRoot()
 	backend := func(ctx context.Context, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
-		return r.sandbox(ctx, m.ID, m.Environment, workdir, command, timeout, out)
+		return r.sandbox(ctx, m.ID, workdir, command, timeout, out)
 	}
 	bootstrapFirst := len(plan.Units) > 0 && plan.Units[0].Bootstrap
 	for _, u := range plan.Units {
@@ -483,11 +483,7 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 				r.log.Info("plan probe: missing command accepted, it lives in a dependency dir the work installs", "mission_id", m.ID, "unit", u.Title, "not_found", strings.TrimSpace(lastLine(res.Excerpt)))
 				continue
 			}
-			env := m.Environment
-			if env == "" {
-				env = "sandbox"
-			}
-			return fmt.Errorf("mission runner: unit %q check_cmd `%s` uses a command the %s environment does not have: %s", u.Title, u.CheckCmd, env, strings.TrimSpace(lastLine(res.Excerpt)))
+			return fmt.Errorf("mission runner: unit %q check_cmd `%s` uses a command the sandbox does not have: %s", u.Title, u.CheckCmd, strings.TrimSpace(lastLine(res.Excerpt)))
 		}
 	}
 	return nil
@@ -531,7 +527,7 @@ func lastLine(s string) string {
 }
 
 // acceptPlan is parsePlan plus the gate checks that need the mission
-// (kind, environment, sandbox). PlanSession's recovery turn quotes the
+// (kind, sandbox). PlanSession's recovery turn quotes the
 // returned error to the planner, so every message names the unit and
 // the fix.
 func (r *nativeRunner) acceptPlan(ctx context.Context, m Mission, raw string) (Plan, error) {

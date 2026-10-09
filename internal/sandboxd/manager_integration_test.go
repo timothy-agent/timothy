@@ -94,7 +94,7 @@ func TestManagerLifecycle(t *testing.T) {
 
 	t.Run("exec runs and captures output", func(t *testing.T) {
 		var out bytes.Buffer
-		code, err := mgr.Exec(ctx, missionID, "", missionDir, "echo hello", 5*time.Second, &out)
+		code, err := mgr.Exec(ctx, missionID, missionDir, "echo hello", 5*time.Second, &out)
 		if err != nil {
 			t.Fatalf("Exec: %v", err)
 		}
@@ -108,7 +108,7 @@ func TestManagerLifecycle(t *testing.T) {
 
 	t.Run("non-zero exit is reported as a code, not an error", func(t *testing.T) {
 		var out bytes.Buffer
-		code, err := mgr.Exec(ctx, missionID, "", missionDir, "exit 7", 5*time.Second, &out)
+		code, err := mgr.Exec(ctx, missionID, missionDir, "exit 7", 5*time.Second, &out)
 		if err != nil {
 			t.Fatalf("Exec: %v", err)
 		}
@@ -119,7 +119,7 @@ func TestManagerLifecycle(t *testing.T) {
 
 	t.Run("timeout is reported as an error", func(t *testing.T) {
 		var out bytes.Buffer
-		_, err := mgr.Exec(ctx, missionID, "", missionDir, "sleep 5", 1*time.Second, &out)
+		_, err := mgr.Exec(ctx, missionID, missionDir, "sleep 5", 1*time.Second, &out)
 		if err == nil {
 			t.Fatal("Exec: want timeout error, got nil")
 		}
@@ -130,7 +130,7 @@ func TestManagerLifecycle(t *testing.T) {
 
 	t.Run("runs as nobody, no brain secrets leak", func(t *testing.T) {
 		var out bytes.Buffer
-		if _, err := mgr.Exec(ctx, missionID, "", missionDir, "id -u; env", 5*time.Second, &out); err != nil {
+		if _, err := mgr.Exec(ctx, missionID, missionDir, "id -u; env", 5*time.Second, &out); err != nil {
 			t.Fatalf("Exec: %v", err)
 		}
 		got := out.String()
@@ -152,7 +152,7 @@ func TestManagerLifecycle(t *testing.T) {
 		// within the execStreamGrace window.
 		var out bytes.Buffer
 		start := time.Now()
-		code, err := mgr.Exec(ctx, missionID, "", missionDir, "echo started; sleep 15 &", 10*time.Second, &out)
+		code, err := mgr.Exec(ctx, missionID, missionDir, "echo started; sleep 15 &", 10*time.Second, &out)
 		elapsed := time.Since(start)
 		if err != nil {
 			t.Fatalf("Exec: %v", err)
@@ -170,11 +170,11 @@ func TestManagerLifecycle(t *testing.T) {
 
 	t.Run("container persists between exec calls (reuse, not recreate)", func(t *testing.T) {
 		var out bytes.Buffer
-		if _, err := mgr.Exec(ctx, missionID, "", missionDir, "echo one > /tmp/marker", 5*time.Second, &out); err != nil {
+		if _, err := mgr.Exec(ctx, missionID, missionDir, "echo one > /tmp/marker", 5*time.Second, &out); err != nil {
 			t.Fatalf("Exec (write): %v", err)
 		}
 		out.Reset()
-		if _, err := mgr.Exec(ctx, missionID, "", missionDir, "cat /tmp/marker", 5*time.Second, &out); err != nil {
+		if _, err := mgr.Exec(ctx, missionID, missionDir, "cat /tmp/marker", 5*time.Second, &out); err != nil {
 			t.Fatalf("Exec (read): %v", err)
 		}
 		if got := strings.TrimSpace(out.String()); got != "one" {
@@ -214,7 +214,7 @@ func TestCoreUlimitPreventsDump(t *testing.T) {
 	assertNoCoreFiles := func(t *testing.T) {
 		t.Helper()
 		var out bytes.Buffer
-		if _, err := mgr.Exec(ctx, missionID, "", missionDir, "ls -a", 5*time.Second, &out); err != nil {
+		if _, err := mgr.Exec(ctx, missionID, missionDir, "ls -a", 5*time.Second, &out); err != nil {
 			t.Fatalf("Exec (ls): %v", err)
 		}
 		for _, name := range strings.Fields(out.String()) {
@@ -226,7 +226,7 @@ func TestCoreUlimitPreventsDump(t *testing.T) {
 
 	t.Run("SIGSEGV does not dump", func(t *testing.T) {
 		var out bytes.Buffer
-		if _, err := mgr.Exec(ctx, missionID, "", missionDir, "kill -SEGV $$", 5*time.Second, &out); err != nil {
+		if _, err := mgr.Exec(ctx, missionID, missionDir, "kill -SEGV $$", 5*time.Second, &out); err != nil {
 			t.Fatalf("Exec: %v", err)
 		}
 		assertNoCoreFiles(t)
@@ -236,7 +236,7 @@ func TestCoreUlimitPreventsDump(t *testing.T) {
 		// A low per-exec fsize ulimit plus a write exceeding it raises
 		// SIGXFSZ: the exact signal that produced the leaked core.234.
 		var out bytes.Buffer
-		if _, err := mgr.Exec(ctx, missionID, "", missionDir, "sh -c 'ulimit -f 1; yes > bigfile'", 5*time.Second, &out); err != nil {
+		if _, err := mgr.Exec(ctx, missionID, missionDir, "sh -c 'ulimit -f 1; yes > bigfile'", 5*time.Second, &out); err != nil {
 			t.Fatalf("Exec: %v", err)
 		}
 		assertNoCoreFiles(t)
@@ -299,7 +299,7 @@ func TestTwoOwnersOnOneDaemon(t *testing.T) {
 	missionDir := newMissionDir(t, missionID)
 	t.Cleanup(func() { _ = a.Remove(context.Background(), missionID) })
 	var out bytes.Buffer
-	if _, err := a.Exec(ctx, missionID, "", missionDir, "true", 5*time.Second, &out); err != nil {
+	if _, err := a.Exec(ctx, missionID, missionDir, "true", 5*time.Second, &out); err != nil {
 		t.Fatalf("A Exec: %v", err)
 	}
 
@@ -309,14 +309,14 @@ func TestTwoOwnersOnOneDaemon(t *testing.T) {
 	if err := b.Remove(ctx, missionID); err != nil {
 		t.Fatalf("B Remove: %v", err)
 	}
-	if _, err := b.Exec(ctx, missionID, "", missionDir, "true", 5*time.Second, &out); !errors.Is(err, ErrForeignContainer) {
+	if _, err := b.Exec(ctx, missionID, missionDir, "true", 5*time.Second, &out); !errors.Is(err, ErrForeignContainer) {
 		t.Fatalf("B Exec err = %v, want ErrForeignContainer", err)
 	}
 	ids, err := a.List(ctx)
 	if err != nil || !slices.Contains(ids, missionID) {
 		t.Fatalf("A List = %v, %v; want A's container to survive B's Remove", ids, err)
 	}
-	if _, err := a.Exec(ctx, missionID, "", missionDir, "true", 5*time.Second, &out); err != nil {
+	if _, err := a.Exec(ctx, missionID, missionDir, "true", 5*time.Second, &out); err != nil {
 		t.Fatalf("A Exec after B's Remove: %v", err)
 	}
 }
