@@ -292,7 +292,7 @@ func TestListFailureBodyIsGeneric(t *testing.T) {
 		a, _, _ := testAPI(t, "tok", nil)
 		store := missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard())
 		m := mux(a)
-		a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("GET", "/v1/missions", nil)
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()

@@ -661,8 +661,10 @@ func (d *Driver) SetMemoryExtract(fn MemoryExtract) {
 
 // SetNameMission installs the display-name generator: ensureProvisioned
 // names a mission before its branch is cut so the slug comes from the
-// title, not the goal (issue #494), and runResult backfills any mission
-// that still reached a terminal phase unnamed. A setter for the same
+// title, not the goal (issue #494), Create names any mission still
+// unnamed after provisioning in the background (issue #1081), and
+// runResult backfills any mission that still reached a terminal phase
+// unnamed. A setter for the same
 // reason SetMemoryExtract is. Optional — nil leaves unnamed missions
 // unnamed and branches slugged from the goal, same as before.
 func (d *Driver) SetNameMission(fn func(context.Context, string) string) {
@@ -949,7 +951,8 @@ func (d *Driver) removeSandbox(id string) {
 // the store without one. Kicks off the first Drive in a background
 // goroutine; callers (the API create handler, automation runs, the
 // workflow engine) get the new id back immediately. Callers resolve
-// defaults first via ResolveDefaults.
+// defaults first via ResolveDefaults. A mission still unnamed after
+// provisioning is named in the background (issue #1081).
 func (d *Driver) Create(ctx context.Context, m Mission) (string, error) {
 	if d.validateDeps != nil {
 		if err := ValidateCreate(ctx, m, *d.validateDeps); err != nil {
@@ -961,8 +964,12 @@ func (d *Driver) Create(ctx context.Context, m Mission) (string, error) {
 		return "", fmt.Errorf("driver: create: %w", err)
 	}
 	m.ID = id
-	if _, err := d.ensureProvisioned(ctx, m); err != nil {
+	provisioned, err := d.ensureProvisioned(ctx, m)
+	if err != nil {
 		return "", fmt.Errorf("driver: create: %w", err)
+	}
+	if provisioned.Name == "" && d.nameMission != nil {
+		go d.backfillMissionName(context.Background(), id, m.Goal) //nolint:gosec // G118: deliberate, the naming call must outlive the request that created the mission
 	}
 	go func() { //nolint:gosec // G118: deliberate — the mission must outlive the HTTP request that created it, driveTimeBound is Drive's own cap
 		if err := d.Drive(context.Background(), id); err != nil {
