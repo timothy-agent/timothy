@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 	"github.com/SumonMSelim/timothy/internal/platform/netguard"
+	"github.com/SumonMSelim/timothy/internal/platform/pagefetch"
 )
 
 const (
@@ -114,37 +114,27 @@ func fetchReadable(ctx context.Context, client *http.Client, markitdownURL strin
 	// Authorization header (no auth passthrough), and never leak it on
 	// a redirect to another host.
 	u.User = nil
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("User-Agent", "timothy/1.0 (+self-hosted assistant)")
 	accept := "text/html, text/plain;q=0.9, application/json;q=0.8, */*;q=0.1"
 	if markitdownURL != "" {
 		accept = "text/html, application/pdf;q=0.9, text/plain;q=0.9, application/json;q=0.8, */*;q=0.1"
 	}
-	req.Header.Set("Accept", accept)
 
-	resp, err := client.Do(req)
+	page, err := pagefetch.Fetch(ctx, client, u.String(), accept, webFetchMaxBody)
 	if err != nil {
 		return "", fmt.Errorf("fetch failed: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("http %d fetching %s", resp.StatusCode, u.Host)
+	if page.Status < 200 || page.Status >= 300 {
+		return "", fmt.Errorf("http %d fetching %s", page.Status, u.Host)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, webFetchMaxBody+1))
-	if err != nil {
-		return "", fmt.Errorf("read body: %w", err)
-	}
+	body := page.Body
 	bodyTruncated := len(body) > webFetchMaxBody
 	if bodyTruncated {
 		body = body[:webFetchMaxBody]
 	}
 
-	ct := resp.Header.Get("Content-Type")
+	ct := page.ContentType
 	var text string
 	switch {
 	case strings.Contains(ct, "text/html"):
