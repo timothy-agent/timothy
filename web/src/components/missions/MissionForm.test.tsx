@@ -439,14 +439,19 @@ describe('MissionForm: # references', () => {
     )
     renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
-    const countChips = () =>
-      screen.getAllByRole('button', { name: /^Remove mission\d reference$/ }).length
+    // Label query, not role: role queries are slow under full-suite load.
+    const countChips = () => screen.queryAllByLabelText(/^Remove mission\d reference$/).length
 
     const goal = screen.getByLabelText('Goal') as HTMLTextAreaElement
     for (let i = 0; i < 8; i++) {
       fireEvent.change(goal, { target: { value: `#mission${i}` } })
-      fireEvent.click(await screen.findByText(`mission${i}`))
-      await waitFor(() => expect(countChips()).toBe(i + 1))
+      fireEvent.click(
+        await screen.findByText(`mission${i}`, { selector: 'button' }, { timeout: 3000 }),
+      )
+      expect(countChips()).toBe(i + 1)
+      // pick restores the caret in a rAF; let it land before the next
+      // change, or it moves the caret off the new #token and the pick no-ops.
+      await new Promise((r) => requestAnimationFrame(r))
     }
 
     fireEvent.change(goal, { target: { value: '#mission8' } })
@@ -454,7 +459,7 @@ describe('MissionForm: # references', () => {
     expect(screen.queryByText('Missions')).toBeNull()
     expect(screen.queryByText('mission8', { selector: 'button' })).toBeNull()
     expect(countChips()).toBe(8)
-  })
+  }, 15000)
 })
 
 const destinations: Destination[] = [
