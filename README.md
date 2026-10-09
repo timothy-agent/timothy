@@ -66,6 +66,7 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `web`        | React + Tailwind interface: chat, missions, usage, settings                                   |
 | `searxng`    | Internal metasearch backend for the search_web tool                                           |
 | `markitdown` | Internal Python sidecar: file→markdown conversion                                             |
+| `ocr`        | Internal Python sidecar: tesseract image OCR                                                  |
 | `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (opt-in, off by default) |
 | `pdfgen`     | Internal Python sidecar: markdown→PDF via Typst, powers mission PDF export                    |
 
