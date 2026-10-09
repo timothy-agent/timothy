@@ -406,7 +406,7 @@ func TestSecretsDirectoryGuardsWebhookTriggerRef(t *testing.T) {
 	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{{RefName: "ITEST_HOOK_KEY"}}}
 	a, _, _ := testAPI(t, "tok", nil)
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, nil, h.store)
+	a.registerSecrets(m.Handle, gw, nil, nil, h.store, nil)
 
 	want := referenceInfo{Kind: "automation", Name: h.tag + "secret-ref", Role: "credential"}
 	found := false
