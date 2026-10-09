@@ -1582,6 +1582,8 @@ export interface Readiness {
   kb_collections: number
   automations: number
   automations_enabled: boolean
+  // MISSION_MODEL_FLOOR substrings; a matching model cannot run missions.
+  mission_model_floor?: string[] | null
 }
 
 // ReadinessKey is a boolean readiness key a SetupGate can require.

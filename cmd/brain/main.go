@@ -1055,6 +1055,7 @@ func onboardingProbes(gwc *gwclient.Client, sandbox *sandboxclient.Client, sessi
 		HasAssistantReply:  sessions.HasAssistantReply,
 		CountKBCollections: countOf(kbStore.ListCollections),
 		AutomationsEnabled: func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyAutomations) },
+		MissionModelFloor:  missions.ParseModelFloor(os.Getenv("MISSION_MODEL_FLOOR")),
 	}
 	if missionStore != nil {
 		p.HasSucceededMission = missionStore.HasSucceeded
@@ -1479,12 +1480,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// too weak to drive tool-using mission turns; a turn served by one
 	// pauses the mission immediately instead of burning its iteration
 	// budget. Unset = floor disabled.
-	var floorDeny []string
-	for _, s := range strings.Split(os.Getenv("MISSION_MODEL_FLOOR"), ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			floorDeny = append(floorDeny, s)
-		}
-	}
+	floorDeny := missions.ParseModelFloor(os.Getenv("MISSION_MODEL_FLOOR"))
 	// sandboxMgr routes model-authored command execution (the
 	// worker/reviewer shell, check_cmd) OUT of brain's own process,
 	// through sandboxd, into a per-mission Docker container.
