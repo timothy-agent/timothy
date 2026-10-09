@@ -253,12 +253,6 @@ func (d *Driver) CreateFollowUp(ctx context.Context, parentID string, opts Follo
 	if err != nil {
 		return "", fmt.Errorf("create follow-up: %w", err)
 	}
-	// Fire-and-forget display name generation, same shape as
-	// api/missions.go's create handler's own generateName — detached
-	// from ctx so a caller winding down doesn't cancel it.
-	if d.nameMission != nil {
-		go d.backfillMissionName(context.Background(), id, goal) //nolint:gosec // G118: deliberate — the naming call must outlive whatever request/ctx triggered create
-	}
 	return id, nil
 }
 

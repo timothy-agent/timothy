@@ -403,7 +403,7 @@ ON CONFLICT (backend) DO NOTHING;
 CREATE TABLE IF NOT EXISTS connectors (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name           text UNIQUE NOT NULL,
-    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github', 'microsoft', 'imap', 'caldav', 'aws', 'gcp', 'bitbucket')),
+    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github', 'microsoft', 'imap', 'caldav', 'aws', 'gcp', 'bitbucket', 'gitlab')),
     -- kind-specific settings: mcp → {transport, endpoint, headers},
     -- google/microsoft → {client_id, client_secret_ref, scopes},
     -- imap → {host, port, username, account_email, smtp_host,
@@ -1181,7 +1181,7 @@ CREATE INDEX IF NOT EXISTS kb_chunks_document_idx ON kb_chunks (document_id);
 CREATE TABLE destinations (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name        text NOT NULL UNIQUE,
-    kind        text NOT NULL CHECK (kind IN ('email', 'webhook', 'channel', 'github', 'bitbucket')),
+    kind        text NOT NULL CHECK (kind IN ('email', 'webhook', 'channel', 'github', 'bitbucket', 'gitlab')),
     config      jsonb NOT NULL DEFAULT '{}',
     credential_ref text NOT NULL DEFAULT '',
     enabled     boolean NOT NULL DEFAULT true,

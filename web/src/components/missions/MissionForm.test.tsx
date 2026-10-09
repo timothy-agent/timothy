@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminAgent, AdminConnector, AdminRoute, GitHubRepo, Mission } from '../../api/types'
@@ -788,6 +788,32 @@ describe('MissionForm: kind chip', () => {
     // Locked: the further edit above must not trigger a reclassify.
     expect(classifyMission).not.toHaveBeenCalled()
     expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
+  })
+})
+
+describe('MissionForm: slow create (issue #1081)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows a preparing state once create takes longer than 2 seconds', async () => {
+    vi.mocked(createMission).mockReturnValue(new Promise(() => {}))
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await act(() => vi.advanceTimersByTimeAsync(1999))
+    expect(screen.getByRole('button', { name: 'Create mission' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Preparing mission…' })).not.toBeInTheDocument()
+
+    await act(() => vi.advanceTimersByTimeAsync(1))
+    expect(screen.getByRole('button', { name: 'Preparing mission…' })).toBeDisabled()
   })
 })
 

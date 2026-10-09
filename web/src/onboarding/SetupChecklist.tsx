@@ -1,4 +1,4 @@
-import { Circle, CircleCheck } from 'lucide-react'
+import { Circle, CircleCheck, Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -6,6 +6,7 @@ import { createMission } from '../api/client'
 import { Panel } from '../components/timothy/panel'
 import { Button } from '../components/ui/button'
 import { Progress } from '../components/ui/progress'
+import { useSlow } from '../hooks/use-slow'
 import { errText } from '../lib/errors'
 import { cn } from '../lib/utils'
 import { buildChecklist, canDismiss, checklistProgress } from './checklist'
@@ -16,6 +17,7 @@ export function SetupChecklist() {
   const { readiness, progress, updateProgress } = useOnboarding()
   const navigate = useNavigate()
   const [starting, setStarting] = useState(false)
+  const preparing = useSlow(starting)
   if (!readiness || progress.checklist_dismissed === true) return null
 
   const items = buildChecklist(readiness, progress)
@@ -70,8 +72,15 @@ export function SetupChecklist() {
             {!item.done && (
               <div className="flex shrink-0 flex-wrap justify-end gap-2">
                 {item.key === 'first_mission' && sampleReady && (
-                  <Button variant="outline" size="xs" disabled={starting} onClick={() => void runSample()}>
-                    Run a sample mission
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    disabled={starting}
+                    aria-busy={starting}
+                    onClick={() => void runSample()}
+                  >
+                    {preparing && <Loader2 className="animate-spin motion-keep" aria-hidden />}
+                    {preparing ? 'Preparing mission…' : 'Run a sample mission'}
                   </Button>
                 )}
                 <Button asChild variant="ghost" size="xs">
