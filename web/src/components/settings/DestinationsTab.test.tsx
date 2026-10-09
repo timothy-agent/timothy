@@ -332,6 +332,30 @@ describe('Destinations tab', () => {
     })
   })
 
+  it('lists only connectors that can send mail in the email picker', async () => {
+    const google = (id: string, name: string, scopes: string[]): AdminConnector => ({
+      ...googleConnector,
+      id,
+      name,
+      config: { scopes },
+    })
+    vi.mocked(listConnectors).mockResolvedValue([
+      googleConnector,
+      google('g2', 'work-calendar', ['https://www.googleapis.com/auth/calendar']),
+      google('g3', 'my-drive', ['https://www.googleapis.com/auth/drive.readonly']),
+      google('g4', 'my-docs', ['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive.file']),
+      { ...googleConnector, id: 'm1', name: 'outlook', kind: 'microsoft', config: { scopes: ['Mail.Send'] } },
+      githubConnector,
+    ])
+
+    renderTab()
+    fireEvent.click(await screen.findByRole('link', { name: /^Email/ }))
+    fireEvent.click(await screen.findByText('Choose a connected Gmail account'))
+
+    expect(await screen.findByRole('option', { name: 'gmail' })).toBeTruthy()
+    expect(screen.getAllByRole('option')).toHaveLength(1)
+  })
+
   it('offers a Channel tile and no Telegram tile', async () => {
     renderTab()
     expect(await screen.findByRole('link', { name: /^Channel/ })).toBeTruthy()

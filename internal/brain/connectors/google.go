@@ -368,8 +368,8 @@ func (g *Google) token(ctx context.Context, cfg GoogleConfig, ref string) (strin
 // uses (google_tools.go), reused directly here so destinations' email
 // adapter and the chat tool can never diverge on how a message
 // actually goes out. connectorID must name a google-kind connector
-// with the gmail scope; callers (destinations' validation) check that
-// before ever reaching here.
+// with a gmail scope; destinations' validate checks that when an email
+// destination is created or patched.
 func (g *Google) SendMail(ctx context.Context, connectorID, to, subject, body string) error {
 	c, err := g.Rows.Get(ctx, connectorID)
 	if err != nil {
