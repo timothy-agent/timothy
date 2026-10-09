@@ -60,8 +60,13 @@ const (
 // optionally followed by a title in quotes; capture groups are alt
 // text and URL. HTML <img> tags are out of scope for v1 (markitdown's
 // own output and hand-written/clip markdown both use the Markdown
-// form).
-var imageLinkPattern = regexp.MustCompile(`!\[([^\]]*)\]\((\S+?)(?:\s+"[^"]*")?\)`)
+// form). The URL may contain backslash-escaped parentheses (clipped
+// pages escape them) or one level of balanced unescaped ones.
+var imageLinkPattern = regexp.MustCompile(`!\[([^\]]*)\]\(((?:\\[()]|\([^\s()]*\)|[^\s()])+)(?:\s+"[^"]*")?\)`)
+
+// unescapeParens turns Markdown-escaped parentheses in a link URL back
+// into the literal characters the server expects.
+var unescapeParens = strings.NewReplacer(`\(`, "(", `\)`, ")")
 
 // imageRef is one image link found in markdown, with the byte range of
 // its full match (used to detect an existing caption block right after
@@ -79,7 +84,7 @@ func extractImageLinks(md string) []imageRef {
 	seen := map[string]bool{}
 	var out []imageRef
 	for _, m := range imageLinkPattern.FindAllStringSubmatchIndex(md, -1) {
-		url := md[m[4]:m[5]]
+		url := unescapeParens.Replace(md[m[4]:m[5]])
 		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 			continue
 		}
