@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -22,8 +23,8 @@ func (f fakeConns) Get(_ context.Context, id string) (Connector, error) {
 
 func TestValidate(t *testing.T) {
 	conns := fakeConns{rows: map[string]Connector{
-		"gmail-ok":       {Kind: "google", Enabled: true},
-		"gmail-disabled": {Kind: "google", Enabled: false},
+		"gmail-ok":       {Kind: "google", Enabled: true, Scopes: []string{gmailModify}},
+		"gmail-disabled": {Kind: "google", Enabled: false, Scopes: []string{gmailModify}},
 		"mcp-conn":       {Kind: "mcp", Enabled: true},
 		"gh-ok":          {Kind: "github", Enabled: true},
 		"bb-ok":          {Kind: "bitbucket", Enabled: true},
@@ -136,6 +137,55 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+const gmailModify = "https://www.googleapis.com/auth/gmail.modify"
+
+// TestValidateEmailRejectsNonMailConnectors pins that an email
+// destination only accepts a google connector with a gmail scope, and
+// the refusal names what the connector is.
+func TestValidateEmailRejectsNonMailConnectors(t *testing.T) {
+	t.Parallel()
+	conns := fakeConns{rows: map[string]Connector{
+		"gmail":    {Kind: "google", Enabled: true, Scopes: []string{gmailModify}},
+		"gmail-rw": {Kind: "google", Enabled: true, Scopes: []string{"https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/gmail.send"}},
+		"calendar": {Kind: "google", Enabled: true, Scopes: []string{"https://www.googleapis.com/auth/calendar"}},
+		"drive":    {Kind: "google", Enabled: true, Scopes: []string{"https://www.googleapis.com/auth/drive.readonly"}},
+		"docs":     {Kind: "google", Enabled: true, Scopes: []string{"https://www.googleapis.com/auth/documents", "https://www.googleapis.com/auth/drive.file"}},
+		"noscope":  {Kind: "google", Enabled: true},
+		"outlook":  {Kind: "microsoft", Enabled: true, Scopes: []string{"Mail.Send"}},
+		"imap":     {Kind: "imap", Enabled: true},
+		"github":   {Kind: "github", Enabled: true},
+	}}
+	for _, tt := range []struct {
+		connector, wantErr string
+	}{
+		{"gmail", ""},
+		{"gmail-rw", ""},
+		{"calendar", "google connector without Gmail access"},
+		{"drive", "google connector without Gmail access"},
+		{"docs", "google connector without Gmail access"},
+		{"noscope", "google connector without Gmail access"},
+		{"outlook", "connector of kind microsoft, which cannot send mail"},
+		{"imap", "connector of kind imap, which cannot send mail"},
+		{"github", "connector of kind github, which cannot send mail"},
+	} {
+		t.Run(tt.connector, func(t *testing.T) {
+			t.Parallel()
+			d := Destination{Name: "ops-inbox", Kind: "email",
+				Config: json.RawMessage(`{"connector_id":"` + tt.connector + `","to":"ops@example.com"}`)}
+			err := validate(t.Context(), conns, nil, &d)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validate() = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validate() = %v, want error containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateEmailNoConnectors(t *testing.T) {
 	d := Destination{Name: "ops-inbox", Kind: "email",
 		Config: json.RawMessage(`{"connector_id":"gmail-ok","to":"ops@example.com"}`)}
@@ -229,7 +279,7 @@ func (f fakeAutomationRefs) NameReferencingDestination(context.Context, string) 
 func TestCreateWrapsValidationInErrInvalid(t *testing.T) {
 	t.Parallel()
 	conns := fakeConns{rows: map[string]Connector{
-		"gmail-ok": {Kind: "google", Enabled: true},
+		"gmail-ok": {Kind: "google", Enabled: true, Scopes: []string{gmailModify}},
 		"mcp-conn": {Kind: "mcp", Enabled: true},
 	}}
 	s := &Store{conns: conns, channels: fakeChannels}
