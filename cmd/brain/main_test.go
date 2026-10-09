@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
 	"github.com/SumonMSelim/timothy/internal/brain/memclient"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -249,6 +250,27 @@ func TestPRStateResolver(t *testing.T) {
 			}
 			if tc.buildErr == nil && (client.ref != gitprovider.RepoRef{Owner: "octocat", Name: "hello-world"} || client.num != 7) {
 				t.Fatalf("GetPR called with %+v #%d", client.ref, client.num)
+			}
+		})
+	}
+}
+
+func TestDestinationConnectorCarriesGoogleScopes(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		in   connectors.Connector
+		want []string
+	}{
+		{"google", connectors.Connector{Kind: "google", Enabled: true, Config: json.RawMessage(`{"scopes":["https://www.googleapis.com/auth/gmail.modify"]}`)}, []string{"https://www.googleapis.com/auth/gmail.modify"}},
+		{"malformed google config", connectors.Connector{Kind: "google", Enabled: true, Config: json.RawMessage(`{"scopes":`)}, nil},
+		{"microsoft scopes ignored", connectors.Connector{Kind: "microsoft", Enabled: true, Config: json.RawMessage(`{"scopes":["Mail.Send"]}`)}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := destinationConnector(tc.in)
+			if got.Kind != tc.in.Kind || got.Enabled != tc.in.Enabled || !slices.Equal(got.Scopes, tc.want) {
+				t.Fatalf("destinationConnector = %+v, want kind %s scopes %v", got, tc.in.Kind, tc.want)
 			}
 		})
 	}
