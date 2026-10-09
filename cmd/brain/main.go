@@ -1325,7 +1325,20 @@ func (d destinationConnectorLookup) Get(ctx context.Context, id string) (destina
 	if err != nil {
 		return destinations.Connector{}, err
 	}
-	return destinations.Connector{Kind: c.Kind, Enabled: c.Enabled}, nil
+	return destinationConnector(c), nil
+}
+
+// destinationConnector narrows a connectors row; a google row carries
+// its scopes. A malformed config leaves none, so validation refuses it.
+func destinationConnector(c connectors.Connector) destinations.Connector {
+	out := destinations.Connector{Kind: c.Kind, Enabled: c.Enabled}
+	if c.Kind == "google" {
+		var cfg connectors.GoogleConfig
+		if json.Unmarshal(c.Config, &cfg) == nil {
+			out.Scopes = cfg.Scopes
+		}
+	}
+	return out
 }
 
 // destinationLister adapts *destinations.Store.List to the deliver
