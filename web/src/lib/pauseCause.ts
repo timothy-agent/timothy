@@ -7,6 +7,7 @@ export interface PausePayload {
   phase?: string
   harness_retries?: number
   detail?: string
+  model?: string
 }
 
 const causeLabels: Record<string, string> = {
@@ -20,6 +21,7 @@ const causeLabels: Record<string, string> = {
   review_rounds_exhausted: 'review rounds exhausted, findings still open',
   result_failed: 'delivery failed in the result phase',
   plan_approval: 'plan awaiting approval',
+  model_floor: 'model is below the mission floor',
 }
 
 // pauseCauseLabel returns the banner label for a pause payload, or
@@ -31,11 +33,16 @@ export function pauseCauseLabel(p: PausePayload | undefined): string | undefined
     const times = typeof n === 'number' ? `${n} ${n === 1 ? 'time' : 'times'}` : 'repeatedly'
     return p.phase === 'plan' ? `plan rejected ${times}` : `harness failed ${times}`
   }
+  if (p.cause === 'model_floor' && p.model) return `${p.model} is below the mission floor`
   return causeLabels[p.cause]
 }
 
-// pauseDetailText prefixes the last rejection reason for a plan pause.
+// pauseDetailText prefixes the last rejection reason for a plan pause
+// and replaces a model floor error with what to do about it.
 export function pauseDetailText(p: PausePayload | undefined): string | undefined {
+  if (p?.cause === 'model_floor') {
+    return 'This model can chat but cannot run missions. Pick a stronger model for missions in Settings, then resume.'
+  }
   if (!p?.detail) return undefined
   const planRejected = p.cause === 'harness_retries_exhausted' && p.phase === 'plan'
   return planRejected ? `Last rejection: ${p.detail}` : p.detail
