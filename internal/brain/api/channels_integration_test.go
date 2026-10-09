@@ -18,6 +18,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
@@ -423,5 +424,61 @@ func TestChannelsAPIEmail(t *testing.T) {
 	tg := h.create("tg", "GOOD_BOT")
 	if w := h.do("PATCH", "/v1/channels/"+tg, `{"config":{"from_allow":["a@x.com"]}}`); w.Code != 400 {
 		t.Fatalf("allowlist on telegram = %d %s", w.Code, w.Body.String())
+	}
+}
+
+// TestSecretsDirectoryGuardsChannelTokenRefs runs the credentials
+// directory over the real channels store: each channel token ref lists
+// its channel and cannot be deleted until the channel is gone.
+func TestSecretsDirectoryGuardsChannelTokenRefs(t *testing.T) {
+	h := newChannelHarness(t)
+	tgRef, botRef, appRef := h.tag+"TG", h.tag+"SLACK_BOT", h.tag+"SLACK_APP"
+	tg := h.create("tg", tgRef)
+	w := h.do("POST", "/v1/channels", fmt.Sprintf(`{"name":%q,"kind":"slack","credential_ref":%q,"config":{"dispatch":true,"app_token_ref":%q}}`, h.tag+"slack", botRef, appRef))
+	if w.Code != 201 {
+		t.Fatalf("create slack = %d %s", w.Code, w.Body.String())
+	}
+	var slack struct{ ID string }
+	h.decode(w, &slack)
+
+	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{{RefName: tgRef}, {RefName: botRef}, {RefName: appRef}}}
+	a, _, _ := testAPI(t, "tok", nil)
+	m := http.NewServeMux()
+	a.registerSecrets(m.Handle, gw, nil, nil, nil, h.store)
+
+	deleteRef := func(ref string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodDelete, "/v1/admin/secrets/"+ref, nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		rec := httptest.NewRecorder()
+		m.ServeHTTP(rec, req)
+		return rec
+	}
+	listed := listSecrets(t, m)
+	for _, tt := range []struct{ ref, channel, id string }{
+		{tgRef, h.tag + "tg", tg},
+		{botRef, h.tag + "slack", slack.ID},
+		{appRef, h.tag + "slack", slack.ID},
+	} {
+		want := referenceInfo{Kind: "channel", Name: tt.channel, Role: "credential"}
+		if len(listed[tt.ref]) != 1 || listed[tt.ref][0] != want {
+			t.Fatalf("%s referenced_by = %+v, want [%+v]", tt.ref, listed[tt.ref], want)
+		}
+		if rec := deleteRef(tt.ref); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "channel(s) "+tt.channel) {
+			t.Fatalf("delete %s = %d %s, want 409 naming the channel", tt.ref, rec.Code, rec.Body)
+		}
+		if gw.deletedRef != "" {
+			t.Fatalf("gateway DeleteSecret called with %q, want never called", gw.deletedRef)
+		}
+	}
+
+	for _, id := range []string{tg, slack.ID} {
+		if rec := h.do("DELETE", "/v1/channels/"+id, ""); rec.Code != http.StatusNoContent {
+			t.Fatalf("delete channel = %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	for _, ref := range []string{tgRef, botRef, appRef} {
+		if rec := deleteRef(ref); rec.Code != http.StatusNoContent || gw.deletedRef != ref {
+			t.Fatalf("delete %s after channel gone = %d deleted %q, want 204 forwarded", ref, rec.Code, gw.deletedRef)
+		}
 	}
 }
