@@ -1,13 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const docs = vi.hoisted(() => ({ url: '' }))
-vi.mock('./docsUrl', () => ({
-  get DOCS_URL() {
-    return docs.url
-  },
-}))
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 import { OnboardingContext } from './context'
@@ -37,10 +31,6 @@ function renderMenu(path: string) {
 const item = (name: string) => screen.getByRole('menuitem', { name })
 const where = () => screen.getByTestId('where')
 
-beforeEach(() => {
-  docs.url = ''
-})
-
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
@@ -49,7 +39,7 @@ afterEach(() => {
 describe('HelpMenu', () => {
   it('lists the help items', () => {
     renderMenu('/')
-    for (const name of ['Setup checklist', "Restart this page's tour", 'Restart welcome', 'README on GitHub']) {
+    for (const name of ['Setup checklist', "Restart this page's tour", 'Restart welcome', 'Docs']) {
       expect(item(name)).toBeInTheDocument()
     }
   })
@@ -87,18 +77,10 @@ describe('HelpMenu', () => {
     await waitFor(() => expect(where()).toHaveTextContent('/welcome'))
   })
 
-  it('links the README when there is no docs site', () => {
+  it('links the docs site in a new tab', () => {
     renderMenu('/')
-    const link = item('README on GitHub')
-    expect(link).toHaveAttribute('href', 'https://github.com/timothy-agent/timothy#readme')
+    const link = item('Docs')
+    expect(link).toHaveAttribute('href', 'https://timothy-agent.github.io/docs/')
     expect(link).toHaveAttribute('target', '_blank')
-    expect(screen.queryByRole('menuitem', { name: 'Docs' })).toBeNull()
-  })
-
-  it('links the docs site when it is set', () => {
-    docs.url = 'https://docs.example.test'
-    renderMenu('/')
-    expect(item('Docs')).toHaveAttribute('href', 'https://docs.example.test')
-    expect(screen.queryByRole('menuitem', { name: 'README on GitHub' })).toBeNull()
   })
 })
