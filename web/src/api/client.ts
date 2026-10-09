@@ -798,8 +798,8 @@ export async function catalogPrices(pairs: CatalogPriceQuery[]): Promise<Catalog
 // store-wide default backend (write-only: it is never returned by any
 // endpoint). Built-in storage encrypts it in Timothy's database; a
 // Vault/ASM default has Timothy write it into that backend under the
-// name timothy/refName. deleteSecret removes it; the provider then
-// builds without a key and shows unhealthy until a new value is set.
+// name timothy/refName. deleteSecret removes it; the gateway refuses
+// while any provider's credential_ref still names refName.
 export async function setSecret(refName: string, value: string): Promise<void> {
   await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, {
     method: 'PUT',
