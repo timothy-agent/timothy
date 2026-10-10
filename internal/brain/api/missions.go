@@ -1501,6 +1501,20 @@ func (h *missionAPI) delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *missionAPI) events(w http.ResponseWriter, r *http.Request) {
+	page, paged, err := parseSeqPage(r.URL.Query())
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if paged {
+		events, hasMore, err := h.store.EventsPage(r.Context(), r.PathValue("id"), page.AfterSeq, page.BeforeSeq, page.Limit)
+		if err != nil {
+			failMission(w, h.log, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"events": events, "has_more": hasMore})
+		return
+	}
 	events, err := h.store.Events(r.Context(), r.PathValue("id"))
 	if err != nil {
 		failMission(w, h.log, err)
