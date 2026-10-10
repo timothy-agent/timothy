@@ -325,6 +325,9 @@ CREATE INDEX IF NOT EXISTS memories_status_type_idx ON memories (status, type);
 -- Backs the paged browser and review queue (created_at DESC, id DESC).
 CREATE INDEX IF NOT EXISTS memories_status_created_idx ON memories (status, created_at DESC, id DESC);
 
+-- Serves the semantic decay pass (status + last_confirmed_at cutoff).
+CREATE INDEX IF NOT EXISTS memories_status_confirmed_idx ON memories (status, last_confirmed_at);
+
 -- Serves entity_refs @> ARRAY[id]: entity memories and the graph join.
 CREATE INDEX IF NOT EXISTS memories_entity_refs_gin ON memories USING gin (entity_refs);
 

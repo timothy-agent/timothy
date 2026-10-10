@@ -3,6 +3,7 @@ package metrics
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -55,6 +56,20 @@ func TestNewCounterVec(t *testing.T) {
 	}
 	if got := testutil.ToFloat64(c.WithLabelValues("red")); got != 1 {
 		t.Fatalf("red = %v, want 1", got)
+	}
+}
+
+func TestNewHistogramVec(t *testing.T) {
+	t.Parallel()
+	m := New()
+	h := m.NewHistogramVec("widget_seconds", "Widget time.", "kind")
+	h.WithLabelValues("blue").Observe(0.02)
+	h.WithLabelValues("blue").Observe(0.2)
+
+	rec := httptest.NewRecorder()
+	m.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if !strings.Contains(rec.Body.String(), `timothy_widget_seconds_count{kind="blue"} 2`) {
+		t.Fatalf("histogram missing from exposition:\n%s", rec.Body)
 	}
 }
 

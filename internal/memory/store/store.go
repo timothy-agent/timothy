@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -433,6 +434,29 @@ func (s *Store) UpsertEntity(ctx context.Context, typ, name string) (string, err
 	return id, nil
 }
 
+// WithIterativeScan runs fn in a transaction with pgvector's iterative
+// HNSW scan on (D-150). A filtered k-NN otherwise stops at ef_search
+// (default 40) index candidates and drops the filtered-out ones, so
+// once archived rows crowd the neighborhood it returns fewer than its
+// LIMIT. strict_order keeps exact distance order, which RRF ranks and
+// LIMIT 1 dedup lookups need; ef_search stays at 40 (above the legs'
+// LIMIT 30) and hnsw.max_scan_tuples (20000, dead entries included
+// until vacuum) bounds the extra work.
+func WithIterativeScan(ctx context.Context, db *pgxpool.Pool, fn func(pgx.Tx) error) error {
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL hnsw.iterative_scan = strict_order`); err != nil {
+		return err
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // NearestActive returns the closest active, pending, or rejected
 // memory to the embedding by cosine similarity, or ok=false when no
 // such memory has an embedding. Pending rows must be visible too:
@@ -449,11 +473,13 @@ func (s *Store) NearestActive(ctx context.Context, embedding Vector) (id string,
 	if err != nil {
 		return "", 0, "", false, fmt.Errorf("nearest active: %w", err)
 	}
-	err = db.QueryRow(ctx, `SELECT id, 1 - (embedding <=> $1::vector), status
-		FROM memories
-		WHERE status IN ($2, $3, $4) AND embedding IS NOT NULL
-		ORDER BY embedding <=> $1::vector
-		LIMIT 1`, embedding.String(), StatusActive, StatusPending, StatusRejected).Scan(&id, &similarity, &status)
+	err = WithIterativeScan(ctx, db, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT id, 1 - (embedding <=> $1::vector), status
+			FROM memories
+			WHERE status IN ($2, $3, $4) AND embedding IS NOT NULL
+			ORDER BY embedding <=> $1::vector
+			LIMIT 1`, embedding.String(), StatusActive, StatusPending, StatusRejected).Scan(&id, &similarity, &status)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", 0, "", false, nil
 	}
@@ -471,11 +497,13 @@ func (s *Store) NearestActiveOnly(ctx context.Context, embedding Vector) (id str
 	if err != nil {
 		return "", 0, false, fmt.Errorf("nearest active memory: %w", err)
 	}
-	err = db.QueryRow(ctx, `SELECT id, 1 - (embedding <=> $1::vector)
-		FROM memories
-		WHERE status = $2 AND embedding IS NOT NULL
-		ORDER BY embedding <=> $1::vector
-		LIMIT 1`, embedding.String(), StatusActive).Scan(&id, &similarity)
+	err = WithIterativeScan(ctx, db, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `SELECT id, 1 - (embedding <=> $1::vector)
+			FROM memories
+			WHERE status = $2 AND embedding IS NOT NULL
+			ORDER BY embedding <=> $1::vector
+			LIMIT 1`, embedding.String(), StatusActive).Scan(&id, &similarity)
+	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", 0, false, nil
 	}
@@ -491,34 +519,61 @@ func (s *Store) NearestActiveOnly(ctx context.Context, embedding Vector) (id str
 // semantic+episodic pair never merges, even at similarity 1.0: they
 // answer different questions (a durable fact vs. something that
 // happened) and collapsing them silently loses that distinction.
-// O(n²) join - fine for a single-user corpus; revisit if the active
-// set grows past tens of thousands.
+// Pairs come back smaller id first, in order.
 func (s *Store) NearDupPairs(ctx context.Context, threshold float64) ([][2]string, error) {
-	db, err := s.db.Get()
-	if err != nil {
-		return nil, fmt.Errorf("near-dup pairs: %w", err)
-	}
-	rows, err := db.Query(ctx, `SELECT a.id, b.id
-		FROM memories a
-		JOIN memories b ON a.id < b.id
-		WHERE a.status = $1 AND b.status = $1
-		  AND a.type = b.type
-		  AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
-		  AND 1 - (a.embedding <=> b.embedding) >= $2`,
+	pairs, err := s.nearPairs(ctx, `SELECT DISTINCT LEAST(a.id, n.id), GREATEST(a.id, n.id)`,
 		StatusActive, threshold)
 	if err != nil {
 		return nil, fmt.Errorf("near-dup pairs: %w", err)
 	}
-	defer rows.Close()
-	var pairs [][2]string
-	for rows.Next() {
-		var p [2]string
-		if err := rows.Scan(&p[0], &p[1]); err != nil {
-			return nil, fmt.Errorf("near-dup pairs: %w", err)
-		}
-		pairs = append(pairs, p)
+	return pairs, nil
+}
+
+// nearDupNeighbors is how many nearest same-type rows each row checks
+// for near-duplicates (D-150). Groups larger than 11 still join up
+// through union-find as long as each member has its closest
+// duplicates within its own top 10.
+const nearDupNeighbors = 10
+
+// nearPairs runs the per-row k-NN self-join behind NearDupPairs and
+// RedundantPendingPairs (D-150): each row of the status probes the
+// HNSW index for its nearDupNeighbors same-type neighbors instead of
+// comparing against every row, so the cost grows with n log n, not
+// n². selectPair projects the pair from rows a and n.
+func (s *Store) nearPairs(ctx context.Context, selectPair string, status Status, threshold float64) ([][2]string, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, err
 	}
-	return pairs, rows.Err()
+	var pairs [][2]string
+	err = WithIterativeScan(ctx, db, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, selectPair+`
+			FROM memories a
+			CROSS JOIN LATERAL (
+				SELECT b.id, b.created_at, b.embedding <=> a.embedding AS dist
+				FROM memories b
+				WHERE b.status = $1 AND b.type = a.type
+				  AND b.embedding IS NOT NULL AND b.id <> a.id
+				ORDER BY b.embedding <=> a.embedding
+				LIMIT $3) n
+			WHERE a.status = $1 AND a.embedding IS NOT NULL
+			  AND 1 - n.dist >= $2
+			ORDER BY 1, 2`,
+			status, threshold, nearDupNeighbors)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p [2]string
+			if err := rows.Scan(&p[0], &p[1]); err != nil {
+				return err
+			}
+			pairs = append(pairs, p)
+		}
+		return rows.Err()
+	})
+	return pairs, err
 }
 
 // RedundantPendingPairs returns every pair of pending embedded
@@ -530,31 +585,15 @@ func (s *Store) NearDupPairs(ctx context.Context, threshold float64) ([][2]strin
 // confirmed knowledge yet, so the consolidator just rejects the newer
 // half of each pair outright.
 func (s *Store) RedundantPendingPairs(ctx context.Context, threshold float64) ([][2]string, error) {
-	db, err := s.db.Get()
-	if err != nil {
-		return nil, fmt.Errorf("redundant pending pairs: %w", err)
-	}
-	rows, err := db.Query(ctx, `SELECT a.id, b.id
-		FROM memories a
-		JOIN memories b ON a.created_at < b.created_at
-		WHERE a.status = $1 AND b.status = $1
-		  AND a.type = b.type
-		  AND a.embedding IS NOT NULL AND b.embedding IS NOT NULL
-		  AND 1 - (a.embedding <=> b.embedding) >= $2`,
+	// Equal created_at falls back to id order for "older".
+	pairs, err := s.nearPairs(ctx, `SELECT DISTINCT
+			CASE WHEN (a.created_at, a.id) < (n.created_at, n.id) THEN a.id ELSE n.id END,
+			CASE WHEN (a.created_at, a.id) < (n.created_at, n.id) THEN n.id ELSE a.id END`,
 		StatusPending, threshold)
 	if err != nil {
 		return nil, fmt.Errorf("redundant pending pairs: %w", err)
 	}
-	defer rows.Close()
-	var pairs [][2]string
-	for rows.Next() {
-		var p [2]string
-		if err := rows.Scan(&p[0], &p[1]); err != nil {
-			return nil, fmt.Errorf("redundant pending pairs: %w", err)
-		}
-		pairs = append(pairs, p)
-	}
-	return pairs, rows.Err()
+	return pairs, nil
 }
 
 // ApplyMerge inserts the consolidator's merged fact and supersedes

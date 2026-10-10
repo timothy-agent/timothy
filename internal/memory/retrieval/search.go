@@ -14,6 +14,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/SumonMSelim/timothy/internal/memory/store"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -36,14 +39,31 @@ func NewCandidate(id string, typ store.MemoryType, content string, lastConfirmed
 	return &Candidate{ID: id, Type: typ, Content: content, LastConfirmedAt: lastConfirmed, Confidence: 1, ranks: ranks}
 }
 
-// Searcher runs the three legs.
-type Searcher struct {
-	db  *pgpool.Pool
-	log *slog.Logger
+// Metrics observes each leg; either field may be nil (tests).
+type Metrics struct {
+	LegDuration *prometheus.HistogramVec // leg: vector|text|entity
+	LegErrors   *prometheus.CounterVec   // leg: vector|text|entity
 }
 
-func NewSearcher(db *pgpool.Pool, log *slog.Logger) *Searcher {
-	return &Searcher{db: db, log: log}
+// Searcher runs the three legs.
+type Searcher struct {
+	db      *pgpool.Pool
+	log     *slog.Logger
+	metrics Metrics
+}
+
+func NewSearcher(db *pgpool.Pool, log *slog.Logger, m Metrics) *Searcher {
+	return &Searcher{db: db, log: log, metrics: m}
+}
+
+// observe records one leg run's duration and outcome.
+func (s *Searcher) observe(leg string, start time.Time, err error) {
+	if s.metrics.LegDuration != nil {
+		s.metrics.LegDuration.WithLabelValues(leg).Observe(time.Since(start).Seconds())
+	}
+	if err != nil && s.metrics.LegErrors != nil {
+		s.metrics.LegErrors.WithLabelValues(leg).Inc()
+	}
 }
 
 // Search runs all legs in parallel and merges their hits into one
@@ -73,7 +93,9 @@ func (s *Searcher) Search(ctx context.Context, query string, embedding store.Vec
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			start := time.Now()
 			errs[i] = s.leg(ctx, l.name, l.sql, l.args, types, m)
+			s.observe(l.name, start, errs[i])
 		}()
 	}
 	wg.Wait()
@@ -183,33 +205,44 @@ func (s *Searcher) leg(ctx context.Context, name, sql string, args []any, types 
 		typeNames[i] = string(t)
 	}
 	params := append([]any{args[0], typeNames, store.DecayFloor}, args[1:]...)
-	rows, err := db.Query(ctx, sql, params...)
+	merge := func(rows pgx.Rows, err error) error {
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		rank := 0
+		for rows.Next() {
+			var c Candidate
+			var retrieved *time.Time
+			if err := rows.Scan(&c.ID, &c.Type, &c.Content, &c.LastConfirmedAt, &retrieved, &c.Confidence); err != nil {
+				return err
+			}
+			if retrieved != nil {
+				c.LastRetrievedAt = *retrieved
+			}
+			rank++
+			m.mu.Lock()
+			if existing, ok := m.into[c.ID]; ok {
+				existing.ranks[name] = rank
+			} else {
+				c.ranks = map[string]int{name: rank}
+				m.into[c.ID] = &c
+			}
+			m.mu.Unlock()
+		}
+		return rows.Err()
+	}
+	if name == "vector" {
+		err = store.WithIterativeScan(ctx, db, func(tx pgx.Tx) error {
+			return merge(tx.Query(ctx, sql, params...))
+		})
+	} else {
+		err = merge(db.Query(ctx, sql, params...))
+	}
 	if err != nil {
 		return fmt.Errorf("retrieval %s leg: %w", name, err)
 	}
-	defer rows.Close()
-
-	rank := 0
-	for rows.Next() {
-		var c Candidate
-		var retrieved *time.Time
-		if err := rows.Scan(&c.ID, &c.Type, &c.Content, &c.LastConfirmedAt, &retrieved, &c.Confidence); err != nil {
-			return fmt.Errorf("retrieval %s leg: %w", name, err)
-		}
-		if retrieved != nil {
-			c.LastRetrievedAt = *retrieved
-		}
-		rank++
-		m.mu.Lock()
-		if existing, ok := m.into[c.ID]; ok {
-			existing.ranks[name] = rank
-		} else {
-			c.ranks = map[string]int{name: rank}
-			m.into[c.ID] = &c
-		}
-		m.mu.Unlock()
-	}
-	return rows.Err()
+	return nil
 }
 
 // MarkRetrieved stamps last_retrieved_at and bumps retrieval_hits on

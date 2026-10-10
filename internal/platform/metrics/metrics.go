@@ -71,6 +71,16 @@ func (m *Metrics) NewCounterVec(name, help string, labels ...string) *prometheus
 	return c
 }
 
+// NewHistogramVec registers a service-specific labeled histogram on
+// this registry, with the default buckets.
+func (m *Metrics) NewHistogramVec(name, help string, labels ...string) *prometheus.HistogramVec {
+	h := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "timothy", Name: name, Help: help, Buckets: prometheus.DefBuckets,
+	}, labels)
+	m.registry.MustRegister(h)
+	return h
+}
+
 // Handler serves the registry in Prometheus exposition format.
 func (m *Metrics) Handler() http.Handler {
 	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})

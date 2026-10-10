@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/SumonMSelim/timothy/internal/memory/extract"
 	"github.com/SumonMSelim/timothy/internal/memory/retrieval"
 	"github.com/SumonMSelim/timothy/internal/memory/store"
@@ -44,14 +46,15 @@ type API struct {
 	consolidate ConsolidateRunner
 	kb          KBManager
 	kbDocs      DocumentStatusSetter
+	emptyPacks  prometheus.Counter // nil in tests
 	log         *slog.Logger
 }
 
 // Register mounts the routes. kb/kbDocs nil leaves /ingest-document and
 // /kb-search unmounted (WORKSPACES-style nil-gate, same as every other
-// optional surface).
-func Register(srv *httpserver.Server, ext Extractor, search Searcher, embed Embedder, st Manager, consolidate ConsolidateRunner, kb KBManager, kbDocs DocumentStatusSetter, log *slog.Logger) {
-	a := &API{ext: ext, search: search, embed: embed, store: st, consolidate: consolidate, kb: kb, kbDocs: kbDocs, log: log}
+// optional surface). emptyPacks counts retrievals that packed nothing.
+func Register(srv *httpserver.Server, ext Extractor, search Searcher, embed Embedder, st Manager, consolidate ConsolidateRunner, kb KBManager, kbDocs DocumentStatusSetter, emptyPacks prometheus.Counter, log *slog.Logger) {
+	a := &API{ext: ext, search: search, embed: embed, store: st, consolidate: consolidate, kb: kb, kbDocs: kbDocs, emptyPacks: emptyPacks, log: log}
 	srv.Handle("POST /v1/extract", http.HandlerFunc(a.handleExtract))
 	srv.Handle("POST /v1/retrieve", http.HandlerFunc(a.handleRetrieve))
 	srv.Handle("GET /v1/memories", http.HandlerFunc(a.handleList))
@@ -155,6 +158,9 @@ func (a *API) handleRetrieve(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "retrieval_failed", err.Error())
 		return
+	}
+	if len(packed) == 0 && a.emptyPacks != nil {
+		a.emptyPacks.Inc()
 	}
 
 	out := make([]retrievedMemory, len(packed))
