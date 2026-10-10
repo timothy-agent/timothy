@@ -541,7 +541,7 @@ export function AssistantMessage({
 
       {onDecision &&
         msg.permissions.map((p) => (
-          <ApprovalCard key={p.id} id={`approval-${p.id}`} request={p} onDecision={onDecision} className="mt-4" />
+          <ApprovalCard key={p.id} id={`approval-${p.id}`} request={p} onDecision={onDecision} className="mt-4 w-full min-w-0" />
         ))}
 
       <div
