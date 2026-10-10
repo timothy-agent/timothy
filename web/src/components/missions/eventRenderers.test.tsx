@@ -479,7 +479,7 @@ describe('mission.result_complete rendering', () => {
     )
     const row = screen.getByText(/Result complete/)
     expect(row).toHaveClass('text-good')
-    expect(row).toHaveTextContent('delivered to 2')
+    expect(row).toHaveTextContent('delivered to 2 destinations')
     expect(row).toHaveTextContent('1 artifact copied')
   })
 
@@ -508,7 +508,7 @@ describe('mission.result_complete rendering', () => {
   it('keeps count wording for older events without names', () => {
     render(<div>{renderEvent(event({ delivered: 2, artifacts_copied: 2 }, 'mission.result_complete'))}</div>)
     expect(screen.getByText(/Result complete/)).toHaveTextContent(
-      'Result complete: delivered to 2, 2 artifacts copied',
+      'Result complete: delivered to 2 destinations, 2 artifacts copied',
     )
   })
 

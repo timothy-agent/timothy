@@ -285,7 +285,7 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
     const parts: string[] = []
     const names = Array.isArray(delivered_to) ? delivered_to.filter((n): n is string => typeof n === 'string' && n !== '') : []
     if (names.length > 0) parts.push(`delivered to ${names.join(', ')}`)
-    else if (delivered) parts.push(`delivered to ${String(delivered)}`)
+    else if (delivered) parts.push(`delivered to ${String(delivered)} ${Number(delivered) === 1 ? 'destination' : 'destinations'}`)
     if (artifacts_copied) {
       parts.push(`${String(artifacts_copied)} ${Number(artifacts_copied) === 1 ? 'artifact' : 'artifacts'} copied`)
     }
