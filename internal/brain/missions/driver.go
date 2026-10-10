@@ -204,6 +204,9 @@ type Driver struct {
 	// nil-safe: unset skips extraction entirely, same as chat's own
 	// MemoryExtract field.
 	memory MemoryExtract
+	// memoryRoute returns the route the session's digest extraction must
+	// ride ("" for the side-call default; see SetMemoryRoute).
+	memoryRoute func(ctx context.Context, sessionID string) string
 
 	// nameMission wires the display-name generator used to backfill
 	// missions that reached a terminal phase without a name (see
@@ -657,6 +660,12 @@ func reviewTokensExceeded(used, ceiling int64) bool {
 // nothing into memory.
 func (d *Driver) SetMemoryExtract(fn MemoryExtract) {
 	d.memory = fn
+}
+
+// SetMemoryRoute wires the sensitive-route pin for mission digest
+// extraction. Optional: nil extracts on the side-call default.
+func (d *Driver) SetMemoryRoute(fn func(ctx context.Context, sessionID string) string) {
+	d.memoryRoute = fn
 }
 
 // SetNameMission installs the display-name generator: ensureProvisioned

@@ -204,6 +204,14 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # The brain image copies build/selfdocs (manifest pages only here).
+      - name: Self-docs bundle
+        if: matrix.service == 'brain' && needs.changes.outputs.go == 'true'
+        run: |
+          mkdir -p build
+          docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.26.9 \
+            go run ./cmd/manifest -out build/selfdocs-manifest -routes web/routes.generated.json -skills skills -version ci
+          ./scripts/selfdocs-bundle.sh --docs "" --manifest build/selfdocs-manifest --out build/selfdocs --version ci
       - name: Build image
         if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
         run: |

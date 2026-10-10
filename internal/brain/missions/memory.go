@@ -100,7 +100,13 @@ func (d *Driver) ExtractMemory(ctx context.Context, id string, terminal Phase, f
 	if err := d.store.AppendEvent(ctx, m.ID, memoryExtractedKind, map[string]any{"terminal": string(terminal)}); err != nil {
 		return fmt.Errorf("memory extraction: record event: %w", err)
 	}
-	go d.memory(context.Background(), m.SessionID, 0, digest, "") //nolint:gosec // G118: deliberate — the mission is already terminal, extraction must outlive whatever request/ctx observed that transition
+	// A mission session that ran a sensitive tool pins the digest
+	// extraction to the sensitive route, as chat does for its turns.
+	route := ""
+	if d.memoryRoute != nil {
+		route = d.memoryRoute(ctx, m.SessionID)
+	}
+	go d.memory(context.Background(), m.SessionID, 0, digest, route) //nolint:gosec // G118: deliberate — the mission is already terminal, extraction must outlive whatever request/ctx observed that transition
 	return nil
 }
 

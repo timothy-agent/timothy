@@ -143,6 +143,9 @@ func exemptTools() map[string]bool {
 		// read_note reads the running automation's own notes, the
 		// automation id bound in Go at construction, never model input.
 		"read_note": true,
+		// timothy_help reads the bundled docs collection, bound in
+		// Go, and this instance's configuration; it writes nothing.
+		"timothy_help": true,
 		// A connector's deferred-tool index entry point is exempt
 		// too, but its name is only known once a connector is
 		// built: see SetLoadTools.
