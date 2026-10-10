@@ -22,8 +22,8 @@ git init -q "${work}/repo"
 git -C "${work}/repo" -c user.name=t -c user.email=t@example.com commit -q --allow-empty -m init
 git -C "${work}/repo" tag v1.0.0-alpha.1
 
-check "existing tag" "$(/bin/sh "${SCRIPT}" "${work}/repo" 1.0.0-alpha.1)" "v1.0.0-alpha.1"
-check "new version uses main" "$(/bin/sh "${SCRIPT}" "${work}/repo" 1.0.0-alpha.2)" "main"
+check "existing tag" "$("${SCRIPT}" "${work}/repo" 1.0.0-alpha.1)" "v1.0.0-alpha.1"
+check "new version uses main" "$("${SCRIPT}" "${work}/repo" 1.0.0-alpha.2)" "main"
 
 if [ "${failures}" -ne 0 ]; then
   echo "${failures} failure(s)" >&2
