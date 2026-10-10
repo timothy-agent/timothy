@@ -658,3 +658,94 @@ func TestTurnMemoryEventProjectsAsOwnMessage(t *testing.T) {
 		}
 	}
 }
+
+// controlOf mirrors Store.TranscriptControl: only the control kinds,
+// payloads kept only where the projection decodes them.
+func controlOf(events []Event) []Event {
+	var out []Event
+	for _, e := range events {
+		switch e.Kind {
+		case KindCompactionApplied, KindPermissionResolved:
+			out = append(out, Event{SessionID: e.SessionID, Seq: e.Seq, Kind: e.Kind, Payload: e.Payload})
+		case KindPendingState, KindAssistantTurn:
+			out = append(out, Event{SessionID: e.SessionID, Seq: e.Seq, Kind: e.Kind})
+		}
+	}
+	return out
+}
+
+// TestUITranscriptPageMatchesFull pins issue #1113's contract: every
+// seq window projects exactly the items the full projection shows for
+// those seqs, so a client stitching pages renders a full load.
+func TestUITranscriptPageMatchesFull(t *testing.T) {
+	t.Parallel()
+	events := []Event{
+		ev(t, 1, KindSessionStarted, SessionStarted{Title: "t"}),
+		ev(t, 2, KindUserMessage, UserMessage{
+			Text:      "look",
+			Images:    []ImageRef{{ID: "img1", Mime: "image/png"}},
+			Documents: []DocumentRef{{ID: "doc1", Mime: "application/pdf", Name: "a.pdf", Markdown: "# body"}},
+		}),
+		ev(t, 3, KindPermissionRequest, PermissionRequest{ID: "p1", Tool: "shell"}),
+		ev(t, 4, KindPendingState, PendingState{Partial: "superseded"}),
+		ev(t, 5, KindPermissionResolved, PermissionResolved{ID: "p1", Decision: "once"}),
+		ev(t, 6, KindToolExecution, ToolExecution{CallID: "c1", Name: "shell", Status: "ok"}),
+		assistant(t, 7, "done", nil),
+		ev(t, 8, KindCompactionApplied, CompactionApplied{Summary: "s", ReplacesThroughSeq: 3}),
+		user(t, 9, "again"),
+		ev(t, 10, KindPermissionRequest, PermissionRequest{ID: "p2", Tool: "write"}),
+		ev(t, 11, KindPendingState, PendingState{Partial: "live"}),
+	}
+	full, err := UITranscript(events)
+	if err != nil {
+		t.Fatalf("UITranscript: %v", err)
+	}
+	control := controlOf(events)
+	for lo := 0; lo < len(events); lo++ {
+		for hi := lo + 1; hi <= len(events); hi++ {
+			window := events[lo:hi]
+			page, err := UITranscriptPage(window, control)
+			if err != nil {
+				t.Fatalf("UITranscriptPage [%d,%d): %v", lo, hi, err)
+			}
+			var want []TranscriptItem
+			for _, it := range full {
+				if it.Seq >= window[0].Seq && it.Seq <= window[len(window)-1].Seq {
+					want = append(want, it)
+				}
+			}
+			if !reflect.DeepEqual(page.Items, want) {
+				t.Fatalf("window [%d,%d): items = %+v, want %+v", lo, hi, page.Items, want)
+			}
+			if page.LivePendingSeq != 11 {
+				t.Fatalf("window [%d,%d): live pending = %d, want 11", lo, hi, page.LivePendingSeq)
+			}
+			resolvedInWindow := lo <= 4 && hi > 4
+			if got := strings.Join(page.ResolvedPermissions, ","); resolvedInWindow != (got == "p1") {
+				t.Fatalf("window [%d,%d): resolved = %q", lo, hi, got)
+			}
+		}
+	}
+	// Attachment refs and the tool item survive a window that starts
+	// mid-log.
+	page, err := UITranscriptPage(events[1:7], control)
+	if err != nil {
+		t.Fatalf("UITranscriptPage: %v", err)
+	}
+	if len(page.Items) != 3 || page.Items[0].Images[0].ID != "img1" || page.Items[0].Documents[0].Name != "a.pdf" ||
+		page.Items[1].Tool == nil || page.Items[2].Kind != "assistant" {
+		t.Fatalf("items = %+v", page.Items)
+	}
+}
+
+func TestUITranscriptPageNoLivePending(t *testing.T) {
+	t.Parallel()
+	events := []Event{user(t, 1, "hi"), ev(t, 2, KindPendingState, PendingState{Partial: "x"}), assistant(t, 3, "ok", nil)}
+	page, err := UITranscriptPage(events[2:], controlOf(events))
+	if err != nil {
+		t.Fatalf("UITranscriptPage: %v", err)
+	}
+	if page.LivePendingSeq != -1 || len(page.Items) != 1 {
+		t.Fatalf("page = %+v", page)
+	}
+}
