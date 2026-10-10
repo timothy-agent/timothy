@@ -213,6 +213,17 @@ export interface Transcript {
   // guess. Lets a tab that opens a session mid-turn know to attach
   // streamLive instead of rendering the last event as stale/interrupted.
   turn_active: boolean
+  // Paged responses only (limit/before_seq/after_seq given): has_more
+  // reports events past the page in its direction; first_seq/last_seq
+  // are the page's event cursors (absent when empty, and event seqs,
+  // not item seqs: some events render nothing). live_pending_seq and
+  // resolved_permissions let a client drop held interrupted and
+  // permission items that later events now hide.
+  has_more?: boolean
+  first_seq?: number
+  last_seq?: number
+  live_pending_seq?: number
+  resolved_permissions?: string[]
 }
 
 // One unresolved permission ask, from GET /v1/permissions/pending:
@@ -618,7 +629,7 @@ export interface AvailableModel {
 }
 
 // AdminAgent is one row of the agent registry (D-034): who serves a
-// session. Empty skills/tools = everything allowed; empty route = the
+// session. Empty skills/tools = none allowed; empty route = the
 // default chain.
 export interface AdminAgent {
   id: string
@@ -677,6 +688,10 @@ export interface KbCollection {
   // retrieval_weight scales this collection's score at retrieval time
   // (D-085): 1.0 is neutral, bounded to (0, 2].
   retrieval_weight: number
+  // system collections ship with Timothy and are read-only;
+  // bundle_version names the version their content came from.
+  system?: boolean
+  bundle_version?: string
   created_at: string
   updated_at: string
 }
@@ -688,7 +703,7 @@ export interface KbDocument {
   id: string
   collection_id: string
   title: string
-  source_type: 'file' | 'notion' | 'wiki' | 'url' | 'clip' | 'mission'
+  source_type: 'file' | 'notion' | 'wiki' | 'url' | 'clip' | 'mission' | 'selfdocs'
   source_ref: string
   // provenance weights retrieval ranking (curated > mission > web): see
   // internal/memory/store/kb.go KBSearch.
@@ -1582,6 +1597,8 @@ export interface Readiness {
   kb_collections: number
   automations: number
   automations_enabled: boolean
+  // MISSION_MODEL_FLOOR substrings; a matching model cannot run missions.
+  mission_model_floor?: string[] | null
 }
 
 // ReadinessKey is a boolean readiness key a SetupGate can require.

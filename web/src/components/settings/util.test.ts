@@ -8,7 +8,7 @@ describe('probeFailureText', () => {
         latency_ms: 1694,
         detail: 'http 401: {"error":{"code":"401","message":"token expired or incorrect"}}',
       }),
-    ).toBe('Failed after 1694 ms: Provider rejected the API key — token expired or incorrect')
+    ).toBe('Failed after 1694 ms: Provider rejected the API key: token expired or incorrect')
   })
 })
 

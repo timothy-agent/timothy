@@ -23,6 +23,9 @@ var ErrNotFound = errors.New("not found")
 // ErrInUse reports an operation blocked by a dependent row.
 var ErrInUse = errors.New("in use")
 
+// ErrSystem reports a write to a collection brain manages itself.
+var ErrSystem = errors.New("collection is bundled with Timothy and read-only")
+
 // Collection is one named group of documents agents can search.
 type Collection struct {
 	ID          string    `json:"id"`
@@ -33,9 +36,13 @@ type Collection struct {
 	FailedCount int       `json:"failed_count"`
 	// RetrievalWeight scales this collection's score at retrieval time
 	// (D-085, issue #443): 1.0 is neutral, bounded to (0, 2].
-	RetrievalWeight float64   `json:"retrieval_weight"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	RetrievalWeight float64 `json:"retrieval_weight"`
+	// System collections (issue #1126) are written only by brain;
+	// BundleVersion names the Timothy version their content ships with.
+	System        bool      `json:"system"`
+	BundleVersion string    `json:"bundle_version,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // Document is one ingested file within a collection. Markdown is
@@ -79,14 +86,16 @@ func New(db *pgpool.Pool) *Store {
 	return &Store{db: db}
 }
 
-const collectionColumns = `c.id, c.name, c.description, c.retrieval_weight, c.created_at, c.updated_at,
+const collectionColumns = `c.id, c.name, c.description, c.retrieval_weight, c.system,
+	coalesce((SELECT b.version FROM kb_system_bundles b WHERE c.system AND b.name = c.name), ''),
+	c.created_at, c.updated_at,
 	(SELECT count(*) FROM kb_documents d WHERE d.collection_id = c.id),
 	(SELECT coalesce(sum(d.chunk_count), 0) FROM kb_documents d WHERE d.collection_id = c.id),
 	(SELECT count(*) FROM kb_documents d WHERE d.collection_id = c.id AND d.status = 'failed')`
 
 func scanCollection(row pgx.Row) (Collection, error) {
 	var c Collection
-	err := row.Scan(&c.ID, &c.Name, &c.Description, &c.RetrievalWeight, &c.CreatedAt, &c.UpdatedAt, &c.DocCount, &c.ChunkCount, &c.FailedCount)
+	err := row.Scan(&c.ID, &c.Name, &c.Description, &c.RetrievalWeight, &c.System, &c.BundleVersion, &c.CreatedAt, &c.UpdatedAt, &c.DocCount, &c.ChunkCount, &c.FailedCount)
 	return c, err
 }
 
@@ -155,6 +164,9 @@ func (s *Store) CreateCollection(ctx context.Context, name, description string, 
 // so a bare rename never clobbers the description the classifier
 // matches against, or the retrieval weight (D-085, issue #443).
 func (s *Store) UpdateCollection(ctx context.Context, id string, name, description *string, retrievalWeight *float64) error {
+	if err := s.Writable(ctx, id); err != nil {
+		return err
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("kb collections update: %w", err)
@@ -175,6 +187,9 @@ func (s *Store) UpdateCollection(ctx context.Context, id string, name, descripti
 // DeleteCollection removes a collection; ON DELETE CASCADE takes its
 // documents and chunks with it.
 func (s *Store) DeleteCollection(ctx context.Context, id string) error {
+	if err := s.Writable(ctx, id); err != nil {
+		return err
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("kb collections delete: %w", err)
@@ -280,6 +295,9 @@ func (s *Store) GetDocument(ctx context.Context, id string) (Document, error) {
 // is 'file' or 'url'; sourceRef names the uploaded filename or the
 // fetched URL; provenance is 'curated', 'mission', or 'web' (D-080).
 func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceType, sourceRef, provenance, markdown string, bytes int64) (string, error) {
+	if err := s.Writable(ctx, collectionID); err != nil {
+		return "", err
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return "", fmt.Errorf("kb documents create: %w", err)
@@ -309,7 +327,7 @@ func (s *Store) SweepStale(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("kb sweep stale: %w", err)
 	}
 	tag, err := db.Exec(ctx, `UPDATE kb_documents
-		SET status = 'failed', error = 'ingestion interrupted by a restart — re-ingest to retry', updated_at = now()
+		SET status = 'failed', error = 'ingestion interrupted by a restart. Re-ingest to retry', updated_at = now()
 		WHERE status IN ('pending', 'ingesting')
 		  AND updated_at < now() - interval '30 seconds'`)
 	if err != nil {
@@ -427,6 +445,14 @@ func (s *Store) FindDocumentBySource(ctx context.Context, sourceType, sourceRef 
 // a fresh ingest, and any error is cleared. collectionID moves the
 // document only when non-empty, leaving it in place otherwise.
 func (s *Store) ReplaceDocumentContent(ctx context.Context, id, title, markdown string, bytes int64, collectionID string) error {
+	if err := s.DocumentWritable(ctx, id); err != nil {
+		return err
+	}
+	if collectionID != "" {
+		if err := s.Writable(ctx, collectionID); err != nil {
+			return err
+		}
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("kb document %s replace: %w", id, err)
@@ -470,6 +496,9 @@ func (s *Store) UpdateMarkdown(ctx context.Context, id, markdown string) error {
 // DeleteDocument removes a document; ON DELETE CASCADE takes its
 // chunks with it.
 func (s *Store) DeleteDocument(ctx context.Context, id string) error {
+	if err := s.DocumentWritable(ctx, id); err != nil {
+		return err
+	}
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("kb documents delete: %w", err)

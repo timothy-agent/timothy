@@ -1,4 +1,4 @@
-import { BookOpen, ListChecks, RotateCcw, Sparkles, type LucideIcon } from 'lucide-react'
+import { BookOpen, ListChecks, MessageCircleQuestion, RotateCcw, Sparkles, type LucideIcon } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { errText } from '../lib/errors'
@@ -77,6 +77,12 @@ export function useHelpActions(): HelpAction[] {
           fail('Could not restart the welcome'),
         )
       },
+    },
+    {
+      id: 'ask',
+      label: 'Ask Timothy about this page',
+      icon: MessageCircleQuestion,
+      run: () => navigate('/chat', { state: { draft: `How do I use this page: ${pathname}?` } }),
     },
     { id: 'docs', label: 'Docs', icon: BookOpen, href: DOCS_URL },
   ]

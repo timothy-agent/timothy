@@ -11,10 +11,10 @@ import { consequenceLine } from '../../lib/chatUi'
 // call finishes executing, which for a long-running command can be
 // minutes — the card must not look unanswered for that whole span).
 const answeredCopy: Record<'once' | 'session' | 'deny' | 'unknown', string> = {
-  once: 'Approved — command running…',
-  session: 'Approved — command running…',
-  deny: 'Denied — returning to worker…',
-  unknown: 'Answered — waiting for the worker to continue…',
+  once: 'Approved. Command running…',
+  session: 'Approved. Command running…',
+  deny: 'Denied. Returning to worker…',
+  unknown: 'Answered. Waiting for the worker to continue…',
 }
 
 function parseArgs(raw?: string): unknown {

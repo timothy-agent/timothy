@@ -1,3 +1,4 @@
+import { Loader2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -26,6 +27,7 @@ import type {
   Reference,
 } from '../../api/types'
 import { useAgents, useRoutes } from '../AgentPicker'
+import { useSlow } from '../../hooks/use-slow'
 import { CURRENCIES } from '../../lib/currencies'
 import { extractRepoMentions, matchRepo } from '../../lib/goalRepo'
 import { Badge } from '../ui/badge'
@@ -340,6 +342,7 @@ export function MissionForm({
   // route it resolves to (defaultRouteLabel).
   const [defaultHarnessName, setDefaultHarnessName] = useState('')
   const [busy, setBusy] = useState(false)
+  const preparing = useSlow(busy)
 
   // Repository source: 'none' self-initializes an empty repo (the
   // existing coding-mission default); 'github' clones an existing repo
@@ -1444,9 +1447,11 @@ export function MissionForm({
           <Button
             data-tour="missions.form.create"
             disabled={!canSubmit || busy || createDisabled}
+            aria-busy={busy}
             onClick={() => void submit()}
           >
-            Create mission
+            {preparing && <Loader2 className="size-4 animate-spin motion-keep" aria-hidden />}
+            {preparing ? 'Preparing mission…' : 'Create mission'}
           </Button>
         </div>
         <button

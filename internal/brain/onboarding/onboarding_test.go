@@ -38,6 +38,7 @@ func fullProbes() Probes {
 		CountKBCollections:  func(context.Context) (int, error) { return 3, nil },
 		CountAutomations:    func(context.Context) (int, error) { return 4, nil },
 		AutomationsEnabled:  func(context.Context) bool { return true },
+		MissionModelFloor:   []string{"qwen2.5:7b", "nova"},
 	}
 }
 
@@ -45,6 +46,7 @@ var fullReadiness = Readiness{
 	GatewayReady: true, ChatRoute: true, SummarizeRoute: true, EmbeddingRoute: true, VisionRoute: true,
 	Sandbox: true, FirstChat: true, FirstMission: true,
 	Connectors: 2, Channels: 1, KBCollections: 3, Automations: 4, AutomationsEnabled: true,
+	MissionModelFloor: []string{"qwen2.5:7b", "nova"},
 }
 
 func TestCompute(t *testing.T) {
@@ -93,6 +95,7 @@ func TestCompute(t *testing.T) {
 			p.CountChannels = nil
 		}, func(r *Readiness) { r.Connectors, r.Channels = 0, 0 }},
 		{"automations off", func(p *Probes) { p.AutomationsEnabled = func(context.Context) bool { return false } }, func(r *Readiness) { r.AutomationsEnabled = false }},
+		{"no mission floor", func(p *Probes) { p.MissionModelFloor = nil }, func(r *Readiness) { r.MissionModelFloor = nil }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -100,7 +103,7 @@ func TestCompute(t *testing.T) {
 			tc.mutate(&p)
 			want := fullReadiness
 			tc.want(&want)
-			if got := Compute(t.Context(), p, discard()); got != want {
+			if got := Compute(t.Context(), p, discard()); !reflect.DeepEqual(got, want) {
 				t.Fatalf("Compute =\n%+v\nwant\n%+v", got, want)
 			}
 		})

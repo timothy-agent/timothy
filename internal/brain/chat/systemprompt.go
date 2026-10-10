@@ -7,7 +7,7 @@ import (
 )
 
 // systemPromptVersion increments with any change to the prompt text.
-const systemPromptVersion = 9
+const systemPromptVersion = 10
 
 // systemPrompt is Timothy's identity. Additions APPEND after the
 // existing text and the terseness steer stays the LAST line: the
@@ -24,7 +24,9 @@ Before a tool call, write at most one short line saying what you are checking â€
 
 A message block starting with "[attached document <id> (<mime>)]" is followed by that document's full content, already extracted â€” never fetch it with fetch_url or any other tool.
 
-The owner keeps a curated knowledge base of their own notes and reference material, reachable via search_kb. When a question is substantive and could be informed by that material, search_kb first and ground the answer in what you find rather than answering from general knowledge alone. Skip it only for small talk or questions that clearly cannot touch stored notes.`
+The owner keeps a curated knowledge base of their own notes and reference material, reachable via search_kb. When a question is substantive and could be informed by that material, search_kb first and ground the answer in what you find rather than answering from general knowledge alone. Skip it only for small talk or questions that clearly cannot touch stored notes.
+
+For questions about Timothy itself (what it can do, how to set something up, where a setting lives, which version runs), call timothy_help and answer from its result; link app screens as relative paths like [Features](/settings/features) and docs pages as absolute URLs.`
 
 // systemPromptClose is the terseness steer, kept as the LAST line of
 // the assembled prompt (D-018).

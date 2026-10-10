@@ -114,6 +114,9 @@ type Request struct {
 	// neither stored nor counted as a confirmation; a correction of one
 	// still goes through.
 	Recalled []string `json:"recalled,omitempty"`
+	// Actor is the provenance stamped on inserted rows; empty means
+	// "agent". In-process callers only (D-143): never decoded from JSON.
+	Actor string `json:"-"`
 }
 
 // Extractor runs the pipeline.
@@ -271,7 +274,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 		id, err := e.store.Insert(ctx, store.Memory{
 			Type: store.MemoryType(f.Type), Content: f.Content, Embedding: emb,
 			EntityRefs: refs, SourceSession: req.SessionID, SourceSeq: req.SourceSeq,
-			Confidence: f.Confidence, Supersedes: supersedes,
+			Actor: req.Actor, Confidence: f.Confidence, Supersedes: supersedes,
 		})
 		if err != nil {
 			return ids, fmt.Errorf("extract: insert: %w", err)

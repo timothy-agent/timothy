@@ -198,7 +198,7 @@ describe('executor.result rendering', () => {
     )
     const result = event(resultPayload(null), 'executor.result', 2)
     render(<div>{renderEvent(result, [spawn, result])}</div>)
-    expect(screen.getByText(/subscription — cost untracked/)).toBeInTheDocument()
+    expect(screen.getByText(/subscription: cost untracked/)).toBeInTheDocument()
   })
 
   it('shows subscription untracked cost when cost_usd is null and the spawn was oauth_token auth', () => {
@@ -209,7 +209,7 @@ describe('executor.result rendering', () => {
     )
     const result = event(resultPayload(null), 'executor.result', 2)
     render(<div>{renderEvent(result, [spawn, result])}</div>)
-    expect(screen.getByText(/subscription — cost untracked/)).toBeInTheDocument()
+    expect(screen.getByText(/subscription: cost untracked/)).toBeInTheDocument()
   })
 
   it('shows cost unreported when cost_usd is null and auth was not subscription', () => {

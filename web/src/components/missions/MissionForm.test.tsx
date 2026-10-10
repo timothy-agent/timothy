@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminAgent, AdminConnector, AdminRoute, GitHubRepo, Mission } from '../../api/types'
@@ -439,14 +439,19 @@ describe('MissionForm: # references', () => {
     )
     renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
 
-    const countChips = () =>
-      screen.getAllByRole('button', { name: /^Remove mission\d reference$/ }).length
+    // Label query, not role: role queries are slow under full-suite load.
+    const countChips = () => screen.queryAllByLabelText(/^Remove mission\d reference$/).length
 
     const goal = screen.getByLabelText('Goal') as HTMLTextAreaElement
     for (let i = 0; i < 8; i++) {
       fireEvent.change(goal, { target: { value: `#mission${i}` } })
-      fireEvent.click(await screen.findByText(`mission${i}`))
-      await waitFor(() => expect(countChips()).toBe(i + 1))
+      fireEvent.click(
+        await screen.findByText(`mission${i}`, { selector: 'button' }, { timeout: 3000 }),
+      )
+      expect(countChips()).toBe(i + 1)
+      // pick restores the caret in a rAF; let it land before the next
+      // change, or it moves the caret off the new #token and the pick no-ops.
+      await new Promise((r) => requestAnimationFrame(r))
     }
 
     fireEvent.change(goal, { target: { value: '#mission8' } })
@@ -454,7 +459,7 @@ describe('MissionForm: # references', () => {
     expect(screen.queryByText('Missions')).toBeNull()
     expect(screen.queryByText('mission8', { selector: 'button' })).toBeNull()
     expect(countChips()).toBe(8)
-  })
+  }, 15000)
 })
 
 const destinations: Destination[] = [
@@ -783,6 +788,32 @@ describe('MissionForm: kind chip', () => {
     // Locked: the further edit above must not trigger a reclassify.
     expect(classifyMission).not.toHaveBeenCalled()
     expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
+  })
+})
+
+describe('MissionForm: slow create (issue #1081)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows a preparing state once create takes longer than 2 seconds', async () => {
+    vi.mocked(createMission).mockReturnValue(new Promise(() => {}))
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Research something new' } })
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await act(() => vi.advanceTimersByTimeAsync(1999))
+    expect(screen.getByRole('button', { name: 'Create mission' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'Preparing mission…' })).not.toBeInTheDocument()
+
+    await act(() => vi.advanceTimersByTimeAsync(1))
+    expect(screen.getByRole('button', { name: 'Preparing mission…' })).toBeDisabled()
   })
 })
 

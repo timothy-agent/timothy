@@ -101,10 +101,11 @@ type provisioner struct {
 	resolvePRState PRStateResolver
 
 	// nameMission generates the display name (Driver.SetNameMission).
-	// ensureProvisioned calls it before cutting the branch so the slug
-	// is the title's, not the goal's (issue #494). nil-safe: unset
-	// leaves the mission unnamed here and the branch slugged from the
-	// goal; runResult's backfill still names it later.
+	// ensureProvisioned calls it before cutting a branch so the slug
+	// is the title's, not the goal's (issue #494); a mission with no
+	// branch skips it (issue #1081). nil-safe: unset leaves the
+	// mission unnamed here and the branch slugged from the goal;
+	// runResult's backfill still names it later.
 	nameMission func(context.Context, string) string
 
 	// sandboxExec runs the toolchain install (D-126) in the mission's
@@ -118,6 +119,10 @@ const toolchainInstallTimeout = 10 * time.Minute
 
 // toolchainErrCap bounds the install output kept on a failure event.
 const toolchainErrCap = 2000
+
+// nameBeforeBranchTimeout bounds the naming call create waits on before
+// cutting a branch (issue #1081). A var so tests can shrink it.
+var nameBeforeBranchTimeout = 5 * time.Second
 
 // ensureProvisioned gives a mission everything Create used to set up
 // inline — a hidden session, its standing grants, and a workspace —
@@ -138,13 +143,16 @@ const toolchainErrCap = 2000
 // it has none yet, so Provision can slug the branch from it (issue
 // #494). Synchronous on purpose: the branch is cut once and never
 // renamed, so this is the only moment the title can still shape it.
-// nameMission carries its own short timeout; an empty result just
-// leaves the goal as the slug source, same as before.
+// Bounded by nameBeforeBranchTimeout (issue #1081); an empty result
+// leaves the goal as the slug source and Driver.Create names the
+// mission in the background.
 func (p *provisioner) nameBeforeBranch(ctx context.Context, m Mission) Mission {
 	if m.Name != "" || p.nameMission == nil {
 		return m
 	}
-	name := p.nameMission(ctx, m.Goal)
+	nctx, cancel := context.WithTimeout(ctx, nameBeforeBranchTimeout)
+	name := p.nameMission(nctx, m.Goal)
+	cancel()
 	if name == "" {
 		p.log.Warn("driver: name generation returned empty before provisioning; branch slug falls back to the goal", "mission_id", m.ID)
 		return m
@@ -231,7 +239,9 @@ func (p *provisioner) ensureProvisionedLocked(ctx context.Context, m Mission) (M
 		}
 		branchPattern := p.githubBranchPattern(ctx, m)
 		baseRef := p.followUpBaseRef(ctx, m)
-		m = p.nameBeforeBranch(ctx, m)
+		if missionPolicyFor(m).needsWorktree {
+			m = p.nameBeforeBranch(ctx, m)
+		}
 		workspace, worktree, branch, baseCommit, baseUsed, err := p.workspace.Provision(ctx, m.ID, m.Goal, m.Name, m.Kind, repoURL, p.cloneAuth(m, repoURL, token), connIdentity, branchPattern, baseRef)
 		if err != nil {
 			return m, fmt.Errorf("provision: %w", err)

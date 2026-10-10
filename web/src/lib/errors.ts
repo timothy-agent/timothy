@@ -1,5 +1,5 @@
 export const timothyAuthErrorMessage =
-  "Timothy's API token is missing or invalid. Paste TIMOTHY_API_TOKEN from deploy/.env — this is not an LLM provider key."
+  "Timothy's API token is missing or invalid. Paste TIMOTHY_API_TOKEN from deploy/.env. This is not an LLM provider key."
 
 // Brain's own auth failures: status 401, code unauthorized /
 // auth_not_configured, or the exact message the API returns. Match
@@ -87,7 +87,7 @@ export function humanizeProbeDetail(detail: string): string {
     msg = rest
   }
   const label = httpStatusLabel(status)
-  if (label && msg) return `${label} — ${msg}`
+  if (label && msg) return `${label}: ${msg}`
   if (msg) return msg
   if (label) return label
   return detail

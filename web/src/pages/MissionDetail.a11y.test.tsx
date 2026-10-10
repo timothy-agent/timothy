@@ -12,6 +12,7 @@ vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn(() => vi.fn()) }))
 vi.mock('../api/client', () => ({
   getMission: vi.fn(),
   missionEvents: vi.fn(),
+  missionEventsPage: vi.fn().mockResolvedValue({ events: [], has_more: false }),
   missionUsage: vi.fn(),
   resumeMission: vi.fn(),
   sendMissionNote: vi.fn(),

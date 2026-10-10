@@ -299,8 +299,6 @@ func (s *Store) HasPendingCorrection(ctx context.Context, id string) (bool, erro
 	return open, nil
 }
 
-// ListByStatus returns memories in a lifecycle stage, optionally
-// narrowed to types, oldest first (queue order).
 // RecentEpisodic returns active episodic memories created since the
 // cutoff, newest first - the reflection pass's raw material.
 func (s *Store) RecentEpisodic(ctx context.Context, since time.Time, limit int) ([]Memory, error) {
@@ -327,7 +325,34 @@ func (s *Store) RecentEpisodic(ctx context.Context, since time.Time, limit int) 
 	return out, rows.Err()
 }
 
-func (s *Store) ListByStatus(ctx context.Context, status Status, types ...MemoryType) ([]Memory, error) {
+// Page is a keyset window over created_at DESC, id DESC: Before and
+// BeforeID are the previous page's last row. Zero Before means the
+// first page; Limit 0 means every row.
+type Page struct {
+	Before   time.Time
+	BeforeID string
+	Limit    int
+}
+
+// pageClause appends p's cursor predicate, order and limit to a query
+// whose WHERE clause already binds args.
+func pageClause(p Page, args []any) (string, []any) {
+	q := ""
+	if !p.Before.IsZero() {
+		args = append(args, p.Before, p.BeforeID)
+		q += fmt.Sprintf(` AND (created_at, id) < ($%d, $%d::uuid)`, len(args)-1, len(args))
+	}
+	q += ` ORDER BY created_at DESC, id DESC`
+	if p.Limit > 0 {
+		args = append(args, p.Limit)
+		q += fmt.Sprintf(` LIMIT $%d`, len(args))
+	}
+	return q, args
+}
+
+// ListByStatus returns one page of memories in a lifecycle stage,
+// optionally narrowed to types, newest first.
+func (s *Store) ListByStatus(ctx context.Context, status Status, page Page, types ...MemoryType) ([]Memory, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("list memories: %w", err)
@@ -342,8 +367,8 @@ func (s *Store) ListByStatus(ctx context.Context, status Status, types ...Memory
 		}
 		args = append(args, names)
 	}
-	q += ` ORDER BY created_at`
-	rows, err := db.Query(ctx, q, args...)
+	clause, args := pageClause(page, args)
+	rows, err := db.Query(ctx, q+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list memories: %w", err)
 	}
@@ -357,6 +382,19 @@ func (s *Store) ListByStatus(ctx context.Context, status Status, types ...Memory
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// CountByStatus returns how many memories are in a lifecycle stage.
+func (s *Store) CountByStatus(ctx context.Context, status Status) (int, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return 0, fmt.Errorf("count memories: %w", err)
+	}
+	var n int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM memories WHERE status = $1`, status).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count memories: %w", err)
+	}
+	return n, nil
 }
 
 // Chain walks a supersede chain forward from id and returns every
@@ -523,8 +561,8 @@ func (s *Store) RedundantPendingPairs(ctx context.Context, threshold float64) ([
 // every member in a single transaction: a crash mid-sequence can no
 // longer leave the merged row active alongside still-active members
 // (D-011 double-count). The merged row activates directly - it
-// replaces confirmed knowledge - with last_confirmed_at defaulting to
-// now(). Any member whose Supersede predicate no longer matches (already
+// replaces confirmed knowledge - with last_confirmed_at taken from m when
+// set, else now(). Any member whose Supersede predicate no longer matches (already
 // superseded, or no longer active/pending) aborts the whole tx: the
 // merged content was computed from a stale read, and the deferred
 // Rollback undoes the insert along with every supersede already
@@ -540,13 +578,17 @@ func (s *Store) ApplyMerge(ctx context.Context, m Memory, memberIDs []string) (s
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
+	var confirmedAt *time.Time
+	if !m.LastConfirmedAt.IsZero() {
+		confirmedAt = &m.LastConfirmedAt
+	}
 	var id string
 	err = tx.QueryRow(ctx, `INSERT INTO memories
-		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence)
-		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9)
+		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence, last_confirmed_at)
+		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9, COALESCE($10::timestamptz, now()))
 		RETURNING id`,
 		m.Type, m.Content, m.Embedding.String(), refs(m.EntityRefs),
-		m.SourceSession, m.SourceSeq, actor(m.Actor), StatusActive, m.Confidence).Scan(&id)
+		m.SourceSession, m.SourceSeq, actor(m.Actor), StatusActive, m.Confidence, confirmedAt).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("apply merge insert: %w", err)
 	}

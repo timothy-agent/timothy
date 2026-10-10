@@ -1,5 +1,5 @@
 import { Pencil, Play, Plus, RefreshCw, StickyNote, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 
@@ -42,7 +42,15 @@ import { euDateTime, humanBytes, money, relativeTime, relativeTimeUntil } from '
 
 // Runs poll this often while any run is queued, starting or running.
 export const runPollMs = 15_000
+// Mirrors the server's default runs page: a full page means another may exist.
+const runsPageSize = 50
 const maxNotes = 10
+
+// mergeRuns appends tail to head, skipping runs head already has.
+function mergeRuns(head: AutomationRun[], tail: AutomationRun[]): AutomationRun[] {
+  const seen = new Set(head.map((r) => r.id))
+  return [...head, ...tail.filter((r) => !seen.has(r.id))]
+}
 
 const concurrencyText: Record<Automation['concurrency'], string> = {
   skip: 'Skip while a run is active',
@@ -126,6 +134,13 @@ export function AutomationDetail() {
   const [automation, setAutomation] = useState<Automation | null>(null)
   const [loading, setLoading] = useState(true)
   const [runs, setRuns] = useState<AutomationRun[]>([])
+  const [moreRuns, setMoreRuns] = useState(false)
+  // One older-page fetch at a time; once any landed, a refresh of the
+  // newest page no longer decides whether more exist.
+  const runsLoading = useRef(false)
+  const olderRunsLoaded = useRef(false)
+  // State, not a ref: the sentinel mounts only when the run tab opens.
+  const [runsSentinel, setRunsSentinel] = useState<HTMLDivElement | null>(null)
   const [notes, setNotes] = useState<AutomationNote[]>([])
   const [agents, setAgents] = useState<AdminAgent[]>([])
   const [destinations, setDestinations] = useState<Destination[]>([])
@@ -141,14 +156,40 @@ export function AutomationDetail() {
       .then(setAutomation, () => setAutomation(null))
       .finally(() => setLoading(false))
   }, [id])
+  // loadRuns refreshes the newest page and keeps older pages already loaded.
   const loadRuns = useCallback(() => {
-    if (id) listAutomationRuns(id).then(setRuns, () => undefined)
+    if (!id) return
+    listAutomationRuns(id).then(
+      (page) => {
+        setRuns((prev) => mergeRuns(page, prev.filter((r) => r.automation_id === id)))
+        if (!olderRunsLoaded.current) setMoreRuns(page.length === runsPageSize)
+      },
+      () => undefined,
+    )
   }, [id])
+  const loadMoreRuns = useCallback(() => {
+    const last = runs[runs.length - 1]
+    if (!id || !last || runsLoading.current) return
+    runsLoading.current = true
+    listAutomationRuns(id, { before: last.created_at, beforeId: last.id })
+      .then(
+        (page) => {
+          olderRunsLoaded.current = true
+          setRuns((prev) => mergeRuns(prev, page))
+          setMoreRuns(page.length === runsPageSize)
+        },
+        () => undefined,
+      )
+      .finally(() => {
+        runsLoading.current = false
+      })
+  }, [id, runs])
   const loadNotes = useCallback(() => {
     if (id) listAutomationNotes(id).then(setNotes, () => undefined)
   }, [id])
 
   useEffect(() => {
+    olderRunsLoaded.current = false
     loadAutomation()
     loadRuns()
     loadNotes()
@@ -168,6 +209,17 @@ export function AutomationDetail() {
     const t = setInterval(loadRuns, runPollMs)
     return () => clearInterval(t)
   }, [pending, loadRuns])
+
+  // Infinite scroll: fetch the next page when the sentinel below the
+  // run table scrolls into view.
+  useEffect(() => {
+    if (!runsSentinel) return
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) loadMoreRuns()
+    })
+    obs.observe(runsSentinel)
+    return () => obs.disconnect()
+  }, [runsSentinel, loadMoreRuns])
 
   const commitRename = async () => {
     const trimmed = name.trim()
@@ -410,7 +462,10 @@ export function AutomationDetail() {
             actions={<IconButton label="Refresh runs" icon={RefreshCw} size="sm" onClick={loadRuns} />}
           >
             {runs.length > 0 ? (
-              <RunHistoryTable runs={runs} triggers={automation.triggers} />
+              <>
+                <RunHistoryTable runs={runs} triggers={automation.triggers} />
+                {moreRuns && <div ref={setRunsSentinel} className="h-px" data-testid="runs-sentinel" />}
+              </>
             ) : (
               <EmptyState title="No runs yet" density="operational" />
             )}

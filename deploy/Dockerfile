@@ -42,6 +42,10 @@ COPY --from=build /out/app /app
 # Skill packs ship inside the brain image; release.yml's change filter
 # lists skills/ so a pack edit rebuilds it instead of copying forward.
 COPY skills/ /skills/
+# Self-docs (capability pages plus docs pages) from scripts/selfdocs-bundle.sh;
+# `make selfdocs` writes the manifest-only default, release.yml the full bundle.
+ARG SELFDOCS_DIR_SRC=build/selfdocs
+COPY ${SELFDOCS_DIR_SRC}/ /selfdocs/
 RUN mkdir -p /workspace /attachments && chown nobody:nobody /workspace /attachments
 USER nobody
 ENTRYPOINT ["/app"]

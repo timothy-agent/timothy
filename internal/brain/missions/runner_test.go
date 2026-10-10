@@ -1631,6 +1631,10 @@ func TestRunWorkerModelFloor(t *testing.T) {
 	if !errors.Is(err, ErrModelFloor) {
 		t.Fatalf("RunWorker err = %v, want ErrModelFloor", err)
 	}
+	var floor *ModelFloorError
+	if !errors.As(err, &floor) || floor.Model != "amazon.nova-lite-v1:0" {
+		t.Fatalf("RunWorker err = %v, want ModelFloorError naming the served model", err)
+	}
 }
 
 // TestRunWorkerModelFloorDisabledByDefault: no deny list, any model is

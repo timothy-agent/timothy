@@ -18,6 +18,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 	"github.com/SumonMSelim/timothy/internal/platform/netguard"
+	"github.com/SumonMSelim/timothy/internal/platform/pagefetch"
 )
 
 // maxKBUploadBytes caps a single knowledge-base document upload.
@@ -136,9 +137,15 @@ type kbAPI struct {
 // CreateCollection error just logs and falls through to "Unsorted" via
 // a second attempt, since ingest must not block on this step.
 func (h *kbAPI) resolveCollection(ctx context.Context, title, markdownText string) (string, error) {
-	collections, err := h.store.ListCollections(ctx)
+	all, err := h.store.ListCollections(ctx)
 	if err != nil {
 		return "", fmt.Errorf("list collections: %w", err)
+	}
+	collections := make([]kb.Collection, 0, len(all))
+	for _, c := range all {
+		if !c.System {
+			collections = append(collections, c)
+		}
 	}
 	choice := h.classify(ctx, title, markdownText, collections)
 	if choice.ExistingID != "" {
@@ -161,6 +168,8 @@ func failKB(w http.ResponseWriter, log *slog.Logger, err error) {
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, kb.ErrInUse):
 		jsonError(w, http.StatusConflict, "in_use", err.Error())
+	case errors.Is(err, kb.ErrSystem):
+		jsonError(w, http.StatusForbidden, "system_collection", err.Error())
 	default:
 		failInternal(w, log, "kb", err)
 	}
@@ -421,7 +430,7 @@ func (h *kbAPI) finishIngest(w http.ResponseWriter, r *http.Request, collectionI
 // caller-chosen collection.
 func (h *kbAPI) uploadDocument(w http.ResponseWriter, r *http.Request) {
 	collectionID := r.PathValue("id")
-	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
+	if err := h.store.Writable(r.Context(), collectionID); err != nil {
 		failKB(w, h.log, err)
 		return
 	}
@@ -568,7 +577,7 @@ func (h *kbAPI) refreshOrCreate(w http.ResponseWriter, r *http.Request, resolveC
 // moving it to collectionID since the operator explicitly chose it.
 func (h *kbAPI) addDocumentFromURL(w http.ResponseWriter, r *http.Request) {
 	collectionID := r.PathValue("id")
-	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
+	if err := h.store.Writable(r.Context(), collectionID); err != nil {
 		failKB(w, h.log, err)
 		return
 	}
@@ -675,7 +684,7 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 
 	collectionID := strings.TrimSpace(req.CollectionID)
 	if collectionID != "" {
-		if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
+		if err := h.store.Writable(r.Context(), collectionID); err != nil {
 			failKB(w, h.log, err)
 			return
 		}
@@ -742,36 +751,26 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 // fetchURL GETs u, capping the body at maxKBUploadBytes, and returns
 // the bytes plus the response Content-Type.
 func (h *kbAPI) fetchURL(ctx context.Context, u *url.URL) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	page, err := pagefetch.Fetch(ctx, h.fetchHTTP, u.String(),
+		"text/html, application/pdf;q=0.9, text/plain;q=0.9, text/markdown;q=0.9, */*;q=0.1", maxKBUploadBytes)
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("User-Agent", "timothy/1.0 (+self-hosted assistant)")
-	req.Header.Set("Accept", "text/html, application/pdf;q=0.9, text/plain;q=0.9, text/markdown;q=0.9, */*;q=0.1")
-
-	resp, err := h.fetchHTTP.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if page.Status < 200 || page.Status >= 300 {
 		// Bot-block statuses: LinkedIn's 999, plus the usual challenge
 		// responses: a raw status code reads like our bug when it's the
 		// site refusing automated clients.
-		switch resp.StatusCode {
+		switch page.Status {
 		case 999, http.StatusForbidden, http.StatusTooManyRequests:
-			return nil, "", fmt.Errorf("http %d fetching %s: the site blocks automated access — save the page as a PDF and upload it instead", resp.StatusCode, u.Host)
+			return nil, "", fmt.Errorf("http %d fetching %s: the site blocks automated access. Save the page as a PDF and upload it instead", page.Status, u.Host)
 		}
-		return nil, "", fmt.Errorf("http %d fetching %s", resp.StatusCode, u.Host)
+		return nil, "", fmt.Errorf("http %d fetching %s", page.Status, u.Host)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxKBUploadBytes+1))
-	if err != nil {
-		return nil, "", fmt.Errorf("read body: %w", err)
-	}
+	body := page.Body
 	if len(body) > maxKBUploadBytes {
 		return nil, "", fmt.Errorf("response exceeds the 32MiB limit")
 	}
-	return body, resp.Header.Get("Content-Type"), nil
+	return body, page.ContentType, nil
 }
 
 // convertFetched turns a fetched body into markdown by content type:
@@ -882,6 +881,10 @@ func (h *kbAPI) deleteDocument(w http.ResponseWriter, r *http.Request) {
 // document's existing chunks before writing the new set.
 func (h *kbAPI) reingestDocument(w http.ResponseWriter, r *http.Request) {
 	docID := r.PathValue("id")
+	if err := h.store.DocumentWritable(r.Context(), docID); err != nil {
+		failKB(w, h.log, err)
+		return
+	}
 	doc, err := h.store.GetDocument(r.Context(), docID)
 	if err != nil {
 		failKB(w, h.log, err)

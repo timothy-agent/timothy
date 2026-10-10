@@ -70,3 +70,19 @@ describe('tour anchors', () => {
     }
   })
 })
+
+describe('tour copy', () => {
+  const body = (def: TourDef, target: string) => def.steps.find((s) => s.target === target)?.body ?? ''
+
+  it('names only what the app offers', () => {
+    expect(body(chatTour, 'chat.composer')).not.toContain('@')
+    expect(body(chatTour, 'chat.composer')).toContain('mission, chat or document')
+    expect(body(automationsTour, 'automations.new')).not.toContain('email')
+    expect(body(settingsTour, 'settings.destinations')).not.toContain('file')
+    expect(body(settingsTour, 'settings.channels')).toContain('Slack')
+  })
+
+  it.each(cases)('%s tour has no em dash', (_path, def) => {
+    for (const step of def.steps) expect(`${step.title} ${step.body}`).not.toContain('—')
+  })
+})

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -50,6 +51,8 @@ type Directory interface {
 	List(ctx context.Context, query string, before time.Time, beforeID string) ([]session.Meta, error)
 	Get(ctx context.Context, id string) (session.Meta, error)
 	Events(ctx context.Context, id string) ([]session.Event, error)
+	EventsPage(ctx context.Context, id string, afterSeq, beforeSeq int64, limit int) ([]session.Event, bool, error)
+	TranscriptControl(ctx context.Context, id string) ([]session.Event, error)
 	Update(ctx context.Context, id string, title *string, archived *bool) error
 	Delete(ctx context.Context, id string) error
 	SetKnowledge(ctx context.Context, id string, names []string) error
@@ -109,6 +112,7 @@ type API struct {
 // stays unreachable from outside. Tests pin this scope.
 var memoryRoutePatterns = []string{
 	"GET /v1/memories",
+	"GET /v1/memories/count",
 	"POST /v1/memories",
 	"POST /v1/memories/{id}",
 	"GET /v1/memories/{id}/chain",
@@ -127,7 +131,7 @@ var memoryRoutePatterns = []string{
 // and automation attachment resolution; nil (no gateway wiring) makes
 // every image attachment fail with attachmentResolver's "could not be
 // described" error.
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, kbEnrich *kb.Enricher, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, automationStore *automations.Store, eventStore *events.Store, eventsKick func(), pdfService *pdfgen.Service, caption func(context.Context, string, []byte) string, channelStore *channels.Store, channelService *channels.Service, onboardingProbes onboarding.Probes) {
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, kbEnrich *kb.Enricher, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, automationStore *automations.Store, eventStore *events.Store, eventsKick func(), pdfService *pdfgen.Service, caption func(context.Context, string, []byte) string, channelStore *channels.Store, channelService *channels.Service, onboardingProbes onboarding.Probes) {
 	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates, pdfService: pdfService}
 	if missionStore != nil {
 		a.missionPerms = missionStore
@@ -161,7 +165,12 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if automationStore != nil {
 		autoLister = automationStore
 	}
-	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister, autoLister)
+	// Same nil-box guard for *channels.Store.
+	var chanLister channelLister
+	if channelStore != nil {
+		chanLister = channelStore
+	}
+	a.registerSecrets(srv.Handle, gwSecrets, connLister, destLister, autoLister, chanLister)
 	a.registerSettings(srv.Handle, flags, whisperURL, pdfService != nil)
 	a.registerOnboarding(srv.Handle, flags, onboardingProbes)
 	a.registerAgents(srv.Handle, agentReg)
@@ -194,7 +203,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	if destinationStore != nil {
 		destLookup = destinationStore
 	}
-	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveRoute, nameMission, topModels, conns, missionAttachments, markitdownURL, pdfService, kbStore, kbIngest, kbEnrich, whisperURL, caption)
+	a.registerMissions(srv.Handle, missionStore, missionDriver, missionNotifier, agentReg, missionWorkspace, resolveSecret, routeForRole, missionClassify, codingExecutorDefault, resolveRoute, topModels, conns, missionAttachments, markitdownURL, pdfService, kbStore, kbIngest, kbEnrich, whisperURL, caption)
 	resolver := &attachmentResolver{store: missionAttachments, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: whisperClient, caption: caption, enrich: kbEnrich, log: log}
 	var location func(context.Context) *time.Location
 	if flags != nil {
@@ -452,6 +461,11 @@ func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "not_found", "no such session")
 		return
 	}
+	page, paged, err := parseSeqPage(r.URL.Query())
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	meta, err := a.dir.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -461,15 +475,23 @@ func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		failInternalCode(w, a.log, "get_failed", "session", err)
 		return
 	}
-	events, err := a.dir.Events(r.Context(), id)
-	if err != nil {
-		failInternalCode(w, a.log, "events_failed", "session", err)
-		return
-	}
-	items, err := session.UITranscript(events)
-	if err != nil {
-		failInternalCode(w, a.log, "projection_failed", "session", err)
-		return
+	var items []session.TranscriptItem
+	var pageFields map[string]any
+	if paged {
+		if items, pageFields, err = a.transcriptPage(r.Context(), id, page); err != nil {
+			failInternalCode(w, a.log, "events_failed", "session", err)
+			return
+		}
+	} else {
+		events, err := a.dir.Events(r.Context(), id)
+		if err != nil {
+			failInternalCode(w, a.log, "events_failed", "session", err)
+			return
+		}
+		if items, err = session.UITranscript(events); err != nil {
+			failInternalCode(w, a.log, "projection_failed", "session", err)
+			return
+		}
 	}
 	if items == nil {
 		items = []session.TranscriptItem{}
@@ -484,9 +506,42 @@ func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	// running right now", not a separate flag that could drift from it.
 	// a.svc is never nil (Register always constructs one), and
 	// TurnActive itself is nil-map-safe, so this needs no guard.
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"session": meta, "items": items, "turn_active": a.svc.TurnActive(id),
-	})
+	}
+	maps.Copy(resp, pageFields)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// transcriptPage projects one seq window of a session's log. Beyond
+// items it returns has_more, the window's first_seq/last_seq event
+// cursors (absent when empty), live_pending_seq (absent for none) and
+// resolved_permissions: what a client holding earlier items needs to
+// drop the ones a full projection now hides.
+func (a *API) transcriptPage(ctx context.Context, id string, page seqPage) ([]session.TranscriptItem, map[string]any, error) {
+	window, hasMore, err := a.dir.EventsPage(ctx, id, page.AfterSeq, page.BeforeSeq, page.Limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	control, err := a.dir.TranscriptControl(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	tp, err := session.UITranscriptPage(window, control)
+	if err != nil {
+		return nil, nil, err
+	}
+	fields := map[string]any{"has_more": hasMore}
+	if len(window) > 0 {
+		fields["first_seq"], fields["last_seq"] = window[0].Seq, window[len(window)-1].Seq
+	}
+	if tp.LivePendingSeq >= 0 {
+		fields["live_pending_seq"] = tp.LivePendingSeq
+	}
+	if len(tp.ResolvedPermissions) > 0 {
+		fields["resolved_permissions"] = tp.ResolvedPermissions
+	}
+	return tp.Items, fields, nil
 }
 
 func (a *API) handleUpdate(w http.ResponseWriter, r *http.Request) {

@@ -198,7 +198,7 @@ export const providerPresets: ProviderPreset[] = [
     // alias.
     baseURL: 'http://host.docker.internal:11434/v1',
     requiresKey: false,
-    validateModel: 'qwen2.5:7b',
+    validateModel: 'qwen3:8b',
   },
   {
     id: 'custom',

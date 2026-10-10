@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -140,6 +142,80 @@ func (s *Store) Events(ctx context.Context, sessionID string) ([]Event, error) {
 		if err := rows.Scan(&ev.SessionID, &ev.Seq, &ev.Kind, &ev.Payload, &ev.CreatedAt); err != nil {
 			return nil, fmt.Errorf("session: events scan: %w", err)
 		}
+		events = append(events, ev)
+	}
+	return events, rows.Err()
+}
+
+// EventsPage reads one seq keyset page of a session's log (issue
+// #1113). afterSeq >= 0 reads seq > afterSeq oldest first; otherwise it
+// reads the newest rows below beforeSeq (0 means the log's end). Rows
+// come back ascending; hasMore reports rows past the page in its
+// direction.
+func (s *Store) EventsPage(ctx context.Context, sessionID string, afterSeq, beforeSeq int64, limit int) ([]Event, bool, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, false, fmt.Errorf("session: events page: %w", err)
+	}
+	sql, cursor := `SELECT session_id, seq, kind, payload, created_at FROM session_events
+		 WHERE session_id = $1 AND seq < $2 ORDER BY seq DESC LIMIT $3`, beforeSeq
+	if afterSeq >= 0 {
+		sql, cursor = `SELECT session_id, seq, kind, payload, created_at FROM session_events
+		 WHERE session_id = $1 AND seq > $2 ORDER BY seq LIMIT $3`, afterSeq
+	} else if beforeSeq <= 0 {
+		cursor = math.MaxInt64
+	}
+	rows, err := db.Query(ctx, sql, sessionID, cursor, limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("session: events page query: %w", err)
+	}
+	defer rows.Close()
+	var events []Event
+	for rows.Next() {
+		var ev Event
+		if err := rows.Scan(&ev.SessionID, &ev.Seq, &ev.Kind, &ev.Payload, &ev.CreatedAt); err != nil {
+			return nil, false, fmt.Errorf("session: events page scan: %w", err)
+		}
+		events = append(events, ev)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("session: events page: %w", err)
+	}
+	hasMore := len(events) > limit
+	if hasMore {
+		events = events[:limit]
+	}
+	if afterSeq < 0 {
+		slices.Reverse(events)
+	}
+	return events, hasMore, nil
+}
+
+// TranscriptControl reads the whole log's events that decide whether an
+// earlier transcript item stays visible (pending_state supersession,
+// answered permission asks), with payloads only where the projection
+// decodes them, so UITranscriptPage over a window matches UITranscript.
+func (s *Store) TranscriptControl(ctx context.Context, sessionID string) ([]Event, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("session: transcript control: %w", err)
+	}
+	rows, err := db.Query(ctx,
+		`SELECT seq, kind, CASE WHEN kind IN ($2, $3) THEN payload END
+		 FROM session_events WHERE session_id = $1 AND kind IN ($2, $3, $4, $5) ORDER BY seq`,
+		sessionID, KindCompactionApplied, KindPermissionResolved, KindPendingState, KindAssistantTurn)
+	if err != nil {
+		return nil, fmt.Errorf("session: transcript control query: %w", err)
+	}
+	defer rows.Close()
+	var events []Event
+	for rows.Next() {
+		ev := Event{SessionID: sessionID}
+		var payload []byte // NULL for kinds the projection never decodes
+		if err := rows.Scan(&ev.Seq, &ev.Kind, &payload); err != nil {
+			return nil, fmt.Errorf("session: transcript control scan: %w", err)
+		}
+		ev.Payload = payload
 		events = append(events, ev)
 	}
 	return events, rows.Err()
