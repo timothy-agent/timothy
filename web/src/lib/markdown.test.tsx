@@ -1,7 +1,8 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import ReactMarkdown from 'react-markdown'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
-import { rehypePlugins, remarkPlugins } from './markdown'
+import { markdownComponents, rehypePlugins, remarkPlugins } from './markdown'
 
 afterEach(cleanup)
 
@@ -10,6 +11,21 @@ function renderMarkdown(text: string) {
     <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins}>
       {text}
     </ReactMarkdown>,
+  )
+}
+
+// With the shared component overrides, inside a router (links need one).
+function renderLinks(text: string) {
+  return render(
+    <MemoryRouter>
+      <ReactMarkdown
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        components={markdownComponents}
+      >
+        {text}
+      </ReactMarkdown>
+    </MemoryRouter>,
   )
 }
 
@@ -43,5 +59,37 @@ describe('shared markdown config', () => {
     const { container } = renderMarkdown('```typescript\nconst x = 1\n```')
     const code = container.querySelector('code')
     expect(code?.className).toContain('language-typescript')
+  })
+
+  it('renders a known relative link as an in-app link', () => {
+    renderLinks('[Features](/settings/features)')
+    const link = screen.getByRole('link', { name: /Features/ })
+    expect(link).toHaveAttribute('href', '/settings/features')
+    expect(link).toHaveAttribute('title', 'Open in Timothy')
+    expect(link).not.toHaveAttribute('target')
+    expect(link.querySelector('svg')).not.toBeNull()
+  })
+
+  it('renders an unknown relative link as plain text with the href', () => {
+    const { container } = renderLinks('[Nowhere](/nope/page)')
+    expect(container.querySelector('a')).toBeNull()
+    expect(container).toHaveTextContent('Nowhere (/nope/page)')
+  })
+
+  it('opens absolute links in a new tab', () => {
+    renderLinks('[Docs](https://timothy-agent.github.io/docs/)')
+    const link = screen.getByRole('link', { name: 'Docs' })
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+
+  it('renders no anchor for scheme-relative hrefs', () => {
+    const { container } = renderLinks('[x](//evil.example/settings)')
+    expect(container.querySelector('a')).toBeNull()
+  })
+
+  it('rejects data: hrefs', () => {
+    const { container } = renderLinks('<a href="data:text/html,x">click</a>')
+    expect(container.querySelector('a')?.getAttribute('href') ?? null).toBeNull()
   })
 })

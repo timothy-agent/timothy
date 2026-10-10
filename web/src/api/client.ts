@@ -548,14 +548,27 @@ export async function fetchAttachmentBlob(id: string): Promise<Blob> {
 
 // --- Long-term memory (queue + browser) ---
 
+// listMemories returns one page, newest first (server default 50, max
+// 200); the cursor is the previous page's last (created_at, id).
 export async function listMemories(
   status: MemoryItem['status'],
-  types?: string[],
+  opts?: { types?: string[]; cursor?: SessionCursor },
 ): Promise<MemoryItem[]> {
   const params = new URLSearchParams({ status })
-  if (types && types.length > 0) params.set('types', types.join(','))
+  if (opts?.types && opts.types.length > 0) params.set('types', opts.types.join(','))
+  if (opts?.cursor) {
+    params.set('before', opts.cursor.before)
+    params.set('before_id', opts.cursor.beforeId)
+  }
   const { memories } = await request<{ memories: MemoryItem[] }>(`/v1/memories?${params}`)
   return memories ?? []
+}
+
+export async function countMemories(status: MemoryItem['status']): Promise<number> {
+  const { count } = await request<{ count: number }>(
+    `/v1/memories/count?${new URLSearchParams({ status })}`,
+  )
+  return count
 }
 
 export async function addMemory(
@@ -599,8 +612,13 @@ export async function entityGraph(): Promise<EntityGraphData> {
   return { entities: data.entities ?? [], edges: data.edges ?? [] }
 }
 
-export async function entityMemories(id: string): Promise<MemoryItem[]> {
-  const { memories } = await request<{ memories: MemoryItem[] }>(`/v1/entities/${id}/memories`)
+// entityMemories returns one page of an entity's active memories,
+// newest first, with the same cursor as listMemories.
+export async function entityMemories(id: string, cursor?: SessionCursor): Promise<MemoryItem[]> {
+  const qs = cursor
+    ? `?${new URLSearchParams({ before: cursor.before, before_id: cursor.beforeId })}`
+    : ''
+  const { memories } = await request<{ memories: MemoryItem[] }>(`/v1/entities/${id}/memories${qs}`)
   return memories ?? []
 }
 

@@ -9,7 +9,13 @@ import { HelpMenu } from './HelpMenu'
 import { onboardingState } from './testing'
 
 function Where() {
-  return <p data-testid="where">{useLocation().pathname}</p>
+  const loc = useLocation()
+  return (
+    <>
+      <p data-testid="where">{loc.pathname}</p>
+      <p data-testid="draft">{(loc.state as { draft?: string } | null)?.draft}</p>
+    </>
+  )
 }
 
 function renderMenu(path: string) {
@@ -39,7 +45,7 @@ afterEach(() => {
 describe('HelpMenu', () => {
   it('lists the help items', () => {
     renderMenu('/')
-    for (const name of ['Setup checklist', "Restart this page's tour", 'Restart welcome', 'Docs']) {
+    for (const name of ['Setup checklist', "Restart this page's tour", 'Restart welcome', 'Ask Timothy about this page', 'Docs']) {
       expect(item(name)).toBeInTheDocument()
     }
   })
@@ -75,6 +81,13 @@ describe('HelpMenu', () => {
     fireEvent.click(item('Restart welcome'))
     expect(updateProgress).toHaveBeenCalledWith({ wizard: 'pending' })
     await waitFor(() => expect(where()).toHaveTextContent('/welcome'))
+  })
+
+  it('opens chat with a draft naming the current page', async () => {
+    renderMenu('/memory')
+    fireEvent.click(item('Ask Timothy about this page'))
+    await waitFor(() => expect(where()).toHaveTextContent('/chat'))
+    expect(screen.getByTestId('draft')).toHaveTextContent('How do I use this page: /memory?')
   })
 
   it('links the docs site in a new tab', () => {
