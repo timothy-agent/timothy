@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -115,12 +116,14 @@ type prepareSpec struct {
 	Lockfiles      []string // worktree-relative, sorted
 	// NpmNoLock: root package.json without any node lockfile.
 	NpmNoLock bool
-	RepoKeys  map[string]bool
+	// Services are the mise daemon presets the tests need (D-142).
+	Services []serviceNeed
+	RepoKeys map[string]bool
 }
 
-// empty reports a spec with nothing to install, test or audit.
+// empty reports a spec with nothing to install, start, test or audit.
 func (s prepareSpec) empty() bool {
-	return len(s.Providers) == 0 && s.EnvTemplate == "" && len(s.TestCandidates) == 0 && len(s.Lockfiles) == 0 && !s.NpmNoLock
+	return len(s.Providers) == 0 && s.EnvTemplate == "" && len(s.TestCandidates) == 0 && len(s.Lockfiles) == 0 && !s.NpmNoLock && len(s.Services) == 0
 }
 
 // planPrepare derives the spec from the worktree and its manifest list
@@ -164,6 +167,7 @@ func planPrepare(worktree string, manifests []string) prepareSpec {
 	}
 	spec.Artisan = fileExists(worktree, "artisan")
 	spec.TestCandidates = testLadder(worktree, root, spec.RepoKeys)
+	spec.Services = detectServices(worktree)
 	return spec
 }
 
@@ -419,11 +423,15 @@ type miseLocalInput struct {
 	TestCmd     string // raw command for tasks.test, "" for none yet
 	Lockfiles   []string
 	OSVOffline  bool
+	// Services are the daemons that started (or are about to start);
+	// tasks.test lists them so `mise run test` starts them first.
+	Services []serviceNeed
 }
 
 // renderMiseLocal renders the harness mise.local.toml: settings the
-// prepare step needs, the audit tool, the deps providers, the env
-// template provider and the test and audit tasks. Every key the repo
+// prepare step needs, the audit tool, the deps providers, the test
+// service daemons (D-142), the env template provider and the test and
+// audit tasks. Every key the repo
 // config already declares (repoKeys) is left out, so the repo's value
 // wins even though mise loads the local file over mise.toml.
 func renderMiseLocal(in miseLocalInput, repoKeys map[string]bool) string {
@@ -439,9 +447,17 @@ func renderMiseLocal(in miseLocalInput, repoKeys map[string]bool) string {
 	if len(settings) > 0 {
 		b.WriteString("\n[settings]\n" + strings.Join(settings, "\n") + "\n")
 	}
+	var tools []string
 	if !repoKeys["tools."+osvScannerTool] && !repoKeys["tools.osv-scanner"] {
-		fmt.Fprintf(&b, "\n[tools]\n%q = %q\n", osvScannerTool, osvScannerVersion)
+		tools = append(tools, fmt.Sprintf("%q = %q", osvScannerTool, osvScannerVersion))
 	}
+	if len(in.Services) > 0 && !repoKeys["tools."+pitchforkTool] {
+		tools = append(tools, fmt.Sprintf("%s = %q", pitchforkTool, pitchforkVersion))
+	}
+	if len(tools) > 0 {
+		b.WriteString("\n[tools]\n" + strings.Join(tools, "\n") + "\n")
+	}
+	b.WriteString(renderDaemons(in.Services, repoKeys))
 	for _, p := range in.Providers {
 		if !repoKeys["deps."+p] {
 			fmt.Fprintf(&b, "\n[deps.%s]\n", p)
@@ -455,7 +471,15 @@ func renderMiseLocal(in miseLocalInput, repoKeys map[string]bool) string {
 		}
 	}
 	if in.TestCmd != "" && !repoKeys["tasks.test"] {
-		fmt.Fprintf(&b, "\n[tasks.test]\nrun = %q\n", in.TestCmd)
+		b.WriteString("\n[tasks.test]\n")
+		if len(in.Services) > 0 {
+			q := make([]string, 0, len(in.Services))
+			for _, n := range serviceNames(in.Services) {
+				q = append(q, strconv.Quote(n))
+			}
+			b.WriteString("daemons = [" + strings.Join(q, ", ") + "]\n")
+		}
+		fmt.Fprintf(&b, "run = %q\n", in.TestCmd)
 	}
 	if len(in.Lockfiles) > 0 && !repoKeys["tasks.audit"] {
 		fmt.Fprintf(&b, "\n[tasks.audit]\nrun = %q\n", buildAuditCmd(in.Lockfiles, "", in.OSVOffline))
