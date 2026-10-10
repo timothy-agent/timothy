@@ -98,6 +98,9 @@ jobs:
     services:
       postgres:
         image: pgvector/pgvector:0.8.4-pg18-trixie
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_USER: timothy
           POSTGRES_PASSWORD: ci
@@ -187,6 +190,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
+      # Authenticated pulls: shared runner IPs hit Docker Hub's anonymous
+      # rate limit.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build image
         if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
         run: |
@@ -221,6 +231,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build sandbox image
         run: docker build -f deploy/sandbox.Dockerfile -t timothy-sandbox:ci .
       - name: Smoke test sandbox image

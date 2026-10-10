@@ -148,6 +148,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Authenticated base-image pulls: shared runner IPs hit Docker
+      # Hub's anonymous rate limit.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build and push
         id: build
         if: fromJSON(needs.diff.outputs[matrix.name])
