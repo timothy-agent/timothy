@@ -561,8 +561,8 @@ func (s *Store) RedundantPendingPairs(ctx context.Context, threshold float64) ([
 // every member in a single transaction: a crash mid-sequence can no
 // longer leave the merged row active alongside still-active members
 // (D-011 double-count). The merged row activates directly - it
-// replaces confirmed knowledge - with last_confirmed_at defaulting to
-// now(). Any member whose Supersede predicate no longer matches (already
+// replaces confirmed knowledge - with last_confirmed_at taken from m when
+// set, else now(). Any member whose Supersede predicate no longer matches (already
 // superseded, or no longer active/pending) aborts the whole tx: the
 // merged content was computed from a stale read, and the deferred
 // Rollback undoes the insert along with every supersede already
@@ -578,13 +578,17 @@ func (s *Store) ApplyMerge(ctx context.Context, m Memory, memberIDs []string) (s
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
+	var confirmedAt *time.Time
+	if !m.LastConfirmedAt.IsZero() {
+		confirmedAt = &m.LastConfirmedAt
+	}
 	var id string
 	err = tx.QueryRow(ctx, `INSERT INTO memories
-		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence)
-		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9)
+		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence, last_confirmed_at)
+		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9, COALESCE($10::timestamptz, now()))
 		RETURNING id`,
 		m.Type, m.Content, m.Embedding.String(), refs(m.EntityRefs),
-		m.SourceSession, m.SourceSeq, actor(m.Actor), StatusActive, m.Confidence).Scan(&id)
+		m.SourceSession, m.SourceSeq, actor(m.Actor), StatusActive, m.Confidence, confirmedAt).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("apply merge insert: %w", err)
 	}

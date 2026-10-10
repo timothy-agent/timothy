@@ -54,7 +54,7 @@ const (
 	// reject on OR, the opposite of an AND-gated guard that only
 	// blocks a rewrite outright.
 	guardMinTokenRetention = 0.5
-	guardMinLengthRatio    = 0.4
+	guardMinLengthRatio    = 0.7
 	guardMaxLengthRatio    = 4.0
 )
 
@@ -324,18 +324,11 @@ func (c *Consolidator) mergeGroup(ctx context.Context, ids []string) (reject str
 		return "", fmt.Errorf("embed merged fact: %w", err)
 	}
 
-	// The merged fact inherits the group's strongest provenance: it
-	// replaces confirmed knowledge, so it activates directly.
-	canonical := members[0]
 	memberIDs := make([]string, len(members))
 	for i, m := range members {
 		memberIDs[i] = m.ID
 	}
-	newID, err := c.store.ApplyMerge(ctx, store.Memory{
-		Type: canonical.Type, Content: merged, Embedding: store.Vector(vecs[0]),
-		EntityRefs: unionRefs(members), SourceSession: canonical.SourceSession,
-		SourceSeq: canonical.SourceSeq, Confidence: maxConfidence(members),
-	}, memberIDs)
+	newID, err := c.store.ApplyMerge(ctx, mergedMemory(members, merged, store.Vector(vecs[0])), memberIDs)
 	if err != nil {
 		return "", err
 	}
@@ -571,6 +564,28 @@ func groupPairs(pairs [][2]string) [][]string {
 		}
 	}
 	return groups
+}
+
+// mergedMemory builds the row that replaces members. It inherits the
+// strongest provenance (a user member makes the result user-owned),
+// the latest confirmation time and the highest confidence.
+func mergedMemory(members []store.Memory, content string, emb store.Vector) store.Memory {
+	canonical := members[0]
+	out := store.Memory{
+		Type: canonical.Type, Content: content, Embedding: emb,
+		EntityRefs: unionRefs(members), SourceSession: canonical.SourceSession,
+		SourceSeq: canonical.SourceSeq, Confidence: maxConfidence(members),
+		Actor: canonical.Actor,
+	}
+	for _, m := range members {
+		if m.Actor == store.ActorUser {
+			out.Actor = store.ActorUser
+		}
+		if m.LastConfirmedAt.After(out.LastConfirmedAt) {
+			out.LastConfirmedAt = m.LastConfirmedAt
+		}
+	}
+	return out
 }
 
 func unionRefs(members []store.Memory) []string {
