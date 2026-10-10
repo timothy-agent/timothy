@@ -1935,9 +1935,13 @@ func (h *missionAPI) promoteKB(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "collection_id is required")
 		return
 	}
-	if _, err := h.kbStore.GetCollection(r.Context(), body.CollectionID); err != nil {
+	if err := h.kbStore.Writable(r.Context(), body.CollectionID); err != nil {
 		if errors.Is(err, kb.ErrNotFound) {
 			jsonError(w, http.StatusBadRequest, "bad_request", "unknown collection_id")
+			return
+		}
+		if errors.Is(err, kb.ErrSystem) {
+			jsonError(w, http.StatusForbidden, "system_collection", err.Error())
 			return
 		}
 		failInternalCode(w, h.log, "promote_failed", "mission", err)

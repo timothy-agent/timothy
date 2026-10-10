@@ -214,6 +214,8 @@ export function KnowledgeCollectionDetail() {
     }
   }
 
+  const readOnly = collection.system === true
+
   return (
     <div className="w-full space-y-6">
       <PageHeader
@@ -221,32 +223,40 @@ export function KnowledgeCollectionDetail() {
         description={collection.description}
         breadcrumbs={[{ label: 'Knowledge', href: '/knowledge' }, { label: collection.name }]}
         actions={
-          <>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setEditName(collection.name)
-                setEditDesc(collection.description ?? '')
-                setEditWeight(String(collection.retrieval_weight ?? 1.0))
-                setEditing(true)
-              }}
-            >
-              <Pencil />
-              Rename
-            </Button>
-            <Button variant="destructive" onClick={() => setConfirmDeleteCollection(true)}>
-              <Trash2 />
-              Delete collection
-            </Button>
-          </>
+          readOnly ? undefined : (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setEditName(collection.name)
+                  setEditDesc(collection.description ?? '')
+                  setEditWeight(String(collection.retrieval_weight ?? 1.0))
+                  setEditing(true)
+                }}
+              >
+                <Pencil />
+                Rename
+              </Button>
+              <Button variant="destructive" onClick={() => setConfirmDeleteCollection(true)}>
+                <Trash2 />
+                Delete collection
+              </Button>
+            </>
+          )
         }
       />
 
-      <KbUploadForm
-        uploadFile={(file) => uploadKbDocument(id, file)}
-        addUrl={(u) => addKbDocumentFromUrl(id, u)}
-        onUploaded={(doc) => setDocuments((prev) => [doc, ...prev])}
-      />
+      {readOnly ? (
+        <p className="text-sm text-muted-foreground">
+          Bundled with Timothy{collection.bundle_version ? ` ${collection.bundle_version}` : ''}. Read-only.
+        </p>
+      ) : (
+        <KbUploadForm
+          uploadFile={(file) => uploadKbDocument(id, file)}
+          addUrl={(u) => addKbDocumentFromUrl(id, u)}
+          onUploaded={(doc) => setDocuments((prev) => [doc, ...prev])}
+        />
+      )}
 
       <Panel title="Documents" density="operational">
         {documents.length === 0 ? (
@@ -290,24 +300,26 @@ export function KnowledgeCollectionDetail() {
                     <TableCell>{humanBytes(doc.bytes)}</TableCell>
                     <TableCell>{doc.ingested_at ? relativeTime(doc.ingested_at) : '—'}</TableCell>
                     <TableCell>
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          type="button"
-                          aria-label={`Re-ingest ${doc.title}`}
-                          onClick={() => void reingest(doc)}
-                          className="text-muted-foreground hover:text-foreground"
-                        >
-                          <RefreshCw className="size-4" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`Delete ${doc.title}`}
-                          onClick={() => setConfirmDeleteDoc(doc)}
-                          className="text-muted-foreground hover:text-destructive"
-                        >
-                          <Trash2 className="size-4" />
-                        </button>
-                      </div>
+                      {!readOnly && (
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            aria-label={`Re-ingest ${doc.title}`}
+                            onClick={() => void reingest(doc)}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <RefreshCw className="size-4" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Delete ${doc.title}`}
+                            onClick={() => setConfirmDeleteDoc(doc)}
+                            className="text-muted-foreground hover:text-destructive"
+                          >
+                            <Trash2 className="size-4" />
+                          </button>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

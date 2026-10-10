@@ -933,3 +933,69 @@ func TestKBGoldenSemanticFloor(t *testing.T) {
 		t.Fatalf("semantic orthogonal: got %d hits, want 0 (similarity floor)", len(hits))
 	}
 }
+
+// TestKBGoldenSystemCollectionExcluded pins D-143 (issue #1127): a
+// system collection (Timothy's bundled docs) holding the same content
+// stays out of whole-KB search in every mode unless the boost list
+// names it, and an explicit scope always reaches it.
+func TestKBGoldenSystemCollectionExcluded(t *testing.T) {
+	st := seedKBGolden(t)
+	const system = "itest-kbgolden-system"
+	db, err := st.db.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var collID, docID string
+	if err := db.QueryRow(t.Context(), "INSERT INTO kb_collections (name, system) VALUES ($1, true) RETURNING id", system).Scan(&collID); err != nil {
+		t.Fatalf("insert system collection: %v", err)
+	}
+	if err := db.QueryRow(t.Context(), `INSERT INTO kb_documents (collection_id, title, status) VALUES ($1, 'system', 'ready') RETURNING id`,
+		collID).Scan(&docID); err != nil {
+		t.Fatalf("insert document: %v", err)
+	}
+	chunks := make([]KBChunk, len(kbCorpus))
+	for i, f := range kbCorpus {
+		chunks[i] = KBChunk{Seq: i, Content: f.content, Embedding: kbBasis(f.dim), EmbeddingModel: "itest"}
+	}
+	if err := st.ReplaceChunks(t.Context(), docID, chunks); err != nil {
+		t.Fatalf("ReplaceChunks: %v", err)
+	}
+
+	queries := map[KBSearchMode]struct {
+		text string
+		dim  int
+	}{
+		KBSearchHybrid:   {"where do the logs go?", 1},
+		KBSearchSemantic: {"where do the logs go?", 1},
+		KBSearchKeyword:  {"grafana alloy node exporters", 900},
+	}
+	collections := func(names, boost []string, mode KBSearchMode) map[string]bool {
+		t.Helper()
+		q := queries[mode]
+		hits, err := st.KBSearch(t.Context(), q.text, kbBasis(q.dim), names, boost, mode, 20)
+		if err != nil {
+			t.Fatalf("KBSearch: %v", err)
+		}
+		seen := map[string]bool{}
+		for _, h := range hits {
+			seen[h.Collection] = true
+		}
+		return seen
+	}
+	for mode := range queries {
+		t.Run(string(mode), func(t *testing.T) {
+			if seen := collections(nil, nil, mode); seen[system] || !seen[kbGoldenCollection] {
+				t.Fatalf("whole-KB search: collections %v, want operator ones only", seen)
+			}
+			if seen := collections(nil, []string{kbGoldenOther}, mode); seen[system] {
+				t.Fatalf("boost without the system collection leaked it: %v", seen)
+			}
+			if seen := collections(nil, []string{system}, mode); !seen[system] || !seen[kbGoldenCollection] {
+				t.Fatalf("boost naming the system collection: collections %v, want it beside operator ones", seen)
+			}
+			if seen := collections([]string{system}, nil, mode); !seen[system] || len(seen) != 1 {
+				t.Fatalf("scope to the system collection: collections %v, want it alone", seen)
+			}
+		})
+	}
+}
