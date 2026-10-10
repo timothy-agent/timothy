@@ -4,8 +4,10 @@ package retrieval
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -325,6 +327,203 @@ func rankOf(scored []Scored, id string) int {
 		}
 	}
 	return -1
+}
+
+// tilted returns a unit vector at cosine sim to basis(dim).
+func tilted(dim int, sim float64) store.Vector {
+	v := make(store.Vector, 1024)
+	v[dim] = float32(sim)
+	v[dim+1] = float32(math.Sqrt(1 - sim*sim))
+	return v
+}
+
+// TestRetrievalBumpKeepsDurableFact: a 200-day-old fact found by one
+// leg is dropped as stale, and one retrieval bump brings it back
+// (D-148).
+func TestRetrievalBumpKeepsDurableFact(t *testing.T) {
+	s, _ := seedGolden(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	id := insertActive(t, s, "The user's passport renewal office is in Haarlem.", 320)
+	if _, err := db.Exec(ctx, `UPDATE memories SET last_confirmed_at = now() - interval '200 days'
+		WHERE id = $1`, id); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	returned := func() bool {
+		cands, err := s.Search(ctx, "zzqx", basis(320), nil)
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		return rankOf(Fuse(cands, time.Now()), id) >= 0
+	}
+	if returned() {
+		t.Fatal("200-day-old single-leg fact survived without a bump; the fixture no longer shows the gap")
+	}
+	s.MarkRetrieved(ctx, []string{id})
+	if !returned() {
+		t.Fatal("200-day-old fact still dropped after a retrieval bump")
+	}
+}
+
+// TestVectorLegCosineFloor: hits under the D-149 floor are dropped,
+// so an off-topic turn can come back empty.
+func TestVectorLegCosineFloor(t *testing.T) {
+	s, _ := seedGolden(t)
+	ctx := t.Context()
+	id := insertActive(t, s, "The user keeps bees on the allotment.", 330)
+	for _, tc := range []struct {
+		sim  float64
+		want bool
+	}{{0.2, false}, {0.3, true}, {1, true}} {
+		cands, err := s.Search(ctx, "zzqx", tilted(330, tc.sim), nil)
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		_, got := cands[id]
+		if got != tc.want {
+			t.Fatalf("cosine %.2f: returned = %v, want %v", tc.sim, got, tc.want)
+		}
+	}
+
+	// Off-topic: an embedding near nothing in the corpus and no shared
+	// words or entities yields an empty block.
+	cands, err := s.Search(ctx, "what is 2+2", basis(999), nil)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	packed, _, err := Pack(Fuse(cands, time.Now()), 0, 0)
+	if err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	if len(packed) != 0 {
+		t.Fatalf("off-topic query packed %d memories, want none", len(packed))
+	}
+}
+
+// entity creates (or reuses) one entity; only ones it created are
+// deleted at cleanup, so a real entity of the same name survives.
+func entity(t *testing.T, s *Searcher, typ, name string) string {
+	t.Helper()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var id string
+	err = db.QueryRow(t.Context(), `INSERT INTO entities (type, name) VALUES ($1, $2)
+		ON CONFLICT (type, name) DO NOTHING RETURNING id`, typ, name).Scan(&id)
+	if err == nil {
+		t.Cleanup(func() {
+			conn, err := pgx.Connect(context.Background(), os.Getenv("DATABASE_URL"))
+			if err != nil {
+				return
+			}
+			defer func() { _ = conn.Close(context.Background()) }()
+			_, _ = conn.Exec(context.Background(), "DELETE FROM entities WHERE id = $1", id)
+		})
+		return id
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("insert entity: %v", err)
+	}
+	if err := db.QueryRow(t.Context(), `SELECT id FROM entities WHERE type = $1 AND name = $2`,
+		typ, name).Scan(&id); err != nil {
+		t.Fatalf("read entity: %v", err)
+	}
+	return id
+}
+
+// entityRanks runs only the entity leg and returns rank by memory id.
+func entityRanks(t *testing.T, s *Searcher, query string) map[string]int {
+	t.Helper()
+	m := &merger{into: map[string]*Candidate{}}
+	if err := s.leg(t.Context(), "entity", entitySQL, []any{query}, nil, m); err != nil {
+		t.Fatalf("entity leg: %v", err)
+	}
+	out := map[string]int{}
+	for id, c := range m.into {
+		out[id] = c.ranks["entity"]
+	}
+	return out
+}
+
+// TestEntityLegWordBoundary: names under 4 characters need a word
+// boundary, longer names still match inside words (D-149).
+func TestEntityLegWordBoundary(t *testing.T) {
+	s, _ := seedGolden(t)
+	ctx := t.Context()
+	st := store.New(s.db, s.log)
+	add := func(content string, refs ...string) string {
+		id, err := st.Insert(ctx, store.Memory{Type: store.TypeSemantic, Content: goldenMarker + " " + content,
+			Confidence: 0.9, Actor: store.ActorUser, EntityRefs: refs})
+		if err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		return id
+	}
+	goMem := add("Services are written in one compiled language.", entity(t, s, "topic", "Go"))
+	cppMem := add("The firmware uses one systems language.", entity(t, s, "topic", "C++"))
+	amsMem := add("The user lives near the canals.", entity(t, s, "place", "Amsterdam"))
+
+	for _, tc := range []struct {
+		query string
+		id    string
+		want  bool
+	}{
+		{"is this a good idea?", goMem, false},
+		{"Gopher stickers", goMem, false},
+		{"I write Go every day", goMem, true},
+		{"go", goMem, true},
+		{"Go's tooling", goMem, true},
+		{"(Go)", goMem, true},
+		{"is C++ fast?", cppMem, true},
+		{"is C fast?", cppMem, false},
+		{"weekend in Amsterdam", amsMem, true},
+		{"Amsterdam's canals", amsMem, true},
+		{"amsterdammers", amsMem, true},
+		{"Rotterdam", amsMem, false},
+	} {
+		_, got := entityRanks(t, s, tc.query)[tc.id]
+		if got != tc.want {
+			t.Errorf("%q: matched = %v, want %v", tc.query, got, tc.want)
+		}
+	}
+}
+
+// TestEntityLegOrdersByMatchQuality: more matched entities first, then
+// the longer matched name, and recency never outranks either (D-149).
+func TestEntityLegOrdersByMatchQuality(t *testing.T) {
+	s, _ := seedGolden(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	short := entity(t, s, "project", "Zephyrine")
+	long := entity(t, s, "project", "Zephyrine Rewrite")
+	st := store.New(s.db, s.log)
+	add := func(content string, ageDays int, refs ...string) string {
+		id, err := st.Insert(ctx, store.Memory{Type: store.TypeSemantic, Content: goldenMarker + " " + content,
+			Confidence: 0.9, Actor: store.ActorUser, EntityRefs: refs})
+		if err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		if _, err := db.Exec(ctx, `UPDATE memories SET last_confirmed_at = now() - make_interval(days => $2)
+			WHERE id = $1`, id, ageDays); err != nil {
+			t.Fatalf("backdate: %v", err)
+		}
+		return id
+	}
+	newest := add("Kickoff happened last week.", 0, short)
+	specific := add("The rewrite targets the new storage layer.", 20, long)
+	both := add("The rewrite replaces the old project core.", 40, short, long)
+
+	ranks := entityRanks(t, s, "how is the Zephyrine Rewrite going?")
+	if ranks[both] != 1 || ranks[specific] != 2 || ranks[newest] != 3 {
+		t.Fatalf("ranks both=%d specific=%d newest=%d, want 1/2/3", ranks[both], ranks[specific], ranks[newest])
+	}
 }
 
 // TestDecayPassRanksDecayedDuplicateLower runs a real decay pass and

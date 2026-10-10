@@ -1724,6 +1724,65 @@ func TestMemoryRetrieveInjectsIntoSystemTail(t *testing.T) {
 	}
 }
 
+func TestMemoryRetrieveQueryCarriesPreviousTurn(t *testing.T) {
+	t.Parallel()
+	log := newFakeLog()
+	gw := &fakeGW{events: okEvents("answer")}
+	svc := newService(gw, log)
+	var mu sync.Mutex
+	var queries []string
+	svc.SetMemoryRetrieve(func(_ context.Context, _, query string) MemoryRecall {
+		mu.Lock()
+		queries = append(queries, query)
+		mu.Unlock()
+		return MemoryRecall{}
+	})
+	for _, msg := range []string{"tell me about Marta", "and her birthday?"} {
+		gw.mu.Lock()
+		gw.events = okEvents("answer")
+		gw.mu.Unlock()
+		_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: msg})
+		if err != nil {
+			t.Fatalf("Chat: %v", err)
+		}
+		drain(t, ch)
+		waitFor(t, func() bool { return !svc.TurnActive("s1") })
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"tell me about Marta", "and her birthday?\ntell me about Marta"}
+	if !slices.Equal(queries, want) {
+		t.Fatalf("queries = %q, want %q", queries, want)
+	}
+}
+
+func TestMemoryQuery(t *testing.T) {
+	t.Parallel()
+	user := func(text string) session.Event {
+		payload, _ := json.Marshal(session.UserMessage{Text: text})
+		return session.Event{Kind: session.KindUserMessage, Payload: payload}
+	}
+	turn := session.Event{Kind: session.KindAssistantTurn, Payload: json.RawMessage(`{}`)}
+	long := strings.Repeat("a", 500) + strings.Repeat("é", 300)
+	tests := []struct {
+		name   string
+		events []session.Event
+		want   string
+	}{
+		{"first turn", []session.Event{user("now")}, "now"},
+		{"previous appended", []session.Event{user("before"), turn, user("now")}, "now\nbefore"},
+		{"only the turn right before", []session.Event{user("oldest"), turn, user("before"), turn, user("now")}, "now\nbefore"},
+		{"blank previous ignored", []session.Event{user("  "), turn, user("now")}, "now"},
+		{"bad payload ignored", []session.Event{{Kind: session.KindUserMessage, Payload: json.RawMessage(`x`)}, user("now")}, "now"},
+		{"tail bounded in runes", []session.Event{user(long), turn, user("now")}, "now\n" + strings.Repeat("a", 100) + strings.Repeat("é", 300)},
+	}
+	for _, tc := range tests {
+		if got := memoryQuery(tc.events, "now"); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // chatRequest returns the turn's actual chat call (auto-title fires a
 // second, purposeless mini request on first exchanges).
 func chatRequest(t *testing.T, gw *fakeGW) gwclient.StreamRequest {
