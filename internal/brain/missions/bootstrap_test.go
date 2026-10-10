@@ -185,7 +185,7 @@ func TestPlanPromptBootstrapRule(t *testing.T) {
 				t.Fatalf("bootstrapAllowed = %v, want %v", allowed, tc.want)
 			}
 			for _, hasPlan := range []bool{false, true} {
-				got := strings.Contains(planSystemPrompt(hasPlan, allowed), "bootstrap=true")
+				got := strings.Contains(planSystemPrompt(hasPlan, allowed, tc.kind == KindCoding), "bootstrap=true")
 				if got != tc.want {
 					t.Fatalf("hasPlan=%v: prompt carries bootstrap rule = %v, want %v", hasPlan, got, tc.want)
 				}
