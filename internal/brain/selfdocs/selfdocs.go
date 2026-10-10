@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 )
@@ -175,8 +176,8 @@ type Deps struct {
 // Sync loads the bundle in d.Dir and, when its hash differs from the
 // one last ingested in full, replaces the collection's documents and
 // ingests each through memoryd. The bundle row moves only after every
-// page ingested, so a failure retries on the next boot. A missing
-// bundle is ErrNoBundle.
+// page ingested, so a failed run is safe to repeat. A missing bundle is
+// ErrNoBundle.
 func Sync(ctx context.Context, d Deps) error {
 	b, err := Load(d.Dir)
 	if err != nil {
@@ -214,4 +215,25 @@ func Sync(ctx context.Context, d Deps) error {
 	}
 	d.Log.Info("selfdocs: bundle ingested", "collection", d.Name, "version", b.Version, "pages", len(ids), "chunks", chunks)
 	return nil
+}
+
+// SyncRetry runs Sync until it succeeds, the bundle is missing or ctx
+// ends. After each failure it calls onErr and waits, starting at base
+// and doubling up to maxWait: at boot the gateway may not embed yet
+// (issue #1158).
+func SyncRetry(ctx context.Context, d Deps, base, maxWait time.Duration, onErr func(error)) error {
+	wait := base
+	for {
+		err := Sync(ctx, d)
+		if err == nil || errors.Is(err, ErrNoBundle) || ctx.Err() != nil {
+			return err
+		}
+		onErr(err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+		wait = min(wait*2, maxWait)
+	}
 }
