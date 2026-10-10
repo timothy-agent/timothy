@@ -71,6 +71,8 @@ func main() {
 		Demoted:  app.Metrics.NewCounter("memory_demoted_total", "Unused pending memories demoted by the usage-driven decay pass."),
 		PendingDeduped: app.Metrics.NewCounter("memory_pending_deduped_total",
 			"Pending memories rejected as a near-duplicate of another still-pending proposal."),
+		Reflected: app.Metrics.NewCounter("memory_reflections_created_total",
+			"Semantic insights inserted by the reflection pass."),
 	})
 	consolidator.SetReflector(extractor)
 	kbStore := store.NewKBStore(app.DB)

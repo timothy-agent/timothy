@@ -670,6 +670,20 @@ func TestNoteToolExemption(t *testing.T) {
 	}
 }
 
+// TestTimothyHelpExemption pins issue #1127: timothy_help is a pure
+// read and never asks.
+func TestTimothyHelpExemption(t *testing.T) {
+	t.Parallel()
+	p := NewPermissions(nil, "/workspace")
+	res, err := p.Resolve(t.Context(), "s1", "timothy_help", json.RawMessage(`{"query":"what can you do"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.isExempt("timothy_help") || res.Decision != DecisionAllow {
+		t.Fatalf("timothy_help exempt=%v decision=%v, want exempt allow", p.isExempt("timothy_help"), res.Decision)
+	}
+}
+
 func TestRememberPermissionExemptionAllowsPendingReviewWrites(t *testing.T) {
 	t.Parallel()
 	p := NewPermissions(nil, "/workspace")

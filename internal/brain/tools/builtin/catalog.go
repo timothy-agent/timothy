@@ -25,6 +25,7 @@ func Catalog() []*tools.Tool {
 		SearchMemory(nil),
 		ShareFile(ShareFileConfig{}),
 		Shell(ShellConfig{}),
+		TimothyHelp(TimothyHelpConfig{}),
 		WebFetch(WebFetchConfig{}),
 		WebSearch(""),
 		WriteFile(WriteFileConfig{}),

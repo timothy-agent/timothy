@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"strings"
 	"testing"
 
@@ -247,43 +248,64 @@ type fakeStore struct {
 	}
 	nextID            int
 	pendingCorrection bool
+	// rejected maps rejected contents to ids for RejectedWithContent.
+	rejected map[string]string
+	// failInsert fails ApplyExtraction at that 1-based proposal; staged
+	// writes are discarded like a rolled-back transaction.
+	failInsert  int
+	textLookups int
 }
 
 func (s *fakeStore) HasPendingCorrection(context.Context, string) (bool, error) {
 	return s.pendingCorrection, nil
 }
 
-func (s *fakeStore) Insert(_ context.Context, m store.Memory) (string, error) {
-	s.nextID++
-	id := fmt.Sprintf("mem-%d", s.nextID)
-	s.inserted = append(s.inserted, m)
-	return id, nil
-}
-
 func (s *fakeStore) Get(_ context.Context, id string) (store.Memory, error) {
 	return store.Memory{ID: id, Content: s.nearest.content, Status: s.nearest.status}, nil
 }
 
-func (s *fakeStore) Promote(_ context.Context, id string) error {
-	s.promoted = append(s.promoted, id)
-	return nil
+func (s *fakeStore) RejectedWithContent(_ context.Context, content string) (string, bool, error) {
+	s.textLookups++
+	id, ok := s.rejected[strings.TrimSuffix(strings.ToLower(strings.Join(strings.Fields(content), " ")), ".")]
+	return id, ok, nil
 }
 
-func (s *fakeStore) Confirm(_ context.Context, id string, confidence float32) error {
-	s.confirmed = append(s.confirmed, id)
-	s.confirmedConfidence = append(s.confirmedConfidence, confidence)
-	return nil
-}
-
-func (s *fakeStore) UpsertEntity(_ context.Context, typ, name string) (string, error) {
-	if s.entities == nil {
-		s.entities = map[string]string{}
+func (s *fakeStore) ApplyExtraction(_ context.Context, confirm []store.Confirmation, proposals []store.Proposal) ([]string, error) {
+	entities := maps.Clone(s.entities)
+	if entities == nil {
+		entities = map[string]string{}
 	}
-	key := typ + "/" + name
-	if _, ok := s.entities[key]; !ok {
-		s.entities[key] = "ent-" + key
+	var inserted []store.Memory
+	var ids, promoted []string
+	nextID := s.nextID
+	for i, p := range proposals {
+		m := p.Memory
+		for _, e := range p.Entities {
+			key := e.Type + "/" + e.Name
+			if _, ok := entities[key]; !ok {
+				entities[key] = "ent-" + key
+			}
+			m.EntityRefs = append(m.EntityRefs, entities[key])
+		}
+		if s.failInsert == i+1 {
+			return nil, fmt.Errorf("insert %d: boom", i+1)
+		}
+		nextID++
+		id := fmt.Sprintf("mem-%d", nextID)
+		inserted = append(inserted, m)
+		ids = append(ids, id)
+		if p.Promote {
+			promoted = append(promoted, id)
+		}
 	}
-	return s.entities[key], nil
+	s.entities, s.nextID = entities, nextID
+	s.inserted = append(s.inserted, inserted...)
+	s.promoted = append(s.promoted, promoted...)
+	for _, c := range confirm {
+		s.confirmed = append(s.confirmed, c.ID)
+		s.confirmedConfidence = append(s.confirmedConfidence, c.Confidence)
+	}
+	return ids, nil
 }
 
 func (s *fakeStore) NearestActive(context.Context, store.Vector) (string, float64, store.Status, bool, error) {
@@ -632,6 +654,65 @@ func TestEchoesDeny(t *testing.T) {
 	}
 }
 
+// A deny line under 3 content words only echoes when the fact is
+// mostly that phrase (#878, D-145).
+func TestEchoesDenyShortDeny(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		content string
+		deny    string
+		want    bool
+	}{
+		{name: "one word in long fact", content: "The bKash production API requires research approval before launch.", deny: "Research", want: false},
+		{name: "one word alone", content: "Research.", deny: "Research", want: true},
+		{name: "one word in two-word fact", content: "Research mission.", deny: "Research", want: true},
+		{name: "one word in three-word fact", content: "Research mission completed.", deny: "Research", want: false},
+		{name: "stopwords do not count", content: "It was the research.", deny: "Research", want: true},
+		{name: "two words in four-word fact", content: "Understanding redirects mission completed.", deny: "Understanding Redirects", want: true},
+		{name: "two words in long fact", content: "Understanding redirects matters because the CDN rewrites 301 responses to 302.", deny: "Understanding Redirects", want: false},
+		{name: "three-word deny keeps containment", content: "The user mandated a mission goal to deploy the billing service tonight at nine.", deny: "deploy billing service", want: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := echoesDeny(tc.content, []string{tc.deny}); got != tc.want {
+				t.Fatalf("echoesDeny(%q, %q) = %v, want %v", tc.content, tc.deny, got, tc.want)
+			}
+		})
+	}
+}
+
+// Operator setting values keep plain containment: a long fact carrying
+// the timezone is still fenced.
+func TestMentionsSettingKeepsContainment(t *testing.T) {
+	t.Parallel()
+	if !mentionsSetting("User timezone preference is Europe/Amsterdam; interpret all times in Europe/Amsterdam.", []string{"Europe/Amsterdam"}) {
+		t.Fatal("timezone restatement not fenced")
+	}
+	if mentionsSetting("User is attending a concert in Amsterdam on 5 September 2026.", []string{"Europe/Amsterdam"}) {
+		t.Fatal("unrelated Amsterdam fact fenced")
+	}
+}
+
+// A mission titled with one common word no longer drops every fact
+// that mentions it.
+func TestExtractMissionShortTitleKeepsFacts(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[` +
+		`{"type":"semantic","content":"The bKash production API requires research approval before launch.","entities":[],"confidence":0.9,"changes_behavior":true},` +
+		`{"type":"semantic","content":"Research.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
+	st := &fakeStore{}
+	digest := "mission goal: Look into how bKash approvals work for production keys\nmission title: Research\nmission kind: research\n"
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: digest, Source: "mission"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 1 || !strings.Contains(st.inserted[0].Content, "bKash") {
+		t.Fatalf("want the bKash fact kept and the bare title echo dropped: inserted=%+v", st.inserted)
+	}
+}
+
 func TestExtractRetriesOnInvalidJSON(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGateway{replies: []string{
@@ -706,21 +787,30 @@ func (g *embedlessGateway) Embed(context.Context, []string, string) ([][]float32
 	return nil, "", fmt.Errorf("no route for task category embedding")
 }
 
+// Without embeddings facts still store, and the text fallback still
+// drops a normalized-equal rejected fact (#878).
 func TestExtractDegradesWithoutEmbeddings(t *testing.T) {
 	t.Parallel()
-	gw := &embedlessGateway{fakeGateway{replies: []string{
-		`[{"type":"episodic","content":"Deployed v2 on 2026-07-11.","entities":[],"confidence":0.9,"changes_behavior":true}]`,
+	gw := &embedlessGateway{fakeGateway{replies: []string{`[` +
+		`{"type":"episodic","content":"Deployed v2 on 2026-07-11.","entities":[],"confidence":0.9,"changes_behavior":true},` +
+		`{"type":"semantic","content":"  User   lives in PORTO ","entities":[{"type":"place","name":"Porto"}],"confidence":0.9,"changes_behavior":true}]`,
 	}}}
-	st := &fakeStore{}
+	st := &fakeStore{rejected: map[string]string{"user lives in porto": "rejected-1"}}
 	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
 	if err != nil {
 		t.Fatalf("Extract must degrade, not fail: %v", err)
 	}
-	if len(ids) != 1 || len(st.inserted) != 1 {
-		t.Fatalf("fact not stored: ids=%v", ids)
+	if len(ids) != 1 || len(st.inserted) != 1 || st.inserted[0].Content != "Deployed v2 on 2026-07-11." {
+		t.Fatalf("want only the non-rejected fact stored: ids=%v inserted=%+v", ids, st.inserted)
 	}
 	if len(st.inserted[0].Embedding) != 0 {
 		t.Fatal("phantom embedding attached")
+	}
+	if st.textLookups != 2 {
+		t.Fatalf("text lookups = %d, want one per fact", st.textLookups)
+	}
+	if len(st.entities) != 0 {
+		t.Fatalf("entities = %v, want none for the dropped fact", st.entities)
 	}
 	// Promotion policy still applies in degraded mode.
 	if len(st.promoted) != 1 {
@@ -787,6 +877,82 @@ func TestExtractCountsGateDrops(t *testing.T) {
 				t.Fatalf("%d gate series, want only %s", total, tc.gate)
 			}
 		})
+	}
+}
+
+// Without embeddings, the rejected text match counts as a rejected
+// duplicate too.
+func TestExtractCountsTextFallbackRejectedDrop(t *testing.T) {
+	t.Parallel()
+	gw := &embedlessGateway{fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}}
+	st := &fakeStore{rejected: map[string]string{"user lives in porto": "rejected-1"}}
+	drops := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "drops"}, []string{"gate"})
+	e := New(gw, st, testLog())
+	e.SetGateDrops(drops)
+	if _, err := e.Extract(t.Context(), Request{Text: "x"}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if got := testutil.ToFloat64(drops.WithLabelValues(gateRejectedDuplicate)); got != 1 {
+		t.Fatalf("drops{gate=%s} = %v, want 1", gateRejectedDuplicate, got)
+	}
+}
+
+// With embeddings the vector path decides; the text fallback is not
+// consulted.
+func TestExtractSkipsTextFallbackWithEmbeddings(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
+	st := &fakeStore{rejected: map[string]string{"user lives in porto": "rejected-1"}}
+	if _, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if st.textLookups != 0 {
+		t.Fatalf("text lookups = %d, want 0 when embeddings exist", st.textLookups)
+	}
+}
+
+// A failure on the 2nd insert rolls the whole run back (#878): no rows,
+// no entities, no promotions, no confirmations, no ids.
+func TestExtractRollsBackRunOnInsertError(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{
+		replies: []string{`[` +
+			`{"type":"episodic","content":"Deployed v2 on 2026-07-11.","entities":[{"type":"project","name":"v2"}],"confidence":0.9,"changes_behavior":true},` +
+			`{"type":"semantic","content":"User lives in Porto.","entities":[{"type":"place","name":"Porto"}],"confidence":0.9,"changes_behavior":true},` +
+			`{"type":"semantic","content":"User likes tea.","entities":[],"confidence":0.9,"changes_behavior":true}]`},
+		embeds: [][]float32{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}},
+	}
+	st := &fakeStore{failInsert: 2}
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err == nil {
+		t.Fatal("Extract succeeded, want the insert error")
+	}
+	if ids != nil || len(st.inserted) != 0 || len(st.entities) != 0 || len(st.promoted) != 0 || len(st.confirmed) != 0 {
+		t.Fatalf("partial batch left behind: ids=%v inserted=%d entities=%v promoted=%v confirmed=%v",
+			ids, len(st.inserted), st.entities, st.promoted, st.confirmed)
+	}
+}
+
+// Two facts in one run correcting the same active row queue one
+// correction, as they did when the first insert was visible to the
+// second fact's pending-correction check.
+func TestExtractOneCorrectionPerActiveRowPerRun(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{
+		replies: []string{`[` +
+			`{"type":"semantic","content":"User lives in Berlin.","entities":[],"confidence":0.9,"changes_behavior":true},` +
+			`{"type":"semantic","content":"User lives in Munich.","entities":[],"confidence":0.9,"changes_behavior":true}]`},
+		embeds: [][]float32{{1, 0}, {0, 1}},
+	}
+	st := &fakeStore{}
+	st.nearest.id, st.nearest.sim, st.nearest.status, st.nearest.ok = "active-1", 0.96, store.StatusActive, true
+	st.nearest.content = "User lives in Amsterdam."
+	ids, err := New(gw, st, testLog()).Extract(t.Context(), Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 1 || len(st.inserted) != 1 || st.inserted[0].Supersedes != "active-1" {
+		t.Fatalf("want one correction: ids=%v inserted=%+v", ids, st.inserted)
 	}
 }
 
