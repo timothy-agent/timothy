@@ -143,7 +143,7 @@ func TestUntrustedToolOutputRememberIsPendingInStore(t *testing.T) {
 	if got.Status != store.StatusPending || got.Actor != store.ActorUser || got.Content != content {
 		t.Fatalf("stored memory = %+v, want pending user memory", got)
 	}
-	queue, err := st.ListByStatus(t.Context(), store.StatusPending)
+	queue, err := st.ListByStatus(t.Context(), store.StatusPending, store.Page{})
 	if err != nil {
 		t.Fatalf("ListByStatus: %v", err)
 	}

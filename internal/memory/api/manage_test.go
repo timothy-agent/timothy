@@ -20,7 +20,13 @@ import (
 type fakeManager struct {
 	memories             map[string]store.Memory
 	listed               []store.Memory
-	promoted             []string
+	listStatus           store.Status
+	listPage             store.Page
+	listTypes            []store.MemoryType
+	count                int
+	countStatus          store.Status
+	entityPage           store.Page
+	promoted            []string
 	rejected             []string
 	inserted             []store.Memory
 	superseded           map[string]string
@@ -45,8 +51,14 @@ func newFakeManager() *fakeManager {
 	return &fakeManager{memories: map[string]store.Memory{}, superseded: map[string]string{}}
 }
 
-func (f *fakeManager) ListByStatus(_ context.Context, status store.Status, types ...store.MemoryType) ([]store.Memory, error) {
+func (f *fakeManager) ListByStatus(_ context.Context, status store.Status, page store.Page, types ...store.MemoryType) ([]store.Memory, error) {
+	f.listStatus, f.listPage, f.listTypes = status, page, types
 	return f.listed, nil
+}
+
+func (f *fakeManager) CountByStatus(_ context.Context, status store.Status) (int, error) {
+	f.countStatus = status
+	return f.count, nil
 }
 
 func (f *fakeManager) Get(_ context.Context, id string) (store.Memory, error) {
@@ -150,6 +162,79 @@ func TestListDefaultsToPendingQueue(t *testing.T) {
 	}
 	if len(out.Memories) != 1 || out.Memories[0].ID != "p1" {
 		t.Fatalf("out = %+v", out)
+	}
+	if fm.listStatus != store.StatusPending || fm.listPage.Limit != 50 || !fm.listPage.Before.IsZero() {
+		t.Fatalf("listStatus=%q page=%+v, want pending first page", fm.listStatus, fm.listPage)
+	}
+}
+
+func TestListPassesFiltersAndCursor(t *testing.T) {
+	t.Parallel()
+	const before = "2026-10-01T12:00:00.123456Z"
+	const beforeID = "22222222-2222-4222-8222-222222222222"
+	fm := newFakeManager()
+	rec := httptest.NewRecorder()
+	manageAPI(fm).handleList(rec, httptest.NewRequest(http.MethodGet,
+		"/v1/memories?status=active&types=episodic,semantic&limit=10&before="+before+"&before_id="+beforeID, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	want, _ := time.Parse(time.RFC3339Nano, before)
+	if fm.listStatus != store.StatusActive || len(fm.listTypes) != 2 || fm.listTypes[0] != store.TypeEpisodic ||
+		fm.listPage.Limit != 10 || fm.listPage.BeforeID != beforeID || !fm.listPage.Before.Equal(want) {
+		t.Fatalf("status=%q types=%v page=%+v", fm.listStatus, fm.listTypes, fm.listPage)
+	}
+}
+
+func TestListRejectsBadPageParams(t *testing.T) {
+	t.Parallel()
+	for _, q := range []string{
+		"before=2026-10-01T12:00:00Z",
+		"before_id=22222222-2222-4222-8222-222222222222",
+		"before=yesterday&before_id=22222222-2222-4222-8222-222222222222",
+		"before=2026-10-01T12:00:00Z&before_id=nope",
+		"limit=0",
+		"limit=201",
+	} {
+		rec := httptest.NewRecorder()
+		manageAPI(newFakeManager()).handleList(rec, httptest.NewRequest(http.MethodGet, "/v1/memories?"+q, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status = %d, want 400", q, rec.Code)
+		}
+	}
+}
+
+func TestListEncodesFullPrecisionCreatedAt(t *testing.T) {
+	t.Parallel()
+	fm := newFakeManager()
+	fm.listed = []store.Memory{{ID: "p1", Status: store.StatusPending,
+		CreatedAt: time.Date(2026, 10, 1, 12, 0, 0, 123456000, time.UTC)}}
+	rec := httptest.NewRecorder()
+	manageAPI(fm).handleList(rec, httptest.NewRequest(http.MethodGet, "/v1/memories", nil))
+	if !strings.Contains(rec.Body.String(), `"created_at":"2026-10-01T12:00:00.123456Z"`) {
+		t.Fatalf("body = %s, want microsecond created_at for the cursor", rec.Body)
+	}
+}
+
+func TestCountByStatus(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		query string
+		want  store.Status
+	}{
+		{"", store.StatusPending},
+		{"?status=active", store.StatusActive},
+	} {
+		fm := newFakeManager()
+		fm.count = 7
+		rec := httptest.NewRecorder()
+		manageAPI(fm).handleCount(rec, httptest.NewRequest(http.MethodGet, "/v1/memories/count"+tc.query, nil))
+		if rec.Code != http.StatusOK || fm.countStatus != tc.want {
+			t.Fatalf("%q: status=%d countStatus=%q", tc.query, rec.Code, fm.countStatus)
+		}
+		if strings.TrimSpace(rec.Body.String()) != `{"count":7}` {
+			t.Fatalf("%q: body = %s", tc.query, rec.Body)
+		}
 	}
 }
 

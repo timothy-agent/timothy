@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MemoryItem } from '../api/types'
@@ -16,6 +16,7 @@ vi.mock('../onboarding/context', async () => {
 vi.mock('../api/client', () => ({
   getToken: vi.fn(() => ''),
   listMemories: vi.fn(),
+  countMemories: vi.fn().mockResolvedValue(0),
   addMemory: vi.fn(),
   resolveMemory: vi.fn(),
   memoryChain: vi.fn(),
@@ -49,8 +50,51 @@ vi.mock('echarts/components', () => ({
 }))
 vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }))
 
-import { addMemory, entityGraph, listMemories, memoryChain, resolveMemory, searchMemories } from '../api/client'
+import {
+  addMemory,
+  countMemories,
+  entityGraph,
+  listMemories,
+  memoryChain,
+  resolveMemory,
+  searchMemories,
+} from '../api/client'
 import { toast } from 'sonner'
+
+// jsdom has no IntersectionObserver: keep each observer's callback so a
+// test can report the sentinel as visible.
+let observerCallbacks: IntersectionObserverCallback[] = []
+class FakeIntersectionObserver {
+  constructor(cb: IntersectionObserverCallback) {
+    observerCallbacks.push(cb)
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return []
+  }
+}
+
+function scrollToSentinel() {
+  const cb = observerCallbacks.at(-1)
+  act(() => {
+    cb?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
+  })
+}
+
+// page builds n memories newest first, starting at minute `from`.
+function page(status: MemoryItem['status'], n: number, from = 0): MemoryItem[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `${status}-${String(from + i).padStart(3, '0')}`,
+    type: 'semantic',
+    content: `${status} fact ${from + i}`,
+    status,
+    confidence: 0.9,
+    actor: 'agent',
+    created_at: new Date(Date.UTC(2026, 9, 1, 12, 0) - (from + i) * 60_000).toISOString(),
+  }))
+}
 
 const pendingMemory: MemoryItem = {
   id: 'm1',
@@ -75,6 +119,8 @@ function renderPage(initialEntry = '/memory') {
 
 afterEach(cleanup)
 beforeEach(() => {
+  observerCallbacks = []
+  vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
   vi.clearAllMocks()
   vi.mocked(listMemories).mockResolvedValue([pendingMemory])
   vi.mocked(resolveMemory).mockResolvedValue(undefined)
@@ -148,10 +194,71 @@ describe('Memory queue', () => {
     await waitFor(() => expect(resolveMemory).toHaveBeenCalledTimes(2))
   })
 
+  it('bulk confirm pages through and resolves every pending memory', async () => {
+    const first = page('pending', 50)
+    const last = first[49]
+    vi.mocked(listMemories).mockImplementation((_status, opts) =>
+      Promise.resolve(opts?.cursor ? page('pending', 10, 50) : first),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(50))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm all' }))
+    await waitFor(() => expect(resolveMemory).toHaveBeenCalledTimes(60))
+    expect(listMemories).toHaveBeenCalledWith('pending', {
+      cursor: { before: last.created_at, beforeId: last.id },
+    })
+    const resolvedIds = vi.mocked(resolveMemory).mock.calls.map(([id, action]) => {
+      expect(action).toBe('confirm')
+      return id
+    })
+    expect(new Set(resolvedIds).size).toBe(60)
+    expect(resolvedIds).toContain('pending-059')
+  })
+
   it('shows the empty state when nothing is pending', async () => {
     vi.mocked(listMemories).mockResolvedValue([])
     renderPage()
     expect(await screen.findByText(/Queue is empty/)).toBeInTheDocument()
+  })
+
+  it('loads the next page on scroll without duplicates and shows the server count', async () => {
+    const first = page('pending', 50)
+    const last = first[49]
+    vi.mocked(countMemories).mockResolvedValue(52)
+    vi.mocked(listMemories).mockImplementation((_status, opts) =>
+      Promise.resolve(opts?.cursor ? [last, ...page('pending', 2, 50)] : first),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(50))
+    expect(await screen.findByText('52 pending')).toBeInTheDocument()
+    scrollToSentinel()
+    await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(52))
+    expect(listMemories).toHaveBeenLastCalledWith('pending', {
+      cursor: { before: last.created_at, beforeId: last.id },
+    })
+    expect(screen.queryByTestId('queue-sentinel')).toBeNull()
+  })
+
+  it('resolving a card refetches page 1 only and keeps loaded older pages', async () => {
+    const first = page('pending', 50)
+    vi.mocked(listMemories).mockImplementation((_status, opts) =>
+      Promise.resolve(opts?.cursor ? page('pending', 3, 50) : first),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(50))
+    scrollToSentinel()
+    await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(53))
+
+    vi.mocked(listMemories).mockClear()
+    // Page 1 after the resolve: the next row moves up into it.
+    vi.mocked(listMemories).mockResolvedValue([...first.slice(1), ...page('pending', 1, 50)])
+    fireEvent.click(screen.getAllByRole('button', { name: 'Confirm' })[0])
+    await waitFor(() => expect(resolveMemory).toHaveBeenCalledWith('pending-000', 'confirm', undefined))
+    await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(52))
+    expect(listMemories).toHaveBeenCalledTimes(1)
+    expect(listMemories).toHaveBeenCalledWith('pending', { cursor: undefined })
+    expect(screen.queryByText('pending fact 0')).toBeNull()
+    expect(screen.getByText('pending fact 52')).toBeInTheDocument()
   })
 })
 
@@ -198,6 +305,25 @@ describe('Memory graph tab', () => {
 })
 
 describe('Memory browser', () => {
+  it('loads more active memories on scroll without duplicates', async () => {
+    const first = page('active', 50)
+    const last = first[49]
+    vi.mocked(listMemories).mockImplementation((status, opts) => {
+      if (status === 'pending') return Promise.resolve([])
+      return Promise.resolve(opts?.cursor ? [last, ...page('active', 4, 50)] : first)
+    })
+    renderPage()
+    fireEvent.click(await screen.findByRole('radio', { name: 'Browser' }))
+    await screen.findByText('active fact 49')
+    scrollToSentinel()
+    await screen.findByText('active fact 53')
+    expect(listMemories).toHaveBeenLastCalledWith('active', {
+      cursor: { before: last.created_at, beforeId: last.id },
+    })
+    expect(screen.getAllByText(/^active fact /)).toHaveLength(54)
+    expect(screen.queryByTestId('browse-sentinel')).toBeNull()
+  })
+
   it('shows when a manual add needs review', async () => {
     vi.mocked(addMemory).mockResolvedValue({ id: 'm2', status: 'pending' })
     renderPage()
