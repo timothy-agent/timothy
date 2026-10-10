@@ -310,6 +310,15 @@ AGENTS.md so other work does not pay for it every session.
   non-empty one as `missions.final_output`, the web Result panel
   prefers it over `last_evidence`, and `PRBody` renders it in
   `<details>` (60k rune cap).
+- Scope rule (D-151, issue #1173): a coding mission's plan prompt and
+  both worker system prompts (native, and the delegated system append
+  every CLI adapter carries) end with `codingScopeRule`: change only
+  what the goal needs, evidence belongs in the PR the harness fills, no
+  new report, test-log or audit-output file unless the goal asks (the
+  D-134 gate enforces new report artifacts). Prompt only. Generic
+  default only: stricter preferences (e.g. leave existing report
+  files alone) go in the agent's prompt overlay, which `PlanSession`
+  appends to the plan system prompt as the worker packet does.
 - Environment facts (issue #1008): `renderEnvFacts` (envfacts.go)
   appends one deterministic block to the discover, plan, reviewer
   (native and delegated) and worker (native and delegated) prompts:

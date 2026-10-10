@@ -150,6 +150,16 @@ export const connectorPresets: ConnectorPreset[] = [
     description: 'Any calendar via CalDAV, list and create events.',
     brandColor: '#64748B',
   },
+  {
+    id: 'custom-mcp',
+    name: 'Custom MCP server',
+    kind: 'mcp',
+    description: 'Any streamable-HTTP MCP endpoint',
+    brandColor: '#4B5563',
+    endpoint: '',
+    endpointHint: 'The server’s streamable-HTTP endpoint, e.g. https://mcp.example.com/mcp',
+    tokenHint: 'Optional. Leave empty for servers without auth.',
+  },
 ]
 
 // Fallback for connectors that predate a preset removal / don't match
@@ -193,5 +203,10 @@ function matchesPreset(
 // presetFor resolves a connector to its friendly preset (name, logo,
 // description) by kind + scopes, falling back to unknownPreset.
 export function presetFor(c: { kind: string; config: Record<string, unknown> }): ConnectorPreset {
-  return connectorPresets.find((p) => matchesPreset(c, p)) ?? unknownPreset
+  const match = connectorPresets.find((p) => matchesPreset(c, p))
+  if (match) return match
+  // An mcp connector whose endpoint matches no catalog entry was added
+  // through the custom tile (or predates one), so it renders as that.
+  if (c.kind === 'mcp') return connectorPresets.find((p) => p.id === 'custom-mcp') ?? unknownPreset
+  return unknownPreset
 }
