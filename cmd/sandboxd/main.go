@@ -9,13 +9,16 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/platform/config"
 	"github.com/SumonMSelim/timothy/internal/platform/httpserver"
@@ -82,9 +85,62 @@ func newBackend(ctx context.Context, log *slog.Logger) (sandboxd.Backend, error)
 	switch name {
 	case sandboxd.BackendDocker:
 		return sandboxd.NewDocker(ctx, image, log)
+	case sandboxd.BackendKubernetes:
+		cfg, err := kubernetesConfig(image)
+		if err != nil {
+			return nil, err
+		}
+		return sandboxd.NewKubernetes(cfg, log)
 	default:
 		return nil, fmt.Errorf("sandbox: backend %q is not available in this build", name)
 	}
+}
+
+// kubernetesConfig reads the Kubernetes backend's SANDBOXD_K8S_* env.
+// Node selector is "key=value,key=value"; tolerations are the JSON
+// list a pod spec carries.
+func kubernetesConfig(image string) (sandboxd.KubernetesConfig, error) {
+	cfg := sandboxd.KubernetesConfig{
+		Image:          image,
+		Namespace:      os.Getenv("SANDBOXD_K8S_NAMESPACE"),
+		Owner:          os.Getenv("SANDBOXD_K8S_OWNER"),
+		WorkspacePVC:   os.Getenv("SANDBOXD_K8S_WORKSPACE_PVC"),
+		StatePVC:       os.Getenv("SANDBOXD_K8S_STATE_PVC"),
+		ToolchainsPVC:  os.Getenv("SANDBOXD_K8S_TOOLCHAINS_PVC"),
+		CachesPVC:      os.Getenv("SANDBOXD_K8S_CACHES_PVC"),
+		RuntimeClass:   os.Getenv("SANDBOXD_K8S_RUNTIME_CLASS"),
+		SkipImageCheck: os.Getenv("SANDBOXD_K8S_SKIP_IMAGE_CHECK") == "true",
+	}
+	if v := os.Getenv("SANDBOXD_K8S_NODE_SELECTOR"); v != "" {
+		cfg.NodeSelector = map[string]string{}
+		for _, pair := range strings.Split(v, ",") {
+			k, val, ok := strings.Cut(strings.TrimSpace(pair), "=")
+			if !ok || k == "" {
+				return cfg, fmt.Errorf("sandbox: SANDBOXD_K8S_NODE_SELECTOR: bad pair %q", pair)
+			}
+			cfg.NodeSelector[k] = val
+		}
+	}
+	if v := os.Getenv("SANDBOXD_K8S_TOLERATIONS"); v != "" {
+		if err := json.Unmarshal([]byte(v), &cfg.Tolerations); err != nil {
+			return cfg, fmt.Errorf("sandbox: SANDBOXD_K8S_TOLERATIONS: %w", err)
+		}
+	}
+	for _, d := range []struct {
+		name string
+		dst  *time.Duration
+	}{{"SANDBOXD_K8S_SANDBOX_TTL", &cfg.SandboxTTL}, {"SANDBOXD_K8S_READY_TIMEOUT", &cfg.ReadyTimeout}} {
+		v := os.Getenv(d.name)
+		if v == "" {
+			continue
+		}
+		parsed, err := time.ParseDuration(v)
+		if err != nil {
+			return cfg, fmt.Errorf("sandbox: %s: %w", d.name, err)
+		}
+		*d.dst = parsed
+	}
+	return cfg, nil
 }
 
 // health assembles /health's checks from the backend: runtime
