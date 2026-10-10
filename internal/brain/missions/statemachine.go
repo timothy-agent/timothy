@@ -77,7 +77,7 @@ func nextPhase(flow Flow, p Phase) (Phase, bool) {
 // from rows a data migration hasn't touched yet or from historical
 // mission_events payloads after a rollback. execute maps straight to
 // build, having been renamed twice. Drop this branch once the
-// migrations in scripts/pending-alters.md have run everywhere and the
+// the operator's pending alters have run everywhere and the
 // first stable release ships.
 func parsePhase(raw string) (Phase, bool) {
 	switch Phase(raw) {
