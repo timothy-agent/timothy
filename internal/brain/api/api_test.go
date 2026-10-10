@@ -324,6 +324,7 @@ func TestMemoryProxyScopedToDocumentedRoutes(t *testing.T) {
 	// Every documented pattern reaches the proxy behind the bearer.
 	for _, c := range []struct{ method, path string }{
 		{http.MethodGet, "/v1/memories"},
+		{http.MethodGet, "/v1/memories/count"},
 		{http.MethodPost, "/v1/memories"},
 		{http.MethodPost, "/v1/memories/abc"},
 		{http.MethodGet, "/v1/memories/abc/chain"},
@@ -335,8 +336,8 @@ func TestMemoryProxyScopedToDocumentedRoutes(t *testing.T) {
 			t.Fatalf("%s %s = %d, want 200", c.method, c.path, code)
 		}
 	}
-	if proxied != 7 {
-		t.Fatalf("proxied = %d, want 7", proxied)
+	if proxied != 8 {
+		t.Fatalf("proxied = %d, want 8", proxied)
 	}
 
 	// memoryd-internal routes must never be reachable through brain —
