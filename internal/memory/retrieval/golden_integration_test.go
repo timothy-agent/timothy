@@ -191,7 +191,7 @@ func seedGolden(t *testing.T) (*Searcher, map[string]string) {
 		}
 		idByKey[f.key] = id
 	}
-	return NewSearcher(pool, log), idByKey
+	return NewSearcher(pool, log, Metrics{}), idByKey
 }
 
 // recallAt5 runs every golden query through search+fuse and returns

@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
@@ -123,10 +125,36 @@ type Extractor struct {
 	gw    Gateway
 	store Storer
 	log   *slog.Logger
+	drops *prometheus.CounterVec // gate label; nil disables
 }
 
 func New(gw Gateway, st Storer, log *slog.Logger) *Extractor {
 	return &Extractor{gw: gw, store: st, log: log}
+}
+
+// SetGateDrops counts every proposed fact a gate or dedup check drops,
+// by gate.
+func (e *Extractor) SetGateDrops(c *prometheus.CounterVec) {
+	e.drops = c
+}
+
+// Gate labels for memory_extract_gate_drops_total.
+const (
+	gateUtility           = "utility"
+	gateDenyEcho          = "deny_echo"
+	gateRecalledEcho      = "recalled_echo"
+	gateBoundedWindow     = "bounded_window"
+	gateBatchDuplicate    = "batch_duplicate"
+	gateActiveDuplicate   = "active_duplicate"
+	gateOpenCorrection    = "open_correction"
+	gateRejectedDuplicate = "rejected_duplicate"
+	gatePendingDuplicate  = "pending_duplicate"
+)
+
+func (e *Extractor) drop(gate string) {
+	if e.drops != nil {
+		e.drops.WithLabelValues(gate).Inc()
+	}
 }
 
 // Extract proposes, validates, dedupes, and inserts facts; it returns
@@ -167,6 +195,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			// behavior (general knowledge the conversation happened to
 			// touch) - the utility gate drops it before it can queue.
 			e.log.Info("memory dropped by utility gate", "session_id", req.SessionID)
+			e.drop(gateUtility)
 			continue
 		}
 		if echoesDeny(f.Content, deny) || mentionsSetting(f.Content, req.Deny) {
@@ -174,10 +203,12 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			// bookkeeping the missions table already records, never a
 			// memory. Code enforces what the prompt asks for (D-011).
 			e.log.Info("memory dropped as source-header echo", "session_id", req.SessionID)
+			e.drop(gateDenyEcho)
 			continue
 		}
 		if echoesRecalled(f.Content, req.Recalled) {
 			e.log.Info("memory dropped as echo of a recalled memory", "session_id", req.SessionID)
+			e.drop(gateRecalledEcho)
 			continue
 		}
 		if f.Type != string(store.TypeEpisodic) && boundedWindow(f.Content) {
@@ -187,6 +218,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			// something that happened IS time-scoped. Code enforces what
 			// the prompt asks for (D-011).
 			e.log.Info("memory dropped as bounded-window observation", "session_id", req.SessionID)
+			e.drop(gateBoundedWindow)
 			continue
 		}
 		emb := store.Vector(vecs[i])
@@ -197,6 +229,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			// same run, before either the DB or NearestActive sees them.
 			if nearDupVector(emb, f.Content, batch) {
 				e.log.Info("memory dropped as intra-batch duplicate", "session_id", req.SessionID)
+				e.drop(gateBatchDuplicate)
 				continue
 			}
 		}
@@ -212,6 +245,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			if found {
 				e.log.Info("memory dropped as text match of rejected fact",
 					"of", rejectedID, "session_id", req.SessionID)
+				e.drop(gateRejectedDuplicate)
 				continue
 			}
 		} else {
@@ -231,6 +265,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 					confirms = append(confirms, store.Confirmation{ID: activeID, Confidence: f.Confidence})
 					e.log.Info("memory duplicate reinforced existing row",
 						"of", activeID, "similarity", sim, "session_id", req.SessionID)
+					e.drop(gateActiveDuplicate)
 					continue
 				}
 				// One open correction per fact: later turns repeating the
@@ -245,6 +280,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 				if open {
 					e.log.Info("memory correction already pending; skipped",
 						"of", activeID, "session_id", req.SessionID)
+					e.drop(gateOpenCorrection)
 					continue
 				}
 				supersedes = activeID
@@ -267,9 +303,11 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 							// reworded re-proposal is dropped, never re-queued.
 							e.log.Info("memory dropped as near-duplicate of rejected fact",
 								"of", dupID, "similarity", sim, "session_id", req.SessionID)
+							e.drop(gateRejectedDuplicate)
 						} else {
 							e.log.Info("memory duplicate matched pending row; skipped",
 								"of", dupID, "similarity", sim, "session_id", req.SessionID)
+							e.drop(gatePendingDuplicate)
 						}
 						continue
 					}

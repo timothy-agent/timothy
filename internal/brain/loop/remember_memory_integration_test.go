@@ -84,7 +84,7 @@ func TestUntrustedToolOutputRememberIsPendingInStore(t *testing.T) {
 	srv := httpserver.New(port, logger, metrics.New(), func() httpserver.Health {
 		return httpserver.Health{Status: "ok"}
 	})
-	memoryapi.Register(srv, nil, nil, noMemoryEmbedding{}, st, nil, nil, nil, logger)
+	memoryapi.Register(srv, nil, nil, noMemoryEmbedding{}, st, nil, nil, nil, nil, logger)
 	serverCtx, stopServer := context.WithCancel(context.Background())
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- srv.Run(serverCtx) }()

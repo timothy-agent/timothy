@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/SumonMSelim/timothy/internal/memory/extract"
 	"github.com/SumonMSelim/timothy/internal/memory/retrieval"
 	"github.com/SumonMSelim/timothy/internal/memory/store"
@@ -249,8 +252,30 @@ func TestRetrievePassesTypesFilter(t *testing.T) {
 func TestRetrieveSearchFailureIs500(t *testing.T) {
 	t.Parallel()
 	s := &fakeSearcher{failSearch: errors.New("db down")}
-	rec := postRetrieve(t, retrieveAPI(s, &fakeEmbedder{}), `{"query":"x"}`)
+	a := retrieveAPI(s, &fakeEmbedder{})
+	a.emptyPacks = prometheus.NewCounter(prometheus.CounterOpts{Name: "empty"})
+	rec := postRetrieve(t, a, `{"query":"x"}`)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if got := testutil.ToFloat64(a.emptyPacks); got != 0 {
+		t.Fatalf("memory_retrieval_empty_total = %v after a failure, want 0", got)
+	}
+}
+
+func TestRetrieveCountsEmptyPacks(t *testing.T) {
+	t.Parallel()
+	a := retrieveAPI(&fakeSearcher{cands: map[string]*retrieval.Candidate{}}, &fakeEmbedder{})
+	a.emptyPacks = prometheus.NewCounter(prometheus.CounterOpts{Name: "empty"})
+	postRetrieve(t, a, `{"query":"what is 2+2"}`)
+	if got := testutil.ToFloat64(a.emptyPacks); got != 1 {
+		t.Fatalf("memory_retrieval_empty_total = %v after an empty pack, want 1", got)
+	}
+	a.search = &fakeSearcher{cands: map[string]*retrieval.Candidate{
+		"m1": retrieval.NewCandidate("m1", store.TypeSemantic, "user lives in Porto", time.Now(), map[string]int{"vector": 1}),
+	}}
+	postRetrieve(t, a, `{"query":"where do I live?"}`)
+	if got := testutil.ToFloat64(a.emptyPacks); got != 1 {
+		t.Fatalf("memory_retrieval_empty_total = %v after a non-empty pack, want still 1", got)
 	}
 }

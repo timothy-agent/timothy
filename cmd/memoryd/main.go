@@ -53,7 +53,14 @@ func main() {
 	gwc := gwclient.New(gatewayURL)
 	st := store.New(app.DB, app.Log)
 	extractor := extract.New(gwc, st, app.Log)
-	searcher := retrieval.NewSearcher(app.DB, app.Log)
+	extractor.SetGateDrops(app.Metrics.NewCounterVec("memory_extract_gate_drops_total",
+		"Proposed facts dropped before insert, by gate.", "gate"))
+	searcher := retrieval.NewSearcher(app.DB, app.Log, retrieval.Metrics{
+		LegDuration: app.Metrics.NewHistogramVec("memory_retrieval_leg_duration_seconds",
+			"Retrieval leg duration by leg.", "leg"),
+		LegErrors: app.Metrics.NewCounterVec("memory_retrieval_leg_errors_total",
+			"Retrieval leg failures by leg.", "leg"),
+	})
 
 	consolidator := extract.NewConsolidator(gwc, st, app.Log, extract.Metrics{
 		Merges: app.Metrics.NewCounter("memory_merges_total", "Near-duplicate memory groups merged."),
@@ -69,7 +76,8 @@ func main() {
 	})
 	consolidator.SetReflector(extractor)
 	kbStore := store.NewKBStore(app.DB)
-	api.Register(app.Server, extractor, searcher, gwc, st, consolidator, kbStore, kbStore, app.Log)
+	api.Register(app.Server, extractor, searcher, gwc, st, consolidator, kbStore, kbStore,
+		app.Metrics.NewCounter("memory_retrieval_empty_total", "Retrievals that packed no memories."), app.Log)
 	go consolidator.RunLoop(ctx, consolidateEvery)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {

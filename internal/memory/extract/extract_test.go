@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/memory/store"
@@ -812,6 +815,85 @@ func TestExtractDegradesWithoutEmbeddings(t *testing.T) {
 	// Promotion policy still applies in degraded mode.
 	if len(st.promoted) != 1 {
 		t.Fatalf("promoted = %v", st.promoted)
+	}
+}
+
+// TestExtractCountsGateDrops: every gate and dedup drop increments
+// memory_extract_gate_drops_total under its own label, once per fact.
+func TestExtractCountsGateDrops(t *testing.T) {
+	t.Parallel()
+	fact := func(typ, content string, changes bool) string {
+		return fmt.Sprintf(`{"type":%q,"content":%q,"entities":[],"confidence":0.9,"changes_behavior":%v}`, typ, content, changes)
+	}
+	porto := fact("semantic", "User lives in Porto.", true)
+	tests := []struct {
+		gate   string
+		reply  string
+		req    Request
+		store  func(*fakeStore)
+		embeds [][]float32
+	}{
+		{gate: gateUtility, reply: fact("semantic", "HTTP 429 means rate limiting.", false)},
+		{gate: gateDenyEcho, reply: fact("semantic", "The timezone is Europe/Amsterdam.", true),
+			req: Request{Deny: []string{"Europe/Amsterdam"}}},
+		{gate: gateRecalledEcho, reply: porto, req: Request{Recalled: []string{"User lives in Porto."}}},
+		{gate: gateBoundedWindow, reply: fact("semantic", "The user deployed twice today.", true)},
+		{gate: gateBatchDuplicate, reply: porto + "," + porto, embeds: [][]float32{{1, 0}, {1, 0}}},
+		{gate: gateActiveDuplicate, reply: porto, store: func(s *fakeStore) {
+			s.nearest.id, s.nearest.sim, s.nearest.ok, s.nearest.content = "a", 0.99, true, "User lives in Porto."
+		}},
+		{gate: gateOpenCorrection, reply: porto, store: func(s *fakeStore) {
+			s.nearest.id, s.nearest.sim, s.nearest.ok, s.nearest.content = "a", 0.99, true, "User lives in Lisbon."
+			s.pendingCorrection = true
+		}},
+		{gate: gateRejectedDuplicate, reply: porto, store: func(s *fakeStore) {
+			s.nearest.id, s.nearest.sim, s.nearest.ok, s.nearest.content = "r", 0.99, true, "User lives in Porto."
+			s.nearest.status = store.StatusRejected
+		}},
+		{gate: gatePendingDuplicate, reply: porto, store: func(s *fakeStore) {
+			s.nearest.id, s.nearest.sim, s.nearest.ok, s.nearest.content = "p", 0.99, true, "User lives in Porto."
+			s.nearest.status = store.StatusPending
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.gate, func(t *testing.T) {
+			t.Parallel()
+			st := &fakeStore{}
+			if tc.store != nil {
+				tc.store(st)
+			}
+			drops := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "drops"}, []string{"gate"})
+			e := New(&fakeGateway{replies: []string{"[" + tc.reply + "]"}, embeds: tc.embeds}, st, testLog())
+			e.SetGateDrops(drops)
+			req := tc.req
+			req.Text = "x"
+			if _, err := e.Extract(t.Context(), req); err != nil {
+				t.Fatalf("Extract: %v", err)
+			}
+			if got := testutil.ToFloat64(drops.WithLabelValues(tc.gate)); got != 1 {
+				t.Fatalf("drops{gate=%s} = %v, want 1", tc.gate, got)
+			}
+			if total := testutil.CollectAndCount(drops); total != 1 {
+				t.Fatalf("%d gate series, want only %s", total, tc.gate)
+			}
+		})
+	}
+}
+
+// Without embeddings, the rejected text match counts as a rejected
+// duplicate too.
+func TestExtractCountsTextFallbackRejectedDrop(t *testing.T) {
+	t.Parallel()
+	gw := &embedlessGateway{fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}}
+	st := &fakeStore{rejected: map[string]string{"user lives in porto": "rejected-1"}}
+	drops := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "drops"}, []string{"gate"})
+	e := New(gw, st, testLog())
+	e.SetGateDrops(drops)
+	if _, err := e.Extract(t.Context(), Request{Text: "x"}); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if got := testutil.ToFloat64(drops.WithLabelValues(gateRejectedDuplicate)); got != 1 {
+		t.Fatalf("drops{gate=%s} = %v, want 1", gateRejectedDuplicate, got)
 	}
 }
 
