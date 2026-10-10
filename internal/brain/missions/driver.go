@@ -224,6 +224,11 @@ type Driver struct {
 	// same as SetMemoryExtract does for memoryd.
 	deliverDestinations DestinationDeliver
 
+	// destinationName resolves a destination id to its display name for
+	// the result_complete summary; nil-safe, unset or "" falls back to
+	// the id. A func for the same import-cycle reason as above.
+	destinationName func(ctx context.Context, id string) string
+
 	// artifactCopy wires the best-effort copy of declared artifact
 	// files into the attachment store on a mission's terminal done
 	// transition (see SetArtifactCopy / copyArtifacts) — nil-safe:
@@ -702,6 +707,29 @@ func (d *Driver) SetDestinationDeliver(fn DestinationDeliver) {
 	d.deliverDestinations = fn
 }
 
+// SetDestinationNameResolver wires the destination display-name lookup
+// used for the result_complete summary's delivered_to list.
+func (d *Driver) SetDestinationNameResolver(fn func(ctx context.Context, id string) string) {
+	d.destinationName = fn
+}
+
+// destinationNames returns each target's display name, falling back to
+// its id when no resolver is wired or the name is empty.
+func (d *Driver) destinationNames(ctx context.Context, targets []DestinationEntry) []string {
+	names := make([]string, 0, len(targets))
+	for _, e := range targets {
+		name := ""
+		if d.destinationName != nil {
+			name = d.destinationName(ctx, e.DestinationID)
+		}
+		if name == "" {
+			name = e.DestinationID
+		}
+		names = append(names, name)
+	}
+	return names
+}
+
 // deliverableEntries filters m.Destinations down to the kinds
 // DestinationDeliver actually delivers: email/webhook/channel/github,
 // i.e. every entry naming an operator-owned destinations table row. A
@@ -889,6 +917,7 @@ func (d *Driver) runResult(ctx context.Context, m Mission) (StepInput, error) {
 		summary["delivery_error"] = err.Error()
 	} else if len(targets) > 0 {
 		summary["delivered"] = len(targets)
+		summary["delivered_to"] = d.destinationNames(ctx, targets)
 	}
 
 	kbCollectionID := m.KBCollectionID()
