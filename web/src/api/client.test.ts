@@ -12,6 +12,7 @@ import {
   exportMissionPdf,
   getToken,
   isTimothyAuthError,
+  listAutomationRuns,
   listMissionFiles,
   listMissions,
   listNotifications,
@@ -237,6 +238,22 @@ describe('chatStream errors', () => {
 
     expect(fetchMock.mock.calls[0][0]).toBe(
       '/v1/sessions?query=light&before=2026-07-10T12%3A00%3A00Z&before_id=s-42',
+    )
+  })
+
+  it('pages automation runs with a composite cursor', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ runs: [] }), { status: 200 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listAutomationRuns('a1')
+    await listAutomationRuns('a1', { before: '2026-07-10T12:00:00.123456Z', beforeId: 'r-42' })
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/automations/a1/runs')
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      '/v1/automations/a1/runs?before=2026-07-10T12%3A00%3A00.123456Z&before_id=r-42',
     )
   })
 

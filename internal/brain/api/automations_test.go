@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -216,18 +217,29 @@ func TestDecodeExpiresAt(t *testing.T) {
 	}
 }
 
-func TestParseRunsLimit(t *testing.T) {
+// TestRunHistoriesRejectBadPageParams covers both run-history endpoints:
+// a bad cursor or limit is a 400 before any store access.
+func TestRunHistoriesRejectBadPageParams(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		in   string
-		want int
-		ok   bool
-	}{
-		{"", 50, true}, {"1", 1, true}, {"200", 200, true}, {"0", 0, false}, {"201", 0, false}, {"x", 0, false},
+	handlers := map[string]http.HandlerFunc{
+		"automation": (&automationAPI{}).runs,
+		"workflow":   (&workflowAPI{}).listRuns,
+	}
+	for _, tc := range []struct{ query, wantInMessage string }{
+		{"limit=0", "limit"},
+		{"limit=201", "limit"},
+		{"limit=x", "limit"},
+		{"before=yesterday&before_id=r1", "RFC3339Nano"},
+		{"before=2026-10-10T10:00:00Z", "before requires before_id"},
+		{"before_id=r1", "before_id requires before"},
 	} {
-		got, err := parseRunsLimit(tc.in)
-		if (err == nil) != tc.ok || (tc.ok && got != tc.want) {
-			t.Fatalf("parseRunsLimit(%q) = %d, %v; want %d ok=%v", tc.in, got, err, tc.want, tc.ok)
+		for name, h := range handlers {
+			w := httptest.NewRecorder()
+			h(w, httptest.NewRequest(http.MethodGet, "/runs?"+tc.query, nil))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("%s %q: code = %d, want 400", name, tc.query, w.Code)
+			}
+			assertErrorBody(t, w, "bad_request", tc.wantInMessage)
 		}
 	}
 }

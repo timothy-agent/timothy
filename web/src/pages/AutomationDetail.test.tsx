@@ -71,6 +71,7 @@ function openTab(name: string) {
 afterEach(() => {
   cleanup()
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 beforeEach(() => {
   vi.clearAllMocks()
@@ -279,6 +280,47 @@ describe('AutomationDetail run history tab', () => {
     openTab('Run history')
     fireEvent.click(await screen.findByRole('button', { name: 'Refresh runs' }))
     await waitFor(() => expect(listAutomationRuns).toHaveBeenCalledTimes(2))
+  })
+
+  it('loads older pages on scroll without duplicates and keeps them on refresh', async () => {
+    let intersect: (() => void) | undefined
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: IntersectionObserverCallback) {
+          intersect = () => cb([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver)
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    const run = (i: number) =>
+      makeRun({ id: `r-${String(i).padStart(3, '0')}`, created_at: new Date(Date.UTC(2026, 6, 20, 8, 0, 0) - i * 1000).toISOString() })
+    const firstPage = Array.from({ length: 50 }, (_, i) => run(i))
+    vi.mocked(listAutomationRuns)
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([run(49), run(50), run(51), run(52)])
+      .mockResolvedValue(firstPage)
+    const { container } = renderPage()
+    await screen.findByRole('tab', { name: 'Run history' })
+    openTab('Run history')
+    await screen.findByTestId('runs-sentinel')
+    expect(container.querySelectorAll('[data-run-id]')).toHaveLength(50)
+
+    act(() => intersect?.())
+    await waitFor(() => expect(container.querySelectorAll('[data-run-id]')).toHaveLength(53))
+    expect(listAutomationRuns).toHaveBeenLastCalledWith('s1', { before: run(49).created_at, beforeId: 'r-049' })
+    const ids = [...container.querySelectorAll('[data-run-id]')].map((el) => el.getAttribute('data-run-id'))
+    expect(new Set(ids).size).toBe(53)
+    expect(ids.at(-1)).toBe('r-052')
+    // A short page means the end: no sentinel, no further fetches.
+    expect(screen.queryByTestId('runs-sentinel')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh runs' }))
+    await waitFor(() => expect(listAutomationRuns).toHaveBeenCalledTimes(3))
+    expect(container.querySelectorAll('[data-run-id]')).toHaveLength(53)
+    expect(screen.queryByTestId('runs-sentinel')).not.toBeInTheDocument()
   })
 
   it('polls while a run is pending and stops once all are terminal', async () => {
