@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
 // repoMission is a coding mission over a repo source whose worktree is
@@ -300,9 +301,14 @@ func TestDelegatedRunWorkerCarriesFinalOutput(t *testing.T) {
 // worker paths of a coding mission carry the scope rule; general and
 // light missions do not.
 func TestCodingScopeRulePrompts(t *testing.T) {
-	const marker = "never create or update a report, test-log or audit-output file"
-	if !strings.Contains(codingScopeRule, marker) || !strings.Contains(codingScopeRule, "leave report files that earlier changes added") {
+	const marker = "do not add a report, test-log or audit-output file"
+	if !strings.Contains(codingScopeRule, marker) || !strings.Contains(codingScopeRule, "unless the goal asks for one") {
 		t.Fatalf("codingScopeRule lost its rule text: %s", codingScopeRule)
+	}
+	// Stricter preferences (leaving existing report files alone) belong
+	// in the agent overlay, never in the generic rule.
+	if strings.Contains(codingScopeRule, "untouched") {
+		t.Fatalf("codingScopeRule carries a preference that belongs in the overlay: %s", codingScopeRule)
 	}
 	cases := []struct {
 		name   string
@@ -350,5 +356,30 @@ func TestDelegatedRunWorkerCarriesScopeRule(t *testing.T) {
 	}
 	if !strings.Contains(sandbox.lastLaunchCmd(), "Change only what the goal needs.") {
 		t.Fatalf("launch command lacks the scope rule: %s", sandbox.lastLaunchCmd())
+	}
+}
+
+// TestPlanSessionCarriesPromptOverlay (issue #1173): the planner sees
+// the agent's own instructions, so user-side rules shape which files
+// the plan's units touch; no overlay adds nothing.
+func TestPlanSessionCarriesPromptOverlay(t *testing.T) {
+	const overlay = "Never touch SECURITY_REPORT.md."
+	for _, tc := range []struct {
+		name    string
+		overlay string
+	}{{"with overlay", overlay}, {"without overlay", ""}} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+				{toolEndEvent(planToolName, `{"units":[{"title":"u","artifacts":["out.md"],"criteria":["c1","c2"],"check_cmd":"test -s out.md"}]}`)},
+			}}
+			m := Mission{ID: "m1", Route: "default", Goal: "upgrade deps", Kind: KindCoding, PromptOverlay: tc.overlay}
+			if _, err := newTestRunner(agent).PlanSession(context.Background(), m, ""); err != nil {
+				t.Fatalf("PlanSession: %v", err)
+			}
+			system := agent.requests[0].System
+			if got := strings.Contains(system, overlay); got != (tc.overlay != "") {
+				t.Fatalf("plan system carries overlay = %v, want %v:\n%s", got, tc.overlay != "", system)
+			}
+		})
 	}
 }

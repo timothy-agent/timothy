@@ -2057,6 +2057,12 @@ func planSystemPrompt(hasPlan, bootstrap, coding bool) string {
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	skillsHint := r.skillsNudge(ctx, m)
 	system := planSystemPrompt(m.HasPlan, bootstrapAllowed(m, discoverNotes), m.Kind == KindCoding) + r.execEnvironmentNote(ctx) + skillsHint + r.loadedSkillsForPlan(ctx, m, discoverNotes) + renderEnvFacts(m)
+	if m.PromptOverlay != "" {
+		// Operator-authored agent instructions (issue #1173): the plan
+		// decides which files units touch, so it carries them as the
+		// workers do. Never neutralized, same as the worker packet.
+		system += "\n\n" + m.PromptOverlay
+	}
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)
