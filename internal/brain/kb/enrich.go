@@ -25,6 +25,11 @@ type Captioner func(ctx context.Context, mediaType string, data []byte) string
 // against the ocr sidecar is the production implementation.
 type Recognizer func(ctx context.Context, mediaType string, data []byte) string
 
+// Rasterizer renders one SVG document to PNG bytes (issue #1121): vision
+// models and OCR take raster images only. pdfgen.Client.Rasterize is the
+// production implementation.
+type Rasterizer func(ctx context.Context, svg []byte) ([]byte, error)
+
 // captionMarker prefixes every caption block Enricher inserts: it
 // makes a captioned link recognizable so a reingest of an
 // already-enriched document doesn't re-fetch and re-caption the same
@@ -160,7 +165,10 @@ type Enricher struct {
 	// (settings.Store.Enabled(ctx, settings.KeyKBLocalOCR)). Separate
 	// from Enabled: OCR is local and free, so it defaults on.
 	OCREnabled func(ctx context.Context) bool
-	Log        *slog.Logger
+	// Rasterize turns a fetched SVG into a PNG the caption path can take;
+	// nil (PDFGEN_URL unset) leaves SVG links skipped as unsupported.
+	Rasterize Rasterizer
+	Log       *slog.Logger
 }
 
 // describe turns one image's bytes into a block of text plus the marker
@@ -368,6 +376,18 @@ func (e *Enricher) captionOne(ctx context.Context, url string) (string, string, 
 		return "", "", false
 	}
 	mediaType := http.DetectContentType(data)
+	if !allowedImageTypes[mediaType] && e.Rasterize != nil && isSVG(data) {
+		png, err := e.Rasterize(ctx, data)
+		if err != nil {
+			e.Log.Warn("kb caption: svg rasterize failed", "url", url, "error", err)
+			return "", "", false
+		}
+		if len(png) > maxImageBytes {
+			e.Log.Warn("kb caption: rasterized svg too large", "url", url, "limit_bytes", maxImageBytes)
+			return "", "", false
+		}
+		data, mediaType = png, "image/png"
+	}
 	if !allowedImageTypes[mediaType] {
 		e.Log.Warn("kb caption: unsupported content type", "url", url, "content_type", mediaType)
 		return "", "", false

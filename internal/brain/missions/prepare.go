@@ -32,6 +32,8 @@ const (
 	prepareEnvTimeout   = 2 * time.Minute
 	prepareTestTimeout  = 10 * time.Minute
 	prepareAuditTimeout = 3 * time.Minute
+	// prepareDaemonTimeout covers one daemon's first init and readiness.
+	prepareDaemonTimeout = 3 * time.Minute
 	// prepareTailCap bounds the output tail kept per step event.
 	prepareTailCap = 2000
 	// prepareFactTailCap bounds the tail kept on a failed step's fact.
@@ -63,8 +65,10 @@ type PrepareFacts struct {
 	TestSource string       `json:"test_source,omitempty"`
 	Tests      *TestSummary `json:"tests,omitempty"`
 	Audit      []AuditFact  `json:"audit,omitempty"`
-	Failures   []string     `json:"failures,omitempty"`
-	CeilingHit bool         `json:"ceiling_hit,omitempty"`
+	// Services are the test databases started as mise daemons (D-142).
+	Services   []ServiceFact `json:"services,omitempty"`
+	Failures   []string      `json:"failures,omitempty"`
+	CeilingHit bool          `json:"ceiling_hit,omitempty"`
 }
 
 // PrepareStepFact is one executed step. Tail is kept on failure only.
@@ -118,12 +122,13 @@ func (p *provisioner) prepareWorkspace(ctx context.Context, m Mission) Mission {
 	r := &prepareRun{p: p, m: m, wt: wt, deadline: start.Add(prepareCeiling), facts: &PrepareFacts{}}
 	p.appendPrepareEvent(ctx, m.ID, "mission.prepare_started", map[string]any{
 		"providers": spec.Providers, "env_template": spec.EnvTemplate, "test_candidates": spec.TestCandidates, "lockfiles": spec.Lockfiles,
-		"npm_no_lockfile": spec.NpmNoLock,
+		"npm_no_lockfile": spec.NpmNoLock, "services": spec.Services,
 	})
 	r.run(ctx, spec)
 	payload := map[string]any{
 		"duration_ms": time.Since(start).Milliseconds(), "installed": r.facts.Installed, "env_file": r.facts.EnvFile,
 		"test_cmd": r.facts.TestCmd, "audit": r.facts.Audit, "failures": r.facts.Failures, "ceiling_hit": r.facts.CeilingHit,
+		"services": r.facts.Services,
 	}
 	p.appendPrepareEvent(ctx, m.ID, "mission.prepare_complete", payload)
 	facts.Prepare = r.facts
@@ -151,9 +156,9 @@ type prepareRun struct {
 }
 
 // run executes the spec in order: config, tools, deps, env template,
-// baseline test, audit.
+// test services, baseline test, audit.
 func (r *prepareRun) run(ctx context.Context, spec prepareSpec) {
-	local := miseLocalInput{Providers: spec.Providers, EnvTemplate: spec.EnvTemplate, Artisan: spec.Artisan, Lockfiles: spec.Lockfiles, OSVOffline: r.p.osvOffline}
+	local := miseLocalInput{Providers: spec.Providers, EnvTemplate: spec.EnvTemplate, Artisan: spec.Artisan, Lockfiles: spec.Lockfiles, OSVOffline: r.p.osvOffline, Services: spec.Services}
 	if err := r.writeMiseLocal(local, spec.RepoKeys); err != nil {
 		r.fail("writing " + miseLocalFile + ": " + err.Error())
 		return
@@ -192,6 +197,13 @@ func (r *prepareRun) run(ctx context.Context, spec prepareSpec) {
 			r.fail("env template " + spec.EnvTemplate + " was not applied")
 		}
 	}
+	if started := r.startServices(ctx, spec.Services); len(started) < len(spec.Services) {
+		local.Services = started
+		if err := r.writeMiseLocal(local, spec.RepoKeys); err != nil {
+			r.fail("rewriting " + miseLocalFile + " without the failed test services: " + err.Error())
+		}
+	}
+	r.recordServiceEnv(ctx)
 	r.baselineTest(ctx, spec.TestCandidates)
 	if r.facts.TestCmd != "" && !strings.HasPrefix(r.facts.TestCmd, "mise run ") {
 		local.TestCmd = r.facts.TestCmd
@@ -200,6 +212,57 @@ func (r *prepareRun) run(ctx context.Context, spec prepareSpec) {
 		}
 	}
 	r.audit(ctx, spec.Lockfiles, spec.NpmNoLock)
+}
+
+// startServices starts each test service daemon (D-142) and returns the
+// ones that came up. A failed one is stopped, best effort, and recorded.
+func (r *prepareRun) startServices(ctx context.Context, services []serviceNeed) []serviceNeed {
+	var started []serviceNeed
+	for _, s := range services {
+		fact := ServiceFact{Name: s.Name, Version: s.Version, Source: s.Source}
+		if _, _, ok := r.step(ctx, "daemon:"+s.Name, buildDaemonStartCmd(s.Name), prepareDaemonTimeout); ok {
+			fact.OK = true
+			started = append(started, s)
+		} else {
+			r.step(ctx, "daemon-stop:"+s.Name, buildDaemonStopCmd(s.Name), prepareEnvTimeout)
+			r.fail("test service " + s.Name + " did not start")
+		}
+		r.facts.Services = append(r.facts.Services, fact)
+	}
+	return started
+}
+
+// recordServiceEnv reads the started services' connection variables
+// from `mise env --json` and their observed listen addresses onto their
+// facts.
+func (r *prepareRun) recordServiceEnv(ctx context.Context) {
+	var up bool
+	for _, s := range r.facts.Services {
+		up = up || s.OK
+	}
+	if !up {
+		return
+	}
+	_, out, ok := r.step(ctx, "daemons:env", buildDaemonEnvCmd(), prepareEnvTimeout)
+	if !ok {
+		return
+	}
+	for i, s := range r.facts.Services {
+		if p, found := presetByName(s.Name); found && s.OK {
+			r.facts.Services[i].Env = parseDaemonEnv(out, p)
+		}
+	}
+	if _, out, ok = r.step(ctx, "daemons:listen", buildListenProbeCmd(), prepareEnvTimeout); !ok {
+		return
+	}
+	for i, s := range r.facts.Services {
+		if port := servicePort(s); s.OK && port > 0 {
+			r.facts.Services[i].Listen = parseListenAddrs(out, port)
+			if exposed := nonLoopback(r.facts.Services[i].Listen); len(exposed) > 0 {
+				r.p.log.Warn("driver: test service listens beyond loopback", "mission_id", r.m.ID, "service", s.Name, "addrs", exposed)
+			}
+		}
+	}
 }
 
 // baselineTest tries the ladder candidates in order until one exits 0;
@@ -403,6 +466,7 @@ func renderPrepareFacts(f *PrepareFacts) string {
 	if f.EnvFile != "" {
 		fmt.Fprintf(&b, "- Env file: %s by the harness.\n", NeutralizeSlot(f.EnvFile))
 	}
+	b.WriteString(renderServiceFacts(f.Services))
 	if f.TestCmd != "" {
 		fmt.Fprintf(&b, "- Baseline tests: `%s` (from %s) exits 0", NeutralizeSlot(f.TestCmd), NeutralizeSlot(f.TestSource))
 		if f.Tests != nil && f.Tests.Parsed {
