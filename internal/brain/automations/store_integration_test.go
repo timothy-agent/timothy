@@ -242,7 +242,7 @@ func TestStoreDeleteAfterRunKeepsMission(t *testing.T) {
 	if _, err := db.Exec(ctx, `UPDATE automation_runs SET mission_id = $2 WHERE id = $1`, runID, missionID); err != nil {
 		t.Fatalf("link run: %v", err)
 	}
-	runs, err := s.ListRuns(ctx, id, 50)
+	runs, err := s.ListRuns(ctx, id, time.Time{}, "", 50)
 	if err != nil || len(runs) != 1 || runs[0].MissionID != missionID || runs[0].TriggerID == nil {
 		t.Fatalf("ListRuns = %+v, %v", runs, err)
 	}
@@ -422,5 +422,70 @@ func TestStoreNameReferencingDestination(t *testing.T) {
 	}
 	if _, ok, err := s.NameReferencingDestination(ctx, dest); err != nil || ok {
 		t.Fatalf("disabled reference = %v %v, want none", ok, err)
+	}
+}
+
+// TestStoreListRunsKeysetTies pages across ties on created_at: every
+// run appears exactly once, ordered created_at DESC, id DESC (#1114).
+func TestStoreListRunsKeysetTies(t *testing.T) {
+	s, pool := testStore(t)
+	ctx := t.Context()
+	tag := runTag()
+	id, err := s.Create(ctx, fixture(tag+"paging", defaultAgentID(t, pool)))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	db, _ := pool.Get()
+	tie := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for i := range 5 {
+		runID, _, err := s.CreateRun(ctx, nil, Run{AutomationID: id, DedupKey: fmt.Sprintf("%sp%d", tag, i), Status: RunRunning})
+		if err != nil {
+			t.Fatalf("CreateRun %d: %v", i, err)
+		}
+		at := tie
+		if i == 0 {
+			at = tie.Add(time.Hour)
+		}
+		if _, err := db.Exec(ctx, `UPDATE automation_runs SET created_at = $2 WHERE id = $1`, runID, at); err != nil {
+			t.Fatalf("set created_at: %v", err)
+		}
+	}
+	all, err := s.ListRuns(ctx, id, time.Time{}, "", 50)
+	if err != nil || len(all) != 5 {
+		t.Fatalf("ListRuns all = %d runs, %v; want 5", len(all), err)
+	}
+	if !all[0].CreatedAt.After(tie) {
+		t.Fatalf("first run created_at = %v, want the newest", all[0].CreatedAt)
+	}
+	for i := 2; i < len(all); i++ {
+		if all[i-1].ID <= all[i].ID {
+			t.Fatalf("tied runs not in id DESC order: %s then %s", all[i-1].ID, all[i].ID)
+		}
+	}
+
+	var paged []string
+	var before time.Time
+	var beforeID string
+	for range 4 {
+		page, err := s.ListRuns(ctx, id, before, beforeID, 2)
+		if err != nil {
+			t.Fatalf("ListRuns page: %v", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, r := range page {
+			paged = append(paged, r.ID)
+		}
+		last := page[len(page)-1]
+		before, beforeID = last.CreatedAt, last.ID
+	}
+	if len(paged) != len(all) {
+		t.Fatalf("paged %d runs, want %d: %v", len(paged), len(all), paged)
+	}
+	for i, r := range all {
+		if paged[i] != r.ID {
+			t.Fatalf("paged[%d] = %s, want %s", i, paged[i], r.ID)
+		}
 	}
 }

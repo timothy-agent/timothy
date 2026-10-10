@@ -526,6 +526,35 @@ describe('tool calls', () => {
     expect(screen.getByRole('region')).toBeInTheDocument()
   })
 
+  it('constrains the inline ApprovalCard to the message width', () => {
+    // The message column is items-start: an unconstrained card sizes
+    // to its longest JSON line and pushes the right-aligned buttons
+    // off-screen (issue #1118).
+    const msg = play([
+      { type: 'tool_start', tool_call: { id: 'c1', name: 'generate_pdf' } },
+      {
+        type: 'permission_request',
+        permission: {
+          id: 'p1',
+          call_id: 'c1',
+          tool: 'generate_pdf',
+          args: JSON.stringify({ documents: [{ title: 'About Me', content: 'x'.repeat(4000) }] }),
+          danger_level: 'safe',
+          rationale: 'no standing grant',
+        },
+      },
+    ])
+    render(
+      <TooltipProvider>
+        <AssistantMessage msg={msg} onDecision={vi.fn()} />
+      </TooltipProvider>,
+    )
+    const card = screen.getByRole('region')
+    expect(card).toHaveClass('w-full')
+    expect(card).toHaveClass('min-w-0')
+    expect(screen.getByRole('button', { name: /Allow once/ })).toBeInTheDocument()
+  })
+
   it('renders no permission card without an onDecision handler', () => {
     const msg = play([
       { type: 'tool_start', tool_call: { id: 'c1', name: 'shell' } },
