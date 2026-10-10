@@ -20,7 +20,8 @@ func (f *fakeManager) EntityEdges(_ context.Context) ([]store.EntityEdge, error)
 	return f.edges, nil
 }
 
-func (f *fakeManager) ListByEntity(_ context.Context, entityID string) ([]store.Memory, error) {
+func (f *fakeManager) ListByEntity(_ context.Context, entityID string, page store.Page) ([]store.Memory, error) {
+	f.entityPage = page
 	return f.entityMems[entityID], nil
 }
 
@@ -93,6 +94,35 @@ func TestEntityMemoriesRejectsBadID(t *testing.T) {
 	t.Parallel()
 	req := httptest.NewRequest(http.MethodGet, "/v1/entities/not-a-uuid/memories", nil)
 	req.SetPathValue("id", "not-a-uuid")
+	rec := httptest.NewRecorder()
+	manageAPI(newFakeManager()).handleEntityMemories(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestEntityMemoriesPassesCursor(t *testing.T) {
+	t.Parallel()
+	const before = "2026-10-01T12:00:00.123456Z"
+	const beforeID = "22222222-2222-4222-8222-222222222222"
+	fm := newFakeManager()
+	req := httptest.NewRequest(http.MethodGet, "/v1/entities/"+entityID+"/memories?limit=5&before="+before+"&before_id="+beforeID, nil)
+	req.SetPathValue("id", entityID)
+	rec := httptest.NewRecorder()
+	manageAPI(fm).handleEntityMemories(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body)
+	}
+	want, _ := time.Parse(time.RFC3339Nano, before)
+	if fm.entityPage.Limit != 5 || fm.entityPage.BeforeID != beforeID || !fm.entityPage.Before.Equal(want) {
+		t.Fatalf("page = %+v", fm.entityPage)
+	}
+}
+
+func TestEntityMemoriesRejectsBadCursor(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest(http.MethodGet, "/v1/entities/"+entityID+"/memories?before=2026-10-01T12:00:00Z", nil)
+	req.SetPathValue("id", entityID)
 	rec := httptest.NewRecorder()
 	manageAPI(newFakeManager()).handleEntityMemories(rec, req)
 	if rec.Code != http.StatusBadRequest {

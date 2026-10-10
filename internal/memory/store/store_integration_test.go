@@ -8,6 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,7 +151,7 @@ func TestEntityGraphQueries(t *testing.T) {
 		t.Fatalf("edges = %v, want a-b:2 a-c:1 only", mine)
 	}
 
-	byA, err := s.ListByEntity(ctx, a)
+	byA, err := s.ListByEntity(ctx, a, Page{})
 	if err != nil {
 		t.Fatalf("ListByEntity: %v", err)
 	}
@@ -710,7 +713,7 @@ func TestListByStatusFiltersTypes(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	got, err := s.ListByStatus(ctx, StatusPending, TypeEpisodic)
+	got, err := s.ListByStatus(ctx, StatusPending, Page{}, TypeEpisodic)
 	if err != nil {
 		t.Fatalf("ListByStatus: %v", err)
 	}
@@ -719,12 +722,230 @@ func TestListByStatusFiltersTypes(t *testing.T) {
 			t.Fatalf("type filter leaked %s row %s", m.Type, m.ID)
 		}
 	}
-	all, err := s.ListByStatus(ctx, StatusPending)
+	all, err := s.ListByStatus(ctx, StatusPending, Page{})
 	if err != nil {
 		t.Fatalf("ListByStatus all: %v", err)
 	}
 	if len(all) < 2 {
 		t.Fatalf("unfiltered list has %d rows, want >= 2", len(all))
+	}
+}
+
+// pinCreatedAt gives fixture rows one shared created_at so paging has
+// to break ties on id.
+func pinCreatedAt(t *testing.T, s *Store, at time.Time, ids ...string) {
+	t.Helper()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	if _, err := db.Exec(t.Context(), "UPDATE memories SET created_at = $1 WHERE id = ANY($2::uuid[])", at, ids); err != nil {
+		t.Fatalf("pin created_at: %v", err)
+	}
+}
+
+// walkPages follows the keyset cursor from first until a short page,
+// failing on a repeated id or an out-of-order row.
+func walkPages(t *testing.T, first Page, list func(Page) ([]Memory, error)) []string {
+	t.Helper()
+	var ids []string
+	seen := map[string]bool{}
+	page := first
+	for range 50 {
+		got, err := list(page)
+		if err != nil {
+			t.Fatalf("list page %+v: %v", page, err)
+		}
+		for i, m := range got {
+			if seen[m.ID] {
+				t.Fatalf("id %s repeated across pages", m.ID)
+			}
+			seen[m.ID] = true
+			ids = append(ids, m.ID)
+			if i > 0 {
+				prev := got[i-1]
+				if prev.CreatedAt.Before(m.CreatedAt) || (prev.CreatedAt.Equal(m.CreatedAt) && prev.ID < m.ID) {
+					t.Fatalf("page out of order at %d: %s then %s", i, prev.ID, m.ID)
+				}
+			}
+		}
+		if len(got) < page.Limit {
+			return ids
+		}
+		last := got[len(got)-1]
+		page = Page{Before: last.CreatedAt, BeforeID: last.ID, Limit: page.Limit}
+	}
+	t.Fatal("paging did not terminate")
+	return nil
+}
+
+func TestListByStatusKeysetPagesAcrossTies(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	// Far in the past so the cursor below skips every real row.
+	tie := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+	var semantic []string
+	for range 5 {
+		id, err := s.Insert(ctx, mem("keyset tie fixture"))
+		if err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		semantic = append(semantic, id)
+	}
+	epi := mem("keyset tie episodic fixture")
+	epi.Type = TypeEpisodic
+	epiID, err := s.Insert(ctx, epi)
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	pinCreatedAt(t, s, tie, append([]string{epiID}, semantic...)...)
+
+	start := Page{Before: tie.Add(time.Microsecond), BeforeID: "ffffffff-ffff-ffff-ffff-ffffffffffff", Limit: 2}
+	got := walkPages(t, start, func(p Page) ([]Memory, error) {
+		return s.ListByStatus(ctx, StatusPending, p, TypeSemantic)
+	})
+	want := append([]string(nil), semantic...)
+	sort.Sort(sort.Reverse(sort.StringSlice(want)))
+	if !slices.Equal(got, want) {
+		t.Fatalf("semantic pages = %v, want %v (id DESC within the tie)", got, want)
+	}
+
+	both := walkPages(t, start, func(p Page) ([]Memory, error) {
+		return s.ListByStatus(ctx, StatusPending, p)
+	})
+	if len(both) != 6 || !slices.Contains(both, epiID) {
+		t.Fatalf("unfiltered pages = %v, want all 6 fixtures", both)
+	}
+
+	active, err := s.ListByStatus(ctx, StatusActive, start)
+	if err != nil {
+		t.Fatalf("ListByStatus active: %v", err)
+	}
+	for _, m := range active {
+		if slices.Contains(both, m.ID) {
+			t.Fatalf("status filter leaked pending fixture %s", m.ID)
+		}
+	}
+}
+
+func TestCountByStatusMatchesList(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	for range 3 {
+		if _, err := s.Insert(ctx, mem("count fixture")); err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+	}
+	// Other writers may land between the reads; retry until a count
+	// brackets the list unchanged.
+	for range 5 {
+		before, err := s.CountByStatus(ctx, StatusPending)
+		if err != nil {
+			t.Fatalf("CountByStatus: %v", err)
+		}
+		list, err := s.ListByStatus(ctx, StatusPending, Page{})
+		if err != nil {
+			t.Fatalf("ListByStatus: %v", err)
+		}
+		after, err := s.CountByStatus(ctx, StatusPending)
+		if err != nil {
+			t.Fatalf("CountByStatus: %v", err)
+		}
+		if before != after {
+			continue
+		}
+		if before < 3 || before != len(list) {
+			t.Fatalf("count = %d, list = %d", before, len(list))
+		}
+		return
+	}
+	t.Fatal("pending count kept changing")
+}
+
+func TestListByEntityKeysetPages(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	entity, err := s.UpsertEntity(ctx, "topic", "itest-entity-"+t.Name())
+	if err != nil {
+		t.Fatalf("UpsertEntity: %v", err)
+	}
+	var active []string
+	for range 3 {
+		m := mem("entity paging fixture")
+		m.EntityRefs = []string{entity}
+		m.Actor = ActorUser
+		id, err := s.Insert(ctx, m)
+		if err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		active = append(active, id)
+	}
+	pending := mem("entity paging pending fixture")
+	pending.EntityRefs = []string{entity}
+	if _, err := s.Insert(ctx, pending); err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	pinCreatedAt(t, s, time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC), active[0], active[1])
+
+	got := walkPages(t, Page{Limit: 2}, func(p Page) ([]Memory, error) {
+		return s.ListByEntity(ctx, entity, p)
+	})
+	if len(got) != 3 {
+		t.Fatalf("entity pages = %v, want the 3 active fixtures", got)
+	}
+	for _, id := range active {
+		if !slices.Contains(got, id) {
+			t.Fatalf("entity pages = %v, missing %s", got, id)
+		}
+	}
+}
+
+// The containment predicate is what lets memories_entity_refs_gin
+// serve entity lookups; the old = ANY form cannot use it.
+func TestEntityRefsContainmentUsesGIN(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("db: %v", err)
+	}
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	// A database migrated before #1132 lacks the index until its
+	// pending alter runs; create it inside the rolled-back tx.
+	if _, err := tx.Exec(ctx, "CREATE INDEX IF NOT EXISTS memories_entity_refs_gin ON memories USING gin (entity_refs)"); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if _, err := tx.Exec(ctx, "SET LOCAL enable_seqscan = off"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	explain := func(where string) string {
+		rows, err := tx.Query(ctx, "EXPLAIN SELECT id FROM memories WHERE "+where)
+		if err != nil {
+			t.Fatalf("explain: %v", err)
+		}
+		defer rows.Close()
+		var plan strings.Builder
+		for rows.Next() {
+			var line string
+			if err := rows.Scan(&line); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			plan.WriteString(line + "\n")
+		}
+		return plan.String()
+	}
+	const id = "11111111-1111-4111-8111-111111111111"
+	if plan := explain("entity_refs @> ARRAY['" + id + "'::uuid]"); !strings.Contains(plan, "memories_entity_refs_gin") {
+		t.Fatalf("containment plan does not use the GIN index:\n%s", plan)
+	}
+	if plan := explain("'" + id + "'::uuid = ANY(entity_refs)"); strings.Contains(plan, "memories_entity_refs_gin") {
+		t.Fatalf("= ANY unexpectedly uses the GIN index:\n%s", plan)
 	}
 }
 
