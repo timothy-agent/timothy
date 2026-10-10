@@ -1011,6 +1011,67 @@ func main() {
 		}
 		return out, nil
 	})
+	// timothy_help (issue #1127): registered here, not inside
+	// buildAgent, since its live block reads stores built after it.
+	// Chat surface only, like deliver; resolveToolAllow offers it to
+	// every agent.
+	helpCfg := builtin.TimothyHelpConfig{
+		Search:    selfdocs.HelpSearch(mc, kbStore, selfdocs.Collection),
+		Version:   service.Version,
+		Features:  flags.All,
+		Workflows: workflowEngine != nil,
+		Agents: func(ctx context.Context) ([]string, error) {
+			list, err := agentReg.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			names := []string{}
+			for _, a := range list {
+				if a.Enabled {
+					names = append(names, a.Name)
+				}
+			}
+			return names, nil
+		},
+		Sandbox: func(ctx context.Context) error {
+			hctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			return missionSandbox.Health(hctx)
+		},
+	}
+	if conns != nil {
+		helpCfg.Connectors = func(ctx context.Context) ([]builtin.HelpAccount, error) {
+			list, err := conns.Store().List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]builtin.HelpAccount, len(list))
+			for i, c := range list {
+				out[i] = builtin.HelpAccount{Kind: c.Kind, Enabled: c.Enabled}
+			}
+			return out, nil
+		}
+	}
+	if channelStore != nil {
+		helpCfg.Channels = func(ctx context.Context) ([]builtin.HelpAccount, error) {
+			list, err := channelStore.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]builtin.HelpAccount, len(list))
+			for i, c := range list {
+				out[i] = builtin.HelpAccount{Kind: c.Kind, Enabled: c.Enabled}
+			}
+			return out, nil
+		}
+	}
+	if current := builtinSet.add(builtin.TimothyHelp(helpCfg)); conns != nil {
+		swapAgentTools(agent, current, conns, app.Log, toolCalls)
+	} else if constrained, defs, err := compileToolset(current, nil, app.Log, toolCalls); err != nil {
+		app.Log.Warn("timothy_help tool registration failed; agent keeps its previous tool surface", "error", err)
+	} else {
+		agent.SwapTools(constrained, defs)
+	}
 	svc.SetKBRead(kbReadFromStore(kbStore))
 	// writing_samples: the operator's own writing by language, which
 	// search_kb (topic similarity) cannot surface. The collection name

@@ -162,3 +162,36 @@ func (s *Store) ReplaceSystemDocuments(ctx context.Context, name, description st
 	}
 	return ids, nil
 }
+
+// DocumentMeta returns the string fields of kb_documents.meta for each
+// of ids that exists, keyed by document id.
+func (s *Store) DocumentMeta(ctx context.Context, ids []string) (map[string]map[string]string, error) {
+	out := make(map[string]map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, fmt.Errorf("kb document meta: %w", err)
+	}
+	rows, err := db.Query(ctx, `SELECT d.id, kv.key, kv.value FROM kb_documents d, jsonb_each_text(d.meta) kv
+		WHERE d.id = ANY($1::uuid[]) AND jsonb_typeof(d.meta -> kv.key) = 'string'`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("kb document meta: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, key, value string
+		if err := rows.Scan(&id, &key, &value); err != nil {
+			return nil, fmt.Errorf("kb document meta: %w", err)
+		}
+		if out[id] == nil {
+			out[id] = map[string]string{}
+		}
+		out[id][key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("kb document meta: %w", err)
+	}
+	return out, nil
+}
