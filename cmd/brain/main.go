@@ -18,6 +18,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,6 +42,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/onboarding"
 	"github.com/SumonMSelim/timothy/internal/brain/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/brain/sandboxclient"
+	"github.com/SumonMSelim/timothy/internal/brain/selfdocs"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
@@ -263,6 +265,11 @@ func main() {
 	}, chat.VisionRouteBound(gwc, app.Log), recognizeImage, func(ctx context.Context) bool {
 		return flags.Enabled(ctx, settings.KeyKBLocalOCR)
 	}, app.Log)
+	// SVG images rasterize through the pdfgen sidecar before captioning
+	// (issue #1121); without it they stay skipped as unsupported.
+	if pdfgenURL != "" {
+		kbEnrich.Rasterize = pdfgenclient.New(pdfgenURL).Rasterize
+	}
 
 	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, flags.Location, rememberWithTurnTrust(mc), app.Log, toolCalls, sensitiveRoute, fxStore, kbEnrich)
 	if buildErr != nil {
@@ -985,6 +992,34 @@ func main() {
 	// kb retry sweep (issue #414): re-ingests documents that failed on a
 	// transient embedding/provider error, on their own backoff schedule.
 	go api.RunKBRetrySweep(ctx, kbStore, mc, kbEnrich, app.Log)
+	// selfdocs (issue #1126): the bundled docs go into a system
+	// collection once per bundle hash, after migrations and off the
+	// boot path. A failure degrades health and retries on the next boot.
+	selfdocsDir := os.Getenv("SELFDOCS_DIR")
+	if selfdocsDir == "" {
+		selfdocsDir = "/selfdocs"
+	}
+	var selfdocsErr atomic.Pointer[string]
+	app.AddCheck("selfdocs", func() httpserver.Check {
+		if msg := selfdocsErr.Load(); msg != nil {
+			return httpserver.Check{Status: "degraded", Detail: *msg}
+		}
+		return httpserver.Check{Status: "ok"}
+	})
+	go func() {
+		if err := app.WaitMigrated(ctx); err != nil {
+			return
+		}
+		err := selfdocs.Sync(ctx, selfdocs.Deps{Dir: selfdocsDir, Name: selfdocs.Collection, Store: kbStore, Ingest: mc, Log: app.Log})
+		switch {
+		case errors.Is(err, selfdocs.ErrNoBundle):
+			app.Log.Info("selfdocs: no bundle, skipping ingest", "dir", selfdocsDir)
+		case err != nil:
+			app.Log.Error("selfdocs: ingest failed; retrying on next boot", "error", err)
+			msg := err.Error()
+			selfdocsErr.Store(&msg)
+		}
+	}()
 	svc.SetKBSearch(func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		hits, err := mc.KBSearch(ctx, query, nil, boostCollections, mode, k)
 		if err != nil {
@@ -999,6 +1034,67 @@ func main() {
 		}
 		return out, nil
 	})
+	// timothy_help (issue #1127): registered here, not inside
+	// buildAgent, since its live block reads stores built after it.
+	// Chat surface only, like deliver; resolveToolAllow offers it to
+	// every agent.
+	helpCfg := builtin.TimothyHelpConfig{
+		Search:    selfdocs.HelpSearch(mc, kbStore, selfdocs.Collection),
+		Version:   service.Version,
+		Features:  flags.All,
+		Workflows: workflowEngine != nil,
+		Agents: func(ctx context.Context) ([]string, error) {
+			list, err := agentReg.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			names := []string{}
+			for _, a := range list {
+				if a.Enabled {
+					names = append(names, a.Name)
+				}
+			}
+			return names, nil
+		},
+		Sandbox: func(ctx context.Context) error {
+			hctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			return missionSandbox.Health(hctx)
+		},
+	}
+	if conns != nil {
+		helpCfg.Connectors = func(ctx context.Context) ([]builtin.HelpAccount, error) {
+			list, err := conns.Store().List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]builtin.HelpAccount, len(list))
+			for i, c := range list {
+				out[i] = builtin.HelpAccount{Kind: c.Kind, Enabled: c.Enabled}
+			}
+			return out, nil
+		}
+	}
+	if channelStore != nil {
+		helpCfg.Channels = func(ctx context.Context) ([]builtin.HelpAccount, error) {
+			list, err := channelStore.List(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]builtin.HelpAccount, len(list))
+			for i, c := range list {
+				out[i] = builtin.HelpAccount{Kind: c.Kind, Enabled: c.Enabled}
+			}
+			return out, nil
+		}
+	}
+	if current := builtinSet.add(builtin.TimothyHelp(helpCfg)); conns != nil {
+		swapAgentTools(agent, current, conns, app.Log, toolCalls)
+	} else if constrained, defs, err := compileToolset(current, nil, app.Log, toolCalls); err != nil {
+		app.Log.Warn("timothy_help tool registration failed; agent keeps its previous tool surface", "error", err)
+	} else {
+		agent.SwapTools(constrained, defs)
+	}
 	svc.SetKBRead(kbReadFromStore(kbStore))
 	// writing_samples: the operator's own writing by language, which
 	// search_kb (topic similarity) cannot surface. The collection name
@@ -1071,7 +1167,7 @@ func onboardingProbes(gwc *gwclient.Client, sandbox *sandboxclient.Client, sessi
 		ResolveRoute:       gwc.ResolveRoute,
 		SandboxHealth:      sandbox.Health,
 		HasAssistantReply:  sessions.HasAssistantReply,
-		CountKBCollections: countOf(kbStore.ListCollections),
+		CountKBCollections: kbStore.CountOperatorCollections,
 		AutomationsEnabled: func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyAutomations) },
 		MissionModelFloor:  missions.ParseModelFloor(os.Getenv("MISSION_MODEL_FLOOR")),
 	}

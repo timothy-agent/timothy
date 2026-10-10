@@ -33,6 +33,23 @@ replaces served, so the drops are safe once the creates land. Additive:
 safe to run before deploy. Instances: homelab `timothy`, `demo1`,
 `demo2` and `demo3` on timothy-oci.
 
+## system knowledge collections and bundle hashes (#1126)
+
+```sql
+ALTER TABLE kb_collections ADD COLUMN IF NOT EXISTS system boolean NOT NULL DEFAULT false;
+ALTER TABLE kb_documents ADD COLUMN IF NOT EXISTS meta jsonb NOT NULL DEFAULT '{}';
+CREATE TABLE IF NOT EXISTS kb_system_bundles (
+    name         text PRIMARY KEY,
+    version      text NOT NULL,
+    content_hash text NOT NULL,
+    ingested_at  timestamptz NOT NULL DEFAULT now()
+);
+```
+
+Matches `0001_init.sql`. Additive: safe to run before deploy.
+Instances: homelab `timothy`, `demo1`, `demo2` and `demo3` on
+timothy-oci.
+
 ## memories paging and entity_refs indexes (#1132)
 
 ```sql
