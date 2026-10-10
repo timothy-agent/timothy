@@ -42,22 +42,142 @@ const memoryColumns = `id, type, content, entity_refs, ` +
 // unless policy requires review; everything else lands pending.
 // Embedding may be empty (backfilled by extraction).
 func (s *Store) Insert(ctx context.Context, m Memory) (string, error) {
-	status := initialStatus(m)
 	db, err := s.db.Get()
 	if err != nil {
 		return "", fmt.Errorf("insert memory: %w", err)
 	}
+	id, err := insertMemory(ctx, db, m, initialStatus(m))
+	if err != nil {
+		return "", fmt.Errorf("insert memory: %w", err)
+	}
+	return id, nil
+}
+
+// rowQuerier is the pool or a transaction.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func insertMemory(ctx context.Context, q rowQuerier, m Memory, status Status) (string, error) {
 	var id string
-	err = db.QueryRow(ctx, `INSERT INTO memories
+	err := q.QueryRow(ctx, `INSERT INTO memories
 		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence, supersedes)
 		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9, NULLIF($10, '')::uuid)
 		RETURNING id`,
 		m.Type, m.Content, m.Embedding.String(), refs(m.EntityRefs),
 		m.SourceSession, m.SourceSeq, actor(m.Actor), status, m.Confidence, m.Supersedes).Scan(&id)
+	return id, err
+}
+
+// EntityKey names an entity by its unique (type, name).
+type EntityKey struct {
+	Type string
+	Name string
+}
+
+// Proposal is one extracted fact to persist: the memory, the entities
+// it references (upserted with it), and whether promotion policy
+// activates it on insert.
+type Proposal struct {
+	Memory   Memory
+	Entities []EntityKey
+	Promote  bool
+}
+
+// Confirmation is a restatement of an active row and the restated
+// fact's confidence.
+type Confirmation struct {
+	ID         string
+	Confidence float32
+}
+
+// confirmSQL reconfirms active rows from parallel id ($1) and
+// confidence ($2) arrays, same effect as Confirm (D-147): clear decay,
+// lift confidence to at least the restatement's. A row restated twice
+// takes its highest confidence.
+const confirmSQL = `UPDATE memories m SET last_confirmed_at = now(),
+		decayed_at = NULL, confidence = GREATEST(COALESCE(m.confidence, 0), c.conf)
+	FROM (SELECT id, max(conf) AS conf FROM unnest($1::uuid[], $2::real[]) AS u(id, conf) GROUP BY id) c
+	WHERE m.id = c.id AND m.status = $3`
+
+// ApplyExtraction writes one extraction run in a single transaction
+// (D-144): confirmations of restated active rows, entity upserts,
+// inserts and promotions. Any failure rolls back the whole run, so no
+// half-applied batch and no entity left behind by a failed insert.
+// Returns the inserted ids in proposal order.
+func (s *Store) ApplyExtraction(ctx context.Context, confirm []Confirmation, proposals []Proposal) ([]string, error) {
+	db, err := s.db.Get()
 	if err != nil {
-		return "", fmt.Errorf("insert memory: %w", err)
+		return nil, fmt.Errorf("apply extraction: %w", err)
 	}
-	return id, nil
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("apply extraction begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+
+	if len(confirm) > 0 {
+		ids := make([]string, len(confirm))
+		confs := make([]float32, len(confirm))
+		for i, c := range confirm {
+			ids[i], confs[i] = c.ID, c.Confidence
+		}
+		// A row archived since the dedup read is skipped, not an error.
+		if _, err := tx.Exec(ctx, confirmSQL, ids, confs, StatusActive); err != nil {
+			return nil, fmt.Errorf("apply extraction confirm: %w", err)
+		}
+	}
+	ids := make([]string, 0, len(proposals))
+	for _, p := range proposals {
+		m := p.Memory
+		m.EntityRefs = make([]string, 0, len(p.Entities))
+		for _, e := range p.Entities {
+			id, err := upsertEntity(ctx, tx, e.Type, e.Name)
+			if err != nil {
+				return nil, fmt.Errorf("apply extraction: %w", err)
+			}
+			m.EntityRefs = append(m.EntityRefs, id)
+		}
+		status := initialStatus(m)
+		if p.Promote {
+			status = StatusActive
+		}
+		id, err := insertMemory(ctx, tx, m, status)
+		if err != nil {
+			return nil, fmt.Errorf("apply extraction insert: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("apply extraction commit: %w", err)
+	}
+	return ids, nil
+}
+
+// normalizedContent is the comparison form for text-equality dedup:
+// trimmed, lowercased, whitespace runs collapsed, trailing .!? dropped.
+func normalizedContent(expr string) string {
+	return `regexp_replace(lower(regexp_replace(btrim(` + expr + `), '\s+', ' ', 'g')), '[.!?]+$', '')`
+}
+
+// RejectedWithContent returns a rejected memory whose normalized
+// content equals content's: rejected suppression when no embedding is
+// available to compare by.
+func (s *Store) RejectedWithContent(ctx context.Context, content string) (id string, ok bool, err error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return "", false, fmt.Errorf("rejected with content: %w", err)
+	}
+	err = db.QueryRow(ctx, `SELECT id::text FROM memories
+		WHERE status = $1 AND `+normalizedContent("content")+` = `+normalizedContent("$2")+`
+		LIMIT 1`, StatusRejected, content).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("rejected with content: %w", err)
+	}
+	return id, true, nil
 }
 
 func initialStatus(m Memory) Status {
@@ -422,9 +542,13 @@ func (s *Store) UpsertEntity(ctx context.Context, typ, name string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("upsert entity: %w", err)
 	}
+	return upsertEntity(ctx, db, typ, name)
+}
+
+func upsertEntity(ctx context.Context, q rowQuerier, typ, name string) (string, error) {
 	var id string
 	// DO UPDATE (not DO NOTHING) so RETURNING always yields the row.
-	err = db.QueryRow(ctx, `INSERT INTO entities (type, name) VALUES ($1, $2)
+	err := q.QueryRow(ctx, `INSERT INTO entities (type, name) VALUES ($1, $2)
 		ON CONFLICT (type, name) DO UPDATE SET name = EXCLUDED.name
 		RETURNING id`, typ, name).Scan(&id)
 	if err != nil {
@@ -561,8 +685,8 @@ func (s *Store) RedundantPendingPairs(ctx context.Context, threshold float64) ([
 // every member in a single transaction: a crash mid-sequence can no
 // longer leave the merged row active alongside still-active members
 // (D-011 double-count). The merged row activates directly - it
-// replaces confirmed knowledge - with last_confirmed_at defaulting to
-// now(). Any member whose Supersede predicate no longer matches (already
+// replaces confirmed knowledge - with last_confirmed_at taken from m when
+// set, else now(). Any member whose Supersede predicate no longer matches (already
 // superseded, or no longer active/pending) aborts the whole tx: the
 // merged content was computed from a stale read, and the deferred
 // Rollback undoes the insert along with every supersede already
@@ -578,13 +702,17 @@ func (s *Store) ApplyMerge(ctx context.Context, m Memory, memberIDs []string) (s
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
+	var confirmedAt *time.Time
+	if !m.LastConfirmedAt.IsZero() {
+		confirmedAt = &m.LastConfirmedAt
+	}
 	var id string
 	err = tx.QueryRow(ctx, `INSERT INTO memories
-		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence)
-		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9)
+		(type, content, embedding, entity_refs, source_session, source_seq, actor, status, confidence, last_confirmed_at)
+		VALUES ($1, $2, NULLIF($3, '')::vector, $4, NULLIF($5, '')::uuid, NULLIF($6, 0), $7, $8, $9, COALESCE($10::timestamptz, now()))
 		RETURNING id`,
 		m.Type, m.Content, m.Embedding.String(), refs(m.EntityRefs),
-		m.SourceSession, m.SourceSeq, actor(m.Actor), StatusActive, m.Confidence).Scan(&id)
+		m.SourceSession, m.SourceSeq, actor(m.Actor), StatusActive, m.Confidence, confirmedAt).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("apply merge insert: %w", err)
 	}
@@ -610,19 +738,17 @@ func (s *Store) ApplyMerge(ctx context.Context, m Memory, memberIDs []string) (s
 
 // Confirm bumps an active memory's last_confirmed_at without touching
 // its content - lifecycle metadata, not a fact UPDATE (D-011).
-// Extraction calls it when a proposed fact turns out to be an exact
-// duplicate of an active memory: dropping the duplicate would
-// otherwise discard the confirmation signal entirely. The restatement
-// also clears decay and lifts confidence to at least its own, so a
-// fact decayed below DecayFloor becomes retrievable again (D-147).
+// The memory API calls it when a user re-adds an active fact; the
+// extraction path confirms inside ApplyExtraction with the same SQL.
+// The restatement also clears decay and lifts confidence to at least
+// its own, so a fact decayed below DecayFloor becomes retrievable
+// again (D-147).
 func (s *Store) Confirm(ctx context.Context, id string, confidence float32) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("confirm memory: %w", err)
 	}
-	tag, err := db.Exec(ctx, `UPDATE memories SET last_confirmed_at = now(),
-			decayed_at = NULL, confidence = GREATEST(COALESCE(confidence, 0), $3)
-		WHERE id = $1 AND status = $2`, id, StatusActive, confidence)
+	tag, err := db.Exec(ctx, confirmSQL, []string{id}, []float32{confidence}, StatusActive)
 	if err != nil {
 		return fmt.Errorf("confirm memory: %w", err)
 	}

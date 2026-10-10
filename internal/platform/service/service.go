@@ -118,6 +118,29 @@ func (a *App) migrationsCheck() httpserver.Check {
 	}
 }
 
+// migratedPoll is how often WaitMigrated rechecks.
+const migratedPoll = 250 * time.Millisecond
+
+// WaitMigrated blocks until startup migrations have applied or ctx is
+// done.
+func (a *App) WaitMigrated(ctx context.Context) error {
+	t := time.NewTicker(migratedPoll)
+	defer t.Stop()
+	for {
+		a.mu.RLock()
+		done := a.migrationsDone
+		a.mu.RUnlock()
+		if done {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}
+
 func (a *App) setMigrations(err error) {
 	a.mu.Lock()
 	a.migrationsDone, a.migrationsErr = err == nil, err

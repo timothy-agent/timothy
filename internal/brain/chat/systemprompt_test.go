@@ -172,3 +172,29 @@ func TestAssembleSystemWritingStyleBlock(t *testing.T) {
 		}
 	})
 }
+
+// TestSystemPromptRoutesSelfQuestionsToTimothyHelp pins the one-line
+// steer of issue #1127: self questions go to timothy_help, app screens
+// link relative, docs absolute. It sits in the stable prefix, before
+// the date line.
+func TestSystemPromptRoutesSelfQuestionsToTimothyHelp(t *testing.T) {
+	t.Parallel()
+	got := assembleSystem("", "", false, time.Date(2026, time.October, 10, 0, 0, 0, 0, time.UTC), nil)
+	line := ""
+	for l := range strings.SplitSeq(got, "\n") {
+		if strings.Contains(l, "timothy_help") {
+			if line != "" {
+				t.Fatalf("timothy_help named on more than one line:\n%s", got)
+			}
+			line = l
+		}
+	}
+	for _, want := range []string{"Timothy itself", "[Features](/settings/features)", "absolute URLs"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("timothy_help line %q missing %q", line, want)
+		}
+	}
+	if strings.Index(got, line) > strings.Index(got, "Today is ") {
+		t.Fatalf("timothy_help line must sit in the stable prefix before the date line:\n%s", got)
+	}
+}

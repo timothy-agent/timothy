@@ -1318,15 +1318,15 @@ func TestChatNonEmptySkillsAllowlistAdmitsOnlyListedPacks(t *testing.T) {
 }
 
 // Tools keep the same "empty = none, opt-in only" flip as skills, but
-// resolveToolAllow carves out retrieve_output unconditionally (D-019:
-// how the model reads back its own offloaded results) and load_skill
-// only when the agent's skills allowlist is non-empty (nothing to
-// load otherwise).
-func TestResolveToolAllowEmptyGrantsOnlyRetrieveOutput(t *testing.T) {
+// resolveToolAllow carves out retrieve_output (D-019: how the model
+// reads back its own offloaded results) and timothy_help (issue #1127)
+// unconditionally, and load_skill only when the agent's skills
+// allowlist is non-empty (nothing to load otherwise).
+func TestResolveToolAllowEmptyGrantsOnlyInfraTools(t *testing.T) {
 	t.Parallel()
 	got := resolveToolAllow(agents.Agent{}, nil)
-	want := []string{retrieveOutputTool}
-	if len(got) != len(want) || got[0] != want[0] {
+	want := []string{retrieveOutputTool, timothyHelpTool}
+	if !slices.Equal(got, want) {
 		t.Fatalf("resolveToolAllow(empty) = %v, want %v", got, want)
 	}
 }
@@ -1334,7 +1334,7 @@ func TestResolveToolAllowEmptyGrantsOnlyRetrieveOutput(t *testing.T) {
 func TestResolveToolAllowEmptyToolsWithSkillsAlsoGrantsLoadSkill(t *testing.T) {
 	t.Parallel()
 	got := resolveToolAllow(agents.Agent{Skills: []string{"some-skill"}}, nil)
-	want := map[string]bool{retrieveOutputTool: true, loadSkillTool: true}
+	want := map[string]bool{retrieveOutputTool: true, timothyHelpTool: true, loadSkillTool: true}
 	if len(got) != len(want) {
 		t.Fatalf("resolveToolAllow = %v, want exactly %v", got, want)
 	}
@@ -1349,7 +1349,7 @@ func TestResolveToolAllowNonEmptyToolsGainsInfraExemptions(t *testing.T) {
 	t.Parallel()
 	profile := agents.Agent{Tools: []string{"search_web", "get_current_time"}, Skills: []string{"some-skill"}}
 	got := resolveToolAllow(profile, nil)
-	want := []string{"search_web", "get_current_time", "retrieve_output", "load_skill"}
+	want := []string{"search_web", "get_current_time", "retrieve_output", "timothy_help", "load_skill"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("resolveToolAllow(non-empty) = %v, want %v", got, want)
 	}
@@ -1360,18 +1360,18 @@ func TestResolveToolAllowNonEmptyToolsGainsInfraExemptions(t *testing.T) {
 
 func TestResolveToolAllowNeverDuplicatesExemptions(t *testing.T) {
 	t.Parallel()
-	profile := agents.Agent{Tools: []string{"retrieve_output", "load_skill"}, Skills: []string{"some-skill"}}
+	profile := agents.Agent{Tools: []string{"retrieve_output", "timothy_help", "load_skill"}, Skills: []string{"some-skill"}}
 	got := resolveToolAllow(profile, nil)
-	want := []string{"retrieve_output", "load_skill"}
+	want := []string{"retrieve_output", "timothy_help", "load_skill"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("resolveToolAllow(already listed) = %v, want %v", got, want)
 	}
 }
 
 // End-to-end: an agent with no tools configured still offers
-// retrieve_output to the loop (the exemption survives the actual
-// Chat call, not just the helper).
-func TestChatEmptyToolsAllowlistStillOffersRetrieveOutput(t *testing.T) {
+// retrieve_output and timothy_help to the loop (the exemptions survive
+// the actual Chat call, not just the helper).
+func TestChatEmptyToolsAllowlistStillOffersInfraTools(t *testing.T) {
 	t.Parallel()
 	gw := &fakeGW{events: okEvents("ok")}
 	resolver := func(context.Context, string) (agents.Agent, bool) {
@@ -1385,8 +1385,8 @@ func TestChatEmptyToolsAllowlistStillOffersRetrieveOutput(t *testing.T) {
 	}
 	drain(t, ch)
 	allow := chatRequest(t, gw).ToolAllow
-	if len(allow) != 1 || allow[0] != retrieveOutputTool {
-		t.Fatalf("ToolAllow = %v, want only retrieve_output", allow)
+	if !slices.Equal(allow, []string{retrieveOutputTool, timothyHelpTool}) {
+		t.Fatalf("ToolAllow = %v, want only retrieve_output and timothy_help", allow)
 	}
 }
 
@@ -1943,8 +1943,8 @@ func TestAgentProfileShapesTurn(t *testing.T) {
 	if sent.Route != "research" || sent.Agent != "researcher-id" {
 		t.Fatalf("route/agent = %s/%s, want research/researcher-id", sent.Route, sent.Agent)
 	}
-	if !slices.Equal(sent.ToolAllow, []string{"search_web", "retrieve_output"}) {
-		t.Fatalf("tool allowlist = %v, want authored list plus retrieve_output", sent.ToolAllow)
+	if !slices.Equal(sent.ToolAllow, []string{"search_web", "retrieve_output", "timothy_help"}) {
+		t.Fatalf("tool allowlist = %v, want authored list plus retrieve_output and timothy_help", sent.ToolAllow)
 	}
 	if !strings.Contains(sent.System, "Consult sources before answering.") {
 		t.Fatalf("overlay missing from system prompt:\n%s", sent.System)
@@ -3548,13 +3548,13 @@ func TestResolveToolAllowDeferredLoadTool(t *testing.T) {
 		tools []string
 		want  []string
 	}{
-		{"raw hidden name", []string{"get_issue"}, []string{"get_issue", "retrieve_output", "jira_load_tool"}},
-		{"namespaced hidden name", []string{"jira_search_issues"}, []string{"jira_search_issues", "retrieve_output", "jira_load_tool"}},
-		{"entry point by raw name covers every connector", []string{"load_tool"}, []string{"load_tool", "retrieve_output"}},
-		{"entry point already listed", []string{"jira_load_tool"}, []string{"jira_load_tool", "retrieve_output"}},
-		{"unrelated tools", []string{"search_web"}, []string{"search_web", "retrieve_output"}},
-		{"empty allowlist", nil, []string{"retrieve_output"}},
-		{"both connectors", []string{"ping", "get_issue"}, []string{"ping", "get_issue", "retrieve_output", "jira_load_tool", "other_load_tool"}},
+		{"raw hidden name", []string{"get_issue"}, []string{"get_issue", "retrieve_output", "timothy_help", "jira_load_tool"}},
+		{"namespaced hidden name", []string{"jira_search_issues"}, []string{"jira_search_issues", "retrieve_output", "timothy_help", "jira_load_tool"}},
+		{"entry point by raw name covers every connector", []string{"load_tool"}, []string{"load_tool", "retrieve_output", "timothy_help"}},
+		{"entry point already listed", []string{"jira_load_tool"}, []string{"jira_load_tool", "retrieve_output", "timothy_help"}},
+		{"unrelated tools", []string{"search_web"}, []string{"search_web", "retrieve_output", "timothy_help"}},
+		{"empty allowlist", nil, []string{"retrieve_output", "timothy_help"}},
+		{"both connectors", []string{"ping", "get_issue"}, []string{"ping", "get_issue", "retrieve_output", "timothy_help", "jira_load_tool", "other_load_tool"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

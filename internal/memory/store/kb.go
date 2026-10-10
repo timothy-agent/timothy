@@ -208,7 +208,8 @@ const kbCandidateFetchMultiplier = 3
 
 // KBSearch runs hybrid (vector + full-text, RRF-fused), semantic-only,
 // or keyword-only retrieval over kb_chunks. Empty collectionNames
-// searches the whole knowledge base; non-empty scopes to it (an
+// searches the whole knowledge base except system collections not
+// named in boostCollections (D-143); non-empty scopes to it (an
 // explicit narrowing, still enforced here in SQL, never a prompt).
 // boostCollections gets a score multiplier at ranking time regardless
 // of collectionNames: a relevance signal, never a filter: chunks
@@ -325,11 +326,14 @@ const (
 	// than replacing it.
 	keywordMatchGate = `(SELECT count(*) FROM unnest(q.lexemes) ql WHERE tsvector_to_array(c.tsv) @> ARRAY[ql]) >= ` + minMatchedLexemesLit
 
-	// collectionFilter matches every row when names is empty/null
-	// (whole-KB search), or scopes to it when non-empty (an explicit
-	// narrowing, still enforced in SQL).
-	collectionFilterQ2 = `(array_length($2::text[], 1) IS NULL OR col.name = ANY($2))`
-	collectionFilterQ3 = `(array_length($3::text[], 1) IS NULL OR col.name = ANY($3))`
+	// collectionFilter scopes to names when non-empty (an explicit
+	// narrowing, still enforced in SQL). Empty/null names is whole-KB
+	// search minus system collections (issue #1126) the boost list does
+	// not name (D-143): Timothy's own docs stay out of an agent's
+	// results unless its Knowledge lists them. A filter, not a post-pass,
+	// so k is never thinned.
+	collectionFilterQ2 = `(col.name = ANY($2::text[]) OR (array_length($2::text[], 1) IS NULL AND (NOT col.system OR col.name = ANY($4::text[]))))`
+	collectionFilterQ3 = `(col.name = ANY($3::text[]) OR (array_length($3::text[], 1) IS NULL AND (NOT col.system OR col.name = ANY($5::text[]))))`
 
 	// boostMultiplier scores a boosted-collection chunk higher without
 	// excluding anything else: CASE, not a WHERE filter.
