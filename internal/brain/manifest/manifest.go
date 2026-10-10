@@ -280,7 +280,7 @@ type index struct {
 func Write(dir string, pages []Page, version string) error {
 	sorted := slices.Clone(pages)
 	slices.SortFunc(sorted, func(a, b Page) int { return strings.Compare(a.File, b.File) })
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil { //nolint:gosec // generated docs, read by the image build as another user
 		return fmt.Errorf("manifest: create %s: %w", dir, err)
 	}
 	h := sha256.New()
@@ -290,7 +290,7 @@ func Write(dir string, pages []Page, version string) error {
 			return fmt.Errorf("%w: page file name %q", ErrInvalid, p.File)
 		}
 		content := Render(p)
-		if err := os.WriteFile(filepath.Join(dir, p.File), []byte(content), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, p.File), []byte(content), 0o644); err != nil { //nolint:gosec // generated docs, not secrets
 			return fmt.Errorf("manifest: write %s: %w", p.File, err)
 		}
 		h.Write([]byte(content))
@@ -301,7 +301,7 @@ func Write(dir string, pages []Page, version string) error {
 	if err != nil {
 		return fmt.Errorf("manifest: encode index: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(raw, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), append(raw, '\n'), 0o644); err != nil { //nolint:gosec // generated index, not a secret
 		return fmt.Errorf("manifest: write manifest.json: %w", err)
 	}
 	return nil
