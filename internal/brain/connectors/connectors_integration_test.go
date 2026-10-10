@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -213,3 +214,50 @@ type nopSource struct{}
 func (nopSource) Tools() []*tools.Tool        { return nil }
 func (nopSource) Test(context.Context) error  { return nil }
 func (nopSource) Close() error                { return nil }
+
+// TestSearchConsoleThroughManagerRefreshesToken runs a Search Console
+// connector stored in the database through the Manager's aggregated
+// tool surface against a fake Google, starting from an expired token.
+func TestSearchConsoleThroughManagerRefreshesToken(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := t.Context()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	name := marker + "search-console"
+
+	f := &fakeGoogle{}
+	row := googleRow(searchConsoleScopes)
+	row.Name, row.Enabled = name, true
+	g, secrets := testGoogle(t, f, row)
+	//nolint:gosec // G117: fake token fixture.
+	expired, _ := json.Marshal(tokenBundle{AccessToken: "stale", RefreshToken: "rt-1", Expiry: time.Now().Add(-time.Hour)})
+	_ = secrets.Set(ctx, row.CredentialRef, string(expired))
+
+	mgr := NewManager(store, func(context.Context, string) (string, error) { return "resolved", nil }, log)
+	mgr.RegisterBuilder("google", g.Builder())
+	if _, err := store.Create(ctx, row); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var query *tools.Tool
+	for _, tl := range mgr.Tools(nil) {
+		if tl.Name == "search_console_query" {
+			query = tl
+		}
+	}
+	if query == nil {
+		t.Fatal("search_console_query missing from the manager's tool surface")
+	}
+	out, err := query.Execute(ctx, json.RawMessage(`{"site":"sc-domain:example.com","account":"`+name+`"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(f.tokenForms) != 1 || f.tokenForms[0].Get("grant_type") != "refresh_token" {
+		t.Fatalf("token calls = %v, want one refresh", f.tokenForms)
+	}
+	if len(f.scQueries) != 1 {
+		t.Fatalf("query calls = %d, want 1", len(f.scQueries))
+	}
+	if !strings.Contains(out, "timothy cat") {
+		t.Fatalf("output = %q", out)
+	}
+}

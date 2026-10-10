@@ -50,17 +50,20 @@ type SecretRW interface {
 const (
 	googleAuthURL = "https://accounts.google.com/o/oauth2/v2/auth"
 	//nolint:gosec // G101: the token ENDPOINT's URL, not a credential.
-	googleTokenURL = "https://oauth2.googleapis.com/token"
-	gmailBase      = "https://gmail.googleapis.com"
-	calendarBase   = "https://www.googleapis.com/calendar/v3"
-	driveBase      = "https://www.googleapis.com/drive/v3"
-	docsBase       = "https://docs.googleapis.com/v1"
+	googleTokenURL    = "https://oauth2.googleapis.com/token"
+	gmailBase         = "https://gmail.googleapis.com"
+	calendarBase      = "https://www.googleapis.com/calendar/v3"
+	driveBase         = "https://www.googleapis.com/drive/v3"
+	docsBase          = "https://docs.googleapis.com/v1"
+	searchConsoleBase = "https://searchconsole.googleapis.com/webmasters/v3"
 
 	// driveReadonlyScope/documentsScope gate the Drive and Docs tool
 	// sets in Builder — exact matches (see hasExactScope) since
 	// drive.readonly and drive.file (Docs' scope) share a substring.
 	driveReadonlyScope = "https://www.googleapis.com/auth/drive.readonly"
 	documentsScope     = "https://www.googleapis.com/auth/documents"
+	// searchConsoleScope gates the Search Console tool set, also exact.
+	searchConsoleScope = "https://www.googleapis.com/auth/webmasters.readonly"
 
 	// oauthStateTTL bounds how long a started OAuth dance may take.
 	oauthStateTTL = 10 * time.Minute
@@ -79,12 +82,13 @@ type Google struct {
 	PublicURL string // Timothy's public base URL, for the redirect URI
 	Log       *slog.Logger
 
-	AuthURL      string
-	TokenURL     string
-	GmailBase    string
-	CalendarBase string
-	DriveBase    string
-	DocsBase     string
+	AuthURL           string
+	TokenURL          string
+	GmailBase         string
+	CalendarBase      string
+	DriveBase         string
+	DocsBase          string
+	SearchConsoleBase string
 	// MarkItDownURL is the markitdown sidecar's base address (compose-
 	// internal, e.g. http://markitdown:8000); empty disables HTML-only
 	// body rendering and PDF attachment reading with a clear error
@@ -96,6 +100,8 @@ type Google struct {
 	// refreshes serializes token(), which is a read-modify-write on the
 	// stored bundle; mu guards only states.
 	refreshes refreshLocks
+	// now is the clock Search Console's default date range counts from.
+	now func() time.Time
 }
 
 type oauthState struct {
@@ -110,8 +116,8 @@ func NewGoogle(secrets SecretRW, rows rowSource, publicURL string, log *slog.Log
 		Secrets: secrets, Rows: rows, Client: &http.Client{}, PublicURL: publicURL, Log: log,
 		AuthURL: googleAuthURL, TokenURL: googleTokenURL,
 		GmailBase: gmailBase, CalendarBase: calendarBase,
-		DriveBase: driveBase, DocsBase: docsBase,
-		states: map[string]oauthState{},
+		DriveBase: driveBase, DocsBase: docsBase, SearchConsoleBase: searchConsoleBase,
+		states: map[string]oauthState{}, now: time.Now,
 	}
 }
 

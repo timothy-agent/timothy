@@ -70,7 +70,7 @@ func (f *fakeSecrets) Set(_ context.Context, ref, value string) error {
 }
 
 // fakeGoogle serves the token endpoint plus minimal Gmail/Calendar/
-// Drive/Docs.
+// Drive/Docs/Search Console.
 type fakeGoogle struct {
 	mu          sync.Mutex
 	tokenForms  []url.Values
@@ -79,6 +79,7 @@ type fakeGoogle struct {
 	authTokens  []string // Authorization headers seen on API calls
 	docsCreated []map[string]any
 	batchUpdate []map[string]any // raw batchUpdate request bodies, per doc id
+	scQueries   []scRecorded     // searchAnalytics.query calls
 }
 
 func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
@@ -273,6 +274,37 @@ func (f *fakeGoogle) server(t *testing.T) *httptest.Server {
 		f.mu.Unlock()
 		_, _ = w.Write([]byte(`{}`))
 	})
+	mux.HandleFunc("GET /sites", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		_, _ = w.Write([]byte(`{"siteEntry":[
+			{"siteUrl":"sc-domain:example.com","permissionLevel":"siteOwner"},
+			{"siteUrl":"https://blog.example.com/","permissionLevel":"siteFullUser"},
+			{"siteUrl":"https://unverified.example/","permissionLevel":"siteUnverifiedUser"}]}`))
+	})
+	mux.HandleFunc("POST /sites/{site}/searchAnalytics/query", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		body, _ := io.ReadAll(r.Body)
+		f.mu.Lock()
+		f.scQueries = append(f.scQueries, scRecorded{escapedPath: r.URL.EscapedPath(), body: string(body)})
+		f.mu.Unlock()
+		switch r.PathValue("site") {
+		case "sc-domain:forbidden.example":
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":403,"message":"User does not have sufficient permission for site"}}`))
+		case "sc-domain:quota.example":
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"code":429,"message":"Quota exceeded"}}`))
+		case "sc-domain:bad.example":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":400,"message":"Invalid regex in filter"}}`))
+		case "sc-domain:empty.example":
+			_, _ = w.Write([]byte(`{"responseAggregationType":"byProperty"}`))
+		default:
+			_, _ = w.Write([]byte(`{"rows":[
+				{"keys":["timothy cat","https://example.com/cat"],"clicks":120,"impressions":2400,"ctr":0.05,"position":3.46},
+				{"keys":["tab\tquery","https://example.com/"],"clicks":7,"impressions":1000,"ctr":0.00749,"position":12.04}]}`))
+		}
+	})
 	// Fakes the markitdown sidecar: echoes back a recognizable marker
 	// plus the filename/mimetype headers it was called with, so tests
 	// can assert read_mail/read_mail_attachment actually reached it
@@ -296,6 +328,11 @@ const bothScopes = `["https://www.googleapis.com/auth/gmail.modify","https://www
 // for gmail+calendar in the round-trip tests below.
 const driveDocsScopes = `["https://www.googleapis.com/auth/drive.readonly","https://www.googleapis.com/auth/documents","https://www.googleapis.com/auth/drive.file"]`
 
+const searchConsoleScopes = `["https://www.googleapis.com/auth/webmasters.readonly"]`
+
+// allGoogleScopes enables every google tool set.
+const allGoogleScopes = `["https://www.googleapis.com/auth/gmail.modify","https://www.googleapis.com/auth/calendar","https://www.googleapis.com/auth/drive.readonly","https://www.googleapis.com/auth/documents","https://www.googleapis.com/auth/drive.file","https://www.googleapis.com/auth/webmasters.readonly"]`
+
 func googleRow(scopes string) Connector {
 	return Connector{
 		ID: "c1", Name: "personal", Kind: "google",
@@ -317,6 +354,7 @@ func testGoogle(t *testing.T, f *fakeGoogle, row Connector) (*Google, *fakeSecre
 	g.CalendarBase = srv.URL
 	g.DriveBase = srv.URL
 	g.DocsBase = srv.URL
+	g.SearchConsoleBase = srv.URL
 	g.MarkItDownURL = srv.URL
 	return g, secrets
 }
@@ -439,16 +477,23 @@ func TestGoogleBuilderScopeGating(t *testing.T) {
 	t.Parallel()
 	f := &fakeGoogle{}
 
+	scTools := []string{"list_search_console_sites", "search_console_query"}
 	for _, tc := range []struct {
 		scopes string
 		want   int
+		wantSC bool
 	}{
-		{`["https://www.googleapis.com/auth/gmail.modify"]`, 4},
-		{`["https://www.googleapis.com/auth/calendar"]`, 2},
-		{bothScopes, 6},
-		{`["https://www.googleapis.com/auth/drive.readonly"]`, 2},
-		{`["https://www.googleapis.com/auth/documents","https://www.googleapis.com/auth/drive.file"]`, 3},
-		{driveDocsScopes, 5},
+		{`["https://www.googleapis.com/auth/gmail.modify"]`, 4, false},
+		{`["https://www.googleapis.com/auth/calendar"]`, 2, false},
+		{bothScopes, 6, false},
+		{`["https://www.googleapis.com/auth/drive.readonly"]`, 2, false},
+		{`["https://www.googleapis.com/auth/documents","https://www.googleapis.com/auth/drive.file"]`, 3, false},
+		{driveDocsScopes, 5, false},
+		{searchConsoleScopes, 2, true},
+		{`["https://www.googleapis.com/auth/drive.readonly","https://www.googleapis.com/auth/webmasters.readonly"]`, 4, true},
+		{`["https://www.googleapis.com/auth/drive.readonly","https://www.googleapis.com/auth/documents","https://www.googleapis.com/auth/drive.file","https://www.googleapis.com/auth/webmasters.readonly"]`, 7, true},
+		// A write-capable webmasters scope is not ours to serve.
+		{`["https://www.googleapis.com/auth/drive.readonly","https://www.googleapis.com/auth/webmasters"]`, 2, false},
 	} {
 		row := googleRow(tc.scopes)
 		g, _ := testGoogle(t, f, row)
@@ -459,12 +504,27 @@ func TestGoogleBuilderScopeGating(t *testing.T) {
 		if got := len(src.Tools()); got != tc.want {
 			t.Fatalf("scopes %s: %d tools, want %d", tc.scopes, got, tc.want)
 		}
+		names := map[string]bool{}
+		for _, tl := range src.Tools() {
+			names[tl.Name] = true
+		}
+		for _, name := range scTools {
+			if names[name] != tc.wantSC {
+				t.Fatalf("scopes %s: %s present = %v, want %v", tc.scopes, name, names[name], tc.wantSC)
+			}
+		}
 	}
 
-	row := googleRow(`["https://www.googleapis.com/auth/drive"]`)
-	g, _ := testGoogle(t, f, row)
-	if _, err := g.Builder()(t.Context(), row, nil); err == nil {
-		t.Fatal("unknown scopes accepted")
+	for _, scopes := range []string{
+		`["https://www.googleapis.com/auth/drive"]`,
+		`["https://www.googleapis.com/auth/webmasters"]`,
+	} {
+		row := googleRow(scopes)
+		g, _ := testGoogle(t, f, row)
+		_, err := g.Builder()(t.Context(), row, nil)
+		if err == nil || !strings.Contains(err.Error(), "search console") {
+			t.Fatalf("scopes %s: err = %v, want unknown scopes naming search console", scopes, err)
+		}
 	}
 }
 
@@ -476,7 +536,7 @@ func TestGoogleBuilderScopeGating(t *testing.T) {
 func TestGoogleReadOnlyToolsPinned(t *testing.T) {
 	t.Parallel()
 	f := &fakeGoogle{}
-	row := googleRow(bothScopes)
+	row := googleRow(allGoogleScopes)
 	g, _ := testGoogle(t, f, row)
 	src, err := g.Builder()(t.Context(), row, nil)
 	if err != nil {
@@ -484,10 +544,12 @@ func TestGoogleReadOnlyToolsPinned(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"search_mail":          true,
-		"read_mail":            true,
-		"read_mail_attachment": true,
-		"list_calendar_events": true,
+		"search_mail":               true,
+		"read_mail":                 true,
+		"read_mail_attachment":      true,
+		"list_calendar_events":      true,
+		"list_search_console_sites": true,
+		"search_console_query":      true,
 	}
 	got := map[string]bool{}
 	for _, tl := range src.Tools() {

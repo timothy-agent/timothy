@@ -39,8 +39,11 @@ func (g *Google) Builder() Builder {
 		if src.hasExactScope(documentsScope) {
 			src.toolList = append(src.toolList, src.docsRead(), src.docsCreate(), src.docsAppend())
 		}
+		if src.hasExactScope(searchConsoleScope) {
+			src.toolList = append(src.toolList, src.searchConsoleSites(), src.searchConsoleQuery())
+		}
 		if len(src.toolList) == 0 {
-			return nil, fmt.Errorf("google %s: no known scopes (want gmail, calendar, drive, and/or docs)", c.Name)
+			return nil, fmt.Errorf("google %s: no known scopes (want gmail, calendar, drive, docs, and/or search console)", c.Name)
 		}
 		return src, nil
 	}
@@ -120,6 +123,14 @@ func (s *googleSource) Identity(ctx context.Context) (GitHubIdentity, error) {
 			return GitHubIdentity{}, err
 		}
 		return GitHubIdentity{Login: cal.ID, Email: cal.ID, Scopes: scopes}, nil
+	case s.hasExactScope(searchConsoleScope):
+		// Search Console exposes no account email; a sites listing proves
+		// the grant works, and the empty Login tells the caller there is
+		// no identity to show.
+		if err := s.api(ctx, http.MethodGet, s.g.SearchConsoleBase+"/sites", nil, nil); err != nil {
+			return GitHubIdentity{}, err
+		}
+		return GitHubIdentity{Scopes: scopes}, nil
 	default:
 		// Defensive: the builder rejects a connector with no known
 		// scopes, so every built googleSource has at least one of the
@@ -215,7 +226,19 @@ func googleAPIError(resp *http.Response) error {
 		return fmt.Errorf("Google authorization expired or was revoked. Reconnect to re-authorize")
 	}
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-	return fmt.Errorf("google api status %d: %s", resp.StatusCode, snippet)
+	return &googleStatusError{Status: resp.StatusCode, Body: snippet}
+}
+
+// googleStatusError is a non-2xx, non-401 Google API answer. A tool
+// that knows what the call was about (a Search Console site) maps
+// Status to its own message via errors.As.
+type googleStatusError struct {
+	Status int
+	Body   []byte // first 512 bytes of the response body
+}
+
+func (e *googleStatusError) Error() string {
+	return fmt.Sprintf("google api status %d: %s", e.Status, e.Body)
 }
 
 // --- Gmail ---

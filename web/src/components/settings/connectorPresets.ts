@@ -24,6 +24,7 @@ const gmailScope = 'https://www.googleapis.com/auth/gmail.modify'
 const calendarScope = 'https://www.googleapis.com/auth/calendar'
 const driveScope = 'https://www.googleapis.com/auth/drive.readonly'
 const docsScopes = ['https://www.googleapis.com/auth/documents', 'https://www.googleapis.com/auth/drive.file']
+const searchConsoleScope = 'https://www.googleapis.com/auth/webmasters.readonly'
 const outlookScopes = ['Mail.Read', 'Mail.Send', 'Calendars.Read', 'offline_access', 'User.Read']
 
 export const connectorPresets: ConnectorPreset[] = [
@@ -62,6 +63,15 @@ export const connectorPresets: ConnectorPreset[] = [
     logo: 'googledocs',
     brandColor: '#4285F4',
     scopes: docsScopes,
+  },
+  {
+    id: 'google-search-console',
+    name: 'Google Search Console',
+    kind: 'google',
+    description: 'Read search queries, clicks and positions (read-only)',
+    logo: 'googlesearchconsole',
+    brandColor: '#4285F4',
+    scopes: [searchConsoleScope],
   },
   {
     id: 'outlook',

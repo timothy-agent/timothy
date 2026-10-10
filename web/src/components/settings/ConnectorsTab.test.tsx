@@ -87,7 +87,16 @@ describe('Connectors tab', () => {
     expect(screen.getByText('calendar')).toBeTruthy()
     // AddPresetTile's accessible name is the title alone (description
     // reachable via aria-describedby), per contract.
-    for (const name of ['Gmail', 'Google Calendar', 'Google Drive', 'Google Docs', 'GitHub MCP', 'GitHub', 'Bitbucket']) {
+    for (const name of [
+      'Gmail',
+      'Google Calendar',
+      'Google Drive',
+      'Google Docs',
+      'Google Search Console',
+      'GitHub MCP',
+      'GitHub',
+      'Bitbucket',
+    ]) {
       expect(screen.getByRole('link', { name })).toBeTruthy()
     }
   })
@@ -573,6 +582,35 @@ describe('Connectors tab', () => {
       }),
     )
     expect(connectorOAuthStart).toHaveBeenCalledWith('c4')
+  })
+
+  it('adds a Google Search Console connector with the read-only scope and hands off to Google consent', async () => {
+    vi.mocked(setSecret).mockResolvedValue()
+    vi.mocked(createConnector).mockResolvedValue('c6')
+    vi.mocked(connectorOAuthStart).mockResolvedValue('https://accounts.google.com/o/oauth2/v2/auth?x=4')
+
+    renderTab()
+    fireEvent.click(await screen.findByRole('link', { name: 'Google Search Console' }))
+    fireEvent.change(await screen.findByPlaceholderText('….apps.googleusercontent.com'), {
+      target: { value: 'cid.apps.googleusercontent.com' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('GOCSPX-…'), { target: { value: 'GOCSPX-secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & connect Google' }))
+
+    await waitFor(() =>
+      expect(assign).toHaveBeenCalledWith('https://accounts.google.com/o/oauth2/v2/auth?x=4'),
+    )
+    expect(createConnector).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'google-search-console',
+        kind: 'google',
+        credential_ref: 'GOOGLE_SEARCH_CONSOLE_GOOGLE_OAUTH',
+        config: expect.objectContaining({
+          scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+        }),
+      }),
+    )
+    expect(connectorOAuthStart).toHaveBeenCalledWith('c6')
   })
 
   it('adds an Outlook connector and hands off to Microsoft consent', async () => {

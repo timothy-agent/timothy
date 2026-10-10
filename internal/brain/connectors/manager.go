@@ -892,7 +892,11 @@ func (m *Manager) TestReport(ctx context.Context, id string) (TestReport, error)
 	if err != nil {
 		return TestReport{}, err
 	}
-	report.Identity = &identity
+	// An empty Login means the check passed but the credential names no
+	// account (a Search Console only google connector).
+	if identity.Login != "" {
+		report.Identity = &identity
+	}
 	return report, nil
 }
 
