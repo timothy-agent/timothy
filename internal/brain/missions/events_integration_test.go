@@ -189,7 +189,7 @@ func TestApplyTransitionCommitFailureLeavesNoEvent(t *testing.T) {
 // notificationRows returns a mission's notification rows for assertions.
 func notificationRows(t *testing.T, s *Store, missionID string) []Notification {
 	t.Helper()
-	notes, err := (&Notifier{db: s.db}).List(t.Context())
+	notes, err := (&Notifier{db: s.db}).List(t.Context(), NotificationFilter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

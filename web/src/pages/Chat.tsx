@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import { ArrowDown } from 'lucide-react'
@@ -40,12 +40,23 @@ import { SetupGate } from '../onboarding/SetupGate'
 import { TourOverlay } from '../onboarding/tour/TourOverlay'
 import { useTour } from '../onboarding/tour/useTour'
 import { chatTour } from '../onboarding/tours/chat'
-import { fromTranscript, type ChatItem } from '../lib/transcript'
+import {
+  fromTranscript,
+  mergePage,
+  prependChatItems,
+  windowFromPage,
+  type ChatItem,
+  type TranscriptWindow,
+} from '../lib/transcript'
 import { uuid } from '../lib/uuid'
 import type { ChatIntent } from './Home'
 
 const agentKey = 'timothy.agent'
 const routeKey = 'timothy.route'
+// Issue #1113: a chat opens on its newest events and fetches older or
+// newer ones by seq instead of refetching the whole transcript.
+const transcriptPageSize = 200
+const catchUpPageSize = 500
 
 export function Chat({
   onNeedToken,
@@ -151,6 +162,90 @@ export function Chat({
   const pinnedRef = useRef(true)
   const [pinned, setPinned] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
+  // The server transcript loaded so far, and fromTranscript of it as
+  // last rendered: the head of `items`, which may also carry live or
+  // optimistic items after it.
+  const windowRef = useRef<TranscriptWindow | null>(null)
+  const derivedRef = useRef<ChatItem[]>([])
+  const [hasOlder, setHasOlder] = useState(false)
+  const loadingOlderRef = useRef(false)
+  const scrollRestoreRef = useRef<{ height: number; top: number } | null>(null)
+  const lastScrollTopRef = useRef(0)
+  const streamingRef = useRef(false)
+  useEffect(() => {
+    streamingRef.current = streaming
+  }, [streaming])
+
+  const showWindow = (w: TranscriptWindow) => {
+    windowRef.current = w
+    derivedRef.current = fromTranscript(w.items)
+    setItems(derivedRef.current)
+    setHasOlder(w.hasOlder)
+  }
+
+  // catchUp fetches only events after the newest loaded seq and
+  // re-renders the window when they change it, or always with force:
+  // the same replacement a full refetch did. With no window yet it
+  // loads the newest page. Session events are append-only and the page
+  // fields cover items later events hide, so no flow needs a full
+  // refetch.
+  const catchUp = async (sessionId: string, force = false) => {
+    if (windowRef.current?.sessionId !== sessionId) {
+      const t = await getTranscript(sessionId, { limit: transcriptPageSize })
+      if (sessionRef.current === sessionId) showWindow(windowFromPage(sessionId, t))
+      return
+    }
+    let more = true
+    let changed = false
+    while (more) {
+      const t = await getTranscript(sessionId, {
+        after_seq: windowRef.current?.newestSeq ?? 0,
+        limit: catchUpPageSize,
+      })
+      const cur = windowRef.current
+      if (sessionRef.current !== sessionId || cur?.sessionId !== sessionId) return
+      const next = mergePage(cur, t, 'newer')
+      if (next !== cur) {
+        changed = true
+        showWindow(next)
+      }
+      more = t.has_more === true
+    }
+    if (force && !changed && windowRef.current) showWindow(windowRef.current)
+  }
+
+  const loadOlder = () => {
+    const w = windowRef.current
+    if (!w?.hasOlder || w.oldestSeq === undefined || loadingOlderRef.current || streaming) return
+    loadingOlderRef.current = true
+    getTranscript(w.sessionId, { before_seq: w.oldestSeq, limit: transcriptPageSize })
+      .then((t) => {
+        const cur = windowRef.current
+        if (cur?.sessionId !== w.sessionId) return
+        const merged = mergePage(cur, t, 'older')
+        const before = derivedRef.current
+        const mergedDerived = fromTranscript(merged.items)
+        windowRef.current = merged
+        derivedRef.current = mergedDerived
+        const el = listRef.current
+        scrollRestoreRef.current = el ? { height: el.scrollHeight, top: el.scrollTop } : null
+        setItems((prev) => prependChatItems(prev, before, mergedDerived))
+        setHasOlder(merged.hasOlder)
+      })
+      .catch(() => toast.error('Could not load earlier messages'))
+      .finally(() => {
+        loadingOlderRef.current = false
+      })
+  }
+
+  // Keep the viewport on the same message after older ones land above.
+  useLayoutEffect(() => {
+    const restore = scrollRestoreRef.current
+    const el = listRef.current
+    if (!restore || !el) return
+    scrollRestoreRef.current = null
+    el.scrollTop = el.scrollHeight - restore.height + restore.top
+  }, [items])
 
   // Cancel any in-flight stream when the page unmounts (route change).
   useEffect(() => () => abortRef.current?.abort(), [])
@@ -184,6 +279,9 @@ export function Chat({
     }
     sessionRef.current = routeSession
     setLoadError(null)
+    windowRef.current = null
+    derivedRef.current = []
+    setHasOlder(false)
     if (!routeSession) {
       setItems([])
       setKnowledge([])
@@ -192,10 +290,11 @@ export function Chat({
     }
     adoptedRef.current = null
     let stale = false
-    getTranscript(routeSession)
-      .then(({ session, items, turn_active }) => {
+    getTranscript(routeSession, { limit: transcriptPageSize })
+      .then((t) => {
         if (stale) return
-        setItems(fromTranscript(items))
+        const { session, turn_active } = t
+        showWindow(windowFromPage(routeSession, t))
         if (session.agent) setAgent(session.agent)
         setRoute(session.last_route ?? '')
         setKnowledge(session.knowledge ?? [])
@@ -220,20 +319,28 @@ export function Chat({
 
   // Tier 1 fallback: while NOT attached to a live stream for the open
   // session, a "session" signal means some turn elsewhere finished (or
-  // this tab missed the transition): refetch the transcript so a tab
-  // that never got to attach live still catches up promptly instead of
-  // waiting on the next navigation. Attached tabs skip this: they're
+  // this tab missed the transition): catch up on newer events so a tab
+  // that never got to attach live still updates promptly instead of
+  // waiting on the next navigation. A reconnect (onReady) does the same
+  // once the first page has loaded. Attached tabs skip this: they're
   // already getting every event live, and a mid-stream refetch would
   // race the reducer's own state.
   useEffect(() => {
-    return subscribeEvents((sig) => {
-      if (sig.kind !== 'session' || sig.id !== sessionRef.current) return
-      if (streaming) return
-      getTranscript(sig.id)
-        .then(({ items }) => setItems(fromTranscript(items)))
-        .catch(() => undefined)
-    })
-  }, [streaming])
+    return subscribeEvents(
+      (sig) => {
+        if (sig.kind !== 'session' || sig.id !== sessionRef.current) return
+        if (streamingRef.current) return
+        catchUp(sig.id).catch(() => undefined)
+      },
+      () => {
+        const id = sessionRef.current
+        if (!id || streamingRef.current || windowRef.current?.sessionId !== id) return
+        catchUp(id).catch(() => undefined)
+      },
+    )
+    // catchUp only touches refs and state setters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     if (pinnedRef.current) bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -250,6 +357,10 @@ export function Chat({
     const el = listRef.current
     if (!el) return
     setPin(el.scrollHeight - el.scrollTop - el.clientHeight < 80)
+    // Only an upward scroll into the top edge loads earlier messages,
+    // never the initial smooth scroll down from the top.
+    if (el.scrollTop < lastScrollTopRef.current && el.scrollTop < 80) loadOlder()
+    lastScrollTopRef.current = el.scrollTop
   }
 
   // updateKnowledge handles both the mention popup's add (local only,
@@ -337,9 +448,7 @@ export function Chat({
         // now-completed turn, or it shows the turn still running and
         // the next session signal (Tier 1) prompts another refetch.
         if (!sawTerminal) {
-          getTranscript(sessionId)
-            .then(({ items }) => setItems(fromTranscript(items)))
-            .catch(() => undefined)
+          catchUp(sessionId, true).catch(() => undefined)
         }
         refresh()
       })
@@ -350,9 +459,7 @@ export function Chat({
           // between getTranscript and this attach: refetch once to pick
           // up the now-completed transcript rather than leaving the
           // freshly-blanked item stuck empty.
-          getTranscript(sessionId)
-            .then(({ items }) => setItems(fromTranscript(items)))
-            .catch(() => undefined)
+          catchUp(sessionId, true).catch(() => undefined)
           if (err.status === 401 || err.status === 503) onNeedToken()
           return
         }
@@ -365,9 +472,7 @@ export function Chat({
           attachLive(sessionId, reconnectAttempt + 1)
           return
         }
-        getTranscript(sessionId)
-          .then(({ items }) => setItems(fromTranscript(items)))
-          .catch(() => undefined)
+        catchUp(sessionId, true).catch(() => undefined)
       })
       .finally(() => {
         if (abortRef.current !== controller) return
@@ -730,6 +835,13 @@ export function Chat({
                   <AlertTitle>Could not load this conversation</AlertTitle>
                   <p className="font-mono text-xs">{loadError}</p>
                 </Alert>
+              )}
+              {hasOlder && (
+                <div className="flex justify-center">
+                  <Button variant="ghost" size="sm" onClick={loadOlder} disabled={streaming}>
+                    Load earlier messages
+                  </Button>
+                </div>
               )}
               {items.map((item, i) => {
                 switch (item.role) {
