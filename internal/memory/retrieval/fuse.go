@@ -39,11 +39,11 @@ type Scored struct {
 	Legs    int // how many legs surfaced it (diagnostics)
 }
 
-// Fuse combines per-leg ranks with RRF, then multiplies recency decay
-// and type weight. Summing RRF terms across legs is the multi-leg
-// boost: a memory found three ways outranks any single-leg hit of
-// equal rank. Results come back sorted best-first with the cutoff
-// applied.
+// Fuse combines per-leg ranks with RRF, then multiplies recency decay,
+// type weight and confidence weight. Summing RRF terms across legs is
+// the multi-leg boost: a memory found three ways outranks any
+// single-leg hit of equal rank. Results come back sorted best-first
+// with the cutoff applied.
 func Fuse(candidates map[string]*Candidate, now time.Time) []Scored {
 	out := make([]Scored, 0, len(candidates))
 	for _, c := range candidates {
@@ -51,7 +51,7 @@ func Fuse(candidates map[string]*Candidate, now time.Time) []Scored {
 		for _, rank := range c.ranks {
 			rrf += 1.0 / float64(rrfK+rank)
 		}
-		score := rrf * recencyDecay(now.Sub(c.LastConfirmedAt)) * typeWeight(c.Type)
+		score := rrf * recencyDecay(now.Sub(c.LastConfirmedAt)) * typeWeight(c.Type) * confidenceWeight(c.Confidence)
 		if score < minScore {
 			continue
 		}
@@ -74,6 +74,14 @@ func recencyDecay(age time.Duration) float64 {
 		return 1
 	}
 	return math.Pow(0.5, float64(age)/float64(recencyHalfLife))
+}
+
+// confidenceWeight maps confidence [0,1] onto [0.5,1] (D-147): decay
+// and weak extractions rank lower, but confidence alone never cuts a
+// score by more than half, so an unscored row (0) still competes on
+// rank and recency.
+func confidenceWeight(c float32) float64 {
+	return 0.5 + 0.5*math.Min(math.Max(float64(c), 0), 1)
 }
 
 func typeWeight(t store.MemoryType) float64 {

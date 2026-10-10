@@ -233,8 +233,10 @@ type fakeStore struct {
 	inserted  []store.Memory
 	promoted  []string
 	confirmed []string
-	entities  map[string]string
-	nearest   struct {
+	// confirmedConfidence parallels confirmed.
+	confirmedConfidence []float32
+	entities            map[string]string
+	nearest             struct {
 		id      string
 		sim     float64
 		status  store.Status
@@ -265,7 +267,7 @@ func (s *fakeStore) RejectedWithContent(_ context.Context, content string) (stri
 	return id, ok, nil
 }
 
-func (s *fakeStore) ApplyExtraction(_ context.Context, confirm []string, proposals []store.Proposal) ([]string, error) {
+func (s *fakeStore) ApplyExtraction(_ context.Context, confirm []store.Confirmation, proposals []store.Proposal) ([]string, error) {
 	entities := maps.Clone(s.entities)
 	if entities == nil {
 		entities = map[string]string{}
@@ -296,7 +298,10 @@ func (s *fakeStore) ApplyExtraction(_ context.Context, confirm []string, proposa
 	s.entities, s.nextID = entities, nextID
 	s.inserted = append(s.inserted, inserted...)
 	s.promoted = append(s.promoted, promoted...)
-	s.confirmed = append(s.confirmed, confirm...)
+	for _, c := range confirm {
+		s.confirmed = append(s.confirmed, c.ID)
+		s.confirmedConfidence = append(s.confirmedConfidence, c.Confidence)
+	}
 	return ids, nil
 }
 
@@ -386,6 +391,10 @@ func TestExtractDropsExactDuplicate(t *testing.T) {
 	// Dropping the duplicate must not drop the confirmation signal.
 	if len(st.confirmed) != 1 || st.confirmed[0] != "existing" {
 		t.Fatalf("confirmed = %v, want [existing]", st.confirmed)
+	}
+	// The restatement's own confidence lifts a decayed row (D-147).
+	if st.confirmedConfidence[0] != 0.9 {
+		t.Fatalf("confirm confidence = %v, want 0.9", st.confirmedConfidence[0])
 	}
 }
 

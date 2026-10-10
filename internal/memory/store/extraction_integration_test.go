@@ -61,7 +61,7 @@ func TestApplyExtractionCommitsRun(t *testing.T) {
 	activeID, before := seedStaleActive(t, s, db, "apply commit restated")
 
 	promoted, pending := mem("apply commit promoted"), mem("apply commit pending")
-	ids, err := s.ApplyExtraction(ctx, []string{activeID}, []Proposal{
+	ids, err := s.ApplyExtraction(ctx, []Confirmation{{ID: activeID, Confidence: 0.9}}, []Proposal{
 		{Memory: promoted, Entities: []EntityKey{{Type: "topic", Name: "itest-entity-apply-1"}}, Promote: true},
 		{Memory: pending, Entities: []EntityKey{{Type: "topic", Name: "itest-entity-apply-1"}, {Type: "place", Name: "itest-entity-apply-2"}}},
 	})
@@ -93,6 +93,52 @@ func TestApplyExtractionCommitsRun(t *testing.T) {
 	}
 }
 
+// D-147: ApplyExtraction's confirm step reconfirms like Confirm:
+// decayed_at clears, confidence lifts to the highest restatement and
+// never drops, and a non-active id is skipped.
+func TestApplyExtractionConfirmClearsDecay(t *testing.T) {
+	s := testStore(t)
+	db := rawDB(t)
+	ctx := t.Context()
+	decayed, _ := seedStaleActive(t, s, db, "apply confirm decayed")
+	strong, _ := seedStaleActive(t, s, db, "apply confirm strong")
+	pendingID, err := s.Insert(ctx, mem("apply confirm pending"))
+	if err != nil {
+		t.Fatalf("seed pending: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE memories SET decayed_at = now(), confidence = 0.15 WHERE id = $1`, decayed); err != nil {
+		t.Fatalf("decay seed: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE memories SET decayed_at = now(), confidence = 0.95 WHERE id = $1`, strong); err != nil {
+		t.Fatalf("strong seed: %v", err)
+	}
+
+	if _, err := s.ApplyExtraction(ctx, []Confirmation{
+		{ID: decayed, Confidence: 0.6}, {ID: decayed, Confidence: 0.8},
+		{ID: strong, Confidence: 0.3}, {ID: pendingID, Confidence: 1},
+	}, nil); err != nil {
+		t.Fatalf("ApplyExtraction: %v", err)
+	}
+	for id, want := range map[string]float32{decayed: 0.8, strong: 0.95} {
+		var decayedAt *time.Time
+		var conf float32
+		if err := db.QueryRow(ctx, `SELECT decayed_at, confidence FROM memories WHERE id = $1`, id).
+			Scan(&decayedAt, &conf); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if decayedAt != nil || conf != want {
+			t.Fatalf("row %s: decayed_at=%v confidence=%v, want NULL/%v", id, decayedAt, conf, want)
+		}
+	}
+	got, err := s.Get(ctx, pendingID)
+	if err != nil {
+		t.Fatalf("Get pending: %v", err)
+	}
+	if got.Status != StatusPending || got.Confidence != 0.9 {
+		t.Fatalf("pending row = %s/%v, want untouched", got.Status, got.Confidence)
+	}
+}
+
 // D-144 (#872, #878): a failing insert rolls back the whole run: no
 // earlier insert, no entity, no confirmation survives.
 func TestApplyExtractionRollsBackOnFailure(t *testing.T) {
@@ -103,7 +149,7 @@ func TestApplyExtractionRollsBackOnFailure(t *testing.T) {
 
 	ok, bad := mem("apply rollback first"), mem("apply rollback second")
 	bad.SourceSession = "reflection" // not a uuid: the insert fails
-	_, err := s.ApplyExtraction(ctx, []string{activeID}, []Proposal{
+	_, err := s.ApplyExtraction(ctx, []Confirmation{{ID: activeID, Confidence: 0.9}}, []Proposal{
 		{Memory: ok, Entities: []EntityKey{{Type: "topic", Name: "itest-entity-rollback-1"}}, Promote: true},
 		{Memory: bad, Entities: []EntityKey{{Type: "topic", Name: "itest-entity-rollback-2"}}},
 	})

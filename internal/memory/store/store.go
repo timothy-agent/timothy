@@ -84,12 +84,28 @@ type Proposal struct {
 	Promote  bool
 }
 
+// Confirmation is a restatement of an active row and the restated
+// fact's confidence.
+type Confirmation struct {
+	ID         string
+	Confidence float32
+}
+
+// confirmSQL reconfirms active rows from parallel id ($1) and
+// confidence ($2) arrays, same effect as Confirm (D-147): clear decay,
+// lift confidence to at least the restatement's. A row restated twice
+// takes its highest confidence.
+const confirmSQL = `UPDATE memories m SET last_confirmed_at = now(),
+		decayed_at = NULL, confidence = GREATEST(COALESCE(m.confidence, 0), c.conf)
+	FROM (SELECT id, max(conf) AS conf FROM unnest($1::uuid[], $2::real[]) AS u(id, conf) GROUP BY id) c
+	WHERE m.id = c.id AND m.status = $3`
+
 // ApplyExtraction writes one extraction run in a single transaction
 // (D-144): confirmations of restated active rows, entity upserts,
 // inserts and promotions. Any failure rolls back the whole run, so no
 // half-applied batch and no entity left behind by a failed insert.
 // Returns the inserted ids in proposal order.
-func (s *Store) ApplyExtraction(ctx context.Context, confirm []string, proposals []Proposal) ([]string, error) {
+func (s *Store) ApplyExtraction(ctx context.Context, confirm []Confirmation, proposals []Proposal) ([]string, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("apply extraction: %w", err)
@@ -101,9 +117,13 @@ func (s *Store) ApplyExtraction(ctx context.Context, confirm []string, proposals
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
 	if len(confirm) > 0 {
+		ids := make([]string, len(confirm))
+		confs := make([]float32, len(confirm))
+		for i, c := range confirm {
+			ids[i], confs[i] = c.ID, c.Confidence
+		}
 		// A row archived since the dedup read is skipped, not an error.
-		if _, err := tx.Exec(ctx, `UPDATE memories SET last_confirmed_at = now()
-			WHERE id = ANY($1::uuid[]) AND status = $2`, confirm, StatusActive); err != nil {
+		if _, err := tx.Exec(ctx, confirmSQL, ids, confs, StatusActive); err != nil {
 			return nil, fmt.Errorf("apply extraction confirm: %w", err)
 		}
 	}
@@ -718,16 +738,17 @@ func (s *Store) ApplyMerge(ctx context.Context, m Memory, memberIDs []string) (s
 
 // Confirm bumps an active memory's last_confirmed_at without touching
 // its content - lifecycle metadata, not a fact UPDATE (D-011).
-// Extraction calls it when a proposed fact turns out to be an exact
-// duplicate of an active memory: dropping the duplicate would
-// otherwise discard the confirmation signal entirely.
-func (s *Store) Confirm(ctx context.Context, id string) error {
+// The memory API calls it when a user re-adds an active fact; the
+// extraction path confirms inside ApplyExtraction with the same SQL.
+// The restatement also clears decay and lifts confidence to at least
+// its own, so a fact decayed below DecayFloor becomes retrievable
+// again (D-147).
+func (s *Store) Confirm(ctx context.Context, id string, confidence float32) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("confirm memory: %w", err)
 	}
-	tag, err := db.Exec(ctx, `UPDATE memories SET last_confirmed_at = now()
-		WHERE id = $1 AND status = $2`, id, StatusActive)
+	tag, err := db.Exec(ctx, confirmSQL, []string{id}, []float32{confidence}, StatusActive)
 	if err != nil {
 		return fmt.Errorf("confirm memory: %w", err)
 	}
@@ -790,23 +811,33 @@ func (s *Store) ArchiveStaleEpisodic(ctx context.Context, olderThan time.Time) (
 	return tag.RowsAffected(), nil
 }
 
+// DecayFloor is the confidence below which a decayed memory leaves
+// retrieval until reconfirmed (D-147).
+const DecayFloor = 0.2
+
 // DecayStaleSemantic multiplies confidence by factor for active
-// semantic memories unconfirmed since the cutoff and returns their
-// ids, stalest first (capped) - the reconfirmation queue. Confidence
-// is lifecycle metadata; decaying it is not a fact UPDATE (D-011).
-func (s *Store) DecayStaleSemantic(ctx context.Context, olderThan time.Time, factor float64, limit int) ([]string, error) {
+// semantic memories unconfirmed since olderThan and returns their ids
+// (capped). D-146: a row decays at most once per window (decayed_at
+// before decayedBefore), never-decayed rows go first, then the
+// stalest, and rows already below DecayFloor are left alone, so every
+// stale row is reached instead of the same oldest few each pass.
+// Confidence is lifecycle metadata; decaying it is not a fact UPDATE
+// (D-011).
+func (s *Store) DecayStaleSemantic(ctx context.Context, olderThan, decayedBefore time.Time, factor float64, limit int) ([]string, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("decay stale: %w", err)
 	}
-	rows, err := db.Query(ctx, `UPDATE memories SET confidence = confidence * $4
+	rows, err := db.Query(ctx, `UPDATE memories SET confidence = confidence * $4, decayed_at = now()
 		WHERE id IN (
 			SELECT id FROM memories
 			WHERE status = $1 AND type = $2 AND last_confirmed_at < $3
-			ORDER BY last_confirmed_at
+			  AND (decayed_at IS NULL OR decayed_at < $6)
+			  AND confidence >= $7
+			ORDER BY decayed_at NULLS FIRST, last_confirmed_at, id
 			LIMIT $5)
 		RETURNING id`,
-		StatusActive, TypeSemantic, olderThan, factor, limit)
+		StatusActive, TypeSemantic, olderThan, factor, limit, decayedBefore, DecayFloor)
 	if err != nil {
 		return nil, fmt.Errorf("decay stale: %w", err)
 	}

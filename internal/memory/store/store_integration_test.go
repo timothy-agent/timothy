@@ -1208,7 +1208,7 @@ func TestConfirmBumpsActiveOnly(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 	// Pending rows are not confirmable.
-	if err := s.Confirm(ctx, id); !errors.Is(err, ErrNotFound) {
+	if err := s.Confirm(ctx, id, 0.9); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Confirm pending err = %v, want ErrNotFound", err)
 	}
 	if err := s.Promote(ctx, id); err != nil {
@@ -1218,7 +1218,7 @@ func TestConfirmBumpsActiveOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if err := s.Confirm(ctx, id); err != nil {
+	if err := s.Confirm(ctx, id, 0.9); err != nil {
 		t.Fatalf("Confirm active: %v", err)
 	}
 	after, err := s.Get(ctx, id)
@@ -1294,7 +1294,7 @@ func TestDecayStaleSemantic(t *testing.T) {
 	freshID, _ := s.Insert(ctx, fresh)
 	_ = s.Promote(ctx, freshID)
 
-	ids, err := s.DecayStaleSemantic(ctx, time.Now().Add(-365*24*time.Hour), 0.8, 10)
+	ids, err := s.DecayStaleSemantic(ctx, time.Now().Add(-365*24*time.Hour), time.Now().Add(-30*24*time.Hour), 0.8, 10)
 	if err != nil {
 		t.Fatalf("DecayStaleSemantic: %v", err)
 	}
@@ -1316,6 +1316,178 @@ func TestDecayStaleSemantic(t *testing.T) {
 	}
 	if got.Status != StatusActive {
 		t.Fatalf("decayed fact = %s, must stay active (still retrievable)", got.Status)
+	}
+}
+
+// insertStale activates n semantic rows unconfirmed for 10000+ days,
+// staler than anything real, so they lead the decay order.
+func insertStale(t *testing.T, s *Store, n int, label string) []string {
+	t.Helper()
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	ids := make([]string, n)
+	for i := range ids {
+		m := mem(label)
+		m.Actor = ActorUser
+		id, err := s.Insert(ctx, m)
+		if err != nil {
+			t.Fatalf("Insert: %v", err)
+		}
+		if _, err := db.Exec(ctx, `UPDATE memories
+			SET last_confirmed_at = now() - make_interval(days => 10000 + $2)
+			WHERE id = $1`, id, i); err != nil {
+			t.Fatalf("backdate: %v", err)
+		}
+		ids[i] = id
+	}
+	return ids
+}
+
+// TestDecayStaleSemanticReachesEveryRow proves D-146: consecutive
+// passes decay different rows, and no row decays twice in one window.
+func TestDecayStaleSemanticReachesEveryRow(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	ids := insertStale(t, s, 25, "decay rotation fixture")
+	mine := map[string]bool{}
+	for _, id := range ids {
+		mine[id] = true
+	}
+
+	now := time.Now()
+	cutoff, window := now.Add(-365*24*time.Hour), now.Add(-30*24*time.Hour)
+	touched := map[string]int{}
+	for pass := 0; pass < 2; pass++ {
+		got, err := s.DecayStaleSemantic(ctx, cutoff, window, 0.8, 10)
+		if err != nil {
+			t.Fatalf("DecayStaleSemantic pass %d: %v", pass, err)
+		}
+		for _, id := range got {
+			if mine[id] {
+				touched[id]++
+			}
+		}
+	}
+	if len(touched) != 20 {
+		t.Fatalf("two passes touched %d distinct fixture rows, want 20", len(touched))
+	}
+	for id, n := range touched {
+		if n != 1 {
+			t.Fatalf("row %s decayed %d times in one window, want 1", id, n)
+		}
+	}
+
+	// The third pass reaches the last 5 and nothing already decayed.
+	got, err := s.DecayStaleSemantic(ctx, cutoff, window, 0.8, 10)
+	if err != nil {
+		t.Fatalf("DecayStaleSemantic pass 3: %v", err)
+	}
+	for _, id := range got {
+		if touched[id] > 0 {
+			t.Fatalf("row %s decayed again inside its window", id)
+		}
+		if mine[id] {
+			touched[id]++
+		}
+	}
+	if len(touched) != 25 {
+		t.Fatalf("three passes touched %d fixture rows, want all 25", len(touched))
+	}
+
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var stamped int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM memories
+		WHERE id = ANY($1::uuid[]) AND decayed_at IS NOT NULL`, ids).Scan(&stamped); err != nil {
+		t.Fatalf("count stamped: %v", err)
+	}
+	if stamped != 25 {
+		t.Fatalf("decayed_at stamped on %d rows, want 25", stamped)
+	}
+}
+
+// TestDecayStaleSemanticWindowAndFloor: a row decays again once its
+// window passes, and a row already below DecayFloor is left alone.
+func TestDecayStaleSemanticWindowAndFloor(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	ids := insertStale(t, s, 2, "decay window fixture")
+	due, floored := ids[0], ids[1]
+	if _, err := db.Exec(ctx, `UPDATE memories SET decayed_at = now() - interval '31 days', confidence = 0.5
+		WHERE id = $1`, due); err != nil {
+		t.Fatalf("seed due: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE memories SET decayed_at = now() - interval '31 days', confidence = 0.15
+		WHERE id = $1`, floored); err != nil {
+		t.Fatalf("seed floored: %v", err)
+	}
+
+	now := time.Now()
+	got, err := s.DecayStaleSemantic(ctx, now.Add(-365*24*time.Hour), now.Add(-30*24*time.Hour), 0.8, 1000)
+	if err != nil {
+		t.Fatalf("DecayStaleSemantic: %v", err)
+	}
+	if !slices.Contains(got, due) {
+		t.Fatal("row past its window was not decayed again")
+	}
+	if slices.Contains(got, floored) {
+		t.Fatal("row below the floor was decayed again")
+	}
+	m, err := s.Get(ctx, due)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if m.Confidence < 0.39 || m.Confidence > 0.41 {
+		t.Fatalf("confidence = %v, want 0.4", m.Confidence)
+	}
+}
+
+// TestConfirmClearsDecay proves a restatement undoes decay (D-147): the
+// row leaves the below-floor state and confidence never drops.
+func TestConfirmClearsDecay(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	ids := insertStale(t, s, 2, "confirm decay fixture")
+	if _, err := db.Exec(ctx, `UPDATE memories SET decayed_at = now(), confidence = 0.15
+		WHERE id = ANY($1::uuid[])`, ids); err != nil {
+		t.Fatalf("seed decayed: %v", err)
+	}
+	if err := s.Confirm(ctx, ids[0], 0.9); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	// A weaker restatement never lowers confidence.
+	if _, err := db.Exec(ctx, `UPDATE memories SET confidence = 0.95 WHERE id = $1`, ids[1]); err != nil {
+		t.Fatalf("seed strong: %v", err)
+	}
+	if err := s.Confirm(ctx, ids[1], 0.3); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	for id, want := range map[string]float32{ids[0]: 0.9, ids[1]: 0.95} {
+		var decayed *time.Time
+		var conf float32
+		if err := db.QueryRow(ctx, `SELECT decayed_at, confidence FROM memories WHERE id = $1`, id).
+			Scan(&decayed, &conf); err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if decayed != nil {
+			t.Fatalf("decayed_at = %v after Confirm, want NULL", decayed)
+		}
+		if conf != want {
+			t.Fatalf("confidence = %v, want %v", conf, want)
+		}
 	}
 }
 

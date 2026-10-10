@@ -189,6 +189,51 @@ func TestExtractRollsBackRunAgainstRealStore(t *testing.T) {
 	}
 }
 
+// Integration (#874, D-147): a re-extracted duplicate of a decayed
+// active row reconfirms it through ApplyExtraction: decayed_at clears,
+// confidence lifts to the restatement's, and nothing new is inserted.
+func TestExtractReconfirmsDecayedRowAgainstRealStore(t *testing.T) {
+	st, db := itestStore(t)
+	ctx := t.Context()
+	content := fmt.Sprintf("%s decayed restated fact %d", itestMarker, time.Now().UnixNano())
+	gw := &dimGateway{axis: 1021, reply: fmt.Sprintf(
+		`[{"type":"semantic","content":%q,"entities":[],"confidence":0.85,"changes_behavior":true}]`, content)}
+	vecs, _, _ := gw.Embed(ctx, []string{content}, "")
+	id, err := st.Insert(ctx, store.Memory{Type: store.TypeSemantic, Content: content,
+		Embedding: store.Vector(vecs[0]), Confidence: 0.9, Actor: store.ActorUser})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE memories SET decayed_at = now(), confidence = 0.15,
+		last_confirmed_at = now() - interval '400 days' WHERE id = $1`, id); err != nil {
+		t.Fatalf("decay seed: %v", err)
+	}
+
+	ids, err := New(gw, st, testLog()).Extract(ctx, Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("ids = %v, want the duplicate dropped, not inserted", ids)
+	}
+	var decayed *time.Time
+	var conf float32
+	var confirmedAt time.Time
+	if err := db.QueryRow(ctx, `SELECT decayed_at, confidence, last_confirmed_at FROM memories WHERE id = $1`, id).
+		Scan(&decayed, &conf, &confirmedAt); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if decayed != nil {
+		t.Fatalf("decayed_at = %v after re-extraction, want NULL", decayed)
+	}
+	if conf != 0.85 {
+		t.Fatalf("confidence = %v, want lifted to the restated 0.85", conf)
+	}
+	if time.Since(confirmedAt) > time.Hour {
+		t.Fatalf("last_confirmed_at = %v, want bumped", confirmedAt)
+	}
+}
+
 // Integration (#878): without embeddings, a fact whose normalized text
 // equals a rejected row is dropped; other facts still store.
 func TestExtractTextFallbackAgainstRealStore(t *testing.T) {

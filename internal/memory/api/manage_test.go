@@ -42,6 +42,7 @@ type fakeManager struct {
 	nearestFound         bool
 	nearestErr           error
 	confirmed            []string
+	confirmedConfidence  []float32
 	confirmErr           error
 	insertErr            error
 	contentsCalls        int
@@ -93,8 +94,9 @@ func (f *fakeManager) NearestActive(_ context.Context, _ store.Vector) (string, 
 	return f.nearestID, f.nearestSim, f.nearestStatus, f.nearestFound, f.nearestErr
 }
 
-func (f *fakeManager) Confirm(_ context.Context, id string) error {
+func (f *fakeManager) Confirm(_ context.Context, id string, confidence float32) error {
 	f.confirmed = append(f.confirmed, id)
+	f.confirmedConfidence = append(f.confirmedConfidence, confidence)
 	return f.confirmErr
 }
 
@@ -473,6 +475,10 @@ func TestAddActiveNearDuplicateConfirmsExistingMemory(t *testing.T) {
 	}
 	if len(fm.confirmed) != 1 || fm.confirmed[0] != "active-1" {
 		t.Fatalf("confirmed = %v, want [active-1]", fm.confirmed)
+	}
+	// A user restatement reconfirms at full confidence (D-147).
+	if fm.confirmedConfidence[0] != 1 {
+		t.Fatalf("confirm confidence = %v, want 1", fm.confirmedConfidence[0])
 	}
 	if !strings.Contains(rec.Body.String(), `"status":"active"`) {
 		t.Fatalf("result = %s, want active status", rec.Body)

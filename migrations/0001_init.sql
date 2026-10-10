@@ -306,7 +306,10 @@ CREATE TABLE IF NOT EXISTS memories (
     -- how many times retrieval has returned this memory. Metadata
     -- bookkeeping, not a fact UPDATE (D-011); memory content stays
     -- supersede-only.
-    retrieval_hits    integer NOT NULL DEFAULT 0
+    retrieval_hits    integer NOT NULL DEFAULT 0,
+    -- Last semantic decay pass that lowered confidence (D-146); NULL
+    -- when never decayed or reconfirmed since.
+    decayed_at        timestamptz
 );
 
 -- m/ef_construction over pgvector defaults (16/64): better recall at

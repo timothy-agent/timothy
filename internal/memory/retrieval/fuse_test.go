@@ -10,7 +10,35 @@ import (
 func cand(id string, typ store.MemoryType, confirmedAgo time.Duration, ranks map[string]int, now time.Time) *Candidate {
 	return &Candidate{
 		ID: id, Type: typ, Content: "content of " + id,
-		LastConfirmedAt: now.Add(-confirmedAgo), ranks: ranks,
+		LastConfirmedAt: now.Add(-confirmedAgo), Confidence: 1, ranks: ranks,
+	}
+}
+
+func TestFuseHigherConfidenceRanksHigher(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	// "a" sorts first on an ID tie, so only confidence can put "b" on top.
+	low := cand("a", store.TypeSemantic, 0, map[string]int{"vector": 2}, now)
+	low.Confidence = 0.4
+	high := cand("b", store.TypeSemantic, 0, map[string]int{"vector": 2}, now)
+	out := Fuse(map[string]*Candidate{"a": low, "b": high}, now)
+	if len(out) != 2 || out[0].ID != "b" {
+		t.Fatalf("out = %+v, want confidence 1.0 above 0.4", out)
+	}
+	if ratio := out[1].Score / out[0].Score; ratio < 0.69 || ratio > 0.71 {
+		t.Fatalf("score ratio = %f, want 0.7 (weight 0.5+0.5*0.4)", ratio)
+	}
+}
+
+func TestConfidenceWeight(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		conf float32
+		want float64
+	}{{-1, 0.5}, {0, 0.5}, {0.2, 0.6}, {0.4, 0.7}, {1, 1}, {2, 1}} {
+		if got := confidenceWeight(tc.conf); got < tc.want-1e-6 || got > tc.want+1e-6 {
+			t.Errorf("confidenceWeight(%v) = %v, want %v", tc.conf, got, tc.want)
+		}
 	}
 }
 

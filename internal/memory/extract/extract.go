@@ -36,7 +36,7 @@ type Storer interface {
 	NearestActiveOnly(ctx context.Context, embedding store.Vector) (id string, similarity float64, ok bool, err error)
 	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, status store.Status, ok bool, err error)
 	RejectedWithContent(ctx context.Context, content string) (id string, ok bool, err error)
-	ApplyExtraction(ctx context.Context, confirm []string, proposals []store.Proposal) ([]string, error)
+	ApplyExtraction(ctx context.Context, confirm []store.Confirmation, proposals []store.Proposal) ([]string, error)
 }
 
 const (
@@ -158,7 +158,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 
 	deny := denyText(req)
 	var proposals []store.Proposal
-	var confirms []string
+	var confirms []store.Confirmation
 	correcting := map[string]bool{} // active ids this run already proposes to supersede
 	var batch []batchMemory         // accepted so far, this run only
 	for i, f := range facts {
@@ -228,7 +228,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 					// A restatement reinforces the existing row instead of
 					// inserting: repetition is a confidence signal, not new
 					// knowledge.
-					confirms = append(confirms, activeID)
+					confirms = append(confirms, store.Confirmation{ID: activeID, Confidence: f.Confidence})
 					e.log.Info("memory duplicate reinforced existing row",
 						"of", activeID, "similarity", sim, "session_id", req.SessionID)
 					continue
