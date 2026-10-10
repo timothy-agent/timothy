@@ -677,6 +677,10 @@ export interface KbCollection {
   // retrieval_weight scales this collection's score at retrieval time
   // (D-085): 1.0 is neutral, bounded to (0, 2].
   retrieval_weight: number
+  // system collections ship with Timothy and are read-only;
+  // bundle_version names the version their content came from.
+  system?: boolean
+  bundle_version?: string
   created_at: string
   updated_at: string
 }
@@ -688,7 +692,7 @@ export interface KbDocument {
   id: string
   collection_id: string
   title: string
-  source_type: 'file' | 'notion' | 'wiki' | 'url' | 'clip' | 'mission'
+  source_type: 'file' | 'notion' | 'wiki' | 'url' | 'clip' | 'mission' | 'selfdocs'
   source_ref: string
   // provenance weights retrieval ranking (curated > mission > web): see
   // internal/memory/store/kb.go KBSearch.

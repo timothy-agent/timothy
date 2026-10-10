@@ -137,9 +137,15 @@ type kbAPI struct {
 // CreateCollection error just logs and falls through to "Unsorted" via
 // a second attempt, since ingest must not block on this step.
 func (h *kbAPI) resolveCollection(ctx context.Context, title, markdownText string) (string, error) {
-	collections, err := h.store.ListCollections(ctx)
+	all, err := h.store.ListCollections(ctx)
 	if err != nil {
 		return "", fmt.Errorf("list collections: %w", err)
+	}
+	collections := make([]kb.Collection, 0, len(all))
+	for _, c := range all {
+		if !c.System {
+			collections = append(collections, c)
+		}
 	}
 	choice := h.classify(ctx, title, markdownText, collections)
 	if choice.ExistingID != "" {
@@ -162,6 +168,8 @@ func failKB(w http.ResponseWriter, log *slog.Logger, err error) {
 		jsonError(w, http.StatusNotFound, "not_found", err.Error())
 	case errors.Is(err, kb.ErrInUse):
 		jsonError(w, http.StatusConflict, "in_use", err.Error())
+	case errors.Is(err, kb.ErrSystem):
+		jsonError(w, http.StatusForbidden, "system_collection", err.Error())
 	default:
 		failInternal(w, log, "kb", err)
 	}
@@ -422,7 +430,7 @@ func (h *kbAPI) finishIngest(w http.ResponseWriter, r *http.Request, collectionI
 // caller-chosen collection.
 func (h *kbAPI) uploadDocument(w http.ResponseWriter, r *http.Request) {
 	collectionID := r.PathValue("id")
-	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
+	if err := h.store.Writable(r.Context(), collectionID); err != nil {
 		failKB(w, h.log, err)
 		return
 	}
@@ -569,7 +577,7 @@ func (h *kbAPI) refreshOrCreate(w http.ResponseWriter, r *http.Request, resolveC
 // moving it to collectionID since the operator explicitly chose it.
 func (h *kbAPI) addDocumentFromURL(w http.ResponseWriter, r *http.Request) {
 	collectionID := r.PathValue("id")
-	if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
+	if err := h.store.Writable(r.Context(), collectionID); err != nil {
 		failKB(w, h.log, err)
 		return
 	}
@@ -676,7 +684,7 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 
 	collectionID := strings.TrimSpace(req.CollectionID)
 	if collectionID != "" {
-		if _, err := h.store.GetCollection(r.Context(), collectionID); err != nil {
+		if err := h.store.Writable(r.Context(), collectionID); err != nil {
 			failKB(w, h.log, err)
 			return
 		}
@@ -873,6 +881,10 @@ func (h *kbAPI) deleteDocument(w http.ResponseWriter, r *http.Request) {
 // document's existing chunks before writing the new set.
 func (h *kbAPI) reingestDocument(w http.ResponseWriter, r *http.Request) {
 	docID := r.PathValue("id")
+	if err := h.store.DocumentWritable(r.Context(), docID); err != nil {
+		failKB(w, h.log, err)
+		return
+	}
 	doc, err := h.store.GetDocument(r.Context(), docID)
 	if err != nil {
 		failKB(w, h.log, err)

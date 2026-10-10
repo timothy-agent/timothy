@@ -18,6 +18,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -41,6 +42,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/onboarding"
 	"github.com/SumonMSelim/timothy/internal/brain/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/brain/sandboxclient"
+	"github.com/SumonMSelim/timothy/internal/brain/selfdocs"
 	"github.com/SumonMSelim/timothy/internal/brain/session"
 	"github.com/SumonMSelim/timothy/internal/brain/settings"
 	"github.com/SumonMSelim/timothy/internal/brain/skills"
@@ -967,6 +969,34 @@ func main() {
 	// kb retry sweep (issue #414): re-ingests documents that failed on a
 	// transient embedding/provider error, on their own backoff schedule.
 	go api.RunKBRetrySweep(ctx, kbStore, mc, kbEnrich, app.Log)
+	// selfdocs (issue #1126): the bundled docs go into a system
+	// collection once per bundle hash, after migrations and off the
+	// boot path. A failure degrades health and retries on the next boot.
+	selfdocsDir := os.Getenv("SELFDOCS_DIR")
+	if selfdocsDir == "" {
+		selfdocsDir = "/selfdocs"
+	}
+	var selfdocsErr atomic.Pointer[string]
+	app.AddCheck("selfdocs", func() httpserver.Check {
+		if msg := selfdocsErr.Load(); msg != nil {
+			return httpserver.Check{Status: "degraded", Detail: *msg}
+		}
+		return httpserver.Check{Status: "ok"}
+	})
+	go func() {
+		if err := app.WaitMigrated(ctx); err != nil {
+			return
+		}
+		err := selfdocs.Sync(ctx, selfdocs.Deps{Dir: selfdocsDir, Name: selfdocs.Collection, Store: kbStore, Ingest: mc, Log: app.Log})
+		switch {
+		case errors.Is(err, selfdocs.ErrNoBundle):
+			app.Log.Info("selfdocs: no bundle, skipping ingest", "dir", selfdocsDir)
+		case err != nil:
+			app.Log.Error("selfdocs: ingest failed; retrying on next boot", "error", err)
+			msg := err.Error()
+			selfdocsErr.Store(&msg)
+		}
+	}()
 	svc.SetKBSearch(func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
 		hits, err := mc.KBSearch(ctx, query, nil, boostCollections, mode, k)
 		if err != nil {
@@ -1053,7 +1083,7 @@ func onboardingProbes(gwc *gwclient.Client, sandbox *sandboxclient.Client, sessi
 		ResolveRoute:       gwc.ResolveRoute,
 		SandboxHealth:      sandbox.Health,
 		HasAssistantReply:  sessions.HasAssistantReply,
-		CountKBCollections: countOf(kbStore.ListCollections),
+		CountKBCollections: kbStore.CountOperatorCollections,
 		AutomationsEnabled: func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyAutomations) },
 		MissionModelFloor:  missions.ParseModelFloor(os.Getenv("MISSION_MODEL_FLOOR")),
 	}

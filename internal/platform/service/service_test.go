@@ -56,6 +56,28 @@ func TestMigrationsStateTransitions(t *testing.T) {
 	}
 }
 
+func TestWaitMigrated(t *testing.T) {
+	app := newTestApp(t)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	if err := app.WaitMigrated(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("pending: err = %v, want DeadlineExceeded", err)
+	}
+
+	app.setMigrations(errors.New("boom"))
+	ctx2, cancel2 := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel2()
+	if err := app.WaitMigrated(ctx2); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("failed: err = %v, want DeadlineExceeded", err)
+	}
+
+	app.setMigrations(nil)
+	if err := app.WaitMigrated(t.Context()); err != nil {
+		t.Fatalf("applied: err = %v", err)
+	}
+}
+
 // TestHealthCarriesVersion: the link-time Version reaches /health.
 // Empty (an unset -ldflags on a local build) is a valid state, not an
 // error, and simply omits the field from the response.
