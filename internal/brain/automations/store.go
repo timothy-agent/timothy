@@ -399,13 +399,19 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 }
 
 // ListRuns returns an automation's runs, newest first, at most limit.
-func (s *Store) ListRuns(ctx context.Context, automationID string, limit int) ([]Run, error) {
+// A non-zero before pages past the run (before, beforeID).
+func (s *Store) ListRuns(ctx context.Context, automationID string, before time.Time, beforeID string, limit int) ([]Run, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("automations runs: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT `+runColumns+` FROM automation_runs WHERE automation_id = $1
-		ORDER BY created_at DESC, id LIMIT $2`, automationID, limit)
+	query := `SELECT ` + runColumns + ` FROM automation_runs WHERE automation_id = $1`
+	args := []any{automationID, limit}
+	if !before.IsZero() {
+		query += ` AND (created_at, id) < ($3, $4::uuid)`
+		args = append(args, before, beforeID)
+	}
+	rows, err := db.Query(ctx, query+` ORDER BY created_at DESC, id DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("automations runs: %w", err)
 	}

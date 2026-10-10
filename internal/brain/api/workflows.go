@@ -139,7 +139,12 @@ func (h *workflowAPI) startRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *workflowAPI) listRuns(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.ListRuns(r.Context(), r.PathValue("id"))
+	page, err := parseKeyset(r.URL.Query(), defaultRunsLimit, maxRunsLimit)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	rows, err := h.store.ListRuns(r.Context(), r.PathValue("id"), page.Before, page.BeforeID, page.Limit)
 	if err != nil {
 		failInternalCode(w, h.log, "workflows_failed", "workflow", err)
 		return
