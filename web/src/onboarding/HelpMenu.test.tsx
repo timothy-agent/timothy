@@ -50,6 +50,11 @@ describe('HelpMenu', () => {
     }
   })
 
+  it('sizes the menu wider than its icon trigger so labels stay on one line', () => {
+    renderMenu('/')
+    expect(screen.getByRole('menu')).toHaveClass('w-60')
+  })
+
   it("disables the tour restart on a page without a tour", () => {
     renderMenu('/')
     expect(item("Restart this page's tour")).toHaveAttribute('aria-disabled', 'true')
