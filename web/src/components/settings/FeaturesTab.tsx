@@ -153,6 +153,47 @@ const MCP_TOOL_INDEX_THRESHOLD_DEFAULT = 8
 // WRITING_STYLE_MAX_LEN mirrors the server's cap on writing_style.
 const WRITING_STYLE_MAX_LEN = 4000
 
+// MAIL_MAX_RECIPIENTS_DEFAULT and MAIL_MAX_SENDS_DEFAULT mirror
+// settings.DefaultMailMaxRecipientsPerSend/DefaultMailMaxSendsPerDay
+// for the placeholders; the server applies the real defaults.
+const MAIL_MAX_RECIPIENTS_DEFAULT = 5
+const MAIL_MAX_SENDS_DEFAULT = 50
+
+// Above these the mail ceiling fields warn without blocking the save.
+const MAIL_RECIPIENTS_RECOMMENDED_MAX = 50
+const MAIL_SENDS_RECOMMENDED_MAX = 500
+
+const MAIL_BULK_WARNING = 'Above the recommended limit. Bulk mail belongs on a dedicated email service.'
+
+function MailCeilingInput({
+  value,
+  setValue,
+  label,
+  placeholder,
+  recommendedMax,
+}: {
+  value: string
+  setValue: (v: string) => void
+  label: string
+  placeholder: number
+  recommendedMax: number
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <Input
+        type="number"
+        min={0}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        placeholder={String(placeholder)}
+        className="h-9 w-40"
+        aria-label={label}
+      />
+      {Number(value) > recommendedMax && <p className="text-sm text-warning">{MAIL_BULK_WARNING}</p>}
+    </div>
+  )
+}
+
 // Descriptor for a plain value card: an Input or Select field, one
 // settings key, and how its committed value maps to the field's
 // working value. save() receives the trimmed working value.
@@ -236,6 +277,38 @@ const valueCardDescriptors: ValueCardDescriptor[] = [
         placeholder={String(REVIEW_TOKEN_CEILING_DEFAULT)}
         className="h-9 w-40"
         aria-label="Review token ceiling"
+      />
+    ),
+    toPatchValue: (v) => v.trim(),
+  },
+  {
+    key: 'mail_max_recipients_per_send',
+    title: 'Max recipients per email',
+    description:
+      'Recipients across To and Cc that one email from a connected mail account may address; a larger send is refused, never split. Empty uses the default (5), 0 disables the limit.',
+    render: (value, setValue) => (
+      <MailCeilingInput
+        value={value}
+        setValue={setValue}
+        label="Max recipients per email"
+        placeholder={MAIL_MAX_RECIPIENTS_DEFAULT}
+        recommendedMax={MAIL_RECIPIENTS_RECOMMENDED_MAX}
+      />
+    ),
+    toPatchValue: (v) => v.trim(),
+  },
+  {
+    key: 'mail_max_sends_per_day',
+    title: 'Max emails per account per day',
+    description:
+      'Emails one connected mail account may send in a rolling 24 hours, across chat, automations, channels and deliveries. Empty uses the default (50), 0 disables the limit.',
+    render: (value, setValue) => (
+      <MailCeilingInput
+        value={value}
+        setValue={setValue}
+        label="Max emails per account per day"
+        placeholder={MAIL_MAX_SENDS_DEFAULT}
+        recommendedMax={MAIL_SENDS_RECOMMENDED_MAX}
       />
     ),
     toPatchValue: (v) => v.trim(),

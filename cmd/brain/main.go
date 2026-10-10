@@ -338,6 +338,15 @@ func main() {
 		}
 		conns.RegisterBuilder("imap", connectors.IMAPBuilder(nil, markItDownURL))
 		conns.RegisterBuilder("caldav", connectors.CalDAVBuilder(nil))
+		// One ceiling for every connector mail send: the send_mail tool
+		// (chat and automations), channel replies and email destinations.
+		mailCeiling := connectors.NewMailCeiling(app.DB, func(ctx context.Context) (int, int) {
+			return flags.MailMaxRecipientsPerSend(ctx), flags.MailMaxSendsPerDay(ctx)
+		}, app.Log)
+		conns.SetMailCeiling(mailCeiling)
+		if goog != nil {
+			goog.MailCeiling = mailCeiling
+		}
 		conns.SetOnReload(func(context.Context) {
 			swapAgentTools(agent, builtinSet.snapshot(), conns, app.Log, toolCalls)
 		})

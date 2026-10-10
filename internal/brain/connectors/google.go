@@ -90,6 +90,9 @@ type Google struct {
 	// body rendering and PDF attachment reading with a clear error
 	// instead of a silent snippet fallback.
 	MarkItDownURL string
+	// MailCeiling gates SendMail, SendMailWithAttachments and
+	// SendMailHTML; nil admits all.
+	MailCeiling *MailCeiling
 
 	mu     sync.Mutex
 	states map[string]oauthState
@@ -382,6 +385,9 @@ func (g *Google) SendMail(ctx context.Context, connectorID, to, subject, body st
 	if c.CredentialRef == "" {
 		return fmt.Errorf("send mail: connector %s has no credential_ref", c.Name)
 	}
+	if err := g.MailCeiling.Admit(ctx, c.Name, countRecipients(to)); err != nil {
+		return fmt.Errorf("send mail: %w", err)
+	}
 	token, err := g.token(ctx, cfg, c.CredentialRef)
 	if err != nil {
 		return fmt.Errorf("send mail: %w", err)
@@ -437,6 +443,9 @@ func (g *Google) SendMailWithAttachments(ctx context.Context, connectorID, to, s
 	}
 	if c.CredentialRef == "" {
 		return fmt.Errorf("send mail: connector %s has no credential_ref", c.Name)
+	}
+	if err := g.MailCeiling.Admit(ctx, c.Name, countRecipients(to)); err != nil {
+		return fmt.Errorf("send mail: %w", err)
 	}
 	token, err := g.token(ctx, cfg, c.CredentialRef)
 	if err != nil {
@@ -516,6 +525,9 @@ func (g *Google) SendMailHTML(ctx context.Context, connectorID, to, subject, pla
 	}
 	if c.CredentialRef == "" {
 		return fmt.Errorf("send mail: connector %s has no credential_ref", c.Name)
+	}
+	if err := g.MailCeiling.Admit(ctx, c.Name, countRecipients(to)); err != nil {
+		return fmt.Errorf("send mail: %w", err)
 	}
 	token, err := g.token(ctx, cfg, c.CredentialRef)
 	if err != nil {

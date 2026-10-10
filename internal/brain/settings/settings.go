@@ -216,6 +216,19 @@ const (
 	// in seconds (issue #830); "" or "0" defers to
 	// DefaultEmailPollSeconds, values under MinEmailPollSeconds floor.
 	ValueEmailPollSeconds = "email_poll_seconds"
+	// ValueMailMaxRecipientsPerSend and ValueMailMaxSendsPerDay are the
+	// outbound mail ceilings (D-151, issue #1155): recipients across
+	// to and cc on one send, and sends per account per rolling 24
+	// hours. "" defers to the default, "0" turns that ceiling off.
+	ValueMailMaxRecipientsPerSend = "mail_max_recipients_per_send"
+	ValueMailMaxSendsPerDay       = "mail_max_sends_per_day"
+)
+
+// Outbound mail ceiling defaults (D-151), used when the setting is
+// unset.
+const (
+	DefaultMailMaxRecipientsPerSend = 5
+	DefaultMailMaxSendsPerDay       = 50
 )
 
 // DefaultGitHubPollSeconds is the GitHub event poller's interval when
@@ -282,6 +295,7 @@ var knownValueKeys = map[string]bool{
 	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
 	ValueOutboundHostAllowlist: true, ValueGitHubPollSeconds: true, ValueEmailPollSeconds: true,
+	ValueMailMaxRecipientsPerSend: true, ValueMailMaxSendsPerDay: true,
 }
 
 // KeyOnboarding holds the setup checklist and tour progress as one
@@ -301,6 +315,7 @@ var nonNegativeIntKeys = map[string]bool{
 	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
 	ValueGitHubPollSeconds: true, ValueEmailPollSeconds: true,
+	ValueMailMaxRecipientsPerSend: true, ValueMailMaxSendsPerDay: true,
 }
 
 // allowedCurrencies is the flat, fixed list of ISO 4217 codes the
@@ -345,6 +360,18 @@ type Store struct {
 
 func New(db *pgpool.Pool, log *slog.Logger) *Store {
 	return &Store{db: db, log: log}
+}
+
+// MailMaxRecipientsPerSend is the recipient ceiling of one outbound
+// mail send; 0 means no ceiling.
+func (s *Store) MailMaxRecipientsPerSend(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueMailMaxRecipientsPerSend, DefaultMailMaxRecipientsPerSend)
+}
+
+// MailMaxSendsPerDay is the per-account ceiling of outbound mail sends
+// in a rolling 24 hours; 0 means no ceiling.
+func (s *Store) MailMaxSendsPerDay(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueMailMaxSendsPerDay, DefaultMailMaxSendsPerDay)
 }
 
 // Enabled reports one switch, defaulting to true for absent rows and

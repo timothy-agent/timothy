@@ -43,7 +43,9 @@ type MailMessage struct {
 // SMTP server for the email channel (issue #830). Every call opens and
 // closes its own IMAP session.
 type IMAPMailbox struct {
-	src *imapSource
+	src       *imapSource
+	connector string
+	mail      *MailCeiling
 }
 
 // IMAPMailbox returns the mailbox of connector id, which must be an
@@ -75,7 +77,7 @@ func (m *Manager) IMAPMailbox(ctx context.Context, id string) (*IMAPMailbox, err
 	if is.cfg.SMTPHost == "" {
 		return nil, fmt.Errorf("connector %s has no smtp_host; the email channel needs it to reply", c.Name)
 	}
-	return &IMAPMailbox{src: is}, nil
+	return &IMAPMailbox{src: is, connector: c.Name, mail: m.mail}, nil
 }
 
 // Address is the mailbox's own email address.
@@ -212,6 +214,9 @@ func (b *IMAPMailbox) Reply(ctx context.Context, to, subject, body, inReplyTo st
 		if validMsgID(r) {
 			refs = append(refs, r)
 		}
+	}
+	if err := b.mail.Admit(ctx, b.connector, len(addrs)); err != nil {
+		return "", err
 	}
 	id, err := newMessageID(b.Address())
 	if err != nil {

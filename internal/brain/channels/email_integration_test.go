@@ -20,6 +20,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/loop"
+	"github.com/SumonMSelim/timothy/internal/brain/missions"
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
@@ -394,5 +395,49 @@ func TestEmailOutboundBudget(t *testing.T) {
 	}
 	if _, err := a.send(t.Context(), target{ChatID: "unknown@x.com"}, "reply", nil, false); err == nil {
 		t.Fatal("a mail with no thread was sent")
+	}
+}
+
+// TestEmailOutcomeDroppedOnMailCeiling: a mission outcome refused by
+// the connector mail ceiling (D-151) is dropped like a spent hourly
+// budget, not returned for the drainer to retry.
+func TestEmailOutcomeDroppedOnMailCeiling(t *testing.T) {
+	s, pool := testStore(t)
+	ms, _ := missionFixtures(t, pool)
+	ctx := t.Context()
+	id := createEmailChannel(t, s, runTag()+"ceiling", "ada@x.com")
+	conv := pairedConversation(t, s, id, "ada@x.com")
+	if err := s.saveEmailThread(ctx, conv.ID, mailThread{To: "ada@x.com", Subject: "status", MessageID: "in1@x.com"}, "out0@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeMail(0)
+	replies := 0
+	o := NewOutcomes(s, MissionDeps{Get: ms.Get, Events: ms.Events, AppendEvent: ms.AppendEvent}, fakeResolve, nil, nil, discardLog())
+	o.mail.mailbox = func(context.Context, string) (mailbox, error) {
+		box := f.box()
+		box.Reply = func(context.Context, string, string, string, string, []string) (string, error) {
+			replies++
+			return "", fmt.Errorf("send mail: %w", connectors.ErrMailCeiling)
+		}
+		return box, nil
+	}
+	mid, err := ms.Create(ctx, missions.Mission{Goal: marker + "outcome ceiling", Name: "ceiling", Kind: "general", Route: "default", ChannelConversationID: conv.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.Handle(ctx, nil, terminalEvent(t, mid, "done", "")); err != nil {
+		t.Fatalf("a mail ceiling refusal must not retry: %v", err)
+	}
+	if replies != 1 {
+		t.Fatalf("Reply calls = %d, want 1", replies)
+	}
+	evs, err := ms.Events(ctx, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ev := range evs {
+		if ev.Kind == outcomeRepliedKind {
+			t.Fatal("a refused outcome wrote a replied marker")
+		}
 	}
 }

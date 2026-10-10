@@ -439,6 +439,20 @@ CREATE TABLE IF NOT EXISTS connectors (
     updated_at     timestamptz NOT NULL DEFAULT now()
 );
 
+-- Outbound mail ledger (D-151): one row per connector mail send the
+-- ceilings admitted or rejected. Append-only. Admitted rows in the
+-- last 24 hours are the account's daily count, so a restart keeps it.
+-- connector is the connector name; no recipient addresses are stored.
+CREATE TABLE IF NOT EXISTS mail_sends (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    connector       text NOT NULL,
+    outcome         text NOT NULL CHECK (outcome IN ('admitted', 'rejected')),
+    reason          text NOT NULL DEFAULT '' CHECK (reason IN ('', 'recipients', 'daily')),
+    recipient_count integer NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS mail_sends_connector_created_idx ON mail_sends (connector, created_at);
+
 -- Agents are configuration, not code (D-030, D-034): a chat session
 -- starts by choosing WHO serves it. An agent names a prompt overlay,
 -- a route (its model chain), skill and tool allowlists (empty = none:

@@ -60,6 +60,9 @@ type Manager struct {
 
 	onReload func(context.Context)
 
+	// mail gates every send_mail call; nil admits all (tests).
+	mail *MailCeiling
+
 	mu      sync.RWMutex
 	sources map[string]Source // by connector name
 
@@ -163,7 +166,7 @@ var toolNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
 func (m *Manager) Tools(reserved map[string]bool) []*tools.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return aggregateTools(m.sources, false, reserved)
+	return aggregateTools(m.sources, false, reserved, m.mail)
 }
 
 // ReadOnlyTools returns the aggregated ReadOnly-marked non-MCP tool
@@ -177,7 +180,7 @@ func (m *Manager) Tools(reserved map[string]bool) []*tools.Tool {
 func (m *Manager) ReadOnlyTools() []*tools.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return aggregateTools(m.sources, true, nil)
+	return aggregateTools(m.sources, true, nil, m.mail)
 }
 
 // AccountConnector resolves which connector name a unified tool call
@@ -373,7 +376,7 @@ func schemasEqual(a, b json.RawMessage) bool {
 // tool is dropped outright — a remote MCP server's ReadOnly claim can't
 // be verified, unlike google/microsoft's tool constructors, which are
 // Timothy's own code.
-func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[string]bool) []*tools.Tool {
+func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[string]bool, mail *MailCeiling) []*tools.Tool {
 	merged, split := groupByRawName(sources, reserved)
 
 	if readOnlyOnly {
@@ -408,7 +411,7 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 	for _, name := range order {
 		accounts := merged[name]
 		sort.Slice(accounts, func(i, j int) bool { return accounts[i].connector < accounts[j].connector })
-		agg := aggregateTool(name, accounts)
+		agg := aggregateTool(name, accounts, mail)
 		if readOnlyOnly && !agg.ReadOnly {
 			continue
 		}
@@ -444,7 +447,7 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 // aggregateTool builds one aggregated tool from every account serving
 // raw name: the model sees exactly this shape regardless of which or
 // how many connectors/kinds contribute.
-func aggregateTool(name string, accounts []toolAccount) *tools.Tool {
+func aggregateTool(name string, accounts []toolAccount, mail *MailCeiling) *tools.Tool {
 	readOnly := true
 	for _, a := range accounts {
 		if !a.tool.ReadOnly {
@@ -463,6 +466,11 @@ func aggregateTool(name string, accounts []toolAccount) *tools.Tool {
 			acc, stripped, err := resolveAccount(accounts, args)
 			if err != nil {
 				return "", err
+			}
+			if name == "send_mail" {
+				if err := mail.admitToolArgs(ctx, acc.connector, stripped); err != nil {
+					return "", err
+				}
 			}
 			return acc.tool.Execute(ctx, stripped)
 		},
@@ -645,6 +653,12 @@ func accountNames(accounts []toolAccount) string {
 // Reload — the agent's tool set rebuilds from it. Startup-time only.
 func (m *Manager) SetOnReload(fn func(context.Context)) {
 	m.onReload = fn
+}
+
+// SetMailCeiling gates the unified send_mail tool and IMAPMailbox
+// replies. Startup-time only.
+func (m *Manager) SetMailCeiling(c *MailCeiling) {
+	m.mail = c
 }
 
 // Ready returns a channel that closes once the first successful Reload

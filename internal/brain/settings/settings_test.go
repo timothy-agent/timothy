@@ -222,3 +222,66 @@ func TestJSONSettingsDegradedReturnsError(t *testing.T) {
 		t.Fatal("SetJSON(degraded) err = nil, want error")
 	}
 }
+
+// TestMailCeilingValidation pins D-151's save-time validation: any
+// integer >= 0 passes (and then fails only on the degraded write),
+// with no upper bound; anything else is refused.
+func TestMailCeilingValidation(t *testing.T) {
+	cases := []struct {
+		key, value, wantErr string
+	}{
+		{ValueMailMaxRecipientsPerSend, "5", "settings:"},
+		{ValueMailMaxRecipientsPerSend, "0", "settings:"},
+		{ValueMailMaxRecipientsPerSend, "100000", "settings:"},
+		{ValueMailMaxRecipientsPerSend, "-1", "non-negative integer"},
+		{ValueMailMaxRecipientsPerSend, "five", "non-negative integer"},
+		{ValueMailMaxSendsPerDay, "50", "settings:"},
+		{ValueMailMaxSendsPerDay, "0", "settings:"},
+		{ValueMailMaxSendsPerDay, "1000000", "settings:"},
+		{ValueMailMaxSendsPerDay, "-3", "non-negative integer"},
+		{ValueMailMaxSendsPerDay, "1.5", "non-negative integer"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
+			err := degradedStore(t).SetValue(context.Background(), tc.key, tc.value)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("SetValue(%s, %q) err = %v, want containing %q", tc.key, tc.value, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestMailCeilingReads pins the read side: unset is the default, 0
+// stays 0 (ceiling off), large values pass through, junk falls back.
+func TestMailCeilingReads(t *testing.T) {
+	cases := []struct {
+		name                      string
+		recipients, daily         string
+		wantRecipients, wantDaily int
+	}{
+		{"unset", "", "", 5, 50},
+		{"lowered", "2", "10", 2, 10},
+		{"off", "0", "0", 0, 0},
+		{"large", "200", "5000", 200, 5000},
+		{"junk falls back", "x", "-1", 5, 50},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := degradedStore(t)
+			s.mu.Lock()
+			s.flags, s.fetched = map[string]bool{}, time.Now()
+			s.values = map[string]string{ValueMailMaxRecipientsPerSend: tc.recipients, ValueMailMaxSendsPerDay: tc.daily}
+			s.mu.Unlock()
+			ctx := context.Background()
+			if got := s.MailMaxRecipientsPerSend(ctx); got != tc.wantRecipients {
+				t.Errorf("MailMaxRecipientsPerSend() = %d, want %d", got, tc.wantRecipients)
+			}
+			if got := s.MailMaxSendsPerDay(ctx); got != tc.wantDaily {
+				t.Errorf("MailMaxSendsPerDay() = %d, want %d", got, tc.wantDaily)
+			}
+		})
+	}
+	if !knownValueKeys[ValueMailMaxRecipientsPerSend] || !nonNegativeIntKeys[ValueMailMaxSendsPerDay] {
+		t.Fatal("mail ceiling keys missing from knownValueKeys or nonNegativeIntKeys")
+	}
+}

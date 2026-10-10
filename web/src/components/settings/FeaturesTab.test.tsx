@@ -103,6 +103,55 @@ describe('FeaturesTab review token ceiling', () => {
   })
 })
 
+const BULK_WARNING = 'Above the recommended limit. Bulk mail belongs on a dedicated email service.'
+
+describe('FeaturesTab mail ceilings', () => {
+  it('shows both fields with default placeholders and help text', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    renderTab()
+    const recipients = (await screen.findByRole('spinbutton', { name: 'Max recipients per email' })) as HTMLInputElement
+    const sends = screen.getByRole('spinbutton', { name: 'Max emails per account per day' }) as HTMLInputElement
+    expect(recipients.placeholder).toBe('5')
+    expect(sends.placeholder).toBe('50')
+    expect(screen.getByRole('region', { name: 'Max recipients per email' })).toHaveTextContent('0 disables the limit')
+    expect(screen.getByRole('region', { name: 'Max emails per account per day' })).toHaveTextContent(
+      'Empty uses the default (50), 0 disables the limit',
+    )
+    expect(screen.queryByText(BULK_WARNING)).toBeNull()
+  })
+
+  it('saves 0 to disable the recipient limit', async () => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: { mail_max_recipients_per_send: '5' } })
+    renderTab()
+    const input = (await screen.findByRole('spinbutton', { name: 'Max recipients per email' })) as HTMLInputElement
+    expect(input.value).toBe('5')
+    fireEvent.change(input, { target: { value: '0' } })
+    const region = screen.getByRole('region', { name: 'Max recipients per email' })
+    fireEvent.click(within(region).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(patchSettingValues).toHaveBeenCalledWith({ mail_max_recipients_per_send: '0' }))
+  })
+
+  it.each([
+    ['Max recipients per email', 'mail_max_recipients_per_send', '50', '51'],
+    ['Max emails per account per day', 'mail_max_sends_per_day', '500', '501'],
+  ])('warns above the recommended limit on %s without blocking the save', async (label, key, atLimit, above) => {
+    vi.mocked(getSettings).mockResolvedValue({ settings: {}, values: {} })
+    renderTab()
+    const input = (await screen.findByRole('spinbutton', { name: label })) as HTMLInputElement
+    const region = screen.getByRole('region', { name: label })
+
+    fireEvent.change(input, { target: { value: atLimit } })
+    expect(within(region).queryByText(BULK_WARNING)).toBeNull()
+
+    fireEvent.change(input, { target: { value: above } })
+    expect(within(region).getByText(BULK_WARNING)).toBeTruthy()
+    const save = within(region).getByRole('button', { name: 'Save' })
+    expect(save).toBeEnabled()
+    fireEvent.click(save)
+    await waitFor(() => expect(patchSettingValues).toHaveBeenCalledWith({ [key]: above }))
+  })
+})
+
 describe('FeaturesTab flag flip', () => {
   it('flips a flag optimistically and commits the PATCH', async () => {
     vi.mocked(getSettings).mockResolvedValue({ settings: { tools_enabled: true }, values: {} })

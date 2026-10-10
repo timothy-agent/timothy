@@ -133,7 +133,7 @@ func (o *Outcomes) Handle(ctx context.Context, _ pgx.Tx, ev events.Event) error 
 	}
 	text := outcomeText(m, terminal, reason, missions.OutcomeDigest(m, evs, terminal, reason), base)
 	if _, err := ad.send(ctx, conversationTarget(conv), text, nil, false); err != nil {
-		if errors.Is(err, errMailBudget) {
+		if errors.Is(err, errMailBudget) || errors.Is(err, connectors.ErrMailCeiling) {
 			o.log.Warn("channels: outcome dropped, mail budget spent", "channel_id", ch.ID, "mission_id", m.ID)
 			return nil
 		}
