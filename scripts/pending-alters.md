@@ -25,23 +25,3 @@ CREATE INDEX IF NOT EXISTS memories_status_confirmed_idx ON memories (status, la
 Serves the semantic decay pass's `last_confirmed_at` cutoff. Matches
 `0001_init.sql`. Additive: safe to run before deploy. Instances:
 homelab `timothy`, `demo1`, `demo2` and `demo3` on timothy-oci.
-
-## outbound mail ledger (#1155)
-
-```sql
-CREATE TABLE IF NOT EXISTS mail_sends (
-    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    connector       text NOT NULL,
-    outcome         text NOT NULL CHECK (outcome IN ('admitted', 'rejected')),
-    reason          text NOT NULL DEFAULT '' CHECK (reason IN ('', 'recipients', 'daily')),
-    recipient_count integer NOT NULL,
-    created_at      timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS mail_sends_connector_created_idx ON mail_sends (connector, created_at);
-```
-
-Backs the outbound mail ceilings (D-151): admitted rows in the last 24
-hours are an account's daily send count, rejected rows are the
-operator's record. Matches `0001_init.sql`. Must run before deploy:
-without the table every connector mail send fails closed. Instances:
-homelab `timothy`, `demo1`, `demo2` and `demo3` on timothy-oci.
