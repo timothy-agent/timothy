@@ -17,7 +17,7 @@ export function HelpMenu() {
       <DropdownMenuTrigger asChild>
         <IconButton label="Help" icon={CircleHelp} size="sm" tooltip={false} />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
+      <DropdownMenuContent align="end" className="w-60">
         {actions.map((a) =>
           a.href ? (
             <Fragment key={a.id}>
