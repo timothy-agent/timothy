@@ -1,0 +1,38 @@
+# Sandbox namespace for the kind smoke (make kind-sandbox-smoke): Pod
+# Security restricted, and the workspace claim backed by the node
+# mount from cluster.yaml. The Helm chart ships the production shape
+# (RWX claim, quota, limit range, network policies, RBAC).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: timothy-sandbox
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: timothy-workspace
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kind-workspace
+  hostPath:
+    path: /mnt/timothy-workspace
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: workspace
+  namespace: timothy-sandbox
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: kind-workspace
+  volumeName: timothy-workspace
+  resources:
+    requests:
+      storage: 10Gi

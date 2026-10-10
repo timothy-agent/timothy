@@ -33,6 +33,7 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       sandbox: ${{ steps.filter.outputs.sandbox }}
       deploy: ${{ steps.filter.outputs.deploy }}
+      kind: ${{ steps.filter.outputs.kind }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
@@ -57,6 +58,11 @@ jobs:
               - '.github/workflows/ci.yml'
             deploy:
               - 'deploy/**'
+              - '.github/workflows/ci.yml'
+            kind:
+              - 'internal/sandboxd/**'
+              - 'deploy/kind/**'
+              - 'Makefile'
               - '.github/workflows/ci.yml'
 
   # Split from go-integration: build/vet/unit-test/vuln-scan share no
@@ -262,6 +268,24 @@ jobs:
           exit-code: "0"
           ignore-unfixed: true
 
+  # Kubernetes sandbox backend against a real API server: the lifecycle
+  # suite on a kind cluster with Pod Security restricted enforced
+  # (make kind-up, make kind-sandbox-test). The brain end-to-end smoke
+  # (make kind-sandbox-smoke) needs model credentials and stays local.
+  kind-sandbox:
+    needs: changes
+    if: needs.changes.outputs.kind == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          install_only: true
+      - name: Cluster
+        run: make kind-up
+      - name: Lifecycle suite on kind
+        run: make kind-sandbox-test
+
   # Coolify reads deploy/release/docker-compose.yml straight from git and
   # install.sh fetches it as a release asset, so both compose files must
   # parse at PR time. searxng's settings are inlined in each file; the
@@ -300,7 +324,7 @@ jobs:
   # jobs — path-awareness must not reopen that hole.)
   ci-ok:
     runs-on: ubuntu-latest
-    needs: [changes, go-test, go-integration, lint, web, images, sandbox-image, compose]
+    needs: [changes, go-test, go-integration, lint, web, images, sandbox-image, kind-sandbox, compose]
     if: always()
     steps:
       - name: All relevant jobs succeeded
@@ -327,6 +351,7 @@ jobs:
           check lint            "${{ needs.changes.outputs.go }}"  "${{ needs.lint.result }}"
           check web             "${{ needs.changes.outputs.web }}" "${{ needs.web.result }}"
           check sandbox-image   "${{ needs.changes.outputs.sandbox }}" "${{ needs.sandbox-image.result }}"
+          check kind-sandbox    "${{ needs.changes.outputs.kind }}"    "${{ needs.kind-sandbox.result }}"
           check compose         "${{ needs.changes.outputs.deploy }}"  "${{ needs.compose.result }}"
           # images always runs (per-leg skips internally) unless
           # nothing relevant touched it at all.
