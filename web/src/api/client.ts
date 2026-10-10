@@ -411,8 +411,27 @@ export async function listSessions(query = '', cursor?: SessionCursor): Promise<
   return sessions
 }
 
-export async function getTranscript(id: string): Promise<Transcript> {
-  return request<Transcript>(`/v1/sessions/${id}`)
+// SeqPage selects a seq keyset window of an event log (issue #1113):
+// limit alone means the newest rows; before_seq and after_seq are
+// mutually exclusive. Rows always come back ascending.
+export interface SeqPage {
+  limit?: number
+  before_seq?: number
+  after_seq?: number
+}
+
+function seqPageQuery(page?: SeqPage): string {
+  if (!page) return ''
+  const params = new URLSearchParams()
+  if (page.limit !== undefined) params.set('limit', String(page.limit))
+  if (page.before_seq !== undefined) params.set('before_seq', String(page.before_seq))
+  if (page.after_seq !== undefined) params.set('after_seq', String(page.after_seq))
+  return params.size > 0 ? `?${params.toString()}` : ''
+}
+
+// getTranscript without a page returns the whole transcript.
+export async function getTranscript(id: string, page?: SeqPage): Promise<Transcript> {
+  return request<Transcript>(`/v1/sessions/${id}${seqPageQuery(page)}`)
 }
 
 // answerPermission resolves a parked tool call.
@@ -1513,6 +1532,18 @@ export async function getMission(id: string): Promise<Mission> {
 export async function missionEvents(id: string): Promise<MissionEvent[]> {
   const { events } = await request<{ events: MissionEvent[] }>(`/v1/missions/${id}/events`)
   return events ?? []
+}
+
+// missionEventsPage reads one seq window; has_more reports rows past it
+// in the paging direction.
+export async function missionEventsPage(
+  id: string,
+  page: SeqPage,
+): Promise<{ events: MissionEvent[]; has_more: boolean }> {
+  const res = await request<{ events: MissionEvent[]; has_more: boolean }>(
+    `/v1/missions/${id}/events${seqPageQuery(page)}`,
+  )
+  return { events: res.events ?? [], has_more: res.has_more }
 }
 
 export async function missionUsage(id: string): Promise<MissionUsage> {

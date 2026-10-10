@@ -11,6 +11,7 @@ import {
   getMission,
   listDestinations,
   missionEvents,
+  missionEventsPage,
   missionUsage,
   openMissionPR,
   pushMission,
@@ -240,6 +241,9 @@ function statusLabel(mission: Mission): string {
   return mission.status.replace(/_/g, ' ')
 }
 
+// HeldEvents is a mission's event log as loaded so far.
+type HeldEvents = { id: string; events: MissionEvent[] }
+
 export function MissionDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -303,6 +307,36 @@ export function MissionDetail() {
   )
 
   const refreshSeq = useRef(0)
+  // Event loads run one at a time so a refresh landing mid-load reads
+  // after_seq instead of the full log again.
+  const eventsRef = useRef<HeldEvents | null>(null)
+  const eventsChainRef = useRef<Promise<void>>(Promise.resolve())
+
+  // loadEvents reads the whole log once (turn stats, the failed phase
+  // and the PR chip derive from all of it), then only events after the
+  // newest loaded seq (issue #1113). Mission events are append-only.
+  const loadEvents = useCallback(async (missionId: string) => {
+    if (eventsRef.current?.id !== missionId) {
+      const all = await missionEvents(missionId)
+      eventsRef.current = { id: missionId, events: all }
+      setEvents(all)
+      return
+    }
+    for (;;) {
+      const held: HeldEvents | null = eventsRef.current
+      if (!held) return
+      const newest = held.events.at(-1)?.seq ?? 0
+      const page = await missionEventsPage(missionId, { after_seq: newest, limit: 500 })
+      if (eventsRef.current !== held) return
+      const fresh = page.events.filter((e) => e.seq > newest)
+      if (fresh.length > 0) {
+        const next: HeldEvents = { id: missionId, events: [...held.events, ...fresh] }
+        eventsRef.current = next
+        setEvents(next.events)
+      }
+      if (!page.has_more) return
+    }
+  }, [])
 
   const refresh = useCallback(() => {
     if (!id) return
@@ -310,13 +344,13 @@ export function MissionDetail() {
     getMission(id).then((m) => {
       if (seq === refreshSeq.current) setMission(m)
     }, () => undefined)
-    missionEvents(id).then((e) => {
-      if (seq === refreshSeq.current) setEvents(e)
-    }, () => undefined)
+    eventsChainRef.current = eventsChainRef.current.then(
+      () => loadEvents(id).catch(() => undefined),
+    )
     missionUsage(id).then((u) => {
       if (seq === refreshSeq.current) setUsage(u)
     }, () => undefined)
-  }, [id])
+  }, [id, loadEvents])
 
   const pendingPermission = mission?.pending_permission
   const wasPendingRef = useRef(false)
