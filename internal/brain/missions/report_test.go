@@ -295,3 +295,60 @@ func TestDelegatedRunWorkerCarriesFinalOutput(t *testing.T) {
 		t.Fatalf("verdict = %+v, want done with the report in FinalOutput", verdict)
 	}
 }
+
+// TestCodingScopeRulePrompts (D-151, issue #1173): the planner and both
+// worker paths of a coding mission carry the scope rule; general and
+// light missions do not.
+func TestCodingScopeRulePrompts(t *testing.T) {
+	const marker = "never create or update a report, test-log or audit-output file"
+	if !strings.Contains(codingScopeRule, marker) || !strings.Contains(codingScopeRule, "leave report files that earlier changes added") {
+		t.Fatalf("codingScopeRule lost its rule text: %s", codingScopeRule)
+	}
+	cases := []struct {
+		name   string
+		packet WorkPacket
+		want   bool
+	}{
+		{"coding planned", WorkPacket{Goal: "g", Kind: KindCoding, Plan: Plan{Units: []PlanUnit{{Title: "u"}}}}, true},
+		{"general planned", WorkPacket{Goal: "g", Kind: KindGeneral, Plan: Plan{Units: []PlanUnit{{Title: "u"}}}}, false},
+		{"general light", WorkPacket{Goal: "g", Kind: KindGeneral, Light: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			native, _ := tc.packet.Render()
+			delegated, _, _ := tc.packet.RenderForDelegated("/run")
+			if got := strings.Contains(native, marker); got != tc.want {
+				t.Fatalf("native worker carries the rule = %v, want %v", got, tc.want)
+			}
+			if got := strings.Contains(delegated, marker); got != tc.want {
+				t.Fatalf("delegated worker carries the rule = %v, want %v", got, tc.want)
+			}
+		})
+	}
+	for _, hasPlan := range []bool{false, true} {
+		if !strings.Contains(planSystemPrompt(hasPlan, false, true), marker) {
+			t.Fatalf("hasPlan=%v: coding plan prompt lacks the scope rule", hasPlan)
+		}
+		if strings.Contains(planSystemPrompt(hasPlan, false, false), marker) {
+			t.Fatalf("hasPlan=%v: general plan prompt carries the scope rule", hasPlan)
+		}
+	}
+}
+
+// TestDelegatedRunWorkerCarriesScopeRule (D-151): the rule reaches the
+// CLI through the invocation's system append.
+func TestDelegatedRunWorkerCarriesScopeRule(t *testing.T) {
+	sandbox := newFakeSandbox()
+	sandbox.seedLines = loadDelegatedFixture(t, "schema.ndjson")
+	entry := harnessEntry("subscription")
+	route := &gwclient.ResolvedRoute{Route: "default", Entries: []gwclient.ResolvedRouteEntry{entry}}
+	r := newTestDelegatedRunner(&fakeNative{}, scriptedResolver(route, nil), scriptedCred("", nil), sandbox, &fakeEventSink{}, nil, &fakeLedger{})
+
+	packet := WorkPacket{Goal: "upgrade deps", Kind: KindCoding, Plan: Plan{Units: []PlanUnit{{Title: "u"}}}}
+	if _, _, err := r.RunWorker(testCtx(t), testMission("m1", t.TempDir()), packet); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	if !strings.Contains(sandbox.lastLaunchCmd(), "Change only what the goal needs.") {
+		t.Fatalf("launch command lacks the scope rule: %s", sandbox.lastLaunchCmd())
+	}
+}

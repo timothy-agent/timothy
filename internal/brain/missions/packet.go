@@ -129,6 +129,20 @@ const nativeSystemPreamble = "You are executing one unit of a plan. Work toward 
 // worker's final message is delivered to the user verbatim.
 const lightSystemPreamble = "You are completing this goal in a single pass. Work toward the goal, then end your turn with exactly one mission_status tool call: done (with evidence), retry (with analysis), or blocked (with a question). On done, put the COMPLETE final deliverable text in the mission_status call's final_output argument — it is delivered to the user verbatim as the result, so it must be the deliverable itself, never a summary of work done. Create or update files ONLY with the write_file tool using workspace-relative paths — never shell redirects (>, >>) or heredocs, which classify as writes requiring interactive approval and will stall you. Use shell for reading and checking, not writing. When you end with retry or blocked, include a handoff note summarizing state, remaining work, and gotchas — the next session starts fresh and sees only your handoff and the git log." + toolDisciplineNote
 
+// codingScopeRule (D-151, issue #1173) is appended to the planner and
+// to both worker system prompts of a coding mission: the harness writes
+// test and audit evidence into the PR body itself, so report files in
+// the repository only duplicate it.
+const codingScopeRule = " Change only what the goal needs. Evidence such as test results and dependency audits belongs in the pull request, which the harness fills from its own measurements: unless the goal asks for one, never create or update a report, test-log or audit-output file (such as *REPORT*.md, test-results*, or saved audit output) in any unit, and leave report files that earlier changes added to the repository untouched, even when discovery suggests mirroring them."
+
+// scopeRule is codingScopeRule for a planned coding packet, "" otherwise.
+func (p WorkPacket) scopeRule() string {
+	if p.Kind == KindCoding && !p.Light {
+		return codingScopeRule
+	}
+	return ""
+}
+
 // Render turns the packet into the system/user message a native
 // worker session's first turn receives. Progress notes and git log
 // content can contain prior model-produced text (a worker's own
@@ -138,7 +152,7 @@ func (p WorkPacket) Render() (system, user string) {
 	if p.Light {
 		return p.render(lightSystemPreamble)
 	}
-	return p.render(nativeSystemPreamble)
+	return p.render(nativeSystemPreamble + p.scopeRule())
 }
 
 // RenderForDelegated is Render's delegated-executor counterpart: same
@@ -158,7 +172,7 @@ func (p WorkPacket) Render() (system, user string) {
 // parent digest saying "done, docs only" as the final word and reported
 // DONE without a single tool call.
 func (p WorkPacket) RenderForDelegated(runDir string) (system, user string, files map[string]string) {
-	system = p.systemPrompt("")
+	system = p.systemPrompt("") + p.scopeRule()
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal: %s\n", NeutralizeSlot(p.Goal))
