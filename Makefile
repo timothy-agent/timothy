@@ -74,9 +74,10 @@ manifest:
 # Local self-docs bundle: manifest pages only, no docs checkout. The
 # brain image copies build/selfdocs to /selfdocs; release.yml adds the
 # docs pages through the same scripts/selfdocs-bundle.sh.
+# The manifest dir is removed inside the container: a host rm -rf right
+# before a bind-mounted write leaves a stale entry on Docker Desktop.
 selfdocs:
-	rm -rf build/selfdocs-manifest
-	$(GO_RUN) go run ./cmd/manifest -out build/selfdocs-manifest -routes web/routes.generated.json -skills skills -version $(APP_VERSION)
+	$(GO_RUN) sh -c 'rm -rf build/selfdocs-manifest && go run ./cmd/manifest -out build/selfdocs-manifest -routes web/routes.generated.json -skills skills -version $(APP_VERSION)'
 	./scripts/selfdocs-bundle.sh --docs "" --manifest build/selfdocs-manifest --out build/selfdocs --version $(APP_VERSION)
 
 # Fails when web/routes.generated.json is stale against src/routes.ts.
