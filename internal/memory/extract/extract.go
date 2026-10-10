@@ -28,16 +28,15 @@ type Gateway interface {
 	Embed(ctx context.Context, texts []string, purpose string) ([][]float32, string, error)
 }
 
-// Storer is the slice of the memory store extraction needs.
+// Storer is the slice of the memory store extraction needs. Extract
+// only reads until ApplyExtraction writes the whole run at once.
 type Storer interface {
-	Insert(ctx context.Context, m store.Memory) (string, error)
 	Get(ctx context.Context, id string) (store.Memory, error)
 	HasPendingCorrection(ctx context.Context, id string) (bool, error)
-	Promote(ctx context.Context, id string) error
-	Confirm(ctx context.Context, id string) error
-	UpsertEntity(ctx context.Context, typ, name string) (string, error)
 	NearestActiveOnly(ctx context.Context, embedding store.Vector) (id string, similarity float64, ok bool, err error)
 	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, status store.Status, ok bool, err error)
+	RejectedWithContent(ctx context.Context, content string) (id string, ok bool, err error)
+	ApplyExtraction(ctx context.Context, confirm []string, proposals []store.Proposal) ([]string, error)
 }
 
 const (
@@ -158,8 +157,10 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 	}
 
 	deny := denyText(req)
-	var ids []string
-	var batch []batchMemory // accepted so far, this run only
+	var proposals []store.Proposal
+	var confirms []string
+	correcting := map[string]bool{} // active ids this run already proposes to supersede
+	var batch []batchMemory         // accepted so far, this run only
 	for i, f := range facts {
 		if f.ChangesBehavior != nil && !*f.ChangesBehavior {
 			// The model itself judged this fact wouldn't change future
@@ -168,7 +169,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			e.log.Info("memory dropped by utility gate", "session_id", req.SessionID)
 			continue
 		}
-		if echoesDeny(f.Content, deny) {
+		if echoesDeny(f.Content, deny) || mentionsSetting(f.Content, req.Deny) {
 			// The model restated the digest's own goal/title header -
 			// bookkeeping the missions table already records, never a
 			// memory. Code enforces what the prompt asks for (D-011).
@@ -201,32 +202,45 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 		}
 
 		supersedes := ""
-		if len(emb) > 0 {
+		if len(emb) == 0 {
+			// No vector to compare by: a normalized text match still
+			// keeps a rejected fact out of the queue.
+			rejectedID, found, err := e.store.RejectedWithContent(ctx, f.Content)
+			if err != nil {
+				return nil, fmt.Errorf("extract: rejected text dedup: %w", err)
+			}
+			if found {
+				e.log.Info("memory dropped as text match of rejected fact",
+					"of", rejectedID, "session_id", req.SessionID)
+				continue
+			}
+		} else {
 			activeID, sim, found, err := e.store.NearestActiveOnly(ctx, emb)
 			if err != nil {
-				return ids, fmt.Errorf("extract: active dedup: %w", err)
+				return nil, fmt.Errorf("extract: active dedup: %w", err)
 			}
 			if found && sim >= NearDupSimilarity {
 				active, err := e.store.Get(ctx, activeID)
 				if err != nil {
-					return ids, fmt.Errorf("extract: load duplicate: %w", err)
+					return nil, fmt.Errorf("extract: load duplicate: %w", err)
 				}
 				if !IsCorrection(f.Content, active.Content) {
 					// A restatement reinforces the existing row instead of
 					// inserting: repetition is a confidence signal, not new
 					// knowledge.
-					if err := e.store.Confirm(ctx, activeID); err != nil {
-						e.log.Warn("confirm on duplicate failed; fact still dropped", "of", activeID, "error", err)
-					}
+					confirms = append(confirms, activeID)
 					e.log.Info("memory duplicate reinforced existing row",
 						"of", activeID, "similarity", sim, "session_id", req.SessionID)
 					continue
 				}
 				// One open correction per fact: later turns repeating the
 				// change must not stack more cards on the queue.
-				open, err := e.store.HasPendingCorrection(ctx, activeID)
-				if err != nil {
-					return ids, fmt.Errorf("extract: pending correction: %w", err)
+				open := correcting[activeID]
+				if !open {
+					open, err = e.store.HasPendingCorrection(ctx, activeID)
+					if err != nil {
+						return nil, fmt.Errorf("extract: pending correction: %w", err)
+					}
 				}
 				if open {
 					e.log.Info("memory correction already pending; skipped",
@@ -234,15 +248,16 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 					continue
 				}
 				supersedes = activeID
+				correcting[activeID] = true
 			} else {
 				dupID, sim, status, found, err := e.store.NearestActive(ctx, emb)
 				if err != nil {
-					return ids, fmt.Errorf("extract: dedup: %w", err)
+					return nil, fmt.Errorf("extract: dedup: %w", err)
 				}
 				if found && sim >= NearDupSimilarity && status != store.StatusActive {
 					dup, err := e.store.Get(ctx, dupID)
 					if err != nil {
-						return ids, fmt.Errorf("extract: load duplicate: %w", err)
+						return nil, fmt.Errorf("extract: load duplicate: %w", err)
 					}
 					// A different fact that only embeds close to an
 					// unconfirmed or rejected one still reaches review.
@@ -262,33 +277,31 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 			}
 		}
 
-		refs := make([]string, 0, len(f.Entities))
+		entities := make([]store.EntityKey, 0, len(f.Entities))
 		for _, ent := range f.Entities {
-			id, err := e.store.UpsertEntity(ctx, ent.Type, ent.Name)
-			if err != nil {
-				return ids, fmt.Errorf("extract: entity: %w", err)
-			}
-			refs = append(refs, id)
+			entities = append(entities, store.EntityKey{Type: ent.Type, Name: ent.Name})
 		}
-
-		id, err := e.store.Insert(ctx, store.Memory{
-			Type: store.MemoryType(f.Type), Content: f.Content, Embedding: emb,
-			EntityRefs: refs, SourceSession: req.SessionID, SourceSeq: req.SourceSeq,
-			Actor: req.Actor, Confidence: f.Confidence, Supersedes: supersedes,
+		proposals = append(proposals, store.Proposal{
+			Memory: store.Memory{
+				Type: store.MemoryType(f.Type), Content: f.Content, Embedding: emb,
+				SourceSession: req.SessionID, SourceSeq: req.SourceSeq,
+				Actor: req.Actor, Confidence: f.Confidence, Supersedes: supersedes,
+			},
+			Entities: entities,
+			Promote:  AutoPromote(f) && supersedes == "",
 		})
-		if err != nil {
-			return ids, fmt.Errorf("extract: insert: %w", err)
-		}
-		ids = append(ids, id)
 		if len(emb) > 0 {
 			batch = append(batch, batchMemory{content: f.Content, embedding: emb})
 		}
-
-		if AutoPromote(f) && supersedes == "" {
-			if err := e.store.Promote(ctx, id); err != nil {
-				e.log.Warn("auto-promote failed; memory stays pending", "id", id, "error", err)
-			}
-		}
+	}
+	if len(proposals) == 0 && len(confirms) == 0 {
+		return nil, nil
+	}
+	// One transaction for the whole run (D-144): a failure leaves
+	// nothing behind, not a half-applied batch or orphan entities.
+	ids, err := e.store.ApplyExtraction(ctx, confirms, proposals)
+	if err != nil {
+		return nil, fmt.Errorf("extract: %w", err)
 	}
 	return ids, nil
 }
@@ -491,8 +504,7 @@ func MentionsCredential(content string) bool {
 // restate. Mission digests contribute OutcomeDigest's "mission goal:"
 // and "mission title:" headers - bookkeeping, not knowledge, that
 // models reliably extract as "facts" without this fence. req.Deny
-// contributes system-owned knowledge (operator settings) regardless
-// of source.
+// (operator settings) is checked separately by mentionsSetting.
 func denyText(req Request) []string {
 	var deny []string
 	if req.Source == "mission" {
@@ -505,9 +517,6 @@ func denyText(req Request) []string {
 				}
 			}
 		}
-	}
-	for _, v := range req.Deny {
-		deny = append(deny, strings.ToLower(v))
 	}
 	return deny
 }
@@ -604,19 +613,40 @@ func cosineSimilarity(a, b store.Vector) float64 {
 	return dot / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
+// shortDenyWords is the deny-line length (content words) below which
+// containment alone is not an echo (D-145).
+const shortDenyWords = 3
+
 // echoesDeny reports whether content substantially restates any deny
 // line: most of the deny line's content words (>70%) reappear in the fact.
 // Word-overlap rather than substring, because extraction paraphrases
 // ("The user mandated a mission goal to create...") instead of quoting.
+// A deny line under shortDenyWords words (a mission titled "Research")
+// also needs the fact to be mostly that phrase: at most twice its
+// word count (D-145).
 func echoesDeny(content string, deny []string) bool {
+	return overlapsDeny(content, deny, true)
+}
+
+// mentionsSetting reports whether content restates an operator setting
+// value (the timezone): plain overlap, no short-line rule, since a
+// setting value is one distinctive token the fact merely has to carry
+// (D-145).
+func mentionsSetting(content string, values []string) bool {
+	return overlapsDeny(content, values, false)
+}
+
+func overlapsDeny(content string, deny []string, shortRule bool) bool {
 	if len(deny) == 0 {
 		return false
 	}
 	words := map[string]bool{}
+	factWords := 0
 	for _, w := range strings.Fields(strings.ToLower(content)) {
 		word := strings.Trim(w, ".,;:'\"()")
 		if meaningfulDenyWord(word) {
 			words[word] = true
+			factWords++
 		}
 	}
 	for _, d := range deny {
@@ -628,6 +658,9 @@ func echoesDeny(content string, deny []string) bool {
 			}
 		}
 		if len(fields) == 0 {
+			continue
+		}
+		if shortRule && len(fields) < shortDenyWords && factWords > 2*len(fields) {
 			continue
 		}
 		hits := 0

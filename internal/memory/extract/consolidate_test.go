@@ -103,10 +103,11 @@ func (s *consolidateStore) ApplyMerge(ctx context.Context, m store.Memory, membe
 	if s.applyMergeErr != nil {
 		return "", s.applyMergeErr
 	}
-	id, err := s.Insert(ctx, m)
+	ids, err := s.ApplyExtraction(ctx, nil, []store.Proposal{{Memory: m}})
 	if err != nil {
 		return "", err
 	}
+	id := ids[0]
 	if s.superseded == nil {
 		s.superseded = map[string]string{}
 	}

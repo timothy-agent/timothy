@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,5 +157,66 @@ func TestReflectionInsertsIntoRealStore(t *testing.T) {
 	}
 	if _, err := st.Get(ctx, ids[0]); err != nil {
 		t.Fatalf("returned id %s not stored: %v", ids[0], err)
+	}
+}
+
+// Integration (#878, #872): Extract is one transaction. The 2nd fact's
+// insert fails (NUL byte), so the 1st fact's row and both facts'
+// entities roll back: no orphan entities, no half batch.
+func TestExtractRollsBackRunAgainstRealStore(t *testing.T) {
+	st, db := itestStore(t)
+	ctx := t.Context()
+	first := fmt.Sprintf("%s tx first %d", itestMarker, time.Now().UnixNano())
+	// The JSON escape decodes to a NUL byte, which a Postgres text
+	// column rejects.
+	gw := &dimGateway{axis: 1001, reply: `[` +
+		`{"type":"episodic","content":"` + first + `","entities":[{"type":"topic","name":"itest-extract-tx-1"}],"confidence":0.9,"changes_behavior":true},` +
+		`{"type":"semantic","content":"` + first + ` second \u0000","entities":[{"type":"topic","name":"itest-extract-tx-2"}],"confidence":0.9,"changes_behavior":true}]`}
+
+	ids, err := New(gw, st, testLog()).Extract(ctx, Request{Text: "x"})
+	if err == nil {
+		t.Fatalf("Extract succeeded with ids %v, want the insert error", ids)
+	}
+	var memories, entities int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM memories WHERE content LIKE $1 || '%'`, first).Scan(&memories); err != nil {
+		t.Fatalf("count memories: %v", err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM entities WHERE name IN ('itest-extract-tx-1', 'itest-extract-tx-2')`).Scan(&entities); err != nil {
+		t.Fatalf("count entities: %v", err)
+	}
+	if memories != 0 || entities != 0 {
+		t.Fatalf("after rollback: memories=%d entities=%d, want 0/0", memories, entities)
+	}
+}
+
+// Integration (#878): without embeddings, a fact whose normalized text
+// equals a rejected row is dropped; other facts still store.
+func TestExtractTextFallbackAgainstRealStore(t *testing.T) {
+	st, _ := itestStore(t)
+	ctx := t.Context()
+	rejected := fmt.Sprintf("%s user rejected fact %d.", itestMarker, time.Now().UnixNano())
+	id, err := st.Insert(ctx, store.Memory{Type: store.TypeSemantic, Content: rejected, Confidence: 0.9})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := st.Reject(ctx, id); err != nil {
+		t.Fatalf("Reject: %v", err)
+	}
+	kept := rejected + " kept"
+	gw := &embedlessGateway{fakeGateway{replies: []string{fmt.Sprintf(`[`+
+		`{"type":"semantic","content":%q,"entities":[{"type":"topic","name":"itest-extract-text-1"}],"confidence":0.9,"changes_behavior":true},`+
+		`{"type":"semantic","content":%q,"entities":[],"confidence":0.9,"changes_behavior":true}]`,
+		"  "+strings.ToUpper(rejected[:len(rejected)-1])+"  ", kept)}}}
+
+	ids, err := New(gw, st, testLog()).Extract(ctx, Request{Text: "x"})
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("ids = %v, want only the non-rejected fact", ids)
+	}
+	got, err := st.Get(ctx, ids[0])
+	if err != nil || got.Content != kept {
+		t.Fatalf("stored = %+v, %v; want %q", got, err, kept)
 	}
 }
