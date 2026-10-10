@@ -73,6 +73,22 @@ Issues labeled `help wanted` or `good first issue` are the best starting points.
 
 This project has adopted a [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you agree to uphold it.
 
+## Contributor License Agreement (CLA)
+
+Before a pull request can be merged, every commit author must sign the
+[Timothy Contributor License Agreement](CLA.md). The CLA Assistant check on
+your first pull request posts a signing link; you sign once with your GitHub
+account and later pull requests pass automatically.
+
+You keep the copyright to your contribution. The CLA grants the Project the
+right to distribute it, including under licenses other than the current
+one, which keeps a hosted edition and future license changes possible.
+
+If you contribute on behalf of an employer, make sure you have their
+permission before signing.
+
 ## Licensing
 
-Timothy is licensed under [AGPL-3.0](LICENSE). By submitting a pull request, you agree that your contribution is licensed under the same terms.
+Timothy is licensed under [AGPL-3.0](LICENSE). Contributions are accepted
+under the terms of the [CLA](CLA.md) and distributed under the Project's
+license.
