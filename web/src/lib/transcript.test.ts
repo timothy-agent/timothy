@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatEvent, TranscriptItem } from '../api/types'
+import type { ChatEvent, Transcript, TranscriptItem } from '../api/types'
 import { applyEvent, emptyAssistant } from './chat'
-import { fromTranscript } from './transcript'
+import { fromTranscript, mergePage, prependChatItems, windowFromPage, type ChatItem } from './transcript'
 
 const at = '2026-07-10T12:00:00Z'
 
@@ -531,5 +531,110 @@ describe('fromTranscript', () => {
     if (items[0].role === 'user') {
       expect(items[0].documents).toBeUndefined()
     }
+  })
+})
+
+const session = { id: 's1', title: '', archived: false, created_at: '', updated_at: '' }
+const page = (items: TranscriptItem[], extra: Partial<Transcript> = {}): Transcript => ({
+  session,
+  items,
+  turn_active: false,
+  has_more: false,
+  first_seq: items[0]?.seq,
+  last_seq: items.at(-1)?.seq,
+  ...extra,
+})
+
+// A session whose tool calls, attachments and an ask span page edges.
+const fullLog: TranscriptItem[] = [
+  {
+    seq: 2,
+    kind: 'user',
+    text: 'see attached',
+    images: [{ id: 'img-1', mime: 'image/png' }],
+    documents: [{ id: 'doc-1', mime: 'application/pdf', name: 'a.pdf' }],
+    created_at: at,
+  },
+  { seq: 3, kind: 'tool', tool: { call_id: 'c1', name: 'read', status: 'ok' }, created_at: at },
+  { seq: 4, kind: 'tool', tool: { call_id: 'c2', name: 'grep', status: 'error' }, created_at: at },
+  { seq: 5, kind: 'assistant', blocks: [{ type: 'text', text: 'done' }], provider: 'p', created_at: at },
+  { seq: 6, kind: 'user', text: 'again', created_at: at },
+  { seq: 7, kind: 'tool', tool: { call_id: 'c3', name: 'shell', status: 'ok' }, created_at: at },
+  { seq: 8, kind: 'assistant', blocks: [{ type: 'text', text: 'ok' }], provider: 'p', created_at: at },
+]
+
+describe('transcript windows', () => {
+  it('stitches older pages into exactly the full replay at every page boundary', () => {
+    const full = fromTranscript(fullLog)
+    for (let cut = 1; cut < fullLog.length; cut++) {
+      const latest = page(fullLog.slice(cut), { has_more: true })
+      const w = windowFromPage('s1', latest)
+      const before = fromTranscript(w.items)
+      const merged = mergePage(w, page(fullLog.slice(0, cut)), 'older')
+      const stitched = prependChatItems(before, before, fromTranscript(merged.items))
+      expect(stitched).toEqual(full)
+      expect(merged.hasOlder).toBe(false)
+      expect(merged.oldestSeq).toBe(2)
+    }
+  })
+
+  it('keeps live and optimistic items after the boundary when prepending', () => {
+    const w = windowFromPage('s1', page(fullLog.slice(4), { has_more: true }))
+    const before = fromTranscript(w.items)
+    const live: ChatItem = { id: 'live', role: 'assistant', ...emptyAssistant() }
+    const current = [...before, live]
+    const merged = mergePage(w, page(fullLog.slice(0, 4)), 'older')
+    const out = prependChatItems(current, before, fromTranscript(merged.items))
+    expect(out.at(-1)).toBe(live)
+    expect(out.slice(0, -1)).toEqual(fromTranscript(fullLog))
+  })
+
+  it('leaves a mutated head item alone when prepending', () => {
+    const w = windowFromPage('s1', page(fullLog.slice(5), { has_more: true }))
+    const before = fromTranscript(w.items)
+    const mutated: ChatItem = { ...before[0], id: before[0].id }
+    const out = prependChatItems([mutated], before, fromTranscript(mergePage(w, page(fullLog.slice(0, 5)), 'older').items))
+    expect(out.at(-1)).toBe(mutated)
+    expect(out.map((i) => i.id)).toEqual(['replay-2', 'replay-5', 'replay-6', 'replay-8'])
+  })
+
+  it('appends a newer page, deduped by seq, and tracks the event cursor', () => {
+    const w = windowFromPage('s1', page(fullLog.slice(0, 4), { last_seq: 5 }))
+    const next = mergePage(w, page(fullLog.slice(3), { first_seq: 5, last_seq: 9 }), 'newer')
+    expect(next.items.map((i) => i.seq)).toEqual([2, 3, 4, 5, 6, 7, 8])
+    expect(next.newestSeq).toBe(9)
+    expect(fromTranscript(next.items)).toEqual(fromTranscript(fullLog))
+  })
+
+  it('returns the same window when a newer page adds nothing', () => {
+    const w = windowFromPage('s1', page(fullLog))
+    expect(mergePage(w, page([], { first_seq: undefined, last_seq: undefined }), 'newer')).toBe(w)
+    expect(mergePage(w, page([fullLog[6]]), 'newer')).toBe(w)
+  })
+
+  it('drops held interrupted items and answered asks a newer page hides', () => {
+    const held: TranscriptItem[] = [
+      { seq: 2, kind: 'user', text: 'go', created_at: at },
+      {
+        seq: 3,
+        kind: 'permission',
+        permission: { id: 'p1', call_id: 'c', tool: 'shell', args: '{}', danger_level: 'safe', rationale: '' },
+        created_at: at,
+      },
+      { seq: 4, kind: 'interrupted', text: 'half', created_at: at },
+    ]
+    const w = windowFromPage('s1', page(held, { live_pending_seq: 4 }))
+    const kept = mergePage(w, page([], { first_seq: 5, last_seq: 5, live_pending_seq: 4 }), 'newer')
+    expect(kept.items.map((i) => i.kind)).toEqual(['user', 'permission', 'interrupted'])
+    const next = mergePage(
+      w,
+      page([{ seq: 7, kind: 'assistant', blocks: [{ type: 'text', text: 'ok' }], created_at: at }], {
+        first_seq: 5,
+        last_seq: 7,
+        resolved_permissions: ['p1'],
+      }),
+      'newer',
+    )
+    expect(next.items.map((i) => i.kind)).toEqual(['user', 'assistant'])
   })
 })

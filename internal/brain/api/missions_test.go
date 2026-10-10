@@ -161,6 +161,65 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	if code := call("/v1/missions?q=fix+the+bug"); code != 500 {
 		t.Fatalf("q= against a degraded store = %d, want 500 (reached the store)", code)
 	}
+
+	// Paging and board filters (issue #1112).
+	cursor := "before=2026-10-01T12%3A00%3A00.123456Z&before_id=11111111-2222-3333-4444-555555555555"
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/v1/missions?limit=201", 400},
+		{"/v1/missions?limit=200", 500},
+		{"/v1/missions?before=2026-10-01T12%3A00%3A00Z", 400},
+		{"/v1/missions?before_id=11111111-2222-3333-4444-555555555555", 400},
+		{"/v1/missions?before=yesterday&before_id=11111111-2222-3333-4444-555555555555", 400},
+		{"/v1/missions?before=2026-10-01T12%3A00%3A00Z&before_id=not-a-uuid", 400},
+		{"/v1/missions?kind=epic", 400},
+		{"/v1/missions?source=robot", 400},
+		{"/v1/missions?" + cursor, 500},
+		{"/v1/missions?kind=coding&harness=native&model=glm-4.7&source=manual&" + cursor, 500},
+		{"/v1/missions?source=automated&kind=general&harness=claude-cli", 500},
+		// lib/references.ts's composer #-mention search.
+		{"/v1/missions?q=fix&limit=8", 500},
+	} {
+		if code := call(tc.path); code != tc.want {
+			t.Fatalf("GET %s = %d, want %d", tc.path, code, tc.want)
+		}
+	}
+}
+
+// TestNotificationsListValidation: bad paging or unread values 400
+// before reaching the (degraded) store; valid ones reach it and 500.
+func TestNotificationsListValidation(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	notifier := missions.NewNotifier(pool, "", nil, discard())
+	m := mux(a)
+	a.registerMissions(m.Handle, store, nil, notifier, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/v1/notifications?unread=yes", 400},
+		{"/v1/notifications?limit=0", 400},
+		{"/v1/notifications?limit=500", 400},
+		{"/v1/notifications?before=2026-10-01T12%3A00%3A00Z", 400},
+		{"/v1/notifications?before_id=11111111-2222-3333-4444-555555555555", 400},
+		{"/v1/notifications?before=nope&before_id=11111111-2222-3333-4444-555555555555", 400},
+		{"/v1/notifications", 500},
+		{"/v1/notifications?unread=true&limit=20&before=2026-10-01T12%3A00%3A00Z&before_id=11111111-2222-3333-4444-555555555555", 500},
+	} {
+		req := httptest.NewRequest("GET", tc.path, nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		if w.Code != tc.want {
+			t.Fatalf("GET %s = %d, want %d", tc.path, w.Code, tc.want)
+		}
+	}
 }
 
 // TestMissionsDeleteReachesStore confirms DELETE /v1/missions/{id} is

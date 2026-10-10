@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
@@ -278,16 +277,52 @@ func failMission(w http.ResponseWriter, log *slog.Logger, err error) {
 	}
 }
 
-// list serves GET /v1/missions, optionally narrowed by ?automation_id=
-// (every mission an automation's runs started),
-// ?q= (case-insensitive substring match on name or goal, the
-// composer #-mention mission search), ?origin_kind= (one
-// missions.Origin* value), and/or ?limit= (a positive
-// result cap). All are ignored when empty/absent, the original
-// "every mission" behavior, and a malformed value is a 400 rather
-// than a silently-empty filter.
+// parsePageCursor reads the shared list paging params (limit default
+// 50, max 200; before + before_id), answering 400 on a bad value.
+func parsePageCursor(w http.ResponseWriter, r *http.Request) (keyset, bool) {
+	k, err := parseKeyset(r.URL.Query(), 50, 200)
+	if err == nil && k.BeforeID != "" && !validSessionID(k.BeforeID) {
+		err = errors.New("before_id must be a UUID")
+	}
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return keyset{}, false
+	}
+	return k, true
+}
+
+// list serves GET /v1/missions one page at a time (created_at DESC,
+// id DESC; ?limit=, ?before= + ?before_id=), optionally narrowed by
+// ?automation_id= (every mission an automation's runs started), ?q=
+// (case-insensitive substring match on name or goal, the composer
+// #-mention mission search), ?origin_kind= (one missions.Origin*
+// value), ?kind=, ?harness= ("native" for none), ?model= (top ledger
+// model) and ?source= (manual or automated). A malformed value is a
+// 400 rather than a silently-empty filter.
 func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
-	var filter missions.ListFilter
+	k, ok := parsePageCursor(w, r)
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	filter := missions.ListFilter{
+		Query: q.Get("q"), Harness: q.Get("harness"), Model: q.Get("model"),
+		Before: k.Before, BeforeID: k.BeforeID, Limit: k.Limit,
+	}
+	if v := q.Get("kind"); v != "" {
+		if v != "coding" && v != "general" {
+			jsonError(w, http.StatusBadRequest, "bad_request", "kind must be coding or general")
+			return
+		}
+		filter.Kind = v
+	}
+	if v := q.Get("source"); v != "" {
+		if v != missions.SourceManual && v != missions.SourceAutomated {
+			jsonError(w, http.StatusBadRequest, "bad_request", "source must be manual or automated")
+			return
+		}
+		filter.Source = v
+	}
 	if v := r.URL.Query().Get("automation_id"); v != "" {
 		if !validSessionID(v) {
 			jsonError(w, http.StatusBadRequest, "bad_request", "automation_id must be a UUID")
@@ -301,15 +336,6 @@ func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		filter.OriginKind = v
-	}
-	filter.Query = r.URL.Query().Get("q")
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			jsonError(w, http.StatusBadRequest, "bad_request", "limit must be a positive integer")
-			return
-		}
-		filter.Limit = n
 	}
 	rows, err := h.store.List(r.Context(), filter)
 	if err != nil {
@@ -1475,6 +1501,20 @@ func (h *missionAPI) delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *missionAPI) events(w http.ResponseWriter, r *http.Request) {
+	page, paged, err := parseSeqPage(r.URL.Query())
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if paged {
+		events, hasMore, err := h.store.EventsPage(r.Context(), r.PathValue("id"), page.AfterSeq, page.BeforeSeq, page.Limit)
+		if err != nil {
+			failMission(w, h.log, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"events": events, "has_more": hasMore})
+		return
+	}
 	events, err := h.store.Events(r.Context(), r.PathValue("id"))
 	if err != nil {
 		failMission(w, h.log, err)
@@ -2325,7 +2365,20 @@ func (h *missionAPI) notifications(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "not_found", "notifications are not enabled")
 		return
 	}
-	rows, err := h.notifier.List(r.Context())
+	k, ok := parsePageCursor(w, r)
+	if !ok {
+		return
+	}
+	filter := missions.NotificationFilter{Before: k.Before, BeforeID: k.BeforeID, Limit: k.Limit}
+	switch r.URL.Query().Get("unread") {
+	case "":
+	case "true":
+		filter.Unread = true
+	default:
+		jsonError(w, http.StatusBadRequest, "bad_request", "unread must be true")
+		return
+	}
+	rows, err := h.notifier.List(r.Context(), filter)
 	if err != nil {
 		failInternalCode(w, h.log, "notifications_failed", "mission", err)
 		return

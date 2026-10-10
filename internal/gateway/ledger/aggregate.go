@@ -476,6 +476,16 @@ func (a *Aggregator) TopModelByMission(ctx context.Context, missionIDs []string)
 	return out, rows.Err()
 }
 
+// TopModelSQL is a scalar subquery yielding the top model, ranked as
+// TopModelByMission ranks, of the mission whose uuid is missionIDExpr.
+func TopModelSQL(missionIDExpr string) string {
+	return `(SELECT model FROM cost_ledger
+		WHERE mission_id = (` + missionIDExpr + `)::text AND ` + notTest + `
+		GROUP BY provider, model
+		ORDER BY BOOL_OR(purpose IS NOT DISTINCT FROM 'executor' AND status = 'ok') DESC, COUNT(*) DESC, MAX(ts) DESC
+		LIMIT 1)`
+}
+
 // SessionUsage ranks sessions by spend for the top-N table. Grouped by
 // currency as well as session: a session's rows are ranked by cost
 // within their own currency, never summed against a different one.
