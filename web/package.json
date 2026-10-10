@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "routes:export": "node scripts/export-routes.ts",
+    "routes:check": "node scripts/export-routes.ts --check"
   },
   "dependencies": {
     "@fontsource-variable/fira-code": "^5.3.0",
