@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,7 @@ type fixture struct {
 	content  string
 	dim      int      // embedding basis dimension
 	entities []string // "type/name" pairs
+	conf     float32  // confidence, weighs into Fuse (D-147)
 }
 
 // The corpus splits into three groups, each reachable primarily
@@ -46,34 +48,34 @@ type fixture struct {
 //   - text group: queries share words, embeddings point elsewhere
 //   - entity group: queries name an entity the content omits
 var corpus = []fixture{
-	{key: "v-editor", typ: store.TypeSemantic, dim: 1,
+	{key: "v-editor", typ: store.TypeSemantic, dim: 1, conf: 0.9,
 		content: goldenMarker + " The user's preferred text editing environment is Neovim."},
-	{key: "v-coffee", typ: store.TypeSemantic, dim: 2,
+	{key: "v-coffee", typ: store.TypeSemantic, dim: 2, conf: 0.9,
 		content: goldenMarker + " The user drinks two espressos every morning."},
-	{key: "v-transport", typ: store.TypeSemantic, dim: 3,
+	{key: "v-transport", typ: store.TypeSemantic, dim: 3, conf: 0.9,
 		content: goldenMarker + " The user cycles to the office when weather allows."},
-	{key: "v-music", typ: store.TypeSemantic, dim: 4,
+	{key: "v-music", typ: store.TypeSemantic, dim: 4, conf: 0.9,
 		content: goldenMarker + " The user listens to ambient playlists while programming."},
 
-	{key: "t-pool", typ: store.TypeProcedural, dim: 20,
+	{key: "t-pool", typ: store.TypeProcedural, dim: 20, conf: 0.9,
 		content: goldenMarker + " Postgres connection pool size stays at twenty for the homelab."},
-	{key: "t-deploy", typ: store.TypeProcedural, dim: 21,
+	{key: "t-deploy", typ: store.TypeProcedural, dim: 21, conf: 0.9,
 		content: goldenMarker + " Deploys run through docker compose with pinned image digests."},
-	{key: "t-backup", typ: store.TypeProcedural, dim: 22,
+	{key: "t-backup", typ: store.TypeProcedural, dim: 22, conf: 0.9,
 		content: goldenMarker + " Nightly backups upload encrypted tarballs to object storage."},
-	{key: "t-alerts", typ: store.TypeSemantic, dim: 23,
+	{key: "t-alerts", typ: store.TypeSemantic, dim: 23, conf: 0.9,
 		content: goldenMarker + " Grafana alerting notifies through the oncall channel on Slack."},
 
-	{key: "e-marta", typ: store.TypeSemantic, dim: 40,
+	{key: "e-marta", typ: store.TypeSemantic, dim: 40, conf: 0.9,
 		content:  goldenMarker + " Her special day falls on the third of March.",
 		entities: []string{"person/Marta"}},
-	{key: "e-atlas", typ: store.TypeSemantic, dim: 41,
+	{key: "e-atlas", typ: store.TypeSemantic, dim: 41, conf: 0.9,
 		content:  goldenMarker + " The rewrite ships its first milestone in September 2026.",
 		entities: []string{"project/Atlas"}},
-	{key: "e-lisbon", typ: store.TypeEpisodic, dim: 42,
+	{key: "e-lisbon", typ: store.TypeEpisodic, dim: 42, conf: 0.9,
 		content:  goldenMarker + " The user visited the aquarium there on 2026-05-02.",
 		entities: []string{"place/Lisbon"}},
-	{key: "e-vault", typ: store.TypeSemantic, dim: 43,
+	{key: "e-vault", typ: store.TypeSemantic, dim: 43, conf: 0.9,
 		content:  goldenMarker + " Secrets rotate quarterly through the homelab secret manager.",
 		entities: []string{"service/Vault"}},
 }
@@ -177,7 +179,7 @@ func seedGolden(t *testing.T) (*Searcher, map[string]string) {
 		}
 		id, err := st.Insert(ctx, store.Memory{
 			Type: f.typ, Content: f.content, Embedding: basis(f.dim),
-			EntityRefs: refs, Confidence: 0.9,
+			EntityRefs: refs, Confidence: f.conf,
 		})
 		if err != nil {
 			t.Fatalf("Insert %s: %v", f.key, err)
@@ -299,5 +301,111 @@ func TestSearchErrorsOnlyWhenEveryLegFails(t *testing.T) {
 	cancel() // every leg's query now fails
 	if _, err := s.Search(ctx, "anything at all", nil, nil); err == nil {
 		t.Fatal("want error when all legs fail")
+	}
+}
+
+// insertActive stores one active golden-marked memory and returns its id.
+func insertActive(t *testing.T, s *Searcher, content string, dim int) string {
+	t.Helper()
+	st := store.New(s.db, s.log)
+	id, err := st.Insert(t.Context(), store.Memory{
+		Type: store.TypeSemantic, Content: goldenMarker + " " + content,
+		Embedding: basis(dim), Confidence: 0.9, Actor: store.ActorUser,
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	return id
+}
+
+func rankOf(scored []Scored, id string) int {
+	for i, sc := range scored {
+		if sc.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// TestDecayPassRanksDecayedDuplicateLower runs a real decay pass and
+// retrieves: of two duplicates with equal recency, the decayed one
+// ranks below the other (D-147).
+func TestDecayPassRanksDecayedDuplicateLower(t *testing.T) {
+	s, _ := seedGolden(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	const content = "The user's spare bicycle is a green gravel frame."
+	decayed := insertActive(t, s, content, 300)
+	kept := insertActive(t, s, content, 300)
+	if _, err := db.Exec(ctx, `UPDATE memories SET last_confirmed_at = now() - interval '10000 days'
+		WHERE id = $1`, decayed); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+	now := time.Now()
+	ids, err := store.New(s.db, s.log).DecayStaleSemantic(ctx,
+		now.Add(-365*24*time.Hour), now.Add(-30*24*time.Hour), 0.8, 10)
+	if err != nil {
+		t.Fatalf("DecayStaleSemantic: %v", err)
+	}
+	if !slices.Contains(ids, decayed) || slices.Contains(ids, kept) {
+		t.Fatalf("decay pass = %v, want the stale duplicate only", ids)
+	}
+	// Equal recency again, so only confidence separates them.
+	if _, err := db.Exec(ctx, `UPDATE memories SET last_confirmed_at =
+		(SELECT last_confirmed_at FROM memories WHERE id = $2) WHERE id = $1`, decayed, kept); err != nil {
+		t.Fatalf("align recency: %v", err)
+	}
+
+	cands, err := s.Search(ctx, "spare bicycle gravel frame", basis(300), nil)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	fused := Fuse(cands, time.Now())
+	ki, di := rankOf(fused, kept), rankOf(fused, decayed)
+	if ki < 0 || di < 0 || ki > di {
+		t.Fatalf("kept at %d, decayed at %d: want the decayed duplicate below", ki, di)
+	}
+}
+
+// TestDecayedBelowFloorLeavesRetrievalUntilConfirmed proves D-147's
+// floor: a decayed row under it is excluded from every leg, and a
+// reconfirmation brings it back.
+func TestDecayedBelowFloorLeavesRetrievalUntilConfirmed(t *testing.T) {
+	s, _ := seedGolden(t)
+	ctx := t.Context()
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	id := insertActive(t, s, "The user's rowing club meets at the Amstel boathouse.", 301)
+	// Low confidence alone (never decayed) stays retrievable.
+	if _, err := db.Exec(ctx, `UPDATE memories SET confidence = 0.1 WHERE id = $1`, id); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	found := func() bool {
+		cands, err := s.Search(ctx, "rowing club boathouse", basis(301), nil)
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		_, ok := cands[id]
+		return ok
+	}
+	if !found() {
+		t.Fatal("undecayed low-confidence row excluded; the floor applies to decayed rows only")
+	}
+	if _, err := db.Exec(ctx, `UPDATE memories SET decayed_at = now(), confidence = 0.15 WHERE id = $1`, id); err != nil {
+		t.Fatalf("seed decayed: %v", err)
+	}
+	if found() {
+		t.Fatal("decayed row below the floor still retrieved")
+	}
+	if err := store.New(s.db, s.log).Confirm(ctx, id, 0.9); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if !found() {
+		t.Fatal("reconfirmed row not retrieved")
 	}
 }

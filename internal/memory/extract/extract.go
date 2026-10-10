@@ -34,7 +34,7 @@ type Storer interface {
 	Get(ctx context.Context, id string) (store.Memory, error)
 	HasPendingCorrection(ctx context.Context, id string) (bool, error)
 	Promote(ctx context.Context, id string) error
-	Confirm(ctx context.Context, id string) error
+	Confirm(ctx context.Context, id string, confidence float32) error
 	UpsertEntity(ctx context.Context, typ, name string) (string, error)
 	NearestActiveOnly(ctx context.Context, embedding store.Vector) (id string, similarity float64, ok bool, err error)
 	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, status store.Status, ok bool, err error)
@@ -212,7 +212,7 @@ func (e *Extractor) Extract(ctx context.Context, req Request) ([]string, error) 
 					// A restatement reinforces the existing row instead of
 					// inserting: repetition is a confidence signal, not new
 					// knowledge.
-					if err := e.store.Confirm(ctx, activeID); err != nil {
+					if err := e.store.Confirm(ctx, activeID, f.Confidence); err != nil {
 						e.log.Warn("confirm on duplicate failed; fact still dropped", "of", activeID, "error", err)
 					}
 					e.log.Info("memory duplicate reinforced existing row",

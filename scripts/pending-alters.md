@@ -45,3 +45,15 @@ lookup behind `GET /v1/entities/{id}/memories` and the entity graph.
 Matches `0001_init.sql`. Additive: safe to run before deploy.
 Instances: homelab `timothy`, `demo1`, `demo2` and `demo3` on
 timothy-oci.
+
+## memories decay stamp (#874)
+
+```sql
+ALTER TABLE memories ADD COLUMN IF NOT EXISTS decayed_at timestamptz;
+```
+
+Paces semantic decay to one step per row per window and gates the
+retrieval floor (D-146, D-147). Matches `0001_init.sql`. Nullable with
+no default: existing rows read as never decayed, which is what the old
+code assumed. Additive: safe to run before deploy. Instances: homelab
+`timothy`, `demo1`, `demo2` and `demo3` on timothy-oci.

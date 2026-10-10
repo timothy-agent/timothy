@@ -24,14 +24,15 @@ type Candidate struct {
 	Type            store.MemoryType
 	Content         string
 	LastConfirmedAt time.Time
+	Confidence      float32
 	// rank per leg name; missing key = leg didn't surface it
 	ranks map[string]int
 }
 
-// NewCandidate assembles a candidate with explicit leg ranks — for
-// tests and callers that don't go through Search.
+// NewCandidate assembles a full-confidence candidate with explicit leg
+// ranks, for tests and callers that don't go through Search.
 func NewCandidate(id string, typ store.MemoryType, content string, lastConfirmed time.Time, ranks map[string]int) *Candidate {
-	return &Candidate{ID: id, Type: typ, Content: content, LastConfirmedAt: lastConfirmed, ranks: ranks}
+	return &Candidate{ID: id, Type: typ, Content: content, LastConfirmedAt: lastConfirmed, Confidence: 1, ranks: ranks}
 }
 
 // Searcher runs the three legs.
@@ -90,12 +91,14 @@ func (s *Searcher) Search(ctx context.Context, query string, embedding store.Vec
 }
 
 // Leg queries share a projection and differ only in match + order.
-// All see active memories exclusively. $1 is the leg's own parameter;
-// $2 is the optional type filter (empty array = all types).
+// All see active memories exclusively, minus decayed ones below the
+// floor (D-147). $1 is the leg's own parameter; $2 is the optional
+// type filter (empty array = all types); $3 is store.DecayFloor.
 const (
-	vectorSQL = `SELECT id, type, content, last_confirmed_at
+	vectorSQL = `SELECT id, type, content, last_confirmed_at, COALESCE(confidence, 0)
 		FROM memories
 		WHERE status = 'active' AND embedding IS NOT NULL
+		  AND (decayed_at IS NULL OR confidence >= $3)
 		  AND (cardinality($2::text[]) = 0 OR type = ANY($2))
 		ORDER BY embedding <=> $1::vector
 		LIMIT ` + limitLit
@@ -111,9 +114,10 @@ const (
 				string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query
 			FROM unnest(tsvector_to_array(to_tsvector('english', $1))) AS lexeme
 		)
-		SELECT id, type, content, last_confirmed_at
+		SELECT id, type, content, last_confirmed_at, COALESCE(confidence, 0)
 		FROM memories, q
 		WHERE status = 'active'
+		  AND (decayed_at IS NULL OR confidence >= $3)
 		  AND tsv @@ q.query
 		  AND (cardinality($2::text[]) = 0 OR type = ANY($2))
 		ORDER BY ts_rank(tsv, q.query) DESC
@@ -122,9 +126,10 @@ const (
 	// Entities literally named in the query pull in every memory that
 	// references them. position() over ILIKE keeps it index-friendly
 	// enough at this scale and case-insensitivity comes from lower().
-	entitySQL = `SELECT m.id, m.type, m.content, m.last_confirmed_at
+	entitySQL = `SELECT m.id, m.type, m.content, m.last_confirmed_at, COALESCE(m.confidence, 0)
 		FROM memories m
 		WHERE m.status = 'active'
+		  AND (m.decayed_at IS NULL OR m.confidence >= $3)
 		  AND (cardinality($2::text[]) = 0 OR m.type = ANY($2))
 		  AND m.entity_refs && ARRAY(
 			SELECT e.id FROM entities e
@@ -150,7 +155,7 @@ func (s *Searcher) leg(ctx context.Context, name, sql string, args []any, types 
 	for i, t := range types {
 		typeNames[i] = string(t)
 	}
-	rows, err := db.Query(ctx, sql, append(args, typeNames)...)
+	rows, err := db.Query(ctx, sql, append(args, typeNames, store.DecayFloor)...)
 	if err != nil {
 		return fmt.Errorf("retrieval %s leg: %w", name, err)
 	}
@@ -159,7 +164,7 @@ func (s *Searcher) leg(ctx context.Context, name, sql string, args []any, types 
 	rank := 0
 	for rows.Next() {
 		var c Candidate
-		if err := rows.Scan(&c.ID, &c.Type, &c.Content, &c.LastConfirmedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Type, &c.Content, &c.LastConfirmedAt, &c.Confidence); err != nil {
 			return fmt.Errorf("retrieval %s leg: %w", name, err)
 		}
 		rank++

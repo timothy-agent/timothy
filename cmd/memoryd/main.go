@@ -60,7 +60,7 @@ func main() {
 		Rejects: app.Metrics.NewCounterVec("memory_merge_rejects_total",
 			"Near-duplicate merges rejected by reason.", "reason"),
 		Archived: app.Metrics.NewCounter("memory_archived_total", "Stale episodic memories archived."),
-		Decayed:  app.Metrics.NewCounter("memory_decayed_total", "Stale semantic facts decayed and queued for reconfirmation."),
+		Decayed:  app.Metrics.NewCounter("memory_decayed_total", "Stale semantic facts decayed, counted per row."),
 		Demoted:  app.Metrics.NewCounter("memory_demoted_total", "Unused pending memories demoted by the usage-driven decay pass."),
 		PendingDeduped: app.Metrics.NewCounter("memory_pending_deduped_total",
 			"Pending memories rejected as a near-duplicate of another still-pending proposal."),

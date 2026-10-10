@@ -21,7 +21,7 @@ type Manager interface {
 	Contents(ctx context.Context, ids []string) (map[string]string, error)
 	Insert(ctx context.Context, m store.Memory) (string, error)
 	NearestActive(ctx context.Context, embedding store.Vector) (id string, similarity float64, status store.Status, ok bool, err error)
-	Confirm(ctx context.Context, id string) error
+	Confirm(ctx context.Context, id string, confidence float32) error
 	Promote(ctx context.Context, id string) error
 	ConfirmSuperseding(ctx context.Context, id string) error
 	CorrectSuperseding(ctx context.Context, id string, m store.Memory) (string, error)
@@ -207,7 +207,7 @@ func (a *API) handleAdd(w http.ResponseWriter, r *http.Request) {
 				if m.RequireReview {
 					break
 				}
-				if err := a.store.Confirm(r.Context(), dupID); err != nil {
+				if err := a.store.Confirm(r.Context(), dupID, m.Confidence); err != nil {
 					a.log.Warn("confirm on duplicate failed; fact still dropped", "of", dupID, "error", err)
 				}
 				a.log.Info("memory duplicate reinforced existing row",

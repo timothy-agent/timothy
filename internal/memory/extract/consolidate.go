@@ -21,10 +21,16 @@ const (
 	// retrieved within this window archive out of the active set.
 	episodicArchiveAfter = 180 * 24 * time.Hour
 	// semanticDecayAfter: semantic facts unconfirmed this long start
-	// losing confidence and queue for user reconfirmation.
+	// losing confidence; below store.DecayFloor they leave retrieval
+	// until reconfirmed (D-147).
 	semanticDecayAfter = 365 * 24 * time.Hour
 	decayFactor        = 0.8
-	decayBatch         = 10 // stalest per run; a queue, not a flood
+	decayBatch         = 10 // rows per run; a queue, not a flood
+	// decayEvery (D-146): one decay per row per 30 days. From a 0.9
+	// start, 0.8 per step crosses the 0.2 floor on the 7th step, six
+	// months after the first, so a stale fact stays recallable for a
+	// while before it needs reconfirming.
+	decayEvery = 30 * 24 * time.Hour
 
 	// Reasoning models spend thinking tokens from the same budget
 	// before emitting content - 300 would starve the one-sentence
@@ -69,7 +75,7 @@ type ConsolidateStore interface {
 	Get(ctx context.Context, id string) (store.Memory, error)
 	ApplyMerge(ctx context.Context, m store.Memory, memberIDs []string) (string, error)
 	ArchiveStaleEpisodic(ctx context.Context, olderThan time.Time) (int64, error)
-	DecayStaleSemantic(ctx context.Context, olderThan time.Time, factor float64, limit int) ([]string, error)
+	DecayStaleSemantic(ctx context.Context, olderThan, decayedBefore time.Time, factor float64, limit int) ([]string, error)
 	RecentEpisodic(ctx context.Context, since time.Time, limit int) ([]store.Memory, error)
 	DemoteUnused(ctx context.Context, olderThan time.Time, confidenceBelow float64, limit int) ([]string, error)
 }
@@ -501,12 +507,13 @@ func (c *Consolidator) archiveStale(ctx context.Context) (int, error) {
 }
 
 func (c *Consolidator) decayStale(ctx context.Context) (int, error) {
-	ids, err := c.store.DecayStaleSemantic(ctx, time.Now().Add(-semanticDecayAfter), decayFactor, decayBatch)
+	now := time.Now()
+	ids, err := c.store.DecayStaleSemantic(ctx, now.Add(-semanticDecayAfter), now.Add(-decayEvery), decayFactor, decayBatch)
 	if err != nil {
 		return 0, err
 	}
 	if len(ids) > 0 {
-		c.log.Info("stale semantic facts decayed; queued for reconfirmation", "count", len(ids))
+		c.log.Info("stale semantic facts decayed", "count", len(ids), "ids", strings.Join(ids, ","))
 		if c.metrics.Decayed != nil {
 			c.metrics.Decayed.Add(float64(len(ids)))
 		}

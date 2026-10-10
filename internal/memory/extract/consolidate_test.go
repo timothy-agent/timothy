@@ -8,6 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/SumonMSelim/timothy/internal/memory/store"
 )
 
@@ -51,6 +54,8 @@ type consolidateStore struct {
 	archived int64
 	decayed  []string
 	demoted  []string
+
+	decayOlderThan, decayedBefore time.Time
 
 	applyMergeErr  error
 	superseded     map[string]string
@@ -116,8 +121,35 @@ func (s *consolidateStore) ArchiveStaleEpisodic(context.Context, time.Time) (int
 	return s.archived, nil
 }
 
-func (s *consolidateStore) DecayStaleSemantic(context.Context, time.Time, float64, int) ([]string, error) {
+func (s *consolidateStore) DecayStaleSemantic(_ context.Context, olderThan, decayedBefore time.Time, _ float64, _ int) ([]string, error) {
+	s.decayOlderThan, s.decayedBefore = olderThan, decayedBefore
 	return s.decayed, nil
+}
+
+// TestConsolidateDecayCountsRowsAndPassesWindow proves memory_decayed_total
+// moves once per decayed row and the store gets the D-146 window.
+func TestConsolidateDecayCountsRowsAndPassesWindow(t *testing.T) {
+	t.Parallel()
+	st := &consolidateStore{decayed: []string{"a", "b", "c"}}
+	decayed := prometheus.NewCounter(prometheus.CounterOpts{Name: "decayed"})
+	c := NewConsolidator(&fakeGateway{}, st, testLog(), Metrics{Decayed: decayed})
+	summary, err := c.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	after := time.Now()
+	if summary.Decayed != 3 {
+		t.Fatalf("summary decayed = %d, want 3", summary.Decayed)
+	}
+	if got := testutil.ToFloat64(decayed); got != 3 {
+		t.Fatalf("memory_decayed_total = %v, want 3 (one per row)", got)
+	}
+	if d := after.Sub(st.decayOlderThan); d < semanticDecayAfter || d > semanticDecayAfter+time.Minute {
+		t.Fatalf("olderThan offset = %v, want %v", d, semanticDecayAfter)
+	}
+	if d := after.Sub(st.decayedBefore); d < decayEvery || d > decayEvery+time.Minute {
+		t.Fatalf("decayedBefore offset = %v, want %v", d, decayEvery)
+	}
 }
 
 func activeMem(id, content string, conf float32, refs ...string) store.Memory {
