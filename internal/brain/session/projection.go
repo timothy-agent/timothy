@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -306,11 +307,49 @@ type TranscriptItem struct {
 // executions as digest blocks, and a trailing pending state as an
 // interrupted turn.
 func UITranscript(events []Event) ([]TranscriptItem, error) {
-	livePending := livePendingSeq(events)
 	resolved, err := resolvedPermissionIDs(events)
 	if err != nil {
 		return nil, err
 	}
+	return uiTranscript(events, livePendingSeq(events), resolved)
+}
+
+// TranscriptPage is a projected seq window plus what a client holding
+// earlier items needs to reconcile them: a later assistant_turn hides
+// an older interrupted item, and a later permission_resolved hides its
+// ask.
+type TranscriptPage struct {
+	Items []TranscriptItem
+	// LivePendingSeq is the one pending_state still shown, -1 for none.
+	LivePendingSeq int64
+	// ResolvedPermissions are ask ids answered inside the window.
+	ResolvedPermissions []string
+}
+
+// UITranscriptPage projects a seq window of the log. control is the
+// whole log as TranscriptControl reads it, so the window renders
+// exactly as the same seqs do in UITranscript over the full log.
+func UITranscriptPage(window, control []Event) (TranscriptPage, error) {
+	resolved, err := resolvedPermissionIDs(control)
+	if err != nil {
+		return TranscriptPage{}, err
+	}
+	page := TranscriptPage{LivePendingSeq: livePendingSeq(control)}
+	if page.Items, err = uiTranscript(window, page.LivePendingSeq, resolved); err != nil {
+		return TranscriptPage{}, err
+	}
+	inWindow, err := resolvedPermissionIDs(window)
+	if err != nil {
+		return TranscriptPage{}, err
+	}
+	for id := range inWindow {
+		page.ResolvedPermissions = append(page.ResolvedPermissions, id)
+	}
+	slices.Sort(page.ResolvedPermissions)
+	return page, nil
+}
+
+func uiTranscript(events []Event, livePending int64, resolved map[string]bool) ([]TranscriptItem, error) {
 	var items []TranscriptItem
 	for _, ev := range events {
 		item := TranscriptItem{Seq: ev.Seq, CreatedAt: ev.CreatedAt}

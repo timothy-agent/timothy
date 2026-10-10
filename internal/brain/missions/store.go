@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -1182,6 +1184,50 @@ func (s *Store) Events(ctx context.Context, id string) ([]Event, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// EventsPage reads one seq keyset page of a mission's log (issue
+// #1113). afterSeq >= 0 reads seq > afterSeq oldest first; otherwise it
+// reads the newest rows below beforeSeq (0 means the log's end). Rows
+// come back ascending; hasMore reports rows past the page in its
+// direction.
+func (s *Store) EventsPage(ctx context.Context, id string, afterSeq, beforeSeq int64, limit int) ([]Event, bool, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, false, fmt.Errorf("missions events page: %w", err)
+	}
+	sql, cursor := `SELECT mission_id, seq, kind, payload, provenance, fingerprint, created_at
+		FROM mission_events WHERE mission_id = $1 AND seq < $2 ORDER BY seq DESC LIMIT $3`, beforeSeq
+	if afterSeq >= 0 {
+		sql, cursor = `SELECT mission_id, seq, kind, payload, provenance, fingerprint, created_at
+		FROM mission_events WHERE mission_id = $1 AND seq > $2 ORDER BY seq LIMIT $3`, afterSeq
+	} else if beforeSeq <= 0 {
+		cursor = math.MaxInt64
+	}
+	rows, err := db.Query(ctx, sql, id, cursor, limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("missions events page: %w", err)
+	}
+	defer rows.Close()
+	out := []Event{}
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.MissionID, &e.Seq, &e.Kind, &e.Payload, &e.Provenance, &e.Fingerprint, &e.CreatedAt); err != nil {
+			return nil, false, fmt.Errorf("missions events page: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("missions events page: %w", err)
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	if afterSeq < 0 {
+		slices.Reverse(out)
+	}
+	return out, hasMore, nil
 }
 
 // LastRunState reads back the delegated executor's most recent run
