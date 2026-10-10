@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -30,6 +31,50 @@ const mcpCallTimeout = 60 * time.Second
 type mcpConfig struct {
 	Endpoint string            `json:"endpoint"`
 	Headers  map[string]string `json:"headers"`
+
+	// AuthMode is "token" (or empty): credential_ref resolves to a
+	// static bearer; or "oauth" (D-151): credential_ref holds the token
+	// bundle MCPAuth's login stored. Every field below is oauth-only.
+	AuthMode string `json:"auth_mode,omitempty"`
+	// ClientID and ClientSecretRef are pasted by the operator for a
+	// server without dynamic client registration, or written back by
+	// MCPAuth after registering (ClientRegistered marks that case, so a
+	// reconnect against another issuer registers again).
+	ClientID         string `json:"client_id,omitempty"`
+	ClientSecretRef  string `json:"client_secret_ref,omitempty"`
+	ClientRegistered bool   `json:"client_registered,omitempty"`
+	// Persisted at callback from discovery: the issuer, its token
+	// endpoint and client auth method (refresh needs both without
+	// rediscovering), the granted scopes, and the RFC 8707 resource.
+	AuthServer      string   `json:"auth_server,omitempty"`
+	TokenEndpoint   string   `json:"token_endpoint,omitempty"`
+	TokenAuthMethod string   `json:"token_auth_method,omitempty"`
+	Scopes          []string `json:"scopes,omitempty"`
+	Resource        string   `json:"resource,omitempty"`
+}
+
+const (
+	mcpAuthToken = "token"
+	mcpAuthOAuth = "oauth"
+)
+
+// authMode normalizes and validates AuthMode and the fields it needs.
+func (c mcpConfig) authMode() (string, error) {
+	switch c.AuthMode {
+	case "", mcpAuthToken:
+		return mcpAuthToken, nil
+	case mcpAuthOAuth:
+		if c.ClientSecretRef != "" && c.ClientID == "" {
+			return "", fmt.Errorf("config.client_secret_ref needs config.client_id")
+		}
+		u, err := url.Parse(c.Endpoint)
+		if err != nil || u.Scheme != "https" || u.Host == "" {
+			return "", fmt.Errorf("config.endpoint must be an https URL in oauth auth mode")
+		}
+		return mcpAuthOAuth, nil
+	default:
+		return "", fmt.Errorf("config.auth_mode must be %q or %q, got %q", mcpAuthToken, mcpAuthOAuth, c.AuthMode)
+	}
 }
 
 // MCPDeferral is what an mcp source needs to defer tool schemas
@@ -61,6 +106,12 @@ type MCPDeferral struct {
 // unauthenticated services; main.go wires the operator's
 // outbound_host_allowlist.
 func MCPBuilder(client *http.Client, deferral MCPDeferral) Builder {
+	return mcpBuilder(client, deferral, nil)
+}
+
+// mcpBuilder is MCPBuilder plus the OAuth engine an oauth-mode
+// connector draws its tokens from; a nil auth refuses oauth mode.
+func mcpBuilder(client *http.Client, deferral MCPDeferral, auth *MCPAuth) Builder {
 	if client == nil {
 		client = &http.Client{Transport: netguard.Guard{}.Transport()}
 	}
@@ -72,13 +123,20 @@ func MCPBuilder(client *http.Client, deferral MCPDeferral) Builder {
 		if cfg.Endpoint == "" {
 			return nil, fmt.Errorf("mcp %s: config.endpoint is required", c.Name)
 		}
-		token := ""
-		if c.CredentialRef != "" {
+		mode, err := cfg.authMode()
+		if err != nil {
+			return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
+		}
+		src := &mcpSource{name: c.Name, cfg: cfg, client: client}
+		if mode == mcpAuthOAuth {
+			if err := auth.bind(src, c.CredentialRef); err != nil {
+				return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
+			}
+		} else if c.CredentialRef != "" {
 			if v, err := resolve(ctx, c.CredentialRef); err == nil {
-				token = v
+				src.token = v
 			}
 		}
-		src := &mcpSource{name: c.Name, cfg: cfg, token: token, client: client}
 		if err := src.connect(ctx); err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
 		}
@@ -100,6 +158,13 @@ type mcpSource struct {
 	cfg    mcpConfig
 	token  string
 	client *http.Client
+	// auth replaces token in oauth mode: a live access token per
+	// request. rejected names a token the server just answered 401 to,
+	// which forces a refresh unless another caller already did one.
+	auth func(ctx context.Context, rejected string) (string, error)
+	// identity is what a connection test reports for an oauth-mode
+	// source; nil in token mode.
+	identity *GitHubIdentity
 
 	sessionID string // Mcp-Session-Id, captured at initialize
 	nextID    atomic.Int64
@@ -454,6 +519,26 @@ func (s *mcpSource) post(ctx context.Context, body any) (*http.Response, error) 
 	if err != nil {
 		return nil, err
 	}
+	token := s.token
+	if s.auth != nil {
+		if token, err = s.auth(ctx, ""); err != nil {
+			return nil, err
+		}
+	}
+	resp, err := s.send(ctx, payload, token)
+	if err != nil || s.auth == nil || resp.StatusCode != http.StatusUnauthorized {
+		return resp, err
+	}
+	// The server rejected a token the bundle still dates as live: one
+	// forced refresh, then the server's answer stands.
+	_ = resp.Body.Close()
+	if token, err = s.auth(ctx, token); err != nil {
+		return nil, err
+	}
+	return s.send(ctx, payload, token)
+}
+
+func (s *mcpSource) send(ctx context.Context, payload []byte, token string) (*http.Response, error) {
 	cctx, cancel := context.WithTimeout(ctx, mcpCallTimeout)
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost, s.cfg.Endpoint, bytes.NewReader(payload))
 	if err != nil {
@@ -462,8 +547,8 @@ func (s *mcpSource) post(ctx context.Context, body any) (*http.Response, error) 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if s.token != "" {
-		req.Header.Set("Authorization", "Bearer "+s.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	if s.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", s.sessionID)
