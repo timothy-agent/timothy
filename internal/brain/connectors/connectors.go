@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -35,6 +36,16 @@ import (
 // and BigQuery's REST APIs natively with a token minted from a
 // service-account key.
 var kinds = map[string]bool{"mcp": true, "google": true, "github": true, "microsoft": true, "imap": true, "caldav": true, "aws": true, "gcp": true, "bitbucket": true, "gitlab": true}
+
+// Kinds lists the connector kinds the manager can build, sorted.
+func Kinds() []string {
+	out := make([]string, 0, len(kinds))
+	for k := range kinds {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
 
 // credentialRefPattern matches the gateway's: names and paths only,
 // never anything that could be a pasted secret.

@@ -36,3 +36,6 @@ docs/
 
 # Onboarding canary output (make canary-onboarding)
 web/e2e/.out/
+
+# Generated capability pages (make manifest)
+/build/

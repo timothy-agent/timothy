@@ -45,6 +45,8 @@ jobs:
               - 'go.sum'
               - 'migrations/**'
               - 'deploy/Dockerfile'
+              - 'skills/**'
+              - 'web/routes.generated.json'
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
@@ -77,6 +79,9 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Manifest
+        # Fails on a tool without a description or a settings area missing from the routes export.
+        run: go run ./cmd/manifest -out build/selfdocs -routes web/routes.generated.json -skills skills
       - name: Upload coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
@@ -158,6 +163,8 @@ jobs:
         run: npm run build
       - name: Lint
         run: npm run lint
+      - name: Routes export current
+        run: npm run routes:check
       - name: Test
         run: npm test
       # Separate, never-blocking: v8 instrumentation slows the suite

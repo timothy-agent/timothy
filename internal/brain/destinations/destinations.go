@@ -155,6 +155,17 @@ var (
 	ErrInvalid = errors.New("invalid destination")
 )
 
+// Kinds lists every destination kind validate accepts, sorted: the
+// fixed kinds plus each registered git provider.
+func Kinds() []string {
+	out := []string{"channel", "email", "webhook"}
+	for _, k := range gitprovider.Kinds() {
+		out = append(out, string(k))
+	}
+	slices.Sort(out)
+	return out
+}
+
 func validate(ctx context.Context, conns connectorLookup, channels ChannelLookup, d *Destination) error {
 	name, err := validateName(d.Name)
 	if err != nil {
