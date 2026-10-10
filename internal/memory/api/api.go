@@ -55,6 +55,7 @@ func Register(srv *httpserver.Server, ext Extractor, search Searcher, embed Embe
 	srv.Handle("POST /v1/extract", http.HandlerFunc(a.handleExtract))
 	srv.Handle("POST /v1/retrieve", http.HandlerFunc(a.handleRetrieve))
 	srv.Handle("GET /v1/memories", http.HandlerFunc(a.handleList))
+	srv.Handle("GET /v1/memories/count", http.HandlerFunc(a.handleCount))
 	srv.Handle("POST /v1/memories", http.HandlerFunc(a.handleAdd))
 	srv.Handle("POST /v1/memories/{id}", http.HandlerFunc(a.handleResolve))
 	srv.Handle("GET /v1/memories/{id}/chain", http.HandlerFunc(a.handleChain))

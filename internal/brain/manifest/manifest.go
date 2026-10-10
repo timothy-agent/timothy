@@ -81,7 +81,7 @@ var services = []struct{ name, role string }{
 	{"markitdown", "file to markdown conversion"},
 	{"ocr", "local image OCR"},
 	{"whisper", "local speech to text, off unless enabled"},
-	{"pdfgen", "markdown to PDF for mission export"},
+	{"pdfgen", "markdown to PDF for mission export, SVG to PNG for Knowledge captions"},
 }
 
 // availableWhen notes tools brain registers only under a condition.

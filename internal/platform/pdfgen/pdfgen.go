@@ -1,6 +1,7 @@
 // Package pdfgen is the client for the pdfgen sidecar (pdfgen-svc/):
-// one POST /render per document set, markdown in, PDF bytes out.
-// Compose-internal, no auth — the sidecar is only reachable inside the
+// one POST /render per document set, markdown in, PDF bytes out, and
+// one POST /rasterize per SVG, SVG in, PNG bytes out.
+// Compose-internal, no auth: the sidecar is only reachable inside the
 // compose network.
 package pdfgen
 
@@ -17,6 +18,10 @@ import (
 // renderTimeout is generous: Typst compiles (mermaid diagrams, code
 // highlighting) can run long on larger documents.
 const renderTimeout = 120 * time.Second
+
+// rasterizeTimeout sits above the sidecar's own 20s typst bound so a
+// slow SVG surfaces as the sidecar's 504, not a client timeout.
+const rasterizeTimeout = 30 * time.Second
 
 // Document is one input document: a title and its markdown content.
 // Each document becomes one chapter in the rendered PDF.
@@ -81,6 +86,25 @@ func (c *Client) Render(ctx context.Context, docs []Document, opts Options) ([]b
 	}
 	req.Header.Set("Content-Type", "application/json")
 
+	return c.do(req)
+}
+
+// Rasterize posts one SVG document to the sidecar and returns it
+// rendered as PNG, longest side at most 1600 px.
+func (c *Client) Rasterize(ctx context.Context, svg []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, rasterizeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/rasterize", bytes.NewReader(svg))
+	if err != nil {
+		return nil, fmt.Errorf("pdfgen: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "image/svg+xml")
+	return c.do(req)
+}
+
+// do sends req and returns the response body, surfacing the sidecar's
+// JSON error message on a non-200.
+func (c *Client) do(req *http.Request) ([]byte, error) {
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("pdfgen: request failed: %w", err)
@@ -97,9 +121,9 @@ func (c *Client) Render(ctx context.Context, docs []Document, opts Options) ([]b
 		return nil, fmt.Errorf("pdfgen returned http %d", resp.StatusCode)
 	}
 
-	pdf, err := io.ReadAll(resp.Body)
+	out, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("pdfgen: read response: %w", err)
 	}
-	return pdf, nil
+	return out, nil
 }

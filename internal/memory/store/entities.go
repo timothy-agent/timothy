@@ -15,7 +15,7 @@ func (s *Store) ListEntities(ctx context.Context) ([]Entity, error) {
 	}
 	rows, err := db.Query(ctx, `SELECT e.id, e.type, e.name, count(m.id)::int
 		FROM entities e
-		LEFT JOIN memories m ON e.id = ANY(m.entity_refs) AND m.status = $1
+		LEFT JOIN memories m ON m.entity_refs @> ARRAY[e.id] AND m.status = $1
 		GROUP BY e.id
 		ORDER BY count(m.id) DESC, e.name`, StatusActive)
 	if err != nil {
@@ -68,16 +68,17 @@ func (s *Store) EntityEdges(ctx context.Context) ([]EntityEdge, error) {
 	return out, rows.Err()
 }
 
-// ListByEntity returns the active memories referencing one entity,
-// newest first (detail-panel order).
-func (s *Store) ListByEntity(ctx context.Context, entityID string) ([]Memory, error) {
+// ListByEntity returns one page of the active memories referencing one
+// entity, newest first (detail-panel order). The containment form lets
+// memories_entity_refs_gin serve the lookup.
+func (s *Store) ListByEntity(ctx context.Context, entityID string, page Page) ([]Memory, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("list by entity: %w", err)
 	}
+	clause, args := pageClause(page, []any{entityID, StatusActive})
 	rows, err := db.Query(ctx, `SELECT `+memoryColumns+` FROM memories
-		WHERE $1 = ANY(entity_refs) AND status = $2
-		ORDER BY created_at DESC`, entityID, StatusActive)
+		WHERE entity_refs @> ARRAY[$1::uuid] AND status = $2`+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list by entity: %w", err)
 	}
