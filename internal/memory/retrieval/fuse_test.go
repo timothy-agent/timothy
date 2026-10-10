@@ -30,6 +30,51 @@ func TestFuseHigherConfidenceRanksHigher(t *testing.T) {
 	}
 }
 
+// TestFuseAgeHorizon pins the documented survival horizons (minScore
+// and D-148 comments) at full confidence.
+func TestFuseAgeHorizon(t *testing.T) {
+	t.Parallel()
+	const day = 24 * time.Hour
+	legs := func(rank, n int) map[string]int {
+		r := map[string]int{}
+		for _, l := range []string{"vector", "text", "entity"}[:n] {
+			r[l] = rank
+		}
+		return r
+	}
+	tests := []struct {
+		rank, legs    int
+		confirmedDays int
+		retrievedDays int // -1: never retrieved
+		survives      bool
+	}{
+		// rank 1, one leg: drops after ~154 days.
+		{1, 1, 0, -1, true}, {1, 1, 100, -1, true}, {1, 1, 150, -1, true}, {1, 1, 300, -1, false},
+		// rank 30, one leg: drops after ~104 days.
+		{30, 1, 0, -1, true}, {30, 1, 100, -1, true}, {30, 1, 150, -1, false}, {30, 1, 300, -1, false},
+		// rank 1, three legs: drops after ~297 days.
+		{1, 3, 0, -1, true}, {1, 3, 100, -1, true}, {1, 3, 150, -1, true}, {1, 3, 300, -1, false},
+		// rank 30, three legs: drops after ~246 days.
+		{30, 3, 0, -1, true}, {30, 3, 100, -1, true}, {30, 3, 150, -1, true}, {30, 3, 300, -1, false},
+		// D-148: a retrieval restarts recency at the slower half-life.
+		{1, 1, 300, 0, true}, {1, 1, 300, 150, true}, {1, 1, 400, 300, true}, {1, 1, 500, 350, false},
+		// A retrieval older than the confirmation changes nothing.
+		{1, 1, 300, 400, false},
+	}
+	now := time.Now()
+	for _, tc := range tests {
+		c := cand("x", store.TypeSemantic, time.Duration(tc.confirmedDays)*day, legs(tc.rank, tc.legs), now)
+		if tc.retrievedDays >= 0 {
+			c.LastRetrievedAt = now.Add(-time.Duration(tc.retrievedDays) * day)
+		}
+		got := len(Fuse(map[string]*Candidate{"x": c}, now)) == 1
+		if got != tc.survives {
+			t.Errorf("rank %d legs %d confirmed %dd retrieved %dd: survives = %v, want %v",
+				tc.rank, tc.legs, tc.confirmedDays, tc.retrievedDays, got, tc.survives)
+		}
+	}
+}
+
 func TestConfidenceWeight(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

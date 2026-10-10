@@ -24,6 +24,7 @@ type Candidate struct {
 	Type            store.MemoryType
 	Content         string
 	LastConfirmedAt time.Time
+	LastRetrievedAt time.Time // zero: never retrieved
 	Confidence      float32
 	// rank per leg name; missing key = leg didn't surface it
 	ranks map[string]int
@@ -63,7 +64,7 @@ func (s *Searcher) Search(ctx context.Context, query string, embedding store.Vec
 		{"entity", entitySQL, []any{query}},
 	}
 	if len(embedding) > 0 {
-		legs = append(legs, legRun{"vector", vectorSQL, []any{embedding.String()}})
+		legs = append(legs, legRun{"vector", vectorSQL, []any{embedding.String(), 1 - minSimilarity}})
 	}
 
 	var wg sync.WaitGroup
@@ -90,18 +91,30 @@ func (s *Searcher) Search(ctx context.Context, query string, embedding store.Vec
 	return m.into, nil
 }
 
+// minSimilarity is the vector leg's cosine floor (D-149): k-NN always
+// returns k rows, so without it an off-topic turn gets the nearest
+// anything. 0.25 matches the KB floor on the same embedding model.
+const minSimilarity = 0.25
+
 // Leg queries share a projection and differ only in match + order.
 // All see active memories exclusively, minus decayed ones below the
 // floor (D-147). $1 is the leg's own parameter; $2 is the optional
 // type filter (empty array = all types); $3 is store.DecayFloor.
 const (
-	vectorSQL = `SELECT id, type, content, last_confirmed_at, COALESCE(confidence, 0)
-		FROM memories
-		WHERE status = 'active' AND embedding IS NOT NULL
-		  AND (decayed_at IS NULL OR confidence >= $3)
-		  AND (cardinality($2::text[]) = 0 OR type = ANY($2))
-		ORDER BY embedding <=> $1::vector
-		LIMIT ` + limitLit
+	// $4 is the max cosine distance. The floor filters outside the
+	// LIMIT so the index scan stays a plain k-NN.
+	vectorSQL = `SELECT id, type, content, last_confirmed_at, last_retrieved_at, confidence
+		FROM (
+			SELECT id, type, content, last_confirmed_at, last_retrieved_at,
+				COALESCE(confidence, 0) AS confidence, embedding <=> $1::vector AS dist
+			FROM memories
+			WHERE status = 'active' AND embedding IS NOT NULL
+			  AND (decayed_at IS NULL OR confidence >= $3)
+			  AND (cardinality($2::text[]) = 0 OR type = ANY($2))
+			ORDER BY dist
+			LIMIT ` + limitLit + `) nn
+		WHERE dist <= $4
+		ORDER BY dist`
 
 	// The query's normalized lexemes OR together: a question spanning
 	// several topics ("what seat do I prefer and when is my birthday")
@@ -114,7 +127,7 @@ const (
 				string_agg('''' || replace(lexeme, '''', '''''') || '''', ' | ')) AS query
 			FROM unnest(tsvector_to_array(to_tsvector('english', $1))) AS lexeme
 		)
-		SELECT id, type, content, last_confirmed_at, COALESCE(confidence, 0)
+		SELECT id, type, content, last_confirmed_at, last_retrieved_at, COALESCE(confidence, 0)
 		FROM memories, q
 		WHERE status = 'active'
 		  AND (decayed_at IS NULL OR confidence >= $3)
@@ -123,18 +136,32 @@ const (
 		ORDER BY ts_rank(tsv, q.query) DESC
 		LIMIT ` + limitLit
 
-	// Entities literally named in the query pull in every memory that
-	// references them. position() over ILIKE keeps it index-friendly
-	// enough at this scale and case-insensitivity comes from lower().
-	entitySQL = `SELECT m.id, m.type, m.content, m.last_confirmed_at, COALESCE(m.confidence, 0)
+	// Entities named in the query pull in every memory that references
+	// them, case-insensitively. D-149: a name shorter than 4 characters
+	// must stand alone (no letter or digit on either side, so "Go"
+	// skips "good"); its other characters are escaped for the regex.
+	// Longer names match as substrings. Memories citing more matched
+	// entities rank first, then those citing the longest matched name
+	// (the most specific), recency only breaks ties.
+	entitySQL = `WITH hit AS (
+			SELECT e.id, char_length(e.name) AS len
+			FROM entities e
+			WHERE e.name <> '' AND CASE WHEN char_length(e.name) < 4
+				THEN lower($1) ~ ('(^|[^[:alnum:]])'
+					|| regexp_replace(lower(e.name), '([^[:alnum:][:space:]])', '\\\1', 'g')
+					|| '([^[:alnum:]]|$)')
+				ELSE position(lower(e.name) IN lower($1)) > 0 END
+		)
+		SELECT m.id, m.type, m.content, m.last_confirmed_at, m.last_retrieved_at, COALESCE(m.confidence, 0)
 		FROM memories m
+		CROSS JOIN LATERAL (
+			SELECT count(*) AS n, max(h.len) AS best
+			FROM hit h WHERE h.id = ANY(m.entity_refs)) q
 		WHERE m.status = 'active'
 		  AND (m.decayed_at IS NULL OR m.confidence >= $3)
 		  AND (cardinality($2::text[]) = 0 OR m.type = ANY($2))
-		  AND m.entity_refs && ARRAY(
-			SELECT e.id FROM entities e
-			WHERE position(lower(e.name) IN lower($1)) > 0)
-		ORDER BY m.last_confirmed_at DESC
+		  AND m.entity_refs && ARRAY(SELECT id FROM hit)
+		ORDER BY q.n DESC, q.best DESC, m.last_confirmed_at DESC, m.id
 		LIMIT ` + limitLit
 
 	limitLit = "30"
@@ -155,7 +182,8 @@ func (s *Searcher) leg(ctx context.Context, name, sql string, args []any, types 
 	for i, t := range types {
 		typeNames[i] = string(t)
 	}
-	rows, err := db.Query(ctx, sql, append(args, typeNames, store.DecayFloor)...)
+	params := append([]any{args[0], typeNames, store.DecayFloor}, args[1:]...)
+	rows, err := db.Query(ctx, sql, params...)
 	if err != nil {
 		return fmt.Errorf("retrieval %s leg: %w", name, err)
 	}
@@ -164,8 +192,12 @@ func (s *Searcher) leg(ctx context.Context, name, sql string, args []any, types 
 	rank := 0
 	for rows.Next() {
 		var c Candidate
-		if err := rows.Scan(&c.ID, &c.Type, &c.Content, &c.LastConfirmedAt, &c.Confidence); err != nil {
+		var retrieved *time.Time
+		if err := rows.Scan(&c.ID, &c.Type, &c.Content, &c.LastConfirmedAt, &retrieved, &c.Confidence); err != nil {
 			return fmt.Errorf("retrieval %s leg: %w", name, err)
+		}
+		if retrieved != nil {
+			c.LastRetrievedAt = *retrieved
 		}
 		rank++
 		m.mu.Lock()
@@ -183,10 +215,10 @@ func (s *Searcher) leg(ctx context.Context, name, sql string, args []any, types 
 // MarkRetrieved stamps last_retrieved_at and bumps retrieval_hits on
 // the returned memories so the consolidation job can see what is
 // actually used (archival window and usage-driven decay,
-// memory-extraction-v2 slice 5). This is metadata bookkeeping,
-// deliberately NOT a supersede or last_confirmed_at bump (D-011);
-// memory content stays supersede-only. Failures only log — retrieval
-// already succeeded.
+// memory-extraction-v2 slice 5) and Fuse can keep used facts fresh
+// (D-148). This is metadata bookkeeping, deliberately NOT a supersede
+// or last_confirmed_at bump (D-011); memory content stays
+// supersede-only. Failures only log: retrieval already succeeded.
 func (s *Searcher) MarkRetrieved(ctx context.Context, ids []string) {
 	if len(ids) == 0 {
 		return

@@ -1532,7 +1532,7 @@ func (s *Service) runTurn(turnCtx, reqCtx context.Context, sessionID, userText, 
 	}
 	var memoryContents []string
 	if s.recall != nil && profile.Memory {
-		if recall := s.recall(turnCtx, sessionID, userText); recall.Block != "" {
+		if recall := s.recall(turnCtx, sessionID, memoryQuery(events, userText)); recall.Block != "" {
 			system += "\n\n" + recall.Block
 			memoryContents = append([]string(nil), recall.Contents...)
 		}
@@ -2132,6 +2132,40 @@ func collapseRepeatedTail(s string) string {
 		return s
 	}
 	return t
+}
+
+// memoryQueryContext bounds how much of the previous user turn rides
+// along in the memory query (D-149): enough to carry a follow-up's
+// topic, short of drowning the current turn in the embedding.
+const memoryQueryContext = 400
+
+// memoryQuery is the memory retrieval query: the current turn plus the
+// tail of the user message before it, so "and her birthday?" keeps the
+// subject named one turn earlier. events ends with the current turn's
+// user_message.
+func memoryQuery(events []session.Event, userText string) string {
+	seen := 0
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Kind != session.KindUserMessage {
+			continue
+		}
+		if seen++; seen < 2 {
+			continue
+		}
+		var msg session.UserMessage
+		if err := json.Unmarshal(events[i].Payload, &msg); err != nil {
+			return userText
+		}
+		prev := []rune(strings.TrimSpace(msg.Text))
+		if len(prev) == 0 {
+			return userText
+		}
+		if len(prev) > memoryQueryContext {
+			prev = prev[len(prev)-memoryQueryContext:]
+		}
+		return userText + "\n" + string(prev)
+	}
+	return userText
 }
 
 // lastUserMessage returns the session's last user_message when it has
