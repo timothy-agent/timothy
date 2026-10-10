@@ -219,15 +219,41 @@ func (n *Notifier) NotifyOperator(ctx context.Context, kind, message string) err
 	return nil
 }
 
-// List returns unread-first notifications across all missions and
-// operator-level rows (no mission id).
-func (n *Notifier) List(ctx context.Context) ([]Notification, error) {
+// NotificationFilter narrows Notifier.List. The zero value lists every
+// notification.
+type NotificationFilter struct {
+	// Unread keeps only unread rows.
+	Unread bool
+	// Before/BeforeID is the keyset cursor: the (created_at, id) of the
+	// previous page's last row. Zero Before means the first page.
+	Before   time.Time
+	BeforeID string
+	// Limit caps the result count; 0 means unlimited.
+	Limit int
+}
+
+// List returns notifications across all missions and operator-level
+// rows (no mission id), ordered created_at DESC, id DESC.
+func (n *Notifier) List(ctx context.Context, filter NotificationFilter) ([]Notification, error) {
 	db, err := n.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("notify: list: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT id, mission_id, kind, message, read, created_at
-		FROM notifications ORDER BY read, created_at DESC`)
+	query := `SELECT id, mission_id, kind, message, read, created_at FROM notifications WHERE true`
+	var args []any
+	if filter.Unread {
+		query += ` AND NOT read`
+	}
+	if !filter.Before.IsZero() {
+		args = append(args, filter.Before, filter.BeforeID)
+		query += fmt.Sprintf(` AND (created_at, id) < ($%d, $%d::uuid)`, len(args)-1, len(args))
+	}
+	query += ` ORDER BY created_at DESC, id DESC`
+	if filter.Limit > 0 {
+		args = append(args, filter.Limit)
+		query += fmt.Sprintf(` LIMIT $%d`, len(args))
+	}
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("notify: list: %w", err)
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
+	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -514,13 +515,36 @@ type ListFilter struct {
 	// it (case-insensitive): the composer #-mention "type to find a
 	// mission" search (GET /v1/missions?q=).
 	Query string
+	// Kind keeps only missions of that kind (coding/general).
+	Kind string
+	// Harness keeps only missions run by that harness; HarnessNative
+	// matches the native one.
+	Harness string
+	// Model keeps only missions whose top ledger model is this one.
+	Model string
+	// Source is SourceAutomated (origin_kind automation) or
+	// SourceManual (any other origin).
+	Source string
+	// Before/BeforeID is the keyset cursor: the (created_at, id) of the
+	// previous page's last row. Zero Before means the first page.
+	Before   time.Time
+	BeforeID string
 	// Limit caps the result count; 0 means unlimited.
 	Limit int
 }
 
-// List returns missions matching filter, newest first. The zero
-// ListFilter{} returns every mission, matching the pre-filter
-// behavior exactly.
+// Source filter values for ListFilter.Source.
+const (
+	SourceManual    = "manual"
+	SourceAutomated = "automated"
+)
+
+// HarnessNative is the ListFilter.Harness value matching missions with
+// no delegated harness (harness = '').
+const HarnessNative = "native"
+
+// List returns missions matching filter, ordered created_at DESC,
+// id DESC. The zero ListFilter{} returns every mission.
 func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) {
 	db, err := s.db.Get()
 	if err != nil {
@@ -541,10 +565,36 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) 
 		args = append(args, "%"+escapeLike(filter.Query)+"%")
 		where = append(where, fmt.Sprintf("(name ILIKE $%d OR goal ILIKE $%d)", len(args), len(args)))
 	}
+	if filter.Kind != "" {
+		args = append(args, filter.Kind)
+		where = append(where, fmt.Sprintf("kind = $%d", len(args)))
+	}
+	if filter.Harness != "" {
+		h := filter.Harness
+		if h == HarnessNative {
+			h = ""
+		}
+		args = append(args, h)
+		where = append(where, fmt.Sprintf("harness = $%d", len(args)))
+	}
+	if filter.Model != "" {
+		args = append(args, filter.Model)
+		where = append(where, fmt.Sprintf("%s = $%d", ledger.TopModelSQL("missions.id"), len(args)))
+	}
+	switch filter.Source {
+	case SourceAutomated:
+		where = append(where, "origin_kind = '"+OriginAutomation+"'")
+	case SourceManual:
+		where = append(where, "origin_kind <> '"+OriginAutomation+"'")
+	}
+	if !filter.Before.IsZero() {
+		args = append(args, filter.Before, filter.BeforeID)
+		where = append(where, fmt.Sprintf("(created_at, id) < ($%d, $%d::uuid)", len(args)-1, len(args)))
+	}
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY created_at DESC, id DESC"
 	if filter.Limit > 0 {
 		args = append(args, filter.Limit)
 		query += fmt.Sprintf(" LIMIT $%d", len(args))
