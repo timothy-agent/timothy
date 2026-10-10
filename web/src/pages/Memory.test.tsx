@@ -194,6 +194,27 @@ describe('Memory queue', () => {
     await waitFor(() => expect(resolveMemory).toHaveBeenCalledTimes(2))
   })
 
+  it('bulk confirm pages through and resolves every pending memory', async () => {
+    const first = page('pending', 50)
+    const last = first[49]
+    vi.mocked(listMemories).mockImplementation((_status, opts) =>
+      Promise.resolve(opts?.cursor ? page('pending', 10, 50) : first),
+    )
+    renderPage()
+    await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(50))
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm all' }))
+    await waitFor(() => expect(resolveMemory).toHaveBeenCalledTimes(60))
+    expect(listMemories).toHaveBeenCalledWith('pending', {
+      cursor: { before: last.created_at, beforeId: last.id },
+    })
+    const resolvedIds = vi.mocked(resolveMemory).mock.calls.map(([id, action]) => {
+      expect(action).toBe('confirm')
+      return id
+    })
+    expect(new Set(resolvedIds).size).toBe(60)
+    expect(resolvedIds).toContain('pending-059')
+  })
+
   it('shows the empty state when nothing is pending', async () => {
     vi.mocked(listMemories).mockResolvedValue([])
     renderPage()

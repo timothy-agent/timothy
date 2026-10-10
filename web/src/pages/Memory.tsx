@@ -26,7 +26,7 @@ import {
   SelectValue,
 } from '../components/ui/select'
 import { Textarea } from '../components/ui/textarea'
-import { notifyMemoryChanged, useMemoryPages, usePendingMemories } from '../lib/memory'
+import { memoryPageSize, notifyMemoryChanged, useMemoryPages, usePendingMemories } from '../lib/memory'
 import { TourOverlay } from '../onboarding/tour/TourOverlay'
 import { useTour } from '../onboarding/tour/useTour'
 import { memoryTour } from '../onboarding/tours/memory'
@@ -148,11 +148,37 @@ function Queue() {
     refresh()
   }
 
-  // Bulk actions cover the loaded cards only.
+  // allPendingIds pages past the loaded cards so bulk actions cover
+  // every pending memory, not just what is on screen.
+  const allPendingIds = async (): Promise<string[]> => {
+    const ids = pending.map((m) => m.id)
+    const seen = new Set(ids)
+    let last = pending[pending.length - 1]
+    let more = hasMore
+    while (more && last) {
+      const page = await load({ before: last.created_at, beforeId: last.id })
+      for (const m of page) {
+        if (!seen.has(m.id)) {
+          seen.add(m.id)
+          ids.push(m.id)
+        }
+      }
+      more = page.length === memoryPageSize
+      last = page[page.length - 1]
+    }
+    return ids
+  }
+
   const bulk = async (action: 'confirm' | 'reject') => {
     setBulkBusy(true)
     try {
-      const ids = pending.map((m) => m.id)
+      let ids: string[]
+      try {
+        ids = await allPendingIds()
+      } catch {
+        toast.error('Could not load the memory queue')
+        return
+      }
       await Promise.allSettled(ids.map((id) => resolveMemory(id, action)))
       notifyMemoryChanged()
       resolved(ids)
