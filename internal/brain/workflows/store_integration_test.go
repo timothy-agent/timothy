@@ -218,3 +218,70 @@ func TestCountEdgeFirings(t *testing.T) {
 		t.Fatalf("CountEdgeFirings (different on) = %d, want 0", n)
 	}
 }
+
+// TestStoreListRunsKeysetTies pages across ties on created_at: every
+// run appears exactly once, ordered created_at DESC, id DESC (#1114).
+func TestStoreListRunsKeysetTies(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	wfID, err := s.Create(ctx, marker+"paging", validDef())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	tie := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for i := range 5 {
+		runID, err := s.CreateRun(ctx, wfID, "a", nil)
+		if err != nil {
+			t.Fatalf("CreateRun %d: %v", i, err)
+		}
+		at := tie
+		if i == 0 {
+			at = tie.Add(time.Hour)
+		}
+		if _, err := db.Exec(ctx, `UPDATE workflow_runs SET created_at = $2 WHERE id = $1`, runID, at); err != nil {
+			t.Fatalf("set created_at: %v", err)
+		}
+	}
+	all, err := s.ListRuns(ctx, wfID, time.Time{}, "", 50)
+	if err != nil || len(all) != 5 {
+		t.Fatalf("ListRuns all = %d runs, %v; want 5", len(all), err)
+	}
+	if !all[0].CreatedAt.After(tie) {
+		t.Fatalf("first run created_at = %v, want the newest", all[0].CreatedAt)
+	}
+	for i := 2; i < len(all); i++ {
+		if all[i-1].ID <= all[i].ID {
+			t.Fatalf("tied runs not in id DESC order: %s then %s", all[i-1].ID, all[i].ID)
+		}
+	}
+
+	var paged []string
+	var before time.Time
+	var beforeID string
+	for range 4 {
+		page, err := s.ListRuns(ctx, wfID, before, beforeID, 2)
+		if err != nil {
+			t.Fatalf("ListRuns page: %v", err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, r := range page {
+			paged = append(paged, r.ID)
+		}
+		last := page[len(page)-1]
+		before, beforeID = last.CreatedAt, last.ID
+	}
+	if len(paged) != len(all) {
+		t.Fatalf("paged %d runs, want %d: %v", len(paged), len(all), paged)
+	}
+	for i, r := range all {
+		if paged[i] != r.ID {
+			t.Fatalf("paged[%d] = %s, want %s", i, paged[i], r.ID)
+		}
+	}
+}

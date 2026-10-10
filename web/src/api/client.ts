@@ -1849,8 +1849,12 @@ export async function runAutomationNow(id: string): Promise<{ event_id: number }
   return request<{ event_id: number }>(`/v1/automations/${id}/run`, { method: 'POST' })
 }
 
-export async function listAutomationRuns(id: string, limit?: number): Promise<AutomationRun[]> {
-  const qs = limit ? `?limit=${limit}` : ''
+// listAutomationRuns returns one page of runs (newest first). Pass the
+// previous page's last run (created_at, id) as the cursor for the next.
+export async function listAutomationRuns(id: string, cursor?: SessionCursor): Promise<AutomationRun[]> {
+  const qs = cursor
+    ? `?${new URLSearchParams({ before: cursor.before, before_id: cursor.beforeId }).toString()}`
+    : ''
   const { runs } = await request<{ runs: AutomationRun[] }>(`/v1/automations/${id}/runs${qs}`)
   return runs ?? []
 }
