@@ -83,7 +83,8 @@ function tokenRefFor(kind: string, refBase: string): string {
 // are created, tested, and enabled in one go with Add gated on a
 // passing test (same contract as adding a provider); Google presets
 // take the OAuth client and hand off to Google's consent screen
-// instead - there is no unsaved test to run before that redirect.
+// instead - there is no unsaved test to run before that redirect. An
+// MCP preset in OAuth login mode hands off the same way.
 export function ConnectorAdd() {
   const { presetId } = useParams()
   const navigate = useNavigate()
@@ -131,6 +132,9 @@ export function ConnectorAdd() {
   const [existingTokenRef, setExistingTokenRef] = useState('')
   const [clientSecretCredMode, setClientSecretCredMode] = useState<CredentialMode>('new')
   const [existingClientSecretRef, setExistingClientSecretRef] = useState('')
+  // mcpAuthMode: "token" sends a stored bearer; "oauth" signs in
+  // through the server's own authorization server (D-151).
+  const [mcpAuthMode, setMcpAuthMode] = useState<'token' | 'oauth'>('token')
 
   useEffect(() => {
     if (!preset) return
@@ -161,6 +165,7 @@ export function ConnectorAdd() {
     setExistingTokenRef('')
     setClientSecretCredMode('new')
     setExistingClientSecretRef('')
+    setMcpAuthMode(preset.authMode ?? 'token')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.id])
 
@@ -178,6 +183,7 @@ export function ConnectorAdd() {
   const isCalDAV = preset.kind === 'caldav'
   const isAWS = preset.kind === 'aws'
   const isGCP = preset.kind === 'gcp'
+  const isMCPOAuth = preset.kind === 'mcp' && mcpAuthMode === 'oauth'
   const slug = slugify(name)
   const refBase = slug.toUpperCase().replace(/-/g, '_')
   const tested = test?.ok === true
@@ -384,6 +390,37 @@ export function ConnectorAdd() {
       setBusy(false)
     }
   }
+
+  // No stutter when the connector name already ends in MCP.
+  const mcpRefBase = refBase.endsWith('_MCP') ? refBase : `${refBase}_MCP`
+  const mcpClientSecretRef = `${mcpRefBase}_CLIENT_SECRET`
+
+  const submitMCPOAuth = async () => {
+    setBusy(true)
+    try {
+      const pastedClient = clientID.trim() !== ''
+      if (pastedClient && clientSecret) await setSecret(mcpClientSecretRef, clientSecret)
+      const id = await createConnector({
+        name: name.trim(),
+        kind: 'mcp',
+        config: {
+          endpoint: endpoint.trim(),
+          auth_mode: 'oauth',
+          ...(pastedClient ? { client_id: clientID.trim() } : {}),
+          ...(pastedClient && clientSecret ? { client_secret_ref: mcpClientSecretRef } : {}),
+        },
+        credential_ref: `${mcpRefBase}_OAUTH`,
+        enabled: false,
+      })
+      window.location.assign(await connectorOAuthStart(id))
+    } catch (err) {
+      toast.error('Could not connect MCP server', { description: errText(err) })
+      setBusy(false)
+    }
+  }
+
+  const canSubmitMCPOAuth =
+    name.trim() !== '' && endpoint.trim().startsWith('https://') && (clientSecret === '' || clientID.trim() !== '')
 
   const canTest =
     name.trim() !== '' &&
@@ -631,6 +668,24 @@ export function ConnectorAdd() {
                   />
                 </Field>
               )}
+              {preset.kind === 'mcp' && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-foreground">Authentication</span>
+                  <SegmentedControl
+                    value={mcpAuthMode}
+                    onChange={(v) => {
+                      setMcpAuthMode(v as 'token' | 'oauth')
+                      invalidate()
+                    }}
+                    options={[
+                      { value: 'token', label: 'Bearer token' },
+                      { value: 'oauth', label: 'OAuth login' },
+                    ]}
+                    size="sm"
+                    aria-label="Authentication"
+                  />
+                </div>
+              )}
               {isImap && (
                 <>
                   <div className="grid grid-cols-2 gap-5">
@@ -804,6 +859,26 @@ export function ConnectorAdd() {
                     </div>
                   )}
                 </div>
+              ) : isMCPOAuth ? (
+                <>
+                  <Field label="Client ID" required={false}>
+                    <Input value={clientID} onChange={(e) => setClientID(e.target.value)} placeholder="client id" />
+                  </Field>
+                  <Field label="Client secret" required={false}>
+                    <Input
+                      type="password"
+                      value={clientSecret}
+                      onChange={(e) => setClientSecret(e.target.value)}
+                      placeholder="client secret"
+                      autoComplete="off"
+                    />
+                  </Field>
+                  <p className="-mt-2 text-sm text-muted-foreground">
+                    Only for servers without automatic client registration. Register{' '}
+                    <span className="font-mono">{window.location.origin}/v1/connectors/oauth/callback</span> as its
+                    redirect URI.
+                  </p>
+                </>
               ) : (
               <CredentialField
                 label={
@@ -839,7 +914,7 @@ export function ConnectorAdd() {
                 refName={tokenRefFor(preset.kind, refBase)}
               />
               )}
-              {!isImap && !isCalDAV && !isAWS && !isGCP && tokenCredMode === 'new' && (
+              {!isImap && !isCalDAV && !isAWS && !isGCP && !isMCPOAuth && tokenCredMode === 'new' && (
                 <p className="-mt-2 text-sm text-muted-foreground">
                   {preset.tokenHint}
                   {preset.tokenURL && (
@@ -858,7 +933,11 @@ export function ConnectorAdd() {
                 </p>
               )}
 
-              {testState === 'gate' ? (
+              {isMCPOAuth ? (
+                <p className="text-sm text-muted-foreground">
+                  Saving redirects you to the server's sign-in page to consent.
+                </p>
+              ) : testState === 'gate' ? (
                 <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-muted/40 p-4 text-sm text-muted-foreground">
                   <span className="min-w-0 flex-1 font-medium">Not tested yet, run a test before adding.</span>
                   <Button size="sm" variant="test" disabled={busy || !canTest} onClick={() => void runTest()}>
@@ -902,6 +981,10 @@ export function ConnectorAdd() {
           {isOAuth ? (
             <Button disabled={!canSubmitOAuth || busy} onClick={() => void submitOAuth()}>
               {busy ? 'Redirecting…' : `Save & connect ${oauthProviderLabel}`}
+            </Button>
+          ) : isMCPOAuth ? (
+            <Button disabled={!canSubmitMCPOAuth || busy} onClick={() => void submitMCPOAuth()}>
+              {busy ? 'Redirecting…' : 'Save & connect'}
             </Button>
           ) : (
             <Button disabled={!tested || busy} onClick={() => void submit()}>

@@ -311,6 +311,7 @@ func main() {
 	// nil-safe anyway: a load_tool call with no sink just reports the
 	// schema and nothing sticks.
 	var recordLoadedTool func(sessionID string, t *tools.Tool) bool
+	var mcpAuth *connectors.MCPAuth
 	if conns != nil {
 		// Shared by every MCP-backed kind, so a settings change to the
 		// index threshold reaches all of them.
@@ -324,7 +325,8 @@ func main() {
 			},
 		}
 		mcpHTTP := &http.Client{Transport: netguard.Guard{Allowed: flags.OutboundHosts}.Transport()}
-		conns.RegisterBuilder("mcp", connectors.MCPBuilder(mcpHTTP, mcpDeferral))
+		mcpAuth = connectors.NewMCPAuth(secrets, conns.Store(), os.Getenv("TIMOTHY_PUBLIC_URL"), mcpHTTP, app.Log)
+		conns.RegisterBuilder("mcp", mcpAuth.Builder(mcpDeferral))
 		conns.RegisterBuilder("aws", connectors.AWSBuilder(nil, mcpDeferral))
 		conns.RegisterBuilder("gcp", connectors.GCPBuilder(nil))
 		conns.RegisterBuilder(string(gitprovider.KindGitHub), connectors.GitHubBuilder(nil))
@@ -1158,7 +1160,7 @@ func main() {
 	}
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
-		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
+		agentReg, conns, goog, msft, mcpAuth, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
 		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
 		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags))
 
@@ -1293,7 +1295,7 @@ func buildConnectors(db *pgpool.Pool, secrets *secretstore.Store, log *slog.Logg
 
 	publicURL := os.Getenv("TIMOTHY_PUBLIC_URL")
 	if publicURL == "" {
-		log.Warn("TIMOTHY_PUBLIC_URL not set; google/microsoft connectors cannot run their OAuth flow")
+		log.Warn("TIMOTHY_PUBLIC_URL not set; google/microsoft and oauth-mode mcp connectors cannot run their OAuth flow")
 	}
 	goog := connectors.NewGoogle(secrets, store, publicURL, log)
 	msft := connectors.NewMicrosoft(secrets, store, publicURL, log)
