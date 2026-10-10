@@ -797,6 +797,24 @@ func main() {
 				app.Log.Warn("mission memory extraction failed", "session_id", sessionID, "error", err)
 			}
 		})
+		// The session-wide floor chat.pinSensitiveRoute applies: a
+		// mission session that ran a sensitive tool keeps its digest on
+		// the sensitive route. An unreadable session pins it too.
+		missionDriver.SetMemoryRoute(func(ctx context.Context, sessionID string) string {
+			route := sensitiveTools.Route(ctx)
+			if route == "" {
+				return ""
+			}
+			events, err := store.Events(ctx, sessionID)
+			if err != nil {
+				app.Log.Warn("mission memory route: session load failed; pinning sensitive route", "session_id", sessionID, "error", err)
+				return route
+			}
+			if sensitiveTools.SessionSensitive(ctx, events) {
+				return route
+			}
+			return ""
+		})
 	}
 	compactor.SetMemoryExtract(func(ctx context.Context, sessionID string, seq int64, text, route string) []string {
 		if !flags.Enabled(ctx, settings.KeyMemoryExtraction) {

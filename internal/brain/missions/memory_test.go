@@ -134,8 +134,9 @@ func TestOutcomeDigestTruncatesLightFinalOutput(t *testing.T) {
 // receives, synchronized so tests can assert on it after the driver's
 // dispatching goroutine has had a chance to run.
 type recordingExtract struct {
-	mu    sync.Mutex
-	calls []string // sessionID per call
+	mu     sync.Mutex
+	calls  []string // sessionID per call
+	routes []string // route per call
 }
 
 func (r *recordingExtract) fn() MemoryExtract {
@@ -143,6 +144,7 @@ func (r *recordingExtract) fn() MemoryExtract {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.calls = append(r.calls, sessionID)
+		r.routes = append(r.routes, route)
 	}
 }
 
@@ -294,6 +296,46 @@ func TestDriverExtractsMemoryOnceOnRedelivery(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if got := rec.count(); got != 1 {
 		t.Fatalf("extraction calls after redelivery = %d, want 1 (idempotency guard must suppress the second attempt)", got)
+	}
+}
+
+// #878: the mission's session route pin rides through to the
+// extraction call; unwired or unpinned keeps the side-call default.
+func TestExtractMemoryPassesSessionRoute(t *testing.T) {
+	tests := []struct {
+		name  string
+		route func(context.Context, string) string
+		want  string
+	}{
+		{name: "unwired", want: ""},
+		{name: "not sensitive", route: func(context.Context, string) string { return "" }, want: ""},
+		{name: "sensitive session", route: func(_ context.Context, sessionID string) string {
+			if sessionID == "sess-1" {
+				return "local"
+			}
+			return ""
+		}, want: "local"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseDone, Status: StatusDone, SessionID: "sess-1"})
+			d := testDriver(store, &scriptedRunner{})
+			rec := &recordingExtract{}
+			d.SetMemoryExtract(rec.fn())
+			if tc.route != nil {
+				d.SetMemoryRoute(tc.route)
+			}
+			if err := consumeTerminal(t, d, "m1", PhaseDone, ""); err != nil {
+				t.Fatalf("consume: %v", err)
+			}
+			waitForCalls(t, rec, 1)
+			rec.mu.Lock()
+			defer rec.mu.Unlock()
+			if rec.routes[0] != tc.want {
+				t.Fatalf("route = %q, want %q", rec.routes[0], tc.want)
+			}
+		})
 	}
 }
 
