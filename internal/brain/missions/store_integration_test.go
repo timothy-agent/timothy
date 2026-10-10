@@ -755,10 +755,13 @@ func TestMissionNameRoundTrips(t *testing.T) {
 // TestSetNameIfEmpty mirrors session.Store.SetTitleIfEmpty's own
 // integration coverage: a name lands once and a second call (the
 // generation retrying, or racing an automation-set name) never clobbers
-// it.
+// it. A write publishes a mission signal so an open page refetches.
 func TestSetNameIfEmpty(t *testing.T) {
 	s := testStore(t)
 	ctx := t.Context()
+	hub := NewHub()
+	s.SetHub(hub)
+	sub := hub.Subscribe(ctx)
 
 	id, err := s.Create(ctx, Mission{Goal: marker + "set-name", Kind: "general", Route: "default"})
 	if err != nil {
@@ -766,6 +769,15 @@ func TestSetNameIfEmpty(t *testing.T) {
 	}
 	if err := s.SetNameIfEmpty(ctx, id, "Generated Name"); err != nil {
 		t.Fatalf("SetNameIfEmpty: %v", err)
+	}
+	timeout := time.After(5 * time.Second)
+	for signaled := false; !signaled; {
+		select {
+		case sig := <-sub:
+			signaled = sig.Kind == "mission" && sig.ID == id
+		case <-timeout:
+			t.Fatalf("no mission signal for %s after the name landed", id)
+		}
 	}
 	m, err := s.Get(ctx, id)
 	if err != nil {

@@ -959,24 +959,28 @@ func profileAllowsSkill(allow []string, name string) bool {
 	return false
 }
 
-// retrieveOutputTool and loadSkillTool are the builtin tools' exact
-// registered names (internal/brain/tools/builtin/retrieve.go,
+// retrieveOutputTool, timothyHelpTool and loadSkillTool are the
+// builtin tools' exact registered names
+// (internal/brain/tools/builtin/retrieve.go, timothyhelp.go,
 // internal/brain/skills/tool.go): not imported as constants to avoid
-// pulling chat into the builtin package's dependency graph for two
+// pulling chat into the builtin package's dependency graph for
 // literal strings, same convention as the sensitive-tool suffixes in
 // cmd/brain/main.go.
 const (
 	retrieveOutputTool = "retrieve_output"
+	timothyHelpTool    = "timothy_help"
 	loadSkillTool      = "load_skill"
 )
 
 // resolveToolAllow builds the tool allowlist actually sent to the
 // loop from the serving agent's config: empty means no tools (an
 // agent must opt into tools explicitly), the same flip as skills.
-// Two exemptions, independent of the agent's own list:
+// Exemptions, independent of the agent's own list:
 //   - retrieve_output always stays available: it is how the model
 //     reads back its own offloaded tool results (D-019); filtering it
 //     out would silently strand any result too big to inline.
+//   - timothy_help always stays available (issue #1127): the system
+//     prompt sends questions about Timothy itself to it.
 //   - load_skill follows the SKILLS allowlist, not the tools one: it
 //     is present only when the agent has at least one skill to load
 //     (an agent with none has nothing load_skill could load, and
@@ -999,6 +1003,9 @@ func resolveToolAllow(profile agents.Agent, deferred map[string][]string) []stri
 	allow := profile.Tools
 	if !slices.Contains(allow, retrieveOutputTool) {
 		allow = append(slices.Clone(allow), retrieveOutputTool)
+	}
+	if !slices.Contains(allow, timothyHelpTool) {
+		allow = append(slices.Clone(allow), timothyHelpTool)
 	}
 	if len(profile.Skills) > 0 && !slices.Contains(allow, loadSkillTool) {
 		allow = append(slices.Clone(allow), loadSkillTool)

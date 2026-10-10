@@ -199,26 +199,6 @@ export function ConnectorAdd() {
       toast.error('Name required', { description: 'Give this connector a unique name before testing.' })
       return
     }
-    if (!isTokenRepo && !isImap && !isCalDAV && !isGCP && !endpoint.trim()) {
-      toast.error('Endpoint required', { description: 'An MCP endpoint is required to test this connector.' })
-      return
-    }
-    if (isAWS && !awsRegion.trim()) {
-      toast.error('Region required', { description: 'A signing region matching the endpoint is required.' })
-      return
-    }
-    if (isAWS && !usingExistingToken && (!awsAccessKeyID.trim() || !awsSecretAccessKey.trim())) {
-      toast.error('Access keys required', {
-        description: 'An access key ID and secret access key are required to test this connector.',
-      })
-      return
-    }
-    if (isGCP && !usingExistingToken && !gcpKey.trim()) {
-      toast.error('Service account key required', {
-        description: 'A service-account key JSON is required to test this connector.',
-      })
-      return
-    }
     if (isImap && (!imapHost.trim() || !imapUsername.trim())) {
       toast.error('Host and username required', { description: 'An IMAP host and username are required to test this connector.' })
       return

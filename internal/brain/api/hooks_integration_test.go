@@ -180,7 +180,7 @@ func TestHookGitHubDelivery(t *testing.T) {
 		t.Fatalf("events rows = %d, want 1", n)
 	}
 	h.drain()
-	runs, err := h.store.ListRuns(t.Context(), automationID, 10)
+	runs, err := h.store.ListRuns(t.Context(), automationID, time.Time{}, "", 10)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("runs = %v, %v, want 1", runs, err)
 	}
@@ -219,7 +219,7 @@ func TestHookGitHubDelivery(t *testing.T) {
 	if n := h.webhookEvents(triggerID); n != 1 {
 		t.Fatalf("events rows after duplicate = %d, want 1", n)
 	}
-	if runs, _ := h.store.ListRuns(t.Context(), automationID, 10); len(runs) != 1 {
+	if runs, _ := h.store.ListRuns(t.Context(), automationID, time.Time{}, "", 10); len(runs) != 1 {
 		t.Fatalf("runs after duplicate = %d, want 1", len(runs))
 	}
 
@@ -261,7 +261,7 @@ func TestHookForgedSignature(t *testing.T) {
 	if n := h.webhookEvents(triggerID); n != 0 {
 		t.Fatalf("events rows after forged deliveries = %d, want 0", n)
 	}
-	if runs, _ := h.store.ListRuns(t.Context(), automationID, 10); len(runs) != 0 {
+	if runs, _ := h.store.ListRuns(t.Context(), automationID, time.Time{}, "", 10); len(runs) != 0 {
 		t.Fatalf("runs after forged deliveries = %d, want 0", len(runs))
 	}
 	if n := h.count(`SELECT jsonb_array_length(state->'auth_failures') FROM automation_triggers WHERE id = $1`, triggerID); n != 2 {
@@ -406,7 +406,7 @@ func TestSecretsDirectoryGuardsWebhookTriggerRef(t *testing.T) {
 	gw := &fakeGatewaySecrets{refs: []gwclient.SecretRef{{RefName: "ITEST_HOOK_KEY"}}}
 	a, _, _ := testAPI(t, "tok", nil)
 	m := http.NewServeMux()
-	a.registerSecrets(m.Handle, gw, nil, nil, h.store)
+	a.registerSecrets(m.Handle, gw, nil, nil, h.store, nil)
 
 	want := referenceInfo{Kind: "automation", Name: h.tag + "secret-ref", Role: "credential"}
 	found := false

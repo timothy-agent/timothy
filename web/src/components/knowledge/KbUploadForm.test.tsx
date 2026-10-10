@@ -72,7 +72,7 @@ describe('KbUploadForm', () => {
     const onUploaded = vi.fn()
     render(<KbUploadForm uploadFile={uploadFile} addUrl={addUrl} onUploaded={onUploaded} />)
 
-    fireEvent.change(screen.getByPlaceholderText(/add a page or PDF by URL/), {
+    fireEvent.change(screen.getByPlaceholderText(/Add a page or PDF by URL/), {
       target: { value: 'https://example.com/a' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
@@ -86,7 +86,7 @@ describe('KbUploadForm', () => {
     render(<KbUploadForm uploadFile={vi.fn()} addUrl={vi.fn()} onUploaded={vi.fn()} />)
     expect(screen.getByRole('button', { name: 'Add URL' })).toBeDisabled()
 
-    fireEvent.change(screen.getByPlaceholderText(/add a page or PDF by URL/), {
+    fireEvent.change(screen.getByPlaceholderText(/Add a page or PDF by URL/), {
       target: { value: 'https://example.com/a' },
     })
     expect(screen.getByRole('button', { name: 'Add URL' })).not.toBeDisabled()

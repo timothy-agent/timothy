@@ -72,7 +72,7 @@ func TestSendOncePerMissionDedupes(t *testing.T) {
 			t.Fatalf("NotifyMessage[%d]: %v", i, err)
 		}
 	}
-	notes, err := n.List(ctx)
+	notes, err := n.List(ctx, NotificationFilter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestMarkRead(t *testing.T) {
 	if err := n.NotifyMessage(ctx, id, string(StatusPaused), composeMessage(string(StatusPaused), goal, "")); err != nil {
 		t.Fatalf("NotifyMessage: %v", err)
 	}
-	notes, err := n.List(ctx)
+	notes, err := n.List(ctx, NotificationFilter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestMarkRead(t *testing.T) {
 	if err := n.MarkRead(ctx, noteID); err != nil {
 		t.Fatalf("MarkRead: %v", err)
 	}
-	notes, err = n.List(ctx)
+	notes, err = n.List(ctx, NotificationFilter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestNotifyOperatorOncePerWindow(t *testing.T) {
 	if c := count(); c != 3 {
 		t.Fatalf("operator rows after the window = %d, want 3", c)
 	}
-	notes, err := n.List(ctx)
+	notes, err := n.List(ctx, NotificationFilter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}

@@ -49,15 +49,21 @@ func (a *API) handleEntityGraph(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"entities": outEntities, "edges": outEdges})
 }
 
-// handleEntityMemories returns the active memories referencing one
-// entity, newest first — the graph's detail panel.
+// handleEntityMemories returns one page of the active memories
+// referencing one entity, newest first (the graph's detail panel), with
+// the same keyset params as handleList.
 func (a *API) handleEntityMemories(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !uuidPattern.MatchString(id) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "id must be a uuid")
 		return
 	}
-	memories, err := a.store.ListByEntity(r.Context(), id)
+	page, err := parsePage(r.URL.Query())
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	memories, err := a.store.ListByEntity(r.Context(), id, page)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "entity_memories_failed", err.Error())
 		return

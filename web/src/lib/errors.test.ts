@@ -13,7 +13,7 @@ describe('humanizeProbeDetail', () => {
       humanizeProbeDetail(
         'http 401: {"error":{"code":"401","message":"token expired or incorrect"}}',
       ),
-    ).toBe('Provider rejected the API key — token expired or incorrect')
+    ).toBe('Provider rejected the API key: token expired or incorrect')
   })
 
   it('leaves a non-JSON probe detail unchanged', () => {
@@ -26,19 +26,19 @@ describe('humanizeProbeDetail', () => {
 
   it('labels a 404 as model or endpoint not found', () => {
     expect(humanizeProbeDetail('http 404: {"message":"no such model"}')).toBe(
-      'Model or endpoint not found — no such model',
+      'Model or endpoint not found: no such model',
     )
   })
 
   it('labels a 400 as a bad request', () => {
     expect(humanizeProbeDetail('http 400: {"error":{"message":"missing field"}}')).toBe(
-      'Bad request — missing field',
+      'Bad request: missing field',
     )
   })
 
   it('labels a 5xx status as a provider error', () => {
     expect(humanizeProbeDetail('http 503: {"error":{"message":"down"}}')).toBe(
-      'Provider error — down',
+      'Provider error: down',
     )
   })
 
@@ -48,7 +48,7 @@ describe('humanizeProbeDetail', () => {
 
   it('uses the plain-text rest of an http-prefixed message when not JSON', () => {
     expect(humanizeProbeDetail('http 429: rate limit exceeded')).toBe(
-      'Rate limited — rate limit exceeded',
+      'Rate limited: rate limit exceeded',
     )
   })
 
@@ -79,18 +79,18 @@ describe('humanizeProbeDetail', () => {
   it('extracts a nested error.error.message shape', () => {
     expect(
       humanizeProbeDetail('http 401: {"error":{"error":"token expired"}}'),
-    ).toBe('Provider rejected the API key — token expired')
+    ).toBe('Provider rejected the API key: token expired')
   })
 
   it('extracts a msg field when message and error are absent', () => {
     expect(humanizeProbeDetail('http 429: {"msg":"slow down"}')).toBe(
-      'Rate limited — slow down',
+      'Rate limited: slow down',
     )
   })
 
   it('extracts a detail field when message, error and msg are absent', () => {
     expect(humanizeProbeDetail('http 429: {"detail":"too many requests"}')).toBe(
-      'Rate limited — too many requests',
+      'Rate limited: too many requests',
     )
   })
 
@@ -163,7 +163,7 @@ describe('errText', () => {
 
   it('humanizes an Error instance message', () => {
     expect(errText(new Error('http 429: {"message":"slow down"}'))).toBe(
-      'Rate limited — slow down',
+      'Rate limited: slow down',
     )
   })
 

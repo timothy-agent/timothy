@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,6 +58,22 @@ var knownKeys = map[string]bool{
 // degrades this key to false, same fail-closed-on-spend reasoning).
 var knownKeysOff = map[string]bool{
 	KeyKBImageCaptioning: true,
+}
+
+// Switch is one feature switch and its absent-row default.
+type Switch struct {
+	Key     string
+	Default bool
+}
+
+// Switches lists every known switch, sorted by key.
+func Switches() []Switch {
+	out := make([]Switch, 0, len(knownKeys))
+	for k := range knownKeys {
+		out = append(out, Switch{Key: k, Default: !knownKeysOff[k]})
+	}
+	slices.SortFunc(out, func(a, b Switch) int { return strings.Compare(a.Key, b.Key) })
+	return out
 }
 
 // Typed value settings: strings where empty means the built-in

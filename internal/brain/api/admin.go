@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
+	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/destinations"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -146,9 +147,16 @@ type automationLister interface {
 	List(ctx context.Context) ([]automations.Automation, error)
 }
 
+// channelLister is the slice of channels.Store the directory needs;
+// *channels.Store satisfies it. Includes disabled channels: they still
+// own their token refs.
+type channelLister interface {
+	List(ctx context.Context) ([]channels.Channel, error)
+}
+
 // secretRefEntry is the credentials panel's per-ref shape: the
 // gateway's directory metadata plus every referent (provider,
-// connector, destination, or automation) across both services, merged here because
+// connector, destination, automation, or channel) across both services, merged here because
 // neither service alone can see both tables. Never a value. System
 // marks a configured secret backend's own bootstrap credential (passed
 // straight through from the gateway); the panel hides the delete
@@ -163,7 +171,7 @@ type secretRefEntry struct {
 }
 
 type referenceInfo struct {
-	Kind string `json:"kind"` // "provider" | "connector" | "destination" | "automation"
+	Kind string `json:"kind"` // "provider" | "connector" | "destination" | "automation" | "channel"
 	Name string `json:"name"`
 	// Role distinguishes what the ref is used for, so the frontend can
 	// refuse manual picks of machine-managed refs: "credential" (a
@@ -188,12 +196,13 @@ type referenceInfo struct {
 // (see adminRoutePatterns) and the gateway's own provider guard still
 // applies. nil dests (destinations disabled) is the same: skips the
 // destination referents and the delete guard. nil autos (automations
-// disabled) likewise skips the automation referents and guard.
-func (a *API) registerSecrets(handle func(pattern string, h http.Handler), gw GatewaySecrets, conns connectorLister, dests destinationLister, autos automationLister) {
+// disabled) likewise skips the automation referents and guard, and nil
+// chans (channels disabled) the channel ones.
+func (a *API) registerSecrets(handle func(pattern string, h http.Handler), gw GatewaySecrets, conns connectorLister, dests destinationLister, autos automationLister, chans channelLister) {
 	if gw == nil {
 		return
 	}
-	h := &secretsAPI{gw: gw, connectors: conns, destinations: dests, automations: autos, log: a.log}
+	h := &secretsAPI{gw: gw, connectors: conns, destinations: dests, automations: autos, channels: chans, log: a.log}
 	handle("GET /v1/admin/secrets", a.auth(http.HandlerFunc(h.list)))
 	handle("DELETE /v1/admin/secrets/{ref_name}", a.auth(http.HandlerFunc(h.delete)))
 }
@@ -203,6 +212,7 @@ type secretsAPI struct {
 	connectors   connectorLister
 	destinations destinationLister
 	automations  automationLister
+	channels     channelLister
 	log          *slog.Logger
 }
 
@@ -280,6 +290,33 @@ func automationTriggerCredentialRefs(ctx context.Context, store automationLister
 	return out, nil
 }
 
+// channelTokenRefs maps every stored secret ref name to the channels
+// naming it: credential_ref (telegram or slack bot token) and slack's
+// config.app_token_ref, one referent per channel and ref. An email
+// channel's mailbox password sits on its imap connector, covered by
+// connectorRefs.
+func channelTokenRefs(ctx context.Context, store channelLister) (map[string][]referenceInfo, error) {
+	if store == nil {
+		return map[string][]referenceInfo{}, nil
+	}
+	rows, err := store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]referenceInfo{}
+	for _, c := range rows {
+		seen := map[string]bool{}
+		for _, ref := range []string{c.CredentialRef, c.Config.AppTokenRef} {
+			if ref == "" || seen[ref] {
+				continue
+			}
+			seen[ref] = true
+			out[ref] = append(out[ref], referenceInfo{Kind: "channel", Name: c.Name, Role: "credential"})
+		}
+	}
+	return out, nil
+}
+
 func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 	refs, err := h.gw.ListSecrets(r.Context())
 	if err != nil {
@@ -301,6 +338,11 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 		failInternalCode(w, h.log, "automations_failed", "automation", err)
 		return
 	}
+	byChannel, err := channelTokenRefs(r.Context(), h.channels)
+	if err != nil {
+		failInternalCode(w, h.log, "channels_failed", "channel", err)
+		return
+	}
 
 	out := make([]secretRefEntry, len(refs))
 	for i, ref := range refs {
@@ -313,6 +355,7 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 		referents = append(referents, byConnector[ref.RefName]...)
 		referents = append(referents, byDestination[ref.RefName]...)
 		referents = append(referents, byAutomation[ref.RefName]...)
+		referents = append(referents, byChannel[ref.RefName]...)
 		out[i] = secretRefEntry{
 			RefName: ref.RefName, Backend: ref.Backend, CreatedAt: ref.CreatedAt, UpdatedAt: ref.UpdatedAt,
 			ReferencedBy: referents, System: ref.System,
@@ -321,8 +364,8 @@ func (h *secretsAPI) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"secrets": out})
 }
 
-// delete refuses (409) while any connector, destination, or automation
-// webhook trigger still names ref_name as its credential_ref, without
+// delete refuses (409) while any connector, destination, automation
+// webhook trigger, or channel still names ref_name, without
 // ever asking the gateway; those references are brain's own domain.
 // Otherwise it forwards to the gateway, which independently refuses on
 // provider references.
@@ -368,6 +411,20 @@ func (h *secretsAPI) delete(w http.ResponseWriter, r *http.Request) {
 		}
 		jsonError(w, http.StatusConflict, "in_use",
 			refName+" is referenced by automation(s) "+joinNames(names))
+		return
+	}
+	byChannel, err := channelTokenRefs(r.Context(), h.channels)
+	if err != nil {
+		failInternalCode(w, h.log, "channels_failed", "channel", err)
+		return
+	}
+	if refs := byChannel[refName]; len(refs) > 0 {
+		names := make([]string, len(refs))
+		for i, ref := range refs {
+			names[i] = ref.Name
+		}
+		jsonError(w, http.StatusConflict, "in_use",
+			refName+" is referenced by channel(s) "+joinNames(names))
 		return
 	}
 	status, err := h.gw.DeleteSecret(r.Context(), refName)

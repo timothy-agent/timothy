@@ -156,7 +156,7 @@ export function isTimothyAuthError(err: unknown): boolean {
 }
 
 export const timothyAuthErrorMessage =
-  "Timothy's API token is missing or invalid. Paste TIMOTHY_API_TOKEN from deploy/.env — this is not an LLM provider key."
+  "Timothy's API token is missing or invalid. Paste TIMOTHY_API_TOKEN from deploy/.env. This is not an LLM provider key."
 
 export function errorText(err: unknown): string {
   if (isTimothyAuthError(err)) return timothyAuthErrorMessage
@@ -411,8 +411,27 @@ export async function listSessions(query = '', cursor?: SessionCursor): Promise<
   return sessions
 }
 
-export async function getTranscript(id: string): Promise<Transcript> {
-  return request<Transcript>(`/v1/sessions/${id}`)
+// SeqPage selects a seq keyset window of an event log (issue #1113):
+// limit alone means the newest rows; before_seq and after_seq are
+// mutually exclusive. Rows always come back ascending.
+export interface SeqPage {
+  limit?: number
+  before_seq?: number
+  after_seq?: number
+}
+
+function seqPageQuery(page?: SeqPage): string {
+  if (!page) return ''
+  const params = new URLSearchParams()
+  if (page.limit !== undefined) params.set('limit', String(page.limit))
+  if (page.before_seq !== undefined) params.set('before_seq', String(page.before_seq))
+  if (page.after_seq !== undefined) params.set('after_seq', String(page.after_seq))
+  return params.size > 0 ? `?${params.toString()}` : ''
+}
+
+// getTranscript without a page returns the whole transcript.
+export async function getTranscript(id: string, page?: SeqPage): Promise<Transcript> {
+  return request<Transcript>(`/v1/sessions/${id}${seqPageQuery(page)}`)
 }
 
 // answerPermission resolves a parked tool call.
@@ -529,14 +548,27 @@ export async function fetchAttachmentBlob(id: string): Promise<Blob> {
 
 // --- Long-term memory (queue + browser) ---
 
+// listMemories returns one page, newest first (server default 50, max
+// 200); the cursor is the previous page's last (created_at, id).
 export async function listMemories(
   status: MemoryItem['status'],
-  types?: string[],
+  opts?: { types?: string[]; cursor?: SessionCursor },
 ): Promise<MemoryItem[]> {
   const params = new URLSearchParams({ status })
-  if (types && types.length > 0) params.set('types', types.join(','))
+  if (opts?.types && opts.types.length > 0) params.set('types', opts.types.join(','))
+  if (opts?.cursor) {
+    params.set('before', opts.cursor.before)
+    params.set('before_id', opts.cursor.beforeId)
+  }
   const { memories } = await request<{ memories: MemoryItem[] }>(`/v1/memories?${params}`)
   return memories ?? []
+}
+
+export async function countMemories(status: MemoryItem['status']): Promise<number> {
+  const { count } = await request<{ count: number }>(
+    `/v1/memories/count?${new URLSearchParams({ status })}`,
+  )
+  return count
 }
 
 export async function addMemory(
@@ -580,8 +612,13 @@ export async function entityGraph(): Promise<EntityGraphData> {
   return { entities: data.entities ?? [], edges: data.edges ?? [] }
 }
 
-export async function entityMemories(id: string): Promise<MemoryItem[]> {
-  const { memories } = await request<{ memories: MemoryItem[] }>(`/v1/entities/${id}/memories`)
+// entityMemories returns one page of an entity's active memories,
+// newest first, with the same cursor as listMemories.
+export async function entityMemories(id: string, cursor?: SessionCursor): Promise<MemoryItem[]> {
+  const qs = cursor
+    ? `?${new URLSearchParams({ before: cursor.before, before_id: cursor.beforeId })}`
+    : ''
+  const { memories } = await request<{ memories: MemoryItem[] }>(`/v1/entities/${id}/memories${qs}`)
   return memories ?? []
 }
 
@@ -798,8 +835,8 @@ export async function catalogPrices(pairs: CatalogPriceQuery[]): Promise<Catalog
 // store-wide default backend (write-only: it is never returned by any
 // endpoint). Built-in storage encrypts it in Timothy's database; a
 // Vault/ASM default has Timothy write it into that backend under the
-// name timothy/refName. deleteSecret removes it; the provider then
-// builds without a key and shows unhealthy until a new value is set.
+// name timothy/refName. deleteSecret removes it; the gateway refuses
+// while any provider's credential_ref still names refName.
 export async function setSecret(refName: string, value: string): Promise<void> {
   await request<void>(`/v1/admin/secrets/${encodeURIComponent(refName)}`, {
     method: 'PUT',
@@ -841,18 +878,18 @@ export async function migrateAllSecrets(backend: string): Promise<SecretMigratio
   return results ?? []
 }
 
-// SecretReference is one provider, connector, destination, or
+// SecretReference is one provider, connector, destination, channel, or
 // automation webhook trigger naming a credential ref as its
 // credential_ref: the credentials panel's used-by chips.
 interface SecretReference {
-  kind: 'provider' | 'connector' | 'destination' | 'automation'
+  kind: 'provider' | 'connector' | 'destination' | 'automation' | 'channel'
   name: string
   role: 'credential' | 'oauth_tokens' | 'signing_key' | 'client_secret'
 }
 
 // SecretRefEntry is one stored secret's directory entry: name,
 // timestamps (when the row has them), and every referent across
-// providers, connectors, destinations, and automations. Never a value: the credentials panel is a
+// providers, connectors, destinations, automations, and channels. Never a value: the credentials panel is a
 // directory, not a vault viewer. system marks a configured secret
 // backend's own bootstrap credential (e.g. the vault token): the
 // gateway refuses to delete these regardless, but the panel hides the
@@ -1458,19 +1495,32 @@ export async function getMissionExecutionPlan(params: {
   return phases ?? []
 }
 
-// listMissions returns every mission by default; opts narrows to the
-// missions one automation's runs started (automationId), a text search (query, the
-// composer #-mention mission search), and/or caps the result count
-// (limit): all map directly to the server's optional query params.
+// listMissions returns one page, newest first (server default 50, max
+// 200). opts map directly to the server's query params; the cursor is
+// the previous page's last (created_at, id), and harness 'native'
+// matches missions with no delegated harness.
 export async function listMissions(opts?: {
   automationId?: string
   query?: string
+  kind?: Mission['kind']
+  harness?: string
+  model?: string
+  source?: 'manual' | 'automated'
   limit?: number
+  cursor?: SessionCursor
 }): Promise<Mission[]> {
   const params = new URLSearchParams()
   if (opts?.automationId) params.set('automation_id', opts.automationId)
   if (opts?.query) params.set('q', opts.query)
+  if (opts?.kind) params.set('kind', opts.kind)
+  if (opts?.harness) params.set('harness', opts.harness)
+  if (opts?.model) params.set('model', opts.model)
+  if (opts?.source) params.set('source', opts.source)
   if (opts?.limit) params.set('limit', String(opts.limit))
+  if (opts?.cursor) {
+    params.set('before', opts.cursor.before)
+    params.set('before_id', opts.cursor.beforeId)
+  }
   const qs = params.size > 0 ? `?${params.toString()}` : ''
   const { missions } = await request<{ missions: Mission[] }>(`/v1/missions${qs}`)
   return missions ?? []
@@ -1513,6 +1563,18 @@ export async function getMission(id: string): Promise<Mission> {
 export async function missionEvents(id: string): Promise<MissionEvent[]> {
   const { events } = await request<{ events: MissionEvent[] }>(`/v1/missions/${id}/events`)
   return events ?? []
+}
+
+// missionEventsPage reads one seq window; has_more reports rows past it
+// in the paging direction.
+export async function missionEventsPage(
+  id: string,
+  page: SeqPage,
+): Promise<{ events: MissionEvent[]; has_more: boolean }> {
+  const res = await request<{ events: MissionEvent[]; has_more: boolean }>(
+    `/v1/missions/${id}/events${seqPageQuery(page)}`,
+  )
+  return { events: res.events ?? [], has_more: res.has_more }
 }
 
 export async function missionUsage(id: string): Promise<MissionUsage> {
@@ -1619,8 +1681,13 @@ export async function openMissionPR(id: string): Promise<{ url: string; number: 
   return request<{ url: string; number: number }>(`/v1/missions/${id}/pr`, { method: 'POST' })
 }
 
-export async function listNotifications(): Promise<Notification[]> {
-  const { notifications } = await request<{ notifications: Notification[] }>('/v1/notifications')
+// listNotifications returns the newest page (server default 50);
+// unread narrows to unread rows.
+export async function listNotifications(opts?: { unread?: boolean }): Promise<Notification[]> {
+  const qs = opts?.unread ? '?unread=true' : ''
+  const { notifications } = await request<{ notifications: Notification[] }>(
+    `/v1/notifications${qs}`,
+  )
   return notifications ?? []
 }
 
@@ -1849,8 +1916,12 @@ export async function runAutomationNow(id: string): Promise<{ event_id: number }
   return request<{ event_id: number }>(`/v1/automations/${id}/run`, { method: 'POST' })
 }
 
-export async function listAutomationRuns(id: string, limit?: number): Promise<AutomationRun[]> {
-  const qs = limit ? `?limit=${limit}` : ''
+// listAutomationRuns returns one page of runs (newest first). Pass the
+// previous page's last run (created_at, id) as the cursor for the next.
+export async function listAutomationRuns(id: string, cursor?: SessionCursor): Promise<AutomationRun[]> {
+  const qs = cursor
+    ? `?${new URLSearchParams({ before: cursor.before, before_id: cursor.beforeId }).toString()}`
+    : ''
   const { runs } = await request<{ runs: AutomationRun[] }>(`/v1/automations/${id}/runs${qs}`)
   return runs ?? []
 }

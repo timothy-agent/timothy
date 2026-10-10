@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/events"
 	"github.com/SumonMSelim/timothy/internal/brain/missions/executor"
+	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 )
 
@@ -512,13 +515,36 @@ type ListFilter struct {
 	// it (case-insensitive): the composer #-mention "type to find a
 	// mission" search (GET /v1/missions?q=).
 	Query string
+	// Kind keeps only missions of that kind (coding/general).
+	Kind string
+	// Harness keeps only missions run by that harness; HarnessNative
+	// matches the native one.
+	Harness string
+	// Model keeps only missions whose top ledger model is this one.
+	Model string
+	// Source is SourceAutomated (origin_kind automation) or
+	// SourceManual (any other origin).
+	Source string
+	// Before/BeforeID is the keyset cursor: the (created_at, id) of the
+	// previous page's last row. Zero Before means the first page.
+	Before   time.Time
+	BeforeID string
 	// Limit caps the result count; 0 means unlimited.
 	Limit int
 }
 
-// List returns missions matching filter, newest first. The zero
-// ListFilter{} returns every mission, matching the pre-filter
-// behavior exactly.
+// Source filter values for ListFilter.Source.
+const (
+	SourceManual    = "manual"
+	SourceAutomated = "automated"
+)
+
+// HarnessNative is the ListFilter.Harness value matching missions with
+// no delegated harness (harness = '').
+const HarnessNative = "native"
+
+// List returns missions matching filter, ordered created_at DESC,
+// id DESC. The zero ListFilter{} returns every mission.
 func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) {
 	db, err := s.db.Get()
 	if err != nil {
@@ -539,10 +565,36 @@ func (s *Store) List(ctx context.Context, filter ListFilter) ([]Mission, error) 
 		args = append(args, "%"+escapeLike(filter.Query)+"%")
 		where = append(where, fmt.Sprintf("(name ILIKE $%d OR goal ILIKE $%d)", len(args), len(args)))
 	}
+	if filter.Kind != "" {
+		args = append(args, filter.Kind)
+		where = append(where, fmt.Sprintf("kind = $%d", len(args)))
+	}
+	if filter.Harness != "" {
+		h := filter.Harness
+		if h == HarnessNative {
+			h = ""
+		}
+		args = append(args, h)
+		where = append(where, fmt.Sprintf("harness = $%d", len(args)))
+	}
+	if filter.Model != "" {
+		args = append(args, filter.Model)
+		where = append(where, fmt.Sprintf("%s = $%d", ledger.TopModelSQL("missions.id"), len(args)))
+	}
+	switch filter.Source {
+	case SourceAutomated:
+		where = append(where, "origin_kind = '"+OriginAutomation+"'")
+	case SourceManual:
+		where = append(where, "origin_kind <> '"+OriginAutomation+"'")
+	}
+	if !filter.Before.IsZero() {
+		args = append(args, filter.Before, filter.BeforeID)
+		where = append(where, fmt.Sprintf("(created_at, id) < ($%d, $%d::uuid)", len(args)-1, len(args)))
+	}
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	query += " ORDER BY created_at DESC"
+	query += " ORDER BY created_at DESC, id DESC"
 	if filter.Limit > 0 {
 		args = append(args, filter.Limit)
 		query += fmt.Sprintf(" LIMIT $%d", len(args))
@@ -1094,17 +1146,21 @@ func (s *Store) SetDiscoverNotes(ctx context.Context, id, notes string) error {
 // template name, or an earlier successful generation) — mirrors
 // session.Store.SetTitleIfEmpty exactly: a plain guarded UPDATE, not
 // state-machine/append-only, since name is display metadata about the
-// row, not a fact about what happened during the mission.
+// row, not a fact about what happened during the mission. A write
+// publishes a mission signal so an open page shows a late name.
 func (s *Store) SetNameIfEmpty(ctx context.Context, id, name string) error {
 	db, err := s.db.Get()
 	if err != nil {
 		return fmt.Errorf("missions set name: %w", err)
 	}
-	_, err = db.Exec(ctx,
+	tag, err := db.Exec(ctx,
 		`UPDATE missions SET name = $2, updated_at = now() WHERE id = $1 AND name = ''`,
 		id, name)
 	if err != nil {
 		return fmt.Errorf("missions set name: %w", err)
+	}
+	if tag.RowsAffected() > 0 && s.hub != nil {
+		s.hub.Publish(Signal{Kind: "mission", ID: id})
 	}
 	return nil
 }
@@ -1178,6 +1234,50 @@ func (s *Store) Events(ctx context.Context, id string) ([]Event, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// EventsPage reads one seq keyset page of a mission's log (issue
+// #1113). afterSeq >= 0 reads seq > afterSeq oldest first; otherwise it
+// reads the newest rows below beforeSeq (0 means the log's end). Rows
+// come back ascending; hasMore reports rows past the page in its
+// direction.
+func (s *Store) EventsPage(ctx context.Context, id string, afterSeq, beforeSeq int64, limit int) ([]Event, bool, error) {
+	db, err := s.db.Get()
+	if err != nil {
+		return nil, false, fmt.Errorf("missions events page: %w", err)
+	}
+	sql, cursor := `SELECT mission_id, seq, kind, payload, provenance, fingerprint, created_at
+		FROM mission_events WHERE mission_id = $1 AND seq < $2 ORDER BY seq DESC LIMIT $3`, beforeSeq
+	if afterSeq >= 0 {
+		sql, cursor = `SELECT mission_id, seq, kind, payload, provenance, fingerprint, created_at
+		FROM mission_events WHERE mission_id = $1 AND seq > $2 ORDER BY seq LIMIT $3`, afterSeq
+	} else if beforeSeq <= 0 {
+		cursor = math.MaxInt64
+	}
+	rows, err := db.Query(ctx, sql, id, cursor, limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("missions events page: %w", err)
+	}
+	defer rows.Close()
+	out := []Event{}
+	for rows.Next() {
+		var e Event
+		if err := rows.Scan(&e.MissionID, &e.Seq, &e.Kind, &e.Payload, &e.Provenance, &e.Fingerprint, &e.CreatedAt); err != nil {
+			return nil, false, fmt.Errorf("missions events page: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("missions events page: %w", err)
+	}
+	hasMore := len(out) > limit
+	if hasMore {
+		out = out[:limit]
+	}
+	if afterSeq < 0 {
+		slices.Reverse(out)
+	}
+	return out, hasMore, nil
 }
 
 // LastRunState reads back the delegated executor's most recent run

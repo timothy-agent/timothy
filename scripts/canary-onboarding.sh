@@ -118,6 +118,10 @@ echo "canary-onboarding: preset=${CANARY_PROVIDER_PRESET}${CANARY_MODEL:+ model=
 # A kept project from an earlier run would not be a fresh install.
 "${COMPOSE[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
 echo "canary-onboarding: starting project ${PROJECT} on ports ${BRAIN_PORT}/${WEB_PORT}"
+# The brain image copies build/selfdocs, which only `make selfdocs` writes.
+if [[ "${CANARY_ONBOARDING_NO_BUILD:-}" != 1 ]]; then
+  make -C "${REPO_ROOT}" selfdocs
+fi
 "${COMPOSE[@]}" "${UP[@]}"
 
 start=$(date +%s)

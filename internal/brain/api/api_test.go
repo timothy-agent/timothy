@@ -97,6 +97,31 @@ func (d *memDir) Events(_ context.Context, id string) ([]session.Event, error) {
 	return append([]session.Event(nil), d.events[id]...), nil
 }
 
+// EventsPage mirrors session.Store.EventsPage over the in-memory log.
+func (d *memDir) EventsPage(_ context.Context, id string, afterSeq, beforeSeq int64, limit int) ([]session.Event, bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var sel []session.Event
+	for _, ev := range d.events[id] {
+		if afterSeq >= 0 && ev.Seq > afterSeq || afterSeq < 0 && (beforeSeq <= 0 || ev.Seq < beforeSeq) {
+			sel = append(sel, ev)
+		}
+	}
+	if len(sel) <= limit {
+		return sel, false, nil
+	}
+	if afterSeq >= 0 {
+		return sel[:limit], true, nil
+	}
+	return sel[len(sel)-limit:], true, nil
+}
+
+func (d *memDir) TranscriptControl(_ context.Context, id string) ([]session.Event, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]session.Event(nil), d.events[id]...), nil
+}
+
 func (d *memDir) Update(_ context.Context, id string, title *string, archived *bool) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -299,6 +324,7 @@ func TestMemoryProxyScopedToDocumentedRoutes(t *testing.T) {
 	// Every documented pattern reaches the proxy behind the bearer.
 	for _, c := range []struct{ method, path string }{
 		{http.MethodGet, "/v1/memories"},
+		{http.MethodGet, "/v1/memories/count"},
 		{http.MethodPost, "/v1/memories"},
 		{http.MethodPost, "/v1/memories/abc"},
 		{http.MethodGet, "/v1/memories/abc/chain"},
@@ -310,8 +336,8 @@ func TestMemoryProxyScopedToDocumentedRoutes(t *testing.T) {
 			t.Fatalf("%s %s = %d, want 200", c.method, c.path, code)
 		}
 	}
-	if proxied != 7 {
-		t.Fatalf("proxied = %d, want 7", proxied)
+	if proxied != 8 {
+		t.Fatalf("proxied = %d, want 8", proxied)
 	}
 
 	// memoryd-internal routes must never be reachable through brain —

@@ -222,21 +222,20 @@ func (s *Store) GetRun(ctx context.Context, id string) (Run, error) {
 	return r, nil
 }
 
-// ListRuns returns runs for workflowID, newest first. Empty workflowID
-// lists every run.
-func (s *Store) ListRuns(ctx context.Context, workflowID string) ([]Run, error) {
+// ListRuns returns runs for workflowID, newest first, at most limit.
+// A non-zero before pages past the run (before, beforeID).
+func (s *Store) ListRuns(ctx context.Context, workflowID string, before time.Time, beforeID string, limit int) ([]Run, error) {
 	db, err := s.db.Get()
 	if err != nil {
 		return nil, fmt.Errorf("workflows list runs: %w", err)
 	}
-	query := `SELECT ` + runColumns + ` FROM workflow_runs`
-	var args []any
-	if workflowID != "" {
-		query += ` WHERE workflow_id = $1`
-		args = append(args, workflowID)
+	query := `SELECT ` + runColumns + ` FROM workflow_runs WHERE workflow_id = $1`
+	args := []any{workflowID, limit}
+	if !before.IsZero() {
+		query += ` AND (created_at, id) < ($3, $4::uuid)`
+		args = append(args, before, beforeID)
 	}
-	query += ` ORDER BY created_at DESC`
-	rows, err := db.Query(ctx, query, args...)
+	rows, err := db.Query(ctx, query+` ORDER BY created_at DESC, id DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("workflows list runs: %w", err)
 	}

@@ -70,66 +70,85 @@ func NewPermissions(db *pgpool.Pool, workspaceRoot string) *Permissions {
 	return &Permissions{
 		db:            db,
 		workspaceRoot: workspaceRoot,
-		exempt: map[string]bool{
-			"get_current_time": true,
-			"convert_time":     true,
-			"calculate":        true,
-			"fetch_url":        true,
-			"search_web":       true,
-			"retrieve_output":  true,
-			"load_skill":       true,
-			// memoryd defaults writes to pending unless the caller
-			// explicitly marks them trusted. Keeping this exempt lets a
-			// tainted unattended mission safely enqueue a review item.
-			"remember": true,
-			// Mission protocol sentinels: pure argument parsing, zero
-			// side effects — their Execute just records a verdict for
-			// the harness. Asking a human to approve the harness's own
-			// protocol parked every mission's first turn for nothing.
-			"mission_status": true,
-			"review_verdict": true,
-			"submit_plan":    true,
-			"discover_notes": true,
-			// ask_user (D-088) is the same class: its Execute only
-			// records the question and parks the mission for the
-			// operator, who IS the permission authority. Routing it
-			// through the permission chain double-parks the mission on
-			// a prompt about asking a question.
-			"ask_user": true,
-			// write_file is root-confined by construction (relative
-			// paths only, .. rejected, root fixed at registration) —
-			// there is nothing for a prompt to guard that the tool
-			// doesn't already enforce harder.
-			"write_file": true,
-			// list_missions/get_mission are pure reads over the missions
-			// store (list / status snapshot) — zero side effects, same
-			// reasoning as search_web. push_mission_branch is
-			// deliberately NOT here: it must always ask (see
-			// PushMissionBranch's doc comment).
-			"list_missions": true,
-			"get_mission":   true,
-			// search_kb is a pure read scoped to collections bound in Go
-			// at construction (D-060), never model input — same reasoning
-			// as search_web/missions.
-			"search_kb": true,
-			// read_kb is the same pure read, one document at a time,
-			// with the collection allowlist bound the same way.
-			"read_kb": true,
-			// writing_samples is a pure read of the operator's own
-			// writing collection, whose name is bound in Go from
-			// settings, never model input.
-			"writing_samples": true,
-			// search_memory is the same class of read over long-term
-			// memory (issue #648): the query is the only argument and
-			// nothing it returns reaches a side effect.
-			"search_memory": true,
-			// read_note reads the running automation's own notes, the
-			// automation id bound in Go at construction, never model input.
-			"read_note": true,
-			// A connector's deferred-tool index entry point is exempt
-			// too, but its name is only known once a connector is
-			// built: see SetLoadTools.
-		},
+		exempt:        exemptTools(),
+	}
+}
+
+// ExemptNames lists the fixed permission-exempt tool names, sorted.
+// Connector load tools (SetLoadTools) are runtime-only and not listed.
+func ExemptNames() []string {
+	m := exemptTools()
+	out := make([]string, 0, len(m))
+	for name := range m {
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func exemptTools() map[string]bool {
+	return map[string]bool{
+		"get_current_time": true,
+		"convert_time":     true,
+		"calculate":        true,
+		"fetch_url":        true,
+		"search_web":       true,
+		"retrieve_output":  true,
+		"load_skill":       true,
+		// memoryd defaults writes to pending unless the caller
+		// explicitly marks them trusted. Keeping this exempt lets a
+		// tainted unattended mission safely enqueue a review item.
+		"remember": true,
+		// Mission protocol sentinels: pure argument parsing, zero
+		// side effects: their Execute just records a verdict for
+		// the harness. Asking a human to approve the harness's own
+		// protocol parked every mission's first turn for nothing.
+		"mission_status": true,
+		"review_verdict": true,
+		"submit_plan":    true,
+		"discover_notes": true,
+		// ask_user (D-088) is the same class: its Execute only
+		// records the question and parks the mission for the
+		// operator, who IS the permission authority. Routing it
+		// through the permission chain double-parks the mission on
+		// a prompt about asking a question.
+		"ask_user": true,
+		// write_file is root-confined by construction (relative
+		// paths only, .. rejected, root fixed at registration):
+		// there is nothing for a prompt to guard that the tool
+		// doesn't already enforce harder.
+		"write_file": true,
+		// list_missions/get_mission are pure reads over the missions
+		// store (list / status snapshot), zero side effects, same
+		// reasoning as search_web. push_mission_branch is
+		// deliberately NOT here: it must always ask (see
+		// PushMissionBranch's doc comment).
+		"list_missions": true,
+		"get_mission":   true,
+		// search_kb is a pure read scoped to collections bound in Go
+		// at construction (D-060), never model input, same reasoning
+		// as search_web/missions.
+		"search_kb": true,
+		// read_kb is the same pure read, one document at a time,
+		// with the collection allowlist bound the same way.
+		"read_kb": true,
+		// writing_samples is a pure read of the operator's own
+		// writing collection, whose name is bound in Go from
+		// settings, never model input.
+		"writing_samples": true,
+		// search_memory is the same class of read over long-term
+		// memory (issue #648): the query is the only argument and
+		// nothing it returns reaches a side effect.
+		"search_memory": true,
+		// read_note reads the running automation's own notes, the
+		// automation id bound in Go at construction, never model input.
+		"read_note": true,
+		// timothy_help reads the bundled docs collection, bound in
+		// Go, and this instance's configuration; it writes nothing.
+		"timothy_help": true,
+		// A connector's deferred-tool index entry point is exempt
+		// too, but its name is only known once a connector is
+		// built: see SetLoadTools.
 	}
 }
 

@@ -28,7 +28,7 @@ export function SettingsDialog({ open, onClose }: { open: boolean; onClose: () =
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
             Paste the TIMOTHY_API_TOKEN from deploy/.env. This authenticates the browser against
-            your Timothy instance — it is not an LLM provider API key.
+            your Timothy instance. It is not an LLM provider API key.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2">

@@ -45,6 +45,8 @@ jobs:
               - 'go.sum'
               - 'migrations/**'
               - 'deploy/Dockerfile'
+              - 'skills/**'
+              - 'web/routes.generated.json'
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
@@ -77,6 +79,9 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Manifest
+        # Fails on a tool without a description or a settings area missing from the routes export.
+        run: go run ./cmd/manifest -out build/selfdocs -routes web/routes.generated.json -skills skills
       - name: Upload coverage
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
@@ -98,6 +103,9 @@ jobs:
     services:
       postgres:
         image: pgvector/pgvector:0.8.4-pg18-trixie
+        credentials:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
         env:
           POSTGRES_USER: timothy
           POSTGRES_PASSWORD: ci
@@ -155,6 +163,8 @@ jobs:
         run: npm run build
       - name: Lint
         run: npm run lint
+      - name: Routes export current
+        run: npm run routes:check
       - name: Test
         run: npm test
       # Separate, never-blocking: v8 instrumentation slows the suite
@@ -187,6 +197,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
+      # Authenticated pulls: shared runner IPs hit Docker Hub's anonymous
+      # rate limit.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      # The brain image copies build/selfdocs (manifest pages only here).
+      - name: Self-docs bundle
+        if: matrix.service == 'brain' && needs.changes.outputs.go == 'true'
+        run: |
+          mkdir -p build
+          docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.26.9 \
+            go run ./cmd/manifest -out build/selfdocs-manifest -routes web/routes.generated.json -skills skills -version ci
+          ./scripts/selfdocs-bundle.sh --docs "" --manifest build/selfdocs-manifest --out build/selfdocs --version ci
       - name: Build image
         if: (matrix.service == 'web' && needs.changes.outputs.web == 'true') || (matrix.service != 'web' && needs.changes.outputs.go == 'true')
         run: |
@@ -221,6 +246,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build sandbox image
         run: docker build -f deploy/sandbox.Dockerfile -t timothy-sandbox:ci .
       - name: Smoke test sandbox image

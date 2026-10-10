@@ -785,7 +785,7 @@ describe('ProviderAdd Timothy auth failures', () => {
 
 describe('ProviderAdd embedded mode', () => {
   beforeEach(() => {
-    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 9, model: 'qwen2.5:7b' })
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 9, model: 'qwen3:8b' })
     vi.mocked(createProvider).mockResolvedValue('p-new')
   })
 
@@ -843,7 +843,7 @@ describe('ProviderAdd embedded mode', () => {
 
 describe('ProviderAdd page mode after create', () => {
   it('navigates to the provider list', async () => {
-    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 9, model: 'qwen2.5:7b' })
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 9, model: 'qwen3:8b' })
     vi.mocked(createProvider).mockResolvedValue('p-new')
     render(
       <TooltipProvider>
@@ -876,7 +876,7 @@ describe('ProviderAdd Ollama help', () => {
   })
 
   it('shows the Linux hint when a test against host.docker.internal fails', async () => {
-    vi.mocked(validateProvider).mockResolvedValue({ ok: false, latency_ms: 0, model: 'qwen2.5:7b', detail: 'connection refused' })
+    vi.mocked(validateProvider).mockResolvedValue({ ok: false, latency_ms: 0, model: 'qwen3:8b', detail: 'connection refused' })
     renderPage('ollama')
     expect(screen.queryByText(linuxHint)).not.toBeInTheDocument()
     fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
@@ -884,7 +884,7 @@ describe('ProviderAdd Ollama help', () => {
   })
 
   it('hides the Linux hint when the test passes', async () => {
-    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 9, model: 'qwen2.5:7b' })
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 9, model: 'qwen3:8b' })
     renderPage('ollama')
     fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
     await screen.findByText(/^OK,/)
@@ -892,7 +892,7 @@ describe('ProviderAdd Ollama help', () => {
   })
 
   it('hides the Linux hint when the failing address is not host.docker.internal', async () => {
-    vi.mocked(validateProvider).mockResolvedValue({ ok: false, latency_ms: 0, model: 'qwen2.5:7b', detail: 'connection refused' })
+    vi.mocked(validateProvider).mockResolvedValue({ ok: false, latency_ms: 0, model: 'qwen3:8b', detail: 'connection refused' })
     renderPage('ollama')
     fireEvent.click(await screen.findByText('Advanced: base URL'))
     fireEvent.change(screen.getByPlaceholderText('https://…/v1'), { target: { value: 'http://192.168.1.20:11434/v1' } })

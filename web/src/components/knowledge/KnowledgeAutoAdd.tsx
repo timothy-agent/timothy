@@ -16,7 +16,7 @@ export function KnowledgeAutoAdd() {
     <div className="space-y-6">
       <PageHeader
         title="Add to Knowledgebase"
-        description="Drop a file or paste a URL — it's classified into the best matching collection automatically, or a new one is created if nothing fits."
+        description="Drop a file or paste a URL. It's classified into the best matching collection automatically, or a new one is created if nothing fits."
         breadcrumbs={[{ label: 'Knowledge', href: '/knowledge' }, { label: 'Add to Knowledgebase' }]}
       />
 

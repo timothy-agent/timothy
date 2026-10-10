@@ -210,7 +210,7 @@ func TestSecretsListerFailureIsGeneric(t *testing.T) {
 			var buf bytes.Buffer
 			a := &API{token: "tok", log: slog.New(slog.NewTextHandler(&buf, nil))}
 			m := http.NewServeMux()
-			a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, tt.conns, tt.dests, nil)
+			a.registerSecrets(m.Handle, &fakeGatewaySecrets{}, tt.conns, tt.dests, nil, nil)
 			req := httptest.NewRequest(tt.method, tt.path, nil)
 			req.Header.Set("Authorization", "Bearer tok")
 			w := httptest.NewRecorder()
@@ -292,7 +292,7 @@ func TestListFailureBodyIsGeneric(t *testing.T) {
 		a, _, _ := testAPI(t, "tok", nil)
 		store := missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard())
 		m := mux(a)
-		a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("GET", "/v1/missions", nil)
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()

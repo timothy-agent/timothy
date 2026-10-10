@@ -7,7 +7,7 @@ export const automationsTour: TourDef = {
     {
       target: 'automations.new',
       title: 'Automate work',
-      body: 'An automation runs a mission on a schedule or when something happens, like a new email or a GitHub event.',
+      body: 'An automation runs a mission on a schedule or when something happens, like a GitHub event or a channel message.',
       side: 'left',
     },
     {

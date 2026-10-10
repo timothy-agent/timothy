@@ -101,6 +101,39 @@ beforeEach(() => {
 })
 
 describe('Knowledge page', () => {
+  it('renders a system collection read-only with its bundled version', async () => {
+    vi.mocked(getKbCollection).mockResolvedValue({
+      ...productDocs,
+      name: 'timothy-docs',
+      system: true,
+      bundle_version: 'v0.1.0-alpha.107',
+    })
+    vi.mocked(listKbDocuments).mockResolvedValue([
+      { ...readyDoc, title: 'Tools', source_type: 'selfdocs', source_ref: '' },
+    ])
+    renderPage('/knowledge/c1')
+
+    expect(await screen.findByText('Tools')).toBeTruthy()
+    expect(screen.getByText('Bundled with Timothy v0.1.0-alpha.107. Read-only.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Rename/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Delete collection' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Re-ingest Tools' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Delete Tools' })).toBeNull()
+    expect(screen.queryByPlaceholderText(/Add a page or PDF by URL/)).toBeNull()
+  })
+
+  it('keeps the edit controls on an operator collection', async () => {
+    vi.mocked(getKbCollection).mockResolvedValue(productDocs)
+    vi.mocked(listKbDocuments).mockResolvedValue([readyDoc])
+    renderPage('/knowledge/c1')
+
+    expect(await screen.findByText('onboarding.pdf')).toBeTruthy()
+    expect(screen.queryByText(/Bundled with Timothy/)).toBeNull()
+    expect(screen.getByRole('button', { name: /Rename/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Delete onboarding.pdf' })).toBeTruthy()
+    expect(screen.getByPlaceholderText(/Add a page or PDF by URL/)).toBeTruthy()
+  })
+
   it('renames a collection from the detail header', async () => {
     vi.mocked(getKbCollection).mockResolvedValue(productDocs)
     vi.mocked(listKbDocuments).mockResolvedValue([readyDoc])
@@ -245,7 +278,7 @@ describe('Knowledge page', () => {
       renderPage('/knowledge/c1')
       await screen.findByText('onboarding.pdf')
 
-      const input = screen.getByPlaceholderText(/add a page or PDF by URL/)
+      const input = screen.getByPlaceholderText(/Add a page or PDF by URL/)
       fireEvent.change(input, { target: { value: 'https://example.com/a' } })
       fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
 
@@ -261,7 +294,7 @@ describe('Knowledge page', () => {
       renderPage('/knowledge/c1')
       await screen.findByText('onboarding.pdf')
 
-      const input = screen.getByPlaceholderText(/add a page or PDF by URL/)
+      const input = screen.getByPlaceholderText(/Add a page or PDF by URL/)
       fireEvent.change(input, {
         target: { value: 'https://example.com/a\nhttps://example.com/b https://example.com/c' },
       })
@@ -283,7 +316,7 @@ describe('Knowledge page', () => {
       renderPage('/knowledge/c1')
       await screen.findByText('onboarding.pdf')
 
-      const input = screen.getByPlaceholderText(/add a page or PDF by URL/)
+      const input = screen.getByPlaceholderText(/Add a page or PDF by URL/)
       fireEvent.change(input, {
         target: {
           value: 'https://example.com/a https://example.com/bad https://example.com/c',

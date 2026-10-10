@@ -64,7 +64,10 @@ jobs:
           files=$(git diff --name-only "${{ steps.prev.outputs.tag }}" "$GITHUB_SHA")
           changed() { echo "$files" | grep -qE "$1"; }
           go_pattern='^(go\.mod|go\.sum|migrations/|internal/|cmd/|skills/|deploy/Dockerfile)'
-          for name in brain gateway memoryd sandboxd; do
+          # brain carries the docs bundle, which changes without any
+          # change in this repo, so it is rebuilt on every release.
+          echo "brain=true" >> "$GITHUB_OUTPUT"
+          for name in gateway memoryd sandboxd; do
             changed "$go_pattern" && echo "$name=true" >> "$GITHUB_OUTPUT" || echo "$name=false" >> "$GITHUB_OUTPUT"
           done
           changed '^web/' && echo "web=true" >> "$GITHUB_OUTPUT" || echo "web=false" >> "$GITHUB_OUTPUT"
@@ -74,8 +77,62 @@ jobs:
           changed '^whisper-svc/' && echo "whisper=true" >> "$GITHUB_OUTPUT" || echo "whisper=false" >> "$GITHUB_OUTPUT"
           changed '^deploy/sandbox\.Dockerfile$' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
 
+  # Self-docs for the brain image: capability pages generated from this
+  # tag plus the docs repo pages, validated against this release's route
+  # export. A validator error fails the release before any image builds.
+  # Needs the DOCS_REPO_TOKEN secret (read on timothy-agent/docs).
+  selfdocs:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_sha: ${{ steps.docs.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Capability manifest
+        run: |
+          docker run --rm -v "$PWD":/src -w /src -e GOFLAGS=-buildvcs=false golang:1.26.9 \
+            go run ./cmd/manifest -out build/selfdocs-manifest \
+              -routes web/routes.generated.json -skills skills \
+              -version "${{ steps.version.outputs.value }}"
+      - name: Check out docs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: timothy-agent/docs
+          path: docs-src
+          token: ${{ secrets.DOCS_REPO_TOKEN }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      # A rebuild of a released version reads the docs at its tag.
+      - id: docs
+        run: |
+          ref="$(./scripts/selfdocs-docs-ref.sh docs-src "${{ steps.version.outputs.value }}")"
+          echo "docs ref: $ref"
+          git -C docs-src checkout --detach "$ref"
+          echo "sha=$(git -C docs-src rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.18.0
+      - name: Validate and bundle docs
+        working-directory: docs-src
+        run: |
+          cp ../web/routes.generated.json scripts/routes.json
+          node scripts/validate.mjs --routes scripts/routes.json
+          node scripts/bundle.mjs --out ../build/docs-bundle --routes scripts/routes.json
+      - name: Merge self-docs
+        run: |
+          ./scripts/selfdocs-bundle.sh --docs build/docs-bundle \
+            --manifest build/selfdocs-manifest --out build/selfdocs \
+            --version "${{ steps.version.outputs.value }}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: selfdocs
+          path: build/selfdocs
+          if-no-files-found: error
+
   images:
-    needs: diff
+    needs: [diff, selfdocs]
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -133,6 +190,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: fromJSON(needs.diff.outputs[matrix.name])
+      - name: Download self-docs
+        if: matrix.name == 'brain'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: selfdocs
+          path: build/selfdocs
       - id: version
         run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - id: sha
@@ -148,6 +211,12 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Authenticated base-image pulls: shared runner IPs hit Docker
+      # Hub's anonymous rate limit.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build and push
         id: build
         if: fromJSON(needs.diff.outputs[matrix.name])
@@ -191,6 +260,44 @@ jobs:
           docker buildx imagetools create \
             --tag ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${{ steps.version.outputs.value }} \
             ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${prev_version}
+
+  # After the images are pushed: commit the fresh routes export to docs
+  # main and tag the validated docs commit with this version, in one
+  # atomic push. Skipped when the docs tag already exists (a rebuild).
+  docs-tag:
+    needs: [selfdocs, images]
+    if: needs.images.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Check out docs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: timothy-agent/docs
+          path: docs-src
+          token: ${{ secrets.DOCS_REPO_TOKEN }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Commit routes and tag docs
+        run: |
+          version="${{ steps.version.outputs.value }}"
+          if [ "$(./scripts/selfdocs-docs-ref.sh docs-src "$version")" = "v$version" ]; then
+            echo "docs tag v$version exists; nothing to do"
+            exit 0
+          fi
+          cd docs-src
+          git checkout --detach "${{ needs.selfdocs.outputs.docs_sha }}"
+          cp ../web/routes.generated.json scripts/routes.json
+          if ! git diff --quiet -- scripts/routes.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add scripts/routes.json
+            git commit -m "chore: refresh routes export for v$version"
+          fi
+          git tag "v$version"
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/v$version"
 
   release:
     needs: [images]

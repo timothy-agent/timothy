@@ -64,7 +64,7 @@ export function ChannelsList() {
           {channels.length === 0 ? (
             <EmptyState
               title="No channels yet"
-              description="A channel lets you talk to Timothy from Telegram or email. Pick one below."
+              description="A channel lets you talk to Timothy from Telegram, Slack or email. Pick one below."
             />
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

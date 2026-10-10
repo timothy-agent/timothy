@@ -32,6 +32,8 @@ type Readiness struct {
 	KBCollections      int  `json:"kb_collections"`
 	Automations        int  `json:"automations"`
 	AutomationsEnabled bool `json:"automations_enabled"`
+	// MissionModelFloor is MISSION_MODEL_FLOOR's model-name substrings.
+	MissionModelFloor []string `json:"mission_model_floor"`
 }
 
 // Probes are the live lookups Compute runs; a nil probe reads as false/0.
@@ -50,6 +52,7 @@ type Probes struct {
 	CountKBCollections  func(ctx context.Context) (int, error)
 	CountAutomations    func(ctx context.Context) (int, error)
 	AutomationsEnabled  func(ctx context.Context) bool
+	MissionModelFloor   []string
 }
 
 // Compute runs every probe concurrently under computeTimeout. Probe
@@ -63,7 +66,7 @@ func Compute(ctx context.Context, p Probes, log *slog.Logger) Readiness {
 	}
 
 	var (
-		r  Readiness
+		r  = Readiness{MissionModelFloor: p.MissionModelFloor}
 		mu sync.Mutex
 		wg sync.WaitGroup
 	)

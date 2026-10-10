@@ -118,7 +118,7 @@ func Validate(s Skill) error {
 		return fmt.Errorf("body is empty")
 	}
 	if n := strings.Count(s.Body, "\n") + 1; n > maxBodyLines {
-		return fmt.Errorf("body is %d lines; max %d — split details into references/", n, maxBodyLines)
+		return fmt.Errorf("body is %d lines; max %d. Split details into references/", n, maxBodyLines)
 	}
 	return nil
 }

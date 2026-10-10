@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/mail"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -30,7 +31,7 @@ import (
 type Destination struct {
 	ID            string          `json:"id"`
 	Name          string          `json:"name"`
-	Kind          string          `json:"kind"` // email | webhook | channel | github | bitbucket
+	Kind          string          `json:"kind"` // email | webhook | channel | github | bitbucket | gitlab
 	Config        json.RawMessage `json:"config"`
 	CredentialRef string          `json:"credential_ref"`
 	Enabled       bool            `json:"enabled"`
@@ -135,10 +136,13 @@ type connectorLookup interface {
 }
 
 // Connector is the narrow shape destinations needs from a connectors
-// row to validate an email destination's connector_id.
+// row to validate an email destination's connector_id. Scopes are a
+// google connector's granted OAuth scopes; a gmail one is required to
+// send mail.
 type Connector struct {
 	Kind    string
 	Enabled bool
+	Scopes  []string
 }
 
 // Sentinel errors the HTTP layer maps onto status codes.
@@ -150,6 +154,17 @@ var (
 	// ErrInvalid wraps every Create/Patch validation rejection.
 	ErrInvalid = errors.New("invalid destination")
 )
+
+// Kinds lists every destination kind validate accepts, sorted: the
+// fixed kinds plus each registered git provider.
+func Kinds() []string {
+	out := []string{"channel", "email", "webhook"}
+	for _, k := range gitprovider.Kinds() {
+		out = append(out, string(k))
+	}
+	slices.Sort(out)
+	return out
+}
 
 func validate(ctx context.Context, conns connectorLookup, channels ChannelLookup, d *Destination) error {
 	name, err := validateName(d.Name)
@@ -182,7 +197,10 @@ func validate(ctx context.Context, conns connectorLookup, channels ChannelLookup
 			return fmt.Errorf("config.connector_id: %w", err)
 		}
 		if c.Kind != "google" {
-			return fmt.Errorf("config.connector_id must name a google-kind connector")
+			return fmt.Errorf("config.connector_id names a connector of kind %s, which cannot send mail; choose a google connector with Gmail access", c.Kind)
+		}
+		if !slices.ContainsFunc(c.Scopes, func(s string) bool { return strings.Contains(s, "gmail") }) {
+			return fmt.Errorf("config.connector_id names a google connector without Gmail access, which cannot send mail")
 		}
 		if !c.Enabled {
 			return fmt.Errorf("config.connector_id names a disabled connector")
@@ -203,7 +221,7 @@ func validate(ctx context.Context, conns connectorLookup, channels ChannelLookup
 	case "channel":
 		return validateChannel(ctx, channels, d)
 	default:
-		return fmt.Errorf("unsupported kind %q (only email, webhook, channel, github, bitbucket in this release)", d.Kind)
+		return fmt.Errorf("unsupported kind %q (only email, webhook, channel, github, bitbucket, gitlab in this release)", d.Kind)
 	}
 	return nil
 }

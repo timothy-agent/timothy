@@ -214,7 +214,7 @@ CREATE INDEX IF NOT EXISTS session_events_user_text_idx
     USING gin (to_tsvector('english', payload->>'text'))
     WHERE kind = 'user_message';
 
-CREATE INDEX IF NOT EXISTS sessions_updated_idx ON sessions (updated_at DESC);
+CREATE INDEX IF NOT EXISTS sessions_updated_id_idx ON sessions (updated_at DESC, id DESC);
 
 -- Tool execution audit trail and offloaded outputs. Every tool call
 -- writes an audit row; results too large for the model's context are
@@ -319,6 +319,12 @@ CREATE INDEX IF NOT EXISTS memories_tsv_gin ON memories USING gin (tsv);
 
 CREATE INDEX IF NOT EXISTS memories_status_type_idx ON memories (status, type);
 
+-- Backs the paged browser and review queue (created_at DESC, id DESC).
+CREATE INDEX IF NOT EXISTS memories_status_created_idx ON memories (status, created_at DESC, id DESC);
+
+-- Serves entity_refs @> ARRAY[id]: entity memories and the graph join.
+CREATE INDEX IF NOT EXISTS memories_entity_refs_gin ON memories USING gin (entity_refs);
+
 CREATE TABLE IF NOT EXISTS entities (
     id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     type text NOT NULL CHECK (type IN
@@ -403,7 +409,7 @@ ON CONFLICT (backend) DO NOTHING;
 CREATE TABLE IF NOT EXISTS connectors (
     id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name           text UNIQUE NOT NULL,
-    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github', 'microsoft', 'imap', 'caldav', 'aws', 'gcp', 'bitbucket')),
+    kind           text NOT NULL CHECK (kind IN ('mcp', 'google', 'github', 'microsoft', 'imap', 'caldav', 'aws', 'gcp', 'bitbucket', 'gitlab')),
     -- kind-specific settings: mcp → {transport, endpoint, headers},
     -- google/microsoft → {client_id, client_secret_ref, scopes},
     -- imap → {host, port, username, account_email, smtp_host,
@@ -524,7 +530,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     updated_at    timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS workflow_runs_workflow_idx ON workflow_runs (workflow_id);
+CREATE INDEX IF NOT EXISTS workflow_runs_workflow_created_idx ON workflow_runs (workflow_id, created_at DESC, id DESC);
 
 -- Append-only event log, same invariant as mission_events: seq is
 -- assigned under a SELECT ... FOR UPDATE on the parent run row, never
@@ -618,7 +624,7 @@ CREATE TABLE IF NOT EXISTS automation_runs (
     finished_at     timestamptz,
     UNIQUE (automation_id, dedup_key)
 );
-CREATE INDEX IF NOT EXISTS automation_runs_automation_created_idx ON automation_runs (automation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS automation_runs_automation_created_id_idx ON automation_runs (automation_id, created_at DESC, id DESC);
 
 -- Named cross-run text; at most 10 per automation, enforced in Go.
 CREATE TABLE IF NOT EXISTS automation_notes (
@@ -1009,6 +1015,10 @@ CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);
 CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (phase) WHERE phase NOT IN ('done', 'failed');
 CREATE INDEX IF NOT EXISTS missions_automation_run_idx ON missions (automation_run_id) WHERE automation_run_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS missions_workflow_run_idx ON missions (workflow_run_id) WHERE workflow_run_id IS NOT NULL;
+-- GET /v1/missions keyset paging (Store.List).
+CREATE INDEX IF NOT EXISTS missions_created_idx ON missions (created_at DESC, id DESC);
+-- The sessions list hides mission bookkeeping sessions with a NOT EXISTS on this.
+CREATE INDEX IF NOT EXISTS missions_session_idx ON missions (session_id) WHERE session_id IS NOT NULL;
 
 -- automation_runs.mission_id and missions.automation_run_id reference
 -- each other, so this foreign key lands once missions exists.
@@ -1075,6 +1085,8 @@ CREATE INDEX IF NOT EXISTS notifications_unread_idx ON notifications (mission_id
 -- FROM missions cascading into notifications), distinct from the
 -- partial unread index above which only covers List's unread-first path.
 CREATE INDEX IF NOT EXISTS notifications_mission_idx ON notifications (mission_id);
+-- GET /v1/notifications keyset paging (Notifier.List).
+CREATE INDEX IF NOT EXISTS notifications_created_idx ON notifications (created_at DESC, id DESC);
 
 -- Content-addressed image attachments (internal/brain/attachments):
 -- binaries live on the ATTACHMENTS_DIR volume as <sha256><ext>, never
@@ -1110,8 +1122,20 @@ CREATE TABLE IF NOT EXISTS kb_collections (
     -- identity/profile collections out of general topical contests
     -- while still retrievable when they are the only relevant content.
     retrieval_weight double precision NOT NULL DEFAULT 1.0 CHECK (retrieval_weight > 0 AND retrieval_weight <= 2),
+    -- system marks a collection brain manages itself (issue #1126, the
+    -- bundled timothy-docs): the admin API refuses every write to it.
+    system      boolean NOT NULL DEFAULT false,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- One row per system collection: the bundle hash last ingested in
+-- full. Brain re-ingests at boot only when the shipped hash differs.
+CREATE TABLE IF NOT EXISTS kb_system_bundles (
+    name         text PRIMARY KEY,
+    version      text NOT NULL,
+    content_hash text NOT NULL,
+    ingested_at  timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS kb_documents (
@@ -1132,6 +1156,9 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     -- persisted so a re-ingest never re-calls the sidecar (mirrors
     -- mission attachments, D-05x); never served over the admin API.
     markdown      text NOT NULL DEFAULT '',
+    -- meta carries per-source fields; selfdocs pages store app_path,
+    -- app_label and source here.
+    meta          jsonb NOT NULL DEFAULT '{}',
     status        text NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'ingesting', 'ready', 'failed')),
     error         text NOT NULL DEFAULT '',
@@ -1181,7 +1208,7 @@ CREATE INDEX IF NOT EXISTS kb_chunks_document_idx ON kb_chunks (document_id);
 CREATE TABLE destinations (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name        text NOT NULL UNIQUE,
-    kind        text NOT NULL CHECK (kind IN ('email', 'webhook', 'channel', 'github', 'bitbucket')),
+    kind        text NOT NULL CHECK (kind IN ('email', 'webhook', 'channel', 'github', 'bitbucket', 'gitlab')),
     config      jsonb NOT NULL DEFAULT '{}',
     credential_ref text NOT NULL DEFAULT '',
     enabled     boolean NOT NULL DEFAULT true,
