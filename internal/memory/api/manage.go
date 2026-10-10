@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/memory/extract"
 	"github.com/SumonMSelim/timothy/internal/memory/store"
@@ -14,7 +15,8 @@ import (
 // Manager is the store slice behind the queue, browser, and entity
 // graph endpoints.
 type Manager interface {
-	ListByStatus(ctx context.Context, status store.Status, types ...store.MemoryType) ([]store.Memory, error)
+	ListByStatus(ctx context.Context, status store.Status, page store.Page, types ...store.MemoryType) ([]store.Memory, error)
+	CountByStatus(ctx context.Context, status store.Status) (int, error)
 	Get(ctx context.Context, id string) (store.Memory, error)
 	Contents(ctx context.Context, ids []string) (map[string]string, error)
 	Insert(ctx context.Context, m store.Memory) (string, error)
@@ -28,7 +30,7 @@ type Manager interface {
 	Chain(ctx context.Context, id string) ([]store.Memory, error)
 	ListEntities(ctx context.Context) ([]store.Entity, error)
 	EntityEdges(ctx context.Context) ([]store.EntityEdge, error)
-	ListByEntity(ctx context.Context, entityID string) ([]store.Memory, error)
+	ListByEntity(ctx context.Context, entityID string, page store.Page) ([]store.Memory, error)
 }
 
 type memoryJSON struct {
@@ -53,17 +55,29 @@ func toJSON(m store.Memory) memoryJSON {
 	return memoryJSON{
 		ID: m.ID, Type: string(m.Type), Content: m.Content,
 		Status: string(m.Status), Confidence: m.Confidence, Actor: m.Actor,
-		SourceSession: m.SourceSession, CreatedAt: m.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		// Full precision: created_at is the keyset cursor's first half.
+		SourceSession: m.SourceSession, CreatedAt: m.CreatedAt.Format(time.RFC3339Nano),
 		SupersededBy: m.SupersededBy,
 	}
 }
 
+// statusParam reads ?status, defaulting to pending.
+func statusParam(r *http.Request) store.Status {
+	if s := store.Status(r.URL.Query().Get("status")); s != "" {
+		return s
+	}
+	return store.StatusPending
+}
+
 // handleList serves the confirmation queue and the browser's status
-// filter. ?status defaults to pending; ?types=a,b narrows.
+// filter one page at a time (created_at DESC, id DESC; ?limit=,
+// ?before= + ?before_id=). ?status defaults to pending; ?types=a,b
+// narrows.
 func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
-	status := store.Status(r.URL.Query().Get("status"))
-	if status == "" {
-		status = store.StatusPending
+	page, err := parsePage(r.URL.Query())
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
 	}
 	var types []store.MemoryType
 	if raw := r.URL.Query().Get("types"); raw != "" {
@@ -71,7 +85,7 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 			types = append(types, store.MemoryType(t))
 		}
 	}
-	memories, err := a.store.ListByStatus(r.Context(), status, types...)
+	memories, err := a.store.ListByStatus(r.Context(), statusParam(r), page, types...)
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "list_failed", err.Error())
 		return
@@ -96,6 +110,18 @@ func (a *API) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"memories": out})
+}
+
+// handleCount answers how many memories are in ?status (default
+// pending): the badge reads this instead of the list.
+func (a *API) handleCount(w http.ResponseWriter, r *http.Request) {
+	n, err := a.store.CountByStatus(r.Context(), statusParam(r))
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "count_failed", err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]int{"count": n})
 }
 
 // handleAdd stores a user-explicit memory. Untrusted or

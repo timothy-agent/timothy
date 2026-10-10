@@ -150,7 +150,7 @@ func TestChatMoveCreatesPendingSupersedeCandidate(t *testing.T) {
 	if gotCandidate.Status != store.StatusPending || gotCandidate.Content != "User lives in Berlin." || gotCandidate.Supersedes != oldID {
 		t.Fatalf("candidate = %+v, want pending Berlin correction superseding %s", gotCandidate, oldID)
 	}
-	queued, err := memories.ListByStatus(t.Context(), store.StatusPending)
+	queued, err := memories.ListByStatus(t.Context(), store.StatusPending, store.Page{})
 	if err != nil {
 		t.Fatalf("ListByStatus: %v", err)
 	}

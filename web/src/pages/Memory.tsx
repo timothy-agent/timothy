@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
@@ -6,6 +6,7 @@ import {
   listMemories,
   resolveMemory,
   searchMemories,
+  type SessionCursor,
 } from '../api/client'
 import type { MemoryItem, RetrievedMemory } from '../api/types'
 import { ChainDialog } from '../components/memory/ChainDialog'
@@ -25,7 +26,7 @@ import {
   SelectValue,
 } from '../components/ui/select'
 import { Textarea } from '../components/ui/textarea'
-import { notifyMemoryChanged } from '../lib/memory'
+import { memoryPageSize, notifyMemoryChanged, useMemoryPages, usePendingMemories } from '../lib/memory'
 import { TourOverlay } from '../onboarding/tour/TourOverlay'
 import { useTour } from '../onboarding/tour/useTour'
 import { memoryTour } from '../onboarding/tours/memory'
@@ -129,27 +130,58 @@ function QueueCard({
 }
 
 function Queue() {
-  const [pending, setPending] = useState<MemoryItem[]>([])
-  const [loaded, setLoaded] = useState(false)
+  const load = useCallback((cursor?: SessionCursor) => listMemories('pending', { cursor }), [])
+  const {
+    items: pending,
+    loaded,
+    hasMore,
+    sentinelRef,
+    refresh,
+    drop,
+  } = useMemoryPages(load, 'Could not load the memory queue')
+  // The server count covers pages not loaded yet.
+  const total = Math.max(usePendingMemories(), pending.length)
   const [bulkBusy, setBulkBusy] = useState(false)
 
-  const refresh = useCallback(() => {
-    listMemories('pending')
-      .then(setPending)
-      .catch(() => {
-        toast.error('Could not load the memory queue')
-        setPending([])
-      })
-      .finally(() => setLoaded(true))
-  }, [])
-  useEffect(refresh, [refresh])
+  const resolved = (ids: string[]) => {
+    drop(ids)
+    refresh()
+  }
+
+  // allPendingIds pages past the loaded cards so bulk actions cover
+  // every pending memory, not just what is on screen.
+  const allPendingIds = async (): Promise<string[]> => {
+    const ids = pending.map((m) => m.id)
+    const seen = new Set(ids)
+    let last = pending[pending.length - 1]
+    let more = hasMore
+    while (more && last) {
+      const page = await load({ before: last.created_at, beforeId: last.id })
+      for (const m of page) {
+        if (!seen.has(m.id)) {
+          seen.add(m.id)
+          ids.push(m.id)
+        }
+      }
+      more = page.length === memoryPageSize
+      last = page[page.length - 1]
+    }
+    return ids
+  }
 
   const bulk = async (action: 'confirm' | 'reject') => {
     setBulkBusy(true)
     try {
-      await Promise.allSettled(pending.map((m) => resolveMemory(m.id, action)))
+      let ids: string[]
+      try {
+        ids = await allPendingIds()
+      } catch {
+        toast.error('Could not load the memory queue')
+        return
+      }
+      await Promise.allSettled(ids.map((id) => resolveMemory(id, action)))
       notifyMemoryChanged()
-      refresh()
+      resolved(ids)
     } finally {
       setBulkBusy(false)
     }
@@ -162,7 +194,7 @@ function Queue() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <span className="text-sm text-muted-foreground">{pending.length} pending</span>
+        <span className="text-sm text-muted-foreground">{total} pending</span>
         <Button size="sm" variant="outline" disabled={bulkBusy} onClick={() => bulk('confirm')}>
           Confirm all
         </Button>
@@ -171,8 +203,9 @@ function Queue() {
         </Button>
       </div>
       {pending.map((m) => (
-        <QueueCard key={m.id} memory={m} onResolved={refresh} />
+        <QueueCard key={m.id} memory={m} onResolved={() => resolved([m.id])} />
       ))}
+      {hasMore && <div ref={sentinelRef} className="h-px" data-testid="queue-sentinel" />}
     </div>
   )
 }
@@ -180,22 +213,19 @@ function Queue() {
 function Browser() {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<RetrievedMemory[] | null>(null)
-  const [browse, setBrowse] = useState<MemoryItem[]>([])
   const [status, setStatus] = useState<MemoryItem['status']>('active')
   const [chainFor, setChainFor] = useState<string | null>(null)
   const [newFact, setNewFact] = useState('')
   const [newType, setNewType] = useState('semantic')
   const [busy, setBusy] = useState(false)
 
-  const loadBrowse = useCallback(() => {
-    listMemories(status)
-      .then(setBrowse)
-      .catch(() => {
-        toast.error('Could not load memories')
-        setBrowse([])
-      })
-  }, [status])
-  useEffect(loadBrowse, [loadBrowse])
+  const load = useCallback((cursor?: SessionCursor) => listMemories(status, { cursor }), [status])
+  const {
+    items: browse,
+    hasMore,
+    sentinelRef,
+    refresh: refreshBrowse,
+  } = useMemoryPages(load, 'Could not load memories')
 
   const search = async () => {
     if (!query.trim()) {
@@ -220,7 +250,7 @@ function Browser() {
       const result = await addMemory(newFact.trim(), newType)
       setNewFact('')
       notifyMemoryChanged()
-      if (status === 'active') loadBrowse()
+      if (status === 'active') refreshBrowse()
       if (result.status === 'pending') {
         toast.info('Memory added to the review queue')
       } else if (result.status === 'dropped') {
@@ -308,6 +338,7 @@ function Browser() {
             </div>
           ))
         )}
+        {hasMore && <div ref={sentinelRef} className="h-px" data-testid="browse-sentinel" />}
       </div>
 
       <div className="space-y-2">

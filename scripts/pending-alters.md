@@ -49,3 +49,16 @@ CREATE TABLE IF NOT EXISTS kb_system_bundles (
 Matches `0001_init.sql`. Additive: safe to run before deploy.
 Instances: homelab `timothy`, `demo1`, `demo2` and `demo3` on
 timothy-oci.
+
+## memories paging and entity_refs indexes (#1132)
+
+```sql
+CREATE INDEX IF NOT EXISTS memories_status_created_idx ON memories (status, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS memories_entity_refs_gin ON memories USING gin (entity_refs);
+```
+
+Backs the paged `GET /v1/memories` order and the `entity_refs @>`
+lookup behind `GET /v1/entities/{id}/memories` and the entity graph.
+Matches `0001_init.sql`. Additive: safe to run before deploy.
+Instances: homelab `timothy`, `demo1`, `demo2` and `demo3` on
+timothy-oci.

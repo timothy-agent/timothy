@@ -6,14 +6,14 @@ import { Home } from './Home'
 
 vi.mock('../api/client', () => ({
   listAgents: vi.fn(),
-  listMemories: vi.fn(),
+  countMemories: vi.fn().mockResolvedValue(0),
   listRoutes: vi.fn(),
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: false }, values: {} }),
   listKbCollections: vi.fn().mockResolvedValue([]),
 }))
 
 import type { AdminRoute } from '../api/types'
-import { listAgents, listKbCollections, listMemories, listRoutes } from '../api/client'
+import { listAgents, listKbCollections, listRoutes } from '../api/client'
 
 vi.mock('../onboarding/context', async () => {
   const { onboardingState } = await import('../onboarding/testing')
@@ -83,7 +83,6 @@ beforeEach(() => {
   landed = null
   vi.clearAllMocks()
   vi.mocked(listAgents).mockResolvedValue([generalAgent, researchAgent])
-  vi.mocked(listMemories).mockResolvedValue([])
   vi.mocked(listRoutes).mockRejectedValue(new Error('not used on this page'))
   localStorage.clear()
 })

@@ -1,6 +1,8 @@
 """Tests for the pdfgen sidecar's request bounds: body cap, typst
 compile timeout, and temp-path scrubbing in returned diagnostics."""
 
+import shutil
+import struct
 import subprocess
 
 import pytest
@@ -143,3 +145,164 @@ def test_normal_render_succeeds(monkeypatch):
     assert resp.status_code == 200
     assert resp.content == b"%PDF-1.7 fake"
     assert (seen["workdir"] / "main.typ").exists() is False  # tempdir cleaned up
+
+
+# /rasterize: SVG in, PNG out. Tests marked needs_typst run the real
+# binary and only run inside the pdfgen image.
+
+SVG_TEXT = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" width="3200" height="800">'
+    b'<rect width="3200" height="800" fill="#eef"/>'
+    b'<text x="40" y="400" font-size="200">Hello Typst</text></svg>'
+)
+SVG_VIEWBOX_ONLY = (
+    b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 100">'
+    b'<rect width="400" height="100" fill="green"/></svg>'
+)
+
+needs_typst = pytest.mark.skipif(shutil.which("typst") is None, reason="typst binary not installed")
+
+
+def _png_size(data: bytes) -> tuple[int, int]:
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    return struct.unpack(">II", data[16:24])
+
+
+@needs_typst
+def test_rasterize_caps_longest_side():
+    resp = client.post("/rasterize", content=SVG_TEXT, headers={"content-type": "image/svg+xml"})
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "image/png"
+    assert _png_size(resp.content) == (1600, 400)
+
+
+@needs_typst
+def test_rasterize_viewbox_only_keeps_aspect():
+    resp = client.post("/rasterize", content=SVG_VIEWBOX_ONLY)
+    assert resp.status_code == 200, resp.text
+    width, height = _png_size(resp.content)
+    assert max(width, height) <= 1600
+    assert width == 4 * height
+
+
+@needs_typst
+def test_rasterize_small_icon_grows_to_floor():
+    icon = b'<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8"><rect width="16" height="8"/></svg>'
+    resp = client.post("/rasterize", content=icon)
+    assert resp.status_code == 200, resp.text
+    assert _png_size(resp.content) == (512, 256)
+
+
+@needs_typst
+def test_rasterize_malformed_svg_fails_cleanly():
+    resp = client.post("/rasterize", content=b'<svg xmlns="http://www.w3.org/2000/svg" width="10"><rect')
+    assert resp.status_code == 422
+    error = resp.json()["error"]
+    assert "failed to parse SVG" in error
+    assert "/tmp" not in error
+
+
+def test_rasterize_oversized_body_rejected(monkeypatch):
+    monkeypatch.setattr(main, "_rasterize", lambda *a: pytest.fail("rasterize must not run"))
+    resp = client.post("/rasterize", content=b"x" * (main.MAX_SVG_BYTES + 1))
+    assert resp.status_code == 413
+
+
+def test_rasterize_oversized_chunked_body_rejected(monkeypatch):
+    monkeypatch.setattr(main, "_rasterize", lambda *a: pytest.fail("rasterize must not run"))
+
+    def chunks():
+        for _ in range((main.MAX_SVG_BYTES // (1 << 20)) + 2):
+            yield b"x" * (1 << 20)
+
+    resp = client.post("/rasterize", content=chunks())
+    assert resp.status_code == 413
+
+
+def test_render_cap_unchanged_by_rasterize_cap(monkeypatch):
+    """A render body between the two caps is still accepted."""
+
+    def ok(workdir, out_pdf):
+        out_pdf.write_bytes(b"%PDF-1.7 fake")
+        return subprocess.CompletedProcess(args=["typst"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(main, "_compile", ok)
+    resp = client.post("/render", json=_render_body("x" * (main.MAX_SVG_BYTES + 1)))
+    assert resp.status_code == 200
+
+
+def test_rasterize_empty_body_rejected():
+    assert client.post("/rasterize", content=b"  ").status_code == 400
+
+
+def test_rasterize_timeout_returns_504(monkeypatch):
+    def slow(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=["typst"], timeout=main.RASTERIZE_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(main, "_rasterize", slow)
+    resp = client.post("/rasterize", content=SVG_TEXT)
+    assert resp.status_code == 504
+    assert "timed out" in resp.json()["error"]
+    assert client.get("/healthz").status_code == 200
+
+
+def test_rasterize_failure_response_has_no_temp_path(monkeypatch):
+    def failing(workdir, out_png):
+        return subprocess.CompletedProcess(
+            args=["typst"],
+            returncode=1,
+            stdout="",
+            stderr=f"error: failed to parse SVG\n  ┌─ {workdir}/in.svg:1:0",
+        )
+
+    monkeypatch.setattr(main, "_rasterize", failing)
+    resp = client.post("/rasterize", content=SVG_TEXT)
+    assert resp.status_code == 422
+    error = resp.json()["error"]
+    assert "in.svg:1:0" in error
+    assert "/tmp" not in error
+
+
+def test_rasterize_writes_inputs(monkeypatch):
+    seen = {}
+
+    def ok(workdir, out_png):
+        seen["svg"] = (workdir / "in.svg").read_bytes()
+        seen["typ"] = (workdir / "main.typ").read_text()
+        out_png.write_bytes(b"\x89PNG fake")
+        return subprocess.CompletedProcess(args=["typst"], returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(main, "_rasterize", ok)
+    resp = client.post("/rasterize", content=SVG_TEXT)
+    assert resp.status_code == 200
+    assert resp.content == b"\x89PNG fake"
+    assert seen["svg"] == SVG_TEXT
+    assert seen["typ"] == main.RASTERIZE_TYP
+
+
+def test_rasterize_command_is_bounded(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        seen["kwargs"] = kwargs
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    main._rasterize(tmp_path, tmp_path / "out.png")
+    cmd = seen["cmd"]
+    assert cmd[:3] == ["prlimit", f"--as={main.RASTERIZE_MEMORY_BYTES}", "--"]
+    assert cmd[cmd.index("--root") + 1] == str(tmp_path)
+    assert seen["kwargs"]["timeout"] == main.RASTERIZE_TIMEOUT_SECONDS
+    assert seen["kwargs"]["cwd"] == tmp_path
+
+
+@pytest.mark.parametrize(
+    ("raw", "want"),
+    [
+        ("error: failed to parse SVG\n  ┌─ /tmp/tmpab12cd/in.svg:1:0", "error: failed to parse SVG\n  ┌─ in.svg:1:0"),
+        ("error: cannot write /tmp/tmpab12cd/out.png", "error: cannot write out.png"),
+    ],
+)
+def test_scrub_stderr_rasterize_paths(raw, want):
+    assert main._scrub_stderr(raw) == want

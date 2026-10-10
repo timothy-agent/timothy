@@ -112,6 +112,7 @@ type API struct {
 // stays unreachable from outside. Tests pin this scope.
 var memoryRoutePatterns = []string{
 	"GET /v1/memories",
+	"GET /v1/memories/count",
 	"POST /v1/memories",
 	"POST /v1/memories/{id}",
 	"GET /v1/memories/{id}/chain",
