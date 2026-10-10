@@ -18,6 +18,8 @@ export interface ConnectorPreset {
   tokenURL?: string
   // google, microsoft: OAuth scopes this preset requests
   scopes?: string[]
+  // mcp: the authentication the add form starts on (default 'token')
+  authMode?: 'token' | 'oauth'
 }
 
 const gmailScope = 'https://www.googleapis.com/auth/gmail.modify'
