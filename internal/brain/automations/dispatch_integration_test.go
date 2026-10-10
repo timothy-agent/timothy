@@ -342,7 +342,7 @@ func (h *dispatchHarness) finish(missionID string, failed bool) {
 // runs returns automationID's runs, oldest first.
 func (h *dispatchHarness) runs(automationID string) []Run {
 	h.t.Helper()
-	rs, err := h.store.ListRuns(h.t.Context(), automationID, 200)
+	rs, err := h.store.ListRuns(h.t.Context(), automationID, time.Time{}, "", 200)
 	if err != nil {
 		h.t.Fatalf("ListRuns: %v", err)
 	}

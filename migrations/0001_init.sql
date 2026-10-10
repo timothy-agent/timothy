@@ -214,7 +214,7 @@ CREATE INDEX IF NOT EXISTS session_events_user_text_idx
     USING gin (to_tsvector('english', payload->>'text'))
     WHERE kind = 'user_message';
 
-CREATE INDEX IF NOT EXISTS sessions_updated_idx ON sessions (updated_at DESC);
+CREATE INDEX IF NOT EXISTS sessions_updated_id_idx ON sessions (updated_at DESC, id DESC);
 
 -- Tool execution audit trail and offloaded outputs. Every tool call
 -- writes an audit row; results too large for the model's context are
@@ -524,7 +524,7 @@ CREATE TABLE IF NOT EXISTS workflow_runs (
     updated_at    timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS workflow_runs_workflow_idx ON workflow_runs (workflow_id);
+CREATE INDEX IF NOT EXISTS workflow_runs_workflow_created_idx ON workflow_runs (workflow_id, created_at DESC, id DESC);
 
 -- Append-only event log, same invariant as mission_events: seq is
 -- assigned under a SELECT ... FOR UPDATE on the parent run row, never
@@ -618,7 +618,7 @@ CREATE TABLE IF NOT EXISTS automation_runs (
     finished_at     timestamptz,
     UNIQUE (automation_id, dedup_key)
 );
-CREATE INDEX IF NOT EXISTS automation_runs_automation_created_idx ON automation_runs (automation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS automation_runs_automation_created_id_idx ON automation_runs (automation_id, created_at DESC, id DESC);
 
 -- Named cross-run text; at most 10 per automation, enforced in Go.
 CREATE TABLE IF NOT EXISTS automation_notes (
@@ -1009,6 +1009,8 @@ CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);
 CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (phase) WHERE phase NOT IN ('done', 'failed');
 CREATE INDEX IF NOT EXISTS missions_automation_run_idx ON missions (automation_run_id) WHERE automation_run_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS missions_workflow_run_idx ON missions (workflow_run_id) WHERE workflow_run_id IS NOT NULL;
+-- The sessions list hides mission bookkeeping sessions with a NOT EXISTS on this.
+CREATE INDEX IF NOT EXISTS missions_session_idx ON missions (session_id) WHERE session_id IS NOT NULL;
 
 -- automation_runs.mission_id and missions.automation_run_id reference
 -- each other, so this foreign key lands once missions exists.

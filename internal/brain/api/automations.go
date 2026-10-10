@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -640,20 +639,8 @@ func (h *automationAPI) runNow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]int64{"event_id": eventID})
 }
 
-// parseRunsLimit reads ?limit=: default 50, 1..200.
-func parseRunsLimit(v string) (int, error) {
-	if v == "" {
-		return defaultRunsLimit, nil
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n < 1 || n > maxRunsLimit {
-		return 0, fmt.Errorf("limit must be an integer between 1 and %d", maxRunsLimit)
-	}
-	return n, nil
-}
-
 func (h *automationAPI) runs(w http.ResponseWriter, r *http.Request) {
-	limit, err := parseRunsLimit(r.URL.Query().Get("limit"))
+	page, err := parseKeyset(r.URL.Query(), defaultRunsLimit, maxRunsLimit)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
@@ -663,7 +650,7 @@ func (h *automationAPI) runs(w http.ResponseWriter, r *http.Request) {
 		failAutomation(w, h.log, err)
 		return
 	}
-	runs, err := h.store.ListRuns(r.Context(), id, limit)
+	runs, err := h.store.ListRuns(r.Context(), id, page.Before, page.BeforeID, page.Limit)
 	if err != nil {
 		failAutomation(w, h.log, err)
 		return
