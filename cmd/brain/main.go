@@ -263,6 +263,11 @@ func main() {
 	}, chat.VisionRouteBound(gwc, app.Log), recognizeImage, func(ctx context.Context) bool {
 		return flags.Enabled(ctx, settings.KeyKBLocalOCR)
 	}, app.Log)
+	// SVG images rasterize through the pdfgen sidecar before captioning
+	// (issue #1121); without it they stay skipped as unsupported.
+	if pdfgenURL != "" {
+		kbEnrich.Rasterize = pdfgenclient.New(pdfgenURL).Rasterize
+	}
 
 	agent, broker, outputs, builtins, chatPerms, buildErr := buildAgent(gwc, store, app.DB, workspace, searxngURL, markitdownURL, packs, flags.SkillAllowed, flags.Location, rememberWithTurnTrust(mc), app.Log, toolCalls, sensitiveRoute, fxStore, kbEnrich)
 	if buildErr != nil {
