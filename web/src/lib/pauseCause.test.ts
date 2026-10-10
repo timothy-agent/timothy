@@ -13,6 +13,8 @@ describe('pauseCauseLabel', () => {
     ['review_rounds_exhausted', { cause: 'review_rounds_exhausted' }, 'review rounds exhausted, findings still open'],
     ['result_failed', { cause: 'result_failed' }, 'delivery failed in the result phase'],
     ['plan_approval', { cause: 'plan_approval' }, 'plan awaiting approval'],
+    ['model_floor', { cause: 'model_floor', model: 'qwen2.5:7b' }, 'qwen2.5:7b is below the mission floor'],
+    ['model_floor without a model', { cause: 'model_floor' }, 'model is below the mission floor'],
     ['harness retries in plan', { cause: 'harness_retries_exhausted', phase: 'plan', harness_retries: 3 }, 'plan rejected 3 times'],
     ['harness retries in plan, once', { cause: 'harness_retries_exhausted', phase: 'plan', harness_retries: 1 }, 'plan rejected 1 time'],
     ['harness retries in build', { cause: 'harness_retries_exhausted', phase: 'build', harness_retries: 5 }, 'harness failed 5 times'],
@@ -38,5 +40,11 @@ describe('pauseDetailText', () => {
   it('passes other details through', () => {
     expect(pauseDetailText({ cause: 'budget', detail: 'over' })).toBe('over')
     expect(pauseDetailText({ cause: 'budget' })).toBeUndefined()
+  })
+
+  it('replaces a model floor error with what to do', () => {
+    expect(
+      pauseDetailText({ cause: 'model_floor', model: 'qwen2.5:7b', detail: 'mission turn served by a below-floor model: qwen2.5:7b' }),
+    ).toBe('This model can chat but cannot run missions. Pick a stronger model for missions in Settings, then resume.')
   })
 })

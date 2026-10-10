@@ -1,12 +1,10 @@
-import { BookOpen, ListChecks, RotateCcw, Sparkles, type LucideIcon } from 'lucide-react'
+import { BookOpen, ListChecks, MessageCircleQuestion, RotateCcw, Sparkles, type LucideIcon } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { errText } from '../lib/errors'
 import { useOnboarding } from './context'
 import { DOCS_URL } from './docsUrl'
 import { requestTourRestart } from './tour/useTour'
-
-export const readmeUrl = 'https://github.com/timothy-agent/timothy#readme'
 
 // tourPageFor maps a path to the page whose tour mounts there, or null.
 // List pages carry their tour on the index only, not on detail views.
@@ -80,8 +78,12 @@ export function useHelpActions(): HelpAction[] {
         )
       },
     },
-    DOCS_URL
-      ? { id: 'docs', label: 'Docs', icon: BookOpen, href: DOCS_URL }
-      : { id: 'readme', label: 'README on GitHub', icon: BookOpen, href: readmeUrl },
+    {
+      id: 'ask',
+      label: 'Ask Timothy about this page',
+      icon: MessageCircleQuestion,
+      run: () => navigate('/chat', { state: { draft: `How do I use this page: ${pathname}?` } }),
+    },
+    { id: 'docs', label: 'Docs', icon: BookOpen, href: DOCS_URL },
   ]
 }

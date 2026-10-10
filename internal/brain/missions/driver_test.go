@@ -2567,6 +2567,76 @@ func TestDriverProvisionFallsBackToGoalSlugWhenNamingFails(t *testing.T) {
 	}
 }
 
+// TestDriverCreateNamingWithStalledGenerator covers issue #1081: a
+// mission with no branch makes no synchronous name call, a mission that
+// cuts one waits at most nameBeforeBranchTimeout and slugs the branch
+// from the goal, and either way the name lands in the background.
+func TestDriverCreateNamingWithStalledGenerator(t *testing.T) {
+	old := nameBeforeBranchTimeout
+	nameBeforeBranchTimeout = 100 * time.Millisecond
+	defer func() { nameBeforeBranchTimeout = old }()
+
+	tests := []struct {
+		name          string
+		kind          string
+		wantSyncCalls int32
+		wantBranch    string
+	}{
+		{name: "general mission cuts no branch", kind: KindGeneral, wantSyncCalls: 0, wantBranch: ""},
+		{name: "coding mission bounds the wait", kind: KindCoding, wantSyncCalls: 1, wantBranch: "fix/fix-the-login-bug"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newFakeStore()
+			workspace := NewWorkspace(t.TempDir(), nil, slog.Default())
+			runner := &scriptedRunner{workerVerdicts: []WorkerVerdict{{Outcome: "blocked", Question: "n/a"}}}
+			d := NewDriver(store, runner, workspace, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+			release := make(chan struct{})
+			var syncCalls atomic.Int32
+			d.SetNameMission(func(ctx context.Context, _ string) string {
+				if _, ok := ctx.Deadline(); ok {
+					syncCalls.Add(1)
+				}
+				select {
+				case <-ctx.Done():
+					return ""
+				case <-release:
+					return "Login Bug Fix"
+				}
+			})
+
+			start := time.Now()
+			id, err := d.Create(context.Background(), Mission{Goal: "Fix the login bug", Kind: tc.kind, Route: "route-x", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8})
+			if err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if elapsed := time.Since(start); elapsed > 2*time.Second {
+				t.Fatalf("Create took %s with a stalled name generator, want prompt return", elapsed)
+			}
+			if got := syncCalls.Load(); got != tc.wantSyncCalls {
+				t.Fatalf("synchronous name calls = %d, want %d", got, tc.wantSyncCalls)
+			}
+			m, _ := store.Get(context.Background(), id)
+			if m.Branch != tc.wantBranch {
+				t.Fatalf("Branch = %q, want %q", m.Branch, tc.wantBranch)
+			}
+			if m.Name != "" {
+				t.Fatalf("Name = %q right after create, want empty while generation stalls", m.Name)
+			}
+
+			close(release)
+			deadline := time.Now().Add(5 * time.Second)
+			for m.Name == "" && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+				m, _ = store.Get(context.Background(), id)
+			}
+			if m.Name != "Login Bug Fix" {
+				t.Fatalf("Name = %q, want the background name filled in after create", m.Name)
+			}
+		})
+	}
+}
+
 // TestDriverProvisionThreadsSigningKeyFromIdentityResolver proves a
 // CloneIdentityResolver returning a non-empty SigningKey reaches the
 // clone's LOCAL git config (user.signingkey/gpg.format/commit.gpgsign)
@@ -3527,7 +3597,7 @@ func TestDriverForcedRetriesStallInsteadOfBurningIterations(t *testing.T) {
 func TestDriverModelFloorPausesImmediately(t *testing.T) {
 	store := newFakeStore()
 	store.put("m1", Mission{ID: "m1", Kind: "general", Phase: PhaseBuild, Status: StatusWorking, MaxIterations: 8})
-	runner := &scriptedRunner{workerErr: fmt.Errorf("%w: amazon.nova-lite-v1:0", ErrModelFloor)}
+	runner := &scriptedRunner{workerErr: fmt.Errorf("mission runner: %w", &ModelFloorError{Model: "amazon.nova-lite-v1:0"})}
 	d := testDriver(store, runner)
 
 	if _, err := d.Advance(context.Background(), "m1"); err != nil {
@@ -3536,6 +3606,10 @@ func TestDriverModelFloorPausesImmediately(t *testing.T) {
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Status != StatusPaused || m.PauseReason != PauseInfra {
 		t.Fatalf("mission after below-floor turn = %s/%s, want paused/infra immediately", m.Status, m.PauseReason)
+	}
+	// Issue #1090: its own cause naming the model, never review_infra.
+	if cause, model := pausedPayloadField(t, store, "m1", "cause"), pausedPayloadField(t, store, "m1", "model"); cause != CauseModelFloor || model != "amazon.nova-lite-v1:0" {
+		t.Fatalf("pause cause/model = %q/%q, want %q/amazon.nova-lite-v1:0", cause, model, CauseModelFloor)
 	}
 }
 

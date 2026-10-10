@@ -148,7 +148,7 @@ describe('Help', () => {
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('Help')).toBeInTheDocument()
-    for (const name of ['Setup checklist', "Restart this page's tour", 'Restart welcome', 'README on GitHub']) {
+    for (const name of ['Setup checklist', "Restart this page's tour", 'Restart welcome', 'Docs']) {
       expect(within(dialog).getByRole('option', { name })).toBeInTheDocument()
     }
   })

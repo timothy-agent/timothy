@@ -1,0 +1,143 @@
+{
+  "routes": [
+    {
+      "path": "/",
+      "label": "Home"
+    },
+    {
+      "path": "/analytics",
+      "label": "Analytics"
+    },
+    {
+      "path": "/automations",
+      "label": "Automations"
+    },
+    {
+      "path": "/automations/:id"
+    },
+    {
+      "path": "/automations/:id/edit"
+    },
+    {
+      "path": "/automations/new"
+    },
+    {
+      "path": "/chat/:id?",
+      "label": "Chat"
+    },
+    {
+      "path": "/dashboard"
+    },
+    {
+      "path": "/design"
+    },
+    {
+      "path": "/knowledge/*",
+      "label": "Knowledge"
+    },
+    {
+      "path": "/memory/*",
+      "label": "Memory"
+    },
+    {
+      "path": "/memory/knowledge/*"
+    },
+    {
+      "path": "/missions",
+      "label": "Missions"
+    },
+    {
+      "path": "/missions/:id"
+    },
+    {
+      "path": "/missions/new"
+    },
+    {
+      "path": "/missions/schedules/:id/edit"
+    },
+    {
+      "path": "/research/:id?"
+    },
+    {
+      "path": "/sessions/:id"
+    },
+    {
+      "path": "/settings"
+    },
+    {
+      "path": "/settings/*",
+      "label": "Settings"
+    },
+    {
+      "path": "/welcome",
+      "label": "Welcome"
+    }
+  ],
+  "settings_areas": [
+    {
+      "key": "agents",
+      "label": "Agents",
+      "path": "/settings/agents"
+    },
+    {
+      "key": "channels",
+      "label": "Channels",
+      "path": "/settings/channels"
+    },
+    {
+      "key": "connectors",
+      "label": "Connectors",
+      "path": "/settings/connectors"
+    },
+    {
+      "key": "credentials",
+      "label": "Credentials",
+      "path": "/settings/credentials"
+    },
+    {
+      "key": "destinations",
+      "label": "Destinations",
+      "path": "/settings/destinations"
+    },
+    {
+      "key": "features",
+      "label": "Features",
+      "path": "/settings/features"
+    },
+    {
+      "key": "providers",
+      "label": "Providers",
+      "path": "/settings/providers"
+    },
+    {
+      "key": "routes",
+      "label": "Routing",
+      "path": "/settings/routes"
+    },
+    {
+      "key": "secrets",
+      "label": "Secrets",
+      "path": "/settings/secrets"
+    }
+  ],
+  "labels": [
+    "Agents",
+    "Analytics",
+    "Automations",
+    "Channels",
+    "Chat",
+    "Connectors",
+    "Credentials",
+    "Destinations",
+    "Features",
+    "Home",
+    "Knowledge",
+    "Memory",
+    "Missions",
+    "Providers",
+    "Routing",
+    "Secrets",
+    "Settings",
+    "Welcome"
+  ]
+}

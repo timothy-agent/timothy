@@ -12,7 +12,7 @@ export const settingsAreas = [
   {
     key: 'connectors',
     label: 'Connectors',
-    description: 'External services Timothy can act on, like Google, Outlook, or MCP servers.',
+    description: 'External services Timothy can act on, like Google, Outlook, GitHub, or AWS.',
   },
   {
     key: 'agents',
@@ -37,7 +37,7 @@ export const settingsAreas = [
   {
     key: 'destinations',
     label: 'Destinations',
-    description: 'Where mission results get delivered: email, webhook.',
+    description: 'Where mission results get delivered: email, webhook, channel, GitHub, Bitbucket or GitLab.',
   },
   {
     key: 'channels',

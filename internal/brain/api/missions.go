@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
@@ -63,10 +62,7 @@ type missionAttachmentStore interface {
 // harness before create) and GET /v1/missions/execution-plan (the
 // full per-phase resolution preview) so the web UI never duplicates
 // gateway resolve logic.
-// nameMission generates a mission's short display name from its goal
-// (chat.TitleOverGateway, the same mechanism a chat session's title
-// uses) — nil (no gateway wiring) leaves every mission unnamed, same
-// as any generation failure. topModels resolves the top-served
+// topModels resolves the top-served
 // provider/model per mission id from the cost ledger (D-05x's
 // ledger.Aggregator.TopModelByMission) for the list response's
 // top_model decoration — nil (no ledger wiring) omits the field.
@@ -80,7 +76,7 @@ type missionAttachmentStore interface {
 // (a nil *attachments.Store boxed here would be a non-nil interface
 // value) happens once, at the call site, same shape as
 // chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), nameMission func(context.Context, string) string, topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, whisperURL string, caption func(context.Context, string, []byte) string) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, whisperURL string, caption func(context.Context, string, []byte) string) {
 	if store == nil {
 		return
 	}
@@ -109,7 +105,7 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 		}
 	}
 	resolver := &attachmentResolver{store: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: &http.Client{}, caption: caption, enrich: kbEnrich, log: a.log}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, nameMission: nameMission, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -178,10 +174,6 @@ type missionAPI struct {
 	// /v1/missions/executor-options and GET /v1/missions/execution-plan;
 	// nil (no gateway wiring) makes either endpoint 404.
 	resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error)
-	// nameMission generates a mission's short display name from its
-	// goal, fired async after create; nil (no gateway wiring) leaves
-	// every mission unnamed, same as any generation failure.
-	nameMission func(context.Context, string) string
 	// topModels resolves the top-served provider/model per mission id
 	// from the cost ledger; nil (no ledger wiring) omits top_model/
 	// top_model_provider from list/get responses entirely.
@@ -285,16 +277,52 @@ func failMission(w http.ResponseWriter, log *slog.Logger, err error) {
 	}
 }
 
-// list serves GET /v1/missions, optionally narrowed by ?automation_id=
-// (every mission an automation's runs started),
-// ?q= (case-insensitive substring match on name or goal, the
-// composer #-mention mission search), ?origin_kind= (one
-// missions.Origin* value), and/or ?limit= (a positive
-// result cap). All are ignored when empty/absent, the original
-// "every mission" behavior, and a malformed value is a 400 rather
-// than a silently-empty filter.
+// parsePageCursor reads the shared list paging params (limit default
+// 50, max 200; before + before_id), answering 400 on a bad value.
+func parsePageCursor(w http.ResponseWriter, r *http.Request) (keyset, bool) {
+	k, err := parseKeyset(r.URL.Query(), 50, 200)
+	if err == nil && k.BeforeID != "" && !validSessionID(k.BeforeID) {
+		err = errors.New("before_id must be a UUID")
+	}
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return keyset{}, false
+	}
+	return k, true
+}
+
+// list serves GET /v1/missions one page at a time (created_at DESC,
+// id DESC; ?limit=, ?before= + ?before_id=), optionally narrowed by
+// ?automation_id= (every mission an automation's runs started), ?q=
+// (case-insensitive substring match on name or goal, the composer
+// #-mention mission search), ?origin_kind= (one missions.Origin*
+// value), ?kind=, ?harness= ("native" for none), ?model= (top ledger
+// model) and ?source= (manual or automated). A malformed value is a
+// 400 rather than a silently-empty filter.
 func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
-	var filter missions.ListFilter
+	k, ok := parsePageCursor(w, r)
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	filter := missions.ListFilter{
+		Query: q.Get("q"), Harness: q.Get("harness"), Model: q.Get("model"),
+		Before: k.Before, BeforeID: k.BeforeID, Limit: k.Limit,
+	}
+	if v := q.Get("kind"); v != "" {
+		if v != "coding" && v != "general" {
+			jsonError(w, http.StatusBadRequest, "bad_request", "kind must be coding or general")
+			return
+		}
+		filter.Kind = v
+	}
+	if v := q.Get("source"); v != "" {
+		if v != missions.SourceManual && v != missions.SourceAutomated {
+			jsonError(w, http.StatusBadRequest, "bad_request", "source must be manual or automated")
+			return
+		}
+		filter.Source = v
+	}
 	if v := r.URL.Query().Get("automation_id"); v != "" {
 		if !validSessionID(v) {
 			jsonError(w, http.StatusBadRequest, "bad_request", "automation_id must be a UUID")
@@ -308,15 +336,6 @@ func (h *missionAPI) list(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		filter.OriginKind = v
-	}
-	filter.Query = r.URL.Query().Get("q")
-	if v := r.URL.Query().Get("limit"); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= 0 {
-			jsonError(w, http.StatusBadRequest, "bad_request", "limit must be a positive integer")
-			return
-		}
-		filter.Limit = n
 	}
 	rows, err := h.store.List(r.Context(), filter)
 	if err != nil {
@@ -808,12 +827,8 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 	created, err := h.store.Get(r.Context(), id)
 	if err != nil {
 		h.log.Warn("mission: re-read after create failed", "mission_id", id, "error", err)
-		h.generateName(id, req.Goal)
 		writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 		return
-	}
-	if created.Name == "" {
-		h.generateName(id, req.Goal)
 	}
 	writeJSON(w, http.StatusCreated, h.decorateTopModels(r.Context(), []missions.Mission{sanitizeMission(created)})[0])
 }
@@ -941,32 +956,6 @@ func (h *missionAPI) resolveReferenceSources(ctx context.Context, refs []chat.Re
 		out = append(out, e)
 	}
 	return out, nil
-}
-
-// generateName fires the mission's one-shot naming call in the
-// background — never blocks or fails create, mirrors chat.autoTitle's
-// fire-and-forget shape exactly. Since issue #494 the driver names a
-// mission synchronously before cutting its branch, so this only runs
-// when create returned a still-unnamed row (driver naming unwired or
-// failed). Detached from the request context
-// (context.Background()) so a client disconnect right after create
-// doesn't cancel it; nameMission carries its own short timeout
-// (chat.TitleOverGateway). SetNameIfEmpty's own guard is what makes
-// this safe even if called twice for the same id.
-func (h *missionAPI) generateName(id, goal string) {
-	if h.nameMission == nil {
-		return
-	}
-	go func() {
-		name := h.nameMission(context.Background(), goal)
-		if name == "" {
-			h.log.Warn("mission: name generation returned empty", "mission_id", id)
-			return
-		}
-		if err := h.store.SetNameIfEmpty(context.Background(), id, name); err != nil {
-			h.log.Warn("mission: set name failed", "mission_id", id, "error", err)
-		}
-	}()
 }
 
 // classifyLight decides whether a general-kind goal is single-pass
@@ -1512,6 +1501,20 @@ func (h *missionAPI) delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *missionAPI) events(w http.ResponseWriter, r *http.Request) {
+	page, paged, err := parseSeqPage(r.URL.Query())
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
+	if paged {
+		events, hasMore, err := h.store.EventsPage(r.Context(), r.PathValue("id"), page.AfterSeq, page.BeforeSeq, page.Limit)
+		if err != nil {
+			failMission(w, h.log, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"events": events, "has_more": hasMore})
+		return
+	}
 	events, err := h.store.Events(r.Context(), r.PathValue("id"))
 	if err != nil {
 		failMission(w, h.log, err)
@@ -2358,7 +2361,20 @@ func (h *missionAPI) notifications(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "not_found", "notifications are not enabled")
 		return
 	}
-	rows, err := h.notifier.List(r.Context())
+	k, ok := parsePageCursor(w, r)
+	if !ok {
+		return
+	}
+	filter := missions.NotificationFilter{Before: k.Before, BeforeID: k.BeforeID, Limit: k.Limit}
+	switch r.URL.Query().Get("unread") {
+	case "":
+	case "true":
+		filter.Unread = true
+	default:
+		jsonError(w, http.StatusBadRequest, "bad_request", "unread must be true")
+		return
+	}
+	rows, err := h.notifier.List(r.Context(), filter)
 	if err != nil {
 		failInternalCode(w, h.log, "notifications_failed", "mission", err)
 		return

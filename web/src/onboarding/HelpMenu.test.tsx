@@ -1,13 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const docs = vi.hoisted(() => ({ url: '' }))
-vi.mock('./docsUrl', () => ({
-  get DOCS_URL() {
-    return docs.url
-  },
-}))
 vi.mock('sonner', () => ({ toast: { error: vi.fn() } }))
 
 import { OnboardingContext } from './context'
@@ -15,7 +9,13 @@ import { HelpMenu } from './HelpMenu'
 import { onboardingState } from './testing'
 
 function Where() {
-  return <p data-testid="where">{useLocation().pathname}</p>
+  const loc = useLocation()
+  return (
+    <>
+      <p data-testid="where">{loc.pathname}</p>
+      <p data-testid="draft">{(loc.state as { draft?: string } | null)?.draft}</p>
+    </>
+  )
 }
 
 function renderMenu(path: string) {
@@ -37,10 +37,6 @@ function renderMenu(path: string) {
 const item = (name: string) => screen.getByRole('menuitem', { name })
 const where = () => screen.getByTestId('where')
 
-beforeEach(() => {
-  docs.url = ''
-})
-
 afterEach(() => {
   cleanup()
   vi.clearAllMocks()
@@ -49,7 +45,7 @@ afterEach(() => {
 describe('HelpMenu', () => {
   it('lists the help items', () => {
     renderMenu('/')
-    for (const name of ['Setup checklist', "Restart this page's tour", 'Restart welcome', 'README on GitHub']) {
+    for (const name of ['Setup checklist', "Restart this page's tour", 'Restart welcome', 'Ask Timothy about this page', 'Docs']) {
       expect(item(name)).toBeInTheDocument()
     }
   })
@@ -87,18 +83,17 @@ describe('HelpMenu', () => {
     await waitFor(() => expect(where()).toHaveTextContent('/welcome'))
   })
 
-  it('links the README when there is no docs site', () => {
-    renderMenu('/')
-    const link = item('README on GitHub')
-    expect(link).toHaveAttribute('href', 'https://github.com/timothy-agent/timothy#readme')
-    expect(link).toHaveAttribute('target', '_blank')
-    expect(screen.queryByRole('menuitem', { name: 'Docs' })).toBeNull()
+  it('opens chat with a draft naming the current page', async () => {
+    renderMenu('/memory')
+    fireEvent.click(item('Ask Timothy about this page'))
+    await waitFor(() => expect(where()).toHaveTextContent('/chat'))
+    expect(screen.getByTestId('draft')).toHaveTextContent('How do I use this page: /memory?')
   })
 
-  it('links the docs site when it is set', () => {
-    docs.url = 'https://docs.example.test'
+  it('links the docs site in a new tab', () => {
     renderMenu('/')
-    expect(item('Docs')).toHaveAttribute('href', 'https://docs.example.test')
-    expect(screen.queryByRole('menuitem', { name: 'README on GitHub' })).toBeNull()
+    const link = item('Docs')
+    expect(link).toHaveAttribute('href', 'https://timothy-agent.github.io/docs/')
+    expect(link).toHaveAttribute('target', '_blank')
   })
 })

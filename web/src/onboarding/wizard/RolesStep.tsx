@@ -4,6 +4,7 @@ import { listRoutes } from '../../api/client'
 import type { AdminRoute } from '../../api/types'
 import { Button } from '../../components/ui/button'
 import { errText } from '../../lib/errors'
+import { belowMissionFloor } from '../../lib/modelFloor'
 
 // roleLines turns the four role assignments into plain sentences.
 const roleLines: { role: string; with: (model: string) => string; none: string }[] = [
@@ -13,15 +14,28 @@ const roleLines: { role: string; with: (model: string) => string; none: string }
   { role: 'vision', with: (m) => `Images: ${m}`, none: 'Images: no model yet, add a provider with a vision model later' },
 ]
 
-function modelFor(routes: AdminRoute[], role: string): string | null {
+function servingModel(routes: AdminRoute[], role: string): string | null {
   const r = routes.find((x) => x.role === role)
-  const model = r?.serving?.model ?? r?.chain[0]?.model
+  return r?.serving?.model ?? r?.chain[0]?.model ?? null
+}
+
+function modelFor(routes: AdminRoute[], role: string): string | null {
+  const model = servingModel(routes, role)
   if (!model) return null
-  const provider = r?.resolved?.[0]?.provider_name
+  const provider = routes.find((x) => x.role === role)?.resolved?.[0]?.provider_name
   return provider ? `${model} from ${provider}` : model
 }
 
-export function RolesStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
+// The default (chat) model also serves missions unless an agent names another.
+export function RolesStep({
+  missionFloor,
+  onBack,
+  onNext,
+}: {
+  missionFloor?: readonly string[] | null
+  onBack: () => void
+  onNext: () => void
+}) {
   const [routes, setRoutes] = useState<AdminRoute[] | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -49,7 +63,17 @@ export function RolesStep({ onBack, onNext }: { onBack: () => void; onNext: () =
         {routes !== null &&
           roleLines.map((l) => {
             const model = modelFor(routes, l.role)
-            return <p key={l.role}>{model ? l.with(model) : l.none}</p>
+            const weak = l.role === 'default' && belowMissionFloor(servingModel(routes, l.role) ?? '', missionFloor)
+            return (
+              <div key={l.role}>
+                <p>{model ? l.with(model) : l.none}</p>
+                {weak && (
+                  <p className="text-warning">
+                    This model can chat but cannot run missions. Pick a stronger model for missions in Settings.
+                  </p>
+                )}
+              </div>
+            )
           })}
       </div>
       <p className="mt-4 text-sm">

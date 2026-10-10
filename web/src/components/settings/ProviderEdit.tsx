@@ -6,7 +6,6 @@ import {
   availableModels,
   catalogModelsForProvider,
   deleteProvider,
-  deleteSecret,
   listProviders,
   patchProvider,
   secretStatus,
@@ -491,37 +490,12 @@ function CredentialPanel({
     }
   }
 
-  const clearSecretValue = async () => {
-    const ref = provider.credential_ref
-    if (!ref) return
-    setSavingSecret(true)
-    try {
-      await deleteSecret(ref)
-      refreshSecretStatus()
-      onChanged()
-    } catch (err) {
-      toast.error('Could not clear key', { description: errText(err) })
-    } finally {
-      setSavingSecret(false)
-    }
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <span className={`rounded-md px-2 py-0.5 text-xs font-semibold uppercase ${configured ? 'bg-good-soft text-good' : 'bg-warning-soft text-warning'}`}>
           {configured ? `stored · ${backendLabel(storedBackend)}` : 'not set'}
         </span>
-        {configured && (
-          <button
-            type="button"
-            disabled={savingSecret}
-            onClick={() => void clearSecretValue()}
-            className="text-sm text-muted-foreground underline-offset-2 hover:text-destructive hover:underline"
-          >
-            clear
-          </button>
-        )}
       </div>
       {bedrock ? (
         <>
@@ -663,7 +637,7 @@ function ProviderCatalogPanel({ provider }: { provider: AdminProvider }) {
   const models = useCatalogSearch(q, search)
 
   return (
-    <Panel title={`Models · ${models.length}`} description="Every catalog model this provider can serve, with live pricing. Pick which one actually runs on the Routes page." density="operational">
+    <Panel title={`Models · ${models.length}`} description="Every catalog model this provider can serve, with live pricing. Pick which one actually runs on the Routing page." density="operational">
       <div className="p-3">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter by model id…" size="sm" />
       </div>

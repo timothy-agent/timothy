@@ -1,4 +1,4 @@
-GO_IMAGE   := golang:1.26.6
+GO_IMAGE   := golang:1.26.9
 LINT_IMAGE := golangci/golangci-lint:v2.12.2
 COMPOSE    := docker compose -f deploy/docker-compose.yml
 
@@ -15,7 +15,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
-.PHONY: build test test-integration test-live vet lint tidy skills-validate up down logs \
+.PHONY: build test test-integration test-live vet lint tidy skills-validate manifest routes-check up down logs \
 	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke
 
 build:
@@ -66,6 +66,14 @@ skills-validate:
 		-e GOFLAGS=-buildvcs=false --network timothy_timothy \
 		-e GATEWAY_URL=http://gateway:8081 \
 		$(GO_IMAGE) go run ./cmd/skills-validate -dir skills
+
+# Capability pages for the docs site; no database or network needed.
+manifest:
+	$(GO_RUN) go run ./cmd/manifest -out build/selfdocs -routes web/routes.generated.json -skills skills -version $(APP_VERSION)
+
+# Fails when web/routes.generated.json is stale against src/routes.ts.
+routes-check:
+	docker run --rm -v $(CURDIR)/web:/app -w /app node:24.18.0-alpine npm run routes:check
 
 # sandbox-image first: sandboxd is mandatory infrastructure and fails
 # to boot (NewManager errors on a missing image) without it — a fresh

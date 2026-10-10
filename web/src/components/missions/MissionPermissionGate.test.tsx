@@ -48,19 +48,19 @@ describe('MissionPermissionGate', () => {
 
   it('replaces the actions with a status line once answered', () => {
     renderGate({ tool: 'shell', onDecide: vi.fn(), answeredDecision: 'once' })
-    expect(screen.getByText('Approved — command running…')).toBeInTheDocument()
+    expect(screen.getByText('Approved. Command running…')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Allow once' })).not.toBeInTheDocument()
   })
 
   it('shows a denied status line for a deny decision', () => {
     renderGate({ tool: 'shell', onDecide: vi.fn(), answeredDecision: 'deny' })
-    expect(screen.getByText('Denied — returning to worker…')).toBeInTheDocument()
+    expect(screen.getByText('Denied. Returning to worker…')).toBeInTheDocument()
   })
 
   it('shows an unknown status line for an unknown decision', () => {
     renderGate({ tool: 'shell', onDecide: vi.fn(), answeredDecision: 'unknown' })
     expect(
-      screen.getByText('Answered — waiting for the worker to continue…'),
+      screen.getByText('Answered. Waiting for the worker to continue…'),
     ).toBeInTheDocument()
   })
 

@@ -27,7 +27,7 @@ export function Welcome() {
 
 function Wizard({ chatReady }: { chatReady: boolean }) {
   const [state, dispatch] = useReducer(wizardReducer, chatReady, initialWizardState)
-  const { updateProgress } = useOnboarding()
+  const { updateProgress, readiness } = useOnboarding()
   const navigate = useNavigate()
   const [busy, setBusy] = useState(false)
 
@@ -131,7 +131,9 @@ function Wizard({ chatReady }: { chatReady: boolean }) {
               onNext={next}
             />
           )}
-          {state.step === 'roles' && <RolesStep onBack={back} onNext={next} />}
+          {state.step === 'roles' && (
+            <RolesStep missionFloor={readiness?.mission_model_floor} onBack={back} onNext={next} />
+          )}
           {state.step === 'basics' && <BasicsStep onBack={back} onNext={next} />}
           {state.step === 'hello' && (
             <HelloStep

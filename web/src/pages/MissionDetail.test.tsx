@@ -12,6 +12,7 @@ vi.mock('../lib/events', () => ({ subscribeEvents: vi.fn() }))
 vi.mock('../api/client', () => ({
   getMission: vi.fn(),
   missionEvents: vi.fn(),
+  missionEventsPage: vi.fn().mockResolvedValue({ events: [], has_more: false }),
   missionUsage: vi.fn(),
   resumeMission: vi.fn(),
   sendMissionNote: vi.fn(),
@@ -48,6 +49,7 @@ import {
   listDestinations,
   listMissionFiles,
   missionEvents,
+  missionEventsPage,
   missionUsage,
   openMissionPR,
   pushMission,
@@ -151,6 +153,7 @@ beforeEach(() => {
   vi.mocked(subscribeEvents).mockReturnValue(vi.fn())
   vi.mocked(getMission).mockResolvedValue(baseMission)
   vi.mocked(missionEvents).mockResolvedValue(events)
+  vi.mocked(missionEventsPage).mockResolvedValue({ events: [], has_more: false })
   vi.mocked(missionUsage).mockResolvedValue({
     mission_id: 'm1',
     cost_by_currency: {},
@@ -884,7 +887,7 @@ describe('MissionDetail', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
     await waitFor(() => expect(answerMissionPermission).toHaveBeenCalledWith('m1', 'once'))
-    expect(await screen.findByText('Approved — command running…')).toBeTruthy()
+    expect(await screen.findByText('Approved. Command running…')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Deny' })).toBeNull()
 
@@ -907,7 +910,7 @@ describe('MissionDetail', () => {
     })
     sub.fireSignal({ kind: 'mission', id: 'm1' })
     expect(await screen.findByRole('button', { name: 'Allow once' })).toBeTruthy()
-    expect(screen.queryByText('Approved — command running…')).toBeNull()
+    expect(screen.queryByText('Approved. Command running…')).toBeNull()
   })
 
   it('reverts to actionable and shows an error toast when the decision POST fails', async () => {
@@ -925,7 +928,7 @@ describe('MissionDetail', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
     await waitFor(() => expect(answerMissionPermission).toHaveBeenCalled())
     expect(await screen.findByRole('button', { name: 'Allow once' })).toBeTruthy()
-    expect(screen.queryByText('Approved — command running…')).toBeNull()
+    expect(screen.queryByText('Approved. Command running…')).toBeNull()
   })
 
   it('treats a still-pending permission as answered when the events already show a later permission_answered', async () => {
@@ -954,7 +957,7 @@ describe('MissionDetail', () => {
       },
     ])
     renderPage()
-    expect(await screen.findByText('Answered — waiting for the worker to continue…')).toBeTruthy()
+    expect(await screen.findByText('Answered. Waiting for the worker to continue…')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull()
   })
 
@@ -1122,6 +1125,32 @@ describe('MissionDetail', () => {
     expect(screen.getByText('Last rejection: plan_invalid: unit 2 has no criteria')).toBeTruthy()
   })
 
+  it('names the model on a mission floor pause, not an infrastructure error (#1090)', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'paused', pause_reason: 'infra' })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.paused',
+        payload: {
+          reason: 'infra',
+          cause: 'model_floor',
+          model: 'qwen2.5:7b',
+          detail: 'mission turn served by a below-floor model: qwen2.5:7b',
+        },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('Paused: qwen2.5:7b is below the mission floor')).toBeTruthy()
+    expect(
+      screen.getByText('This model can chat but cannot run missions. Pick a stronger model for missions in Settings, then resume.'),
+    ).toBeTruthy()
+    expect(screen.queryByText('Paused: infrastructure error')).toBeNull()
+  })
+
   it('omits the pause detail once the mission has been resumed', async () => {
     vi.mocked(getMission).mockResolvedValue({ ...baseMission, status: 'idle', pause_reason: '' })
     vi.mocked(missionEvents).mockResolvedValue([
@@ -1238,6 +1267,56 @@ describe('MissionDetail', () => {
 
     sub.fireReady()
     await vi.waitFor(() => expect(getMission).toHaveBeenCalledTimes(2))
+  })
+
+  it('appends only events after the newest seq on a signal, deduped by seq (issue #1113)', async () => {
+    const sub = captureSubscribe()
+    renderPage()
+    expect(await screen.findByText('Mission created')).toBeTruthy()
+
+    const later: MissionEvent = {
+      mission_id: 'm1',
+      seq: 5,
+      kind: 'mission.later_future_kind',
+      payload: {},
+      provenance: 'live',
+      created_at: '2026-01-01T00:04:00Z',
+    }
+    vi.mocked(missionEventsPage).mockResolvedValueOnce({ events: [events[3], later], has_more: false })
+    sub.fireSignal({ kind: 'mission', id: 'm1' })
+
+    expect(await screen.findByText('mission.later_future_kind')).toBeTruthy()
+    expect(missionEventsPage).toHaveBeenCalledWith('m1', { after_seq: 4, limit: 500 })
+    expect(missionEvents).toHaveBeenCalledTimes(1)
+    expect(screen.getAllByText('Permission once: shell')).toHaveLength(1)
+    expect(screen.getByText('Mission created')).toBeTruthy()
+  })
+
+  it('reads newer pages until has_more clears, and catches up on ready', async () => {
+    const sub = captureSubscribe()
+    renderPage()
+    expect(await screen.findByText('Mission created')).toBeTruthy()
+
+    const ev = (seq: number, kind: string): MissionEvent => ({
+      mission_id: 'm1',
+      seq,
+      kind,
+      payload: {},
+      provenance: 'live',
+      created_at: '2026-01-01T00:05:00Z',
+    })
+    vi.mocked(missionEventsPage)
+      .mockResolvedValueOnce({ events: [ev(5, 'mission.page_one_kind')], has_more: true })
+      .mockResolvedValueOnce({ events: [ev(6, 'mission.page_two_kind')], has_more: false })
+      .mockResolvedValueOnce({ events: [ev(7, 'mission.after_reconnect_kind')], has_more: false })
+    sub.fireSignal({ kind: 'mission', id: 'm1' })
+    expect(await screen.findByText('mission.page_two_kind')).toBeTruthy()
+    expect(missionEventsPage).toHaveBeenNthCalledWith(2, 'm1', { after_seq: 5, limit: 500 })
+
+    sub.fireReady()
+    expect(await screen.findByText('mission.after_reconnect_kind')).toBeTruthy()
+    expect(missionEventsPage).toHaveBeenLastCalledWith('m1', { after_seq: 6, limit: 500 })
+    expect(missionEvents).toHaveBeenCalledTimes(1)
   })
 
   it('unsubscribes on unmount', async () => {

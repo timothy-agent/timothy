@@ -146,6 +146,12 @@ func TestAutoResumeBackoffLadder(t *testing.T) {
 			if notified := len(notifier.notified) == 1; notified != tc.wantNotify {
 				t.Fatalf("notified = %v, want notify=%v", notifier.notified, tc.wantNotify)
 			}
+			if tc.n == 4 {
+				wantMessage := "this mission has paused for backoff 4 times and will not auto-resume again. It needs a human look"
+				if notifier.messages[0] != wantMessage {
+					t.Fatalf("message = %q, want %q", notifier.messages[0], wantMessage)
+				}
+			}
 		})
 	}
 }
@@ -269,6 +275,10 @@ func TestAutoResumeInfraNotifiesOncePerTick(t *testing.T) {
 	autoResumeInfra(context.Background(), signaler, store, notifier, nil, log)
 	if len(notifier.notified) != 1 {
 		t.Fatalf("notified = %d, want 1", len(notifier.notified))
+	}
+	wantMessage := "this mission has paused for infra failure 3 times and will not auto-resume again. It needs a human look"
+	if notifier.messages[0] != wantMessage {
+		t.Fatalf("message = %q, want %q", notifier.messages[0], wantMessage)
 	}
 	if len(signaler.signaled) != 0 {
 		t.Fatal("exhausted mission must never be resumed")

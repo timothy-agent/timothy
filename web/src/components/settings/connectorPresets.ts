@@ -109,7 +109,7 @@ export const connectorPresets: ConnectorPreset[] = [
     brandColor: '#24292F',
     tokenPlaceholder: 'ghp_… or github_pat_…',
     tokenHint:
-      'Fine-grained personal access token — grant Contents (read and write) and Pull requests on the repositories Timothy may work with.',
+      'Fine-grained personal access token. Grant Contents (read and write) and Pull requests on the repositories Timothy may work with.',
     tokenURL: 'https://github.com/settings/personal-access-tokens/new',
   },
   {
@@ -121,7 +121,7 @@ export const connectorPresets: ConnectorPreset[] = [
     brandColor: '#0052CC',
     tokenPlaceholder: 'workspace or repository access token',
     tokenHint:
-      'Bitbucket Cloud workspace or repository access token — grant Repositories: Read and Pull requests: Read on the repositories Timothy may work with.',
+      'Bitbucket Cloud workspace or repository access token. Grant Repositories: Read and Pull requests: Read on the repositories Timothy may work with.',
     tokenURL: 'https://support.atlassian.com/bitbucket-cloud/docs/access-tokens/',
   },
   {

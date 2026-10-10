@@ -67,7 +67,9 @@ AGENTS.md so other work does not pay for it every session.
   `pdf_export_enabled`).
 - Mission display names: generated fire-and-forget at create
   (`chat.TitleOverGateway`), backfilled once in the result phase's step
-  (`Driver.SetNameMission`) if still empty.
+  (`Driver.SetNameMission`) if still empty. Only a mission that cuts a
+  branch waits on the name first, at most `nameBeforeBranchTimeout`
+  (5 s, issue #1081), so the slug can come from the title (issue #494).
 - Harness-owned verification: `CheckArtifacts` (declared artifact paths
   must exist, non-empty, inside the workspace) runs BEFORE any
   model-authored `check_cmd`. `passes` flags flip only on harness

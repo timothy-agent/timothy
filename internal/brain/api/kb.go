@@ -18,6 +18,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/platform/markitdown"
 	"github.com/SumonMSelim/timothy/internal/platform/netguard"
+	"github.com/SumonMSelim/timothy/internal/platform/pagefetch"
 )
 
 // maxKBUploadBytes caps a single knowledge-base document upload.
@@ -742,36 +743,26 @@ func (h *kbAPI) clipDocument(w http.ResponseWriter, r *http.Request) {
 // fetchURL GETs u, capping the body at maxKBUploadBytes, and returns
 // the bytes plus the response Content-Type.
 func (h *kbAPI) fetchURL(ctx context.Context, u *url.URL) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	page, err := pagefetch.Fetch(ctx, h.fetchHTTP, u.String(),
+		"text/html, application/pdf;q=0.9, text/plain;q=0.9, text/markdown;q=0.9, */*;q=0.1", maxKBUploadBytes)
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("User-Agent", "timothy/1.0 (+self-hosted assistant)")
-	req.Header.Set("Accept", "text/html, application/pdf;q=0.9, text/plain;q=0.9, text/markdown;q=0.9, */*;q=0.1")
-
-	resp, err := h.fetchHTTP.Do(req)
-	if err != nil {
-		return nil, "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+	if page.Status < 200 || page.Status >= 300 {
 		// Bot-block statuses: LinkedIn's 999, plus the usual challenge
 		// responses: a raw status code reads like our bug when it's the
 		// site refusing automated clients.
-		switch resp.StatusCode {
+		switch page.Status {
 		case 999, http.StatusForbidden, http.StatusTooManyRequests:
-			return nil, "", fmt.Errorf("http %d fetching %s: the site blocks automated access — save the page as a PDF and upload it instead", resp.StatusCode, u.Host)
+			return nil, "", fmt.Errorf("http %d fetching %s: the site blocks automated access. Save the page as a PDF and upload it instead", page.Status, u.Host)
 		}
-		return nil, "", fmt.Errorf("http %d fetching %s", resp.StatusCode, u.Host)
+		return nil, "", fmt.Errorf("http %d fetching %s", page.Status, u.Host)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxKBUploadBytes+1))
-	if err != nil {
-		return nil, "", fmt.Errorf("read body: %w", err)
-	}
+	body := page.Body
 	if len(body) > maxKBUploadBytes {
 		return nil, "", fmt.Errorf("response exceeds the 32MiB limit")
 	}
-	return body, resp.Header.Get("Content-Type"), nil
+	return body, page.ContentType, nil
 }
 
 // convertFetched turns a fetched body into markdown by content type:

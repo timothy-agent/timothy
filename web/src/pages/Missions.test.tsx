@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Mission, Notification } from '../api/types'
@@ -72,8 +72,32 @@ function renderPage() {
   return router
 }
 
+// jsdom has no IntersectionObserver: keep each observer's callback so a
+// test can report the sentinel as visible.
+let observerCallbacks: IntersectionObserverCallback[] = []
+class FakeIntersectionObserver {
+  constructor(cb: IntersectionObserverCallback) {
+    observerCallbacks.push(cb)
+  }
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return []
+  }
+}
+
+function scrollToSentinel() {
+  const cb = observerCallbacks.at(-1)
+  act(() => {
+    cb?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
+  })
+}
+
 afterEach(cleanup)
 beforeEach(() => {
+  observerCallbacks = []
+  vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
   Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(subscribeEvents).mockReturnValue(vi.fn())
@@ -86,6 +110,11 @@ describe('Missions board', () => {
     renderPage()
     expect(await screen.findByText('Fix the login bug')).toBeTruthy()
     expect(screen.getByText('working')).toBeTruthy()
+  })
+
+  it('requests unread notifications only', async () => {
+    renderPage()
+    await waitFor(() => expect(listNotifications).toHaveBeenCalledWith({ unread: true }))
   })
 
   it('shows an unread notification strip, colored amber for paused', async () => {
@@ -261,86 +290,178 @@ describe('Missions board', () => {
       origin_kind: 'automation',
     }
 
-    it('narrows by kind', async () => {
-      vi.mocked(listMissions).mockResolvedValue([mission, coding])
-      renderPage()
-      await screen.findByText('Fix the login bug')
+    // The server applies the filters; the mock answers like it would.
+    beforeEach(() => {
+      vi.mocked(listMissions).mockImplementation(async (opts) => {
+        if (opts?.kind === 'coding' || opts?.harness === 'claude-cli') return [coding]
+        if (opts?.model === 'claude-opus-4' || opts?.source === 'automated') return [coding]
+        if (opts?.harness === 'native' || opts?.source === 'manual') return [mission]
+        return [mission, coding]
+      })
+    })
+
+    const pick = async (combobox: string, option: string) => {
       await screen.findByText('Refactor the payments module')
+      fireEvent.click(screen.getByRole('combobox', { name: combobox }))
+      fireEvent.click(await screen.findByRole('option', { name: option }))
+    }
 
-      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by kind' }))
-      fireEvent.click(await screen.findByRole('option', { name: 'Coding' }))
-
-      expect(screen.queryByText('Fix the login bug')).toBeNull()
+    it('narrows by kind on the server', async () => {
+      renderPage()
+      await pick('Filter by kind', 'Coding')
+      await waitFor(() => expect(screen.queryByText('Fix the login bug')).toBeNull())
       expect(screen.getByText('Refactor the payments module')).toBeTruthy()
-      expect(screen.getByText('1 of 2')).toBeTruthy()
+      expect(listMissions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ kind: 'coding', limit: 50 }),
+      )
     })
 
-    it('narrows by harness, showing Native for an unset harness', async () => {
-      vi.mocked(listMissions).mockResolvedValue([mission, coding])
+    it('sends harness=native for the Native option', async () => {
       renderPage()
-      await screen.findByText('Fix the login bug')
+      await pick('Filter by harness', 'Native')
+      await waitFor(() => expect(screen.queryByText('Refactor the payments module')).toBeNull())
+      expect(screen.getByText('Fix the login bug')).toBeTruthy()
+      expect(listMissions).toHaveBeenLastCalledWith(expect.objectContaining({ harness: 'native' }))
+    })
 
+    it('keeps other harness options after narrowing', async () => {
+      renderPage()
+      await pick('Filter by harness', 'Native')
+      await waitFor(() => expect(screen.queryByText('Refactor the payments module')).toBeNull())
       fireEvent.click(screen.getByRole('combobox', { name: 'Filter by harness' }))
-      fireEvent.click(await screen.findByRole('option', { name: 'Native' }))
+      expect(await screen.findByRole('option', { name: 'claude-cli' })).toBeTruthy()
+    })
 
+    it('narrows by model on the server', async () => {
+      renderPage()
+      await pick('Filter by model', 'claude-opus-4')
+      await waitFor(() => expect(screen.queryByText('Fix the login bug')).toBeNull())
+      expect(listMissions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ model: 'claude-opus-4' }),
+      )
+    })
+
+    it('narrows by source: automated', async () => {
+      renderPage()
+      await pick('Filter by source', 'Automated')
+      await waitFor(() => expect(screen.queryByText('Fix the login bug')).toBeNull())
+      expect(listMissions).toHaveBeenLastCalledWith(expect.objectContaining({ source: 'automated' }))
+    })
+
+    it('narrows by source: manual', async () => {
+      renderPage()
+      await pick('Filter by source', 'Manual')
+      await waitFor(() => expect(screen.queryByText('Refactor the payments module')).toBeNull())
       expect(screen.getByText('Fix the login bug')).toBeTruthy()
-      expect(screen.queryByText('Refactor the payments module')).toBeNull()
+      expect(listMissions).toHaveBeenLastCalledWith(expect.objectContaining({ source: 'manual' }))
     })
 
-    it('narrows by model', async () => {
-      vi.mocked(listMissions).mockResolvedValue([mission, coding])
+    it('sends no filter params when none is active', async () => {
       renderPage()
-      await screen.findByText('Fix the login bug')
-
-      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by model' }))
-      fireEvent.click(await screen.findByRole('option', { name: 'claude-opus-4' }))
-
-      expect(screen.queryByText('Fix the login bug')).toBeNull()
-      expect(screen.getByText('Refactor the payments module')).toBeTruthy()
-    })
-
-    it('narrows by source: automated means origin_kind is automation', async () => {
-      vi.mocked(listMissions).mockResolvedValue([mission, coding])
-      renderPage()
-      await screen.findByText('Fix the login bug')
-
-      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by source' }))
-      fireEvent.click(await screen.findByRole('option', { name: 'Automated' }))
-
-      expect(screen.queryByText('Fix the login bug')).toBeNull()
-      expect(screen.getByText('Refactor the payments module')).toBeTruthy()
-    })
-
-    it('narrows by source: manual hides automation-started missions', async () => {
-      vi.mocked(listMissions).mockResolvedValue([mission, coding])
-      renderPage()
-      await screen.findByText('Fix the login bug')
-
-      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by source' }))
-      fireEvent.click(await screen.findByRole('option', { name: 'Manual' }))
-
-      expect(screen.getByText('Fix the login bug')).toBeTruthy()
-      expect(screen.queryByText('Refactor the payments module')).toBeNull()
-    })
-
-    it('shows no count when no filter is active', async () => {
-      vi.mocked(listMissions).mockResolvedValue([mission, coding])
-      renderPage()
-      await screen.findByText('Fix the login bug')
-      expect(screen.queryByText('1 of 2')).toBeNull()
-      expect(screen.queryByText('2 of 2')).toBeNull()
+      await screen.findByText('Refactor the payments module')
+      expect(listMissions).toHaveBeenCalledWith({
+        kind: undefined,
+        harness: undefined,
+        model: undefined,
+        source: undefined,
+        limit: 50,
+      })
     })
 
     it('shows a filters-no-match empty state with no create button in it', async () => {
-      vi.mocked(listMissions).mockResolvedValue([mission])
+      renderPage()
+      await screen.findByText('Refactor the payments module')
+      vi.mocked(listMissions).mockResolvedValue([])
+      fireEvent.click(screen.getByRole('combobox', { name: 'Filter by kind' }))
+      fireEvent.click(await screen.findByRole('option', { name: 'General' }))
+
+      const empty = (await screen.findByText('No missions match the current filters.')).closest('div')
+      expect(empty?.querySelector('button')).toBeNull()
+    })
+  })
+
+  describe('paging', () => {
+    // page builds n missions, newest first, starting `start` minutes
+    // before a fixed instant.
+    const page = (prefix: string, n: number, start = 0): Mission[] =>
+      Array.from({ length: n }, (_, i) => ({
+        ...mission,
+        id: `${prefix}-${String(i).padStart(3, '0')}`,
+        goal: `${prefix} mission ${i}`,
+        created_at: new Date(Date.UTC(2026, 9, 1, 12, 0) - (start + i) * 60_000).toISOString(),
+      }))
+
+    const first = page('p1', 50)
+    const second = page('p2', 10, 50)
+
+    it('loads the next page at the sentinel and appends without duplicates', async () => {
+      vi.mocked(listMissions).mockImplementation(async (opts) =>
+        // The second page repeats the first page's last row.
+        opts?.cursor ? [first[49], ...second] : first,
+      )
+      renderPage()
+      await screen.findByText('p1 mission 0')
+      expect(screen.getByTestId('missions-sentinel')).toBeTruthy()
+
+      scrollToSentinel()
+
+      await screen.findByText('p2 mission 9')
+      expect(listMissions).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          limit: 50,
+          cursor: { before: first[49].created_at, beforeId: first[49].id },
+        }),
+      )
+      expect(screen.getAllByText('p1 mission 49')).toHaveLength(1)
+      // A short page means the end: the sentinel goes away.
+      expect(screen.queryByTestId('missions-sentinel')).toBeNull()
+    })
+
+    it('shows no sentinel when the first page is short', async () => {
       renderPage()
       await screen.findByText('Fix the login bug')
+      expect(screen.queryByTestId('missions-sentinel')).toBeNull()
+    })
+
+    it('restarts from page 1 when a filter changes', async () => {
+      vi.mocked(listMissions).mockImplementation(async (opts) => {
+        if (opts?.kind === 'coding') return page('coding', 3)
+        return opts?.cursor ? second : first
+      })
+      renderPage()
+      await screen.findByText('p1 mission 0')
+      scrollToSentinel()
+      await screen.findByText('p2 mission 0')
 
       fireEvent.click(screen.getByRole('combobox', { name: 'Filter by kind' }))
       fireEvent.click(await screen.findByRole('option', { name: 'Coding' }))
 
-      const empty = screen.getByText('No missions match the current filters.').closest('div')
-      expect(empty?.querySelector('button')).toBeNull()
+      await screen.findByText('coding mission 0')
+      expect(vi.mocked(listMissions).mock.lastCall?.[0]?.cursor).toBeUndefined()
+      expect(screen.queryByText('p1 mission 0')).toBeNull()
+      expect(screen.queryByText('p2 mission 0')).toBeNull()
+    })
+
+    it('a signal refetches only page 1 and keeps older loaded pages', async () => {
+      const sub = captureSubscribe()
+      vi.mocked(listMissions).mockImplementation(async (opts) => (opts?.cursor ? second : first))
+      renderPage()
+      await screen.findByText('p1 mission 0')
+      scrollToSentinel()
+      await screen.findByText('p2 mission 9')
+
+      vi.mocked(listMissions).mockClear()
+      // A new mission pushes first[49] off page 1.
+      vi.mocked(listMissions).mockResolvedValue([...page('new', 1, -1), ...first.slice(0, 49)])
+
+      sub.fireSignal({ kind: 'mission', id: 'new-000' })
+
+      await screen.findByText('new mission 0')
+      expect(listMissions).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(listMissions).mock.lastCall?.[0]?.cursor).toBeUndefined()
+      expect(screen.getByText('p1 mission 49')).toBeTruthy()
+      expect(screen.getByText('p2 mission 9')).toBeTruthy()
+      expect(screen.getAllByText('p1 mission 0')).toHaveLength(1)
     })
   })
 

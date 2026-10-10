@@ -185,7 +185,7 @@ export function KbUploadForm({
                 void submitUrls()
               }
             }}
-            placeholder="https://example.com/article — add a page or PDF by URL (paste several to bulk-add)"
+            placeholder="Add a page or PDF by URL: https://example.com/article (paste several to bulk-add)"
             className="max-h-40 min-h-9 w-full resize-none rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-ring"
           />
           <Button type="submit" variant="outline" disabled={parseUrls(url).length === 0 || !!urlProgress}>

@@ -77,7 +77,7 @@ func TestMissionsEndpointsUnmountedWhenStoreNil(t *testing.T) {
 	t.Parallel()
 	a, _, _ := testAPI(t, "tok", nil)
 	m := mux(a)
-	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	for _, req := range []struct{ method, path string }{
 		{"GET", "/v1/missions"},
@@ -117,7 +117,7 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	call := func(path string) int {
 		req := httptest.NewRequest("GET", path, nil)
@@ -161,6 +161,65 @@ func TestMissionsListFilterValidation(t *testing.T) {
 	if code := call("/v1/missions?q=fix+the+bug"); code != 500 {
 		t.Fatalf("q= against a degraded store = %d, want 500 (reached the store)", code)
 	}
+
+	// Paging and board filters (issue #1112).
+	cursor := "before=2026-10-01T12%3A00%3A00.123456Z&before_id=11111111-2222-3333-4444-555555555555"
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/v1/missions?limit=201", 400},
+		{"/v1/missions?limit=200", 500},
+		{"/v1/missions?before=2026-10-01T12%3A00%3A00Z", 400},
+		{"/v1/missions?before_id=11111111-2222-3333-4444-555555555555", 400},
+		{"/v1/missions?before=yesterday&before_id=11111111-2222-3333-4444-555555555555", 400},
+		{"/v1/missions?before=2026-10-01T12%3A00%3A00Z&before_id=not-a-uuid", 400},
+		{"/v1/missions?kind=epic", 400},
+		{"/v1/missions?source=robot", 400},
+		{"/v1/missions?" + cursor, 500},
+		{"/v1/missions?kind=coding&harness=native&model=glm-4.7&source=manual&" + cursor, 500},
+		{"/v1/missions?source=automated&kind=general&harness=claude-cli", 500},
+		// lib/references.ts's composer #-mention search.
+		{"/v1/missions?q=fix&limit=8", 500},
+	} {
+		if code := call(tc.path); code != tc.want {
+			t.Fatalf("GET %s = %d, want %d", tc.path, code, tc.want)
+		}
+	}
+}
+
+// TestNotificationsListValidation: bad paging or unread values 400
+// before reaching the (degraded) store; valid ones reach it and 500.
+func TestNotificationsListValidation(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
+	store := missions.NewStore(pool, discard())
+	notifier := missions.NewNotifier(pool, "", nil, discard())
+	m := mux(a)
+	a.registerMissions(m.Handle, store, nil, notifier, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/v1/notifications?unread=yes", 400},
+		{"/v1/notifications?limit=0", 400},
+		{"/v1/notifications?limit=500", 400},
+		{"/v1/notifications?before=2026-10-01T12%3A00%3A00Z", 400},
+		{"/v1/notifications?before_id=11111111-2222-3333-4444-555555555555", 400},
+		{"/v1/notifications?before=nope&before_id=11111111-2222-3333-4444-555555555555", 400},
+		{"/v1/notifications", 500},
+		{"/v1/notifications?unread=true&limit=20&before=2026-10-01T12%3A00%3A00Z&before_id=11111111-2222-3333-4444-555555555555", 500},
+	} {
+		req := httptest.NewRequest("GET", tc.path, nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		w := httptest.NewRecorder()
+		m.ServeHTTP(w, req)
+		if w.Code != tc.want {
+			t.Fatalf("GET %s = %d, want %d", tc.path, w.Code, tc.want)
+		}
+	}
 }
 
 // TestMissionsDeleteReachesStore confirms DELETE /v1/missions/{id} is
@@ -179,7 +238,7 @@ func TestMissionsDeleteReachesStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	req := httptest.NewRequest("DELETE", "/v1/missions/abc", nil)
 	req.Header.Set("Authorization", "Bearer tok")
@@ -199,7 +258,7 @@ func TestMissionsExportPDFNotEnabled(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/abc/export-pdf", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -237,7 +296,7 @@ func TestMissionsCreateValidatesHarness(t *testing.T) {
 
 	post := func(codingExecutorDefault func(context.Context) string, body string) (int, string) {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, codingExecutorDefault, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -301,7 +360,7 @@ func TestMissionsCreateValidatesReviewHarness(t *testing.T) {
 
 	post := func(body string) (int, string) {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -339,7 +398,7 @@ func TestMissionsCreateValidatesLight(t *testing.T) {
 
 	post := func(classify func(context.Context, string) (string, error), body string) (int, string) {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -382,7 +441,7 @@ func TestMissionsCreateFlowNormalization(t *testing.T) {
 
 	post := func(body string) (int, string) {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -449,7 +508,7 @@ func TestMissionsCreateValidatesRepoURL(t *testing.T) {
 
 	post := func(body string) int {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns, nil, "", nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, conns, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -479,7 +538,7 @@ func TestMissionsCreateValidatesRepoURL(t *testing.T) {
 	// No conns wired at all: repo_url is rejected outright rather than
 	// panicking on a nil manager.
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(`{"goal":"g","kind":"coding","repo_url":"https://github.com/o/r","connector_id":"1"}`))
 	req.Header.Set("Authorization", "Bearer tok")
 	w := httptest.NewRecorder()
@@ -503,7 +562,7 @@ func TestMissionsCreateRejectsUnknownFields(t *testing.T) {
 
 	post := func(body string) (int, string) {
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -548,7 +607,7 @@ func TestMissionsCreateValidatesParentMission(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(`{"goal":"g","kind":"general","parent_mission_id":"00000000-0000-0000-0000-000000000000"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -644,7 +703,7 @@ func TestMissionsCreateAttachmentsValidation(t *testing.T) {
 		t.Helper()
 		a, _, _ := testAPI(t, "tok", nil)
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, atts, markitdownURL, nil, nil, nil, nil, whisperURL, caption)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, atts, markitdownURL, nil, nil, nil, nil, whisperURL, caption)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -759,7 +818,7 @@ func TestMissionsCreateReferencesValidation(t *testing.T) {
 		t.Helper()
 		a, _, _ := testAPI(t, "tok", nil)
 		m := mux(a)
-		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+		a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer tok")
 		w := httptest.NewRecorder()
@@ -1060,7 +1119,7 @@ func TestMissionsClassifyEndpoint(t *testing.T) {
 		return "general light", nil
 	}
 	m := mux(a)
-	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions/classify", strings.NewReader(body))
@@ -1099,7 +1158,7 @@ func TestMissionsResumeMalformedBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/abc/resume", strings.NewReader(`{not json`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -1122,7 +1181,7 @@ func TestMissionsResumeEmptyBodyUnchanged(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/resume", body)
@@ -1153,7 +1212,7 @@ func TestMissionsNoteMalformedOrEmptyBodyRejected(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	call := func(body io.Reader) int {
 		req := httptest.NewRequest("POST", "/v1/missions/abc/note", body)
@@ -1233,7 +1292,7 @@ func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 		case "codex-cli":
 			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
 				{ProviderName: "zai", Model: "glm-4.7", Usable: false,
-					SkipReason: "endpoint does not serve /v1/responses — run Test connection on the provider to re-probe"},
+					SkipReason: "endpoint does not serve /v1/responses. Run Test connection on the provider to re-probe"},
 			}}, nil
 		case "opencode":
 			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
@@ -1265,7 +1324,7 @@ func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 	if !ok {
 		t.Fatal("codex-cli option missing (executor.Registered() should include it)")
 	}
-	wantReason := "endpoint does not serve /v1/responses — run Test connection on the provider to re-probe"
+	wantReason := "endpoint does not serve /v1/responses. Run Test connection on the provider to re-probe"
 	if codex.Usable || codex.Reason != wantReason {
 		t.Fatalf("codex-cli option = %+v, want unusable with the entry's own skip_reason %q", codex, wantReason)
 	}
@@ -1303,7 +1362,7 @@ func TestMissionsCreateKindOptional(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -1343,7 +1402,7 @@ func TestMissionsCreateHasPlan(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -1373,7 +1432,7 @@ func TestMissionsCreateValidatesOriginKind(t *testing.T) {
 	driver := missions.NewDriver(store, nil, nil, nil, nil, nil, nil, discard())
 	driver.SetValidateDeps(missions.ValidateDeps{})
 	m := mux(a)
-	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, driver, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	call := func(body string) (int, string) {
 		req := httptest.NewRequest("POST", "/v1/missions", strings.NewReader(body))
@@ -1515,7 +1574,7 @@ func TestPRRejectsNonGitHubConnectionMission(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	// Against a degraded pool, store.Get itself fails before the
 	// connector_id/repo_url gate is ever reached — this test only
@@ -2189,7 +2248,7 @@ func TestPromoteKBNotEnabledWithoutStore(t *testing.T) {
 	pool := pgpool.New(context.Background(), "postgres://invalid/nope", discard())
 	store := missions.NewStore(pool, discard())
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/some-id/promote-kb", strings.NewReader(`{"collection_id":"c1"}`))
 	req.Header.Set("Authorization", "Bearer tok")
@@ -2223,7 +2282,7 @@ func TestPromoteKBReachesStore(t *testing.T) {
 	store := missions.NewStore(pool, discard())
 	kbStore := kb.New(pool)
 	m := mux(a)
-	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, kbStore, noopIngester{}, nil, "", nil)
+	a.registerMissions(m.Handle, store, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, "", nil, kbStore, noopIngester{}, nil, "", nil)
 
 	req := httptest.NewRequest("POST", "/v1/missions/some-id/promote-kb", strings.NewReader(`{"collection_id":"c1"}`))
 	req.Header.Set("Authorization", "Bearer tok")

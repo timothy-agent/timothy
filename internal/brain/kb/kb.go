@@ -309,7 +309,7 @@ func (s *Store) SweepStale(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("kb sweep stale: %w", err)
 	}
 	tag, err := db.Exec(ctx, `UPDATE kb_documents
-		SET status = 'failed', error = 'ingestion interrupted by a restart — re-ingest to retry', updated_at = now()
+		SET status = 'failed', error = 'ingestion interrupted by a restart. Re-ingest to retry', updated_at = now()
 		WHERE status IN ('pending', 'ingesting')
 		  AND updated_at < now() - interval '30 seconds'`)
 	if err != nil {

@@ -63,7 +63,7 @@ describe('wizardReducer', () => {
   })
 
   it('verified records the result and stays on verify', () => {
-    const result = { ok: true, latency_ms: 42, model: 'qwen2.5:7b' }
+    const result = { ok: true, latency_ms: 42, model: 'qwen3:8b' }
     const s = wizardReducer(at('verify'), { type: 'verified', result })
     expect(s.step).toBe('verify')
     expect(s.verified).toEqual(result)

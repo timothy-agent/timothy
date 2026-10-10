@@ -1034,7 +1034,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, chat.TitleOverGateway(gwc, app.Log), ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
 		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags))
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -1055,6 +1055,7 @@ func onboardingProbes(gwc *gwclient.Client, sandbox *sandboxclient.Client, sessi
 		HasAssistantReply:  sessions.HasAssistantReply,
 		CountKBCollections: countOf(kbStore.ListCollections),
 		AutomationsEnabled: func(ctx context.Context) bool { return flags.Enabled(ctx, settings.KeyAutomations) },
+		MissionModelFloor:  missions.ParseModelFloor(os.Getenv("MISSION_MODEL_FLOOR")),
 	}
 	if missionStore != nil {
 		p.HasSucceededMission = missionStore.HasSucceeded
@@ -1324,7 +1325,20 @@ func (d destinationConnectorLookup) Get(ctx context.Context, id string) (destina
 	if err != nil {
 		return destinations.Connector{}, err
 	}
-	return destinations.Connector{Kind: c.Kind, Enabled: c.Enabled}, nil
+	return destinationConnector(c), nil
+}
+
+// destinationConnector narrows a connectors row; a google row carries
+// its scopes. A malformed config leaves none, so validation refuses it.
+func destinationConnector(c connectors.Connector) destinations.Connector {
+	out := destinations.Connector{Kind: c.Kind, Enabled: c.Enabled}
+	if c.Kind == "google" {
+		var cfg connectors.GoogleConfig
+		if json.Unmarshal(c.Config, &cfg) == nil {
+			out.Scopes = cfg.Scopes
+		}
+	}
+	return out
 }
 
 // destinationLister adapts *destinations.Store.List to the deliver
@@ -1466,12 +1480,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	// too weak to drive tool-using mission turns; a turn served by one
 	// pauses the mission immediately instead of burning its iteration
 	// budget. Unset = floor disabled.
-	var floorDeny []string
-	for _, s := range strings.Split(os.Getenv("MISSION_MODEL_FLOOR"), ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			floorDeny = append(floorDeny, s)
-		}
-	}
+	floorDeny := missions.ParseModelFloor(os.Getenv("MISSION_MODEL_FLOOR"))
 	// sandboxMgr routes model-authored command execution (the
 	// worker/reviewer shell, check_cmd) OUT of brain's own process,
 	// through sandboxd, into a per-mission Docker container.

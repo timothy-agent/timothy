@@ -150,7 +150,7 @@ func TestChannelTriggerStartsAutomation(t *testing.T) {
 	if _, err := starter.Pass(ctx); err != nil {
 		t.Fatalf("starter Pass: %v", err)
 	}
-	rs, err := as.ListRuns(ctx, automationID, 10)
+	rs, err := as.ListRuns(ctx, automationID, time.Time{}, "", 10)
 	if err != nil || len(rs) != 1 || rs[0].Status != automations.RunRunning || rs[0].MissionID == "" {
 		t.Fatalf("runs = %+v %v", rs, err)
 	}
