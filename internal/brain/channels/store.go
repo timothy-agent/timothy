@@ -42,6 +42,11 @@ const (
 	KindEmail    = "email"
 )
 
+// Kinds lists the channel kinds this build runs, sorted.
+func Kinds() []string {
+	return []string{KindEmail, KindSlack, KindTelegram}
+}
+
 // Sentinel errors the HTTP layer maps onto status codes.
 var (
 	ErrNotFound        = errors.New("channel not found")
