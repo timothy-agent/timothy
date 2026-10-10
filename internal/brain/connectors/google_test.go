@@ -998,19 +998,19 @@ func TestGoogleTokenErrorMapping(t *testing.T) {
 			name:   "invalid_grant expired refresh token",
 			status: http.StatusBadRequest,
 			body:   `{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`,
-			want:   "Google authorization expired or was revoked — reconnect to re-authorize. (Testing-mode OAuth apps expire grants roughly weekly.)",
+			want:   "Google authorization expired or was revoked. Reconnect to re-authorize. (Testing-mode OAuth apps expire grants roughly weekly.)",
 		},
 		{
 			name:   "invalid_grant revoked",
 			status: http.StatusBadRequest,
 			body:   `{"error":"invalid_grant","error_description":"Token has been revoked."}`,
-			want:   "Google authorization expired or was revoked — reconnect to re-authorize. (Testing-mode OAuth apps expire grants roughly weekly.)",
+			want:   "Google authorization expired or was revoked. Reconnect to re-authorize. (Testing-mode OAuth apps expire grants roughly weekly.)",
 		},
 		{
 			name:   "other oauth error keeps status and code",
 			status: http.StatusBadRequest,
 			body:   `{"error":"invalid_client","error_description":"The OAuth client was not found."}`,
-			want:   `Google authorization failed (status 400, error "invalid_client") — reconnect to re-authorize`,
+			want:   `Google authorization failed (status 400, error "invalid_client"). Reconnect to re-authorize`,
 		},
 		{
 			name:   "generic 500 with no parseable error",
@@ -1053,7 +1053,7 @@ func TestGoogleAPIErrorMapping(t *testing.T) {
 			name:   "401 unauthorized",
 			status: http.StatusUnauthorized,
 			body:   `{"error":{"code":401,"message":"Invalid Credentials"}}`,
-			want:   "Google authorization expired or was revoked — reconnect to re-authorize",
+			want:   "Google authorization expired or was revoked. Reconnect to re-authorize",
 		},
 		{
 			name:   "404 not found keeps status and body snippet",

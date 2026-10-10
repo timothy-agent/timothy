@@ -606,7 +606,7 @@ type gitlabErrorBody struct {
 // gitlabStatusError never includes the token or a raw body.
 func gitlabStatusError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("gitlab: token invalid or expired — replace the access token")
+		return fmt.Errorf("gitlab: token invalid or expired. Replace the access token")
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var e gitlabErrorBody

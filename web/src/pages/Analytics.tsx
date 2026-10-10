@@ -539,7 +539,7 @@ export function Analytics() {
       {otherSummaries.length > 0 && (
         <p className="mt-3 text-xs text-muted-foreground">
           Also in range:{' '}
-          {otherSummaries.map((o) => primaryMoney(o, o.cost)).join(', ')} (shown separately —
+          {otherSummaries.map((o) => primaryMoney(o, o.cost)).join(', ')} (shown separately:
           never summed with the totals above).
         </p>
       )}
