@@ -631,7 +631,7 @@ type PlanUnit struct {
 	CheckCmd string `json:"check_cmd"`
 	// LegacyVerifyCmd reads plans stored before the rename; normalize
 	// folds it into CheckCmd and clears it, so it is never written.
-	// Drop once scripts/pending-alters.md's key rename has run everywhere.
+	// Drop once the operator's key-rename alter has run everywhere.
 	LegacyVerifyCmd string `json:"verify_cmd,omitempty"`
 	// Artifacts are workspace-relative paths this unit must produce.
 	// The harness checks each exists and is non-empty BEFORE running
