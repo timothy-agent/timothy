@@ -19,7 +19,7 @@ import (
 
 // Test databases through mise daemons (D-142) in the real sandbox image,
 // same env as the prepare integration tests. The container runs with
-// sandboxd's flags (internal/sandboxd/manager.go): uid 65534, 2 GiB
+// sandboxd's flags (internal/sandboxd/docker.go): uid 65534, 2 GiB
 // memory, 2 CPUs, 256 pids, nofile 4096, fsize 256 MiB, caps dropped,
 // read-only rootfs, HOME and /tmp on tmpfs, package caches on the
 // mission's own .sandbox-cache.

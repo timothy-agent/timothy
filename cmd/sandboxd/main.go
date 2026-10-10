@@ -1,15 +1,17 @@
-// Command sandboxd holds the Docker socket on brain's behalf: it is
-// the only service that talks to the Docker daemon, exposing a narrow,
+// Command sandboxd runs mission sandboxes on brain's behalf: it is
+// the only service that talks to the container runtime (the Docker
+// daemon, or the Kubernetes API, D-153), exposing a narrow,
 // mission-scoped HTTP API (missionID in — never container names,
 // images, mounts, env) that brain's sandboxclient calls instead of
-// mounting docker.sock itself. Unlike every other Timothy service this
-// has no database — there is nothing here to persist.
+// holding runtime credentials itself. Unlike every other Timothy
+// service this has no database — there is nothing here to persist.
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
@@ -47,11 +49,11 @@ func main() {
 	log := logging.New(cfg.Name, cfg.LogLevel)
 	m := metrics.New()
 
-	// Fail closed: sandboxed execution is mandatory, so a manager that
-	// cannot initialize (image not set, daemon unreachable, workspace
+	// Fail closed: sandboxed execution is mandatory, so a backend that
+	// cannot initialize (image not set, runtime unreachable, workspace
 	// mount unresolvable) must stop this service loudly rather than come
 	// up in a state where every exec fails opaquely.
-	mgr, err := sandboxd.NewManager(ctx, os.Getenv("MISSION_SANDBOX_IMAGE"), log)
+	mgr, err := newBackend(ctx, log)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -69,17 +71,33 @@ func main() {
 	}
 }
 
-// health assembles /health's checks from the Manager: docker daemon
-// reachability and whether the configured sandbox image actually
-// exists locally.
-func health(ctx context.Context, mgr *sandboxd.Manager) httpserver.Health {
+// newBackend builds the sandbox backend SANDBOXD_BACKEND names (D-153).
+func newBackend(ctx context.Context, log *slog.Logger) (sandboxd.Backend, error) {
+	name, err := sandboxd.ResolveBackend(os.Getenv("SANDBOXD_BACKEND"), os.Getenv("KUBERNETES_SERVICE_HOST"))
+	if err != nil {
+		return nil, err
+	}
+	log.Info("sandbox: backend selected", "backend", name)
+	image := os.Getenv("MISSION_SANDBOX_IMAGE")
+	switch name {
+	case sandboxd.BackendDocker:
+		return sandboxd.NewDocker(ctx, image, log)
+	default:
+		return nil, fmt.Errorf("sandbox: backend %q is not available in this build", name)
+	}
+}
+
+// health assembles /health's checks from the backend: runtime
+// reachability (keyed by the backend's name) and whether the
+// configured sandbox image is usable.
+func health(ctx context.Context, mgr sandboxd.Backend) httpserver.Health {
 	checks := map[string]httpserver.Check{}
 	status := "ok"
 	if err := mgr.Ping(ctx); err != nil {
-		checks["docker"] = httpserver.Check{Status: "degraded", Detail: "docker daemon unreachable: " + err.Error()}
+		checks[mgr.Name()] = httpserver.Check{Status: "degraded", Detail: mgr.Name() + " unreachable: " + err.Error()}
 		status = "degraded"
 	} else {
-		checks["docker"] = httpserver.Check{Status: "ok"}
+		checks[mgr.Name()] = httpserver.Check{Status: "ok"}
 	}
 	if err := mgr.CheckImage(ctx); err != nil {
 		checks["image"] = httpserver.Check{Status: "degraded", Detail: "sandbox image not found: " + err.Error()}
