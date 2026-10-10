@@ -11,4 +11,4 @@
 - [ ] Harness changes (`internal/brain/missions/`, executors): `make canary` passes against a rebuilt brain
 - [ ] No secrets, credentials, or personal data in code, tests, or fixtures
 
-By submitting this pull request, I confirm my contribution is made under the terms of the [AGPL-3.0 license](../LICENSE).
+By submitting this pull request, I confirm my contribution is made under the terms of the [Contributor License Agreement](../CLA.md) and distributed under the [AGPL-3.0 license](../LICENSE).
