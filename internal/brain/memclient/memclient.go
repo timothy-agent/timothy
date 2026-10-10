@@ -205,7 +205,8 @@ type KBChunkHit struct {
 
 // KBSearch asks memoryd for the top-k chunks matching query.
 // collectionNames scopes the search (empty means the whole knowledge
-// base); boostCollections reorders results toward those collections
+// base minus system collections boostCollections does not name,
+// D-143); boostCollections reorders results toward those collections
 // without excluding anything else (issue #368). The tool that calls
 // this must bind both at construction, never take them from model
 // input.

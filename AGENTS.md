@@ -22,7 +22,7 @@ registered as an openaicompat provider.
 | `markitdown` | Python sidecar: file → markdown                                       |
 | `ocr`        | Python sidecar: tesseract image OCR (always on)                       |
 | `whisper`    | Python sidecar: local speech-to-text (off unless `COMPOSE_PROFILES=whisper`) |
-| `pdfgen`     | Python sidecar: markdown → PDF via Typst (mission export)             |
+| `pdfgen`     | Python sidecar: markdown → PDF via Typst (mission export), SVG → PNG (KB captions) |
 
 ## Commands
 

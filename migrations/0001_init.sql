@@ -319,6 +319,12 @@ CREATE INDEX IF NOT EXISTS memories_tsv_gin ON memories USING gin (tsv);
 
 CREATE INDEX IF NOT EXISTS memories_status_type_idx ON memories (status, type);
 
+-- Backs the paged browser and review queue (created_at DESC, id DESC).
+CREATE INDEX IF NOT EXISTS memories_status_created_idx ON memories (status, created_at DESC, id DESC);
+
+-- Serves entity_refs @> ARRAY[id]: entity memories and the graph join.
+CREATE INDEX IF NOT EXISTS memories_entity_refs_gin ON memories USING gin (entity_refs);
+
 CREATE TABLE IF NOT EXISTS entities (
     id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     type text NOT NULL CHECK (type IN
@@ -1116,8 +1122,20 @@ CREATE TABLE IF NOT EXISTS kb_collections (
     -- identity/profile collections out of general topical contests
     -- while still retrievable when they are the only relevant content.
     retrieval_weight double precision NOT NULL DEFAULT 1.0 CHECK (retrieval_weight > 0 AND retrieval_weight <= 2),
+    -- system marks a collection brain manages itself (issue #1126, the
+    -- bundled timothy-docs): the admin API refuses every write to it.
+    system      boolean NOT NULL DEFAULT false,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- One row per system collection: the bundle hash last ingested in
+-- full. Brain re-ingests at boot only when the shipped hash differs.
+CREATE TABLE IF NOT EXISTS kb_system_bundles (
+    name         text PRIMARY KEY,
+    version      text NOT NULL,
+    content_hash text NOT NULL,
+    ingested_at  timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS kb_documents (
@@ -1138,6 +1156,9 @@ CREATE TABLE IF NOT EXISTS kb_documents (
     -- persisted so a re-ingest never re-calls the sidecar (mirrors
     -- mission attachments, D-05x); never served over the admin API.
     markdown      text NOT NULL DEFAULT '',
+    -- meta carries per-source fields; selfdocs pages store app_path,
+    -- app_label and source here.
+    meta          jsonb NOT NULL DEFAULT '{}',
     status        text NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'ingesting', 'ready', 'failed')),
     error         text NOT NULL DEFAULT '',
