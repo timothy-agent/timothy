@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/kb"
 	"github.com/SumonMSelim/timothy/internal/brain/manifest"
@@ -248,4 +249,54 @@ func TestSyncRejectsBundleWithoutTitle(t *testing.T) {
 	if store.replaced != nil || len(ing.calls) != 0 || store.setHash != "" {
 		t.Fatalf("store touched: replaced=%v ingests=%d set=%q", store.replaced, len(ing.calls), store.setHash)
 	}
+}
+
+// flakyIngest fails its first fails calls, as memoryd does while the
+// gateway's routing config is still loading.
+type flakyIngest struct {
+	fails int
+	calls int
+}
+
+func (f *flakyIngest) IngestDocument(context.Context, string, string, string) (int, error) {
+	f.calls++
+	if f.calls <= f.fails {
+		return 0, errors.New("gateway http 503: config_unavailable")
+	}
+	return 1, nil
+}
+
+func TestSyncRetry(t *testing.T) {
+	t.Run("retries until success", func(t *testing.T) {
+		dir := writeBundle(t, map[string]string{"manifest.json": goodManifest, "a.md": pageA, "b.md": pageB})
+		store := &fakeStore{}
+		ing := &flakyIngest{fails: 2}
+		var errs int
+		err := SyncRetry(t.Context(), Deps{Dir: dir, Name: Collection, Store: store, Ingest: ing, Log: discard()},
+			time.Millisecond, 2*time.Millisecond, func(error) { errs++ })
+		if err != nil {
+			t.Fatalf("err = %v", err)
+		}
+		if errs != 2 || ing.calls != 4 || store.setHash != "abc" {
+			t.Fatalf("errs = %d, ingests = %d, set hash = %q; want 2, 4, abc", errs, ing.calls, store.setHash)
+		}
+	})
+	t.Run("missing bundle makes one attempt", func(t *testing.T) {
+		var errs int
+		err := SyncRetry(t.Context(), Deps{Dir: t.TempDir(), Name: Collection, Store: &fakeStore{}, Ingest: &flakyIngest{}, Log: discard()},
+			time.Millisecond, time.Millisecond, func(error) { errs++ })
+		if !errors.Is(err, ErrNoBundle) || errs != 0 {
+			t.Fatalf("err = %v, errs = %d; want ErrNoBundle, 0", err, errs)
+		}
+	})
+	t.Run("cancelled context stops waiting", func(t *testing.T) {
+		dir := writeBundle(t, map[string]string{"manifest.json": goodManifest, "a.md": pageA, "b.md": pageB})
+		ctx, cancel := context.WithCancel(t.Context())
+		store := &fakeStore{}
+		err := SyncRetry(ctx, Deps{Dir: dir, Name: Collection, Store: store, Ingest: &flakyIngest{fails: 1 << 30}, Log: discard()},
+			time.Hour, time.Hour, func(error) { cancel() })
+		if !errors.Is(err, context.Canceled) || store.setHash != "" {
+			t.Fatalf("err = %v, set hash = %q; want context.Canceled, empty", err, store.setHash)
+		}
+	})
 }

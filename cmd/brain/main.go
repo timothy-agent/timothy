@@ -994,7 +994,8 @@ func main() {
 	go api.RunKBRetrySweep(ctx, kbStore, mc, kbEnrich, app.Log)
 	// selfdocs (issue #1126): the bundled docs go into a system
 	// collection once per bundle hash, after migrations and off the
-	// boot path. A failure degrades health and retries on the next boot.
+	// boot path. A failure degrades health and retries on a backoff
+	// until it succeeds (issue #1158).
 	selfdocsDir := os.Getenv("SELFDOCS_DIR")
 	if selfdocsDir == "" {
 		selfdocsDir = "/selfdocs"
@@ -1010,14 +1011,17 @@ func main() {
 		if err := app.WaitMigrated(ctx); err != nil {
 			return
 		}
-		err := selfdocs.Sync(ctx, selfdocs.Deps{Dir: selfdocsDir, Name: selfdocs.Collection, Store: kbStore, Ingest: mc, Log: app.Log})
+		deps := selfdocs.Deps{Dir: selfdocsDir, Name: selfdocs.Collection, Store: kbStore, Ingest: mc, Log: app.Log}
+		err := selfdocs.SyncRetry(ctx, deps, 30*time.Second, 10*time.Minute, func(err error) {
+			app.Log.Error("selfdocs: ingest failed; retrying", "error", err)
+			msg := err.Error()
+			selfdocsErr.Store(&msg)
+		})
 		switch {
 		case errors.Is(err, selfdocs.ErrNoBundle):
 			app.Log.Info("selfdocs: no bundle, skipping ingest", "dir", selfdocsDir)
-		case err != nil:
-			app.Log.Error("selfdocs: ingest failed; retrying on next boot", "error", err)
-			msg := err.Error()
-			selfdocsErr.Store(&msg)
+		case err == nil:
+			selfdocsErr.Store(nil)
 		}
 	}()
 	svc.SetKBSearch(func(ctx context.Context, query string, boostCollections []string, mode string, k int) ([]builtin.KBSearchHit, error) {
