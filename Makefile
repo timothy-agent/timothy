@@ -15,7 +15,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
-.PHONY: build test test-integration test-live vet lint tidy skills-validate manifest routes-check up down logs \
+.PHONY: build test test-integration test-live vet lint tidy skills-validate manifest selfdocs routes-check up down logs \
 	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke
 
 build:
@@ -71,6 +71,14 @@ skills-validate:
 manifest:
 	$(GO_RUN) go run ./cmd/manifest -out build/selfdocs -routes web/routes.generated.json -skills skills -version $(APP_VERSION)
 
+# Local self-docs bundle: manifest pages only, no docs checkout. The
+# brain image copies build/selfdocs to /selfdocs; release.yml adds the
+# docs pages through the same scripts/selfdocs-bundle.sh.
+selfdocs:
+	rm -rf build/selfdocs-manifest
+	$(GO_RUN) go run ./cmd/manifest -out build/selfdocs-manifest -routes web/routes.generated.json -skills skills -version $(APP_VERSION)
+	./scripts/selfdocs-bundle.sh --docs "" --manifest build/selfdocs-manifest --out build/selfdocs --version $(APP_VERSION)
+
 # Fails when web/routes.generated.json is stale against src/routes.ts.
 routes-check:
 	docker run --rm -v $(CURDIR)/web:/app -w /app node:24.18.0-alpine npm run routes:check
@@ -78,7 +86,7 @@ routes-check:
 # sandbox-image first: sandboxd is mandatory infrastructure and fails
 # to boot (NewManager errors on a missing image) without it — a fresh
 # clone's first `make up` must not crash-loop waiting on a manual step.
-up: sandbox-image
+up: sandbox-image selfdocs
 	$(COMPOSE) up -d --build
 
 # Per-service rebuild+restart for when only one service changed:
@@ -88,6 +96,8 @@ up: sandbox-image
 # sandboxd (or vice versa, briefly) stays compatible either order, but
 # sandboxd-first avoids brain's own restart racing against sandboxd's
 # health check on its way up.
+brain: selfdocs
+
 brain gateway memoryd web markitdown pdfgen ocr whisper sandboxd:
 	$(COMPOSE) up -d --build $@
 
@@ -163,6 +173,8 @@ canary-onboarding:
 # image) carry no secret value.
 test-scripts:
 	docker run --rm -v $(CURDIR):/src -w /src bash:5.3 ./scripts/canary-onboarding-dry-run.test.sh
+	docker run --rm -v $(CURDIR):/src -w /src bash:5.3 ./scripts/selfdocs-bundle.test.sh
+	docker run --rm -v $(CURDIR):/src -w /src --entrypoint sh alpine/git:2.49.1 ./scripts/selfdocs-docs-ref.test.sh
 
 # Ecosystem smoke matrix (issue #1018), manual only: one dependency
 # audit mission per pinned fork in scripts/ecosystem-matrix.txt, one at
