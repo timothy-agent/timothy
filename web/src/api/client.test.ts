@@ -13,6 +13,8 @@ import {
   getToken,
   isTimothyAuthError,
   listMissionFiles,
+  listMissions,
+  listNotifications,
   listProviders,
   listSessions,
   openMissionPR,
@@ -174,6 +176,54 @@ describe('chatStream errors', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/v1/sessions/s-42/messages')
     // The id travels in the path, not the body.
     expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual({ message: 'hi' })
+  })
+
+  it('keeps the #-mention mission search query (q + limit=8)', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ missions: [] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listMissions({ query: 'fix', limit: 8 })
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/missions?q=fix&limit=8')
+  })
+
+  it('pages the mission list with filters and a composite cursor', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ missions: [] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listMissions({
+      kind: 'coding',
+      harness: 'native',
+      model: 'glm-4.7',
+      source: 'manual',
+      limit: 50,
+      cursor: { before: '2026-10-01T12:00:00.123456Z', beforeId: 'm-42' },
+    })
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      '/v1/missions?kind=coding&harness=native&model=glm-4.7&source=manual&limit=50' +
+        '&before=2026-10-01T12%3A00%3A00.123456Z&before_id=m-42',
+    )
+  })
+
+  it('asks for unread notifications only when told to', async () => {
+    vi.stubGlobal('localStorage', { getItem: () => 'tok', setItem: () => {} })
+    const fetchMock = vi.fn().mockImplementation(
+      async () => new Response(JSON.stringify({ notifications: [] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listNotifications({ unread: true })
+    await listNotifications()
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/v1/notifications?unread=true')
+    expect(fetchMock.mock.calls[1][0]).toBe('/v1/notifications')
   })
 
   it('pages the session list with a composite cursor', async () => {

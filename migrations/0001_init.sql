@@ -1009,6 +1009,8 @@ CREATE INDEX IF NOT EXISTS missions_status_idx ON missions (status);
 CREATE INDEX IF NOT EXISTS missions_active_idx ON missions (phase) WHERE phase NOT IN ('done', 'failed');
 CREATE INDEX IF NOT EXISTS missions_automation_run_idx ON missions (automation_run_id) WHERE automation_run_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS missions_workflow_run_idx ON missions (workflow_run_id) WHERE workflow_run_id IS NOT NULL;
+-- GET /v1/missions keyset paging (Store.List).
+CREATE INDEX IF NOT EXISTS missions_created_idx ON missions (created_at DESC, id DESC);
 
 -- automation_runs.mission_id and missions.automation_run_id reference
 -- each other, so this foreign key lands once missions exists.
@@ -1075,6 +1077,8 @@ CREATE INDEX IF NOT EXISTS notifications_unread_idx ON notifications (mission_id
 -- FROM missions cascading into notifications), distinct from the
 -- partial unread index above which only covers List's unread-first path.
 CREATE INDEX IF NOT EXISTS notifications_mission_idx ON notifications (mission_id);
+-- GET /v1/notifications keyset paging (Notifier.List).
+CREATE INDEX IF NOT EXISTS notifications_created_idx ON notifications (created_at DESC, id DESC);
 
 -- Content-addressed image attachments (internal/brain/attachments):
 -- binaries live on the ATTACHMENTS_DIR volume as <sha256><ext>, never
