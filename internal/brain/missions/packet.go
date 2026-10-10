@@ -81,8 +81,8 @@ type WorkPacket struct {
 	// WritingSamples marks that a writing-samples kb collection is
 	// configured, adding WritingSamplesNote to the same block.
 	WritingSamples bool
-	// DeliversPR marks a mission whose repo destination opens a pull
-	// request (D-152): the turn that can finish the plan asks for the
+	// DeliversPR marks a mission that can end in a pull request, by
+	// destination or by hand (D-152): the turn that can finish the plan asks for the
 	// PR summary in final_output.
 	DeliversPR bool
 }
@@ -90,7 +90,7 @@ type WorkPacket struct {
 // prSummaryRequest (D-152, issue #1174) asks the worker that can finish
 // the plan for the PR description; destinations.PRBody renders
 // final_output under "## Summary" in place of the goal.
-const prSummaryRequest = "Pull request summary: the harness opens a pull request once this work passes. On done, start final_output with a short summary of the whole change for its description: what changed and why, a few sentences of markdown, without restating the goal. A report the goal asks for follows the summary.\n"
+const prSummaryRequest = "Pull request summary: this work becomes a pull request. On done, start final_output with a short summary of the whole change for its description: what changed and why, a few sentences of markdown, without restating the goal. A report the goal asks for follows the summary.\n"
 
 // prSummary is prSummaryRequest when the packet delivers a PR and at
 // most one unit is left without harness evidence, "" otherwise.

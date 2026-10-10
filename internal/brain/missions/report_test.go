@@ -393,21 +393,26 @@ func TestPRSummaryRequest(t *testing.T) {
 }
 
 // TestDriverPacketDeliversPR (D-152): the packet asks for a summary
-// only when a repo destination's mode is push_pr.
+// when a repo destination's mode is push_pr or the mission has a repo
+// connection a PR can be opened on by hand.
 func TestDriverPacketDeliversPR(t *testing.T) {
 	d := testDriver(newFakeStore(), &scriptedRunner{})
+	repo := []SourceEntry{{Source: SourceKindGitHub, ConnectorID: "gh1", RepoURL: "https://github.com/o/r"}}
 	cases := []struct {
-		name  string
-		facts *EnvFacts
-		want  bool
+		name    string
+		facts   *EnvFacts
+		sources []SourceEntry
+		want    bool
 	}{
-		{"no facts", nil, false},
-		{"push only", &EnvFacts{Destinations: []DestinationFact{{Kind: "github", Mode: "push"}}}, false},
-		{"push_pr", &EnvFacts{Destinations: []DestinationFact{{Kind: "repo"}, {Kind: "github", Mode: "push_pr"}}}, true},
+		{"no facts", nil, nil, false},
+		{"push only", &EnvFacts{Destinations: []DestinationFact{{Kind: "github", Mode: "push"}}}, nil, false},
+		{"push_pr", &EnvFacts{Destinations: []DestinationFact{{Kind: "repo"}, {Kind: "github", Mode: "push_pr"}}}, nil, true},
+		{"repo connection without destination", nil, repo, true},
+		{"repo url without connector", nil, []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r"}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := d.packet(context.Background(), Mission{ID: "m1", Kind: KindCoding, EnvFacts: tc.facts})
+			p, err := d.packet(context.Background(), Mission{ID: "m1", Kind: KindCoding, EnvFacts: tc.facts, Sources: tc.sources})
 			if err != nil {
 				t.Fatalf("packet: %v", err)
 			}

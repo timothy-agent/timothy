@@ -317,7 +317,8 @@ AGENTS.md so other work does not pay for it every session.
   report, test-log or audit-output file unless the goal asks, and
   report files from earlier PRs stay untouched. Prompt only, no gate.
 - PR summary (D-152, issue #1174): when a repo destination's mode is
-  push_pr (`deliversPR` over `EnvFacts.Destinations`) and at most one
+  push_pr, or the mission has a repo connection that "Push & open PR"
+  can open a PR on (`deliversPR`), and at most one
   unit lacks harness evidence, the worker packet (native and
   delegated) carries `prSummaryRequest`: start final_output with a
   short what-and-why summary, then any report the goal asks for.
