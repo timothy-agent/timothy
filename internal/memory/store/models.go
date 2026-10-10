@@ -33,6 +33,11 @@ const (
 // remember…"); those skip the pending stage unless RequireReview is set.
 const ActorUser = "user"
 
+// ActorReflection marks an insight minted by consolidation's reflection
+// pass (D-143). It has no source session, so source_session stays NULL
+// and this actor carries the provenance.
+const ActorReflection = "reflection"
+
 // Memory is one stored fact. Content is atomic and self-contained
 // (absolute dates, no pronouns needing context).
 type Memory struct {

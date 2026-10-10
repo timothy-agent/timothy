@@ -2,11 +2,15 @@ package extract
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/SumonMSelim/timothy/internal/memory/store"
 )
@@ -432,5 +436,63 @@ func TestConsolidateDemotesNothing(t *testing.T) {
 	}
 	if summary.Demoted != 0 {
 		t.Fatalf("Demoted = %d, want 0", summary.Demoted)
+	}
+}
+
+// Regression (#872): reflection used to insert with SessionID
+// "reflection", which the uuid source_session column rejects. Insights
+// now carry no session and the reflection actor, and the reflection
+// counter counts them.
+func TestConsolidatorReflectProvenanceAndMetric(t *testing.T) {
+	t.Parallel()
+	episodics := make([]store.Memory, reflectMinEpisodics)
+	for i := range episodics {
+		episodics[i] = store.Memory{ID: fmt.Sprintf("e%d", i), Type: store.TypeEpisodic,
+			Status: store.StatusActive, Content: "user asked about the juaab ALB alarm again", CreatedAt: time.Now()}
+	}
+	st := &consolidateStore{recentEpisodic: episodics}
+	gw := &fakeGateway{replies: []string{`[` +
+		`{"type":"semantic","content":"The juaab admin ALB alarm recurs weekly.","entities":[{"type":"service","name":"juaab"}],"confidence":0.8,"changes_behavior":true},` +
+		`{"type":"semantic","content":"The user triages ALB alarms before other work.","entities":[],"confidence":0.8,"changes_behavior":true}]`}}
+	inner := &fakeStore{}
+	reflected := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_reflections_total"})
+	c := NewConsolidator(gw, st, testLog(), Metrics{Reflected: reflected})
+	c.SetReflector(New(gw, inner, testLog()))
+
+	summary, err := c.Run(t.Context())
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary.Reflected != 2 || len(inner.inserted) != 2 {
+		t.Fatalf("Reflected = %d inserted = %d, want 2/2", summary.Reflected, len(inner.inserted))
+	}
+	for _, m := range inner.inserted {
+		if m.SourceSession != "" {
+			t.Fatalf("SourceSession = %q, want empty (NULL)", m.SourceSession)
+		}
+		if m.Actor != store.ActorReflection {
+			t.Fatalf("Actor = %q, want %q", m.Actor, store.ActorReflection)
+		}
+	}
+	if got := testutil.ToFloat64(reflected); got != 2 {
+		t.Fatalf("reflections counter = %v, want 2", got)
+	}
+}
+
+// Source "reflection" arriving over HTTP selects the prompt only: the
+// reflection actor is set in-process, never from the request body.
+func TestExtractReflectionSourceKeepsDefaultActor(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGateway{replies: []string{`[{"type":"semantic","content":"User lives in Porto.","entities":[],"confidence":0.9,"changes_behavior":true}]`}}
+	st := &fakeStore{}
+	var req Request
+	if err := json.Unmarshal([]byte(`{"text":"x","source":"reflection","actor":"reflection","Actor":"reflection"}`), &req); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, err := New(gw, st, testLog()).Extract(t.Context(), req); err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(st.inserted) != 1 || st.inserted[0].Actor != "" {
+		t.Fatalf("inserted = %+v, want one row with the default actor", st.inserted)
 	}
 }

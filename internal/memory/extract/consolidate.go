@@ -83,6 +83,7 @@ type Metrics struct {
 	Decayed        prometheus.Counter
 	Demoted        prometheus.Counter
 	PendingDeduped prometheus.Counter
+	Reflected      prometheus.Counter
 }
 
 // Summary counts one Run pass. RunLoop discards it; the manual
@@ -474,14 +475,18 @@ func (c *Consolidator) reflect(ctx context.Context) (int, error) {
 	for _, m := range episodics {
 		fmt.Fprintf(&b, "- (%s) %s\n", m.CreatedAt.Format("2006-01-02"), m.Content)
 	}
+	// No SessionID: source_session is a uuid column (D-143).
 	ids, err := c.reflector.Extract(ctx, Request{
-		SessionID: "reflection", Text: b.String(), Source: "reflection",
+		Text: b.String(), Source: "reflection", Actor: store.ActorReflection,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("reflect: %w", err)
 	}
 	if len(ids) > 0 {
 		c.log.Info("reflection minted semantic insights", "count", len(ids), "episodes", len(episodics))
+		if c.metrics.Reflected != nil {
+			c.metrics.Reflected.Add(float64(len(ids)))
+		}
 	}
 	return len(ids), nil
 }
