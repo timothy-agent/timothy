@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ChatStreamOptions } from '../api/client'
-import type { ChatEvent, ChatRequest, Readiness } from '../api/types'
+import type { ChatEvent, ChatRequest, Readiness, Transcript, TranscriptItem } from '../api/types'
 import type { Signal } from '../lib/events'
 import { Chat } from './Chat'
 
@@ -1043,5 +1043,212 @@ describe('skill hint chip', () => {
 
     await screen.findByLabelText('Message')
     expect(screen.queryByRole('button', { name: /Remove .* skill/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('incremental transcript (issue #1113)', () => {
+  const meta = { id: 's1', title: '', archived: false, created_at: '', updated_at: '' }
+  const userItem = (seq: number, text: string): TranscriptItem => ({ seq, kind: 'user', text, created_at: '' })
+  const transcript = (items: TranscriptItem[], extra: Partial<Transcript> = {}): Transcript => ({
+    session: meta,
+    items,
+    turn_active: false,
+    has_more: false,
+    first_seq: items[0]?.seq,
+    last_seq: items.at(-1)?.seq,
+    ...extra,
+  })
+  const renderSession = () =>
+    render(
+      <MemoryRouter initialEntries={['/chat/s1']}>
+        <Routes>
+          <Route path="/chat/:id" element={<Chat onNeedToken={vi.fn()} />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+  it('opens on the newest page and offers no earlier messages when there are none', async () => {
+    vi.mocked(getTranscript).mockResolvedValue(transcript([userItem(5, 'latest')]))
+    renderSession()
+    await screen.findByText('latest')
+    expect(getTranscript).toHaveBeenCalledWith('s1', { limit: 200 })
+    expect(screen.queryByRole('button', { name: 'Load earlier messages' })).not.toBeInTheDocument()
+  })
+
+  it('appends only events after the newest seq on a session signal', async () => {
+    vi.mocked(getTranscript).mockResolvedValueOnce(transcript([userItem(2, 'first load')], { last_seq: 3 }))
+    const { fireSignal } = captureSubscribe()
+    renderSession()
+    await screen.findByText('first load')
+
+    vi.mocked(getTranscript).mockResolvedValueOnce(transcript([userItem(4, 'appeared via signal')]))
+    fireSignal({ kind: 'session', id: 's1' })
+
+    await screen.findByText('appeared via signal')
+    expect(screen.getByText('first load')).toBeInTheDocument()
+    expect(getTranscript).toHaveBeenCalledTimes(2)
+    expect(getTranscript).toHaveBeenLastCalledWith('s1', { after_seq: 3, limit: 500 })
+  })
+
+  it('dedupes by seq when a newer page repeats a loaded event', async () => {
+    vi.mocked(getTranscript).mockResolvedValueOnce(transcript([userItem(1, 'first load')]))
+    const { fireSignal } = captureSubscribe()
+    renderSession()
+    await screen.findByText('first load')
+
+    vi.mocked(getTranscript).mockResolvedValueOnce(
+      transcript([userItem(1, 'first load'), userItem(2, 'second')]),
+    )
+    fireSignal({ kind: 'session', id: 's1' })
+
+    await screen.findByText('second')
+    expect(screen.getAllByText('first load')).toHaveLength(1)
+  })
+
+  it('keeps fetching newer pages while has_more is set', async () => {
+    vi.mocked(getTranscript).mockResolvedValueOnce(transcript([userItem(1, 'first load')]))
+    const { fireSignal } = captureSubscribe()
+    renderSession()
+    await screen.findByText('first load')
+
+    vi.mocked(getTranscript)
+      .mockResolvedValueOnce(transcript([userItem(2, 'page one')], { has_more: true }))
+      .mockResolvedValueOnce(transcript([userItem(3, 'page two')]))
+    fireSignal({ kind: 'session', id: 's1' })
+
+    await screen.findByText('page two')
+    expect(getTranscript).toHaveBeenNthCalledWith(3, 's1', { after_seq: 2, limit: 500 })
+  })
+
+  it('catches up from the newest seq on reconnect', async () => {
+    vi.mocked(getTranscript).mockResolvedValueOnce(transcript([userItem(7, 'first load')]))
+    renderSession()
+    await screen.findByText('first load')
+
+    vi.mocked(getTranscript).mockResolvedValueOnce(transcript([userItem(8, 'missed while away')]))
+    vi.mocked(subscribeEvents).mock.calls.at(-1)?.[1]?.()
+
+    await screen.findByText('missed while away')
+    expect(getTranscript).toHaveBeenLastCalledWith('s1', { after_seq: 7, limit: 500 })
+  })
+
+  it('drops an answered ask when a newer page resolves it', async () => {
+    vi.mocked(getTranscript).mockResolvedValueOnce(
+      transcript([
+        userItem(1, 'do the thing'),
+        {
+          seq: 2,
+          kind: 'permission',
+          permission: {
+            id: 'perm-1',
+            call_id: 'call-1',
+            tool: 'shell',
+            args: '{}',
+            danger_level: 'safe',
+            rationale: 'runs a shell command',
+          },
+          created_at: '',
+        },
+      ]),
+    )
+    const { fireSignal } = captureSubscribe()
+    renderSession()
+    expect(await screen.findByRole('region')).toBeInTheDocument()
+
+    vi.mocked(getTranscript).mockResolvedValueOnce(
+      transcript([], { first_seq: 3, last_seq: 3, resolved_permissions: ['perm-1'] }),
+    )
+    fireSignal({ kind: 'session', id: 's1' })
+
+    await waitFor(() => expect(screen.queryByRole('region')).not.toBeInTheDocument())
+  })
+
+  it('loads earlier messages above and keeps the scroll position', async () => {
+    vi.mocked(getTranscript).mockResolvedValueOnce(
+      transcript([userItem(4, 'newer message')], { has_more: true, first_seq: 3 }),
+    )
+    renderSession()
+    await screen.findByText('newer message')
+
+    const list = document.querySelector('.overflow-y-auto') as HTMLElement
+    let top = 10
+    Object.defineProperty(list, 'scrollTop', { get: () => top, set: (v: number) => (top = v), configurable: true })
+    Object.defineProperty(list, 'scrollHeight', { get: () => list.textContent!.length * 10, configurable: true })
+    const heightBefore = list.scrollHeight
+
+    vi.mocked(getTranscript).mockResolvedValueOnce(transcript([userItem(1, 'older message')]))
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
+
+    await screen.findByText('older message')
+    expect(getTranscript).toHaveBeenLastCalledWith('s1', { before_seq: 3, limit: 200 })
+    const texts = [...list.querySelectorAll('p, div')].map((n) => n.textContent)
+    expect(texts.findIndex((t) => t === 'older message')).toBeLessThan(
+      texts.findIndex((t) => t === 'newer message'),
+    )
+    expect(screen.queryByRole('button', { name: 'Load earlier messages' })).not.toBeInTheDocument()
+    expect(top).toBe(list.scrollHeight - heightBefore + 10)
+  })
+
+  it('loads earlier messages when scrolling up into the top edge', async () => {
+    vi.mocked(getTranscript).mockResolvedValueOnce(
+      transcript([userItem(4, 'newer message')], { has_more: true, first_seq: 4 }),
+    )
+    renderSession()
+    await screen.findByText('newer message')
+
+    const list = document.querySelector('.overflow-y-auto') as HTMLElement
+    let top = 300
+    Object.defineProperty(list, 'scrollTop', { get: () => top, set: (v: number) => (top = v), configurable: true })
+    fireEvent.scroll(list)
+    expect(getTranscript).toHaveBeenCalledTimes(1)
+
+    vi.mocked(getTranscript).mockResolvedValueOnce(transcript([userItem(2, 'older message')]))
+    top = 20
+    fireEvent.scroll(list)
+
+    await screen.findByText('older message')
+    expect(getTranscript).toHaveBeenLastCalledWith('s1', { before_seq: 4, limit: 200 })
+  })
+
+  it('renders tool calls and attachments the same paged as in one full load', async () => {
+    const log: TranscriptItem[] = [
+      {
+        seq: 2,
+        kind: 'user',
+        text: 'read this',
+        documents: [{ id: 'doc-1', mime: 'application/pdf', name: 'report.pdf' }],
+        created_at: '',
+      },
+      { seq: 3, kind: 'tool', tool: { call_id: 'c1', name: 'read_file', status: 'ok' }, created_at: '' },
+      { seq: 4, kind: 'tool', tool: { call_id: 'c2', name: 'grep', status: 'error' }, created_at: '' },
+      {
+        seq: 5,
+        kind: 'assistant',
+        blocks: [{ type: 'text', text: 'summary ready' }],
+        provider: 'prov',
+        model: 'mod',
+        created_at: '',
+      },
+    ]
+    vi.mocked(getTranscript).mockResolvedValueOnce(transcript(log))
+    const full = renderSession()
+    await screen.findByText('summary ready')
+    // Radix ids differ per mount; everything else must match.
+    const html = (c: HTMLElement) =>
+      (c.querySelector('.overflow-y-auto') as HTMLElement).innerHTML.replace(/radix-[^"]*/g, 'radix')
+    const fullHTML = html(full.container)
+    cleanup()
+
+    vi.mocked(getTranscript)
+      .mockResolvedValueOnce(transcript(log.slice(2), { has_more: true }))
+      .mockResolvedValueOnce(transcript(log.slice(0, 2)))
+    const paged = renderSession()
+    await screen.findByText('summary ready')
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
+    await screen.findByText('read this')
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Load earlier messages' })).not.toBeInTheDocument(),
+    )
+    expect(html(paged.container)).toBe(fullHTML)
   })
 })

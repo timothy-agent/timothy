@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -50,6 +51,8 @@ type Directory interface {
 	List(ctx context.Context, query string, before time.Time, beforeID string) ([]session.Meta, error)
 	Get(ctx context.Context, id string) (session.Meta, error)
 	Events(ctx context.Context, id string) ([]session.Event, error)
+	EventsPage(ctx context.Context, id string, afterSeq, beforeSeq int64, limit int) ([]session.Event, bool, error)
+	TranscriptControl(ctx context.Context, id string) ([]session.Event, error)
 	Update(ctx context.Context, id string, title *string, archived *bool) error
 	Delete(ctx context.Context, id string) error
 	SetKnowledge(ctx context.Context, id string, names []string) error
@@ -457,6 +460,11 @@ func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "not_found", "no such session")
 		return
 	}
+	page, paged, err := parseSeqPage(r.URL.Query())
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 	meta, err := a.dir.Get(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -466,15 +474,23 @@ func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 		failInternalCode(w, a.log, "get_failed", "session", err)
 		return
 	}
-	events, err := a.dir.Events(r.Context(), id)
-	if err != nil {
-		failInternalCode(w, a.log, "events_failed", "session", err)
-		return
-	}
-	items, err := session.UITranscript(events)
-	if err != nil {
-		failInternalCode(w, a.log, "projection_failed", "session", err)
-		return
+	var items []session.TranscriptItem
+	var pageFields map[string]any
+	if paged {
+		if items, pageFields, err = a.transcriptPage(r.Context(), id, page); err != nil {
+			failInternalCode(w, a.log, "events_failed", "session", err)
+			return
+		}
+	} else {
+		events, err := a.dir.Events(r.Context(), id)
+		if err != nil {
+			failInternalCode(w, a.log, "events_failed", "session", err)
+			return
+		}
+		if items, err = session.UITranscript(events); err != nil {
+			failInternalCode(w, a.log, "projection_failed", "session", err)
+			return
+		}
 	}
 	if items == nil {
 		items = []session.TranscriptItem{}
@@ -489,9 +505,42 @@ func (a *API) handleTranscript(w http.ResponseWriter, r *http.Request) {
 	// running right now", not a separate flag that could drift from it.
 	// a.svc is never nil (Register always constructs one), and
 	// TurnActive itself is nil-map-safe, so this needs no guard.
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"session": meta, "items": items, "turn_active": a.svc.TurnActive(id),
-	})
+	}
+	maps.Copy(resp, pageFields)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// transcriptPage projects one seq window of a session's log. Beyond
+// items it returns has_more, the window's first_seq/last_seq event
+// cursors (absent when empty), live_pending_seq (absent for none) and
+// resolved_permissions: what a client holding earlier items needs to
+// drop the ones a full projection now hides.
+func (a *API) transcriptPage(ctx context.Context, id string, page seqPage) ([]session.TranscriptItem, map[string]any, error) {
+	window, hasMore, err := a.dir.EventsPage(ctx, id, page.AfterSeq, page.BeforeSeq, page.Limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	control, err := a.dir.TranscriptControl(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	tp, err := session.UITranscriptPage(window, control)
+	if err != nil {
+		return nil, nil, err
+	}
+	fields := map[string]any{"has_more": hasMore}
+	if len(window) > 0 {
+		fields["first_seq"], fields["last_seq"] = window[0].Seq, window[len(window)-1].Seq
+	}
+	if tp.LivePendingSeq >= 0 {
+		fields["live_pending_seq"] = tp.LivePendingSeq
+	}
+	if len(tp.ResolvedPermissions) > 0 {
+		fields["resolved_permissions"] = tp.ResolvedPermissions
+	}
+	return tp.Items, fields, nil
 }
 
 func (a *API) handleUpdate(w http.ResponseWriter, r *http.Request) {

@@ -214,6 +214,43 @@ func TestOpenAIResponsesReasoningEffortPrecedence(t *testing.T) {
 	}
 }
 
+func TestOpenAIResponsesMaxOutputTokensFloor(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		cap  int
+		want int
+	}{
+		{name: "zero stays omitted", cap: 0, want: 0},
+		{name: "probe one raised to floor", cap: 1, want: 16},
+		{name: "fifteen raised to floor", cap: 15, want: 16},
+		{name: "floor passes through", cap: 16, want: 16},
+		{name: "large passes through", cap: 512, want: 512},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var got orsRequest
+			p := orsServer(t, func(w http.ResponseWriter, r *http.Request) {
+				got = decodeORSRequest(t, r)
+				orsWrite(w, "response.completed", `{"response":{"id":"resp_1","status":"completed"}}`)
+			})
+			req := CompletionRequest{
+				Model: "gpt-5.4", Messages: []Message{{Role: "user", Content: "ping"}},
+				MaxTokens: tt.cap,
+			}
+			ch, err := p.Stream(t.Context(), req)
+			if err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+			collect(t, ch)
+			if got.MaxOutputTokens != tt.want {
+				t.Fatalf("max_output_tokens = %d, want %d", got.MaxOutputTokens, tt.want)
+			}
+		})
+	}
+}
+
 func TestOpenAIResponsesImages(t *testing.T) {
 	t.Parallel()
 	var got orsRequest

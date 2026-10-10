@@ -1,4 +1,4 @@
-import type { ImageRef, TranscriptItem } from '../api/types'
+import type { ImageRef, Transcript, TranscriptItem } from '../api/types'
 import type { AssistantState, ToolRun } from './chat'
 
 // ChatItem is one renderable unit of the chat page: live turns and
@@ -154,4 +154,84 @@ export function fromTranscript(items: TranscriptItem[]): ChatItem[] {
   }
   flush()
   return out
+}
+
+// TranscriptWindow is the server transcript a chat page holds, merged
+// across seq pages (issue #1113). Cursors are event seqs from the
+// page responses, not item seqs: some events render no item.
+export interface TranscriptWindow {
+  sessionId: string
+  items: TranscriptItem[]
+  oldestSeq?: number
+  newestSeq?: number
+  hasOlder: boolean
+}
+
+// reconcile drops held items that later events hide in a full
+// projection: an interrupted item once its pending_state is no longer
+// live, and an ask once answered.
+function reconcile(items: TranscriptItem[], page: Transcript): TranscriptItem[] {
+  const resolved = new Set(page.resolved_permissions ?? [])
+  return items.filter(
+    (i) =>
+      !(i.kind === 'interrupted' && i.seq !== page.live_pending_seq) &&
+      !(i.kind === 'permission' && i.permission && resolved.has(i.permission.id)),
+  )
+}
+
+// windowFromPage starts a window from a latest-N page.
+export function windowFromPage(sessionId: string, page: Transcript): TranscriptWindow {
+  return {
+    sessionId,
+    items: page.items,
+    oldestSeq: page.first_seq,
+    newestSeq: page.last_seq,
+    hasOlder: page.has_more ?? false,
+  }
+}
+
+// mergePage folds an older (before_seq) or newer (after_seq) page into
+// w, deduped by seq in seq order. Only a newer page reconciles held
+// items: hiding events always come after what they hide, and the next
+// newer page catches up anything an older one could report. It returns
+// w itself when nothing changed, so callers can skip a re-render.
+export function mergePage(w: TranscriptWindow, page: Transcript, direction: 'older' | 'newer'): TranscriptWindow {
+  const bySeq = new Map(w.items.map((i) => [i.seq, i]))
+  for (const i of page.items) if (!bySeq.has(i.seq)) bySeq.set(i.seq, i)
+  const sorted = [...bySeq.values()].sort((a, b) => a.seq - b.seq)
+  const items = direction === 'newer' ? reconcile(sorted, page) : sorted
+  const oldest = Math.min(w.oldestSeq ?? Infinity, page.first_seq ?? Infinity)
+  const newest = Math.max(w.newestSeq ?? 0, page.last_seq ?? 0)
+  const next: TranscriptWindow = {
+    sessionId: w.sessionId,
+    items,
+    oldestSeq: oldest === Infinity ? undefined : oldest,
+    newestSeq: newest === 0 ? undefined : newest,
+    hasOlder: direction === 'older' ? (page.has_more ?? false) : w.hasOlder,
+  }
+  const same =
+    items.length === w.items.length &&
+    items.every((it, i) => it === w.items[i]) &&
+    next.hasOlder === w.hasOlder &&
+    next.oldestSeq === w.oldestSeq &&
+    next.newestSeq === w.newestSeq
+  return same ? w : next
+}
+
+// prependChatItems renders an older page in front of current, the
+// rendered list whose head is beforeDerived (fromTranscript of the
+// window before the merge); mergedDerived is fromTranscript of the
+// merged window. Only the boundary item can differ from a full replay
+// (it may fold the older page's trailing tool calls), so everything
+// after it, live or optimistic items included, is kept as is.
+// current[0] is replaced only while it is the untouched replay.
+export function prependChatItems(
+  current: ChatItem[],
+  beforeDerived: ChatItem[],
+  mergedDerived: ChatItem[],
+): ChatItem[] {
+  if (beforeDerived.length === 0) return [...mergedDerived, ...current]
+  const head = mergedDerived.slice(0, mergedDerived.length - (beforeDerived.length - 1))
+  if (current[0] !== beforeDerived[0]) return [...head.slice(0, -1), ...current]
+  return [...head, ...current.slice(1)]
 }

@@ -411,8 +411,27 @@ export async function listSessions(query = '', cursor?: SessionCursor): Promise<
   return sessions
 }
 
-export async function getTranscript(id: string): Promise<Transcript> {
-  return request<Transcript>(`/v1/sessions/${id}`)
+// SeqPage selects a seq keyset window of an event log (issue #1113):
+// limit alone means the newest rows; before_seq and after_seq are
+// mutually exclusive. Rows always come back ascending.
+export interface SeqPage {
+  limit?: number
+  before_seq?: number
+  after_seq?: number
+}
+
+function seqPageQuery(page?: SeqPage): string {
+  if (!page) return ''
+  const params = new URLSearchParams()
+  if (page.limit !== undefined) params.set('limit', String(page.limit))
+  if (page.before_seq !== undefined) params.set('before_seq', String(page.before_seq))
+  if (page.after_seq !== undefined) params.set('after_seq', String(page.after_seq))
+  return params.size > 0 ? `?${params.toString()}` : ''
+}
+
+// getTranscript without a page returns the whole transcript.
+export async function getTranscript(id: string, page?: SeqPage): Promise<Transcript> {
+  return request<Transcript>(`/v1/sessions/${id}${seqPageQuery(page)}`)
 }
 
 // answerPermission resolves a parked tool call.
@@ -1458,19 +1477,32 @@ export async function getMissionExecutionPlan(params: {
   return phases ?? []
 }
 
-// listMissions returns every mission by default; opts narrows to the
-// missions one automation's runs started (automationId), a text search (query, the
-// composer #-mention mission search), and/or caps the result count
-// (limit): all map directly to the server's optional query params.
+// listMissions returns one page, newest first (server default 50, max
+// 200). opts map directly to the server's query params; the cursor is
+// the previous page's last (created_at, id), and harness 'native'
+// matches missions with no delegated harness.
 export async function listMissions(opts?: {
   automationId?: string
   query?: string
+  kind?: Mission['kind']
+  harness?: string
+  model?: string
+  source?: 'manual' | 'automated'
   limit?: number
+  cursor?: SessionCursor
 }): Promise<Mission[]> {
   const params = new URLSearchParams()
   if (opts?.automationId) params.set('automation_id', opts.automationId)
   if (opts?.query) params.set('q', opts.query)
+  if (opts?.kind) params.set('kind', opts.kind)
+  if (opts?.harness) params.set('harness', opts.harness)
+  if (opts?.model) params.set('model', opts.model)
+  if (opts?.source) params.set('source', opts.source)
   if (opts?.limit) params.set('limit', String(opts.limit))
+  if (opts?.cursor) {
+    params.set('before', opts.cursor.before)
+    params.set('before_id', opts.cursor.beforeId)
+  }
   const qs = params.size > 0 ? `?${params.toString()}` : ''
   const { missions } = await request<{ missions: Mission[] }>(`/v1/missions${qs}`)
   return missions ?? []
@@ -1513,6 +1545,18 @@ export async function getMission(id: string): Promise<Mission> {
 export async function missionEvents(id: string): Promise<MissionEvent[]> {
   const { events } = await request<{ events: MissionEvent[] }>(`/v1/missions/${id}/events`)
   return events ?? []
+}
+
+// missionEventsPage reads one seq window; has_more reports rows past it
+// in the paging direction.
+export async function missionEventsPage(
+  id: string,
+  page: SeqPage,
+): Promise<{ events: MissionEvent[]; has_more: boolean }> {
+  const res = await request<{ events: MissionEvent[]; has_more: boolean }>(
+    `/v1/missions/${id}/events${seqPageQuery(page)}`,
+  )
+  return { events: res.events ?? [], has_more: res.has_more }
 }
 
 export async function missionUsage(id: string): Promise<MissionUsage> {
@@ -1619,8 +1663,13 @@ export async function openMissionPR(id: string): Promise<{ url: string; number: 
   return request<{ url: string; number: number }>(`/v1/missions/${id}/pr`, { method: 'POST' })
 }
 
-export async function listNotifications(): Promise<Notification[]> {
-  const { notifications } = await request<{ notifications: Notification[] }>('/v1/notifications')
+// listNotifications returns the newest page (server default 50);
+// unread narrows to unread rows.
+export async function listNotifications(opts?: { unread?: boolean }): Promise<Notification[]> {
+  const qs = opts?.unread ? '?unread=true' : ''
+  const { notifications } = await request<{ notifications: Notification[] }>(
+    `/v1/notifications${qs}`,
+  )
   return notifications ?? []
 }
 

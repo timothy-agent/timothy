@@ -86,6 +86,10 @@ type orsTool struct {
 	Strict      bool            `json:"strict"`
 }
 
+// orsMinOutputTokens is the smallest max_output_tokens the Responses
+// API accepts.
+const orsMinOutputTokens = 16
+
 type orsRequest struct {
 	Model              string         `json:"model"`
 	Stream             bool           `json:"stream"`
@@ -278,6 +282,11 @@ func (o *OpenAIResponses) buildRequest(req CompletionRequest, state *orsState) o
 		Instructions:    req.System,
 		MaxOutputTokens: req.MaxTokens,
 		Store:           true,
+	}
+	// The Responses API rejects max_output_tokens under 16; the admin
+	// connection probe asks for 1 (issue #1120).
+	if out.MaxOutputTokens > 0 && out.MaxOutputTokens < orsMinOutputTokens {
+		out.MaxOutputTokens = orsMinOutputTokens
 	}
 
 	effort := ""
