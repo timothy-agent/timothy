@@ -81,7 +81,7 @@ func ValidFlow(raw string) bool {
 // parseFlow maps a stored flow string onto a Flow, translating the
 // pre-#611 discover_generate spelling onto FlowDiscoverBuild. Rows a
 // data migration hasn't touched yet still carry the old value; drop
-// this alias once scripts/pending-alters.md has run everywhere and the
+// this alias once the operator's pending alters have run everywhere and the
 // first stable release ships. An unknown value passes through
 // unchanged, leaving validate.go's ValidFlow check to reject it.
 func parseFlow(raw string) Flow {

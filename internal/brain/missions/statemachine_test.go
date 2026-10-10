@@ -936,7 +936,7 @@ func TestParsePhase(t *testing.T) {
 // carrying a pre-rename value (slice 1's explore/execute/review, or
 // #611's build) must parse to its current equivalent, so a new
 // binary reads old rows correctly before the data migration in
-// scripts/pending-alters.md runs, and old event history keeps
+// the operator's pending alter runs, and old event history keeps
 // displaying after a rollback.
 func TestParsePhaseLegacyMapping(t *testing.T) {
 	cases := []struct {

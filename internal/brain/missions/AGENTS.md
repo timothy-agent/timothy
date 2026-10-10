@@ -17,7 +17,7 @@ AGENTS.md so other work does not pay for it every session.
   `parsePhase` (statemachine.go) still accepts the pre-rename names
   (explore/execute/review, and generate) at read time, mapping them to
   discover/build/prove, so a new binary reads old rows safely before
-  the data migration in `scripts/pending-alters.md` runs; historical `mission_events` payloads keep their old phase
+  the operator's data migration runs; historical `mission_events` payloads keep their old phase
   names forever, tolerated by the web timeline renderer. Result is
   deterministic harness code (zero LLM turns): destinations delivery
   (including github push/PR, issue #561), artifact copy, and KB
@@ -276,7 +276,7 @@ AGENTS.md so other work does not pay for it every session.
   (returned as files, written by `launchRun`), never inline.
 - Plan gates (issue #718): a unit's `check_cmd` (renamed from
   `verify_cmd`; `Plan.normalize` reads the old key until the
-  pending-alters rename runs) is a gate, never a proof. `acceptPlan`
+  the operator's rename alter runs) is a gate, never a proof. `acceptPlan`
   rejects, with one planner recovery turn: the `| grep -q '^$'` idiom
   (exits 1 on empty output), a coding unit with source artifacts and no
   toolchain call (`checkCodeFloor`, per artifact language), and, via
@@ -314,8 +314,11 @@ AGENTS.md so other work does not pay for it every session.
   both worker system prompts (native, and the delegated system append
   every CLI adapter carries) end with `codingScopeRule`: change only
   what the goal needs, evidence belongs in the PR the harness fills, no
-  report, test-log or audit-output file unless the goal asks, and
-  report files from earlier PRs stay untouched. Prompt only, no gate.
+  new report, test-log or audit-output file unless the goal asks (the
+  D-134 gate enforces new report artifacts). Prompt only. Generic
+  default only: stricter preferences (e.g. leave existing report
+  files alone) go in the agent's prompt overlay, which `PlanSession`
+  appends to the plan system prompt as the worker packet does.
 - PR summary (D-152, issue #1174): when a repo destination's mode is
   push_pr, or the mission has a repo connection that "Push & open PR"
   can open a PR on (`deliversPR`), and at most one

@@ -158,9 +158,10 @@ const lightSystemPreamble = "You are completing this goal in a single pass. Work
 
 // codingScopeRule (D-151, issue #1173) is appended to the planner and
 // to both worker system prompts of a coding mission: the harness writes
-// test and audit evidence into the PR body itself, so report files in
-// the repository only duplicate it.
-const codingScopeRule = " Change only what the goal needs. Evidence such as test results and dependency audits belongs in the pull request, which the harness fills from its own measurements: unless the goal asks for one, never create or update a report, test-log or audit-output file (such as *REPORT*.md, test-results*, or saved audit output) in any unit, and leave report files that earlier changes added to the repository untouched, even when discovery suggests mirroring them."
+// test and audit evidence into the PR body itself. Only the generic
+// default lives here; stricter preferences belong in the agent's
+// prompt overlay, which the planner and workers both carry.
+const codingScopeRule = " Change only what the goal needs. Evidence such as test results and dependency audits belongs in the pull request, which the harness fills from its own measurements: unless the goal asks for one, do not add a report, test-log or audit-output file (such as *REPORT*.md, test-results*, or saved audit output)."
 
 // scopeRule is codingScopeRule for a planned coding packet, "" otherwise.
 func (p WorkPacket) scopeRule() string {
