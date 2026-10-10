@@ -15,6 +15,7 @@ vi.mock('../api/client', () => ({
   listRoutes: vi.fn(),
   getSettings: vi.fn(),
   listMemories: vi.fn(),
+  countMemories: vi.fn().mockResolvedValue(0),
   addMemory: vi.fn(),
   resolveMemory: vi.fn(),
   memoryChain: vi.fn(),
@@ -123,7 +124,6 @@ describe('Home', () => {
         enabled: true,
       },
     ])
-    vi.mocked(listMemories).mockResolvedValue([])
     vi.mocked(listRoutes).mockRejectedValue(new Error('not used on this page'))
     vi.mocked(listKbCollections).mockResolvedValue([])
   })

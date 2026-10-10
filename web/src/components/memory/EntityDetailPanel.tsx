@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
-import { toast } from 'sonner'
-import { entityMemories } from '../../api/client'
-import type { EntityNode, MemoryItem } from '../../api/types'
+import { useCallback, useState } from 'react'
+import { entityMemories, type SessionCursor } from '../../api/client'
+import type { EntityNode } from '../../api/types'
+import { useMemoryPages } from '../../lib/memory'
 import { ChainDialog } from './ChainDialog'
 import { TypeBadge } from './TypeBadge'
 
@@ -15,18 +15,13 @@ function confidenceClass(c: number): string {
 
 // EntityDetailPanel lists the active memories behind one graph node.
 export function EntityDetailPanel({ entity }: { entity: EntityNode }) {
-  const [memories, setMemories] = useState<MemoryItem[] | null>(null)
   const [chainFor, setChainFor] = useState<string | null>(null)
-
-  useEffect(() => {
-    setMemories(null)
-    entityMemories(entity.id)
-      .then(setMemories)
-      .catch(() => {
-        toast.error('Could not load entity memories')
-        setMemories([])
-      })
-  }, [entity.id])
+  const load = useCallback(
+    (cursor?: SessionCursor) => (cursor ? entityMemories(entity.id, cursor) : entityMemories(entity.id)),
+    [entity.id],
+  )
+  const { items, loaded, hasMore, sentinelRef } = useMemoryPages(load, 'Could not load entity memories')
+  const memories = loaded ? items : null
 
   return (
     <div className="space-y-3" data-testid="entity-detail">
@@ -72,6 +67,7 @@ export function EntityDetailPanel({ entity }: { entity: EntityNode }) {
               </div>
             </div>
           ))}
+          {hasMore && <div ref={sentinelRef} className="h-px" data-testid="entity-memories-sentinel" />}
         </div>
       )}
       {chainFor && <ChainDialog id={chainFor} onClose={() => setChainFor(null)} />}
