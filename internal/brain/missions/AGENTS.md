@@ -308,14 +308,21 @@ AGENTS.md so other work does not pay for it every session.
   `final_output` (mission_status natively, the optional field of the
   delegated result object otherwise); the driver stores the latest
   non-empty one as `missions.final_output`, the web Result panel
-  prefers it over `last_evidence`, and `PRBody` renders it in
-  `<details>` (60k rune cap).
+  prefers it over `last_evidence`, and `PRBody` renders it under
+  `## Summary` (D-152, 60k rune cap).
 - Scope rule (D-151, issue #1173): a coding mission's plan prompt and
   both worker system prompts (native, and the delegated system append
   every CLI adapter carries) end with `codingScopeRule`: change only
   what the goal needs, evidence belongs in the PR the harness fills, no
   report, test-log or audit-output file unless the goal asks, and
   report files from earlier PRs stay untouched. Prompt only, no gate.
+- PR summary (D-152, issue #1174): when a repo destination's mode is
+  push_pr (`deliversPR` over `EnvFacts.Destinations`) and at most one
+  unit lacks harness evidence, the worker packet (native and
+  delegated) carries `prSummaryRequest`: start final_output with a
+  short what-and-why summary, then any report the goal asks for.
+  `PRBody` is summary (neutralized, capped), dependency evidence,
+  units, attribution; the goal is never in it, not even as a fallback.
 - Environment facts (issue #1008): `renderEnvFacts` (envfacts.go)
   appends one deterministic block to the discover, plan, reviewer
   (native and delegated) and worker (native and delegated) prompts:

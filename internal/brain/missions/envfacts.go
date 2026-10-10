@@ -281,6 +281,20 @@ func (p *provisioner) collectEnvFacts(ctx context.Context, m Mission, workRoot, 
 	return facts
 }
 
+// deliversPR reports whether a repo destination in m's facts opens a
+// pull request (mode push_pr).
+func deliversPR(m Mission) bool {
+	if m.EnvFacts == nil {
+		return false
+	}
+	for _, d := range m.EnvFacts.Destinations {
+		if d.Mode == "push_pr" {
+			return true
+		}
+	}
+	return false
+}
+
 // repoDestinations lists the mission's repo destinations with kind and
 // mode, as the resolver reports them; an entry with only a repo_url is
 // kind "repo" with no mode.

@@ -2433,6 +2433,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		ExecEnvironmentNote: execEnvironmentNote(loc) + renderEnvFacts(m), Sources: m.Sources,
 		Light: m.RunsPlanless(), Location: loc,
 		Findings: m.ReviewFindings, ReworkRound: m.ReworkRounds, MaxRounds: m.MaxIterations,
+		DeliversPR: deliversPR(m),
 	}
 	// D-090: only flow=discover_build ever has discover notes AND
 	// runs planless at the same time (Light is born in PhaseBuild,

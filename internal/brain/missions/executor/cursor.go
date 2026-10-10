@@ -52,7 +52,7 @@ func (cursorAdapter) Capabilities() Capabilities {
 // cursor-agent has no --json-schema flag, so this sentence is the only
 // verdict channel (spec.ResultSchema is intentionally never passed to
 // cursor's argv or config).
-const cursorVerdictInstruction = "End your final message with a single line containing only a JSON object of the form {\"status\":\"DONE\"|\"RETRY\"|\"BLOCKED\",\"note\":\"...\",\"final_output\":\"...\"} and nothing after it (final_output is optional: the report the goal asks for when no unit lists a file for it)."
+const cursorVerdictInstruction = "End your final message with a single line containing only a JSON object of the form {\"status\":\"DONE\"|\"RETRY\"|\"BLOCKED\",\"note\":\"...\",\"final_output\":\"...\"} and nothing after it (final_output is optional: the pull request summary the prompt asks for, then the report the goal asks for when no unit lists a file for it)."
 
 // BuildInvocation validates spec and translates it to a cursor-agent
 // CLI argv + env. The prompt never rides the argv directly - PromptFile
