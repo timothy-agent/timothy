@@ -1345,6 +1345,37 @@ export interface ConnectorTestResult {
   load_tool?: string
 }
 
+// ConnectorProbeRequest is POST /v1/admin/connectors/probe's body. name
+// is the proposed connector name the final tool names are computed for.
+export interface ConnectorProbeRequest {
+  name?: string
+  endpoint: string
+  headers?: Record<string, string>
+  token?: string
+}
+
+// ConnectorProbeTool is one previewed tool. read_only_hint is the
+// server's own unverified annotation; final_name is the allowlist name
+// it would get under the proposed connector name.
+export interface ConnectorProbeTool {
+  name: string
+  final_name?: string
+  description: string
+  read_only_hint: boolean | null
+  input_schema: Record<string, unknown>
+}
+
+// ConnectorProbe is the probe's answer. tools is capped; tool_count is
+// the server's full count, compared against index_threshold.
+export interface ConnectorProbe {
+  status: 'ok' | 'needs_token' | 'needs_oauth' | 'unreachable' | 'error'
+  server: { name: string; version: string }
+  tools: ConnectorProbeTool[]
+  tool_count: number
+  index_threshold: number
+  message?: string
+}
+
 // GitHubIdentity is what a github-kind connector's test resolves:
 // which account its PAT authenticates as.
 export interface GitHubIdentity {
