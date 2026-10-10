@@ -7,7 +7,7 @@ export const chatTour: TourDef = {
     {
       target: 'chat.composer',
       title: 'Ask anything',
-      body: 'Type here and press Enter. Type # to pull in a knowledge collection or @ to reference a mission.',
+      body: 'Type here and press Enter. Type # to pull in a knowledge collection or to reference a mission, chat or document.',
       side: 'top',
     },
     {

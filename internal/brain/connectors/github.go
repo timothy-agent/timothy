@@ -500,7 +500,7 @@ type githubErrorBody struct {
 // keep the status code plus GitHub's parsed message field(s), if any.
 func githubStatusError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("GitHub token invalid or expired — replace the PAT")
+		return fmt.Errorf("GitHub token invalid or expired. Replace the PAT")
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var e githubErrorBody

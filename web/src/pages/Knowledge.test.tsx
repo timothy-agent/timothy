@@ -245,7 +245,7 @@ describe('Knowledge page', () => {
       renderPage('/knowledge/c1')
       await screen.findByText('onboarding.pdf')
 
-      const input = screen.getByPlaceholderText(/add a page or PDF by URL/)
+      const input = screen.getByPlaceholderText(/Add a page or PDF by URL/)
       fireEvent.change(input, { target: { value: 'https://example.com/a' } })
       fireEvent.click(screen.getByRole('button', { name: 'Add URL' }))
 
@@ -261,7 +261,7 @@ describe('Knowledge page', () => {
       renderPage('/knowledge/c1')
       await screen.findByText('onboarding.pdf')
 
-      const input = screen.getByPlaceholderText(/add a page or PDF by URL/)
+      const input = screen.getByPlaceholderText(/Add a page or PDF by URL/)
       fireEvent.change(input, {
         target: { value: 'https://example.com/a\nhttps://example.com/b https://example.com/c' },
       })
@@ -283,7 +283,7 @@ describe('Knowledge page', () => {
       renderPage('/knowledge/c1')
       await screen.findByText('onboarding.pdf')
 
-      const input = screen.getByPlaceholderText(/add a page or PDF by URL/)
+      const input = screen.getByPlaceholderText(/Add a page or PDF by URL/)
       fireEvent.change(input, {
         target: {
           value: 'https://example.com/a https://example.com/bad https://example.com/c',

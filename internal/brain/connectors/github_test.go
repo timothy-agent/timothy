@@ -137,7 +137,7 @@ func TestGitHubStatusErrorMapping(t *testing.T) {
 			name:   "401 bad or expired token",
 			status: http.StatusUnauthorized,
 			body:   `{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest"}`,
-			want:   "GitHub token invalid or expired — replace the PAT",
+			want:   "GitHub token invalid or expired. Replace the PAT",
 		},
 		{
 			name:   "403 forbidden keeps github's message",

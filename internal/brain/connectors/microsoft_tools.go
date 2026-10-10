@@ -172,7 +172,7 @@ func (s *microsoftSource) rawAPI(ctx context.Context, method, apiURL string, bod
 // status code plus a body snippet, same discipline as googleAPIError.
 func microsoftAPIError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("Microsoft authorization expired or was revoked — reconnect to re-authorize")
+		return fmt.Errorf("Microsoft authorization expired or was revoked. Reconnect to re-authorize")
 	}
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	return fmt.Errorf("microsoft graph api status %d: %s", resp.StatusCode, snippet)

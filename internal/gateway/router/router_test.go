@@ -1460,7 +1460,7 @@ func TestExecutorUsableOpenAIResponsesGate(t *testing.T) {
 	}{
 		{name: "codex-cli unknown flag stays usable", harness: "codex-cli", responses: nil, wantUsable: true},
 		{name: "codex-cli true flag stays usable", harness: "codex-cli", responses: &trueVal, wantUsable: true},
-		{name: "codex-cli false flag is unusable", harness: "codex-cli", responses: &falseVal, wantUsable: false, wantReason: "does not serve /v1/responses"},
+		{name: "codex-cli false flag is unusable", harness: "codex-cli", responses: &falseVal, wantUsable: false, wantReason: "does not serve /v1/responses. Run Test connection on the provider to re-probe"},
 		{name: "opencode unaffected by false flag", harness: "opencode", responses: &falseVal, wantUsable: true},
 		{name: "pi unaffected by false flag", harness: "pi", responses: &falseVal, wantUsable: true},
 	}

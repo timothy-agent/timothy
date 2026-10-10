@@ -864,7 +864,7 @@ func executorUsable(row ProviderRow, harness string) (bool, string) {
 	// /responses (404/405) — an unknown result (nil, never probed or an
 	// ambiguous probe outcome) stays usable rather than guessing.
 	if harnessNeedsResponses[harness] && row.OpenAIResponses != nil && !*row.OpenAIResponses {
-		return false, "endpoint does not serve /v1/responses — run Test connection on the provider to re-probe"
+		return false, "endpoint does not serve /v1/responses. Run Test connection on the provider to re-probe"
 	}
 	return true, ""
 }

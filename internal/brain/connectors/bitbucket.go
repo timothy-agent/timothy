@@ -335,7 +335,7 @@ type bitbucketErrorBody struct {
 // bitbucketStatusError never includes the token or a raw body.
 func bitbucketStatusError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusUnauthorized {
-		return fmt.Errorf("bitbucket: token invalid or expired — replace the access token")
+		return fmt.Errorf("bitbucket: token invalid or expired. Replace the access token")
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var e bitbucketErrorBody

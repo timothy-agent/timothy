@@ -72,6 +72,11 @@ func TestLoadRejectsBrokenPacks(t *testing.T) {
 			content: "---\nname: big-desc\ndescription: Use when " + strings.Repeat("x", MaxDescription) + "\n---\n\n- rule\n",
 			wantErr: "max 1024",
 		},
+		{
+			name: "oversized body", dir: "big-body",
+			content: "---\nname: big-body\ndescription: X. Use when Y.\n---\n\n" + strings.Repeat("- rule\n", maxBodyLines+1),
+			wantErr: "max 500. Split details into references/",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
