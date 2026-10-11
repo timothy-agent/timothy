@@ -53,7 +53,7 @@ func MissionStatusTool() *tools.Tool {
 				},
 				"final_output": {
 					"type": "string",
-					"description": "Required for done on a light mission: the COMPLETE final deliverable text, verbatim: this is what the user receives and what destinations deliver. Never a summary of the deliverable; the deliverable itself. On a planned mission, optional: the analysis or report the goal asks for when no unit lists a file for it."
+					"description": "Required for done on a light mission: the COMPLETE final deliverable text, verbatim: this is what the user receives and what destinations deliver. Never a summary of the deliverable; the deliverable itself. On a planned mission, optional: the pull request summary when the prompt asks for one, then the analysis or report the goal asks for when no unit lists a file for it."
 				}
 			},
 			"required": ["outcome"]

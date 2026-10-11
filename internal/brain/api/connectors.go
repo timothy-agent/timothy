@@ -20,11 +20,11 @@ import (
 // secrets, when nil, just skips signing-key generation on a
 // sign_commits create/patch — same as any other secret-store-gated
 // feature elsewhere in brain.
-func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mgr *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, secrets *secretstore.Store) {
+func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mgr *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, mcpAuth *connectors.MCPAuth, secrets *secretstore.Store) {
 	if mgr == nil {
 		return
 	}
-	h := &connectorAPI{mgr: mgr, goog: goog, msft: msft, secrets: secrets, log: a.log}
+	h := &connectorAPI{mgr: mgr, goog: goog, msft: msft, mcp: mcpAuth, secrets: secrets, log: a.log}
 	handle("GET /v1/admin/connectors", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/admin/connectors", a.auth(http.HandlerFunc(h.create)))
 	handle("PATCH /v1/admin/connectors/{id}", a.auth(http.HandlerFunc(h.patch)))
@@ -32,10 +32,10 @@ func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mg
 	handle("POST /v1/admin/connectors/{id}/test", a.auth(http.HandlerFunc(h.test)))
 	handle("GET /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.listRepos)))
 	handle("POST /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.createRepo)))
-	if goog != nil || msft != nil {
+	if goog != nil || msft != nil || mcpAuth != nil {
 		handle("POST /v1/admin/connectors/{id}/oauth/start", a.auth(http.HandlerFunc(h.oauthStart)))
-		// The callback is Google/Microsoft redirecting the user's browser —
-		// no bearer possible; the single-use expiring state token is the
+		// The callback is an identity provider redirecting the user's
+		// browser, so no bearer is possible; the single-use expiring state token is the
 		// auth. It writes nothing an attacker chooses: a forged call
 		// without a live state is rejected.
 		handle("GET /v1/connectors/oauth/callback", http.HandlerFunc(h.oauthCallback))
@@ -46,13 +46,14 @@ type connectorAPI struct {
 	mgr     *connectors.Manager
 	goog    *connectors.Google
 	msft    *connectors.Microsoft
+	mcp     *connectors.MCPAuth
 	secrets *secretstore.Store
 	log     *slog.Logger
 }
 
 // oauthStart begins the OAuth dance and returns the URL the browser
-// should visit, dispatching to Google or Microsoft by the connector's
-// own kind.
+// should visit, dispatching to Google, Microsoft or MCP by the
+// connector's own kind.
 func (h *connectorAPI) oauthStart(w http.ResponseWriter, r *http.Request) {
 	c, err := h.mgr.Store().Get(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -65,6 +66,12 @@ func (h *connectorAPI) oauthStart(w http.ResponseWriter, r *http.Request) {
 		authURL, err = h.goog.StartAuth(r.Context(), c.ID)
 	case "microsoft":
 		authURL, err = h.msft.StartAuth(r.Context(), c.ID)
+	case "mcp":
+		if h.mcp == nil {
+			err = fmt.Errorf("mcp oauth login is not configured: %w", connectors.ErrUnsupported)
+			break
+		}
+		authURL, err = h.mcp.StartAuth(r.Context(), c.ID)
 	default:
 		err = fmt.Errorf("connector kind %s has no oauth dance: %w", c.Kind, connectors.ErrUnsupported)
 	}
@@ -76,9 +83,9 @@ func (h *connectorAPI) oauthStart(w http.ResponseWriter, r *http.Request) {
 }
 
 // oauthCallback finishes the dance and bounces the browser back to
-// Settings with the outcome in the query. Google and Microsoft share
-// this one redirect route (both registered against the same publicURL
-// at signup), so the live (unconsumed) state tells us which engine
+// Settings with the outcome in the query. Google, Microsoft and MCP
+// share this one redirect route (all registered against the same
+// publicURL), so the live (unconsumed) state tells us which engine
 // started it, via HasState.
 func (h *connectorAPI) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -94,6 +101,8 @@ func (h *connectorAPI) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		name, err = h.goog.HandleCallback(r.Context(), state, q.Get("code"))
 	case h.msft != nil && h.msft.HasState(state):
 		name, err = h.msft.HandleCallback(r.Context(), state, q.Get("code"))
+	case h.mcp != nil && h.mcp.HasState(state):
+		name, err = h.mcp.HandleCallback(r.Context(), state, q.Get("code"))
 	default:
 		err = fmt.Errorf("unknown or expired oauth state; restart the connection from Settings")
 	}

@@ -1,5 +1,6 @@
 import { Route, Routes } from 'react-router'
 import { ConnectorAdd } from './ConnectorAdd'
+import { ConnectorAddMCP } from './ConnectorAddMCP'
 import { ConnectorEdit } from './ConnectorEdit'
 import { ConnectorsList } from './ConnectorsList'
 
@@ -10,6 +11,7 @@ export function ConnectorsTab() {
   return (
     <Routes>
       <Route path="/" element={<ConnectorsList />} />
+      <Route path="new/custom-mcp" element={<ConnectorAddMCP />} />
       <Route path="new/:presetId" element={<ConnectorAdd />} />
       <Route path=":id" element={<ConnectorEdit />} />
     </Routes>

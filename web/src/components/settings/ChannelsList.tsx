@@ -56,10 +56,9 @@ export function ChannelsList() {
       <div className="space-y-10">
         <section className="space-y-4">
           <SectionHeader title={channels.length > 0 ? `Your channels · ${channels.length}` : 'Your channels'} />
-          <p className="-mt-2 max-w-2xl text-sm text-muted-foreground">
-            Timothy polls Telegram, holds a Socket Mode connection to Slack and polls email inboxes over IMAP, so
-            nothing inbound needs exposing. Unknown senders get a pairing prompt and never reach a model until you
-            approve them here.
+          <p className="-mt-2 text-sm text-muted-foreground">
+            Where people talk to Timothy: Telegram, Slack and email. Timothy connects outbound, so nothing
+            needs a public address. Unknown senders wait for your approval here before any model sees them.
           </p>
           {channels.length === 0 ? (
             <EmptyState

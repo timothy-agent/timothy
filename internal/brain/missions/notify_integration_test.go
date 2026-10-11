@@ -262,7 +262,9 @@ func TestNotifyOperatorOncePerWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pool: %v", err)
 	}
-	t.Cleanup(func() { _, _ = db.Exec(context.Background(), `DELETE FROM notifications WHERE message LIKE $1 || '%'`, msg) })
+	t.Cleanup(func() {
+		_, _ = db.Exec(context.Background(), `DELETE FROM notifications WHERE message LIKE $1 || '%'`, msg)
+	})
 	count := func() int {
 		var c int
 		if err := db.QueryRow(ctx, `SELECT count(*) FROM notifications WHERE mission_id IS NULL AND message = $1`, msg).Scan(&c); err != nil {

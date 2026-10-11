@@ -144,4 +144,3 @@ func resolvePricedModel(ctx context.Context, cat catalogSuggester, pair Provider
 	}
 	return out, nil
 }
-

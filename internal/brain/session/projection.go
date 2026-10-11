@@ -282,13 +282,13 @@ type TranscriptItem struct {
 	Images []ImageRef `json:"images,omitempty"`
 	// Documents are refs only (id+mime) — never the converted markdown,
 	// which can be huge and has no reason to reach the UI payload.
-	Documents  []ImageRef         `json:"documents,omitempty"`
-	Provider   string             `json:"provider,omitempty"`
-	Model      string             `json:"model,omitempty"`
-	Usage      *stream.Usage      `json:"usage,omitempty"`
-	DurationMs int64              `json:"duration_ms,omitempty"`
-	Cost       *float64           `json:"cost,omitempty"`
-	Currency   string             `json:"currency,omitempty"`
+	Documents  []ImageRef    `json:"documents,omitempty"`
+	Provider   string        `json:"provider,omitempty"`
+	Model      string        `json:"model,omitempty"`
+	Usage      *stream.Usage `json:"usage,omitempty"`
+	DurationMs int64         `json:"duration_ms,omitempty"`
+	Cost       *float64      `json:"cost,omitempty"`
+	Currency   string        `json:"currency,omitempty"`
 	// ConvertedCost/ConvertedCurrency/RateAsOf are additive display
 	// fields the api package fills in at serve time (never persisted —
 	// rates drift, session_events keeps only billed truth): the same
