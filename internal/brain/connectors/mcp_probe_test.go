@@ -1,12 +1,14 @@
 package connectors
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
@@ -265,5 +267,159 @@ func TestReservedFromSurface(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProbeStoredBearer(t *testing.T) {
+	t.Parallel()
+	fake := &fakeMCP{token: "tok-1", toolsJSON: probeHintTools}
+	srv := httptest.NewServer(fake.handler())
+	t.Cleanup(srv.Close)
+	m := testManager(fakeRows{})
+	m.resolve = func(_ context.Context, ref string) (string, error) {
+		if ref == "NOTION_MCP_TOKEN" {
+			return "tok-1", nil
+		}
+		return "", fmt.Errorf("no secret %s", ref)
+	}
+	row := func(ref string) Connector {
+		return Connector{ID: "m1", Name: "notion", Kind: "mcp", Config: json.RawMessage(`{"endpoint":"` + srv.URL + `","headers":{"X-Team":"core"}}`), CredentialRef: ref}
+	}
+
+	res := m.ProbeStored(t.Context(), srv.Client(), row("NOTION_MCP_TOKEN"), nil)
+	if res.Status != ProbeOK || res.ToolCount != 3 {
+		t.Fatalf("stored token: %+v", res)
+	}
+	if fake.gotAuth != "Bearer tok-1" {
+		t.Fatalf("auth = %q", fake.gotAuth)
+	}
+	if res := m.ProbeStored(t.Context(), srv.Client(), row("MISSING"), nil); res.Status != ProbeNeedsToken {
+		t.Fatalf("missing secret: %+v", res)
+	}
+	bad := Connector{ID: "m1", Name: "notion", Kind: "mcp", Config: json.RawMessage(`{"endpoint":"` + srv.URL + `","auth_mode":"basic"}`)}
+	if res := m.ProbeStored(t.Context(), srv.Client(), bad, nil); res.Status != ProbeError || !strings.Contains(res.Message, "auth_mode") {
+		t.Fatalf("bad auth mode: %+v", res)
+	}
+}
+
+func TestProbeStoredOAuth(t *testing.T) {
+	t.Parallel()
+	as, _, client := newOAuthFakes(t, true)
+	auth, rows, _ := testMCPAuth(t, client, oauthRow(as.base+"/mcp", ""))
+	m := testManager(rows)
+
+	before, err := rows.Get(t.Context(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := m.ProbeStored(t.Context(), client, before, auth); res.Status != ProbeNeedsOAuth {
+		t.Fatalf("before connect: %+v", res)
+	}
+	if res := m.ProbeStored(t.Context(), client, before, nil); res.Status != ProbeNeedsOAuth {
+		t.Fatalf("no auth engine: %+v", res)
+	}
+
+	connectMCP(t, auth)
+	connected, err := rows.Get(t.Context(), "m1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := m.ProbeStored(t.Context(), client, connected, auth)
+	if res.Status != ProbeOK || res.ToolCount == 0 {
+		t.Fatalf("connected: %+v", res)
+	}
+
+	// The server revokes the live access token: one forced refresh,
+	// then the probe succeeds on the new one.
+	as.revoke(lastIssued(as))
+	if res := m.ProbeStored(t.Context(), client, connected, auth); res.Status != ProbeOK {
+		t.Fatalf("after revoke: %+v", res)
+	}
+	if as.grants("refresh_token") != 1 {
+		t.Fatalf("refresh grants = %d, want 1", as.grants("refresh_token"))
+	}
+
+	// Refresh refused: the page must ask to reconnect, and the message
+	// never carries the token the server rejected.
+	as.mu.Lock()
+	as.refreshStatus = http.StatusBadRequest
+	as.mu.Unlock()
+	as.revoke(lastIssued(as))
+	res = m.ProbeStored(t.Context(), client, connected, auth)
+	if res.Status != ProbeNeedsOAuth || !strings.Contains(res.Message, "reconnect") {
+		t.Fatalf("refresh refused: %+v", res)
+	}
+}
+
+// lastIssued is the access token the fake authorization server
+// handed out most recently.
+func lastIssued(as *fakeAS) string {
+	as.mu.Lock()
+	defer as.mu.Unlock()
+	return fmt.Sprintf("at-%d", as.issued)
+}
+
+func TestDiffProbe(t *testing.T) {
+	t.Parallel()
+	at := time.Now()
+	stored := func(toolCount int, names ...string) MCPLastProbe {
+		rec := MCPLastProbe{At: at, ToolCount: toolCount}
+		for _, n := range names {
+			rec.Tools = append(rec.Tools, MCPProbedTool{Name: n})
+		}
+		return rec
+	}
+	probed := func(toolCount int, names ...string) ProbeResult {
+		res := ProbeResult{Status: ProbeOK, ToolCount: toolCount}
+		for _, n := range names {
+			res.Tools = append(res.Tools, ProbeTool{Name: n})
+		}
+		return res
+	}
+	cases := []struct {
+		name        string
+		prev        MCPLastProbe
+		next        ProbeResult
+		wantAdded   []string
+		wantRemoved []string
+	}{
+		{name: "no record yet", prev: MCPLastProbe{}, next: probed(2, "a", "b")},
+		{name: "unchanged", prev: stored(2, "a", "b"), next: probed(2, "a", "b")},
+		{name: "added and removed", prev: stored(2, "a", "b"), next: probed(2, "b", "c"), wantAdded: []string{"c"}, wantRemoved: []string{"a"}},
+		{name: "capped previous preview", prev: stored(600, "a"), next: probed(2, "a", "b")},
+		{name: "capped next preview", prev: stored(2, "a", "b"), next: probed(600, "a")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			added, removed := DiffProbe(tc.prev, tc.next)
+			if fmt.Sprint(added) != fmt.Sprint(tc.wantAdded) || fmt.Sprint(removed) != fmt.Sprint(tc.wantRemoved) {
+				t.Fatalf("diff = %v/%v, want %v/%v", added, removed, tc.wantAdded, tc.wantRemoved)
+			}
+		})
+	}
+}
+
+func TestLastProbeRoundTrip(t *testing.T) {
+	t.Parallel()
+	if got := LastProbeOf(Connector{Config: json.RawMessage(`{"endpoint":"https://x"}`)}); !got.At.IsZero() || len(got.Tools) != 0 {
+		t.Fatalf("absent = %+v", got)
+	}
+	if got := LastProbeOf(Connector{Config: json.RawMessage(`nope`)}); !got.At.IsZero() {
+		t.Fatalf("malformed = %+v", got)
+	}
+	ro := true
+	at := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	rec := ProbeResult{ToolCount: 1, Tools: []ProbeTool{{Name: "search", FinalName: "notion_search", Description: "dropped", ReadOnlyHint: &ro, InputSchema: json.RawMessage(`{}`)}}}.Record(at)
+	raw, err := json.Marshal(map[string]any{"endpoint": "https://x", "last_probe": rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "dropped") || strings.Contains(string(raw), "input_schema") {
+		t.Fatalf("record carries more than the table needs: %s", raw)
+	}
+	got := LastProbeOf(Connector{Config: raw})
+	if !got.At.Equal(at) || got.ToolCount != 1 || len(got.Tools) != 1 || got.Tools[0].FinalName != "notion_search" || got.Tools[0].ReadOnlyHint == nil || !*got.Tools[0].ReadOnlyHint {
+		t.Fatalf("round trip = %+v", got)
 	}
 }

@@ -1,3 +1,4 @@
+import type { AdminConnector, ConnectorProbe, MCPLastProbe, MCPProbedTool } from '../../api/types'
 import { slugify } from '../../lib/slugify'
 
 // MCPCandidate is one HTTP server entry the add flow can probe. token
@@ -96,6 +97,43 @@ export function appendAllowlist(current: string[], names: string[]): string[] {
   const out = [...current]
   for (const n of names) if (!out.includes(n)) out.push(n)
   return out
+}
+
+// lastProbeFrom is the config.last_probe record a successful probe
+// leaves on the connector, so its page lists the tools right after
+// adding.
+export function lastProbeFrom(probe: ConnectorProbe, at = new Date()): MCPLastProbe {
+  return {
+    at: at.toISOString(),
+    tool_count: probe.tool_count,
+    tools: probe.tools.map((t) => ({
+      name: t.name,
+      ...(t.final_name ? { final_name: t.final_name } : {}),
+      read_only_hint: t.read_only_hint,
+    })),
+  }
+}
+
+// lastProbeOf reads config.last_probe off a connector; null when absent
+// or malformed.
+export function lastProbeOf(connector: AdminConnector): MCPLastProbe | null {
+  const raw = connector.config.last_probe
+  if (!isRecord(raw) || typeof raw.at !== 'string' || !Array.isArray(raw.tools)) return null
+  const tools: MCPProbedTool[] = []
+  for (const t of raw.tools) {
+    if (!isRecord(t) || typeof t.name !== 'string') continue
+    tools.push({
+      name: t.name,
+      ...(typeof t.final_name === 'string' ? { final_name: t.final_name } : {}),
+      read_only_hint: typeof t.read_only_hint === 'boolean' ? t.read_only_hint : null,
+    })
+  }
+  return { at: raw.at, tool_count: typeof raw.tool_count === 'number' ? raw.tool_count : tools.length, tools }
+}
+
+// allowlistName is the name a tool carries on an agent's allowlist.
+export function allowlistName(tool: MCPProbedTool): string {
+  return tool.final_name || tool.name
 }
 
 // indexNote explains whether chat sees the tools directly or through

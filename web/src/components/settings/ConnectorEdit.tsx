@@ -23,6 +23,7 @@ import { Input } from '../ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
 import { BedrockKeyFields, bedrockKeyJSON } from './BedrockKeyFields'
 import { ConnectorLogo } from './ConnectorLogo'
+import { ConnectorMCPTools } from './ConnectorMCPTools'
 import { GCPKeyField } from './GCPKeyField'
 import { presetFor } from './connectorPresets'
 import { awsRegions } from '../../lib/providerPresets'
@@ -843,6 +844,17 @@ function ConnectorEditForm({
           </div>
         </Panel>
       </div>
+
+      {connector.kind === 'mcp' && (
+        <div className="mt-6">
+          <ConnectorMCPTools
+            connector={connector}
+            onProbed={doRefresh}
+            reconnect={isMCPOAuth ? reconnectOAuth : undefined}
+            reconnecting={oauthBusy}
+          />
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmDelete}

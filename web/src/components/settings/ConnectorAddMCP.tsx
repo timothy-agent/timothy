@@ -27,6 +27,7 @@ import {
   appendAllowlist,
   buildArgs,
   indexNote,
+  lastProbeFrom,
   parseMCPInput,
   schemaFields,
   stdioIssueURL,
@@ -118,7 +119,11 @@ export function ConnectorAddMCP() {
       await createConnector({
         name: connectorName,
         kind: 'mcp',
-        config: { endpoint: candidate.endpoint, ...(Object.keys(headers).length > 0 ? { headers } : {}) },
+        config: {
+          endpoint: candidate.endpoint,
+          ...(Object.keys(headers).length > 0 ? { headers } : {}),
+          last_probe: lastProbeFrom(probe),
+        },
         credential_ref: ref,
         enabled: true,
       })
