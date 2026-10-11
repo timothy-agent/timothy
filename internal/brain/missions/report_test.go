@@ -393,6 +393,9 @@ func TestPRSummaryRequest(t *testing.T) {
 			}
 		})
 	}
+	if !strings.Contains(prSummaryRequest, "Title: <type>(<optional scope>): <subject>") {
+		t.Fatalf("prSummaryRequest lost the title line contract: %s", prSummaryRequest)
+	}
 	if !strings.Contains(prSummaryRequest, "final_output") || !strings.Contains(prSummaryRequest, "without restating the goal") {
 		t.Fatalf("prSummaryRequest lost its contract: %s", prSummaryRequest)
 	}

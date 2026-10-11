@@ -90,7 +90,10 @@ type WorkPacket struct {
 // prSummaryRequest (D-152, issue #1174) asks the worker that can finish
 // the plan for the PR description; destinations.PRBody renders
 // final_output under "## Summary" in place of the goal.
-const prSummaryRequest = "Pull request summary: this work becomes a pull request. On done, start final_output with a short summary of the whole change for its description: what changed and why, a few sentences of markdown, without restating the goal. A report the goal asks for follows the summary.\n"
+//
+// D-153 (issue #1195): the first line is the PR title, read by
+// PRTitleFromOutput.
+const prSummaryRequest = "Pull request summary: this work becomes a pull request. On done, final_output starts with a title line, then the summary. Title line: \"Title: <type>(<optional scope>): <subject>\", a Conventional Commits subject for the change you actually made. Type is one of feat, fix, docs, style, refactor, perf, test, chore, build, ci, revert. The subject is lowercase with no trailing period, and the text after \"Title: \" is at most 72 characters. Summary: a short summary of the whole change for its description: what changed and why, a few sentences of markdown, without restating the goal. A report the goal asks for follows the summary.\n"
 
 // prSummary is prSummaryRequest when the packet delivers a PR and at
 // most one unit is left without harness evidence, "" otherwise.
