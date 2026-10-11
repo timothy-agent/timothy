@@ -16,7 +16,6 @@ metadata:
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/audit: restricted
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 apiVersion: networking.k8s.io/v1
@@ -35,7 +34,6 @@ spec:
     matchLabels:
       app.kubernetes.io/instance: timothy
   policyTypes: [Ingress, Egress]
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # web: reachable from the ingress controller (or anywhere when
@@ -82,7 +80,6 @@ spec:
               app.kubernetes.io/component: brain
       ports:
         - {protocol: TCP, port: 8080}
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # brain: from web; to every internal service, postgres and the
@@ -192,7 +189,6 @@ spec:
               app.kubernetes.io/name: timothy
               app.kubernetes.io/instance: timothy
               app.kubernetes.io/component: postgres
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # gateway: from brain and memoryd; to postgres and provider APIs.
@@ -261,7 +257,6 @@ spec:
               app.kubernetes.io/component: postgres
       ports:
         - {protocol: TCP, port: 5432}
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # memoryd: from brain; to gateway and postgres.
@@ -322,7 +317,6 @@ spec:
               app.kubernetes.io/component: postgres
       ports:
         - {protocol: TCP, port: 5432}
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # sandboxd: from brain; to the Kubernetes API only.
@@ -372,7 +366,6 @@ spec:
       ports:
         - {protocol: TCP, port: 443}
         - {protocol: TCP, port: 6443}
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # searxng: from brain; to the search engines it proxies.
@@ -426,7 +419,6 @@ spec:
               - 100.64.0.0/10
       ports:
         - {protocol: TCP, port: 443}
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # markitdown: from brain; no egress beyond DNS.
@@ -467,7 +459,6 @@ spec:
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # pdfgen: from brain; no egress beyond DNS.
@@ -508,7 +499,6 @@ spec:
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # ocr: from brain; no egress beyond DNS.
@@ -549,7 +539,6 @@ spec:
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 # whisper: from brain; no egress beyond DNS.
@@ -590,7 +579,6 @@ spec:
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
-
 ---
 # Source: timothy/templates/networkpolicy.yaml
 apiVersion: networking.k8s.io/v1
@@ -634,7 +622,6 @@ spec:
       ports:
         - {protocol: TCP, port: 5432}
   egress: []
-
 ---
 # Source: timothy/templates/sandbox-namespace.yaml
 # Sandbox pods: no ingress at all; egress to DNS and the allowed ports
@@ -683,7 +670,6 @@ spec:
               - 100.64.0.0/10
       ports:
         - {protocol: TCP, port: 443}
-
 ---
 # Source: timothy/templates/sandbox-namespace.yaml
 # Everything else in the sandbox namespace is denied both ways.
@@ -701,7 +687,6 @@ metadata:
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
-
 ---
 # Source: timothy/templates/sandbox-namespace.yaml
 apiVersion: v1
@@ -720,7 +705,6 @@ spec:
     pods: "20"
     limits.cpu: "40"
     limits.memory: "40Gi"
-
 ---
 # Source: timothy/templates/sandbox-namespace.yaml
 # Caps a pod that somehow lands here without sandboxd's limits.
@@ -741,7 +725,6 @@ spec:
       max: {cpu: "2", memory: 2Gi}
       default: {cpu: "2", memory: 2Gi}
       defaultRequest: {cpu: 250m, memory: 256Mi}
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -759,7 +742,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -779,7 +761,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -797,7 +778,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -815,7 +795,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: true
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -833,7 +812,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -851,7 +829,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -869,7 +846,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -887,7 +863,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -905,7 +880,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
-
 ---
 # Source: timothy/templates/serviceaccounts.yaml
 apiVersion: v1
@@ -923,7 +897,6 @@ metadata:
 # Only sandboxd talks to the API server; every other pod also sets
 # automountServiceAccountToken false on the pod.
 automountServiceAccountToken: false
-
 ---
 # Source: timothy/templates/searxng.yaml
 apiVersion: v1
@@ -942,23 +915,19 @@ data:
   # Same content as the `configs:` block in deploy/release/docker-compose.yml.
   settings.yml: |
     use_default_settings: true
-
     general:
       # No telemetry to the SearXNG project; this instance serves one tool.
       enable_metrics: false
-
     search:
       formats:
         - html
         - json
-
     server:
       # No published port and a single internal caller (brain): this key
       # only signs session cookies nothing outside the namespace can
       # reach, so a static value is fine here.
       secret_key: "3db45963595b11ba5641234fb40bfb84c612b7aaf25ceff7cc496355337e1add"
       limiter: false
-
 ---
 # Source: timothy/templates/storage.yaml
 apiVersion: v1
@@ -978,7 +947,6 @@ spec:
   resources:
     requests:
       storage: 20Gi
-
 ---
 # Source: timothy/templates/storage.yaml
 apiVersion: v1
@@ -997,8 +965,6 @@ spec:
   resources:
     requests:
       storage: 5Gi
-
-
 ---
 # Source: timothy/templates/storage.yaml
 apiVersion: v1
@@ -1018,7 +984,6 @@ spec:
   resources:
     requests:
       storage: 20Gi
-
 ---
 # Source: timothy/templates/storage.yaml
 apiVersion: v1
@@ -1038,7 +1003,6 @@ spec:
   resources:
     requests:
       storage: 1Gi
-
 ---
 # Source: timothy/templates/storage.yaml
 apiVersion: v1
@@ -1058,7 +1022,6 @@ spec:
   resources:
     requests:
       storage: 20Gi
-
 ---
 # Source: timothy/templates/sandboxd.yaml
 # Namespaced, nothing cluster-scoped: pods and pods/exec in the sandbox
@@ -1093,7 +1056,6 @@ rules:
     resources: [namespaces]
     resourceNames: [timothy-sandbox]
     verbs: [get]
-
 ---
 # Source: timothy/templates/sandboxd.yaml
 apiVersion: rbac.authorization.k8s.io/v1
@@ -1116,7 +1078,6 @@ subjects:
   - kind: ServiceAccount
     name: timothy-sandboxd
     namespace: timothy
-
 ---
 # Source: timothy/templates/brain.yaml
 apiVersion: v1
@@ -1140,7 +1101,6 @@ spec:
     - name: http
       port: 8080
       targetPort: http
-
 ---
 # Source: timothy/templates/gateway.yaml
 apiVersion: v1
@@ -1164,7 +1124,6 @@ spec:
     - name: http
       port: 8081
       targetPort: http
-
 ---
 # Source: timothy/templates/memoryd.yaml
 apiVersion: v1
@@ -1188,7 +1147,6 @@ spec:
     - name: http
       port: 8082
       targetPort: http
-
 ---
 # Source: timothy/templates/postgres.yaml
 apiVersion: v1
@@ -1213,7 +1171,6 @@ spec:
     - name: postgres
       port: 5432
       targetPort: postgres
-
 ---
 # Source: timothy/templates/sandboxd.yaml
 apiVersion: v1
@@ -1237,7 +1194,6 @@ spec:
     - name: http
       port: 8083
       targetPort: http
-
 ---
 # Source: timothy/templates/searxng.yaml
 apiVersion: v1
@@ -1261,7 +1217,6 @@ spec:
     - name: http
       port: 8080
       targetPort: http
-
 ---
 # Source: timothy/templates/sidecars.yaml
 apiVersion: v1
@@ -1285,7 +1240,6 @@ spec:
     - name: http
       port: 8000
       targetPort: http
-
 ---
 # Source: timothy/templates/sidecars.yaml
 apiVersion: v1
@@ -1309,7 +1263,6 @@ spec:
     - name: http
       port: 8000
       targetPort: http
-
 ---
 # Source: timothy/templates/sidecars.yaml
 apiVersion: v1
@@ -1333,7 +1286,6 @@ spec:
     - name: http
       port: 8000
       targetPort: http
-
 ---
 # Source: timothy/templates/sidecars.yaml
 apiVersion: v1
@@ -1357,7 +1309,6 @@ spec:
     - name: http
       port: 8001
       targetPort: http
-
 ---
 # Source: timothy/templates/web.yaml
 apiVersion: v1
@@ -1381,7 +1332,6 @@ spec:
     - name: http
       port: 8080
       targetPort: http
-
 ---
 # Source: timothy/templates/brain.yaml
 apiVersion: apps/v1
@@ -1531,7 +1481,6 @@ spec:
             claimName: timothy-attachments
         - name: tmp
           emptyDir: {}
-
 ---
 # Source: timothy/templates/gateway.yaml
 apiVersion: apps/v1
@@ -1626,7 +1575,6 @@ spec:
             requests:
               cpu: 100m
               memory: 128Mi
-
 ---
 # Source: timothy/templates/memoryd.yaml
 apiVersion: apps/v1
@@ -1717,7 +1665,6 @@ spec:
             requests:
               cpu: 100m
               memory: 256Mi
-
 ---
 # Source: timothy/templates/sandboxd.yaml
 apiVersion: apps/v1
@@ -1825,7 +1772,6 @@ spec:
             requests:
               cpu: 50m
               memory: 64Mi
-
 ---
 # Source: timothy/templates/searxng.yaml
 apiVersion: apps/v1
@@ -1915,7 +1861,6 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
-
 ---
 # Source: timothy/templates/sidecars.yaml
 apiVersion: apps/v1
@@ -1989,7 +1934,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-
 ---
 # Source: timothy/templates/sidecars.yaml
 apiVersion: apps/v1
@@ -2063,7 +2007,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-
 ---
 # Source: timothy/templates/sidecars.yaml
 apiVersion: apps/v1
@@ -2137,7 +2080,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-
 ---
 # Source: timothy/templates/sidecars.yaml
 apiVersion: apps/v1
@@ -2214,7 +2156,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-
 ---
 # Source: timothy/templates/web.yaml
 apiVersion: apps/v1
@@ -2299,7 +2240,6 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
-
 ---
 # Source: timothy/templates/postgres.yaml
 apiVersion: apps/v1
@@ -2400,7 +2340,6 @@ spec:
         resources:
           requests:
             storage: 10Gi
-
 ---
 # Source: timothy/templates/ingress.yaml
 # web only: brain is reached through web's same-origin /v1 proxy.
