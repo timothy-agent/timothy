@@ -186,12 +186,12 @@ func ConventionalPRTitle(m Mission) string {
 	return title
 }
 
-// prTitlePattern is a Conventional Commits subject (D-153, issue #1195):
+// prTitlePattern is a Conventional Commits subject (D-158, issue #1195):
 // known type, optional scope, then a subject that does not start with
 // an uppercase letter (acronyms inside it are fine).
 var prTitlePattern = regexp.MustCompile(`^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\([a-z0-9-]+\))?: [^\sA-Z](.*\S)?$`)
 
-// PRTitleFromOutput (D-153, issue #1195) reads the worker's
+// PRTitleFromOutput (D-158, issue #1195) reads the worker's
 // "Title: <type>(<scope>): <subject>" first line of final_output. ok is
 // false, with rest equal to finalOutput, when the line is missing or not
 // a printable subject without a trailing period of at most
