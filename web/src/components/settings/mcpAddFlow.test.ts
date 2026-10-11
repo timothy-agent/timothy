@@ -7,6 +7,7 @@ import {
   indexNote,
   lastProbeFrom,
   lastProbeOf,
+  missionReadsOf,
   parseMCPInput,
   schemaFields,
   stdioReason,
@@ -220,6 +221,24 @@ describe('last probe record', () => {
       at: '2026-10-11T12:00:00Z',
       tool_count: 1,
       tools: [{ name: 'ok', read_only_hint: null }],
+    })
+  })
+
+  it('lastProbeFrom carries the fingerprint when the probe has one', () => {
+    const at = new Date('2026-10-11T12:00:00Z')
+    expect(lastProbeFrom({ ...probe, hash: 'h1' }, at).hash).toBe('h1')
+    expect('hash' in lastProbeFrom(probe, at)).toBe(false)
+    const base = { id: 'm1', name: 'notion', kind: 'mcp' as const, credential_ref: '', enabled: true, sensitive: false }
+    expect(lastProbeOf({ ...base, config: { last_probe: { at: 'x', tools: [], hash: 'h1' } } })?.hash).toBe('h1')
+  })
+
+  it('missionReadsOf reads the marks and rejects malformed records', () => {
+    const base = { id: 'm1', name: 'notion', kind: 'mcp' as const, credential_ref: '', enabled: true, sensitive: false }
+    expect(missionReadsOf({ ...base, config: {} })).toBeNull()
+    expect(missionReadsOf({ ...base, config: { mission_reads: { tools: ['a'] } } })).toBeNull()
+    expect(missionReadsOf({ ...base, config: { mission_reads: { hash: 'h', tools: ['a', 2, 'b'] } } })).toEqual({
+      hash: 'h',
+      tools: ['a', 'b'],
     })
   })
 
