@@ -1599,7 +1599,7 @@ func applyDiscoverReport(m Mission, report discoverReport) string {
 	if m.ToolchainInstall != "failed" && (stackCovered(stack, m.Toolchains) || stackNeedsNoToolchain(stack)) {
 		return report.Findings
 	}
-	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan's first unit must be a " + bootstrapAllowance + " that installs it into the workspace.\n\n%s", NeutralizeSlot(stack), report.Findings)
+	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan's first unit must be a "+bootstrapAllowance+" that installs it into the workspace.\n\n%s", NeutralizeSlot(stack), report.Findings)
 }
 
 // stackWords maps a toolchain to the words a discover stack uses for
@@ -2032,11 +2032,14 @@ func bootstrapAllowed(m Mission, discoverNotes string) bool {
 // shape (planUnitShapeRules) is identical, so build/prove need no
 // changes: the same D-077 infeasible and D-095 criteria checks apply
 // to a transcribed plan as to a designed one. bootstrap appends
-// planBootstrapRule.
-func planSystemPrompt(hasPlan, bootstrap bool) string {
+// planBootstrapRule, coding codingScopeRule (D-151).
+func planSystemPrompt(hasPlan, bootstrap, coding bool) string {
 	rules := planUnitShapeRules
 	if bootstrap {
 		rules += planBootstrapRule
+	}
+	if coding {
+		rules += codingScopeRule
 	}
 	if hasPlan {
 		return "You are transcribing a mission plan. The goal below already contains the operator's own plan: convert it into an ordered list of verifiable units faithfully, preserving its steps and order. Do not redesign the plan, do not add scope or steps the operator didn't ask for, and do not merge or split steps the operator kept separate, except where the shape rules below force a split (one step whose own deliverable would truncate a single worker turn) or a merge (a small change inside one directory)." + rules
@@ -2053,7 +2056,13 @@ func planSystemPrompt(hasPlan, bootstrap bool) string {
 // each retry since nothing told the model what went wrong).
 func (r *nativeRunner) PlanSession(ctx context.Context, m Mission, discoverNotes string) (Plan, error) {
 	skillsHint := r.skillsNudge(ctx, m)
-	system := planSystemPrompt(m.HasPlan, bootstrapAllowed(m, discoverNotes)) + r.execEnvironmentNote(ctx) + skillsHint + r.loadedSkillsForPlan(ctx, m, discoverNotes) + renderEnvFacts(m)
+	system := planSystemPrompt(m.HasPlan, bootstrapAllowed(m, discoverNotes), m.Kind == KindCoding) + r.execEnvironmentNote(ctx) + skillsHint + r.loadedSkillsForPlan(ctx, m, discoverNotes) + renderEnvFacts(m)
+	if m.PromptOverlay != "" {
+		// Operator-authored agent instructions (issue #1173): the plan
+		// decides which files units touch, so it carries them as the
+		// workers do. Never neutralized, same as the worker packet.
+		system += "\n\n" + m.PromptOverlay
+	}
 	user := "Goal: " + NeutralizeSlot(m.Goal)
 	if discoverNotes != "" {
 		user += "\n\nDiscovery findings:\n" + NeutralizeSlot(discoverNotes)

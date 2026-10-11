@@ -2,7 +2,9 @@ package missions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -149,6 +151,50 @@ func TestDriverBackfillsNameBeforeDestinationDelivery(t *testing.T) {
 	}
 	if got := deliverRec.calls[0].mission.Name; got != "Backfilled Name" {
 		t.Fatalf("destination delivery saw mission name = %q, want %q (backfilled before delivery)", got, "Backfilled Name")
+	}
+}
+
+// TestRunResultRecordsDestinationNames covers the delivered_to list on
+// mission.result_complete: resolver names are used, an empty name falls
+// back to the destination id, and the count stays.
+func TestRunResultRecordsDestinationNames(t *testing.T) {
+	store := newFakeStore()
+	store.put("m1", Mission{ID: "m1", Name: "named", Phase: PhaseResult, Status: StatusWorking, Destinations: []DestinationEntry{{DestinationID: "d1"}, {DestinationID: "d2"}}})
+	d := testDriver(store, &scriptedRunner{})
+	d.SetDestinationDeliver((&recordingDeliver{}).fn())
+	d.SetDestinationNameResolver(func(_ context.Context, id string) string {
+		if id == "d1" {
+			return "sumonmselim-github"
+		}
+		return ""
+	})
+
+	m, _ := store.Get(context.Background(), "m1")
+	if _, err := d.runResult(context.Background(), m); err != nil {
+		t.Fatalf("runResult: %v", err)
+	}
+	events, _ := store.Events(context.Background(), "m1")
+	var payload struct {
+		Delivered   int      `json:"delivered"`
+		DeliveredTo []string `json:"delivered_to"`
+	}
+	found := false
+	for _, e := range events {
+		if e.Kind == "mission.result_complete" {
+			found = true
+			if err := json.Unmarshal(e.Payload, &payload); err != nil {
+				t.Fatalf("unmarshal payload: %v", err)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no mission.result_complete event")
+	}
+	if payload.Delivered != 2 {
+		t.Fatalf("delivered = %d, want 2", payload.Delivered)
+	}
+	if want := []string{"sumonmselim-github", "d2"}; !slices.Equal(payload.DeliveredTo, want) {
+		t.Fatalf("delivered_to = %v, want %v", payload.DeliveredTo, want)
 	}
 }
 

@@ -203,6 +203,79 @@ describe('Connectors tab', () => {
     expect(screen.getByText(/Paste a new personal access token below/)).toBeTruthy()
   })
 
+  it('offers Reconnect for an oauth-mode mcp connector, in the panel and on a failed test', async () => {
+    const linear: AdminConnector = {
+      id: 'mcp1',
+      name: 'linear',
+      kind: 'mcp',
+      config: {
+        endpoint: 'https://mcp.linear.example/mcp',
+        auth_mode: 'oauth',
+        auth_server: 'https://auth.linear.example',
+        scopes: ['read', 'write'],
+      },
+      credential_ref: 'LINEAR_MCP_OAUTH',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([linear])
+    vi.mocked(testConnector).mockResolvedValue({
+      ok: false,
+      error: 'authorization expired or was revoked; reconnect to re-authorize',
+    })
+    vi.mocked(connectorOAuthStart).mockResolvedValue('https://auth.linear.example/authorize?x=9')
+
+    renderTab(`/settings/connectors/${linear.id}`)
+    expect(await screen.findByRole('button', { name: 'Reconnect MCP server' })).toBeTruthy()
+    expect(screen.getByText(/Scopes: read, write/)).toBeTruthy()
+    expect(screen.queryByText('Rotate bearer token')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText(/Failed: authorization expired or was revoked/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }))
+
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://auth.linear.example/authorize?x=9'))
+    expect(connectorOAuthStart).toHaveBeenCalledWith(linear.id)
+  })
+
+  it('shows the issuer and scopes for a passing oauth-mode mcp test', async () => {
+    const linear: AdminConnector = {
+      id: 'mcp2',
+      name: 'linear',
+      kind: 'mcp',
+      config: { endpoint: 'https://mcp.linear.example/mcp', auth_mode: 'oauth' },
+      credential_ref: 'LINEAR_MCP_OAUTH',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([linear])
+    vi.mocked(testConnector).mockResolvedValue({
+      ok: true,
+      identity: { login: 'https://auth.linear.example', name: '', email: '', scopes: 'read, write' },
+    })
+
+    renderTab(`/settings/connectors/${linear.id}`)
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText('Connected as https://auth.linear.example, read, write.')).toBeTruthy()
+  })
+
+  it('keeps the bearer token rotation for a token-mode mcp connector', async () => {
+    const tokenMCP: AdminConnector = {
+      id: 'mcp3',
+      name: 'github-mcp',
+      kind: 'mcp',
+      config: { endpoint: 'https://api.githubcopilot.com/mcp/' },
+      credential_ref: 'GITHUB_MCP_TOKEN',
+      enabled: true,
+      sensitive: false,
+    }
+    vi.mocked(listConnectors).mockResolvedValue([tokenMCP])
+
+    renderTab(`/settings/connectors/${tokenMCP.id}`)
+    expect(await screen.findByText('Rotate bearer token')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Reconnect MCP server' })).toBeNull()
+  })
+
   it('stages sign commits: switch flips immediately with no PATCH, Save patches the config; key block absent until the refetch returns it', async () => {
     const githubConnector: AdminConnector = {
       id: 'gh1',
