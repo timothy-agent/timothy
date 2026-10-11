@@ -45,8 +45,8 @@ COPY skills/ /skills/
 # Self-docs (capability pages plus docs pages) from scripts/selfdocs-bundle.sh;
 # `make selfdocs` writes the manifest-only default, release.yml the full bundle.
 ARG SELFDOCS_DIR_SRC=build/selfdocs
-COPY ${SELFDOCS_DIR_SRC}/ /selfdocs/
-RUN mkdir -p /workspace /attachments && chown nobody:nobody /workspace /attachments
+COPY --chmod=0644 ${SELFDOCS_DIR_SRC}/ /selfdocs/
+RUN chmod 755 /selfdocs && mkdir -p /workspace /attachments && chown nobody:nobody /workspace /attachments
 USER nobody
 ENTRYPOINT ["/app"]
 

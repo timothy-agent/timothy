@@ -1,0 +1,101 @@
+{{- $ns := include "timothy.sandboxNamespace" . }}
+{{- $separate := ne $ns .Release.Namespace }}
+{{- if $separate }}
+# Dedicated sandbox namespace: Pod Security restricted enforced, so a
+# sandbox pod spec that drifts from the profile is rejected by the API
+# server, not just by review.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $ns }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ .Release.Name }}-sandbox
+  namespace: {{ $ns }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  hard:
+    pods: {{ .Values.sandbox.quota.pods | quote }}
+    limits.cpu: {{ .Values.sandbox.quota.limitsCpu | quote }}
+    limits.memory: {{ .Values.sandbox.quota.limitsMemory | quote }}
+---
+# Caps a pod that somehow lands here without sandboxd's limits.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ .Release.Name }}-sandbox
+  namespace: {{ $ns }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      max: {cpu: "2", memory: 2Gi}
+      default: {cpu: "2", memory: 2Gi}
+      defaultRequest: {cpu: 250m, memory: 256Mi}
+{{- end }}
+{{- if .Values.sandbox.networkPolicy.enabled }}
+---
+# Sandbox pods: no ingress at all; egress to DNS and the allowed ports
+# on the internet, never to private ranges or the metadata endpoint.
+# The platform namespace falls under the private ranges on every
+# managed cluster; a cluster on a public pod CIDR must add it to
+# sandbox.networkPolicy.egressExcept. Selected by the owner label
+# sandboxd puts on every pod, so the policy holds in a shared
+# namespace too.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox-pods
+  namespace: {{ $ns }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      timothy.owner: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              {{- toYaml .Values.sandbox.networkPolicy.egressExcept | nindent 14 }}
+      ports:
+        {{- range .Values.sandbox.networkPolicy.egressPorts }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+{{- if $separate }}
+---
+# Everything else in the sandbox namespace is denied both ways.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox-default-deny
+  namespace: {{ $ns }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+{{- end }}
+{{- end }}

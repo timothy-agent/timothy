@@ -1,0 +1,78 @@
+{{- $sel := dict "root" . "svc" "web" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  selector:
+    {{- include "timothy.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "timothy.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "timothy.selector" $sel | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-web
+      automountServiceAccountToken: false
+      {{- include "timothy.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "timothy.podSecurityContext" (dict "uid" 101) | nindent 8 }}
+      containers:
+        - name: web
+          image: {{ include "timothy.image" $sel }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "timothy.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: BRAIN_URL
+              value: http://{{ .Release.Name }}-brain:8080
+            - name: DNS_RESOLVER
+              value: {{ .Values.web.dnsResolver | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+          # nginx-unprivileged writes its rendered config, pid and
+          # caches under these paths.
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: conf
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,135 @@
+{{- $sel := dict "root" . "svc" "brain" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-brain
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: brain
+spec:
+  selector:
+    {{- include "timothy.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-brain
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: brain
+spec:
+  # One replica by design: the mission runner, automations scheduler
+  # and notification hub are in-process state. Recreate so two brains
+  # never overlap on the workspace claim during a rollout.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "timothy.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "timothy.selector" $sel | nindent 8 }}
+      annotations:
+        {{- include "timothy.metricsAnnotations" (dict "root" . "port" 8080) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-brain
+      automountServiceAccountToken: false
+      {{- include "timothy.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "timothy.podSecurityContext" (dict "uid" 65534) | nindent 8 }}
+      containers:
+        - name: brain
+          image: {{ include "timothy.image" $sel }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "timothy.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: PORT
+              value: "8080"
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            {{- include "timothy.databaseEnv" . | nindent 12 }}
+            - name: GATEWAY_URL
+              value: http://{{ .Release.Name }}-gateway:8081
+            - name: MEMORYD_URL
+              value: http://{{ .Release.Name }}-memoryd:8082
+            - name: SANDBOXD_URL
+              value: http://{{ .Release.Name }}-sandboxd:8083
+            - name: SEARXNG_URL
+              value: http://{{ .Release.Name }}-searxng:8080
+            - name: MARKITDOWN_URL
+              value: http://{{ .Release.Name }}-markitdown:8000
+            - name: PDFGEN_URL
+              value: http://{{ .Release.Name }}-pdfgen:8000
+            - name: OCR_URL
+              value: http://{{ .Release.Name }}-ocr:8000
+            - name: WHISPER_URL
+              value: {{ if .Values.whisper.enabled }}http://{{ .Release.Name }}-whisper:8001{{ else }}""{{ end }}
+            - name: TIMOTHY_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "timothy.secretName" . }}
+                  key: TIMOTHY_API_TOKEN
+            - name: TIMOTHY_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "timothy.secretName" . }}
+                  key: TIMOTHY_MASTER_KEY
+            - name: TIMOTHY_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "timothy.secretName" . }}
+                  key: TIMOTHY_METRICS_TOKEN
+            - name: TIMOTHY_PUBLIC_URL
+              value: {{ .Values.brain.publicURL | quote }}
+            - name: WORKSPACE_ROOT
+              value: /workspace
+            - name: WORKSPACES
+              value: /workspace/missions
+            - name: MISSION_MODEL_FLOOR
+              value: {{ .Values.brain.missionModelFloor | quote }}
+            - name: ATTACHMENTS_DIR
+              value: /attachments
+            {{- range $k, $v := .Values.brain.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.brain.resources | nindent 12 }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: attachments
+              mountPath: /attachments
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: {{ include "timothy.workspaceClaim" . }}
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-attachments" .Release.Name) .Values.storage.attachments.existingClaim }}
+        - name: tmp
+          emptyDir: {}

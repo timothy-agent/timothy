@@ -1,0 +1,41 @@
+# Chart values for `make kind-deploy`: locally built images loaded into
+# the node, single-node storage, no registry probe. Sandbox pods share
+# the release namespace, since kind's local-path storage is RWO and a
+# second namespace could not mount the same claim.
+image:
+  registry: docker.io/library
+  tag: latest
+  pullPolicy: Never
+sandbox:
+  skipImageCheck: true
+  image:
+    repository: timothy-sandbox
+    tag: latest
+storage:
+  workspace:
+    accessModes: [ReadWriteOnce]
+    size: 5Gi
+  attachments:
+    size: 1Gi
+postgres:
+  storage:
+    size: 2Gi
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+brain:
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "2", memory: 2Gi}
+markitdown:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 1Gi}
+pdfgen:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 1Gi}
+ocr:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {cpu: "1", memory: 1Gi}

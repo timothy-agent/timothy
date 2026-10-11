@@ -1,0 +1,46 @@
+# Values for the golden render (scripts/helm-golden.sh): an existing
+# Secret so nothing random enters the output, every optional feature
+# on, and a separate sandbox namespace so its objects render too.
+secrets:
+  existingSecret: timothy-secrets
+whisper:
+  enabled: true
+ingress:
+  enabled: true
+  className: nginx
+  host: timothy.example.com
+  tls:
+    - secretName: timothy-tls
+      hosts: [timothy.example.com]
+sandbox:
+  namespace: timothy-sandbox
+  runtimeClassName: gvisor
+  nodeSelector:
+    workload: sandbox
+  tolerations:
+    - key: sandbox
+      operator: Exists
+      effect: NoSchedule
+storage:
+  workspace:
+    className: efs-sc
+    sandboxExistingClaim: timothy-workspace-sandbox
+  executorState:
+    enabled: true
+    className: efs-sc
+  toolchains:
+    enabled: true
+    className: efs-sc
+  caches:
+    enabled: true
+    className: efs-sc
+gateway:
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/timothy-gateway
+networkPolicy:
+  apiServerCIDRs: [10.100.0.1/32]
+brain:
+  publicURL: https://timothy.example.com
+  env:
+    WORKFLOWS_ENABLED: "true"

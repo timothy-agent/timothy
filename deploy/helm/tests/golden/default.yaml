@@ -1,0 +1,2436 @@
+---
+# Source: timothy/templates/sandbox-namespace.yaml
+# Dedicated sandbox namespace: Pod Security restricted enforced, so a
+# sandbox pod spec that drifts from the profile is rejected by the API
+# server, not just by review.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-default-deny
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: timothy
+  policyTypes: [Ingress, Egress]
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# web: reachable from the ingress controller (or anywhere when
+# webIngressFrom is empty); talks to brain only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-web
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: web
+  policyTypes: [Ingress, Egress]
+  ingress:
+    -
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+      ports:
+        - {protocol: TCP, port: 8080}
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# brain: from web; to every internal service, postgres and the
+# internet (connectors, git over https, model-authored web fetches).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-brain
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: brain
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: web
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: gateway
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: memoryd
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: sandboxd
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: searxng
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: markitdown
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: pdfgen
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: ocr
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: whisper
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: postgres
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# gateway: from brain and memoryd; to postgres and provider APIs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-gateway
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: gateway
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: memoryd
+      ports:
+        - {protocol: TCP, port: 8081}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - {protocol: TCP, port: 443}
+    - to:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: postgres
+      ports:
+        - {protocol: TCP, port: 5432}
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# memoryd: from brain; to gateway and postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-memoryd
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: memoryd
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+      ports:
+        - {protocol: TCP, port: 8082}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: gateway
+      ports:
+        - {protocol: TCP, port: 8081}
+    - to:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: postgres
+      ports:
+        - {protocol: TCP, port: 5432}
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# sandboxd: from brain; to the Kubernetes API only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-sandboxd
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: sandboxd
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+      ports:
+        - {protocol: TCP, port: 8083}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    -
+      to:
+        - ipBlock:
+            cidr: 10.100.0.1/32
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# searxng: from brain; to the search engines it proxies.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-searxng
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: searxng
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - {protocol: TCP, port: 443}
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# markitdown: from brain; no egress beyond DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-markitdown
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: markitdown
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# pdfgen: from brain; no egress beyond DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-pdfgen
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: pdfgen
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# ocr: from brain; no egress beyond DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-ocr
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: ocr
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+# whisper: from brain; no egress beyond DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-whisper
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: whisper
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+
+---
+# Source: timothy/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-postgres
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: postgres
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: brain
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: gateway
+        -
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: timothy
+              app.kubernetes.io/instance: timothy
+              app.kubernetes.io/component: memoryd
+      ports:
+        - {protocol: TCP, port: 5432}
+  egress: []
+
+---
+# Source: timothy/templates/sandbox-namespace.yaml
+# Sandbox pods: no ingress at all; egress to DNS and the allowed ports
+# on the internet, never to private ranges or the metadata endpoint.
+# The platform namespace falls under the private ranges on every
+# managed cluster; a cluster on a public pod CIDR must add it to
+# sandbox.networkPolicy.egressExcept. Selected by the owner label
+# sandboxd puts on every pod, so the policy holds in a shared
+# namespace too.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-sandbox-pods
+  namespace: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector:
+    matchLabels:
+      timothy.owner: timothy
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 169.254.169.254/32
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - {protocol: TCP, port: 443}
+
+---
+# Source: timothy/templates/sandbox-namespace.yaml
+# Everything else in the sandbox namespace is denied both ways.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: timothy-sandbox-default-deny
+  namespace: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+
+---
+# Source: timothy/templates/sandbox-namespace.yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: timothy-sandbox
+  namespace: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  hard:
+    pods: "20"
+    limits.cpu: "40"
+    limits.memory: "40Gi"
+
+---
+# Source: timothy/templates/sandbox-namespace.yaml
+# Caps a pod that somehow lands here without sandboxd's limits.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: timothy-sandbox
+  namespace: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  limits:
+    - type: Container
+      max: {cpu: "2", memory: 2Gi}
+      default: {cpu: "2", memory: 2Gi}
+      defaultRequest: {cpu: 250m, memory: 256Mi}
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-brain
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: brain
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: false
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-gateway
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: gateway
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/timothy-gateway
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: false
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-memoryd
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: memoryd
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: false
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-sandboxd
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: sandboxd
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: true
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-web
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: web
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: false
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-searxng
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: searxng
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: false
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-markitdown
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: markitdown
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: false
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-pdfgen
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: pdfgen
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: false
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-ocr
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: ocr
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: false
+
+---
+# Source: timothy/templates/serviceaccounts.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: timothy-whisper
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: whisper
+# Only sandboxd talks to the API server; every other pod also sets
+# automountServiceAccountToken false on the pod.
+automountServiceAccountToken: false
+
+---
+# Source: timothy/templates/searxng.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: timothy-searxng
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: searxng
+data:
+  # Same content as the `configs:` block in deploy/release/docker-compose.yml.
+  settings.yml: |
+    use_default_settings: true
+
+    general:
+      # No telemetry to the SearXNG project; this instance serves one tool.
+      enable_metrics: false
+
+    search:
+      formats:
+        - html
+        - json
+
+    server:
+      # No published port and a single internal caller (brain): this key
+      # only signs session cookies nothing outside the namespace can
+      # reach, so a static value is fine here.
+      secret_key: "3db45963595b11ba5641234fb40bfb84c612b7aaf25ceff7cc496355337e1add"
+      limiter: false
+
+---
+# Source: timothy/templates/storage.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: timothy-workspace
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# Source: timothy/templates/storage.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: timothy-attachments
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+
+
+---
+# Source: timothy/templates/storage.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: timothy-caches
+  namespace: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# Source: timothy/templates/storage.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: timothy-executor-state
+  namespace: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+# Source: timothy/templates/storage.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: timothy-toolchains
+  namespace: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+# Source: timothy/templates/sandboxd.yaml
+# Namespaced, nothing cluster-scoped: pods and pods/exec in the sandbox
+# namespace, plus the quota for capacity reporting and the namespace
+# object itself for the health check.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: timothy-sandboxd
+  namespace: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: sandboxd
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [resourcequotas]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [timothy-sandbox]
+    verbs: [get]
+
+---
+# Source: timothy/templates/sandboxd.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: timothy-sandboxd
+  namespace: timothy-sandbox
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: sandboxd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: timothy-sandboxd
+subjects:
+  - kind: ServiceAccount
+    name: timothy-sandboxd
+    namespace: timothy
+
+---
+# Source: timothy/templates/brain.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-brain
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: brain
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: brain
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+
+---
+# Source: timothy/templates/gateway.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-gateway
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: gateway
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: gateway
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+
+---
+# Source: timothy/templates/memoryd.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-memoryd
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: memoryd
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: memoryd
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+
+---
+# Source: timothy/templates/postgres.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-postgres
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: postgres
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+
+---
+# Source: timothy/templates/sandboxd.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-sandboxd
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: sandboxd
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: sandboxd
+  ports:
+    - name: http
+      port: 8083
+      targetPort: http
+
+---
+# Source: timothy/templates/searxng.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-searxng
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: searxng
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: searxng
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+
+---
+# Source: timothy/templates/sidecars.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-markitdown
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: markitdown
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: markitdown
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+
+---
+# Source: timothy/templates/sidecars.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-pdfgen
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: pdfgen
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: pdfgen
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+
+---
+# Source: timothy/templates/sidecars.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-ocr
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: ocr
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: ocr
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+
+---
+# Source: timothy/templates/sidecars.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-whisper
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: whisper
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: whisper
+  ports:
+    - name: http
+      port: 8001
+      targetPort: http
+
+---
+# Source: timothy/templates/web.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: timothy-web
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: web
+spec:
+  selector:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/component: web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+
+---
+# Source: timothy/templates/brain.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-brain
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: brain
+spec:
+  # One replica by design: the mission runner, automations scheduler
+  # and notification hub are in-process state. Recreate so two brains
+  # never overlap on the workspace claim during a rollout.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: brain
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: brain
+      annotations:
+        
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: timothy-brain
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: brain
+          image: ghcr.io/timothy-agent/timothy-brain:0.1.0-alpha.108
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: PORT
+              value: "8080"
+            - name: LOG_LEVEL
+              value: "info"
+            
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: timothy-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgres://timothy:$(POSTGRES_PASSWORD)@timothy-postgres:5432/timothy
+            - name: GATEWAY_URL
+              value: http://timothy-gateway:8081
+            - name: MEMORYD_URL
+              value: http://timothy-memoryd:8082
+            - name: SANDBOXD_URL
+              value: http://timothy-sandboxd:8083
+            - name: SEARXNG_URL
+              value: http://timothy-searxng:8080
+            - name: MARKITDOWN_URL
+              value: http://timothy-markitdown:8000
+            - name: PDFGEN_URL
+              value: http://timothy-pdfgen:8000
+            - name: OCR_URL
+              value: http://timothy-ocr:8000
+            - name: WHISPER_URL
+              value: http://timothy-whisper:8001
+            - name: TIMOTHY_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: timothy-secrets
+                  key: TIMOTHY_API_TOKEN
+            - name: TIMOTHY_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: timothy-secrets
+                  key: TIMOTHY_MASTER_KEY
+            - name: TIMOTHY_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: timothy-secrets
+                  key: TIMOTHY_METRICS_TOKEN
+            - name: TIMOTHY_PUBLIC_URL
+              value: "https://timothy.example.com"
+            - name: WORKSPACE_ROOT
+              value: /workspace
+            - name: WORKSPACES
+              value: /workspace/missions
+            - name: MISSION_MODEL_FLOOR
+              value: "qwen2.5:7b,nova"
+            - name: ATTACHMENTS_DIR
+              value: /attachments
+            - name: WORKFLOWS_ENABLED
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: attachments
+              mountPath: /attachments
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: timothy-workspace
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: timothy-attachments
+        - name: tmp
+          emptyDir: {}
+
+---
+# Source: timothy/templates/gateway.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-gateway
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: gateway
+      annotations:
+        
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: /metrics
+    spec:
+      # Cloud identity for Bedrock auth=ambient rides on this
+      # ServiceAccount's annotations (gateway.serviceAccount.annotations).
+      # The projected identity token is injected by the cloud's own
+      # webhook, not by the ServiceAccount token mount.
+      serviceAccountName: timothy-gateway
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: ghcr.io/timothy-agent/timothy-gateway:0.1.0-alpha.108
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: PORT
+              value: "8081"
+            - name: LOG_LEVEL
+              value: "info"
+            
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: timothy-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgres://timothy:$(POSTGRES_PASSWORD)@timothy-postgres:5432/timothy
+            - name: TIMOTHY_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: timothy-secrets
+                  key: TIMOTHY_MASTER_KEY
+          ports:
+            - name: http
+              containerPort: 8081
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+
+---
+# Source: timothy/templates/memoryd.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-memoryd
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: memoryd
+spec:
+  # One replica: memory extraction and consolidation run in-process.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: memoryd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: memoryd
+      annotations:
+        
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8082"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: timothy-memoryd
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: memoryd
+          image: ghcr.io/timothy-agent/timothy-memoryd:0.1.0-alpha.108
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: PORT
+              value: "8082"
+            - name: LOG_LEVEL
+              value: "info"
+            
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: timothy-secrets
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgres://timothy:$(POSTGRES_PASSWORD)@timothy-postgres:5432/timothy
+            - name: GATEWAY_URL
+              value: http://timothy-gateway:8081
+          ports:
+            - name: http
+              containerPort: 8082
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+
+---
+# Source: timothy/templates/sandboxd.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-sandboxd
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: sandboxd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: sandboxd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: sandboxd
+      annotations:
+        
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8083"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: timothy-sandboxd
+      # The one pod that needs its token: it creates and execs into
+      # sandbox pods through the API server.
+      automountServiceAccountToken: true
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sandboxd
+          image: ghcr.io/timothy-agent/timothy-sandboxd:0.1.0-alpha.108
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: PORT
+              value: "8083"
+            - name: LOG_LEVEL
+              value: "info"
+            - name: SANDBOXD_BACKEND
+              value: kubernetes
+            - name: MISSION_SANDBOX_IMAGE
+              value: ghcr.io/timothy-agent/timothy-sandbox:0.1.0-alpha.108
+            - name: SANDBOXD_K8S_NAMESPACE
+              value: timothy-sandbox
+            - name: SANDBOXD_K8S_OWNER
+              value: timothy
+            - name: SANDBOXD_K8S_WORKSPACE_PVC
+              value: timothy-workspace-sandbox
+            - name: SANDBOXD_K8S_STATE_PVC
+              value: "timothy-executor-state"
+            - name: SANDBOXD_K8S_TOOLCHAINS_PVC
+              value: "timothy-toolchains"
+            - name: SANDBOXD_K8S_CACHES_PVC
+              value: "timothy-caches"
+            - name: SANDBOXD_K8S_RUNTIME_CLASS
+              value: "gvisor"
+            - name: SANDBOXD_K8S_NODE_SELECTOR
+              value: "workload=sandbox"
+            - name: SANDBOXD_K8S_TOLERATIONS
+              value: "[{\"effect\":\"NoSchedule\",\"key\":\"sandbox\",\"operator\":\"Exists\"}]"
+            - name: SANDBOXD_K8S_SANDBOX_TTL
+              value: "24h"
+            - name: SANDBOXD_K8S_READY_TIMEOUT
+              value: "10m"
+            - name: SANDBOXD_K8S_SKIP_IMAGE_CHECK
+              value: "false"
+          ports:
+            - name: http
+              containerPort: 8083
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+
+---
+# Source: timothy/templates/searxng.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-searxng
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: searxng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: searxng
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: searxng
+    spec:
+      serviceAccountName: timothy-searxng
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 977
+        runAsGroup: 977
+        fsGroup: 977
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: searxng
+          image: searxng/searxng@sha256:aaf56bb5ad737d48a8a375778d42eb4ab1757231e6b1eb7980e71d8dd5bdf0de
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: SEARXNG_BASE_URL
+              value: http://timothy-searxng:8080/
+            - name: SEARXNG_SETTINGS_PATH
+              value: /usr/local/searxng/settings.yml
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: settings
+              mountPath: /usr/local/searxng/settings.yml
+              subPath: settings.yml
+              readOnly: true
+            - name: etc
+              mountPath: /etc/searxng
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: settings
+          configMap:
+            name: timothy-searxng
+        - name: etc
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+
+---
+# Source: timothy/templates/sidecars.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-markitdown
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: markitdown
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: markitdown
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: markitdown
+    spec:
+      serviceAccountName: timothy-markitdown
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: markitdown
+          image: ghcr.io/timothy-agent/timothy-markitdown:0.1.0-alpha.108
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+# Source: timothy/templates/sidecars.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-pdfgen
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: pdfgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: pdfgen
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: pdfgen
+    spec:
+      serviceAccountName: timothy-pdfgen
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pdfgen
+          image: ghcr.io/timothy-agent/timothy-pdfgen:0.1.0-alpha.108
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+# Source: timothy/templates/sidecars.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-ocr
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: ocr
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: ocr
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: ocr
+    spec:
+      serviceAccountName: timothy-ocr
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ocr
+          image: ghcr.io/timothy-agent/timothy-ocr:0.1.0-alpha.108
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+            requests:
+              cpu: 100m
+              memory: 256Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+# Source: timothy/templates/sidecars.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-whisper
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: whisper
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: whisper
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: whisper
+    spec:
+      serviceAccountName: timothy-whisper
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: whisper
+          image: ghcr.io/timothy-agent/timothy-whisper:0.1.0-alpha.108
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: WHISPER_MODEL
+              value: large-v3
+          ports:
+            - name: http
+              containerPort: 8001
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 120
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: "2"
+              memory: 6Gi
+            requests:
+              cpu: 500m
+              memory: 4Gi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+---
+# Source: timothy/templates/web.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timothy-web
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: web
+    spec:
+      serviceAccountName: timothy-web
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: ghcr.io/timothy-agent/timothy-web:0.1.0-alpha.108
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: BRAIN_URL
+              value: http://timothy-brain:8080
+            - name: DNS_RESOLVER
+              value: "kube-dns.kube-system.svc.cluster.local"
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          # nginx-unprivileged writes its rendered config, pid and
+          # caches under these paths.
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nginx/conf.d
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: conf
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+
+---
+# Source: timothy/templates/postgres.yaml
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: timothy-postgres
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+    app.kubernetes.io/component: postgres
+spec:
+  serviceName: timothy-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: timothy
+      app.kubernetes.io/instance: timothy
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: timothy
+        app.kubernetes.io/instance: timothy
+        app.kubernetes.io/component: postgres
+    spec:
+      automountServiceAccountToken: false
+      
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:0.8.4-pg18-trixie@sha256:dc8631aeee036a59d054c28d29ddb15536caa0c89a96f548fa944774a50af973
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          env:
+            - name: POSTGRES_USER
+              value: timothy
+            - name: POSTGRES_DB
+              value: timothy
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: timothy-secrets
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/18/docker
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, timothy, -d, timothy]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, timothy, -d, timothy]
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            limits:
+              cpu: "2"
+              memory: 2Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 10Gi
+
+---
+# Source: timothy/templates/ingress.yaml
+# web only: brain is reached through web's same-origin /v1 proxy.
+# Authentication in front of this (OIDC forward-auth) is the ingress
+# controller's job; Timothy's own API token still applies behind it.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: timothy-web
+  namespace: timothy
+  labels:
+    app.kubernetes.io/name: timothy
+    app.kubernetes.io/instance: timothy
+    app.kubernetes.io/version: "0.1.0-alpha.108"
+    app.kubernetes.io/managed-by: Helm
+    helm.sh/chart: timothy-0.1.0
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+      - timothy.example.com
+      secretName: timothy-tls
+  rules:
+    - host: timothy.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: timothy-web
+                port:
+                  name: http
