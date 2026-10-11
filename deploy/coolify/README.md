@@ -1,5 +1,9 @@
 # Deploying Timothy on Coolify
 
+Running a Kubernetes cluster instead? Use the Helm chart in
+`deploy/helm/timothy`; the guide is on the docs site:
+https://timothy-agent.github.io/docs/kubernetes/
+
 [Coolify](https://coolify.io) deploys Timothy as a **Docker Compose**
 resource from a Git source. The stack is nine containers, two networks
 and three volumes, so the single-Dockerfile resource type cannot host it.

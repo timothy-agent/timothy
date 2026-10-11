@@ -16,7 +16,7 @@ registered as an openaicompat provider.
 | `brain`      | Public API (:8300 host, :8080 in-network): chat, agent loop, missions |
 | `gateway`    | Internal LLM gateway: provider routing, cost ledger                   |
 | `memoryd`    | Internal memory service: pgvector recall                              |
-| `sandboxd`   | Holds the Docker socket; per-mission sandbox containers               |
+| `sandboxd`   | Per-mission sandboxes: Docker containers (Compose) or pods (Kubernetes) |
 | `web`        | React UI (:3300)                                                      |
 | `searxng`    | Metasearch backend for search_web                                     |
 | `markitdown` | Python sidecar: file → markdown                                       |
@@ -136,6 +136,37 @@ absent, sandboxd mounts the mission's own `<workspace>/.sandbox-cache`
 (created at provision) there instead. Never the HOME tmpfs. Harness
 mise installs run under `miseLocked` (flock on the data dir): bare
 concurrent installs of one version can collide on mise's download file.
+
+## Sandbox backends and Kubernetes
+
+D-153 (issue #1179): `internal/sandboxd/backend.go` is the seam
+(`Backend`: Name, Ping, CheckImage, ExecEnv, Remove, List, Capacity).
+`docker.go` is the Compose backend, `kubernetes.go` the pod backend;
+`SANDBOXD_BACKEND=docker|kubernetes` picks one, unset auto-detects
+from `KUBERNETES_SERVICE_HOST` and fails closed. Every `SANDBOXD_K8S_*`
+knob is parsed in `cmd/sandboxd/main.go`.
+
+D-154 (issue #1180): a sandbox pod runs as 65534 with a read-only
+rootfs, all caps dropped, RuntimeDefault seccomp, no service account
+token, memory-backed `/tmp` and HOME, `activeDeadlineSeconds` from the
+TTL; exec goes through `pods/exec` with an in-pod wrapper (`tail --pid`
+on a scratch file, `timeout(1)` maps 124 to `ErrTimeout`) because the
+API has no inspect. kubelet always injects `KUBERNETES_SERVICE_*` env;
+that is not a leak. D-155: the workspace is one RWX PVC and each pod
+mounts `missions/<kind>/<id>` as a subPath, the same boundary as the
+Docker mount; brain and memoryd stay single replica (in-process
+runner, automations, hub).
+
+D-156 (issue #1182): Bedrock `options.auth=static|ambient`; ambient
+uses the SDK default chain (IRSA, Pod Identity), needs a region and
+rejects a `credential_ref`.
+
+Chart at `deploy/helm/timothy` (issue #1183): `make helm-lint`,
+`make helm-golden` (golden render in `deploy/helm/tests/golden/`,
+`UPDATE=1` rewrites), `make kind-up` + `make kind-sandbox-test` (backend
+suite on kind), `make kind-sandbox-smoke` (coding canary through the
+Compose brain with the kind backend), `make kind-deploy` (chart from
+local images). Operator docs live on the docs site, not in the repo.
 
 ## Key invariants (enforce, never relax)
 

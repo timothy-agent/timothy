@@ -16,15 +16,18 @@ routes, and secrets: chat access equals full administrative access. This
 is intentional for the single-operator model, not a defect, but it means
 the token is the whole security perimeter of the control plane.
 
-The system runs as Docker Compose services sharing one PostgreSQL
-database:
+The system runs as Docker Compose services, or as the Helm chart's
+pods on Kubernetes, sharing one PostgreSQL database:
 
 - `brain` publishes the only externally reachable API (`:8300`), plus a
   static web UI (`:3300`).
 - `gateway`, `memoryd`, `sandboxd`, `searxng`, `markitdown`, `ocr`,
   `whisper`, and `pdfgen` publish no host ports and are internal-only.
-- `sandboxd` holds the Docker socket and lives on its own network
-  (`timothy-sandbox`), reachable only by `brain`.
+- On Compose `sandboxd` holds the Docker socket and lives on its own
+  network (`timothy-sandbox`), reachable only by `brain`. On Kubernetes
+  it holds no socket: it creates mission pods through the API server
+  with a Role scoped to the sandbox namespace, and NetworkPolicies
+  replace the Compose networks.
 
 ## Trust boundaries
 
@@ -55,8 +58,10 @@ database:
 - Session transcripts (`session_events`), extracted memories, and KB
   content: the richest personal-data stores, plaintext in `pgdata`.
 - The API token: a single shared bearer credential; compromise is total.
-- Host integrity: sandboxd's Docker socket is root-equivalent on the
-  host.
+- Host integrity: on Compose, sandboxd's Docker socket is
+  root-equivalent on the host. On Kubernetes, sandboxd's service
+  account token creates and execs into pods in the sandbox namespace,
+  and the shared workspace volume holds every mission's files.
 
 ## Attack surfaces and dispositions
 
@@ -251,6 +256,50 @@ not-found and out-of-bounds into the same 404.
   and outbound internet access is a requirement (a coding mission runs
   `pip install` / `npm install`).
 
+### Mission sandbox on Kubernetes
+
+The Helm chart (`deploy/helm/timothy`) runs sandboxd with the
+kubernetes backend (D-153, D-154). sandboxd holds no Docker socket;
+its service account has a namespaced Role limited to pods (get, list,
+watch, create, delete), `pods/exec` (create), `pods/log` (get),
+resourcequotas (get, list) and reading its own namespace. A mission pod
+runs as uid 65534 with a read-only rootfs, all capabilities dropped,
+the RuntimeDefault seccomp profile, no service account token, memory
+and CPU limits, size-bounded memory-backed `/tmp` and HOME, and an
+`activeDeadlineSeconds` TTL. The workspace is one ReadWriteMany
+volume; brain mounts the root and each mission pod mounts only its
+`missions/<kind>/<id>` subPath (D-155), the same boundary as the
+Docker mount.
+
+- **Mitigated:** the Docker socket and the bridge-gateway path listed
+  above do not exist on Kubernetes. The chart's NetworkPolicies default
+  to deny in the release namespace, allow only the service graph
+  (web to brain, brain to the internal services, gateway and memoryd to
+  postgres), and give mission pods DNS plus TCP 443 to the internet
+  with private ranges, CGNAT and the cloud metadata address
+  (`169.254.169.254`) excluded. A mission pod cannot reach brain, the
+  database, sandboxd, the API server or the node network. Verified on
+  kind by exec probes from a sandbox pod.
+- **Mitigated:** the optional separate sandbox namespace
+  (`sandbox.namespace`) enforces Pod Security `restricted`, a
+  ResourceQuota, a LimitRange and its own default deny; a RuntimeClass
+  (`gvisor`, `kata`) and a dedicated node pool are a values change.
+- **Accepted:** NetworkPolicy isolation requires a CNI that enforces
+  policies. On a cluster without enforcement every policy above is
+  inert and a mission pod can reach the other services. Documented as
+  a requirement on the docs site.
+- **Accepted:** the subPath mount is a boundary, not encryption. Anyone
+  who can mount the workspace volume or read the node's filesystem
+  sees every mission. The RWX filesystem (EFS, Azure Files, Filestore)
+  is as private as its own access controls.
+- **Accepted:** `pods/exec` is the exec transport. A principal that
+  obtains sandboxd's service account token can exec into any sandbox
+  pod of that namespace; the Role does not reach other namespaces or
+  other workloads. sandboxd labels its pods `timothy.owner=<release>`
+  and acts only on its own (D-132 carried over).
+- **Accepted:** the TTL and the orphan sweep rely on brain. A pod
+  survives a brain outage until `activeDeadlineSeconds` ends it.
+
 ### Sidecars
 
 markitdown, ocr, whisper, and pdfgen are internal-only FastAPI services
@@ -351,6 +400,8 @@ token equals administrative access; no TLS without an external proxy;
 the API token lives in `localStorage`; the shell classifier is
 advisory; no database-level encryption at rest on a single host;
 fixed-vendor, sidecar, CalDAV, and IMAP clients skip netguard by
-design; sandboxes reach host-published ports through the bridge
-gateway; package caches, toolchains, and the executor auth state are
-shared across missions.
+design; on Compose, sandboxes reach host-published ports through the
+bridge gateway; package caches, toolchains, and the executor auth state
+are shared across missions; on Kubernetes, isolation of mission pods
+depends on a policy-enforcing CNI and the shared workspace volume's
+own access controls.
