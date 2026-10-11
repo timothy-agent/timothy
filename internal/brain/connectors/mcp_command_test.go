@@ -578,3 +578,28 @@ func TestReloadHoldsCrashedService(t *testing.T) {
 		t.Fatalf("a config change must start the service at once: err %v, created %d", err, created())
 	}
 }
+
+func TestServiceStatus(t *testing.T) {
+	t.Parallel()
+	f := newFakeSandboxd(t)
+	svcs := newTestServices(f, io.Discard)
+	command := cmdConnector(cmdID, true, toyCmdConfig)
+	remote := Connector{ID: "remote", Name: "remote", Kind: "mcp", Enabled: true, Config: json.RawMessage(`{"endpoint":"https://x.example/mcp"}`)}
+	m := testManager(fakeRows{rows: []Connector{command, remote}})
+	m.SetServices(svcs)
+	if _, err := mcpBuilder(nil, MCPDeferral{}, nil, svcs)(t.Context(), command, toyResolve); err != nil {
+		t.Fatal(err)
+	}
+	f.crash(cmdID, "exited with code 1")
+
+	st, err := m.ServiceStatus(t.Context(), cmdID)
+	if err != nil || st == nil || st.State != "stopped" || st.LastError != "exited with code 1" {
+		t.Fatalf("command connector status = %+v, %v", st, err)
+	}
+	if st, err := m.ServiceStatus(t.Context(), "remote"); err != nil || st != nil {
+		t.Fatalf("endpoint connector status = %+v, %v", st, err)
+	}
+	if _, err := m.ServiceStatus(t.Context(), "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing connector err = %v", err)
+	}
+}

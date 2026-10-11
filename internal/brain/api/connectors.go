@@ -10,6 +10,7 @@ import (
 	"net/url"
 
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
+	"github.com/SumonMSelim/timothy/internal/brain/sandboxclient"
 	"github.com/SumonMSelim/timothy/internal/secretstore"
 )
 
@@ -30,6 +31,7 @@ func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mg
 	handle("PATCH /v1/admin/connectors/{id}", a.auth(http.HandlerFunc(h.patch)))
 	handle("DELETE /v1/admin/connectors/{id}", a.auth(http.HandlerFunc(h.delete)))
 	handle("POST /v1/admin/connectors/{id}/test", a.auth(http.HandlerFunc(h.test)))
+	handle("GET /v1/admin/connectors/{id}/service", a.auth(http.HandlerFunc(h.service)))
 	handle("GET /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.listRepos)))
 	handle("POST /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.createRepo)))
 	if goog != nil || msft != nil || mcpAuth != nil {
@@ -340,6 +342,25 @@ func (h *connectorAPI) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// service reports a command connector's local server (D-162):
+// {"service": {state, restarts, last_error}}, or null without one.
+func (h *connectorAPI) service(w http.ResponseWriter, r *http.Request) {
+	st, err := h.mgr.ServiceStatus(r.Context(), r.PathValue("id"))
+	if err != nil {
+		failConnector(w, h.log, err)
+		return
+	}
+	var out any
+	if st != nil {
+		out = serviceJSON(st)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"service": out})
+}
+
+func serviceJSON(st *sandboxclient.ServiceStatus) map[string]any {
+	return map[string]any{"state": st.State, "restarts": st.Restarts, "last_error": st.LastError}
+}
+
 // localServersOK answers 400 when c names a command but this instance
 // cannot run local MCP servers (D-162), so the operator learns it at
 // save rather than from a reload log.
@@ -373,9 +394,7 @@ func (h *connectorAPI) test(w http.ResponseWriter, r *http.Request) {
 			out["load_tool"] = report.LoadTool
 		}
 		if report.Service != nil {
-			out["service"] = map[string]any{
-				"state": report.Service.State, "restarts": report.Service.Restarts, "last_error": report.Service.LastError,
-			}
+			out["service"] = serviceJSON(report.Service)
 		}
 		writeJSON(w, http.StatusOK, out)
 	case errors.Is(err, connectors.ErrNotFound), errors.Is(err, connectors.ErrUnsupported):

@@ -7,6 +7,7 @@ import { ConnectorsTab } from './ConnectorsTab'
 
 vi.mock('../../api/client', () => ({
   connectorOAuthStart: vi.fn(),
+  connectorService: vi.fn(),
   createConnector: vi.fn(),
   deleteConnector: vi.fn(),
   listAgents: vi.fn(() => Promise.resolve([])),
@@ -22,6 +23,7 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import {
   connectorOAuthStart,
+  connectorService,
   createConnector,
   deleteConnector,
   listConnectors,
@@ -1279,5 +1281,65 @@ describe('ConnectorsList runTest auth-error handling', () => {
     await waitFor(() =>
       expect(toast.error).toHaveBeenCalledWith('Could not load connectors', { description: 'network down' }),
     )
+  })
+})
+
+describe('command mcp connectors (D-162)', () => {
+  const local: AdminConnector = {
+    id: 'mcp9',
+    name: 'analytics',
+    kind: 'mcp',
+    config: {
+      command: 'pipx',
+      args: ['run', 'analytics-mcp'],
+      env_refs: { GOOGLE_PROJECT_ID: 'ANALYTICS_MCP_ENV_GOOGLE_PROJECT_ID' },
+      provider: 'analytics',
+    },
+    credential_ref: '',
+    enabled: true,
+    sensitive: false,
+  }
+
+  it('shows the command on the card', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([local])
+    renderTab()
+    expect(await screen.findByText('local: pipx run analytics-mcp')).toBeTruthy()
+  })
+
+  it('shows the command, the env secrets and why the server stopped, without a bearer token field', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([local])
+    vi.mocked(connectorService).mockResolvedValue({ state: 'stopped', restarts: 3, last_error: 'exited with code 1' })
+    renderTab(`/settings/connectors/${local.id}`)
+
+    expect(await screen.findByText('stopped')).toBeTruthy()
+    expect(connectorService).toHaveBeenCalledWith('mcp9')
+    expect(screen.getByText('pipx run analytics-mcp')).toBeTruthy()
+    expect(screen.getByText('3 restarts')).toBeTruthy()
+    expect(screen.getByText(/It stopped: exited with code 1\./)).toBeTruthy()
+    expect(screen.getByText('ANALYTICS_MCP_ENV_GOOGLE_PROJECT_ID')).toBeTruthy()
+    expect(screen.queryByText('Rotate bearer token')).toBeNull()
+  })
+
+  it('refreshes the server state after a test', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([local])
+    vi.mocked(connectorService)
+      .mockResolvedValueOnce({ state: 'stopped', restarts: 3, last_error: 'exited with code 1' })
+      .mockResolvedValueOnce({ state: 'running', restarts: 0, last_error: '' })
+    vi.mocked(testConnector).mockResolvedValue({ ok: true, service: { state: 'running', restarts: 0, last_error: '' } })
+    renderTab(`/settings/connectors/${local.id}`)
+    expect(await screen.findByText('stopped')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    expect(await screen.findByText('running')).toBeTruthy()
+    expect(connectorService).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not ask for a service on an endpoint connector', async () => {
+    vi.mocked(listConnectors).mockResolvedValue([
+      { ...local, id: 'mcp10', config: { endpoint: 'https://mcp.example.com/mcp' } },
+    ])
+    renderTab('/settings/connectors/mcp10')
+    expect(await screen.findByText('Rotate bearer token')).toBeTruthy()
+    expect(connectorService).not.toHaveBeenCalled()
   })
 })
