@@ -359,6 +359,76 @@ func TestDelegatedRunWorkerCarriesScopeRule(t *testing.T) {
 	}
 }
 
+// TestPRSummaryRequest (D-152, issue #1174): a PR-delivering planned
+// packet asks for the summary once at most one unit is left without
+// harness evidence, on the native and delegated paths alike.
+func TestPRSummaryRequest(t *testing.T) {
+	const marker = "Pull request summary:"
+	lastPending := Plan{Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", CheckCmd: "go test ./..."}}}
+	twoPending := Plan{Units: []PlanUnit{{Title: "a"}, {Title: "b"}}}
+	allPassed := Plan{Units: []PlanUnit{{Title: "a", HarnessPassed: true}, {Title: "b", Passes: true}}}
+	cases := []struct {
+		name   string
+		packet WorkPacket
+		want   bool
+	}{
+		{"last pending unit", WorkPacket{Goal: "g", Kind: KindCoding, Plan: lastPending, DeliversPR: true}, true},
+		{"rework after every unit passed", WorkPacket{Goal: "g", Kind: KindCoding, Plan: allPassed, DeliversPR: true}, true},
+		{"two units pending", WorkPacket{Goal: "g", Kind: KindCoding, Plan: twoPending, DeliversPR: true}, false},
+		{"no pull request", WorkPacket{Goal: "g", Kind: KindCoding, Plan: lastPending}, false},
+		{"light", WorkPacket{Goal: "g", Kind: KindGeneral, Light: true, DeliversPR: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, native := tc.packet.Render()
+			_, delegated, _ := tc.packet.RenderForDelegated("/run")
+			if got := strings.Contains(native, marker); got != tc.want {
+				t.Fatalf("native prompt asks for the summary = %v, want %v:\n%s", got, tc.want, native)
+			}
+			if got := strings.Contains(delegated, marker); got != tc.want {
+				t.Fatalf("delegated prompt asks for the summary = %v, want %v:\n%s", got, tc.want, delegated)
+			}
+			if tc.want && strings.Contains(delegated, "Current unit:") && !strings.HasSuffix(strings.TrimSpace(delegated), "Do this unit now.") {
+				t.Fatalf("delegated prompt no longer ends with the unit:\n%s", delegated)
+			}
+		})
+	}
+	if !strings.Contains(prSummaryRequest, "final_output") || !strings.Contains(prSummaryRequest, "without restating the goal") {
+		t.Fatalf("prSummaryRequest lost its contract: %s", prSummaryRequest)
+	}
+}
+
+// TestDriverPacketDeliversPR (D-152): the packet asks for a summary
+// when a repo destination's mode is push_pr or the mission has a repo
+// connection a PR can be opened on by hand.
+func TestDriverPacketDeliversPR(t *testing.T) {
+	d := testDriver(newFakeStore(), &scriptedRunner{})
+	repo := []SourceEntry{{Source: SourceKindGitHub, ConnectorID: "gh1", RepoURL: "https://github.com/o/r"}}
+	cases := []struct {
+		name    string
+		facts   *EnvFacts
+		sources []SourceEntry
+		want    bool
+	}{
+		{"no facts", nil, nil, false},
+		{"push only", &EnvFacts{Destinations: []DestinationFact{{Kind: "github", Mode: "push"}}}, nil, false},
+		{"push_pr", &EnvFacts{Destinations: []DestinationFact{{Kind: "repo"}, {Kind: "github", Mode: "push_pr"}}}, nil, true},
+		{"repo connection without destination", nil, repo, true},
+		{"repo url without connector", nil, []SourceEntry{{Source: SourceKindGitHub, RepoURL: "https://github.com/o/r"}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := d.packet(context.Background(), Mission{ID: "m1", Kind: KindCoding, EnvFacts: tc.facts, Sources: tc.sources})
+			if err != nil {
+				t.Fatalf("packet: %v", err)
+			}
+			if p.DeliversPR != tc.want {
+				t.Fatalf("DeliversPR = %v, want %v", p.DeliversPR, tc.want)
+			}
+		})
+	}
+}
+
 // TestPlanSessionCarriesPromptOverlay (issue #1173): the planner sees
 // the agent's own instructions, so user-side rules shape which files
 // the plan's units touch; no overlay adds nothing.

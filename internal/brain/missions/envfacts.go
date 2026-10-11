@@ -281,6 +281,24 @@ func (p *provisioner) collectEnvFacts(ctx context.Context, m Mission, workRoot, 
 	return facts
 }
 
+// deliversPR reports whether m can end in a pull request: a repo
+// destination with mode push_pr, or a repo connection, which the
+// mission page's "Push & open PR" can open a PR on after the run.
+func deliversPR(m Mission) bool {
+	if m.RepoURL() != "" && m.ConnectorID() != "" {
+		return true
+	}
+	if m.EnvFacts == nil {
+		return false
+	}
+	for _, d := range m.EnvFacts.Destinations {
+		if d.Mode == "push_pr" {
+			return true
+		}
+	}
+	return false
+}
+
 // repoDestinations lists the mission's repo destinations with kind and
 // mode, as the resolver reports them; an entry with only a repo_url is
 // kind "repo" with no mode.

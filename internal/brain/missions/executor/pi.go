@@ -52,7 +52,7 @@ const piDefaultAnthropicBaseURL = "https://api.anthropic.com"
 // final message ends with the DONE/RETRY/BLOCKED verdict line — pi has
 // no --json-schema flag, so this sentence is the only verdict channel
 // (spec.ResultSchema is intentionally never passed to pi's argv or env).
-const piVerdictInstruction = " End your final message with a single line containing only a JSON object of the form {\"status\":\"DONE\"|\"RETRY\"|\"BLOCKED\",\"note\":\"...\",\"final_output\":\"...\"} and nothing after it (final_output is optional: the report the goal asks for when no unit lists a file for it)."
+const piVerdictInstruction = " End your final message with a single line containing only a JSON object of the form {\"status\":\"DONE\"|\"RETRY\"|\"BLOCKED\",\"note\":\"...\",\"final_output\":\"...\"} and nothing after it (final_output is optional: the pull request summary the prompt asks for, then the report the goal asks for when no unit lists a file for it)."
 
 // piSchemaInstruction replaces piVerdictInstruction when spec.ResultSchema
 // is set (issue #582): the final line must be one JSON object matching
