@@ -338,7 +338,7 @@ AGENTS.md so other work does not pay for it every session.
   probed part (`EnvFacts`) is collected once at provisioning
   (`provisioner.collectEnvFacts`, coding missions only) and stored on
   `missions.env_facts`. The limit
-  constants mirror `internal/sandboxd/manager.go`; change both together.
+  constants mirror `internal/sandboxd/docker.go`; change both together.
 - Prepare step (D-130, issue #1010): `Driver.Advance` runs
   `provisioner.prepareWorkspace` (prepare.go) for a coding mission in
   discover, after provisioning and before the turn, once per mission

@@ -1,11 +1,12 @@
-// Package sandboxd drives per-mission Docker containers that execute
+// Package sandboxd drives per-mission sandboxes that execute
 // model-authored shell commands (mission worker/reviewer shell calls,
 // check_cmd) OUTSIDE brain's own process, so a command never inherits
 // brain's environment (DATABASE_URL, TIMOTHY_MASTER_KEY, API tokens)
 // or reaches brain's filesystem/binaries. Harness-authored git
 // operations stay in brain; only model/plan-authored commands route
-// here. The Docker socket lives only in this service — brain reaches
-// it exclusively through sandboxclient's narrow HTTP API.
+// here. Runtime credentials (the Docker socket, or Kubernetes RBAC)
+// live only in this service — brain reaches it exclusively through
+// sandboxclient's narrow HTTP API. This file is the Docker Backend.
 package sandboxd
 
 import (
@@ -199,10 +200,10 @@ const (
 // string-matching the error text.
 var ErrTimeout = errors.New("sandbox: command timed out")
 
-// Manager creates, reuses, and tears down one Docker container per
+// Docker creates, reuses, and tears down one Docker container per
 // mission on the same Docker daemon brain itself runs under (driven via
 // the mounted docker.sock). Safe for concurrent use.
-type Manager struct {
+type Docker struct {
 	cli *client.Client
 	// baseImage is MISSION_SANDBOX_IMAGE, the one image every mission
 	// container runs (D-141) and the boot-time health check targets.
@@ -213,7 +214,7 @@ type Manager struct {
 	// OWN container for its /workspace mount and replicating that exact
 	// spec — never hardcode a compose-prefixed volume name, since a
 	// wrong name silently auto-creates an empty volume instead of
-	// erroring (see NewManager). It is the SOURCE spec only: no mission
+	// erroring (see NewDocker). It is the SOURCE spec only: no mission
 	// container ever receives it unscoped, see missionMount (D-107).
 	workspaceMount mount.Mount
 
@@ -246,13 +247,13 @@ type Manager struct {
 	pullMu sync.Mutex
 }
 
-// NewManager connects to the Docker daemon and resolves the shared
+// NewDocker connects to the Docker daemon and resolves the shared
 // workspace mount by inspecting brain's own container — this is the
 // only reliable way to learn the exact volume name (or bind source)
 // brain is running under, since it may differ from any assumed
 // compose-project prefix and a wrong name would silently create a
 // fresh, empty volume instead of failing loudly.
-func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, error) {
+func NewDocker(ctx context.Context, image string, log *slog.Logger) (*Docker, error) {
 	if image == "" {
 		return nil, fmt.Errorf("sandbox: MISSION_SANDBOX_IMAGE not set")
 	}
@@ -285,7 +286,7 @@ func NewManager(ctx context.Context, image string, log *slog.Logger) (*Manager, 
 	}
 	owner := resolveOwner(ctx, cli, log)
 	log.Info("sandbox: owner resolved", "owner", owner)
-	return &Manager{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, toolchainsMount: tm, cachesMount: cm, owner: owner, locks: map[string]*sync.Mutex{}}, nil
+	return &Docker{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, toolchainsMount: tm, cachesMount: cm, owner: owner, locks: map[string]*sync.Mutex{}}, nil
 }
 
 // resolveOwner returns this instance's owner id (D-132): the compose
@@ -316,7 +317,7 @@ var ErrForeignContainer = errors.New("sandbox: container belongs to another inst
 // (D-132). A container with no ownerLabel predates D-132; exec may
 // reuse it, since its name carries a mission UUID only the owning
 // instance's brain knows. Remove and List never touch it (see Remove).
-func (m *Manager) checkOwner(labels map[string]string) error {
+func (m *Docker) checkOwner(labels map[string]string) error {
 	if owner := labels[ownerLabel]; owner != "" && owner != m.owner {
 		return fmt.Errorf("%w: owner %q, this instance is %q", ErrForeignContainer, owner, m.owner)
 	}
@@ -410,7 +411,7 @@ func missionWorkspaceDir(workdir, missionID string) (string, error) {
 // one mission's shell can no longer read or clobber another's files.
 // Docker requires the subpath to exist in the volume; brain provisions
 // the directory at mission create, before the first exec.
-func (m *Manager) missionMount(workdir, missionID string) (mount.Mount, error) {
+func (m *Docker) missionMount(workdir, missionID string) (mount.Mount, error) {
 	dir, err := missionWorkspaceDir(workdir, missionID)
 	if err != nil {
 		return mount.Mount{}, err
@@ -430,7 +431,7 @@ func (m *Manager) missionMount(workdir, missionID string) (mount.Mount, error) {
 // missionCacheDirName dir inside the mission's scoped workspace mount,
 // so caches always land on disk. Brain creates that dir at provision;
 // Docker requires it to exist.
-func (m *Manager) cachesMountFor(missionMount mount.Mount) mount.Mount {
+func (m *Docker) cachesMountFor(missionMount mount.Mount) mount.Mount {
 	if m.cachesMount.Source != "" {
 		return m.cachesMount
 	}
@@ -443,9 +444,12 @@ func (m *Manager) cachesMountFor(missionMount mount.Mount) mount.Mount {
 	return fallback
 }
 
+// Name implements Backend.
+func (m *Docker) Name() string { return BackendDocker }
+
 // Ping reports whether the Docker daemon is reachable — the sandbox
 // health check.
-func (m *Manager) Ping(ctx context.Context) error {
+func (m *Docker) Ping(ctx context.Context) error {
 	_, err := m.cli.Ping(ctx, client.PingOptions{})
 	return err
 }
@@ -454,7 +458,7 @@ func (m *Manager) Ping(ctx context.Context) error {
 // locally: an operator who never ran `make sandbox-image` would
 // otherwise see every mission shell call fail opaquely instead of a
 // clear boot-time health signal.
-func (m *Manager) CheckImage(ctx context.Context) error {
+func (m *Docker) CheckImage(ctx context.Context) error {
 	_, err := m.cli.ImageInspect(ctx, m.baseImage)
 	return err
 }
@@ -472,7 +476,7 @@ func containerName(missionID string) string {
 // several concurrent shell calls (loop.Agent runs up to
 // maxParallelTools at once), and without this two calls racing a
 // container's first-ever creation would both attempt ContainerCreate.
-func (m *Manager) missionLock(missionID string) *sync.Mutex {
+func (m *Docker) missionLock(missionID string) *sync.Mutex {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	l, ok := m.locks[missionID]
@@ -498,7 +502,7 @@ func (m *Manager) missionLock(missionID string) *sync.Mutex {
 // to Docker's WorkingDir, and those branches carry the vast majority of
 // execs, so gating only the create path would leave the invariant
 // unenforced for all but a mission's first command.
-func (m *Manager) ensureContainer(ctx context.Context, missionID, workdir string) (string, error) {
+func (m *Docker) ensureContainer(ctx context.Context, missionID, workdir string) (string, error) {
 	if _, err := missionWorkspaceDir(workdir, missionID); err != nil {
 		return "", err
 	}
@@ -550,7 +554,7 @@ func (m *Manager) ensureContainer(ctx context.Context, missionID, workdir string
 	}
 }
 
-func (m *Manager) createContainer(ctx context.Context, missionID, name, workdir string) (string, error) {
+func (m *Docker) createContainer(ctx context.Context, missionID, name, workdir string) (string, error) {
 	image := m.baseImage
 	workspaceMount, err := m.missionMount(workdir, missionID)
 	if err != nil {
@@ -692,7 +696,7 @@ func (m *Manager) createContainer(ctx context.Context, missionID, name, workdir 
 // (D-056). Re-checks with ImageInspect after acquiring the lock: the
 // image may have arrived while this call waited on a sibling mission's
 // pull, and re-pulling it would be a wasted decompression pass.
-func (m *Manager) pullImage(ctx context.Context, image, missionID string) error {
+func (m *Docker) pullImage(ctx context.Context, image, missionID string) error {
 	m.pullMu.Lock()
 	defer m.pullMu.Unlock()
 
@@ -725,7 +729,7 @@ func (m *Manager) pullImage(ctx context.Context, image, missionID string) error 
 // container gone, attach failed) or a timeout (mirroring
 // builtin.Shell's contract: a command that ran and exited non-zero is
 // reported via exitCode, not err).
-func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
+func (m *Docker) Exec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
 	return m.ExecEnv(ctx, missionID, workdir, command, nil, timeout, out)
 }
 
@@ -734,7 +738,7 @@ func (m *Manager) Exec(ctx context.Context, missionID, workdir, command string, 
 // layer); this method trusts it and passes it straight to Docker's
 // ExecCreate. Existing Exec callers are unaffected: they route through
 // here with env == nil.
-func (m *Manager) ExecEnv(ctx context.Context, missionID, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
+func (m *Docker) ExecEnv(ctx context.Context, missionID, workdir, command string, env map[string]string, timeout time.Duration, out io.Writer) (exitCode int, err error) {
 	containerID, err := m.ensureContainer(ctx, missionID, workdir)
 	if err != nil {
 		return 0, err
@@ -846,7 +850,7 @@ func (m *Manager) ExecEnv(ctx context.Context, missionID, workdir, command strin
 // owner label, is left untouched and reported as success: brain's sweep
 // cannot tell whose an unlabelled container is. Such a legacy container
 // stays until removed by hand (docker rm) once its mission is done.
-func (m *Manager) Remove(ctx context.Context, missionID string) error {
+func (m *Docker) Remove(ctx context.Context, missionID string) error {
 	name := containerName(missionID)
 	insp, err := m.cli.ContainerInspect(ctx, name, client.ContainerInspectOptions{})
 	switch {
@@ -876,7 +880,7 @@ func (m *Manager) Remove(ctx context.Context, missionID string) error {
 // terminal-mission knowledge and deletes what it decides is safe to
 // remove — this package holds no Postgres state to make that call
 // itself.
-func (m *Manager) List(ctx context.Context) ([]string, error) {
+func (m *Docker) List(ctx context.Context) ([]string, error) {
 	result, err := m.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: make(client.Filters).Add("label", missionLabel, ownerLabel+"="+m.owner),
@@ -939,7 +943,7 @@ const hostMeminfoPath = "/host/meminfo"
 // with no memory limit, so this is the HOST's view of available
 // memory, not sandboxd's cgroup. RunningSandboxes reuses List, the same
 // live-container count api.go's ensure-time cap uses.
-func (m *Manager) Capacity(ctx context.Context) (CapacityReport, error) {
+func (m *Docker) Capacity(ctx context.Context) (CapacityReport, error) {
 	f, err := openMeminfo(hostMeminfoPath, "/proc/meminfo")
 	if err != nil {
 		return CapacityReport{}, fmt.Errorf("sandbox: capacity: %w", err)

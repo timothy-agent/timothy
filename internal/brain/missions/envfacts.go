@@ -50,7 +50,7 @@ type ToolFact struct {
 	Version string `json:"version,omitempty"`
 }
 
-// Sandbox limits as sandboxd applies them (internal/sandboxd/manager.go:
+// Sandbox limits as sandboxd applies them (internal/sandboxd/docker.go:
 // sandboxMemoryBytes, sandboxNanoCPUs, sandboxPidsLimit, the tmpfs
 // sizes, sandboxFsizeLimit). Brain does not import sandboxd; keep these
 // in sync when a limit changes there.

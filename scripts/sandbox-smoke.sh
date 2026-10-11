@@ -93,7 +93,7 @@ vol="timothy-smoke-mise-$RANDOM$RANDOM"
 docker volume create "$vol" >/dev/null
 trap 'docker volume rm -f "$vol" >/dev/null 2>&1 || true' EXIT
 # Same read-only rootfs and tmpfs options sandboxd gives a mission
-# container (internal/sandboxd/manager.go createContainer); keep in sync.
+# container (internal/sandboxd/docker.go createContainer); keep in sync.
 SANDBOX_MOUNTS=(--read-only
   --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m
   --tmpfs /home/sandbox:rw,exec,nosuid,nodev,uid=65534,gid=65534,size=1g)
@@ -263,7 +263,7 @@ case "$out" in
 esac
 
 # Runtimes the removed per-language images used to bake install through
-# mise under sandboxd's limits (manager.go: memory, cpus, pids, nofile,
+# mise under sandboxd's limits (docker.go: memory, cpus, pids, nofile,
 # fsize 256 MiB, no core dumps, all caps dropped); keep in sync. A JDK
 # tarball is the largest single file and must fit under fsize.
 rvol="timothy-smoke-runtimes-$RANDOM$RANDOM"
