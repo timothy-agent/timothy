@@ -662,6 +662,15 @@ export function ConnectorAdd() {
                   />
                 </div>
               )}
+              {preset.kind === 'mcp' && preset.docsURL && (
+                <p className="-mt-2 text-sm text-muted-foreground">
+                  <a href={preset.docsURL} target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                    {preset.name} setup guide
+                  </a>
+                  {preset.verifiedOn && <> · endpoint checked on {preset.verifiedOn}</>}
+                </p>
+              )}
+              {isMCPOAuth && preset.authHint && <p className="-mt-2 text-sm text-muted-foreground">{preset.authHint}</p>}
               {isImap && (
                 <>
                   <div className="grid grid-cols-2 gap-5">
