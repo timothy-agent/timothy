@@ -387,6 +387,51 @@ describe('ProviderAdd bedrock credential inputs', () => {
     await waitFor(() => expect(createProvider).toHaveBeenCalled())
   })
 
+  it('cloud identity stores no secret and creates an ambient row without a credential reference', async () => {
+    renderPage('bedrock')
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Authentication' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Cloud identity' }))
+
+    expect(screen.queryByPlaceholderText('AKIA…')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('name (e.g. BEDROCK_KEYS)')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(vi.mocked(validateProvider).mock.calls[0][0]).toMatchObject({
+      driver: 'bedrock',
+      credential_ref: '',
+      options: { region: 'us-east-1', auth: 'ambient' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add provider' }))
+    await waitFor(() => expect(createProvider).toHaveBeenCalled())
+    expect(vi.mocked(createProvider).mock.calls[0][0]).toMatchObject({
+      credential_ref: '',
+      options: { region: 'us-east-1', auth: 'ambient' },
+    })
+  })
+
+  it('switching back to access keys brings the key fields back and sends no auth option', async () => {
+    renderPage('bedrock')
+
+    fireEvent.click(await screen.findByRole('combobox', { name: 'Authentication' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Cloud identity' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Authentication' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Access keys' }))
+
+    fireEvent.change(await screen.findByPlaceholderText('AKIA…'), { target: { value: 'AKIAEXAMPLE' } })
+    fireEvent.change(screen.getByPlaceholderText('wJalrXUtnFEMI/K7MDEN...'), { target: { value: 'secretvalue123' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await screen.findByText(/^OK,/)
+
+    expect(setSecret).toHaveBeenCalled()
+    const config = vi.mocked(validateProvider).mock.calls[0][0]
+    expect(config.credential_ref).toBeTruthy()
+    expect(config.options).toEqual({ region: 'us-east-1' })
+  })
+
   it('mentions no JSON in the bedrock key hint copy', async () => {
     renderPage('bedrock')
     await screen.findByPlaceholderText('AKIA…')
@@ -637,7 +682,7 @@ describe('ProviderAdd invalidates a passing test on further edits', () => {
     await screen.findByText(/^OK,/)
     expect((screen.getByRole('button', { name: 'Add provider' }) as HTMLButtonElement).disabled).toBe(false)
 
-    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Region' }))
     fireEvent.click(await screen.findByRole('option', { name: /us-west-2/ }))
 
     expect(await screen.findByText(/Not tested yet/)).toBeInTheDocument()

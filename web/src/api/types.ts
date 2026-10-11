@@ -548,6 +548,7 @@ export interface AdminProvider {
     reasoning_effort?: string
     request_timeout?: string
     region?: string
+    auth?: string
     anthropic_base_url?: string
     litellm_provider?: string
   }

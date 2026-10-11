@@ -59,6 +59,9 @@ interface StagedProvider {
   reasoningDisabled: boolean
   request_timeout: string
   region: string
+  // auth is the bedrock credential source (D-156): 'static' keys from
+  // the secret store or the gateway's 'ambient' cloud identity.
+  auth: 'static' | 'ambient'
   litellm_provider: string
   default_model: string
 }
@@ -70,6 +73,7 @@ function baselineFrom(provider: AdminProvider): StagedProvider {
     reasoningDisabled: provider.options?.reasoning_effort === 'none',
     request_timeout: provider.options?.request_timeout ?? '',
     region: provider.options?.region ?? 'us-east-1',
+    auth: provider.options?.auth === 'ambient' ? 'ambient' : 'static',
     litellm_provider: provider.options?.litellm_provider ?? '',
     default_model: provider.default_model,
   }
@@ -97,8 +101,17 @@ export function buildPatch(provider: AdminProvider, staged: StagedProvider): Par
     delete options.request_timeout
   }
 
+  // Ambient rows carry no credential_ref (the admin API rejects one),
+  // so the switch clears it; static leaves the picker's choice alone.
+  let credentialRef = staged.credential_ref
   if (provider.driver === 'bedrock') {
     options.region = staged.region
+    if (staged.auth === 'ambient') {
+      options.auth = 'ambient'
+      credentialRef = ''
+    } else {
+      delete options.auth
+    }
   }
 
   const litellmProvider = staged.litellm_provider.trim()
@@ -110,7 +123,7 @@ export function buildPatch(provider: AdminProvider, staged: StagedProvider): Par
 
   return {
     name: staged.name.trim(),
-    credential_ref: staged.credential_ref,
+    credential_ref: credentialRef,
     default_model: staged.default_model.trim(),
     options,
   }
@@ -205,6 +218,7 @@ function ProviderEditForm({
 
   const isCli = provider.kind === 'cli'
   const isBedrock = provider.driver === 'bedrock'
+  const bedrockAmbient = isBedrock && staged.values.auth === 'ambient'
   const isOpenaicompat = provider.driver === 'openaicompat'
 
   return (
@@ -237,12 +251,37 @@ function ProviderEditForm({
             <Input value={staged.values.name} onChange={(e) => staged.setField('name', e.target.value)} />
           </Field>
 
-          <Field label="Credential reference" description="Storage name for this provider's key, choose an existing one or rotate the value below.">
-            <ExistingCredentialSelect
-              value={staged.values.credential_ref}
-              onChange={(v) => staged.setField('credential_ref', v)}
-            />
-          </Field>
+          {isBedrock && (
+            <Field label="Authentication">
+              {(props) => (
+                <>
+                  <Select value={staged.values.auth} onValueChange={(v) => staged.setField('auth', v as StagedProvider['auth'])}>
+                    <SelectTrigger id={props.id} aria-label="Authentication" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="static">Access keys</SelectItem>
+                      <SelectItem value="ambient">Cloud identity</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    {staged.values.auth === 'static'
+                      ? 'An IAM access key pair, stored in the secret store.'
+                      : 'The AWS role attached to the gateway (EKS Pod Identity, IRSA, GKE or AKS Workload Identity, or an instance role). Timothy stores no key.'}
+                  </p>
+                </>
+              )}
+            </Field>
+          )}
+
+          {!bedrockAmbient && (
+            <Field label="Credential reference" description="Storage name for this provider's key, choose an existing one or rotate the value below.">
+              <ExistingCredentialSelect
+                value={staged.values.credential_ref}
+                onChange={(v) => staged.setField('credential_ref', v)}
+              />
+            </Field>
+          )}
 
           {isOpenaicompat && (
             <Field label="Disable reasoning" required={false}>
@@ -331,20 +370,22 @@ function ProviderEditForm({
         </FormActions>
       </Form>
 
-      <div className="mt-10">
-        <Panel title={isBedrock ? 'AWS credentials' : isCli && provider.driver === 'claude-cli' ? 'Subscription token' : 'API key'}>
-          <CredentialPanel
-            provider={provider}
-            defaultBackend={defaultBackend}
-            bedrock={isBedrock}
-            onChanged={() => {
-              void doRefresh().then((refetched) => {
-                if (refetched) staged.rebase(baselineFrom(refetched))
-              })
-            }}
-          />
-        </Panel>
-      </div>
+      {!bedrockAmbient && (
+        <div className="mt-10">
+          <Panel title={isBedrock ? 'AWS credentials' : isCli && provider.driver === 'claude-cli' ? 'Subscription token' : 'API key'}>
+            <CredentialPanel
+              provider={provider}
+              defaultBackend={defaultBackend}
+              bedrock={isBedrock}
+              onChanged={() => {
+                void doRefresh().then((refetched) => {
+                  if (refetched) staged.rebase(baselineFrom(refetched))
+                })
+              }}
+            />
+          </Panel>
+        </div>
+      )}
 
       <div className="mt-10 space-y-4">
         {isCli ? (
