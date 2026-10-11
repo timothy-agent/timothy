@@ -731,6 +731,19 @@ func (m *Manager) SetServices(s *MCPServices) {
 	m.services = s
 }
 
+// ServiceStatus reports connector id's local server as sandboxd sees
+// it; nil for a connector without one, or when sandboxd cannot say.
+func (m *Manager) ServiceStatus(ctx context.Context, id string) (*sandboxclient.ServiceStatus, error) {
+	c, err := m.rows.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if m.services == nil || !IsCommandMCP(c) {
+		return nil, nil
+	}
+	return m.services.status(ctx, c.ID), nil
+}
+
 // LocalServersSupported reports ErrLocalServersUnsupported when command
 // connectors cannot run here: no runner, or a sandbox backend without
 // service containers.

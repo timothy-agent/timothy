@@ -40,6 +40,7 @@ import type {
   KbDocument,
   LatencyRow,
   MemoryItem,
+  MCPServiceStatus,
   Mission,
   MissionEvent,
   MissionFile,
@@ -1179,8 +1180,16 @@ export async function testConnector(id: string): Promise<ConnectorTestResult> {
   return request<ConnectorTestResult>(`/v1/admin/connectors/${id}/test`, { method: 'POST' })
 }
 
-// probeConnector checks an unsaved MCP endpoint: handshake outcome and
-// tool preview. The token is used for this call only, never stored.
+// connectorService reports a command MCP connector's local server, or
+// null for a connector without one.
+export async function connectorService(id: string): Promise<MCPServiceStatus | null> {
+  const { service } = await request<{ service: MCPServiceStatus | null }>(`/v1/admin/connectors/${id}/service`)
+  return service
+}
+
+// probeConnector checks an unsaved MCP endpoint or local server:
+// handshake outcome and tool preview. The token and env values are used
+// for this call only, never stored.
 export async function probeConnector(body: ConnectorProbeRequest): Promise<ConnectorProbe> {
   return request<ConnectorProbe>('/v1/admin/connectors/probe', {
     method: 'POST',

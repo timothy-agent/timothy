@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ConnectorProbe } from '../../api/types'
+import type { AdminConnector, ConnectorProbe } from '../../api/types'
 import {
   allowedBy,
   allowlistName,
@@ -13,8 +13,13 @@ import {
   parseMCPInput,
   providerPattern,
   schemaFields,
-  stdioReason,
+  commandLine,
+  envFor,
+  envNameError,
+  localServerOf,
+  manualLocalCandidate,
 } from './mcpAddFlow'
+import { mcpEnvRef } from './credentialRefs'
 
 describe('parseMCPInput', () => {
   it.each([
@@ -26,16 +31,16 @@ describe('parseMCPInput', () => {
       unsupported: [],
     },
     {
-      name: 'mcpServers with an HTTP and a stdio entry',
+      name: 'mcpServers with an HTTP and a local entry',
       input: JSON.stringify({
         mcpServers: {
           Notion: { url: 'https://mcp.notion.com/mcp' },
           local: { command: 'npx', args: ['-y', 'some-server'] },
         },
       }),
-      endpoints: ['https://mcp.notion.com/mcp'],
-      names: ['notion'],
-      unsupported: [{ name: 'local', reason: stdioReason }],
+      endpoints: ['https://mcp.notion.com/mcp', ''],
+      names: ['notion', 'local'],
+      unsupported: [],
     },
     {
       name: 'inner name-to-entry object',
@@ -271,5 +276,102 @@ describe('provider naming helpers', () => {
     expect(providerPattern.test('Notion')).toBe(false)
     expect(providerPattern.test('notion-work')).toBe(false)
     expect(providerPattern.test('a'.repeat(33))).toBe(false)
+  })
+})
+
+describe('local server entries (D-162)', () => {
+  it('reads command, args and env, leaving template values empty', () => {
+    const got = parseMCPInput(
+      JSON.stringify({
+        mcpServers: {
+          Analytics: {
+            command: 'pipx',
+            args: ['run', 'analytics-mcp', 7],
+            env: { GOOGLE_PROJECT_ID: 'my-project', API_KEY: '${API_KEY}', N: 3 },
+          },
+        },
+      }),
+    )
+    expect(got.unsupported).toEqual([])
+    expect(got.candidates).toEqual([
+      {
+        name: 'analytics',
+        endpoint: '',
+        headers: {},
+        token: '',
+        placeholders: [],
+        command: 'pipx',
+        args: ['run', 'analytics-mcp'],
+        env: { GOOGLE_PROJECT_ID: 'my-project', API_KEY: '' },
+      },
+    ])
+  })
+
+  it('reads a single local entry', () => {
+    const got = parseMCPInput(JSON.stringify({ command: 'uvx', args: ['srv'] }))
+    expect(got.candidates.map((c) => c.command)).toEqual(['uvx'])
+  })
+
+  it.each([
+    { name: 'non-string command', command: 7 },
+    { name: 'empty command', command: '  ' },
+  ])('reports a $name as unsupported', ({ command }) => {
+    const got = parseMCPInput(JSON.stringify({ mcpServers: { odd: { command } } }))
+    expect(got.candidates).toEqual([])
+    expect(got.unsupported).toEqual([{ name: 'odd', reason: 'The command must be a string.' }])
+  })
+
+  it('builds a candidate from the Advanced form', () => {
+    expect(manualLocalCandidate('  ', 'x', '')).toBeNull()
+    expect(manualLocalCandidate(' npx ', '-y\n\n  some-server \n', 'A_KEY, B_KEY\nC_KEY')).toEqual({
+      name: '',
+      endpoint: '',
+      headers: {},
+      token: '',
+      placeholders: [],
+      command: 'npx',
+      args: ['-y', 'some-server'],
+      env: { A_KEY: '', B_KEY: '', C_KEY: '' },
+    })
+  })
+
+  it.each([
+    { name: 'API_KEY', error: undefined },
+    { name: '_x1', error: undefined },
+    { name: '1KEY', error: 'Letters, digits and underscores, not starting with a digit.' },
+    { name: 'MY-KEY', error: 'Letters, digits and underscores, not starting with a digit.' },
+    { name: 'PATH', error: 'PATH is set by Timothy.' },
+    { name: 'HOME', error: 'HOME is set by Timothy.' },
+    { name: 'MCP_BRIDGE_TOKEN', error: 'MCP_BRIDGE_TOKEN is set by Timothy.' },
+  ])('envNameError($name)', ({ name, error }) => {
+    expect(envNameError(name)).toBe(error)
+  })
+
+  it('collects trimmed env values for the listed names only', () => {
+    expect(envFor(['A', 'B'], { A: ' a ', C: 'c' })).toEqual({ A: 'a', B: '' })
+  })
+
+  it('names env secrets without stuttering', () => {
+    expect(mcpEnvRef('ANALYTICS', 'GOOGLE_PROJECT_ID')).toBe('ANALYTICS_MCP_ENV_GOOGLE_PROJECT_ID')
+    expect(mcpEnvRef('ANALYTICS_MCP', 'api_key')).toBe('ANALYTICS_MCP_ENV_API_KEY')
+  })
+
+  it('reads a command connector config', () => {
+    const base = { id: 'c', name: 'analytics', kind: 'mcp' as AdminConnector['kind'], credential_ref: '', enabled: true, sensitive: false }
+    expect(localServerOf({ ...base, config: { endpoint: 'https://x' } })).toBeNull()
+    expect(localServerOf({ ...base, kind: 'aws', config: { command: 'npx' } })).toBeNull()
+    expect(
+      localServerOf({ ...base, config: { command: 'pipx', args: ['run', 'analytics-mcp'], env_refs: { K: 'REF' }, internet: true } }),
+    ).toEqual({ command: 'pipx', args: ['run', 'analytics-mcp'], envRefs: { K: 'REF' }, internet: true })
+    expect(localServerOf({ ...base, config: { command: 'npx' } })).toEqual({
+      command: 'npx',
+      args: [],
+      envRefs: {},
+      internet: false,
+    })
+  })
+
+  it('quotes arguments with spaces in the command line', () => {
+    expect(commandLine('python3', ['-c', 'print(1)', 'a b', ''])).toBe('python3 -c print(1) "a b" ""')
   })
 })

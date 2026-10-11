@@ -28,6 +28,13 @@ export function tokenRefFor(kind: string, refBase: string): string {
   }
 }
 
+// mcpEnvRef names the secret a local MCP server's env var reads from
+// (D-162), with the same no-stutter rule as mcpOAuthRefs.
+export function mcpEnvRef(refBase: string, envName: string): string {
+  const base = refBase.endsWith('_MCP') ? refBase : `${refBase}_MCP`
+  return `${base}_ENV_${envName.toUpperCase()}`
+}
+
 // mcpOAuthRefs names an OAuth-mode MCP connector's token bundle and
 // pasted client secret, with the same no-stutter rule.
 export function mcpOAuthRefs(refBase: string): { tokens: string; clientSecret: string } {

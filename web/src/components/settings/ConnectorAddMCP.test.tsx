@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminAgent, ConnectorProbe } from '../../api/types'
 import { TooltipProvider } from '../ui/tooltip'
 import { ConnectorAddMCP } from './ConnectorAddMCP'
-import { stdioIssueURL } from './mcpAddFlow'
 
 vi.mock('../../api/client', () => ({
   connectorOAuthStart: vi.fn(),
@@ -103,13 +102,13 @@ beforeEach(() => {
 })
 
 describe('ConnectorAddMCP input step', () => {
-  it('prefills the HTTP entry and lists the stdio entry as unsupported', () => {
+  it('prefills the first entry and offers the local entry as a second server', () => {
     renderPage()
     paste(config)
     expect(screen.getByLabelText('Name')).toHaveValue('notion')
     expect(screen.getByText('https://mcp.notion.com/mcp')).toBeInTheDocument()
-    expect(screen.getByText(/Needs a local runtime, not supported yet/)).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Track stdio support' })).toHaveAttribute('href', stdioIssueURL)
+    expect(screen.getByLabelText('Server')).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('reports input that is neither a URL nor JSON', () => {
@@ -387,5 +386,123 @@ describe('ConnectorAddMCP Try it', () => {
       params: { name: 'search', arguments: { query: 'roadmap' } },
     })
     expect(createConnector).not.toHaveBeenCalled()
+  })
+})
+
+describe('ConnectorAddMCP local servers (D-162)', () => {
+  const localConfig = JSON.stringify({
+    mcpServers: {
+      analytics: {
+        command: 'pipx',
+        args: ['run', 'analytics-mcp'],
+        env: { GOOGLE_PROJECT_ID: 'my-project', API_KEY: '${API_KEY}' },
+      },
+    },
+  })
+  const localProbe: ConnectorProbe = {
+    status: 'ok',
+    server: { name: 'analytics', version: '1' },
+    tool_count: 1,
+    index_threshold: 8,
+    provider: 'analytics',
+    tools: [{ name: 'get_account_summaries', final_name: 'analytics_get_account_summaries', description: 'List accounts', read_only_hint: true, input_schema: { type: 'object' } }],
+  }
+
+  it('asks for each env value, keeps internet off by default, and probes the command', async () => {
+    vi.mocked(probeConnector).mockResolvedValue(localProbe)
+    renderPage()
+    paste(localConfig)
+    expect(screen.getByText('pipx run analytics-mcp')).toBeInTheDocument()
+    expect(screen.getByLabelText('GOOGLE_PROJECT_ID')).toHaveValue('my-project')
+    expect(screen.getByLabelText('API_KEY')).toHaveValue('')
+    expect(screen.queryByLabelText('Bearer token')).not.toBeInTheDocument()
+    const internet = screen.getByRole('checkbox', { name: 'Internet access' })
+    expect(internet).not.toBeChecked()
+    const check = screen.getByRole('button', { name: 'Check server' })
+    expect(check).toBeDisabled()
+
+    fireEvent.change(screen.getByLabelText('API_KEY'), { target: { value: ' key-1 ' } })
+    fireEvent.click(internet)
+    fireEvent.click(check)
+    await screen.findByText('List accounts')
+    expect(probeConnector).toHaveBeenCalledWith({
+      name: 'analytics',
+      command: 'pipx',
+      args: ['run', 'analytics-mcp'],
+      env: { GOOGLE_PROJECT_ID: 'my-project', API_KEY: 'key-1' },
+      internet: true,
+    })
+  })
+
+  it('stores every env value as a secret and saves only the ref names', async () => {
+    vi.mocked(probeConnector).mockResolvedValue(localProbe)
+    renderPage()
+    paste(localConfig)
+    fireEvent.change(screen.getByLabelText('API_KEY'), { target: { value: 'key-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('List accounts')
+    fireEvent.click(screen.getByRole('button', { name: 'Add connector' }))
+
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('ANALYTICS_MCP_ENV_GOOGLE_PROJECT_ID', 'my-project')
+    expect(setSecret).toHaveBeenCalledWith('ANALYTICS_MCP_ENV_API_KEY', 'key-1')
+    const created = vi.mocked(createConnector).mock.calls[0][0]
+    expect(created).toEqual({
+      name: 'analytics',
+      kind: 'mcp',
+      config: {
+        command: 'pipx',
+        args: ['run', 'analytics-mcp'],
+        env_refs: { GOOGLE_PROJECT_ID: 'ANALYTICS_MCP_ENV_GOOGLE_PROJECT_ID', API_KEY: 'ANALYTICS_MCP_ENV_API_KEY' },
+        provider: 'analytics',
+        last_probe: expect.any(Object),
+      },
+      credential_ref: '',
+      enabled: true,
+    })
+    expect(JSON.stringify(created)).not.toContain('key-1')
+    expect(JSON.stringify(created)).not.toContain('my-project')
+  })
+
+  it('takes a local server typed into the Advanced form', async () => {
+    vi.mocked(probeConnector).mockResolvedValue(localProbe)
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced: local server' }))
+    expect(screen.queryByLabelText('URL or JSON config')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'uvx' } })
+    fireEvent.change(screen.getByLabelText('Arguments'), { target: { value: 'some-server\n--flag' } })
+    fireEvent.change(screen.getByLabelText('Environment variables'), { target: { value: 'TOKEN' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'local' } })
+    fireEvent.change(screen.getByLabelText('TOKEN'), { target: { value: 't-1' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check server' }))
+
+    await screen.findByText('List accounts')
+    expect(probeConnector).toHaveBeenCalledWith({
+      name: 'local',
+      command: 'uvx',
+      args: ['some-server', '--flag'],
+      env: { TOKEN: 't-1' },
+      internet: false,
+    })
+  })
+
+  it('blocks a reserved env name', () => {
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced: local server' }))
+    fireEvent.change(screen.getByLabelText('Command'), { target: { value: 'uvx' } })
+    fireEvent.change(screen.getByLabelText('Environment variables'), { target: { value: 'PATH' } })
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'local' } })
+    fireEvent.change(screen.getByLabelText('PATH'), { target: { value: '/bin' } })
+    expect(screen.getByText('PATH is set by Timothy.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check server' })).toBeDisabled()
+  })
+
+  it('says the local server could not start', async () => {
+    vi.mocked(probeConnector).mockResolvedValue(failedProbe('unreachable', 'local server stopped after 3 restarts: exited with code 1'))
+    renderPage()
+    paste(JSON.stringify({ command: 'uvx', args: ['broken'] }))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'broken' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check server' }))
+    expect(await screen.findByText('Could not start the local server.')).toBeInTheDocument()
   })
 })

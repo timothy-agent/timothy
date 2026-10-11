@@ -1344,6 +1344,16 @@ export interface ConnectorTestResult {
   identity?: GitHubIdentity
   deferred_tools?: number
   load_tool?: string
+  service?: MCPServiceStatus
+}
+
+// MCPServiceStatus is a command MCP connector's local server as
+// sandboxd reports it (D-162). A stopped server stays stopped for ten
+// minutes before a reload starts it again; a test starts it at once.
+export interface MCPServiceStatus {
+  state: 'running' | 'restarting' | 'stopped'
+  restarts: number
+  last_error: string
 }
 
 // ConnectorProbeRequest is POST /v1/admin/connectors/probe's body. name
@@ -1359,6 +1369,12 @@ export interface ConnectorProbeRequest {
   headers?: Record<string, string>
   token?: string
   connector_id?: string
+  // command, args, env and internet probe an unsaved local server
+  // instead of endpoint (D-162); env values are used for this call only.
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  internet?: boolean
 }
 
 // ConnectorProbeTool is one previewed tool. read_only_hint is the

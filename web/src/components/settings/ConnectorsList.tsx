@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { listConnectors, patchConnector, testConnector } from '../../api/client'
 import type { AdminConnector, GitHubIdentity } from '../../api/types'
 import { Badge } from '../ui/badge'
+import { commandLine, localServerOf } from './mcpAddFlow'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { Alert, AlertDescription } from '../ui/alert'
@@ -143,8 +144,10 @@ function ConnectorCard({
     }
   }
 
-  const summary =
-    connector.kind === 'mcp'
+  const local = localServerOf(connector)
+  const summary = local
+    ? `local: ${commandLine(local.command, local.args)}`
+    : connector.kind === 'mcp'
       ? String(connector.config.endpoint ?? '')
       : connector.kind === 'google' || connector.kind === 'microsoft'
         ? (connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')

@@ -4,13 +4,15 @@ import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
 import {
   connectorOAuthStart,
+  connectorService,
   deleteConnector,
   listConnectors,
   patchConnector,
   setSecret,
   testConnector,
 } from '../../api/client'
-import type { AdminConnector, ConnectorTestResult } from '../../api/types'
+import type { AdminConnector, ConnectorTestResult, MCPServiceStatus } from '../../api/types'
+import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { Alert, AlertDescription } from '../ui/alert'
@@ -25,6 +27,7 @@ import { BedrockKeyFields, bedrockKeyJSON } from './BedrockKeyFields'
 import { ConnectorLogo } from './ConnectorLogo'
 import { ConnectorMCPTools } from './ConnectorMCPTools'
 import { GCPKeyField } from './GCPKeyField'
+import { commandLine, localServerOf } from './mcpAddFlow'
 import { presetFor } from './connectorPresets'
 import { awsRegions } from '../../lib/providerPresets'
 import { settingsArea } from './settingsAreas'
@@ -189,6 +192,19 @@ function ConnectorEditForm({
   const [gcpKey, setGcpKey] = useState('')
   const [savingToken, setSavingToken] = useState(false)
   const [oauthBusy, setOAuthBusy] = useState(false)
+  const local = localServerOf(connector)
+  const isLocal = local !== null
+  const [service, setService] = useState<MCPServiceStatus | null>(null)
+
+  const loadService = useCallback(() => {
+    connectorService(connector.id)
+      .then(setService)
+      .catch(() => setService(null))
+  }, [connector.id])
+
+  useEffect(() => {
+    if (isLocal) loadService()
+  }, [isLocal, loadService])
 
   const staged = useStagedForm<StagedConnector>(baselineFrom(initialConnector))
 
@@ -238,6 +254,7 @@ function ConnectorEditForm({
       setTest({ ok: false, error: errText(err) })
     } finally {
       setTesting(false)
+      if (isLocal) loadService()
     }
   }
 
@@ -783,6 +800,12 @@ function ConnectorEditForm({
                         </>
                       )}
                     </>
+                  ) : local ? (
+                    <>
+                      Command: <span className="font-mono">{commandLine(local.command, local.args)}</span> · Internet
+                      access: {local.internet ? 'on' : 'off'} · Tool prefix:{' '}
+                      <span className="font-mono">{mcpToolPrefix(connector)}</span>
+                    </>
                   ) : (
                     <>
                       Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
@@ -792,6 +815,7 @@ function ConnectorEditForm({
                     </>
                   )}
                 </p>
+                {local && <LocalServerStatus service={service} envRefs={local.envRefs} />}
                 {isAWS ? (
                   <div className="space-y-3">
                     <BedrockKeyFields
@@ -821,7 +845,7 @@ function ConnectorEditForm({
                       Replace key
                     </Button>
                   </div>
-                ) : (
+                ) : isLocal ? null : (
                   <Field
                     label={
                       connector.kind === 'github'
@@ -878,5 +902,50 @@ function ConnectorEditForm({
         onConfirm={() => void remove()}
       />
     </PageShell>
+  )
+}
+
+// LocalServerStatus shows a command connector's local server (D-162):
+// its state from sandboxd, why it stopped, and the secrets its env reads.
+function LocalServerStatus({ service, envRefs }: { service: MCPServiceStatus | null; envRefs: Record<string, string> }) {
+  const names = Object.keys(envRefs).sort()
+  return (
+    <div className="space-y-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-muted-foreground">Local server:</span>
+        {service === null ? (
+          <Badge variant="neutral">not running</Badge>
+        ) : service.state === 'running' ? (
+          <Badge variant="good">running</Badge>
+        ) : service.state === 'restarting' ? (
+          <Badge variant="warning">restarting</Badge>
+        ) : (
+          <Badge variant="destructive">stopped</Badge>
+        )}
+        {service !== null && service.restarts > 0 && (
+          <span className="text-muted-foreground">
+            {service.restarts} {service.restarts === 1 ? 'restart' : 'restarts'}
+          </span>
+        )}
+      </div>
+      {service?.state === 'stopped' && (
+        <p className="text-muted-foreground">
+          {service.last_error ? `It stopped: ${service.last_error}. ` : 'It stopped. '}
+          Timothy starts it again within ten minutes, or now when you test the connection.
+        </p>
+      )}
+      {names.length > 0 && (
+        <p className="text-muted-foreground">
+          Environment from secrets:{' '}
+          {names.map((n, i) => (
+            <span key={n}>
+              {i > 0 && ', '}
+              <span className="font-mono">{n}</span> (<span className="font-mono">{envRefs[n]}</span>)
+            </span>
+          ))}
+          . Change a value under Secrets.
+        </p>
+      )}
+    </div>
   )
 }

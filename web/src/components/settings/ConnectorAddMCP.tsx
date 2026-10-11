@@ -26,16 +26,18 @@ import { presetFor } from './connectorPresets'
 import {
   appendAllowlist,
   buildArgs,
+  commandLine,
+  envFor,
+  envNameError,
   indexNote,
   lastProbeFrom,
+  manualLocalCandidate,
   parseMCPInput,
   providerPattern,
   schemaFields,
-  stdioIssueURL,
-  stdioReason,
   type FieldValue,
 } from './mcpAddFlow'
-import { mcpOAuthRefs, refBaseFor, tokenRefFor } from './credentialRefs'
+import { mcpEnvRef, mcpOAuthRefs, refBaseFor, tokenRefFor } from './credentialRefs'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { errText, isTimothyAuthError } from '../../lib/errors'
@@ -54,7 +56,16 @@ export function ConnectorAddMCP() {
   const [input, setInput] = useState('')
   const parsed = useMemo(() => parseMCPInput(input), [input])
   const [pick, setPick] = useState(0)
-  const candidate = parsed.candidates[pick]
+  // manual is the Advanced: local server form, typed instead of pasted.
+  const [manual, setManual] = useState(false)
+  const [manualCommand, setManualCommand] = useState('')
+  const [manualArgs, setManualArgs] = useState('')
+  const [manualEnv, setManualEnv] = useState('')
+  const candidate = manual ? manualLocalCandidate(manualCommand, manualArgs, manualEnv) : parsed.candidates[pick]
+  const isLocal = !!candidate?.command
+  const envNames = Object.keys(candidate?.env ?? {})
+  const [envValues, setEnvValues] = useState<Record<string, string>>({})
+  const [internet, setInternet] = useState(false)
   const [name, setName] = useState('')
   const [provider, setProvider] = useState('')
   const [token, setToken] = useState('')
@@ -81,6 +92,8 @@ export function ConnectorAddMCP() {
     setPick(index)
     setName(c?.name ?? '')
     setProvider('')
+    setEnvValues(c?.env ?? {})
+    setInternet(false)
     setToken(c?.token ?? '')
     setAskToken(false)
     setClientID('')
@@ -95,12 +108,17 @@ export function ConnectorAddMCP() {
     setProbe(null)
     setTryTool(null)
     try {
+      const target = isLocal
+        ? { command: candidate.command, args: candidate.args ?? [], env: envFor(envNames, envValues), internet }
+        : {
+            endpoint: candidate.endpoint,
+            ...(Object.keys(candidate.headers).length > 0 ? { headers: candidate.headers } : {}),
+            ...(token.trim() ? { token: token.trim() } : {}),
+          }
       const res = await probeConnector({
         name: name.trim(),
         ...(provider.trim() ? { provider: provider.trim() } : {}),
-        endpoint: candidate.endpoint,
-        ...(Object.keys(candidate.headers).length > 0 ? { headers: candidate.headers } : {}),
-        ...(token.trim() ? { token: token.trim() } : {}),
+        ...target,
       })
       setProbe(res)
       if (!provider.trim() && res.status === 'ok' && res.provider) setProvider(res.provider)
@@ -118,21 +136,45 @@ export function ConnectorAddMCP() {
     setSaving(true)
     const connectorName = name.trim()
     try {
-      const ref = token.trim() ? tokenRefFor('mcp', refBaseFor(connectorName)) : ''
-      if (ref) await setSecret(ref, token.trim())
-      const headers = candidate.headers
-      await createConnector({
-        name: connectorName,
-        kind: 'mcp',
-        config: {
-          endpoint: candidate.endpoint,
-          ...(Object.keys(headers).length > 0 ? { headers } : {}),
-          ...(provider.trim() ? { provider: provider.trim() } : {}),
-          last_probe: lastProbeFrom(probe),
-        },
-        credential_ref: ref,
-        enabled: true,
-      })
+      if (isLocal) {
+        // Every env value is stored as a secret; the config carries
+        // only the ref names.
+        const envRefs: Record<string, string> = {}
+        for (const [n, v] of Object.entries(envFor(envNames, envValues))) {
+          envRefs[n] = mcpEnvRef(refBaseFor(connectorName), n)
+          await setSecret(envRefs[n], v)
+        }
+        await createConnector({
+          name: connectorName,
+          kind: 'mcp',
+          config: {
+            command: candidate.command,
+            ...((candidate.args ?? []).length > 0 ? { args: candidate.args } : {}),
+            ...(envNames.length > 0 ? { env_refs: envRefs } : {}),
+            ...(internet ? { internet: true } : {}),
+            ...(provider.trim() ? { provider: provider.trim() } : {}),
+            last_probe: lastProbeFrom(probe),
+          },
+          credential_ref: '',
+          enabled: true,
+        })
+      } else {
+        const ref = token.trim() ? tokenRefFor('mcp', refBaseFor(connectorName)) : ''
+        if (ref) await setSecret(ref, token.trim())
+        const headers = candidate.headers
+        await createConnector({
+          name: connectorName,
+          kind: 'mcp',
+          config: {
+            endpoint: candidate.endpoint,
+            ...(Object.keys(headers).length > 0 ? { headers } : {}),
+            ...(provider.trim() ? { provider: provider.trim() } : {}),
+            last_probe: lastProbeFrom(probe),
+          },
+          credential_ref: ref,
+          enabled: true,
+        })
+      }
     } catch (err) {
       toast.error('Could not add connector', { description: errText(err) })
       setSaving(false)
@@ -196,6 +238,10 @@ export function ConnectorAddMCP() {
     provider.trim() !== '' && !providerPattern.test(provider.trim())
       ? 'Lowercase letters, digits and underscores, up to 32.'
       : undefined
+  const envErrors = Object.fromEntries(
+    envNames.map((n) => [n, envNameError(n) ?? ((envValues[n] ?? '').trim() === '' ? 'Required.' : undefined)]),
+  )
+  const envBlocked = envNames.some((n) => envErrors[n] !== undefined)
   const httpsEndpoint = candidate?.endpoint.startsWith('https://') === true
   const canConnectOAuth =
     needsOAuth &&
@@ -226,35 +272,87 @@ export function ConnectorAddMCP() {
 
       <Form onSubmit={(e) => e.preventDefault()}>
         <FieldGroup title="1. Server" description="Paste the server's URL, or the JSON config its provider publishes.">
-          <Field label="URL or JSON config">
-            <Textarea
-              value={input}
-              onChange={(e) => choose(e.target.value, 0)}
-              placeholder={'https://mcp.example.com/mcp\nor {"mcpServers": {"example": {"url": "https://mcp.example.com/mcp"}}}'}
-              className="font-mono text-xs"
-            />
-          </Field>
-          {parsed.error && <p className="text-sm text-destructive">{parsed.error}</p>}
-          {parsed.unsupported.length > 0 && (
+          {!manual && (
+            <Field label="URL or JSON config">
+              <Textarea
+                value={input}
+                onChange={(e) => choose(e.target.value, 0)}
+                placeholder={
+                  'https://mcp.example.com/mcp\nor {"mcpServers": {"example": {"url": "https://mcp.example.com/mcp"}}}\nor {"mcpServers": {"example": {"command": "npx", "args": ["-y", "example-mcp"]}}}'
+                }
+                className="font-mono text-xs"
+              />
+            </Field>
+          )}
+          <div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              aria-expanded={manual}
+              onClick={() => {
+                setManual((m) => !m)
+                setEnvValues({})
+                setInternet(false)
+                setProbe(null)
+              }}
+            >
+              {manual ? 'Paste a URL or config instead' : 'Advanced: local server'}
+            </Button>
+          </div>
+          {manual && (
+            <>
+              <Field label="Command" description="runs in its own sandbox container, never inside Timothy">
+                <Input
+                  value={manualCommand}
+                  onChange={(e) => {
+                    setManualCommand(e.target.value)
+                    setProbe(null)
+                  }}
+                  placeholder="npx"
+                  className="font-mono"
+                />
+              </Field>
+              <Field label="Arguments" required={false} description="one per line">
+                <Textarea
+                  value={manualArgs}
+                  onChange={(e) => {
+                    setManualArgs(e.target.value)
+                    setProbe(null)
+                  }}
+                  placeholder={'-y\nexample-mcp'}
+                  className="font-mono text-xs"
+                />
+              </Field>
+              <Field label="Environment variables" required={false} description="names only, comma separated; values below">
+                <Input
+                  value={manualEnv}
+                  onChange={(e) => {
+                    setManualEnv(e.target.value)
+                    setProbe(null)
+                  }}
+                  placeholder="EXAMPLE_API_KEY"
+                  className="font-mono"
+                />
+              </Field>
+            </>
+          )}
+          {!manual && parsed.error && <p className="text-sm text-destructive">{parsed.error}</p>}
+          {!manual && parsed.unsupported.length > 0 && (
             <Alert tone="warning">
               <AlertDescription>
                 <ul className="space-y-1">
                   {parsed.unsupported.map((u) => (
                     <li key={u.name}>
-                      <span className="font-mono">{u.name || 'entry'}</span>: {u.reason}{' '}
-                      {u.reason === stdioReason && (
-                        <a href={stdioIssueURL} target="_blank" rel="noreferrer" className="underline underline-offset-2">
-                          Track stdio support
-                        </a>
-                      )}
+                      <span className="font-mono">{u.name || 'entry'}</span>: {u.reason}
                     </li>
                   ))}
                 </ul>
               </AlertDescription>
             </Alert>
           )}
-          {parsed.candidates.length > 1 && (
-            <Field label="Server" description="this config has several HTTP servers; add one at a time">
+          {!manual && parsed.candidates.length > 1 && (
+            <Field label="Server" description="this config has several servers; add one at a time">
               {(props) => (
                 <Select value={String(pick)} onValueChange={(v) => v && choose(input, Number(v))}>
                   <SelectTrigger id={props.id} className="w-full" aria-label="Server">
@@ -263,7 +361,7 @@ export function ConnectorAddMCP() {
                   <SelectContent>
                     {parsed.candidates.map((c, i) => (
                       <SelectItem key={`${c.name}-${i}`} value={String(i)}>
-                        {c.name || c.endpoint}
+                        {c.name || c.endpoint || c.command}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -273,12 +371,20 @@ export function ConnectorAddMCP() {
           )}
           {candidate && (
             <>
-              <p className="text-sm text-muted-foreground">
-                Endpoint: <span className="font-mono">{candidate.endpoint}</span>
-                {Object.keys(candidate.headers).length > 0 && (
-                  <> · headers: <span className="font-mono">{Object.keys(candidate.headers).join(', ')}</span></>
-                )}
-              </p>
+              {isLocal ? (
+                !manual && (
+                  <p className="text-sm text-muted-foreground">
+                    Command: <span className="font-mono">{commandLine(candidate.command ?? '', candidate.args ?? [])}</span>
+                  </p>
+                )
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Endpoint: <span className="font-mono">{candidate.endpoint}</span>
+                  {Object.keys(candidate.headers).length > 0 && (
+                    <> · headers: <span className="font-mono">{Object.keys(candidate.headers).join(', ')}</span></>
+                  )}
+                </p>
+              )}
               {candidate.placeholders.length > 0 && (
                 <Alert tone="warning">
                   <AlertDescription>
@@ -311,7 +417,50 @@ export function ConnectorAddMCP() {
                   placeholder="from the server"
                 />
               </Field>
-              {(askToken || token !== '') && (
+              {isLocal &&
+                envNames.map((n) => (
+                  <Field
+                    key={n}
+                    label={n}
+                    error={envErrors[n] === 'Required.' ? undefined : envErrors[n]}
+                    description="stored as a secret when you add the connector"
+                  >
+                    {(props) => (
+                      <Input
+                        id={props.id}
+                        type="password"
+                        value={envValues[n] ?? ''}
+                        onChange={(e) => {
+                          setEnvValues((v) => ({ ...v, [n]: e.target.value }))
+                          setProbe(null)
+                        }}
+                        placeholder="value"
+                        autoComplete="off"
+                        className="font-mono"
+                      />
+                    )}
+                  </Field>
+                ))}
+              {isLocal && (
+                <label className="flex items-start gap-3 text-sm">
+                  <Checkbox
+                    aria-label="Internet access"
+                    checked={internet}
+                    onCheckedChange={(v) => {
+                      setInternet(v === true)
+                      setProbe(null)
+                    }}
+                  />
+                  <span>
+                    <span className="font-medium">Internet access</span>
+                    <span className="block text-muted-foreground">
+                      Off by default. Turn it on for a server that calls an online API, or that downloads its package
+                      when it starts (npx, uvx).
+                    </span>
+                  </span>
+                </label>
+              )}
+              {!isLocal && (askToken || token !== '') && (
                 <Field label="Bearer token" description="stored as a secret when you add the connector">
                   <Input
                     type="password"
@@ -329,7 +478,9 @@ export function ConnectorAddMCP() {
                 <Button
                   type="button"
                   variant="test"
-                  disabled={probing || !name.trim() || !!providerError || candidate.placeholders.length > 0}
+                  disabled={
+                    probing || !name.trim() || !!providerError || candidate.placeholders.length > 0 || envBlocked
+                  }
                   onClick={() => void runProbe()}
                 >
                   {probe ? 'Check again' : 'Check server'}
@@ -340,7 +491,7 @@ export function ConnectorAddMCP() {
         </FieldGroup>
 
         {probing && <TestStatus state="testing" message="Checking server…" />}
-        {probe && <ProbeOutcome probe={probe} hadToken={token.trim() !== ''} />}
+        {probe && <ProbeOutcome probe={probe} hadToken={token.trim() !== ''} local={isLocal} />}
 
         {needsOAuth && (
           <FieldGroup title="2. OAuth login" description="This server signs in through its own authorization server.">
@@ -472,7 +623,7 @@ export function ConnectorAddMCP() {
   )
 }
 
-function ProbeOutcome({ probe, hadToken }: { probe: ConnectorProbe; hadToken: boolean }) {
+function ProbeOutcome({ probe, hadToken, local }: { probe: ConnectorProbe; hadToken: boolean; local: boolean }) {
   switch (probe.status) {
     case 'ok':
       return (
@@ -494,7 +645,13 @@ function ProbeOutcome({ probe, hadToken }: { probe: ConnectorProbe; hadToken: bo
     case 'needs_oauth':
       return null
     case 'unreachable':
-      return <TestStatus state="failed" message="Could not reach the server." detail={probe.message} />
+      return (
+        <TestStatus
+          state="failed"
+          message={local ? 'Could not start the local server.' : 'Could not reach the server.'}
+          detail={probe.message}
+        />
+      )
     default:
       return <TestStatus state="failed" message="The server answered, but the check failed." detail={probe.message} />
   }
