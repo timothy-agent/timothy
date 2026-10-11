@@ -546,4 +546,3 @@ func TestRawPushBitbucketKind(t *testing.T) {
 		t.Fatalf("branch not on remote: %v: %s", err, out)
 	}
 }
-
