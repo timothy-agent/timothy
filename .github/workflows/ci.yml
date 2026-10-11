@@ -56,6 +56,8 @@ jobs:
             sandbox:
               - 'deploy/sandbox.Dockerfile'
               - 'scripts/sandbox-smoke.sh'
+              - 'cmd/mcp-bridge/**'
+              - 'internal/mcpbridge/**'
               - '.github/workflows/ci.yml'
             deploy:
               - 'deploy/**'
