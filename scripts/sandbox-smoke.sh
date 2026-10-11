@@ -51,6 +51,49 @@ done
 "${RUN[@]}" composer -V --no-interaction
 echo "composer ok (uid 65534)"
 
+# mcp-bridge (D-161): a python stdio MCP server answers over streamable
+# HTTP under service hardening, the token is required, and the bridge
+# exits non-zero when its server exits.
+toy='import json, sys
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        r = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "py-toy", "version": "1"}}
+    else:
+        r = {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)'
+bcid="$(docker run -d -u 65534:65534 --read-only --tmpfs /tmp --tmpfs /home/sandbox:uid=65534,gid=65534 \
+  --cap-drop ALL --security-opt no-new-privileges -e MCP_BRIDGE_TOKEN=smoke "$IMAGE" mcp-bridge -- python3 -c "$toy")"
+trap 'docker rm -f "$bcid" >/dev/null 2>&1 || true' EXIT
+mcp() { docker exec "$bcid" curl -s -w ' %{http_code}' -H 'Content-Type: application/json' "$@" http://127.0.0.1:8090/mcp; }
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  out="$(mcp -H 'Authorization: Bearer smoke' -d '{"jsonrpc":"2.0","id":7,"method":"initialize","params":{}}' || true)"
+  case "$out" in *' 200') break ;; esac
+  sleep 0.5
+done
+case "$out" in
+  *'"id": 7'*'py-toy'*' 200'|*'"id":7'*'py-toy'*' 200') ;;
+  *) echo "FAIL: mcp-bridge initialize: $out" >&2; docker logs "$bcid" >&2; exit 1 ;;
+esac
+out="$(mcp -H 'Authorization: Bearer smoke' -d '{"jsonrpc":"2.0","id":8,"method":"tools/list","params":{}}')"
+case "$out" in
+  *'"echo"'*' 200') ;;
+  *) echo "FAIL: mcp-bridge tools/list: $out" >&2; exit 1 ;;
+esac
+out="$(mcp -d '{"jsonrpc":"2.0","id":9,"method":"tools/list"}')"
+case "$out" in
+  *' 401') ;;
+  *) echo "FAIL: mcp-bridge without token: $out" >&2; exit 1 ;;
+esac
+docker rm -f "$bcid" >/dev/null
+if docker run --rm -e MCP_BRIDGE_TOKEN=smoke "$IMAGE" mcp-bridge -- sh -c 'exit 0' 2>/dev/null; then
+  echo "FAIL: mcp-bridge exited 0 after its server exited" >&2
+  exit 1
+fi
+echo "mcp-bridge ok: python stdio server over http, token required, exits with its server"
+
 ver="$("${RUN[@]}" mise --version)"
 case "$ver" in
   2026.10.1*) echo "mise version ok: $ver" ;;

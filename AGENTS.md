@@ -137,6 +137,13 @@ absent, sandboxd mounts the mission's own `<workspace>/.sandbox-cache`
 mise installs run under `miseLocked` (flock on the data dir): bare
 concurrent installs of one version can collide on mise's download file.
 
+D-161 (issue #1207): the image carries `/usr/local/bin/mcp-bridge`
+(`cmd/mcp-bridge`, core in `internal/mcpbridge`, stdlib only). It runs
+a stdio MCP server and serves it as streamable HTTP on :8090: JSON
+responses, one session, bearer token from `MCP_BRIDGE_TOKEN` (never
+passed to the child), bridge-assigned JSON-RPC ids, initialize replayed
+after the first. It exits 1 when the server exits.
+
 ## Sandbox backends and Kubernetes
 
 D-153 (issue #1179): `internal/sandboxd/backend.go` is the seam

@@ -17,6 +17,17 @@ FROM node:24.18.0-slim AS node-dist
 
 FROM composer:2.8.12 AS composer-dist
 
+# D-161 (issue #1207): mcp-bridge serves a stdio MCP server over
+# streamable HTTP in a sandboxd service container. Stdlib only, so no
+# module download; cross-compiled on the build platform.
+FROM --platform=$BUILDPLATFORM golang:1.26.9 AS mcp-bridge
+ARG TARGETOS TARGETARCH
+WORKDIR /src
+COPY go.mod ./
+COPY cmd/mcp-bridge/ cmd/mcp-bridge/
+COPY internal/mcpbridge/ internal/mcpbridge/
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/mcp-bridge ./cmd/mcp-bridge
+
 FROM debian:stable-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -153,6 +164,8 @@ RUN . /etc/os-release \
 
 # Composer phar from the official image.
 COPY --from=composer-dist /usr/bin/composer /usr/local/bin/composer
+
+COPY --from=mcp-bridge /out/mcp-bridge /usr/local/bin/mcp-bridge
 
 # Same numeric uid/gid as brain's alpine "nobody" (65534) — both sides
 # write the shared workspace volume as the same owner. Debian's built-in
