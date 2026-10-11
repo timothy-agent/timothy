@@ -220,7 +220,7 @@ services:
         condition: service_started
       sandboxd:
         condition: service_started
-    networks: [timothy, timothy-sandbox]
+    networks: [timothy, timothy-sandbox, timothy-services]
 
   # Holds the Docker socket on brain's behalf: the only service that
   # talks to the Docker daemon, exposing a narrow mission-scoped API
@@ -432,3 +432,9 @@ networks:
   timothy:
   # brain + sandboxd only — see the sandboxd service comment.
   timothy-sandbox:
+  # D-159: brain + sandboxd-managed service containers (stdio MCP
+  # servers). Internal: no internet unless sandboxd also attaches a
+  # service to bridge. sandboxd itself stays off it, so a service can
+  # never reach sandboxd's unauthenticated API.
+  timothy-services:
+    internal: true

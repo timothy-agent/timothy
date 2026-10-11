@@ -152,6 +152,69 @@ func Register(s *httpserver.Server, mgr Backend, cfg Config, log *slog.Logger) {
 	s.Handle("DELETE /v1/sandboxes/{missionID}", http.HandlerFunc(a.handleRemove))
 	s.Handle("GET /v1/sandboxes", http.HandlerFunc(a.handleList))
 	s.Handle("GET /capacity", http.HandlerFunc(a.handleCapacity))
+	s.Handle("PUT /v1/services/{id}", http.HandlerFunc(a.handleEnsureService))
+	s.Handle("DELETE /v1/services/{id}", http.HandlerFunc(a.handleRemoveService))
+	s.Handle("GET /v1/services", http.HandlerFunc(a.handleListServices))
+}
+
+// handleEnsureService starts or keeps the service with the body's spec
+// (D-159). The env values in the body are never logged or echoed.
+func (a *API) handleEnsureService(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, execBodyLimit)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var spec ServiceSpec
+	if err := dec.Decode(&spec); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON {command, env?, internet?}")
+		return
+	}
+	spec.ID = r.PathValue("id")
+	st, err := a.mgr.EnsureService(r.Context(), spec)
+	if err != nil {
+		a.serviceError(w, "ensure", spec.ID, err)
+		return
+	}
+	a.log.Info("sandbox: service ensured", "service", spec.ID, "state", st.State, "internet", spec.Internet)
+	writeServiceJSON(w, http.StatusOK, st)
+}
+
+func (a *API) handleRemoveService(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := a.mgr.RemoveService(r.Context(), id); err != nil {
+		a.serviceError(w, "remove", id, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) handleListServices(w http.ResponseWriter, r *http.Request) {
+	list, err := a.mgr.ListServices(r.Context())
+	if err != nil {
+		a.serviceError(w, "list", "", err)
+		return
+	}
+	writeServiceJSON(w, http.StatusOK, map[string]any{"services": list})
+}
+
+// serviceError maps a service failure onto its HTTP answer.
+func (a *API) serviceError(w http.ResponseWriter, op, id string, err error) {
+	switch {
+	case errors.Is(err, ErrInvalidService):
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+	case errors.Is(err, ErrServicesUnsupported):
+		jsonError(w, http.StatusNotImplemented, "unsupported", err.Error())
+	case errors.Is(err, ErrForeignContainer):
+		jsonError(w, http.StatusConflict, "conflict", err.Error())
+	default:
+		a.log.Error("sandbox: service "+op+" failed", "service", id, "error", err)
+		jsonError(w, http.StatusInternalServerError, "infra", "service "+op+" failed")
+	}
+}
+
+func writeServiceJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func jsonError(w http.ResponseWriter, status int, code, msg string) {

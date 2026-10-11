@@ -239,6 +239,10 @@ type Docker struct {
 	// at startup by resolveOwner.
 	owner string
 
+	// servicesNetwork is the internal compose network service
+	// containers join (D-159): "<owner>_timothy-services".
+	servicesNetwork string
+
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // per-mission ensureContainer lock
 
@@ -286,7 +290,7 @@ func NewDocker(ctx context.Context, image string, log *slog.Logger) (*Docker, er
 	}
 	owner := resolveOwner(ctx, cli, log)
 	log.Info("sandbox: owner resolved", "owner", owner)
-	return &Docker{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, toolchainsMount: tm, cachesMount: cm, owner: owner, locks: map[string]*sync.Mutex{}}, nil
+	return &Docker{cli: cli, baseImage: image, log: log, workspaceMount: wm, stateMount: sm, toolchainsMount: tm, cachesMount: cm, owner: owner, servicesNetwork: owner + "_" + servicesNetworkKey, locks: map[string]*sync.Mutex{}}, nil
 }
 
 // resolveOwner returns this instance's owner id (D-132): the compose
