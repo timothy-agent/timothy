@@ -86,8 +86,8 @@ type API struct {
 	// missionPerms clears a mission's pending_permission when a prompt
 	// is answered here; nil when missions are disabled.
 	missionPerms missionPermissionRecorder
-	token string
-	log   *slog.Logger
+	token        string
+	log          *slog.Logger
 
 	// flags/rates drive display-currency conversion of chat cost (the
 	// terminal SSE meta event and the transcript replay) — same

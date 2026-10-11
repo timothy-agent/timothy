@@ -35,7 +35,7 @@ type Definition struct {
 // interpolate.go).
 type Step struct {
 	Goal           string   `json:"goal"`
-	Kind           string   `json:"kind"` // coding | general
+	Kind           string   `json:"kind"`            // coding | general
 	Light          bool     `json:"light,omitempty"` // D-069 light mission; general only
 	Route          string   `json:"route,omitempty"`
 	PlanRoute      string   `json:"plan_route,omitempty"`
