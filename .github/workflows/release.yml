@@ -75,7 +75,7 @@ jobs:
           changed '^pdfgen-svc/' && echo "pdfgen=true" >> "$GITHUB_OUTPUT" || echo "pdfgen=false" >> "$GITHUB_OUTPUT"
           changed '^ocr-svc/' && echo "ocr=true" >> "$GITHUB_OUTPUT" || echo "ocr=false" >> "$GITHUB_OUTPUT"
           changed '^whisper-svc/' && echo "whisper=true" >> "$GITHUB_OUTPUT" || echo "whisper=false" >> "$GITHUB_OUTPUT"
-          changed '^deploy/sandbox\.Dockerfile$' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
+          changed '^(deploy/sandbox\.Dockerfile$|cmd/mcp-bridge/|internal/mcpbridge/)' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
 
   # Self-docs for the brain image: capability pages generated from this
   # tag plus the docs repo pages, validated against this release's route
