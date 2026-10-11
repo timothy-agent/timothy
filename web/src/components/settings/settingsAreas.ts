@@ -25,16 +25,6 @@ export const settingsAreas = [
     description: 'Task routes decide which provider chain handles a given job.',
   },
   {
-    key: 'secrets',
-    label: 'Secrets',
-    description: 'Where credentials live: Timothy storage, Vault, or AWS Secrets Manager.',
-  },
-  {
-    key: 'credentials',
-    label: 'Credentials',
-    description: 'API keys and tokens stored for providers and connectors.',
-  },
-  {
     key: 'destinations',
     label: 'Destinations',
     description: 'Where mission results get delivered: email, webhook, channel, GitHub, Bitbucket or GitLab.',
@@ -48,6 +38,16 @@ export const settingsAreas = [
     key: 'features',
     label: 'Features',
     description: 'Feature switches and defaults: changes serve immediately, no restarts.',
+  },
+  {
+    key: 'secrets',
+    label: 'Secrets',
+    description: 'Where credentials live: Timothy storage, Vault, or AWS Secrets Manager.',
+  },
+  {
+    key: 'credentials',
+    label: 'Credentials',
+    description: 'API keys and tokens stored for providers and connectors.',
   },
 ] as const
 

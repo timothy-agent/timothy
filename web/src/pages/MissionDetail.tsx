@@ -1100,6 +1100,8 @@ export function MissionDetail() {
           </Panel>
         )}
 
+        <TimelineSection events={events} />
+
         <ArtifactsSection
           missionId={id}
           missionName={mission.name}
@@ -1107,8 +1109,6 @@ export function MissionDetail() {
           workspace={mission.workspace}
           refs={mission.artifact_refs ?? []}
         />
-
-        <TimelineSection events={events} />
 
       </div>
     </PageShell>
