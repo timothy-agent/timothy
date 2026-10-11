@@ -1,0 +1,27 @@
+{{- if not .Values.secrets.existingSecret }}
+{{/*
+Generated once: the lookup keeps the values an earlier install created,
+so an upgrade never rotates the master key under the encrypted secret
+store. `helm template` has no cluster to look up and renders fresh
+random values; that output must not be applied over a live release.
+*/}}
+{{- $name := include "timothy.secretName" . }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $name }}
+{{- $data := dict }}
+{{- if $existing }}{{ $data = $existing.data }}{{ end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  TIMOTHY_MASTER_KEY: {{ default (randBytes 32 | b64enc) (get $data "TIMOTHY_MASTER_KEY") }}
+  TIMOTHY_API_TOKEN: {{ default (randAlphaNum 48 | b64enc) (get $data "TIMOTHY_API_TOKEN") }}
+  TIMOTHY_METRICS_TOKEN: {{ default (randAlphaNum 32 | b64enc) (get $data "TIMOTHY_METRICS_TOKEN") }}
+  POSTGRES_PASSWORD: {{ default (randAlphaNum 32 | b64enc) (get $data "POSTGRES_PASSWORD") }}
+{{- end }}

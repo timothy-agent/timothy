@@ -1,0 +1,14 @@
+Timothy {{ include "timothy.tag" . }} is installing into {{ .Release.Namespace }}.
+
+Check every service:
+
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Open the UI without an Ingress:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ .Release.Name }}-web 3300:8080
+
+The API token lives in Secret {{ include "timothy.secretName" . }} (key
+TIMOTHY_API_TOKEN). Sandbox pods run in {{ include "timothy.sandboxNamespace" . }}.
+
+Guide: https://timothy-agent.github.io/docs/

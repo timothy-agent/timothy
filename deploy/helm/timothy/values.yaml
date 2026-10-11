@@ -1,0 +1,232 @@
+# Timothy Helm chart values. The Kubernetes deployment guide on the
+# docs site (https://timothy-agent.github.io/docs/) explains each
+# section; this file documents the knobs.
+
+image:
+  # Every Timothy image is <registry>/timothy-<service>:<tag>.
+  registry: ghcr.io/timothy-agent
+  # Empty means the chart's appVersion. One version knob for every
+  # service, as in the Compose file.
+  tag: ""
+  # Timothy images only; third-party images (postgres, searxng) stay
+  # IfNotPresent, their digests pin them.
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Applied to every Go service; sidecars have their own levels.
+logLevel: info
+
+secrets:
+  # Name of a Secret holding TIMOTHY_MASTER_KEY, TIMOTHY_API_TOKEN,
+  # TIMOTHY_METRICS_TOKEN and POSTGRES_PASSWORD (and DATABASE_URL when
+  # postgres.enabled is false). Empty generates one on first install
+  # and keeps it across upgrades. Never put values in this file; use
+  # the Secrets Store CSI driver or External Secrets to populate the
+  # existing Secret.
+  existingSecret: ""
+
+postgres:
+  # In-cluster Postgres with pgvector. false expects DATABASE_URL in
+  # the Secret above (RDS, Cloud SQL, Azure Database).
+  enabled: true
+  image: pgvector/pgvector:0.8.4-pg18-trixie@sha256:dc8631aeee036a59d054c28d29ddb15536caa0c89a96f548fa944774a50af973
+  storage:
+    className: ""
+    size: 10Gi
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+
+storage:
+  workspace:
+    # Shared by brain and every sandbox pod: ReadWriteMany (EFS, Azure
+    # Files, Filestore, any RWX CSI driver). On a single node RWO works.
+    className: ""
+    size: 20Gi
+    accessModes: [ReadWriteMany]
+    # A claim that already exists in the release namespace.
+    existingClaim: ""
+    # Separate sandbox namespace only (sandbox.namespace set): the
+    # claim in that namespace that is bound to the same backing
+    # filesystem. A PVC cannot cross namespaces, so the operator binds
+    # a second PV to the same volume (static provisioning) and names
+    # its claim here.
+    sandboxExistingClaim: ""
+  attachments:
+    className: ""
+    size: 5Gi
+    accessModes: [ReadWriteOnce]
+    existingClaim: ""
+  # Optional sandbox volumes; disabled means the same degraded
+  # behaviour as Compose without them. Mounted by sandbox pods only,
+  # so they live in the sandbox namespace when one is set.
+  executorState:
+    enabled: false
+    className: ""
+    size: 1Gi
+    accessModes: [ReadWriteMany]
+    existingClaim: ""
+  toolchains:
+    enabled: false
+    className: ""
+    size: 20Gi
+    accessModes: [ReadWriteMany]
+    existingClaim: ""
+  caches:
+    enabled: false
+    className: ""
+    size: 20Gi
+    accessModes: [ReadWriteMany]
+    existingClaim: ""
+
+sandbox:
+  # Empty runs sandbox pods in the release namespace (NetworkPolicies
+  # select them by label). A name creates a dedicated namespace with
+  # Pod Security restricted, a ResourceQuota, a LimitRange and its own
+  # policies; it needs storage.workspace.sandboxExistingClaim.
+  namespace: ""
+  image:
+    repository: timothy-sandbox
+    tag: ""
+    digest: ""
+  # gvisor, kata, or empty for the node's default runtime.
+  runtimeClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  ttl: 24h
+  readyTimeout: 10m
+  # Set when the sandbox image lives in a registry sandboxd cannot
+  # probe anonymously.
+  skipImageCheck: false
+  quota:
+    pods: "20"
+    limitsCpu: "40"
+    limitsMemory: 40Gi
+  networkPolicy:
+    enabled: true
+    # Egress allowed from sandbox pods: DNS plus these TCP ports to the
+    # internet. Private ranges and the cloud metadata endpoint are
+    # excluded so a pod cannot reach the platform, the node network or
+    # 169.254.169.254. Tighten further with an egress proxy or FQDN
+    # policy on a CNI that offers one.
+    egressPorts: [443]
+    egressExcept:
+      - 169.254.169.254/32
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+      - 100.64.0.0/10
+
+networkPolicy:
+  # Default deny in the release namespace plus the allow set between
+  # Timothy's own services. Requires a CNI that enforces policies.
+  enabled: true
+  # Namespace and pod labels of the DNS server pods.
+  dns:
+    namespaceSelector: {kubernetes.io/metadata.name: kube-system}
+    podSelector: {k8s-app: kube-dns}
+  # Where web accepts traffic from. Empty allows every source, which
+  # is what an ingress controller in another namespace needs.
+  webIngressFrom: []
+  # CIDRs sandboxd may reach for the Kubernetes API server. Empty
+  # allows TCP 443 and 6443 anywhere.
+  apiServerCIDRs: []
+
+ingress:
+  enabled: false
+  className: ""
+  host: timothy.example.com
+  annotations: {}
+  tls: []
+  # - secretName: timothy-tls
+  #   hosts: [timothy.example.com]
+
+metrics:
+  # prometheus.io scrape annotations on every pod.
+  annotations: true
+
+# Per service. serviceAccount.annotations attaches cloud identity
+# (eks.amazonaws.com/role-arn, iam.gke.io/gcp-service-account,
+# azure.workload.identity/client-id); gateway is the one that needs it
+# for Bedrock auth=ambient.
+brain:
+  image: {repository: timothy-brain, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "2", memory: 2Gi}
+  # Browser-facing base URL for OAuth redirects; empty disables Google
+  # connector OAuth.
+  publicURL: ""
+  missionModelFloor: "qwen2.5:7b,nova"
+  # Extra environment for brain (TURN_TIMEOUT, WORKFLOWS_ENABLED,
+  # MISSION_OSV_OFFLINE and friends).
+  env: {}
+
+gateway:
+  image: {repository: timothy-gateway, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+memoryd:
+  image: {repository: timothy-memoryd, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "1", memory: 1Gi}
+
+sandboxd:
+  image: {repository: timothy-sandboxd, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+
+web:
+  image: {repository: timothy-web, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 500m, memory: 256Mi}
+  # nginx resolves brain's Service name through this resolver at
+  # request time.
+  dnsResolver: kube-dns.kube-system.svc.cluster.local
+
+searxng:
+  image: searxng/searxng@sha256:aaf56bb5ad737d48a8a375778d42eb4ab1757231e6b1eb7980e71d8dd5bdf0de
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {cpu: "1", memory: 512Mi}
+
+markitdown:
+  image: {repository: timothy-markitdown, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "2", memory: 2Gi}
+
+pdfgen:
+  image: {repository: timothy-pdfgen, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "2", memory: 2Gi}
+
+ocr:
+  image: {repository: timothy-ocr, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "2", memory: 2Gi}
+
+whisper:
+  # Off by default: large-v3 holds about 3 GiB resident at idle.
+  enabled: false
+  image: {repository: timothy-whisper, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 500m, memory: 4Gi}
+    limits: {cpu: "2", memory: 6Gi}
