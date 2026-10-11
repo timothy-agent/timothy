@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate manifest selfdocs routes-check up down logs \
-	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke kind-up kind-down kind-sandbox-test
+	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke kind-up kind-down kind-sandbox-test kind-sandbox-smoke
 
 build:
 	$(GO_RUN) go build ./...
@@ -219,16 +219,26 @@ KIND_CLUSTER   ?= timothy
 KIND_TEST_IMAGE ?= debian:bookworm-slim
 kind-up:
 	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --config deploy/kind/cluster.yaml --name $(KIND_CLUSTER) --wait 120s
+	kubectl --context kind-$(KIND_CLUSTER) apply -f deploy/kind/sandbox.yaml
 	docker image inspect $(KIND_TEST_IMAGE) >/dev/null 2>&1 || docker pull $(KIND_TEST_IMAGE)
 	kind load docker-image $(KIND_TEST_IMAGE) --name $(KIND_CLUSTER)
+	@if docker image inspect $(SANDBOX_IMAGE) >/dev/null 2>&1; then kind load docker-image $(SANDBOX_IMAGE) --name $(KIND_CLUSTER); \
+	else echo "kind-up: $(SANDBOX_IMAGE) not built; run make sandbox-image before make kind-sandbox-smoke"; fi
 
 kind-down:
 	kind delete cluster --name $(KIND_CLUSTER)
 
 kind-sandbox-test:
+	mkdir -p build
 	kind get kubeconfig --name $(KIND_CLUSTER) --internal > build/kind-kubeconfig
 	docker run --rm -v $(CURDIR):/src -w /src \
 		-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
 		-e GOFLAGS=-buildvcs=false --network kind \
 		-e KUBECONFIG=/src/build/kind-kubeconfig -e SANDBOXD_K8S_TEST_IMAGE=$(KIND_TEST_IMAGE) \
 		$(GO_IMAGE) go test -race -count=1 -tags integration -v -run TestKubernetesLifecycle ./internal/sandboxd/
+
+# End to end: the local stack's sandboxd on the kubernetes backend, a
+# coding mission through brain, assertions on the sandbox namespace.
+# Needs kind-up, the stack up and `make sandbox-image`.
+kind-sandbox-smoke:
+	./scripts/kind-sandbox-smoke.sh
