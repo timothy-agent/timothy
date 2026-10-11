@@ -406,7 +406,16 @@ func repoExists(ctx context.Context, c gitprovider.Client, ref gitprovider.RepoR
 // cfg.CreateIfMissing, create a repo named after the mission's goal/id,
 // (d) else fail. On success e is updated in place with the final
 // RepoURL/Branch/RemoteHost, and PRURL/PRNumber when a PR was opened.
-func (a *RepoAdapter) DeliverMission(ctx context.Context, cfg RepoDestinationConfig, m missions.Mission, e *missions.DestinationEntry) error {
+// A failed delivery leaves e.RepoURL as it was: the caller persists the
+// entry, and a resolved target pinned by a failed attempt would be reused
+// by every retry.
+func (a *RepoAdapter) DeliverMission(ctx context.Context, cfg RepoDestinationConfig, m missions.Mission, e *missions.DestinationEntry) (retErr error) {
+	origRepoURL := e.RepoURL
+	defer func() {
+		if retErr != nil {
+			e.RepoURL = origRepoURL
+		}
+	}()
 	if reason := missions.NotPushable(m); reason != "" {
 		return fmt.Errorf("deliver: %s", reason)
 	}

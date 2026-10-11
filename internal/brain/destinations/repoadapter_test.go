@@ -678,6 +678,24 @@ func TestDeliverMissionRepoResolution(t *testing.T) {
 		}
 	})
 
+	t.Run("failed delivery does not pin the resolved repo on the entry", func(t *testing.T) {
+		t.Parallel()
+		m := pushableMission(t)
+		m.Sources = nil
+		m.Goal = "fix the thing"
+		p := &fakePusher{err: errors.New("push rejected")}
+		c := githubClient(&fakeGitClient{newCloneURL: "https://github.com/octo/fix-the-thing.git"})
+		a := &RepoAdapter{Pusher: p, Events: &fakeEvents{}, ResolveToken: resolveToken, Clients: clients(c)}
+		e := &missions.DestinationEntry{}
+
+		if err := a.DeliverMission(t.Context(), RepoDestinationConfig{ConnectorID: "conn1", Mode: "push", CreateIfMissing: true}, m, e); err == nil {
+			t.Fatal("DeliverMission with a rejected push: want an error, got nil")
+		}
+		if e.RepoURL != "" {
+			t.Fatalf("RepoURL = %q after a failed delivery, want it left empty so a retry re-resolves", e.RepoURL)
+		}
+	})
+
 	t.Run("d: no repo and create_if_missing off fails", func(t *testing.T) {
 		t.Parallel()
 		m := pushableMission(t)
