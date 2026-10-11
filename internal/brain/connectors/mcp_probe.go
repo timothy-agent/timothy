@@ -55,6 +55,9 @@ type ProbeResult struct {
 	Tools     []ProbeTool `json:"tools"`
 	ToolCount int         `json:"tool_count"`
 	Message   string      `json:"message,omitempty"`
+	// Hash fingerprints the server's full tool list (fingerprintTools);
+	// the mission read gate compares it with the live source (D-157).
+	Hash string `json:"hash,omitempty"`
 }
 
 // MCPLastProbe is config.last_probe on an mcp connector (issue #1191):
@@ -64,7 +67,16 @@ type ProbeResult struct {
 type MCPLastProbe struct {
 	At        time.Time       `json:"at"`
 	ToolCount int             `json:"tool_count"`
+	Hash      string          `json:"hash,omitempty"`
 	Tools     []MCPProbedTool `json:"tools"`
+}
+
+// MCPMissionReads is config.mission_reads on an mcp connector (D-157,
+// issue #1205): the raw tool names the operator marked as safe for
+// missions to read, valid only while Hash matches the live server.
+type MCPMissionReads struct {
+	Hash  string   `json:"hash"`
+	Tools []string `json:"tools"`
 }
 
 // MCPProbedTool is one stored tool: enough for the page's table, no
@@ -88,7 +100,7 @@ func LastProbeOf(c Connector) MCPLastProbe {
 
 // Record is the stored form of a successful probe.
 func (r ProbeResult) Record(at time.Time) MCPLastProbe {
-	rec := MCPLastProbe{At: at, ToolCount: r.ToolCount, Tools: make([]MCPProbedTool, 0, len(r.Tools))}
+	rec := MCPLastProbe{At: at, ToolCount: r.ToolCount, Hash: r.Hash, Tools: make([]MCPProbedTool, 0, len(r.Tools))}
 	for _, t := range r.Tools {
 		rec.Tools = append(rec.Tools, MCPProbedTool{Name: t.Name, FinalName: t.FinalName, ReadOnlyHint: t.ReadOnlyHint})
 	}
@@ -246,18 +258,21 @@ func probeSource(ctx context.Context, client *http.Client, src *mcpSource) Probe
 	}
 
 	res := ProbeResult{Status: ProbeOK, Server: initRes.ServerInfo, Tools: []ProbeTool{}}
+	var fp []fpTool
 	for _, t := range listRes.Tools {
 		// Same reservation as connect: the connector would never serve it.
 		if t.Name == LoadToolName {
 			continue
 		}
-		res.ToolCount++
-		if len(res.Tools) >= ProbeToolCap {
-			continue
-		}
 		schema := t.InputSchema
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object"}`)
+		}
+		// The fingerprint sees what connect sees: every tool, raw.
+		fp = append(fp, fpTool{name: t.Name, desc: t.Description, schema: schema})
+		res.ToolCount++
+		if len(res.Tools) >= ProbeToolCap {
+			continue
 		}
 		res.Tools = append(res.Tools, ProbeTool{
 			Name:         t.Name,
@@ -266,6 +281,7 @@ func probeSource(ctx context.Context, client *http.Client, src *mcpSource) Probe
 			InputSchema:  schema,
 		})
 	}
+	res.Hash = fingerprintTools(fp)
 	return res
 }
 

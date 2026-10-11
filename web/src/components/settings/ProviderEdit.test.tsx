@@ -126,6 +126,7 @@ describe('buildPatch', () => {
       reasoningDisabled: false,
       request_timeout: '',
       region: 'us-east-1',
+      auth: 'static',
       litellm_provider: '',
       default_model: 'qwen3',
     })
@@ -144,6 +145,7 @@ describe('buildPatch', () => {
       reasoningDisabled: true,
       request_timeout: '',
       region: 'us-east-1',
+      auth: 'static',
       litellm_provider: '',
       default_model: 'qwen3',
     })
@@ -157,6 +159,7 @@ describe('buildPatch', () => {
       reasoningDisabled: false,
       request_timeout: '20m',
       region: 'us-east-1',
+      auth: 'static',
       litellm_provider: '',
       default_model: 'qwen3',
     })
@@ -170,9 +173,43 @@ describe('buildPatch', () => {
       reasoningDisabled: false,
       request_timeout: '',
       region: 'eu-west-1',
+      auth: 'static',
       litellm_provider: '',
       default_model: '',
     })
+    expect(patch.options).toEqual({ region: 'eu-west-1' })
+  })
+
+  it('cloud identity sets options.auth and clears the credential reference', () => {
+    const patch = buildPatch(bedrockProviderWithRef, {
+      name: 'AWS Bedrock',
+      credential_ref: 'BEDROCK_KEY',
+      reasoningDisabled: false,
+      request_timeout: '',
+      region: 'eu-west-1',
+      auth: 'ambient',
+      litellm_provider: '',
+      default_model: '',
+    })
+    expect(patch.credential_ref).toBe('')
+    expect(patch.options).toEqual({ region: 'eu-west-1', auth: 'ambient' })
+  })
+
+  it('switching an ambient row back to access keys drops options.auth', () => {
+    const patch = buildPatch(
+      { ...bedrockProvider, options: { region: 'eu-west-1', auth: 'ambient' } },
+      {
+        name: 'AWS Bedrock',
+        credential_ref: 'BEDROCK_KEY',
+        reasoningDisabled: false,
+        request_timeout: '',
+        region: 'eu-west-1',
+        auth: 'static',
+        litellm_provider: '',
+        default_model: '',
+      },
+    )
+    expect(patch.credential_ref).toBe('BEDROCK_KEY')
     expect(patch.options).toEqual({ region: 'eu-west-1' })
   })
 
@@ -183,6 +220,7 @@ describe('buildPatch', () => {
       reasoningDisabled: false,
       request_timeout: '',
       region: 'eu-west-1',
+      auth: 'static',
       litellm_provider: '',
       default_model: 'qwen3',
     })
@@ -196,6 +234,7 @@ describe('buildPatch', () => {
       reasoningDisabled: false,
       request_timeout: '',
       region: 'us-east-1',
+      auth: 'static',
       litellm_provider: 'xai',
       default_model: 'qwen3',
     })
@@ -211,6 +250,7 @@ describe('buildPatch', () => {
         reasoningDisabled: false,
         request_timeout: '',
         region: 'us-east-1',
+        auth: 'static',
         litellm_provider: '',
         default_model: 'qwen3',
       },
@@ -227,6 +267,7 @@ describe('buildPatch', () => {
         reasoningDisabled: false,
         request_timeout: '',
         region: 'us-east-1',
+        auth: 'static',
         litellm_provider: '',
         default_model: 'qwen3',
       },
@@ -244,6 +285,7 @@ describe('buildPatch', () => {
         reasoningDisabled: false,
         request_timeout: '',
         region: 'us-east-1',
+        auth: 'static',
         litellm_provider: '',
         default_model: 'qwen3',
       },
@@ -779,6 +821,48 @@ describe('ProviderEdit reasoning field', () => {
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     expect(patchProvider).not.toHaveBeenCalled()
+  })
+})
+
+describe('ProviderEdit authentication field', () => {
+  it('omits the field for non-bedrock drivers', async () => {
+    vi.mocked(listProviders).mockResolvedValue([openaicompatProvider])
+    renderPage('p2')
+
+    await screen.findByDisplayValue('Ollama')
+    expect(screen.queryByRole('combobox', { name: 'Authentication' })).toBeNull()
+  })
+
+  it('shows cloud identity for an ambient row and hides the credential reference and key panel', async () => {
+    vi.mocked(listProviders).mockResolvedValue([{ ...bedrockProvider, options: { region: 'eu-west-1', auth: 'ambient' } }])
+    renderPage('p1')
+
+    expect(await screen.findByRole('combobox', { name: 'Authentication' })).toHaveTextContent('Cloud identity')
+    expect(screen.queryByText('Credential reference')).toBeNull()
+    expect(screen.queryByText('AWS credentials')).toBeNull()
+    expect(screen.queryByPlaceholderText('AKIA…')).toBeNull()
+  })
+
+  it('switching a static row to cloud identity hides the key panel and saves an ambient patch', async () => {
+    vi.mocked(listProviders).mockResolvedValue([bedrockProviderWithRef])
+    vi.mocked(patchProvider).mockResolvedValue()
+    renderPage('p1')
+
+    expect(await screen.findByRole('combobox', { name: 'Authentication' })).toHaveTextContent('Access keys')
+    expect(screen.getByText('AWS credentials')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Authentication' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'Cloud identity' }))
+
+    expect(screen.queryByText('AWS credentials')).toBeNull()
+    expect(screen.queryByText('Credential reference')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(patchProvider).toHaveBeenCalled())
+    expect(vi.mocked(patchProvider).mock.calls[0][1]).toMatchObject({
+      credential_ref: '',
+      options: { region: 'us-east-1', auth: 'ambient' },
+    })
   })
 })
 

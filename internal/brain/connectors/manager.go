@@ -166,14 +166,16 @@ func (m *Manager) Tools(reserved map[string]bool) []*tools.Tool {
 	return aggregateTools(m.sources, false, reserved)
 }
 
-// ReadOnlyTools returns the aggregated ReadOnly-marked non-MCP tool
-// surface, for mission turns, which must see connector reads (mail
-// search, calendar list) despite BuiltinsOnly but never connector
-// writes (see missions.nativeRunner's connector reads resolver). MCP
-// sources are excluded unconditionally, marker or not: a remote MCP
-// server's tool can change behavior between builds, and nothing here
-// can verify a "read-only" claim actually holds, unlike google/
-// microsoft's tool constructors, which are Timothy's own code.
+// ReadOnlyTools returns the aggregated ReadOnly-marked tool surface,
+// for mission turns, which must see connector reads (mail search,
+// calendar list) despite BuiltinsOnly but never connector writes (see
+// missions.nativeRunner's connector reads resolver). An MCP tool is
+// included only through the operator's mission_reads mark and only
+// while the server's tool list still matches the reviewed fingerprint
+// (D-157, issue #1205): a remote server's tool can change behavior
+// between builds, and nothing here can verify a "read-only" claim
+// actually holds, unlike google/microsoft's tool constructors, which
+// are Timothy's own code.
 func (m *Manager) ReadOnlyTools() []*tools.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -377,26 +379,17 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 	merged, split := groupByRawName(sources, reserved)
 
 	if readOnlyOnly {
-		// MCP never contributes to ReadOnlyTools, merged or not: a
-		// remote server's ReadOnly claim can't be verified, unlike
-		// google/microsoft's tool constructors (Timothy's own code).
-		// Strip MCP accounts out of each merged group rather than
-		// trusting groupByRawName's ordinary merge/split split, which
-		// answers a different question (does this name unify safely),
-		// not this one (is this account's claim trustworthy).
-		filtered := map[string][]toolAccount{}
-		for name, accounts := range merged {
-			var kept []toolAccount
-			for _, a := range accounts {
-				if _, isMCP := sources[a.connector].(*mcpSource); !isMCP {
-					kept = append(kept, a)
-				}
-			}
-			if len(kept) > 0 {
-				filtered[name] = kept
-			}
-		}
-		merged = filtered
+		// D-157 (issue #1205): an MCP account joins the read-only
+		// surface only through the operator's mission_reads mark, and
+		// only while the server still serves the tool list that mark
+		// was reviewed against. A remote server's own ReadOnly claim
+		// can't be verified, unlike google/microsoft's tool
+		// constructors (Timothy's own code), so it never counts. The
+		// mark is applied here rather than trusting groupByRawName's
+		// merge/split split, which answers a different question (does
+		// this name unify safely), not this one (may a mission call it).
+		merged = missionReadAccounts(sources, merged)
+		split = missionReadAccounts(sources, split)
 	}
 
 	order := make([]string, 0, len(merged))
@@ -414,10 +407,6 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 		}
 		out = append(out, agg)
 	}
-	if readOnlyOnly {
-		return out
-	}
-
 	splitNames := make([]string, 0, len(split))
 	for name := range split {
 		splitNames = append(splitNames, name)
@@ -429,6 +418,11 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 		byConnector := map[string][]*tools.Tool{}
 		var connectorOrder []string
 		for _, a := range accounts {
+			// Namespaced tools skip aggregateTool, so the read-only
+			// rule applies per tool here.
+			if readOnlyOnly && !a.tool.ReadOnly {
+				continue
+			}
 			if _, seen := byConnector[a.connector]; !seen {
 				connectorOrder = append(connectorOrder, a.connector)
 			}
@@ -436,6 +430,33 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 		}
 		for _, connector := range connectorOrder {
 			out = append(out, namespacedTools(connector, byConnector[connector])...)
+		}
+	}
+	return out
+}
+
+// missionReadAccounts keeps, per raw name, every non-MCP account and
+// each MCP account whose source passes missionReadOK, the latter with
+// its tool copied as ReadOnly so aggregateTool's all-accounts rule and
+// the namespaced path treat the operator's mark like a native
+// ReadOnly constructor (D-157).
+func missionReadAccounts(sources map[string]Source, groups map[string][]toolAccount) map[string][]toolAccount {
+	out := map[string][]toolAccount{}
+	for name, accounts := range groups {
+		var kept []toolAccount
+		for _, a := range accounts {
+			if ms, isMCP := sources[a.connector].(*mcpSource); isMCP {
+				if !ms.missionReadOK(name) {
+					continue
+				}
+				marked := *a.tool
+				marked.ReadOnly = true
+				a.tool = &marked
+			}
+			kept = append(kept, a)
+		}
+		if len(kept) > 0 {
+			out[name] = kept
 		}
 	}
 	return out

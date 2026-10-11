@@ -3,6 +3,7 @@ package connectors
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -379,5 +380,85 @@ func TestAccountConnectorLeavesNamespacedMCPToolUnresolved(t *testing.T) {
 	}
 	if got := m.AccountConnector("internal-crm_lookup_customer", nil); got != "" {
 		t.Fatalf("AccountConnector(namespaced name) = %q, want empty (never exposed under that name here)", got)
+	}
+}
+
+// mcpReadSource is an mcp source as the mission read gate sees it: a
+// tool list with its fingerprint plus the operator's mission_reads.
+func mcpReadSource(name, fingerprint string, reads *MCPMissionReads, ts ...*tools.Tool) *mcpSource {
+	return &mcpSource{name: name, cfg: mcpConfig{MissionReads: reads}, fingerprint: fingerprint, toolList: ts}
+}
+
+func mcpTool(name string, schema string) *tools.Tool {
+	return &tools.Tool{Name: name, Description: "remote " + name, InputSchema: json.RawMessage(schema), Execute: func(context.Context, json.RawMessage) (string, error) { return "ran " + name, nil }}
+}
+
+func readOnlyNames(m *Manager) []string {
+	var names []string
+	for _, t := range m.ReadOnlyTools() {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+// TestReadOnlyToolsMCPMissionReads pins D-157: an MCP tool reaches
+// missions only through the operator's mark, only while the server's
+// list matches the reviewed fingerprint, and never through the
+// server's own read-only claim.
+func TestReadOnlyToolsMCPMissionReads(t *testing.T) {
+	t.Parallel()
+	const schema = `{"type":"object","properties":{"q":{"type":"string"}}}`
+	cases := []struct {
+		name  string
+		reads *MCPMissionReads
+		fp    string
+		want  []string
+	}{
+		{name: "no review keeps the connector chat-only", reads: nil, fp: "h1"},
+		{name: "marked tools pass while the fingerprint matches", reads: &MCPMissionReads{Hash: "h1", Tools: []string{"search"}}, fp: "h1", want: []string{"search"}},
+		{name: "a changed server drops every mark", reads: &MCPMissionReads{Hash: "h1", Tools: []string{"search", "write"}}, fp: "h2"},
+		{name: "an empty hash never matches", reads: &MCPMissionReads{Hash: "", Tools: []string{"search"}}, fp: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := testManager(fakeRows{})
+			search := mcpTool("search", schema)
+			search.ReadOnly = true // the server's claim must not count
+			m.sources = map[string]Source{"notion": mcpReadSource("notion", tc.fp, tc.reads, search, mcpTool("write", schema))}
+			if got := readOnlyNames(m); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Fatalf("ReadOnlyTools = %v, want %v", got, tc.want)
+			}
+			for _, tl := range m.ReadOnlyTools() {
+				if !tl.ReadOnly {
+					t.Fatalf("%s offered to missions without ReadOnly", tl.Name)
+				}
+			}
+			// Chat still sees everything either way.
+			if chat := m.Tools(nil); len(chat) != 2 {
+				t.Fatalf("chat surface = %d tools, want 2", len(chat))
+			}
+		})
+	}
+}
+
+// TestReadOnlyToolsMCPMissionReadsNamespaced covers the split path: a
+// marked tool that stays namespaced is offered under that name, and an
+// unmarked one is not, while merged native accounts are untouched.
+func TestReadOnlyToolsMCPMissionReadsNamespaced(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{})
+	m.sources = map[string]Source{
+		"gmail":  &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("gmail", true)}}, kind: "google"},
+		"notion": mcpReadSource("notion", "h1", &MCPMissionReads{Hash: "h1", Tools: []string{"search_mail"}}, mcpTool("search_mail", `{"type":"object","properties":{"text":{"type":"string"}}}`)),
+		"linear": mcpReadSource("linear", "h1", nil, mcpTool("search_mail", `{"type":"object","properties":{"text":{"type":"string"}}}`)),
+	}
+	got := readOnlyNames(m)
+	if fmt.Sprint(got) != fmt.Sprint([]string{"search_mail", "notion_search_mail"}) {
+		t.Fatalf("ReadOnlyTools = %v", got)
+	}
+	out, err := toolNamed(t, m.ReadOnlyTools(), "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"x"}`))
+	if err != nil || out != "ran on gmail" {
+		t.Fatalf("native aggregate = (%q, %v)", out, err)
 	}
 }

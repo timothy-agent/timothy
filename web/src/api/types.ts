@@ -548,6 +548,7 @@ export interface AdminProvider {
     reasoning_effort?: string
     request_timeout?: string
     region?: string
+    auth?: string
     anthropic_base_url?: string
     litellm_provider?: string
   }
@@ -1377,6 +1378,8 @@ export interface ConnectorProbe {
   tool_count: number
   index_threshold: number
   message?: string
+  // Fingerprint of the server's full tool list.
+  hash?: string
   // Re-probe only: tool names that appeared or disappeared since the
   // connector's stored record.
   added?: string[]
@@ -1396,7 +1399,18 @@ export interface MCPProbedTool {
 export interface MCPLastProbe {
   at: string
   tool_count: number
+  // Fingerprint of the server's full tool list; mission_reads is valid
+  // only while it matches the live server.
+  hash?: string
   tools: MCPProbedTool[]
+}
+
+// MCPMissionReads is config.mission_reads on an mcp connector: the raw
+// tool names the operator marked as safe for missions to read, bound
+// to the tool list fingerprint they were reviewed against.
+export interface MCPMissionReads {
+  hash: string
+  tools: string[]
 }
 
 // GitHubIdentity is what a github-kind connector's test resolves:
