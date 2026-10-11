@@ -295,7 +295,7 @@ func truncateRunes(s string, n int) string {
 
 // ProbeFinalNames predicts the allowlist name each probed tool would
 // get if the connector were saved under name with provider (empty
-// falls back to name, D-158): "<provider>_<tool>" when it merges with
+// falls back to name, D-160): "<provider>_<tool>" when it merges with
 // the live sources, "<name>_<provider>_<tool>" when a same-provider
 // connector serves it with another schema, and the loaded-tool form
 // when the server's full tool count crosses threshold and the tools
@@ -357,7 +357,7 @@ func (m *Manager) ProbeFinalNames(name, provider string, res ProbeResult, surfac
 }
 
 // MCPProvider is the provider prefix a saved mcp connector's tools
-// carry (D-158): config.provider, or the connector name.
+// carry (D-160): config.provider, or the connector name.
 func MCPProvider(c Connector) string {
 	var cfg struct {
 		Provider string `json:"provider"`

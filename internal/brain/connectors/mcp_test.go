@@ -278,7 +278,7 @@ func TestMCPStatusErrorNeverLeaksRawJSON(t *testing.T) {
 	}
 }
 
-// TestManagerPrefixesMCPToolsWithProvider pins D-158: every MCP tool
+// TestManagerPrefixesMCPToolsWithProvider pins D-160: every MCP tool
 // carries its provider prefix, the connector name when config sets no
 // provider, so its name never depends on what else is connected.
 func TestManagerPrefixesMCPToolsWithProvider(t *testing.T) {
@@ -559,7 +559,7 @@ func toolDefs(ts []*tools.Tool) []provider.ToolDef {
 
 // TestMCPBuilderProviderPrefix pins that config.provider reaches the
 // built source: every tool, including one loaded through load_tool,
-// carries it (D-158).
+// carries it (D-160).
 func TestMCPBuilderProviderPrefix(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer((&fakeMCP{}).handler())

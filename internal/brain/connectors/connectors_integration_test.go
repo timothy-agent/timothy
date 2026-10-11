@@ -259,7 +259,7 @@ func TestConnectorSetLastProbe(t *testing.T) {
 	}
 }
 
-// TestManagerReloadMergesSameProviderAccounts runs D-158 through the
+// TestManagerReloadMergesSameProviderAccounts runs D-160 through the
 // real store, builder and reload path: two connectors of one provider
 // against one server share provider-prefixed tools with an account
 // argument naming both.

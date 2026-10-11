@@ -80,7 +80,7 @@ type probeRequest struct {
 type probeResponse struct {
 	connectors.ProbeResult
 	IndexThreshold int `json:"index_threshold"`
-	// Provider is the tool name prefix the final names use (D-158):
+	// Provider is the tool name prefix the final names use (D-160):
 	// the request's, the saved connector's, or one derived from the
 	// server's own name.
 	Provider string   `json:"provider,omitempty"`
