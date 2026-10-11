@@ -180,7 +180,9 @@ func PRBody(m missions.Mission, attribution bool) string {
 	var body string
 	// D-134/D-152: final_output carries the summary (and any report the
 	// goal asked for); model text, so neutralized like a prompt slot.
-	if summary := missions.NeutralizeSlot(strings.TrimSpace(m.FinalOutput)); summary != "" {
+	// D-153: a valid title line is the PR title, not part of the summary.
+	_, output, _ := missions.PRTitleFromOutput(m.FinalOutput)
+	if summary := missions.NeutralizeSlot(strings.TrimSpace(output)); summary != "" {
 		if r := []rune(summary); len(r) > prSummaryCap {
 			summary = string(r[:prSummaryCap]) + "\n\n_(summary truncated)_"
 		}
@@ -245,9 +247,13 @@ func (a *RepoAdapter) openPRFor(ctx context.Context, c gitprovider.Client, m mis
 	if repo.DefaultBranch == "" {
 		return "", 0, fmt.Errorf("pr: repo has no default branch")
 	}
+	title, _, ok := missions.PRTitleFromOutput(m.FinalOutput)
+	if !ok {
+		title = missions.ConventionalPRTitle(m)
+	}
 	pr, err := c.CreatePR(ctx, gitprovider.PRSpec{
 		Repo:  ref,
-		Title: missions.ConventionalPRTitle(m),
+		Title: title,
 		Head:  m.Branch,
 		Base:  repo.DefaultBranch,
 		Body:  PRBody(m, a.attribution(ctx)),
