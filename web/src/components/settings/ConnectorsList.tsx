@@ -68,14 +68,12 @@ export function ConnectorsList() {
 
         <section className="space-y-4">
           <SectionHeader title={connectors.length > 0 ? `Your connectors · ${connectors.length}` : 'Your connectors'} />
-          <p className="-mt-2 max-w-2xl text-sm text-muted-foreground">
-            Integrations the agent can use as tools. A tool appears to the model once per capability
-            (e.g. <span className="font-mono text-xs">search_mail</span>) with an{' '}
-            <span className="font-mono text-xs">account</span> argument routing to the right
-            connector when more than one serves it; a name that would otherwise collide (with a
-            built-in tool, or across two MCP servers with different schemas) keeps its{' '}
-            <span className="font-mono text-xs">name_tool</span> form instead. Either way, tool
-            calls go through the same permission prompts as everything else.
+          <p className="-mt-2 text-sm text-muted-foreground">
+            Services the agent can call as tools. One tool per capability, such as{' '}
+            <span className="font-mono text-xs">search_mail</span>, with an{' '}
+            <span className="font-mono text-xs">account</span> argument when several connectors serve
+            it. Clashing names keep a connector prefix. Every call goes through the usual permission
+            prompts.
           </p>
           {connectors.length === 0 ? (
             <EmptyState

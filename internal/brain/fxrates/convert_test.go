@@ -24,7 +24,7 @@ func TestConvert(t *testing.T) {
 		wantOK     bool
 	}{
 		{
-			name: "same currency short-circuits without a rate table",
+			name:   "same currency short-circuits without a rate table",
 			amount: 42, from: "EUR", to: "EUR", rates: nil,
 			wantResult: 42, wantOK: true,
 		},

@@ -1345,6 +1345,60 @@ export interface ConnectorTestResult {
   load_tool?: string
 }
 
+// ConnectorProbeRequest is POST /v1/admin/connectors/probe's body. name
+// is the proposed connector name the final tool names are computed for.
+// connector_id probes a saved connector with its stored credential
+// instead; the other fields are then ignored.
+export interface ConnectorProbeRequest {
+  name?: string
+  endpoint?: string
+  headers?: Record<string, string>
+  token?: string
+  connector_id?: string
+}
+
+// ConnectorProbeTool is one previewed tool. read_only_hint is the
+// server's own unverified annotation; final_name is the allowlist name
+// it would get under the proposed connector name.
+export interface ConnectorProbeTool {
+  name: string
+  final_name?: string
+  description: string
+  read_only_hint: boolean | null
+  input_schema: Record<string, unknown>
+}
+
+// ConnectorProbe is the probe's answer. tools is capped; tool_count is
+// the server's full count, compared against index_threshold.
+export interface ConnectorProbe {
+  status: 'ok' | 'needs_token' | 'needs_oauth' | 'unreachable' | 'error'
+  server: { name: string; version: string }
+  tools: ConnectorProbeTool[]
+  tool_count: number
+  index_threshold: number
+  message?: string
+  // Re-probe only: tool names that appeared or disappeared since the
+  // connector's stored record.
+  added?: string[]
+  removed?: string[]
+}
+
+// MCPProbedTool is one tool as config.last_probe stores it.
+export interface MCPProbedTool {
+  name: string
+  final_name?: string
+  read_only_hint: boolean | null
+}
+
+// MCPLastProbe is config.last_probe on an mcp connector: the tools the
+// last successful probe listed. tools is capped; tool_count is the
+// server's full count.
+export interface MCPLastProbe {
+  at: string
+  tool_count: number
+  tools: MCPProbedTool[]
+}
+
 // GitHubIdentity is what a github-kind connector's test resolves:
 // which account its PAT authenticates as.
 export interface GitHubIdentity {

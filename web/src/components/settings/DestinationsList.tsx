@@ -63,9 +63,9 @@ export function DestinationsList() {
       <div className="space-y-10">
         <section className="space-y-4">
           <SectionHeader title={destinations.length > 0 ? `Your destinations · ${destinations.length}` : 'Your destinations'} />
-          <p className="-mt-2 max-w-2xl text-sm text-muted-foreground">
-            Where mission results go. Attach one or more to a mission and its outcome digest
-            delivers there once it finishes.
+          <p className="-mt-2 text-sm text-muted-foreground">
+            Where mission results go. Attach one or more to a mission and the outcome digest is delivered
+            there when it finishes.
           </p>
           {destinations.length === 0 ? (
             <EmptyState

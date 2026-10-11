@@ -62,6 +62,10 @@ type ProviderRow struct {
 	// region, overridden per-key by the secret JSON's own "region" field
 	// (D-047) when set. Ignored by every other driver.
 	Region string
+	// Auth comes from options.auth (D-156) — the bedrock driver's
+	// credential source; "ambient" rows need no credential_ref. Ignored
+	// by every other driver.
+	Auth string
 	// AnthropicBaseURL comes from options.anthropic_base_url (D-051) — the
 	// URL a claude-cli harness entry injects into the spawned CLI's
 	// environment when this row's own driver isn't already "anthropic"
@@ -297,7 +301,8 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 		// credential_ref names an env var for API-key drivers; bedrock now
 		// requires the same ref to resolve in the secret store as static
 		// keys (D-047, profile/SSO mode removed) — so an unresolved ref
-		// marks every driver unhealthy alike.
+		// marks every driver unhealthy alike. An ambient bedrock row
+		// (D-156) carries no ref by design and is judged by Build below.
 		case row.CredentialRef != "" && lookup(row.CredentialRef) == "":
 			s.unhealthy[row.Name] = fmt.Sprintf("credential %s unresolved", row.CredentialRef)
 		default:
@@ -326,6 +331,7 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 			CredentialRef:   row.CredentialRef,
 			Headers:         row.Headers,
 			Region:          row.Region,
+			Auth:            row.Auth,
 			ReasoningEffort: row.ReasoningEffort,
 			Timeout:         row.Timeout,
 		}}, lookup)

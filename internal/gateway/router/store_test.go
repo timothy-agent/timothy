@@ -192,3 +192,14 @@ func TestApplyProviderOptionsPricesByModel(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyProviderOptionsAuth(t *testing.T) {
+	t.Parallel()
+	var row ProviderRow
+	if err := applyProviderOptions(&row, []byte(`{"auth": "ambient", "region": "eu-central-1"}`)); err != nil {
+		t.Fatalf("applyProviderOptions: %v", err)
+	}
+	if row.Auth != "ambient" || row.Region != "eu-central-1" {
+		t.Fatalf("Auth=%q Region=%q", row.Auth, row.Region)
+	}
+}

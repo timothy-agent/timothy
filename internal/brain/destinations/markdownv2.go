@@ -209,7 +209,7 @@ func renderList(n *ast.List, src []byte) string {
 		content := strings.Join(parts, "\n")
 		var prefix string
 		if ordered {
-			prefix = escapeMarkdownV2(itoa(num) + ".") + " "
+			prefix = escapeMarkdownV2(itoa(num)+".") + " "
 			num++
 		} else {
 			prefix = escapeMarkdownV2("-") + " "

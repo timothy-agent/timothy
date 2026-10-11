@@ -69,12 +69,12 @@ func distillOnce(ctx context.Context, gw Gateway, sessionID, turnText, route str
 	defer cancel()
 
 	events, err := gw.Stream(ctx, gwclient.StreamRequest{
-		Route:        route,
-		Purpose:      "distill",
-		System:       distillSystem,
-		Messages:     []provider.Message{{Role: "user", Content: turnText}},
-		MaxTokens:    1500,
-		SessionID:    sessionID,
+		Route:     route,
+		Purpose:   "distill",
+		System:    distillSystem,
+		Messages:  []provider.Message{{Role: "user", Content: turnText}},
+		MaxTokens: 1500,
+		SessionID: sessionID,
 	})
 	if err != nil {
 		return nil, err
