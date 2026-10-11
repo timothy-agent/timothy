@@ -125,7 +125,7 @@ type Config struct {
 
 // API serves sandboxd's routes.
 type API struct {
-	mgr *Manager
+	mgr Backend
 	log *slog.Logger
 
 	execSem       chan struct{}
@@ -133,7 +133,7 @@ type API struct {
 }
 
 // Register mounts sandboxd's routes on the shared server.
-func Register(s *httpserver.Server, mgr *Manager, cfg Config, log *slog.Logger) {
+func Register(s *httpserver.Server, mgr Backend, cfg Config, log *slog.Logger) {
 	maxExecs := cfg.MaxExecs
 	if maxExecs <= 0 {
 		maxExecs = defaultMaxExecs
@@ -169,7 +169,7 @@ func validMissionID(id string) bool {
 
 // validWorkdir accepts only an absolute, clean path under /workspace.
 // Since D-107 the mission-vs-mission boundary is the container's own
-// mount (Manager.missionMount scopes it to the mission's workspace
+// mount (Docker.missionMount scopes it to the mission's workspace
 // directory and rejects a workdir naming another mission's), so this
 // stays the shape check it always was.
 func validWorkdir(w string) bool {
@@ -294,7 +294,7 @@ func (a *API) liveContainers(ctx context.Context) (int, error) {
 	return len(ids), nil
 }
 
-// sseOutputWriter adapts Manager.Exec's io.Writer contract (arbitrary
+// sseOutputWriter adapts Docker.Exec's io.Writer contract (arbitrary
 // binary chunks) onto the SSE wire format: one `event: output` /
 // `data: <base64>` per Write, flushed immediately so the client sees
 // output as it happens, refreshing the write deadline each time so a
@@ -328,7 +328,7 @@ func writeEvent(w http.ResponseWriter, flusher http.Flusher, event string, paylo
 
 // handleRemove force-removes missionID's sandbox container. Idempotent:
 // a mission with no container (already removed, or never created)
-// reports 204 the same as a successful removal — matching Manager.Remove's
+// reports 204 the same as a successful removal — matching Docker.Remove's
 // own not-found-is-fine contract.
 func (a *API) handleRemove(w http.ResponseWriter, r *http.Request) {
 	missionID := r.PathValue("missionID")
