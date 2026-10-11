@@ -540,7 +540,7 @@ const (
 )
 
 // HarnessNative is the ListFilter.Harness value matching missions with
-// no delegated harness (harness = '').
+// no delegated harness (empty harness column).
 const HarnessNative = "native"
 
 // List returns missions matching filter, ordered created_at DESC,

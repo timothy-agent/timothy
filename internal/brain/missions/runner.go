@@ -1599,7 +1599,7 @@ func applyDiscoverReport(m Mission, report discoverReport) string {
 	if m.ToolchainInstall != "failed" && (stackCovered(stack, m.Toolchains) || stackNeedsNoToolchain(stack)) {
 		return report.Findings
 	}
-	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan's first unit must be a " + bootstrapAllowance + " that installs it into the workspace.\n\n%s", NeutralizeSlot(stack), report.Findings)
+	return fmt.Sprintf("Stack: %s. The sandbox has no preinstalled toolchain for it; the plan's first unit must be a "+bootstrapAllowance+" that installs it into the workspace.\n\n%s", NeutralizeSlot(stack), report.Findings)
 }
 
 // stackWords maps a toolchain to the words a discover stack uses for

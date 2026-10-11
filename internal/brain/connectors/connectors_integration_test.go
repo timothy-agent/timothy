@@ -210,6 +210,6 @@ func TestManagerReloadFromDB(t *testing.T) {
 
 type nopSource struct{}
 
-func (nopSource) Tools() []*tools.Tool        { return nil }
-func (nopSource) Test(context.Context) error  { return nil }
-func (nopSource) Close() error                { return nil }
+func (nopSource) Tools() []*tools.Tool       { return nil }
+func (nopSource) Test(context.Context) error { return nil }
+func (nopSource) Close() error               { return nil }
