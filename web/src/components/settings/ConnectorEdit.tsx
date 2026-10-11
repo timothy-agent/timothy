@@ -37,6 +37,14 @@ import { slugify } from '../../lib/slugify'
 
 const area = settingsArea('connectors')
 
+// mcpToolPrefix is the prefix every tool of an mcp connector carries
+// (D-160): config.provider, or the connector name for one saved before
+// providers existed.
+function mcpToolPrefix(connector: AdminConnector): string {
+  const p = connector.config.provider
+  return typeof p === 'string' && p.trim() ? p.trim() : connector.name
+}
+
 // oauthProviderLabel names the OAuth provider for a connector kind:
 // google, microsoft and oauth-mode mcp share the same reconnect/test UI
 // shape.
@@ -718,6 +726,7 @@ function ConnectorEditForm({
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
                   Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
+                  <> · Tool prefix: <span className="font-mono">{mcpToolPrefix(connector)}</span></>
                   {Array.isArray(connector.config.scopes) && connector.config.scopes.length > 0 && (
                     <> · Scopes: {(connector.config.scopes as string[]).join(', ')}</>
                   )}
@@ -777,6 +786,9 @@ function ConnectorEditForm({
                   ) : (
                     <>
                       Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
+                      {connector.kind === 'mcp' && (
+                        <> · Tool prefix: <span className="font-mono">{mcpToolPrefix(connector)}</span></>
+                      )}
                     </>
                   )}
                 </p>

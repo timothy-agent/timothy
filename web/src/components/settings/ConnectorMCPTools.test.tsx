@@ -6,11 +6,12 @@ import { ConnectorMCPTools } from './ConnectorMCPTools'
 vi.mock('../../api/client', () => ({
   listAgents: vi.fn(),
   patchAgent: vi.fn(),
+  patchConnector: vi.fn(),
   probeConnector: vi.fn(),
 }))
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
-import { listAgents, patchAgent, probeConnector } from '../../api/client'
+import { listAgents, patchAgent, patchConnector, probeConnector } from '../../api/client'
 import { toast } from 'sonner'
 
 const agents: AdminAgent[] = [
@@ -28,6 +29,7 @@ const connector: AdminConnector = {
     last_probe: {
       at: '2026-10-10T10:00:00Z',
       tool_count: 3,
+      hash: 'h1',
       tools: [
         { name: 'search', final_name: 'search', read_only_hint: true },
         { name: 'shell', final_name: 'notion_shell', read_only_hint: null },
@@ -45,6 +47,7 @@ const reprobed: ConnectorProbe = {
   server: { name: 'Notion', version: '2' },
   tool_count: 3,
   index_threshold: 8,
+  hash: 'h2',
   tools: [
     { name: 'search', final_name: 'search', description: '', read_only_hint: true, input_schema: {} },
     { name: 'shell', final_name: 'notion_shell', description: '', read_only_hint: null, input_schema: {} },
@@ -72,7 +75,12 @@ beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(listAgents).mockResolvedValue(agents)
   vi.mocked(patchAgent).mockResolvedValue(undefined)
+  vi.mocked(patchConnector).mockResolvedValue(undefined)
 })
+
+function checked(label: string): string | null {
+  return (screen.getByLabelText(label) as HTMLButtonElement).getAttribute('aria-checked')
+}
 
 describe('ConnectorMCPTools', () => {
   it('lists the stored tools with each enabled agent allow state', async () => {
@@ -167,5 +175,114 @@ describe('ConnectorMCPTools', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Re-probe' }))
     expect(await screen.findByText(text)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull()
+  })
+})
+
+describe('ConnectorMCPTools mission reads', () => {
+  const marked: AdminConnector = {
+    ...connector,
+    config: { ...connector.config, mission_reads: { hash: 'h1', tools: ['search'] } },
+  }
+
+  it('shows the marks only while the stored fingerprint matches the review', async () => {
+    render(<ConnectorMCPTools connector={marked} onProbed={() => Promise.resolve()} />)
+    await screen.findByLabelText('Allow search for general')
+    expect(checked('Missions may read search')).toBe('true')
+    expect(checked('Missions may read shell')).toBe('false')
+    expect(screen.queryByText(/changed since you reviewed/)).toBeNull()
+  })
+
+  it('marks a tool with the current fingerprint and keeps other config', async () => {
+    const onProbed = vi.fn(() => Promise.resolve())
+    render(<ConnectorMCPTools connector={marked} onProbed={onProbed} />)
+    fireEvent.click(await screen.findByLabelText('Missions may read shell'))
+    await waitFor(() =>
+      expect(patchConnector).toHaveBeenCalledWith('m1', {
+        config: { ...marked.config, mission_reads: { hash: 'h1', tools: ['search', 'shell'] } },
+      }),
+    )
+    expect(onProbed).toHaveBeenCalledTimes(1)
+  })
+
+  it('drops the field when the last mark is removed', async () => {
+    render(<ConnectorMCPTools connector={marked} onProbed={() => Promise.resolve()} />)
+    fireEvent.click(await screen.findByLabelText('Missions may read search'))
+    await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('m1', { config: connector.config }))
+  })
+
+  it('disables the marks and asks for a re-probe when the record has no fingerprint', () => {
+    const old: AdminConnector = {
+      ...marked,
+      config: {
+        ...marked.config,
+        last_probe: { at: '2026-10-10T10:00:00Z', tool_count: 1, tools: [{ name: 'search', read_only_hint: null }] },
+      },
+    }
+    render(<ConnectorMCPTools connector={old} onProbed={() => Promise.resolve()} />)
+    expect((screen.getByLabelText('Missions may read search') as HTMLButtonElement).hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText(/re-probe to record the server/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Confirm marks' })).toBeNull()
+  })
+
+  it('lapses the marks after a re-probe with a new fingerprint and confirms them against the new list', async () => {
+    vi.mocked(probeConnector).mockResolvedValue(reprobed)
+    render(<ConnectorMCPTools connector={marked} onProbed={() => Promise.resolve()} />)
+    await screen.findByLabelText('Allow search for general')
+    fireEvent.click(screen.getByRole('button', { name: 'Re-probe' }))
+    await screen.findByText(/changed since you reviewed/)
+    expect(checked('Missions may read search')).toBe('false')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm marks' }))
+    await waitFor(() =>
+      expect(patchConnector).toHaveBeenCalledWith('m1', {
+        config: { ...marked.config, mission_reads: { hash: 'h2', tools: ['search'] } },
+      }),
+    )
+  })
+
+  it('confirms only the tools the server still serves', async () => {
+    const stale: AdminConnector = {
+      ...marked,
+      config: { ...marked.config, mission_reads: { hash: 'h1', tools: ['search', 'old_tool'] } },
+    }
+    vi.mocked(probeConnector).mockResolvedValue(reprobed)
+    render(<ConnectorMCPTools connector={stale} onProbed={() => Promise.resolve()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Re-probe' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm marks' }))
+    await waitFor(() =>
+      expect(patchConnector).toHaveBeenCalledWith('m1', {
+        config: { ...stale.config, mission_reads: { hash: 'h2', tools: ['search'] } },
+      }),
+    )
+  })
+
+  it('reports a failed save and keeps the marks', async () => {
+    vi.mocked(patchConnector).mockRejectedValue(new Error('boom'))
+    render(<ConnectorMCPTools connector={marked} onProbed={() => Promise.resolve()} />)
+    fireEvent.click(await screen.findByLabelText('Missions may read shell'))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Could not save mission reads', { description: 'boom' }))
+    expect(checked('Missions may read search')).toBe('true')
+  })
+})
+
+describe('ConnectorMCPTools broad allowlist entries', () => {
+  it('shows a tool allowed by a raw entry as checked and locked', async () => {
+    vi.mocked(listAgents).mockResolvedValue([
+      { ...agents[1], tools: ['shell'] },
+    ])
+    const prefixed: AdminConnector = {
+      ...connector,
+      config: {
+        ...connector.config,
+        last_probe: { at: '2026-10-10T10:00:00Z', tool_count: 1, hash: 'h1', tools: [{ name: 'shell', final_name: 'notion_shell', read_only_hint: null }] },
+      },
+    }
+    render(<ConnectorMCPTools connector={prefixed} onProbed={() => Promise.resolve()} />)
+    const box = (await screen.findByLabelText('Allow shell for research')) as HTMLButtonElement
+    expect(box.getAttribute('aria-checked')).toBe('true')
+    expect(box.hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText('via shell')).toBeTruthy()
+    fireEvent.click(box)
+    expect(patchAgent).not.toHaveBeenCalled()
   })
 })

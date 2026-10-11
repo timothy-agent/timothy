@@ -29,6 +29,7 @@ import { connectedAs, secretDestination } from './util'
 import { errText, isTimothyAuthError } from '../../lib/errors'
 import { slugify } from '../../lib/slugify'
 import { mcpOAuthRefs, refBaseFor, tokenRefFor } from './credentialRefs'
+import { catalogProvider } from './mcpAddFlow'
 import { useOnboarding } from '../../onboarding/context'
 
 const area = settingsArea('connectors')
@@ -163,6 +164,10 @@ export function ConnectorAdd() {
   const isAWS = preset.kind === 'aws'
   const isGCP = preset.kind === 'gcp'
   const isMCPOAuth = preset.kind === 'mcp' && mcpAuthMode === 'oauth'
+  // A catalog tile names its provider, which prefixes every tool name
+  // (notion gives notion_search) and merges accounts of one server.
+  const provider = catalogProvider(preset)
+  const providerConfig = provider ? { provider } : {}
   const refBase = refBaseFor(name)
   const tested = test?.ok === true
 
@@ -303,7 +308,7 @@ export function ConnectorAdd() {
                 : {
                   name: name.trim(),
                   kind: 'mcp',
-                  config: { endpoint: endpoint.trim() },
+                  config: { endpoint: endpoint.trim(), ...providerConfig },
                   credential_ref: usingExistingToken || token ? tokenRef : '',
                   enabled: false,
                 },
@@ -381,6 +386,7 @@ export function ConnectorAdd() {
         kind: 'mcp',
         config: {
           endpoint: endpoint.trim(),
+          ...providerConfig,
           auth_mode: 'oauth',
           ...(pastedClient ? { client_id: clientID.trim() } : {}),
           ...(pastedClient && clientSecret ? { client_secret_ref: mcpRefs.clientSecret } : {}),

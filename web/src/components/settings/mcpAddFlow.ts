@@ -1,4 +1,4 @@
-import type { AdminConnector, ConnectorProbe, MCPLastProbe, MCPProbedTool } from '../../api/types'
+import type { AdminConnector, ConnectorProbe, MCPLastProbe, MCPMissionReads, MCPProbedTool } from '../../api/types'
 import { slugify } from '../../lib/slugify'
 
 // MCPCandidate is one HTTP server entry the add flow can probe. token
@@ -106,6 +106,7 @@ export function lastProbeFrom(probe: ConnectorProbe, at = new Date()): MCPLastPr
   return {
     at: at.toISOString(),
     tool_count: probe.tool_count,
+    ...(probe.hash ? { hash: probe.hash } : {}),
     tools: probe.tools.map((t) => ({
       name: t.name,
       ...(t.final_name ? { final_name: t.final_name } : {}),
@@ -128,12 +129,42 @@ export function lastProbeOf(connector: AdminConnector): MCPLastProbe | null {
       read_only_hint: typeof t.read_only_hint === 'boolean' ? t.read_only_hint : null,
     })
   }
-  return { at: raw.at, tool_count: typeof raw.tool_count === 'number' ? raw.tool_count : tools.length, tools }
+  return {
+    at: raw.at,
+    tool_count: typeof raw.tool_count === 'number' ? raw.tool_count : tools.length,
+    ...(typeof raw.hash === 'string' && raw.hash ? { hash: raw.hash } : {}),
+    tools,
+  }
+}
+
+// missionReadsOf reads config.mission_reads; null when absent or
+// malformed.
+export function missionReadsOf(connector: AdminConnector): MCPMissionReads | null {
+  const raw = connector.config.mission_reads
+  if (!isRecord(raw) || typeof raw.hash !== 'string' || !Array.isArray(raw.tools)) return null
+  return { hash: raw.hash, tools: raw.tools.filter((t): t is string => typeof t === 'string') }
 }
 
 // allowlistName is the name a tool carries on an agent's allowlist.
 export function allowlistName(tool: MCPProbedTool): string {
   return tool.final_name || tool.name
+}
+
+// providerPattern is a valid MCP provider prefix (D-160).
+export const providerPattern = /^[a-z0-9_]{1,32}$/
+
+// allowedBy names the allowlist entry that admits tool, using the
+// backend's rule: an exact match, or the tool ending in "_" + entry
+// (so "search" admits notion_search). undefined when none does.
+export function allowedBy(allowlist: string[], tool: string): string | undefined {
+  if (allowlist.includes(tool)) return tool
+  return allowlist.find((entry) => tool.endsWith(`_${entry}`))
+}
+
+// catalogProvider is the provider a preset tile saves: its id for a
+// hosted MCP server, none for the custom tile, whose add flow asks.
+export function catalogProvider(preset: { id: string; kind: string }): string | undefined {
+  return preset.kind === 'mcp' && preset.id !== 'custom-mcp' ? preset.id : undefined
 }
 
 // indexNote explains whether chat sees the tools directly or through

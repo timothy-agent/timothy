@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { ConnectorProbe } from '../../api/types'
 import {
+  allowedBy,
   allowlistName,
+  catalogProvider,
   appendAllowlist,
   buildArgs,
   indexNote,
   lastProbeFrom,
   lastProbeOf,
+  missionReadsOf,
   parseMCPInput,
+  providerPattern,
   schemaFields,
   stdioReason,
 } from './mcpAddFlow'
@@ -223,8 +227,49 @@ describe('last probe record', () => {
     })
   })
 
+  it('lastProbeFrom carries the fingerprint when the probe has one', () => {
+    const at = new Date('2026-10-11T12:00:00Z')
+    expect(lastProbeFrom({ ...probe, hash: 'h1' }, at).hash).toBe('h1')
+    expect('hash' in lastProbeFrom(probe, at)).toBe(false)
+    const base = { id: 'm1', name: 'notion', kind: 'mcp' as const, credential_ref: '', enabled: true, sensitive: false }
+    expect(lastProbeOf({ ...base, config: { last_probe: { at: 'x', tools: [], hash: 'h1' } } })?.hash).toBe('h1')
+  })
+
+  it('missionReadsOf reads the marks and rejects malformed records', () => {
+    const base = { id: 'm1', name: 'notion', kind: 'mcp' as const, credential_ref: '', enabled: true, sensitive: false }
+    expect(missionReadsOf({ ...base, config: {} })).toBeNull()
+    expect(missionReadsOf({ ...base, config: { mission_reads: { tools: ['a'] } } })).toBeNull()
+    expect(missionReadsOf({ ...base, config: { mission_reads: { hash: 'h', tools: ['a', 2, 'b'] } } })).toEqual({
+      hash: 'h',
+      tools: ['a', 'b'],
+    })
+  })
+
   it('allowlistName prefers the final name', () => {
     expect(allowlistName({ name: 'shell', final_name: 'notion_shell', read_only_hint: null })).toBe('notion_shell')
     expect(allowlistName({ name: 'plain', read_only_hint: null })).toBe('plain')
+  })
+})
+
+describe('provider naming helpers', () => {
+  it('allowedBy follows the backend suffix rule', () => {
+    expect(allowedBy(['notion_search'], 'notion_search')).toBe('notion_search')
+    expect(allowedBy(['shell', 'search'], 'notion_search')).toBe('search')
+    expect(allowedBy(['arch'], 'notion_search')).toBeUndefined()
+    expect(allowedBy([], 'notion_search')).toBeUndefined()
+  })
+
+  it('catalogProvider names hosted tiles only', () => {
+    expect(catalogProvider({ id: 'notion', kind: 'mcp' })).toBe('notion')
+    expect(catalogProvider({ id: 'custom-mcp', kind: 'mcp' })).toBeUndefined()
+    expect(catalogProvider({ id: 'gmail', kind: 'google' })).toBeUndefined()
+  })
+
+  it('providerPattern accepts slugs only', () => {
+    expect(providerPattern.test('notion')).toBe(true)
+    expect(providerPattern.test('google_analytics')).toBe(true)
+    expect(providerPattern.test('Notion')).toBe(false)
+    expect(providerPattern.test('notion-work')).toBe(false)
+    expect(providerPattern.test('a'.repeat(33))).toBe(false)
   })
 })

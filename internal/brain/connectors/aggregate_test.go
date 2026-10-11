@@ -3,6 +3,8 @@ package connectors
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -223,161 +225,225 @@ func TestAggregateReadOnlyRequiresAllAccountsReadOnly(t *testing.T) {
 	}
 }
 
-// TestAggregateMCPJoinsUnifiedSurfaceAlongsideNonMCP pins that an MCP
-// source with no colliding raw name merges into the unified surface
-// right alongside non-MCP aggregates, un-namespaced: MCP tools are no
-// longer treated differently from any other source once their raw name
-// is free to merge (see groupByRawName).
-func TestAggregateMCPJoinsUnifiedSurfaceAlongsideNonMCP(t *testing.T) {
+// TestAggregateMCPToolsStayOutOfNativeAggregates pins D-160: native
+// kinds share one verb (search_mail), and an MCP tool never joins it,
+// even under the same raw name and schema: it keeps its provider
+// prefix.
+func TestAggregateMCPToolsStayOutOfNativeAggregates(t *testing.T) {
 	t.Parallel()
 	m := testManager(fakeRows{})
+	mcpSearch := *searchTool("fastmail", true)
 	m.sources = map[string]Source{
-		"gmail": &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("gmail", true)}}, kind: "google"},
+		"gmail":    &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("gmail", true)}}, kind: "google"},
+		"fastmail": &mcpSource{name: "fastmail", toolList: []*tools.Tool{&mcpSearch}},
 		"slack": &mcpSource{name: "slack", toolList: []*tools.Tool{
-			{Name: "read_channel", ReadOnly: true, InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "read_channel", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		}},
 	}
-
 	names := map[string]bool{}
 	for _, tl := range m.Tools(nil) {
 		names[tl.Name] = true
 	}
-	if !names["search_mail"] {
-		t.Fatal("aggregated search_mail missing")
+	if !names["search_mail"] || !names["fastmail_search_mail"] || !names["slack_read_channel"] || len(names) != 3 {
+		t.Fatalf("tools = %v", names)
 	}
-	if !names["read_channel"] {
-		t.Fatal("MCP tool with no name collision must merge un-namespaced")
-	}
-	if names["slack_read_channel"] {
-		t.Fatal("MCP tool must not also appear namespaced once merged")
+	out, err := toolNamed(t, m.Tools(nil), "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"x"}`))
+	if err != nil || out != "ran on gmail" {
+		t.Fatalf("native search_mail = (%q, %v), want gmail only", out, err)
 	}
 }
 
-// TestAggregateTwoMCPConnectorsSameToolIdenticalSchemaMerge pins the
-// multi-MCP-connector case: two MCP connectors serving the same raw
-// tool name with an identical schema merge into one tool, "account"
-// required same as any other multi-account aggregate.
-func TestAggregateTwoMCPConnectorsSameToolIdenticalSchemaMerge(t *testing.T) {
+// TestAggregateSameProviderAccountsMerge pins D-160's merge: two
+// connectors of one provider serving a tool with an identical schema
+// share "<provider>_<tool>" with a required account argument, while a
+// different provider with the same raw name stays apart.
+func TestAggregateSameProviderAccountsMerge(t *testing.T) {
 	t.Parallel()
 	schema := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}`)
+	ran := func(s string) func(context.Context, json.RawMessage) (string, error) {
+		return func(context.Context, json.RawMessage) (string, error) { return "ran on " + s, nil }
+	}
 	m := testManager(fakeRows{})
 	m.sources = map[string]Source{
-		"linear": &mcpSource{name: "linear", toolList: []*tools.Tool{
-			{Name: "search", InputSchema: schema, Execute: func(context.Context, json.RawMessage) (string, error) { return "ran on linear", nil }},
-		}},
-		"jira": &mcpSource{name: "jira", toolList: []*tools.Tool{
-			{Name: "search", InputSchema: schema, Execute: func(context.Context, json.RawMessage) (string, error) { return "ran on jira", nil }},
-		}},
+		"notion-work":     &mcpSource{name: "notion-work", provider: "notion", toolList: []*tools.Tool{{Name: "search", InputSchema: schema, Execute: ran("work")}}},
+		"notion-personal": &mcpSource{name: "notion-personal", provider: "notion", toolList: []*tools.Tool{{Name: "search", InputSchema: schema, Execute: ran("personal")}}},
+		"linear":          &mcpSource{name: "linear", toolList: []*tools.Tool{{Name: "search", InputSchema: schema, Execute: ran("linear")}}},
 	}
 
-	tl := toolNamed(t, m.Tools(nil), "search")
+	tl := toolNamed(t, m.Tools(nil), "notion_search")
 	var s map[string]any
 	if err := json.Unmarshal(tl.InputSchema, &s); err != nil {
 		t.Fatal(err)
 	}
 	req, _ := s["required"].([]any)
-	var hasAccount bool
-	for _, r := range req {
-		if r == "account" {
-			hasAccount = true
-		}
+	if !slices.Contains(req, any("account")) {
+		t.Fatal("account must be required once two accounts share a provider tool")
 	}
-	if !hasAccount {
-		t.Fatal("account must be required once two MCP connectors share a raw name")
-	}
-	out, err := tl.Execute(t.Context(), json.RawMessage(`{"query":"x","account":"jira"}`))
-	if err != nil || out != "ran on jira" {
-		t.Fatalf("Execute(account=jira) = (%q, %v), want ran on jira", out, err)
+	out, err := tl.Execute(t.Context(), json.RawMessage(`{"query":"x","account":"notion-personal"}`))
+	if err != nil || out != "ran on personal" {
+		t.Fatalf("Execute(account=notion-personal) = (%q, %v)", out, err)
 	}
 
 	names := map[string]bool{}
 	for _, tl := range m.Tools(nil) {
 		names[tl.Name] = true
 	}
-	if names["linear_search"] || names["jira_search"] {
-		t.Fatalf("tools = %v, must not also appear namespaced once merged", names)
+	if len(names) != 2 || !names["linear_search"] {
+		t.Fatalf("tools = %v, want notion_search and linear_search only", names)
 	}
 }
 
-// TestAggregateTwoMCPConnectorsSameToolSchemaMismatchStaysNamespaced
-// pins Guard B: two MCP connectors serving the same raw tool name with
-// DIFFERENT schemas must never merge — unlike non-MCP sources sharing a
-// raw name (Timothy's own code, schema-identical by construction), an
-// external MCP server's schema can't be assumed to match. Both stay
-// namespaced instead.
-func TestAggregateTwoMCPConnectorsSameToolSchemaMismatchStaysNamespaced(t *testing.T) {
+// TestAggregateSameProviderSchemaDriftSplits pins Guard B under
+// D-160: two accounts of one provider whose schemas for a tool differ
+// never merge; each falls back to "<connector>_<provider>_<tool>".
+func TestAggregateSameProviderSchemaDriftSplits(t *testing.T) {
 	t.Parallel()
 	m := testManager(fakeRows{})
 	m.sources = map[string]Source{
-		"linear": &mcpSource{name: "linear", toolList: []*tools.Tool{
+		"work": &mcpSource{name: "work", provider: "notion", toolList: []*tools.Tool{
 			{Name: "search", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`)},
 		}},
-		"jira": &mcpSource{name: "jira", toolList: []*tools.Tool{
+		"personal": &mcpSource{name: "personal", provider: "notion", toolList: []*tools.Tool{
 			{Name: "search", InputSchema: json.RawMessage(`{"type":"object","properties":{"jql":{"type":"string"}}}`)},
 		}},
 	}
-
 	names := map[string]bool{}
 	for _, tl := range m.Tools(nil) {
 		names[tl.Name] = true
 	}
-	if names["search"] {
-		t.Fatalf("tools = %v, schema-mismatched MCP tools must not merge", names)
-	}
-	if !names["linear_search"] || !names["jira_search"] {
-		t.Fatalf("tools = %v, want both to stay namespaced", names)
+	if names["notion_search"] || !names["work_notion_search"] || !names["personal_notion_search"] {
+		t.Fatalf("tools = %v, want both accounts split", names)
 	}
 }
 
-// TestAccountConnectorResolvesMergedMCPTool is the safety-invariant
-// test for the raw-name refactor: a sensitive MCP connector's tool,
-// once merged under its raw name, must still resolve back to that
-// connector through AccountConnector — the path
-// session.SensitiveTools.Matches falls back to once its own namespace-
-// prefix check no longer fires (the tool has no prefix any more). This
-// pins that the safety property survives the refactor at the layer
-// that actually implements it.
+// TestAccountConnectorResolvesMergedMCPTool is the safety invariant
+// behind session.SensitiveTools.Matches: a sensitive connector's tool
+// must resolve back to that connector whatever its surface name, here
+// a provider prefix that no longer starts with the connector name.
 func TestAccountConnectorResolvesMergedMCPTool(t *testing.T) {
 	t.Parallel()
 	m := testManager(fakeRows{})
 	m.sources = map[string]Source{
-		"internal-crm": &mcpSource{name: "internal-crm", toolList: []*tools.Tool{
+		"internal-crm": &mcpSource{name: "internal-crm", provider: "crm", toolList: []*tools.Tool{
 			{Name: "lookup_customer", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		}},
 	}
-
-	// The tool merged un-namespaced (lone contributor, no collision).
-	tl := toolNamed(t, m.Tools(nil), "lookup_customer")
-	if tl.Name != "lookup_customer" {
-		t.Fatalf("tool name = %q, want lookup_customer", tl.Name)
-	}
-
-	// AccountConnector must still resolve the raw-named call back to
-	// the connector — the fact a name merged doesn't erase which
-	// connector actually served it.
-	if got := m.AccountConnector("lookup_customer", nil); got != "internal-crm" {
-		t.Fatalf("AccountConnector(lookup_customer) = %q, want internal-crm", got)
+	toolNamed(t, m.Tools(nil), "crm_lookup_customer")
+	if got := m.AccountConnector("crm_lookup_customer", nil); got != "internal-crm" {
+		t.Fatalf("AccountConnector(crm_lookup_customer) = %q, want internal-crm", got)
 	}
 }
 
-// TestAccountConnectorLeavesNamespacedMCPToolUnresolved pins the other
-// half: a tool that stayed namespaced (Guard A/B) is never resolvable
-// under its RAW name through AccountConnector, since it isn't exposed
-// that way — session.SensitiveTools.Matches instead catches it via its
-// own namespace-prefix check, which still fires for a namespaced tool.
-func TestAccountConnectorLeavesNamespacedMCPToolUnresolved(t *testing.T) {
+// TestAccountConnectorResolvesSplitAndLoadedNames covers the names that
+// are not merged aggregates: a split tool and a tool loaded through
+// load_tool each resolve to their one connector, and a raw name the
+// surface never exposes resolves to nothing.
+func TestAccountConnectorResolvesSplitAndLoadedNames(t *testing.T) {
 	t.Parallel()
 	m := testManager(fakeRows{})
 	m.sources = map[string]Source{
-		"internal-crm": &mcpSource{name: "internal-crm", toolList: []*tools.Tool{
-			{Name: "lookup_customer", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		"work": &mcpSource{name: "work", provider: "notion", toolList: []*tools.Tool{
+			{Name: "search", InputSchema: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`)},
 		}},
+		"personal": &mcpSource{name: "personal", provider: "notion", toolList: []*tools.Tool{
+			{Name: "search", InputSchema: json.RawMessage(`{"type":"object","properties":{"jql":{"type":"string"}}}`)},
+		}},
+		"jira": &mcpSource{name: "jira", indexed: true, toolList: []*tools.Tool{{Name: "get_issue"}}},
 	}
+	for name, want := range map[string]string{
+		"personal_notion_search": "personal",
+		"work_notion_search":     "work",
+		"jira_get_issue":         "jira",
+		"search":                 "",
+		"get_issue":              "",
+	} {
+		if got := m.AccountConnector(name, nil); got != want {
+			t.Fatalf("AccountConnector(%s) = %q, want %q", name, got, want)
+		}
+	}
+}
 
-	if got := m.AccountConnector("lookup_customer", nil); got == "" {
-		t.Fatal("sanity check: lookup_customer should resolve before reserving it")
+// mcpReadSource is an mcp source as the mission read gate sees it: a
+// tool list with its fingerprint plus the operator's mission_reads.
+func mcpReadSource(name, fingerprint string, reads *MCPMissionReads, ts ...*tools.Tool) *mcpSource {
+	return &mcpSource{name: name, cfg: mcpConfig{MissionReads: reads}, fingerprint: fingerprint, toolList: ts}
+}
+
+func mcpTool(name string, schema string) *tools.Tool {
+	return &tools.Tool{Name: name, Description: "remote " + name, InputSchema: json.RawMessage(schema), Execute: func(context.Context, json.RawMessage) (string, error) { return "ran " + name, nil }}
+}
+
+func readOnlyNames(m *Manager) []string {
+	var names []string
+	for _, t := range m.ReadOnlyTools() {
+		names = append(names, t.Name)
 	}
-	if got := m.AccountConnector("internal-crm_lookup_customer", nil); got != "" {
-		t.Fatalf("AccountConnector(namespaced name) = %q, want empty (never exposed under that name here)", got)
+	return names
+}
+
+// TestReadOnlyToolsMCPMissionReads pins D-157: an MCP tool reaches
+// missions only through the operator's mark, only while the server's
+// list matches the reviewed fingerprint, and never through the
+// server's own read-only claim.
+func TestReadOnlyToolsMCPMissionReads(t *testing.T) {
+	t.Parallel()
+	const schema = `{"type":"object","properties":{"q":{"type":"string"}}}`
+	cases := []struct {
+		name  string
+		reads *MCPMissionReads
+		fp    string
+		want  []string
+	}{
+		{name: "no review keeps the connector chat-only", reads: nil, fp: "h1"},
+		{name: "marked tools pass while the fingerprint matches", reads: &MCPMissionReads{Hash: "h1", Tools: []string{"search"}}, fp: "h1", want: []string{"notion_search"}},
+		{name: "a changed server drops every mark", reads: &MCPMissionReads{Hash: "h1", Tools: []string{"search", "write"}}, fp: "h2"},
+		{name: "an empty hash never matches", reads: &MCPMissionReads{Hash: "", Tools: []string{"search"}}, fp: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := testManager(fakeRows{})
+			search := mcpTool("search", schema)
+			search.ReadOnly = true // the server's claim must not count
+			m.sources = map[string]Source{"notion": mcpReadSource("notion", tc.fp, tc.reads, search, mcpTool("write", schema))}
+			if got := readOnlyNames(m); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Fatalf("ReadOnlyTools = %v, want %v", got, tc.want)
+			}
+			for _, tl := range m.ReadOnlyTools() {
+				if !tl.ReadOnly {
+					t.Fatalf("%s offered to missions without ReadOnly", tl.Name)
+				}
+			}
+			// Chat still sees everything either way.
+			if chat := m.Tools(nil); len(chat) != 2 {
+				t.Fatalf("chat surface = %d tools, want 2", len(chat))
+			}
+		})
+	}
+}
+
+// TestReadOnlyToolsMCPMissionReadsNamespaced covers the split path: a
+// marked tool that stays split (schema drift between two accounts of
+// one provider) is offered under its split name, the unmarked account
+// is not, and native aggregates are untouched.
+func TestReadOnlyToolsMCPMissionReadsNamespaced(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{})
+	work := mcpReadSource("work", "h1", &MCPMissionReads{Hash: "h1", Tools: []string{"search"}}, mcpTool("search", `{"type":"object","properties":{"text":{"type":"string"}}}`))
+	work.provider = "notion"
+	personal := mcpReadSource("personal", "h1", nil, mcpTool("search", `{"type":"object","properties":{"jql":{"type":"string"}}}`))
+	personal.provider = "notion"
+	m.sources = map[string]Source{
+		"gmail":    &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{searchTool("gmail", true)}}, kind: "google"},
+		"work":     work,
+		"personal": personal,
+	}
+	got := readOnlyNames(m)
+	if fmt.Sprint(got) != fmt.Sprint([]string{"search_mail", "work_notion_search"}) {
+		t.Fatalf("ReadOnlyTools = %v", got)
+	}
+	out, err := toolNamed(t, m.ReadOnlyTools(), "search_mail").Execute(t.Context(), json.RawMessage(`{"query":"x"}`))
+	if err != nil || out != "ran on gmail" {
+		t.Fatalf("native aggregate = (%q, %v)", out, err)
 	}
 }

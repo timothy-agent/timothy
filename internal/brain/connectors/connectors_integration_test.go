@@ -8,7 +8,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -254,5 +256,51 @@ func TestConnectorSetLastProbe(t *testing.T) {
 	}
 	if err := store.SetLastProbe(ctx, "00000000-0000-0000-0000-000000000000", rec); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown id err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestManagerReloadMergesSameProviderAccounts runs D-160 through the
+// real store, builder and reload path: two connectors of one provider
+// against one server share provider-prefixed tools with an account
+// argument naming both.
+func TestManagerReloadMergesSameProviderAccounts(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := t.Context()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer((&fakeMCP{}).handler())
+	t.Cleanup(srv.Close)
+
+	mgr := NewManager(store, func(context.Context, string) (string, error) { return "", nil }, log)
+	mgr.RegisterBuilder("mcp", MCPBuilder(srv.Client(), MCPDeferral{}))
+	work, personal := marker+"work", marker+"personal"
+	for _, name := range []string{work, personal} {
+		if _, err := store.Create(ctx, Connector{
+			Name: name, Kind: "mcp", Enabled: true,
+			Config: json.RawMessage(`{"endpoint":"` + srv.URL + `","provider":"itestnotion"}`),
+		}); err != nil {
+			t.Fatalf("Create %s: %v", name, err)
+		}
+	}
+
+	var issue *tools.Tool
+	for _, tl := range mgr.Tools(nil) {
+		if tl.Name == "itestnotion_create_issue" {
+			issue = tl
+		}
+		if strings.HasPrefix(tl.Name, work) || strings.HasPrefix(tl.Name, personal) {
+			t.Fatalf("tool %s carries a connector name, want the provider prefix only", tl.Name)
+		}
+	}
+	if issue == nil {
+		t.Fatalf("itestnotion_create_issue missing from %d tools", len(mgr.Tools(nil)))
+	}
+	if !strings.Contains(issue.Description, work) || !strings.Contains(issue.Description, personal) {
+		t.Fatalf("description names the accounts: %s", issue.Description)
+	}
+	if !strings.Contains(string(issue.InputSchema), `"account"`) {
+		t.Fatalf("schema = %s, want an account argument", issue.InputSchema)
+	}
+	if got := mgr.AccountConnector("itestnotion_create_issue", json.RawMessage(`{"account":"`+personal+`"}`)); got != personal {
+		t.Fatalf("AccountConnector = %q, want %s", got, personal)
 	}
 }

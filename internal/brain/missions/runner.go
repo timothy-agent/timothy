@@ -735,11 +735,20 @@ func (r *nativeRunner) skillsNudge(ctx context.Context, m Mission) string {
 // ExtraTools so an automation mission (daily inbox digest, calendar
 // summary) can read gmail/calendar without the base connector surface
 // (which BuiltinsOnly excludes) ever reopening for a write.
+// Descriptions are neutralized: an MCP server's text reaches the
+// prompt here (D-157), and a native description loses nothing.
 func (r *nativeRunner) connectorReadTools(ctx context.Context, m Mission) []*tools.Tool {
 	if r.connectorReads == nil {
 		return nil
 	}
-	return r.connectorReads(ctx, m.AgentID)
+	read := r.connectorReads(ctx, m.AgentID)
+	out := make([]*tools.Tool, 0, len(read))
+	for _, t := range read {
+		c := *t
+		c.Description = NeutralizeSlot(t.Description)
+		out = append(out, &c)
+	}
+	return out
 }
 
 // kbRefSink accumulates the kb:// refs of documents search_kb actually

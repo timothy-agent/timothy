@@ -31,6 +31,11 @@ const mcpCallTimeout = 60 * time.Second
 type mcpConfig struct {
 	Endpoint string            `json:"endpoint"`
 	Headers  map[string]string `json:"headers"`
+	// Provider prefixes every tool name ("notion" gives notion_search)
+	// and groups the connectors whose accounts merge into one tool
+	// (D-160). Empty falls back to the connector name, which keeps the
+	// names connectors saved before D-160 already had when split.
+	Provider string `json:"provider,omitempty"`
 
 	// AuthMode is "token" (or empty): credential_ref resolves to a
 	// static bearer; or "oauth" (D-151): credential_ref holds the token
@@ -51,6 +56,10 @@ type mcpConfig struct {
 	TokenAuthMethod string   `json:"token_auth_method,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
 	Resource        string   `json:"resource,omitempty"`
+
+	// MissionReads is the operator's review of which tools missions
+	// may read (D-157); nil keeps the connector chat-only.
+	MissionReads *MCPMissionReads `json:"mission_reads,omitempty"`
 }
 
 const (
@@ -127,7 +136,7 @@ func mcpBuilder(client *http.Client, deferral MCPDeferral, auth *MCPAuth) Builde
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
 		}
-		src := &mcpSource{name: c.Name, cfg: cfg, client: client}
+		src := &mcpSource{name: c.Name, provider: strings.TrimSpace(cfg.Provider), cfg: cfg, client: client}
 		if mode == mcpAuthOAuth {
 			if err := auth.bind(src, c.CredentialRef); err != nil {
 				return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
@@ -154,10 +163,17 @@ func mcpBuilder(client *http.Client, deferral MCPDeferral, auth *MCPAuth) Builde
 // tool list fetched at build time. Reloads rebuild sources, so the
 // tool list is immutable for a source's lifetime.
 type mcpSource struct {
-	name   string
-	cfg    mcpConfig
-	token  string
-	client *http.Client
+	name string
+	// provider is cfg.Provider; prefix() falls back to name.
+	provider string
+	// loadPrefix overrides prefix() for tools loaded through load_tool
+	// when another live connector shares the provider, so a loaded
+	// tool can never be mistaken for a sibling account's (set by
+	// Manager.Reload).
+	loadPrefix string
+	cfg        mcpConfig
+	token      string
+	client     *http.Client
 	// auth replaces token in oauth mode: a live access token per
 	// request. rejected names a token the server just answered 401 to,
 	// which forces a refresh unless another caller already did one.
@@ -169,6 +185,9 @@ type mcpSource struct {
 	sessionID string // Mcp-Session-Id, captured at initialize
 	nextID    atomic.Int64
 	toolList  []*tools.Tool
+	// fingerprint hashes the tool list connect fetched, compared with
+	// cfg.MissionReads.Hash by missionReadOK.
+	fingerprint string
 
 	// indexed defers this server's schemas behind load_tool (issue
 	// #643): Tools() then returns that single entry point instead of
@@ -205,6 +224,7 @@ func (s *mcpSource) connect(ctx context.Context) error {
 	if err := s.rpc(ctx, "tools/list", map[string]any{}, &listRes); err != nil {
 		return fmt.Errorf("tools/list: %w", err)
 	}
+	var fp []fpTool
 	for _, t := range listRes.Tools {
 		// LoadToolName is reserved for this package's synthetic index
 		// entry point, which the permission chain exempts by name
@@ -220,6 +240,7 @@ func (s *mcpSource) connect(ctx context.Context) error {
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object"}`)
 		}
+		fp = append(fp, fpTool{name: remote, desc: t.Description, schema: schema})
 		s.toolList = append(s.toolList, &tools.Tool{
 			Name:        remote,
 			Description: t.Description,
@@ -229,7 +250,40 @@ func (s *mcpSource) connect(ctx context.Context) error {
 			},
 		})
 	}
+	s.fingerprint = fingerprintTools(fp)
 	return nil
+}
+
+// prefix is the provider every tool name of this source starts with.
+func (s *mcpSource) prefix() string {
+	if s.provider != "" {
+		return s.provider
+	}
+	return s.name
+}
+
+// loadedPrefix is the prefix a tool loaded through load_tool carries.
+func (s *mcpSource) loadedPrefix() string {
+	if s.loadPrefix != "" {
+		return s.loadPrefix
+	}
+	return s.prefix()
+}
+
+// missionReadOK reports whether the operator marked raw as a mission
+// read and the server still serves the tool list that mark was made
+// against (D-157). The server's own readOnlyHint never counts.
+func (s *mcpSource) missionReadOK(raw string) bool {
+	mr := s.cfg.MissionReads
+	if mr == nil || mr.Hash == "" || mr.Hash != s.fingerprint {
+		return false
+	}
+	for _, n := range mr.Tools {
+		if n == raw {
+			return true
+		}
+	}
+	return false
 }
 
 // Tools returns the server's tools, un-namespaced — the manager
@@ -346,7 +400,7 @@ Tools available from ` + s.name + `:
 				return "", fmt.Errorf("load_tool: no session in context")
 			}
 			loaded := *t
-			loaded.Name = NamespacedName(s.name, t.Name)
+			loaded.Name = NamespacedName(s.loadedPrefix(), t.Name)
 			alreadyLoaded := s.onLoad(sessionID, &loaded)
 			if alreadyLoaded {
 				return fmt.Sprintf("%s is already loaded and callable now as %q.\n\nDescription: %s\n\nInput schema: %s",

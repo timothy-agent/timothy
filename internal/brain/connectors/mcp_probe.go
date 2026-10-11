@@ -55,6 +55,9 @@ type ProbeResult struct {
 	Tools     []ProbeTool `json:"tools"`
 	ToolCount int         `json:"tool_count"`
 	Message   string      `json:"message,omitempty"`
+	// Hash fingerprints the server's full tool list (fingerprintTools);
+	// the mission read gate compares it with the live source (D-157).
+	Hash string `json:"hash,omitempty"`
 }
 
 // MCPLastProbe is config.last_probe on an mcp connector (issue #1191):
@@ -64,7 +67,16 @@ type ProbeResult struct {
 type MCPLastProbe struct {
 	At        time.Time       `json:"at"`
 	ToolCount int             `json:"tool_count"`
+	Hash      string          `json:"hash,omitempty"`
 	Tools     []MCPProbedTool `json:"tools"`
+}
+
+// MCPMissionReads is config.mission_reads on an mcp connector (D-157,
+// issue #1205): the raw tool names the operator marked as safe for
+// missions to read, valid only while Hash matches the live server.
+type MCPMissionReads struct {
+	Hash  string   `json:"hash"`
+	Tools []string `json:"tools"`
 }
 
 // MCPProbedTool is one stored tool: enough for the page's table, no
@@ -88,7 +100,7 @@ func LastProbeOf(c Connector) MCPLastProbe {
 
 // Record is the stored form of a successful probe.
 func (r ProbeResult) Record(at time.Time) MCPLastProbe {
-	rec := MCPLastProbe{At: at, ToolCount: r.ToolCount, Tools: make([]MCPProbedTool, 0, len(r.Tools))}
+	rec := MCPLastProbe{At: at, ToolCount: r.ToolCount, Hash: r.Hash, Tools: make([]MCPProbedTool, 0, len(r.Tools))}
 	for _, t := range r.Tools {
 		rec.Tools = append(rec.Tools, MCPProbedTool{Name: t.Name, FinalName: t.FinalName, ReadOnlyHint: t.ReadOnlyHint})
 	}
@@ -246,18 +258,21 @@ func probeSource(ctx context.Context, client *http.Client, src *mcpSource) Probe
 	}
 
 	res := ProbeResult{Status: ProbeOK, Server: initRes.ServerInfo, Tools: []ProbeTool{}}
+	var fp []fpTool
 	for _, t := range listRes.Tools {
 		// Same reservation as connect: the connector would never serve it.
 		if t.Name == LoadToolName {
 			continue
 		}
-		res.ToolCount++
-		if len(res.Tools) >= ProbeToolCap {
-			continue
-		}
 		schema := t.InputSchema
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object"}`)
+		}
+		// The fingerprint sees what connect sees: every tool, raw.
+		fp = append(fp, fpTool{name: t.Name, desc: t.Description, schema: schema})
+		res.ToolCount++
+		if len(res.Tools) >= ProbeToolCap {
+			continue
 		}
 		res.Tools = append(res.Tools, ProbeTool{
 			Name:         t.Name,
@@ -266,6 +281,7 @@ func probeSource(ctx context.Context, client *http.Client, src *mcpSource) Probe
 			InputSchema:  schema,
 		})
 	}
+	res.Hash = fingerprintTools(fp)
 	return res
 }
 
@@ -278,24 +294,38 @@ func truncateRunes(s string, n int) string {
 }
 
 // ProbeFinalNames predicts the allowlist name each probed tool would
-// get if the connector were saved under name: the merge decision
-// groupByRawName makes, over the live sources plus this one, or the
-// always-namespaced form when the server's full tool count crosses
-// threshold and the tools hide behind load_tool. surface is the
+// get if the connector were saved under name with provider (empty
+// falls back to name, D-160): "<provider>_<tool>" when it merges with
+// the live sources, "<name>_<provider>_<tool>" when a same-provider
+// connector serves it with another schema, and the loaded-tool form
+// when the server's full tool count crosses threshold and the tools
+// hide behind load_tool. surface is the
 // agent's live tool names; the reserved set is recovered from it (see
 // reservedFromSurface).
 // Adding the connector can also split a same-named tool another MCP
 // connector serves today; that rename is not reported here.
-func (m *Manager) ProbeFinalNames(name string, res ProbeResult, surface []string, threshold int) map[string]string {
+func (m *Manager) ProbeFinalNames(name, provider string, res ProbeResult, surface []string, threshold int) map[string]string {
 	probed := res.Tools
 	out := make(map[string]string, len(probed))
+	candidate := &mcpSource{name: name, provider: provider}
 	if threshold > 0 && res.ToolCount > threshold {
+		m.mu.RLock()
+		shared := false
+		for n, src := range m.sources {
+			if ms, ok := src.(*mcpSource); ok && n != name && ms.prefix() == candidate.prefix() {
+				shared = true
+			}
+		}
+		m.mu.RUnlock()
+		prefix := candidate.prefix()
+		if shared {
+			prefix = NamespacedName(name, prefix)
+		}
 		for _, t := range probed {
-			out[t.Name] = NamespacedName(name, t.Name)
+			out[t.Name] = NamespacedName(prefix, t.Name)
 		}
 		return out
 	}
-	candidate := &mcpSource{name: name}
 	for _, t := range probed {
 		candidate.toolList = append(candidate.toolList, &tools.Tool{Name: t.Name, InputSchema: t.InputSchema})
 	}
@@ -311,13 +341,51 @@ func (m *Manager) ProbeFinalNames(name string, res ProbeResult, surface []string
 	sources[name] = candidate
 	merged, _ := groupByRawName(sources, reserved)
 	for _, t := range probed {
-		out[t.Name] = NamespacedName(name, t.Name)
-		for _, a := range merged[t.Name] {
+		key, ok := toolKey(candidate, t.Name)
+		if !ok {
+			continue
+		}
+		out[t.Name] = NamespacedName(name, key)
+		for _, a := range merged[key] {
 			if a.connector == name {
-				out[t.Name] = t.Name
+				out[t.Name] = key
 				break
 			}
 		}
+	}
+	return out
+}
+
+// MCPProvider is the provider prefix a saved mcp connector's tools
+// carry (D-160): config.provider, or the connector name.
+func MCPProvider(c Connector) string {
+	var cfg struct {
+		Provider string `json:"provider"`
+	}
+	if err := json.Unmarshal(c.Config, &cfg); err == nil && strings.TrimSpace(cfg.Provider) != "" {
+		return strings.TrimSpace(cfg.Provider)
+	}
+	return c.Name
+}
+
+// ProviderSlug turns a server's self-reported name into a provider
+// prefix: lowercase letters, digits and underscores, at most 32.
+func ProviderSlug(s string) string {
+	var b strings.Builder
+	underscore := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			underscore = false
+		case !underscore && b.Len() > 0:
+			b.WriteByte('_')
+			underscore = true
+		}
+	}
+	out := strings.TrimRight(b.String(), "_")
+	if len(out) > 32 {
+		out = strings.TrimRight(out[:32], "_")
 	}
 	return out
 }

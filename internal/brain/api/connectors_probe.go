@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
@@ -67,6 +68,7 @@ type connectorProbeAPI struct {
 // token are then ignored.
 type probeRequest struct {
 	Name        string            `json:"name"`
+	Provider    string            `json:"provider"`
 	Endpoint    string            `json:"endpoint"`
 	Headers     map[string]string `json:"headers"`
 	Token       string            `json:"token"`
@@ -77,9 +79,13 @@ type probeRequest struct {
 // tool names that appeared or disappeared since the stored record.
 type probeResponse struct {
 	connectors.ProbeResult
-	IndexThreshold int      `json:"index_threshold"`
-	Added          []string `json:"added,omitempty"`
-	Removed        []string `json:"removed,omitempty"`
+	IndexThreshold int `json:"index_threshold"`
+	// Provider is the tool name prefix the final names use (D-160):
+	// the request's, the saved connector's, or one derived from the
+	// server's own name.
+	Provider string   `json:"provider,omitempty"`
+	Added    []string `json:"added,omitempty"`
+	Removed  []string `json:"removed,omitempty"`
 }
 
 func (h *connectorProbeAPI) probe(w http.ResponseWriter, r *http.Request) {
@@ -99,9 +105,16 @@ func (h *connectorProbeAPI) probe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res := connectors.ProbeMCP(r.Context(), h.client, req.Endpoint, req.Headers, req.Token)
-	threshold := h.finish(r.Context(), req.Name, &res)
+	provider := strings.TrimSpace(req.Provider)
+	if provider == "" && res.Status == connectors.ProbeOK {
+		provider = connectors.ProviderSlug(res.Server.Name)
+	}
+	if provider == "" {
+		provider = req.Name
+	}
+	threshold := h.finish(r.Context(), req.Name, provider, &res)
 	h.log.Info("connector probe", "host", u.Host, "status", res.Status, "tools", res.ToolCount)
-	writeJSON(w, http.StatusOK, probeResponse{ProbeResult: res, IndexThreshold: threshold})
+	writeJSON(w, http.StatusOK, probeResponse{ProbeResult: res, IndexThreshold: threshold, Provider: provider})
 }
 
 // probeStored re-probes a saved mcp connector and records the tool
@@ -117,8 +130,9 @@ func (h *connectorProbeAPI) probeStored(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	res := h.mgr.ProbeStored(r.Context(), h.client, c, h.auth)
-	threshold := h.finish(r.Context(), c.Name, &res)
-	out := probeResponse{ProbeResult: res, IndexThreshold: threshold}
+	provider := connectors.MCPProvider(c)
+	threshold := h.finish(r.Context(), c.Name, provider, &res)
+	out := probeResponse{ProbeResult: res, IndexThreshold: threshold, Provider: provider}
 	if res.Status == connectors.ProbeOK {
 		out.Added, out.Removed = connectors.DiffProbe(connectors.LastProbeOf(c), res)
 		if err := h.rows.SetLastProbe(r.Context(), id, res.Record(h.now())); err != nil {
@@ -131,8 +145,9 @@ func (h *connectorProbeAPI) probeStored(w http.ResponseWriter, r *http.Request, 
 }
 
 // finish neutralizes the server's strings and fills the final names
-// the tools would carry under name; it returns the index threshold.
-func (h *connectorProbeAPI) finish(ctx context.Context, name string, res *connectors.ProbeResult) int {
+// the tools would carry under name and provider; it returns the index
+// threshold.
+func (h *connectorProbeAPI) finish(ctx context.Context, name, provider string, res *connectors.ProbeResult) int {
 	threshold := settings.DefaultMCPToolIndexThreshold
 	if h.flags != nil {
 		threshold = h.flags.MCPToolIndexThreshold(ctx)
@@ -149,7 +164,7 @@ func (h *connectorProbeAPI) finish(ctx context.Context, name string, res *connec
 				surface = append(surface, d.Name)
 			}
 		}
-		names := h.mgr.ProbeFinalNames(name, *res, surface, threshold)
+		names := h.mgr.ProbeFinalNames(name, provider, *res, surface, threshold)
 		for i := range res.Tools {
 			res.Tools[i].FinalName = names[res.Tools[i].Name]
 		}

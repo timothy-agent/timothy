@@ -123,6 +123,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 		}
 		fresh[c.Name] = src
 	}
+	setLoadPrefixes(fresh)
 
 	m.mu.Lock()
 	old := m.sources
@@ -166,14 +167,16 @@ func (m *Manager) Tools(reserved map[string]bool) []*tools.Tool {
 	return aggregateTools(m.sources, false, reserved)
 }
 
-// ReadOnlyTools returns the aggregated ReadOnly-marked non-MCP tool
-// surface, for mission turns, which must see connector reads (mail
-// search, calendar list) despite BuiltinsOnly but never connector
-// writes (see missions.nativeRunner's connector reads resolver). MCP
-// sources are excluded unconditionally, marker or not: a remote MCP
-// server's tool can change behavior between builds, and nothing here
-// can verify a "read-only" claim actually holds, unlike google/
-// microsoft's tool constructors, which are Timothy's own code.
+// ReadOnlyTools returns the aggregated ReadOnly-marked tool surface,
+// for mission turns, which must see connector reads (mail search,
+// calendar list) despite BuiltinsOnly but never connector writes (see
+// missions.nativeRunner's connector reads resolver). An MCP tool is
+// included only through the operator's mission_reads mark and only
+// while the server's tool list still matches the reviewed fingerprint
+// (D-157, issue #1205): a remote server's tool can change behavior
+// between builds, and nothing here can verify a "read-only" claim
+// actually holds, unlike google/microsoft's tool constructors, which
+// are Timothy's own code.
 func (m *Manager) ReadOnlyTools() []*tools.Tool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -202,10 +205,10 @@ func (m *Manager) ReadOnlyTools() []*tools.Tool {
 func (m *Manager) AccountConnector(toolName string, args json.RawMessage) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	merged, _ := groupByRawName(m.sources, nil)
+	merged, split := groupByRawName(m.sources, nil)
 	accounts, ok := merged[toolName]
 	if !ok {
-		return ""
+		return m.namespacedConnector(toolName, split)
 	}
 	acc, _, err := resolveAccount(accounts, args)
 	if err != nil {
@@ -214,23 +217,68 @@ func (m *Manager) AccountConnector(toolName string, args json.RawMessage) string
 	return acc.connector
 }
 
-// namespacedTools clones ts renamed "<name>_<tool>", sanitized and
-// length-capped: MCP's tool-naming scheme, kept for a name that stays
-// split (see groupByRawName).
-func namespacedTools(name string, ts []*tools.Tool) []*tools.Tool {
-	out := make([]*tools.Tool, 0, len(ts))
-	for _, t := range ts {
-		clone := *t
-		clone.Name = NamespacedName(name, t.Name)
-		out = append(out, &clone)
+// namespacedConnector names the one connector behind a tool that is
+// not a merged aggregate: a split tool or a tool loaded through
+// load_tool. "" when toolName is neither. Caller holds m.mu.
+func (m *Manager) namespacedConnector(toolName string, split map[string][]toolAccount) string {
+	for key, accounts := range split {
+		for _, a := range accounts {
+			if NamespacedName(a.connector, key) == toolName {
+				return a.connector
+			}
+		}
 	}
-	return out
+	for _, e := range m.deferredEntries() {
+		if slices.Contains(e.tools, toolName) {
+			return e.connector
+		}
+	}
+	return ""
 }
 
-// NamespacedName is the "<connector>_<tool>" form namespacedTools
-// gives a split tool: sanitized and length-capped. Exported so a
-// deferred MCP tool loaded mid-session (mcp.go's load_tool) lands on
-// exactly the name the eager path would have produced.
+// toolKey is the name a source's tool groups under (D-160): an MCP
+// tool is "<provider>_<raw>", every other connector tool keeps its
+// raw name so native kinds share one verb (search_mail). ok is false
+// for a remote tool whose key would end in "_load_tool": that suffix
+// belongs to the synthetic index entry point the permission chain
+// exempts by name (D-108), and a provider plus a remote name must
+// never spell it.
+func toolKey(src Source, raw string) (string, bool) {
+	ms, ok := src.(*mcpSource)
+	if !ok {
+		return raw, true
+	}
+	key := NamespacedName(ms.prefix(), raw)
+	if raw != LoadToolName && strings.HasSuffix(key, "_"+LoadToolName) {
+		return "", false
+	}
+	return key, true
+}
+
+// setLoadPrefixes gives every MCP source that shares its provider with
+// another live source a connector-specific prefix for loaded tools:
+// two accounts' loaded copies of one tool must not share a name.
+func setLoadPrefixes(sources map[string]Source) {
+	count := map[string]int{}
+	for _, src := range sources {
+		if ms, ok := src.(*mcpSource); ok {
+			count[ms.prefix()]++
+		}
+	}
+	for name, src := range sources {
+		if ms, ok := src.(*mcpSource); ok {
+			ms.loadPrefix = ""
+			if count[ms.prefix()] > 1 {
+				ms.loadPrefix = NamespacedName(name, ms.prefix())
+			}
+		}
+	}
+}
+
+// NamespacedName is the "<prefix>_<tool>" form: sanitized and
+// length-capped. Exported so a deferred MCP tool loaded mid-session
+// (mcp.go's load_tool) lands on exactly the name the eager path would
+// have produced.
 func NamespacedName(connector, tool string) string {
 	full := toolNameSanitizer.ReplaceAllString(connector+"_"+tool, "_")
 	if len(full) > 128 {
@@ -291,7 +339,11 @@ func groupByRawName(sources map[string]Source, reserved map[string]bool) (merged
 			kind, email = info.AccountInfo()
 		}
 		for _, t := range src.Tools() {
-			byName[t.Name] = append(byName[t.Name], toolAccount{connector: name, kind: kind, email: email, tool: t})
+			key, ok := toolKey(src, t.Name)
+			if !ok {
+				continue
+			}
+			byName[key] = append(byName[key], toolAccount{connector: name, kind: kind, email: email, tool: t})
 		}
 	}
 
@@ -377,26 +429,17 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 	merged, split := groupByRawName(sources, reserved)
 
 	if readOnlyOnly {
-		// MCP never contributes to ReadOnlyTools, merged or not: a
-		// remote server's ReadOnly claim can't be verified, unlike
-		// google/microsoft's tool constructors (Timothy's own code).
-		// Strip MCP accounts out of each merged group rather than
-		// trusting groupByRawName's ordinary merge/split split, which
-		// answers a different question (does this name unify safely),
-		// not this one (is this account's claim trustworthy).
-		filtered := map[string][]toolAccount{}
-		for name, accounts := range merged {
-			var kept []toolAccount
-			for _, a := range accounts {
-				if _, isMCP := sources[a.connector].(*mcpSource); !isMCP {
-					kept = append(kept, a)
-				}
-			}
-			if len(kept) > 0 {
-				filtered[name] = kept
-			}
-		}
-		merged = filtered
+		// D-157 (issue #1205): an MCP account joins the read-only
+		// surface only through the operator's mission_reads mark, and
+		// only while the server still serves the tool list that mark
+		// was reviewed against. A remote server's own ReadOnly claim
+		// can't be verified, unlike google/microsoft's tool
+		// constructors (Timothy's own code), so it never counts. The
+		// mark is applied here rather than trusting groupByRawName's
+		// merge/split split, which answers a different question (does
+		// this name unify safely), not this one (may a mission call it).
+		merged = missionReadAccounts(sources, merged)
+		split = missionReadAccounts(sources, split)
 	}
 
 	order := make([]string, 0, len(merged))
@@ -414,10 +457,6 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 		}
 		out = append(out, agg)
 	}
-	if readOnlyOnly {
-		return out
-	}
-
 	splitNames := make([]string, 0, len(split))
 	for name := range split {
 		splitNames = append(splitNames, name)
@@ -426,16 +465,42 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 	for _, name := range splitNames {
 		accounts := split[name]
 		sort.Slice(accounts, func(i, j int) bool { return accounts[i].connector < accounts[j].connector })
-		byConnector := map[string][]*tools.Tool{}
-		var connectorOrder []string
 		for _, a := range accounts {
-			if _, seen := byConnector[a.connector]; !seen {
-				connectorOrder = append(connectorOrder, a.connector)
+			// Namespaced tools skip aggregateTool, so the read-only
+			// rule applies per tool here.
+			if readOnlyOnly && !a.tool.ReadOnly {
+				continue
 			}
-			byConnector[a.connector] = append(byConnector[a.connector], a.tool)
+			clone := *a.tool
+			clone.Name = NamespacedName(a.connector, name)
+			out = append(out, &clone)
 		}
-		for _, connector := range connectorOrder {
-			out = append(out, namespacedTools(connector, byConnector[connector])...)
+	}
+	return out
+}
+
+// missionReadAccounts keeps, per raw name, every non-MCP account and
+// each MCP account whose source passes missionReadOK, the latter with
+// its tool copied as ReadOnly so aggregateTool's all-accounts rule and
+// the namespaced path treat the operator's mark like a native
+// ReadOnly constructor (D-157).
+func missionReadAccounts(sources map[string]Source, groups map[string][]toolAccount) map[string][]toolAccount {
+	out := map[string][]toolAccount{}
+	for name, accounts := range groups {
+		var kept []toolAccount
+		for _, a := range accounts {
+			if ms, isMCP := sources[a.connector].(*mcpSource); isMCP {
+				if !ms.missionReadOK(a.tool.Name) {
+					continue
+				}
+				marked := *a.tool
+				marked.ReadOnly = true
+				a.tool = &marked
+			}
+			kept = append(kept, a)
+		}
+		if len(kept) > 0 {
+			out[name] = kept
 		}
 	}
 	return out
@@ -747,12 +812,17 @@ func (m *Manager) deferredEntries() []deferredEntry {
 		if len(hidden) == 0 {
 			continue
 		}
-		e := deferredEntry{connector: name, loadTool: NamespacedName(name, LoadToolName)}
-		if _, ok := merged[LoadToolName]; ok {
-			e.loadTool = LoadToolName
+		key, _ := toolKey(src, LoadToolName)
+		e := deferredEntry{connector: name, loadTool: NamespacedName(name, key)}
+		if _, ok := merged[key]; ok {
+			e.loadTool = key
+		}
+		prefix := name
+		if ms, ok := src.(*mcpSource); ok {
+			prefix = ms.loadedPrefix()
 		}
 		for _, t := range hidden {
-			e.tools = append(e.tools, NamespacedName(name, t.Name))
+			e.tools = append(e.tools, NamespacedName(prefix, t.Name))
 		}
 		out = append(out, e)
 	}
