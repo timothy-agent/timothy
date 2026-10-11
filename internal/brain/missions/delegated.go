@@ -798,7 +798,7 @@ func newRunID() (string, error) {
 // result ladder (below) can map either onto the same WorkerVerdict.
 // additionalProperties:false is load-bearing: OpenAI's strict
 // structured-output validation (codex --output-schema) rejects any
-// schema without it. final_output carries the PR summary (D-152) and
+// schema without it. final_output carries the PR summary (D-157) and
 // the report a goal asks for when no unit lists a file for it (D-134),
 // "" otherwise; required because
 // strict validation demands every property be listed there.
