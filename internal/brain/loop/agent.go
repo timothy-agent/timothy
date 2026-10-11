@@ -334,7 +334,7 @@ type Request struct {
 	// BuiltinsOnly restricts the turn's base tool surface to compiled-in
 	// builtins (calculator, shell, search_web, ...), excluding connector
 	// tools (e.g. a write-capable GitHub MCP token) and the chat-only
-	// mission tools (list_missions/get_mission/push_mission_branch). Set by
+	// mission tools (list_missions/read_mission/push_mission_branch). Set by
 	// every mission-driven request (discover/plan/worker/reviewer), a
 	// mission worker must never side-channel a connector write around
 	// the worktree/human-consented push pipeline, and push_mission_branch

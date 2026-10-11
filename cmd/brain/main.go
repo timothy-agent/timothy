@@ -627,8 +627,8 @@ func main() {
 		missionAdapter := missionToolStore{missionStore}
 		newTools := []*tools.Tool{
 			builtin.ListMissions(missionAdapter),
-			builtin.GetMission(missionAdapter, missionAdapter),
-			builtin.FollowupMission(missionAdapter, missionFollowUpCreatorAdapter{missionDriver}),
+			builtin.ReadMission(missionAdapter, missionAdapter),
+			builtin.ForkMission(missionAdapter, missionFollowUpCreatorAdapter{missionDriver}),
 			builtin.CreateMission(chatMissionCreator(agentReg, missionDriver, missionResolve), chatMissionOrigin(channelStore), flags.WebBaseURL),
 		}
 		if conns != nil && secrets != nil {
@@ -1862,7 +1862,7 @@ func toMissionRecord(m missions.Mission) builtin.MissionRecord {
 }
 
 // missionToolStore adapts *missions.Store to the builtin package's
-// list_missions/get_mission/push_mission_branch tool interfaces
+// list_missions/read_mission/push_mission_branch tool interfaces
 // (missionLister, missionEventReader): a thin translation layer since
 // builtin cannot import missions.Mission/missions.Event directly
 // (import cycle, see MissionRecord's doc comment).
@@ -1931,7 +1931,7 @@ func (a missionCompleterAdapter) OpenMissionPR(ctx context.Context, id, token st
 }
 
 // missionFollowUpCreatorAdapter adapts *missions.Driver to the builtin
-// package's missionFollowUpCreator interface: followup_mission's
+// package's missionFollowUpCreator interface: fork_mission's
 // create call goes through the exact same Driver.CreateFollowUp the
 // mission-create API's own ParentMissionID branch uses.
 type missionFollowUpCreatorAdapter struct {

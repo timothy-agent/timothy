@@ -70,9 +70,9 @@ func mustMarshal(t *testing.T, v any) json.RawMessage {
 	return b
 }
 
-// TestGetMissionByID proves an id lookup returns that mission's full
+// TestReadMissionByID proves an id lookup returns that mission's full
 // snapshot, including the latest mission.pr_opened event's url.
-func TestGetMissionByID(t *testing.T) {
+func TestReadMissionByID(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -85,7 +85,7 @@ func TestGetMissionByID(t *testing.T) {
 		{Kind: "mission.pr_opened", Payload: mustMarshal(t, map[string]any{"url": "https://github.com/o/r/pull/1", "number": 1})},
 	}
 
-	tool := GetMission(store, store)
+	tool := ReadMission(store, store)
 	out, err := tool.Execute(context.Background(), mustMarshal(t, map[string]string{"id": "m1"}))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -102,15 +102,15 @@ func TestGetMissionByID(t *testing.T) {
 	}
 }
 
-// TestGetMissionByQueryUnique proves a query substring matching
+// TestReadMissionByQueryUnique proves a query substring matching
 // exactly one mission's name/goal resolves to that mission.
-func TestGetMissionByQueryUnique(t *testing.T) {
+func TestReadMissionByQueryUnique(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	store.add(MissionRecord{ID: "m1", Name: "Invoice PDF export", Goal: "export invoices as pdf"})
 	store.add(MissionRecord{ID: "m2", Name: "Unrelated mission", Goal: "something else"})
 
-	tool := GetMission(store, store)
+	tool := ReadMission(store, store)
 	out, err := tool.Execute(context.Background(), mustMarshal(t, map[string]string{"query": "invoice"}))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -124,15 +124,15 @@ func TestGetMissionByQueryUnique(t *testing.T) {
 	}
 }
 
-// TestGetMissionByQueryAmbiguous proves a query matching more than
+// TestReadMissionByQueryAmbiguous proves a query matching more than
 // one mission returns a disambiguation list, not a guess.
-func TestGetMissionByQueryAmbiguous(t *testing.T) {
+func TestReadMissionByQueryAmbiguous(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	store.add(MissionRecord{ID: "m1", Name: "Export invoices", Goal: "export invoices as pdf"})
 	store.add(MissionRecord{ID: "m2", Name: "Export contacts", Goal: "export contacts as csv"})
 
-	tool := GetMission(store, store)
+	tool := ReadMission(store, store)
 	_, err := tool.Execute(context.Background(), mustMarshal(t, map[string]string{"query": "export"}))
 	if err == nil {
 		t.Fatal("expected an ambiguous-match error")
@@ -142,24 +142,24 @@ func TestGetMissionByQueryAmbiguous(t *testing.T) {
 	}
 }
 
-// TestGetMissionRequiresIDOrQuery proves neither id nor query is
+// TestReadMissionRequiresIDOrQuery proves neither id nor query is
 // rejected before touching the store at all.
-func TestGetMissionRequiresIDOrQuery(t *testing.T) {
+func TestReadMissionRequiresIDOrQuery(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
-	tool := GetMission(store, store)
+	tool := ReadMission(store, store)
 	_, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{}))
 	if err == nil {
 		t.Fatal("expected an id-or-query-required error")
 	}
 }
 
-// TestGetMissionUnknownID proves an unknown id returns a clear
+// TestReadMissionUnknownID proves an unknown id returns a clear
 // error rather than a zero-value snapshot.
-func TestGetMissionUnknownID(t *testing.T) {
+func TestReadMissionUnknownID(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
-	tool := GetMission(store, store)
+	tool := ReadMission(store, store)
 	_, err := tool.Execute(context.Background(), mustMarshal(t, map[string]string{"id": "does-not-exist"}))
 	if err == nil {
 		t.Fatal("expected an error for an unknown mission id")
@@ -397,7 +397,7 @@ func TestPushMissionBranchRequiresID(t *testing.T) {
 }
 
 // fakeMissionFollowUpCreator scripts missionFollowUpCreator for
-// followup_mission's table tests.
+// fork_mission's table tests.
 type fakeMissionFollowUpCreator struct {
 	childID string
 	err     error
@@ -420,13 +420,13 @@ func terminalMissionRecord() MissionRecord {
 	return MissionRecord{ID: "m1", Name: "Fix login bug", Goal: "fix the login bug", Phase: "done"}
 }
 
-// TestFollowupMissionInvalidArguments proves malformed JSON (a brief
+// TestForkMissionInvalidArguments proves malformed JSON (a brief
 // that is not an object) is rejected before touching the store.
-func TestFollowupMissionInvalidArguments(t *testing.T) {
+func TestForkMissionInvalidArguments(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	creator := &fakeMissionFollowUpCreator{}
-	tool := FollowupMission(store, creator)
+	tool := ForkMission(store, creator)
 	_, err := tool.Execute(context.Background(), json.RawMessage(`{"goal":"x","id":"m1","brief":"not an object"}`))
 	if err == nil || !strings.Contains(err.Error(), "invalid arguments") {
 		t.Fatalf("err = %v, want invalid arguments", err)
@@ -436,13 +436,13 @@ func TestFollowupMissionInvalidArguments(t *testing.T) {
 	}
 }
 
-// TestFollowupMissionRequiresGoal proves a missing goal is rejected
+// TestForkMissionRequiresGoal proves a missing goal is rejected
 // before touching the store at all.
-func TestFollowupMissionRequiresGoal(t *testing.T) {
+func TestForkMissionRequiresGoal(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	creator := &fakeMissionFollowUpCreator{}
-	tool := FollowupMission(store, creator)
+	tool := ForkMission(store, creator)
 	_, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"id": "m1"}))
 	if err == nil {
 		t.Fatal("expected a goal-required error")
@@ -452,13 +452,13 @@ func TestFollowupMissionRequiresGoal(t *testing.T) {
 	}
 }
 
-// TestFollowupMissionRequiresIDOrQuery proves neither id nor query is
+// TestForkMissionRequiresIDOrQuery proves neither id nor query is
 // rejected before touching the store at all.
-func TestFollowupMissionRequiresIDOrQuery(t *testing.T) {
+func TestForkMissionRequiresIDOrQuery(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	creator := &fakeMissionFollowUpCreator{}
-	tool := FollowupMission(store, creator)
+	tool := ForkMission(store, creator)
 	_, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"goal": "do more"}))
 	if err == nil {
 		t.Fatal("expected an id-or-query-required error")
@@ -468,15 +468,15 @@ func TestFollowupMissionRequiresIDOrQuery(t *testing.T) {
 	}
 }
 
-// TestFollowupMissionAmbiguousQuery proves a query matching more than
+// TestForkMissionAmbiguousQuery proves a query matching more than
 // one mission is refused before the creator is ever called.
-func TestFollowupMissionAmbiguousQuery(t *testing.T) {
+func TestForkMissionAmbiguousQuery(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	store.add(MissionRecord{ID: "m1", Name: "Export invoices", Goal: "export invoices as pdf", Phase: "done"})
 	store.add(MissionRecord{ID: "m2", Name: "Export contacts", Goal: "export contacts as csv", Phase: "done"})
 	creator := &fakeMissionFollowUpCreator{}
-	tool := FollowupMission(store, creator)
+	tool := ForkMission(store, creator)
 	_, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"goal": "do more", "query": "export"}))
 	if err == nil {
 		t.Fatal("expected an ambiguous-match error")
@@ -486,16 +486,16 @@ func TestFollowupMissionAmbiguousQuery(t *testing.T) {
 	}
 }
 
-// TestFollowupMissionNonTerminalParent proves a parent still mid-flight
+// TestForkMissionNonTerminalParent proves a parent still mid-flight
 // is refused before the creator is ever called.
-func TestFollowupMissionNonTerminalParent(t *testing.T) {
+func TestForkMissionNonTerminalParent(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	rec := terminalMissionRecord()
 	rec.Phase = "execute"
 	store.add(rec)
 	creator := &fakeMissionFollowUpCreator{}
-	tool := FollowupMission(store, creator)
+	tool := ForkMission(store, creator)
 	_, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"goal": "do more", "id": "m1"}))
 	if err == nil {
 		t.Fatal("expected a not-finished error")
@@ -508,14 +508,14 @@ func TestFollowupMissionNonTerminalParent(t *testing.T) {
 	}
 }
 
-// TestFollowupMissionCreatorError proves a creator failure surfaces as
+// TestForkMissionCreatorError proves a creator failure surfaces as
 // the tool's own error.
-func TestFollowupMissionCreatorError(t *testing.T) {
+func TestForkMissionCreatorError(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	store.add(terminalMissionRecord())
 	creator := &fakeMissionFollowUpCreator{err: errors.New("create failed")}
-	tool := FollowupMission(store, creator)
+	tool := ForkMission(store, creator)
 	_, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"goal": "do more", "id": "m1"}))
 	if err == nil {
 		t.Fatal("expected the creator's error to surface")
@@ -525,14 +525,14 @@ func TestFollowupMissionCreatorError(t *testing.T) {
 	}
 }
 
-// TestFollowupMissionHappyPath proves a terminal parent resolved by id
+// TestForkMissionHappyPath proves a terminal parent resolved by id
 // creates a follow-up and reports the new mission id.
-func TestFollowupMissionHappyPath(t *testing.T) {
+func TestForkMissionHappyPath(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	store.add(terminalMissionRecord())
 	creator := &fakeMissionFollowUpCreator{childID: "m2"}
-	tool := FollowupMission(store, creator)
+	tool := ForkMission(store, creator)
 	out, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"goal": "add tests", "id": "m1"}))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -550,14 +550,14 @@ func TestFollowupMissionHappyPath(t *testing.T) {
 	}
 }
 
-// TestFollowupMissionPassesAttachAndBrief proves attach paths and every
+// TestForkMissionPassesAttachAndBrief proves attach paths and every
 // brief field reach the creator, and the result reports the file count.
-func TestFollowupMissionPassesAttachAndBrief(t *testing.T) {
+func TestForkMissionPassesAttachAndBrief(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	store.add(terminalMissionRecord())
 	creator := &fakeMissionFollowUpCreator{childID: "m2"}
-	tool := FollowupMission(store, creator)
+	tool := ForkMission(store, creator)
 	out, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{
 		"goal":   "build the ranked idea",
 		"id":     "m1",
@@ -588,14 +588,14 @@ func TestFollowupMissionPassesAttachAndBrief(t *testing.T) {
 	}
 }
 
-// TestFollowupMissionResolvesByQuery proves a query substring matching
+// TestForkMissionResolvesByQuery proves a query substring matching
 // exactly one terminal mission resolves to that mission as parent.
-func TestFollowupMissionResolvesByQuery(t *testing.T) {
+func TestForkMissionResolvesByQuery(t *testing.T) {
 	t.Parallel()
 	store := newFakeMissionStore()
 	store.add(terminalMissionRecord())
 	creator := &fakeMissionFollowUpCreator{childID: "m2"}
-	tool := FollowupMission(store, creator)
+	tool := ForkMission(store, creator)
 	_, err := tool.Execute(context.Background(), mustMarshal(t, map[string]any{"goal": "add tests", "query": "login"}))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
