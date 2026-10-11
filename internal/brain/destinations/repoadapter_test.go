@@ -956,6 +956,43 @@ func TestPRBodyDependencyEvidence(t *testing.T) {
 	}
 }
 
+// TestOpenPRTitle (D-153, issue #1195): a valid title line in
+// final_output is the PR title and stays out of the body; anything else
+// falls back to the goal-derived title with the body unchanged.
+func TestOpenPRTitle(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		finalOutput string
+		wantTitle   string
+		wantBody    string
+	}{
+		{"valid title", "Title: fix(auth): stop logging everyone out\n\nCloses the session bug.", "fix(auth): stop logging everyone out", "## Summary\n\nCloses the session bug.\n\n"},
+		{"invalid title falls back", "Title: Fix the bug.\n\nCloses the session bug.", "chore: upgrade the dependencies", "## Summary\n\nTitle: Fix the bug.\n\nCloses the session bug.\n\n"},
+		{"no title line", "Closes the session bug.", "chore: upgrade the dependencies", "## Summary\n\nCloses the session bug.\n\n"},
+		{"no output", "", "chore: upgrade the dependencies", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := pushableMission(t)
+			m.Goal = "Upgrade the dependencies"
+			m.FinalOutput = tc.finalOutput
+			fc := &fakeGitClient{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/3", prNumber: 3}
+			a := &RepoAdapter{Pusher: &fakePusher{host: "github.com"}, Events: &fakeEvents{}, Clients: clients(githubClient(fc))}
+			if _, _, err := a.OpenPR(t.Context(), m, "tok"); err != nil {
+				t.Fatalf("OpenPR: %v", err)
+			}
+			if fc.lastTitle != tc.wantTitle {
+				t.Fatalf("title = %q, want %q", fc.lastTitle, tc.wantTitle)
+			}
+			if got := PRBody(m, false); got != tc.wantBody {
+				t.Fatalf("PRBody = %q, want %q", got, tc.wantBody)
+			}
+		})
+	}
+}
+
 func TestRepoAdapterAttributionDefaultsOn(t *testing.T) {
 	a := &RepoAdapter{}
 	if !a.attribution(context.Background()) {
