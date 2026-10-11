@@ -88,6 +88,8 @@ type fakeGitClient struct {
 	createRepoErr   error
 	createRepoCalls int
 	lastCreateRepo  string
+	login           string
+	identityErr     error
 	// bitbucketNames models bitbucketSource's name contract so a
 	// permissive fake can't hide issue #786: a bare slug resolves
 	// only when the connector has a workspace configured.
@@ -113,7 +115,7 @@ func gitlabClient(f *fakeGitClient) *fakeGitClient {
 }
 
 func (f *fakeGitClient) Identity(context.Context) (gitprovider.Identity, error) {
-	return gitprovider.Identity{}, nil
+	return gitprovider.Identity{Login: f.login}, f.identityErr
 }
 
 func (f *fakeGitClient) ListRepos(context.Context) ([]gitprovider.Repo, error) { return nil, nil }
@@ -443,12 +445,26 @@ func TestEnsureRepo(t *testing.T) {
 			name:             "github: repo missing, create_if_missing=true creates and redirects origin",
 			repoURL:          "https://github.com/octo/repo.git",
 			createIfMissing:  true,
-			client:           githubClient(&fakeGitClient{newCloneURL: "https://github.com/octo/repo.git"}),
+			client:           githubClient(&fakeGitClient{login: "octo", newCloneURL: "https://github.com/octo/repo.git"}),
 			wantUpdated:      true,
 			wantCreateCalls:  1,
 			wantSetOrigin:    1,
 			wantFinalRepoURL: "https://github.com/octo/repo.git",
-			wantCreateName:   "octo/repo",
+			wantCreateName:   "repo",
+		},
+		{
+			name:            "github: repo owned by another account is never created under the credential account",
+			repoURL:         "https://github.com/kodeeo/website.git",
+			createIfMissing: true,
+			client:          githubClient(&fakeGitClient{login: "sumonmselim", newCloneURL: "https://github.com/sumonmselim/kodeeo-website.git"}),
+			wantErr:         "not found or not accessible",
+		},
+		{
+			name:            "github: credential account lookup failure is hard, never creates",
+			repoURL:         "https://github.com/octo/repo.git",
+			createIfMissing: true,
+			client:          githubClient(&fakeGitClient{identityErr: errors.New("boom")}),
+			wantErr:         "resolve credential account: boom",
 		},
 		{
 			name:            "github: repo missing, create_if_missing=false fails honestly and never creates",

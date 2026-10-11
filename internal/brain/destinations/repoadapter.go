@@ -325,7 +325,23 @@ func (a *RepoAdapter) ensureRepo(ctx context.Context, c gitprovider.Client, m mi
 		if !createIfMissing {
 			return repoURL, false, fmt.Errorf("ensure repo: repo %s does not exist and create_if_missing is not set", ref.FullName())
 		}
-		cloneURL, err := a.createRepo(ctx, c, m, ref.FullName())
+		createName := ref.FullName()
+		if c.Kind() == gitprovider.KindGitHub {
+			// GitHub's create call takes a bare name and always creates
+			// under the credential's own account. A 404 also means "the
+			// credential cannot see it", so an owner that is not the
+			// credential's account must fail rather than deliver to a
+			// different repo.
+			id, err := c.Identity(ctx)
+			if err != nil {
+				return repoURL, false, fmt.Errorf("ensure repo: resolve credential account: %w", err)
+			}
+			if !strings.EqualFold(id.Login, ref.Owner) {
+				return repoURL, false, fmt.Errorf("ensure repo: repo %s not found or not accessible to the connector's credential (account %q); refusing to create it under another account", ref.FullName(), id.Login)
+			}
+			createName = ref.Name
+		}
+		cloneURL, err := a.createRepo(ctx, c, m, createName)
 		if err != nil {
 			return repoURL, false, fmt.Errorf("ensure repo: create %s: %w", ref.FullName(), err)
 		}
