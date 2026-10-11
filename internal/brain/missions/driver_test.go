@@ -1697,20 +1697,38 @@ func TestDriverCommitSkippedPathsEvent(t *testing.T) {
 		t.Fatalf("Advance: %v", err)
 	}
 
-	var payload string
+	var payload, actionPayload string
 	for _, ev := range store.events["m1"] {
 		if ev.Kind == "mission.commit_skipped_paths" {
 			payload = string(ev.Payload)
 		}
+		if ev.Kind == "mission.action_required" {
+			actionPayload = string(ev.Payload)
+		}
 	}
 	if !strings.Contains(payload, "core.1") || strings.Contains(payload, "outside.txt") {
 		t.Fatalf("mission.commit_skipped_paths payload = %q, want core.1 alone (outside.txt is a tracked edit, always staged)", payload)
+	}
+	if !strings.Contains(actionPayload, "\"kind\":\"commit_skipped_paths\"") || !strings.Contains(actionPayload, "core.1") {
+		t.Fatalf("mission.action_required payload = %q, want commit_skipped_paths naming core.1", actionPayload)
 	}
 	committed := strings.Split(strings.TrimSpace(gitRun(t, wt, "diff", "--name-only", "HEAD~1", "HEAD")), "\n")
 	sort.Strings(committed)
 	want := []string{"outside.txt", "src/main.go"}
 	if strings.Join(committed, "|") != strings.Join(want, "|") {
 		t.Fatalf("commit touched %v, want %v", committed, want)
+	}
+	m, _ := store.Get(context.Background(), "m1")
+	if m.Iteration != 1 || m.Status != StatusWorking {
+		t.Fatalf("mission iteration/status = %d/%q, want 1/working after skipped-path retry", m.Iteration, m.Status)
+	}
+	if len(m.Progress) == 0 || !strings.Contains(m.Progress[len(m.Progress)-1].Note, "core.1") {
+		t.Fatalf("latest progress note = %q, want skipped-path handoff naming core.1", func() string {
+			if len(m.Progress) == 0 {
+				return ""
+			}
+			return m.Progress[len(m.Progress)-1].Note
+		}())
 	}
 }
 
@@ -4556,6 +4574,25 @@ func TestDriverForcedRetryIsHarnessCaused(t *testing.T) {
 	m, _ := store.Get(context.Background(), "m1")
 	if m.Iteration != 2 {
 		t.Fatalf("mission.Iteration = %d, want it unchanged at 2: a forced retry spends none", m.Iteration)
+	}
+}
+
+func TestForcedRetryFingerprint(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason, want string
+	}{
+		{name: "no sentinel", reason: "the worker did not report a status; treated as a failed attempt", want: "no_sentinel"},
+		{name: "done without changes", reason: "executor reported DONE but changed nothing in the worktree; the unit is not done", want: "done_without_changes"},
+		{name: "idle timeout", reason: "the executor produced no output for the idle timeout and was killed", want: ""},
+		{name: "run budget", reason: "executor exceeded the run budget and was killed", want: ""},
+		{name: "lost run", reason: "the executor's run was lost across a restart", want: ""},
+		{name: "fallback", reason: "some unknown forced retry reason", want: "forced_retry"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := forcedRetryFingerprint(tc.reason); got != tc.want {
+				t.Fatalf("forcedRetryFingerprint(%q) = %q, want %q", tc.reason, got, tc.want)
+			}
+		})
 	}
 }
 

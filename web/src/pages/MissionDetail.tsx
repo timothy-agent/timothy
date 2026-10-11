@@ -231,6 +231,38 @@ function latestExecutorSpawn(
   return null
 }
 
+// latestCommitSkippedPathsAction picks the newest harness action-required
+// event for skipped commit paths (D-121), so the detail page can surface
+// it as an actionable warning while the mission keeps running.
+function latestCommitSkippedPathsAction(events: MissionEvent[]): string | null {
+  let newestVerifiedPassSeq = -1
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].kind !== 'mission.unit_verified') continue
+    const payload = events[i].payload
+    if (!payload || typeof payload !== 'object') continue
+    if ((payload as { passed?: unknown }).passed === true) {
+      newestVerifiedPassSeq = events[i].seq
+      break
+    }
+  }
+  for (let i = events.length - 1; i >= 0; i--) {
+    if (events[i].kind !== 'mission.action_required') continue
+    if (events[i].seq < newestVerifiedPassSeq) return null
+    const payload = events[i].payload
+    if (!payload || typeof payload !== 'object') continue
+    const p = payload as { kind?: unknown; message?: unknown; paths?: unknown }
+    if (p.kind !== 'commit_skipped_paths') continue
+    if (typeof p.message === 'string' && p.message.trim()) return p.message
+    if (Array.isArray(p.paths)) {
+      const paths = p.paths.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      if (paths.length > 0) {
+        return `Harness skipped untracked paths outside this unit's artifacts/scope: ${paths.join(', ')}`
+      }
+    }
+  }
+  return null
+}
+
 // statusLabel mirrors MissionCard's own rule for the header badge:
 // non-terminal statuses print as-is (underscores to spaces), phase=done
 // reads as "done", and phase=failed reads as "cancelled" (failure_reason)
@@ -463,6 +495,8 @@ export function MissionDetail() {
   const pauseTitle =
     pauseCauseLabel(pausePayload) ??
     (mission.pause_reason ? (pauseReasonLabels[mission.pause_reason] ?? mission.pause_reason) : '')
+  const actionRequired =
+    mission.status === 'working' && mission.phase === 'build' ? latestCommitSkippedPathsAction(events) : null
 
   const resume = async () => {
     setBusy(true)
@@ -718,6 +752,12 @@ export function MissionDetail() {
         <Alert tone="warning" className="mt-4">
           <AlertTitle>Paused: {pauseTitle}</AlertTitle>
           {pauseDetail && <AlertDescription>{pauseDetail}</AlertDescription>}
+        </Alert>
+      )}
+      {actionRequired && (
+        <Alert tone="warning" className="mt-4">
+          <AlertTitle>Action required before done</AlertTitle>
+          <AlertDescription>{actionRequired}</AlertDescription>
         </Alert>
       )}
 
@@ -1060,6 +1100,8 @@ export function MissionDetail() {
           </Panel>
         )}
 
+        <TimelineSection events={events} />
+
         <ArtifactsSection
           missionId={id}
           missionName={mission.name}
@@ -1067,8 +1109,6 @@ export function MissionDetail() {
           workspace={mission.workspace}
           refs={mission.artifact_refs ?? []}
         />
-
-        <TimelineSection events={events} />
 
       </div>
     </PageShell>

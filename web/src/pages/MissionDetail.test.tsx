@@ -1073,6 +1073,58 @@ describe('MissionDetail', () => {
     expect(await screen.findByText('every provider attempt failed: GLM 429')).toBeTruthy()
   })
 
+  it('shows an action-required warning from mission.action_required commit_skipped_paths while building', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'build', status: 'working' })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.action_required',
+        payload: {
+          kind: 'commit_skipped_paths',
+          message: "Harness skipped untracked paths outside this unit's artifacts/scope: docs/notes.md",
+          paths: ['docs/notes.md'],
+        },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+    ])
+    renderPage()
+    expect(await screen.findByText('Action required before done')).toBeTruthy()
+    expect((await screen.findAllByText(/docs\/notes\.md/)).length).toBeGreaterThan(0)
+  })
+
+  it('clears the action-required warning after a later successful mission.unit_verified event', async () => {
+    vi.mocked(getMission).mockResolvedValue({ ...baseMission, phase: 'build', status: 'working' })
+    vi.mocked(missionEvents).mockResolvedValue([
+      ...events,
+      {
+        mission_id: 'm1',
+        seq: 5,
+        kind: 'mission.action_required',
+        payload: {
+          kind: 'commit_skipped_paths',
+          message: "Harness skipped untracked paths outside this unit's artifacts/scope: docs/notes.md",
+          paths: ['docs/notes.md'],
+        },
+        provenance: 'live',
+        created_at: '2026-01-01T00:04:00Z',
+      },
+      {
+        mission_id: 'm1',
+        seq: 6,
+        kind: 'mission.unit_verified',
+        payload: { unit: 0, passed: true, check: 'check_cmd' },
+        provenance: 'live',
+        created_at: '2026-01-01T00:05:00Z',
+      },
+    ])
+    renderPage()
+    await screen.findByRole('heading', { name: 'Fix the login bug' })
+    expect(screen.queryByText('Action required before done')).toBeNull()
+  })
+
   it('labels a review_exhausted pause readably alongside the event detail', async () => {
     vi.mocked(getMission).mockResolvedValue({
       ...baseMission,

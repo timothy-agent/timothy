@@ -80,6 +80,30 @@ func TestWorkPacketRenderUnitFailure(t *testing.T) {
 	}
 }
 
+func TestWorkPacketRenderRetryGuidance(t *testing.T) {
+	p := WorkPacket{
+		Goal: "Fix scope spill",
+		Plan: Plan{Units: []PlanUnit{
+			{Title: "Update parser"},
+		}},
+		RetryGuidance: "Harness skipped untracked paths outside this unit's artifacts/scope: docs/notes.md",
+	}
+	_, user := p.Render()
+	want := "Current unit: Update parser\n" +
+		"Retry guidance from harness:\n" +
+		"Harness skipped untracked paths outside this unit's artifacts/scope: docs/notes.md\n" +
+		"Resolve this before reporting done.\n" +
+		"Plan:\n"
+	if !strings.Contains(user, want) {
+		t.Fatalf("Render retry guidance block mismatch.\nwant substring:\n%s\ngot:\n%s", want, user)
+	}
+
+	_, delegated, _ := p.RenderForDelegated("/run")
+	if !strings.Contains(delegated, "Current unit: Update parser\nRetry guidance from harness:\nHarness skipped untracked paths outside this unit's artifacts/scope: docs/notes.md\nResolve this before reporting done.\n") {
+		t.Fatalf("RenderForDelegated missing retry guidance block:\n%s", delegated)
+	}
+}
+
 // TestWorkPacketRenderOpenFindings is the golden test for the D-092
 // rework work order: the current-unit line above the plan, then the
 // findings block (exact wording, before "Progress so far"), identical
