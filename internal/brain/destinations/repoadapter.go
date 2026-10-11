@@ -325,7 +325,23 @@ func (a *RepoAdapter) ensureRepo(ctx context.Context, c gitprovider.Client, m mi
 		if !createIfMissing {
 			return repoURL, false, fmt.Errorf("ensure repo: repo %s does not exist and create_if_missing is not set", ref.FullName())
 		}
-		cloneURL, err := a.createRepo(ctx, c, m, ref.FullName())
+		createName := ref.FullName()
+		if c.Kind() == gitprovider.KindGitHub {
+			// GitHub's create call takes a bare name and always creates
+			// under the credential's own account. A 404 also means "the
+			// credential cannot see it", so an owner that is not the
+			// credential's account must fail rather than deliver to a
+			// different repo.
+			id, err := c.Identity(ctx)
+			if err != nil {
+				return repoURL, false, fmt.Errorf("ensure repo: resolve credential account: %w", err)
+			}
+			if !strings.EqualFold(id.Login, ref.Owner) {
+				return repoURL, false, fmt.Errorf("ensure repo: repo %s not found or not accessible to the connector's credential (account %q); refusing to create it under another account", ref.FullName(), id.Login)
+			}
+			createName = ref.Name
+		}
+		cloneURL, err := a.createRepo(ctx, c, m, createName)
 		if err != nil {
 			return repoURL, false, fmt.Errorf("ensure repo: create %s: %w", ref.FullName(), err)
 		}
@@ -390,7 +406,16 @@ func repoExists(ctx context.Context, c gitprovider.Client, ref gitprovider.RepoR
 // cfg.CreateIfMissing, create a repo named after the mission's goal/id,
 // (d) else fail. On success e is updated in place with the final
 // RepoURL/Branch/RemoteHost, and PRURL/PRNumber when a PR was opened.
-func (a *RepoAdapter) DeliverMission(ctx context.Context, cfg RepoDestinationConfig, m missions.Mission, e *missions.DestinationEntry) error {
+// A failed delivery leaves e.RepoURL as it was: the caller persists the
+// entry, and a resolved target pinned by a failed attempt would be reused
+// by every retry.
+func (a *RepoAdapter) DeliverMission(ctx context.Context, cfg RepoDestinationConfig, m missions.Mission, e *missions.DestinationEntry) (retErr error) {
+	origRepoURL := e.RepoURL
+	defer func() {
+		if retErr != nil {
+			e.RepoURL = origRepoURL
+		}
+	}()
 	if reason := missions.NotPushable(m); reason != "" {
 		return fmt.Errorf("deliver: %s", reason)
 	}
