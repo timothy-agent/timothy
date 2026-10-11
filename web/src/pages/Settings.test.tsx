@@ -321,9 +321,10 @@ describe('Providers tab', () => {
     fireEvent.click(await screen.findByRole('link', { name: /AWS Bedrock/ }))
     expect(await screen.findByRole('heading', { name: 'Add AWS Bedrock' })).toBeTruthy()
     expect(screen.getByText('Region')).toBeTruthy()
-    expect(screen.getByRole('combobox')).toBeTruthy()
-    // Static keys are the only bedrock auth now: access key id + secret
+    expect(screen.getByRole('combobox', { name: 'Region' })).toBeTruthy()
+    // Access keys are the default bedrock auth: access key id + secret
     // access key are collected directly, not a generic API key field.
+    expect(screen.getByRole('combobox', { name: 'Authentication' })).toHaveTextContent('Access keys')
     expect(screen.getByText('Access Key ID')).toBeTruthy()
     expect(screen.getByText('Secret Access Key')).toBeTruthy()
   })
