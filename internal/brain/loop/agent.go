@@ -343,10 +343,10 @@ type Request struct {
 	// stays an explicit, intentional choice at each call site rather
 	// than inferred.
 	// ExtraTools still layer on top as normal — missions.nativeRunner's
-	// worker/discover turns use exactly this to add back read-only
-	// connector tools (gmail/calendar reads) that automation general
-	// missions need, gated on the agent's Tools allowlist and never
-	// including MCP or write-capable tools (missions.ConnectorReadsResolver).
+	// worker/discover turns use exactly this to add back connector
+	// tools (gmail/calendar reads, worker writes) that automation
+	// missions need, gated on the agent's Tools allowlist; MCP stays
+	// read-only-marked only (missions.ConnectorToolsResolver).
 	BuiltinsOnly bool
 
 	// ExtraTools are tool defs available ONLY for this turn, on top of

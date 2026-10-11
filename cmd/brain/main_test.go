@@ -73,18 +73,20 @@ func TestRememberWithTurnTrustForwardsReviewGate(t *testing.T) {
 	}
 }
 
-// TestIntersectReadOnlyConnectorToolsMatchesAllowlist confirms the
+// TestIntersectConnectorToolsMatchesAllowlist confirms the
 // resolver's matching step: only tools whose name matches an allow
 // entry (direct or connector-namespaced suffix, D-036) come through,
 // and an empty allowlist (agent opted into nothing) yields none.
-func TestIntersectReadOnlyConnectorToolsMatchesAllowlist(t *testing.T) {
+// Reads and writes match the same way; write membership is the
+// resolver input's job, not the matcher's.
+func TestIntersectConnectorToolsMatchesAllowlist(t *testing.T) {
 	available := []*tools.Tool{
 		{Name: "gmail_gmail_search", ReadOnly: true},
 		{Name: "google-calendar_list_calendar_events", ReadOnly: true},
-		{Name: "gmail_gmail_send"}, // not read-only; ReadOnlyTools would never hand this in, but the matcher must not care
+		{Name: "gmail_gmail_send"},
 	}
 
-	got := intersectReadOnlyConnectorTools([]string{"gmail_search"}, available)
+	got := intersectConnectorTools([]string{"gmail_search"}, available)
 	var names []string
 	for _, tl := range got {
 		names = append(names, tl.Name)
@@ -93,20 +95,34 @@ func TestIntersectReadOnlyConnectorToolsMatchesAllowlist(t *testing.T) {
 		t.Fatalf("intersect = %v, want [gmail_gmail_search]", names)
 	}
 
-	if got := intersectReadOnlyConnectorTools(nil, available); got != nil {
+	if got := intersectConnectorTools(nil, available); got != nil {
 		t.Fatalf("empty allowlist = %v, want nil", got)
 	}
 
-	got = intersectReadOnlyConnectorTools([]string{"list_calendar_events", "gmail_search"}, available)
+	got = intersectConnectorTools([]string{"list_calendar_events", "gmail_search", "gmail_send"}, available)
 	names = nil
 	for _, tl := range got {
 		names = append(names, tl.Name)
 	}
 	slices.Sort(names)
-	want := []string{"gmail_gmail_search", "google-calendar_list_calendar_events"}
+	want := []string{"gmail_gmail_search", "google-calendar_list_calendar_events", "gmail_gmail_send"}
 	slices.Sort(want)
 	if !slices.Equal(names, want) {
 		t.Fatalf("intersect = %v, want %v", names, want)
+	}
+
+}
+
+// TestDedupeToolsByNameKeepsFirst confirms the resolver's union step:
+// ReadOnlyTools and NativeTools overlap on native reads, and the
+// merged surface never offers one name twice.
+func TestDedupeToolsByNameKeepsFirst(t *testing.T) {
+	first := &tools.Tool{Name: "search_mail", ReadOnly: true}
+	second := &tools.Tool{Name: "search_mail", ReadOnly: true}
+	third := &tools.Tool{Name: "gmail_send"}
+	got := dedupeToolsByName([]*tools.Tool{first, second, third})
+	if len(got) != 2 || got[0] != first || got[1] != third {
+		t.Fatalf("dedupe = %v, want [search_mail(first) gmail_send]", got)
 	}
 }
 
