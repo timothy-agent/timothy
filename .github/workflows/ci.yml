@@ -332,6 +332,20 @@ jobs:
             docker compose -f "$1" config --format json | jq -er '.configs.searxng_settings.content'
           }
           diff <(extract deploy/docker-compose.yml) <(extract deploy/release/docker-compose.yml)
+      # Networks are isolation boundaries (D-159): a network added to one
+      # file only once left release installs without it.
+      - name: Networks match across compose files
+        run: |
+          docker compose -f deploy/docker-compose.yml config --format json > /tmp/dev.json
+          docker compose -f deploy/release/docker-compose.yml config --format json > /tmp/release.json
+          nets() {
+            jq -S --slurpfile other "$2" '
+              ($other[0].services | keys) as $theirs
+              | {networks: .networks,
+                 services: (.services | with_entries(select(.key as $k | $theirs | index($k)))
+                            | map_values(.networks // {} | keys))}' "$1"
+          }
+          diff <(nets /tmp/dev.json /tmp/release.json) <(nets /tmp/release.json /tmp/dev.json)
 
   # Umbrella gate with a stable name for branch rulesets: matrix legs
   # report as "images (brain)" etc., which rulesets can't reference.
