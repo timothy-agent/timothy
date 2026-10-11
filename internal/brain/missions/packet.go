@@ -85,6 +85,9 @@ type WorkPacket struct {
 	// destination or by hand (D-157): the turn that can finish the plan asks for the
 	// PR summary in final_output.
 	DeliversPR bool
+	// RetryGuidance is a harness-authored handoff that must be addressed
+	// before a done verdict (e.g. paths excluded from commit scope).
+	RetryGuidance string
 }
 
 // prSummaryRequest (D-157, issue #1174) asks the worker that can finish
@@ -245,6 +248,7 @@ func (p WorkPacket) RenderForDelegated(runDir string) (system, user string, file
 		if unit, _ := currentUnit(p.Plan); unit != nil {
 			b.WriteString("\n")
 			fmt.Fprintf(&b, "Current unit: %s\n", NeutralizeSlot(unit.Title))
+			b.WriteString(renderRetryGuidance(p.RetryGuidance))
 			b.WriteString(renderUnitFailure(*unit))
 			for _, c := range unit.Criteria {
 				fmt.Fprintf(&b, "  criterion: %s\n", NeutralizeSlot(c))
@@ -349,6 +353,7 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 	if len(p.Plan.Units) > 0 {
 		if unit, _ := currentUnit(p.Plan); unit != nil {
 			fmt.Fprintf(&b, "Current unit: %s\n", NeutralizeSlot(unit.Title))
+			b.WriteString(renderRetryGuidance(p.RetryGuidance))
 			b.WriteString(renderUnitFailure(*unit))
 		}
 		b.WriteString("Plan:\n")
@@ -430,6 +435,18 @@ func renderUnitFailure(u PlanUnit) string {
 	if u.VerifyExcerpt != "" {
 		fmt.Fprintf(&b, "Harness output:\n%s\n", NeutralizeSlot(strings.TrimRight(u.VerifyExcerpt, "\n")))
 	}
+	return b.String()
+}
+
+func renderRetryGuidance(guidance string) string {
+	guidance = strings.TrimSpace(guidance)
+	if guidance == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Retry guidance from harness:\n")
+	b.WriteString(NeutralizeSlot(guidance))
+	b.WriteString("\nResolve this before reporting done.\n")
 	return b.String()
 }
 

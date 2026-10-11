@@ -1924,6 +1924,24 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 				}); err != nil {
 					d.log.Warn("driver: record commit skipped paths failed", "mission_id", m.ID, "error", err)
 				}
+				note := commitSkippedNote(skipped)
+				if err := d.store.AppendEvent(ctx, m.ID, "mission.action_required", map[string]any{
+					"kind":    "commit_skipped_paths",
+					"message": note,
+					"paths":   skipped,
+				}); err != nil {
+					d.log.Warn("driver: record action required failed", "mission_id", m.ID, "error", err)
+				}
+				if err := d.store.AppendProgress(ctx, m.ID, note); err != nil {
+					d.log.Warn("driver: record skipped-path note failed", "mission_id", m.ID, "error", err)
+				}
+				return StepInput{
+					Input:          InputWorkerRetry,
+					Reason:         truncate(commitSkippedReason(skipped), 500),
+					GapFingerprint: skippedPathsFingerprint(skipped),
+					Provider:       verdict.Provider,
+					Model:          verdict.Model,
+				}, nil
 			}
 		}
 		if err := d.store.SetLastEvidence(ctx, m.ID, verdict.Evidence); err != nil {
@@ -2009,19 +2027,56 @@ func (d *Driver) runExecute(ctx context.Context, m Mission) (StepInput, error) {
 		// tree (runReview).
 		in := StepInput{Input: InputWorkerRetry, Reason: truncate(verdict.Analysis, 500), Provider: verdict.Provider, Model: verdict.Model}
 		if verdict.Forced {
-			// Neither a tool call nor a text-form sentinel (runner.go's
-			// extractTextSentinel) could be read from this turn — a
-			// distinct, stable fingerprint (rather than none at all) so
-			// the stall brake (stepWorkerRetry, StallRounds consecutive
-			// identical fingerprints) pauses the mission after repeated
-			// sentinel-less turns instead of grinding to max_iterations on
-			// a model that never learns to end its turn correctly.
-			in.GapFingerprint = "no_sentinel"
+			// Forced retries are harness-authored. Keep the no_sentinel
+			// stall brake for genuinely sentinel-less turns, while
+			// avoiding false stalls/replans for infra retries such as
+			// run-loss, run-budget and idle-timeout kills.
+			in.GapFingerprint = forcedRetryFingerprint(in.Reason)
 			// The worker did not choose this retry (issue #718), so it
 			// costs no iteration; the stall brake above still stops it.
 			in.HarnessCaused = true
 		}
 		return in, nil
+	}
+}
+
+func commitSkippedReason(paths []string) string {
+	return "untracked files outside this unit's artifacts/scope: " + strings.Join(paths, ", ")
+}
+
+const skippedPathsNotePrefix = "Harness skipped untracked paths outside this unit's artifacts/scope: "
+
+func commitSkippedNote(paths []string) string {
+	return skippedPathsNotePrefix + strings.Join(paths, ", ")
+}
+
+func skippedPathsFingerprint(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	cp := append([]string(nil), paths...)
+	sort.Strings(cp)
+	return "commit_skipped:" + strings.Join(cp, "|")
+}
+
+func forcedRetryFingerprint(reason string) string {
+	lower := strings.ToLower(reason)
+	switch {
+	case strings.Contains(lower, "without a status report"),
+		strings.Contains(lower, "did not report a status"),
+		strings.Contains(lower, "no sentinel"):
+		return "no_sentinel"
+	case strings.Contains(lower, "changed nothing in the worktree"),
+		strings.Contains(lower, "changed nothing"):
+		return "done_without_changes"
+	case strings.Contains(lower, "idle timeout"),
+		strings.Contains(lower, "run budget"),
+		strings.Contains(lower, "run was lost across a restart"),
+		strings.Contains(lower, "process was lost"),
+		strings.Contains(lower, "without a result event"):
+		return ""
+	default:
+		return "forced_retry"
 	}
 }
 
@@ -2462,7 +2517,7 @@ func (d *Driver) packet(ctx context.Context, m Mission) (WorkPacket, error) {
 		ExecEnvironmentNote: execEnvironmentNote(loc) + renderEnvFacts(m), Sources: m.Sources,
 		Light: m.RunsPlanless(), Location: loc,
 		Findings: m.ReviewFindings, ReworkRound: m.ReworkRounds, MaxRounds: m.MaxIterations,
-		DeliversPR: deliversPR(m),
+		DeliversPR: deliversPR(m), RetryGuidance: latestSkippedPathsGuidance(m.Progress),
 	}
 	// D-090: only flow=discover_build ever has discover notes AND
 	// runs planless at the same time (Light is born in PhaseBuild,
@@ -2502,6 +2557,15 @@ func (d *Driver) recordProgress(ctx context.Context, id, text string) error {
 		return nil
 	}
 	return d.store.AppendProgress(ctx, id, NeutralizeSlot(truncate(text, 2000)))
+}
+
+func latestSkippedPathsGuidance(notes []ProgressNote) string {
+	for i := len(notes) - 1; i >= 0; i-- {
+		if strings.HasPrefix(notes[i].Note, skippedPathsNotePrefix) {
+			return notes[i].Note
+		}
+	}
+	return ""
 }
 
 func truncate(s string, n int) string {

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import {
+  AlertTriangle,
   CircleCheck,
   CircleX,
   Flag,
@@ -155,6 +156,13 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
         {label}: {truncateForDisplay(reason, 160)}
       </span>
     )
+  },
+  'mission.action_required': (p) => {
+    const { message, kind } = asRecord(p)
+    if (typeof message === 'string' && message.trim().length > 0) {
+      return <span className="text-warning">Action required: {message}</span>
+    }
+    return <span className="text-warning">Action required: {String(kind ?? 'unknown')}</span>
   },
   'mission.blocked': (p) => {
     const { question } = asRecord(p)
@@ -415,6 +423,7 @@ const kindIcons: Record<string, LucideIcon> = {
   'mission.failed': CircleX,
   'mission.violation': CircleX,
   'mission.paused': Pause,
+  'mission.action_required': AlertTriangle,
   'mission.blocked': Pause,
   'mission.retry': RotateCcw,
   'mission.recovery': RotateCcw,
