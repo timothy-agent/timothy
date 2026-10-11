@@ -121,7 +121,7 @@ func writeFiles(t *testing.T, files map[string]string) string {
 
 type docRow struct {
 	id, title, sourceType, sourceRef, provenance, status, appPath string
-	chunks                                                       int
+	chunks                                                        int
 }
 
 func docs(t *testing.T, db *pgxpool.Pool) map[string]docRow {

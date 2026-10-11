@@ -117,7 +117,7 @@ func TestLockfileCriteria(t *testing.T) {
 func TestSecurityGoal(t *testing.T) {
 	for goal, want := range map[string]bool{
 		"Fix the security advisories in composer": true,
-		"Patch CVE-2025-1234":                    true,
+		"Patch CVE-2025-1234":                     true,
 		"Upgrade laravel to 11":                   false,
 	} {
 		if got := securityGoal(goal); got != want {

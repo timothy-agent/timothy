@@ -371,7 +371,7 @@ func (claudeAdapter) ParseResult(ev Event) (Result, bool) {
 		return Result{}, false
 	}
 	var v struct {
-		Status string `json:"status"`
+		Status      string `json:"status"`
 		Note        string `json:"note"`
 		FinalOutput string `json:"final_output"`
 	}
