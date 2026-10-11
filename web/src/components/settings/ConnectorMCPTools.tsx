@@ -8,7 +8,7 @@ import { Button } from '../ui/button'
 import { Checkbox } from '../ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table'
 import { Panel } from '../timothy/panel'
-import { allowlistName, appendAllowlist, lastProbeOf, missionReadsOf } from './mcpAddFlow'
+import { allowedBy, allowlistName, appendAllowlist, lastProbeOf, missionReadsOf } from './mcpAddFlow'
 import { TestStatus } from './TestStatus'
 import { errText, isTimothyAuthError } from '../../lib/errors'
 import { relativeTime } from '../../lib/format'
@@ -229,17 +229,28 @@ export function ConnectorMCPTools({
                           <span className="text-xs text-muted-foreground">no agents</span>
                         ) : (
                           <div className="flex flex-wrap gap-x-4 gap-y-1">
-                            {agents.map((a) => (
-                              <label key={a.id} className="flex items-center gap-2 text-xs">
-                                <Checkbox
-                                  aria-label={`Allow ${tool.name} for ${a.name}`}
-                                  checked={a.tools.includes(name)}
-                                  disabled={state === 'removed' || busy === `${a.id}:${name}`}
-                                  onCheckedChange={(v) => void setAllowed(a, tool, v === true)}
-                                />
-                                <span>{a.name}</span>
-                              </label>
-                            ))}
+                            {agents.map((a) => {
+                              const entry = allowedBy(a.tools, name)
+                              // A broader entry ("search" for notion_search)
+                              // can only be changed on the agent page.
+                              const broad = entry !== undefined && entry !== name
+                              return (
+                                <label
+                                  key={a.id}
+                                  className="flex items-center gap-2 text-xs"
+                                  title={broad ? `Allowed by "${entry}" on ${a.name}` : undefined}
+                                >
+                                  <Checkbox
+                                    aria-label={`Allow ${tool.name} for ${a.name}`}
+                                    checked={entry !== undefined}
+                                    disabled={state === 'removed' || broad || busy === `${a.id}:${name}`}
+                                    onCheckedChange={(v) => void setAllowed(a, tool, v === true)}
+                                  />
+                                  <span>{a.name}</span>
+                                  {broad && <span className="font-mono text-muted-foreground">via {entry}</span>}
+                                </label>
+                              )
+                            })}
                           </div>
                         )}
                       </TableCell>

@@ -1352,6 +1352,9 @@ export interface ConnectorTestResult {
 // instead; the other fields are then ignored.
 export interface ConnectorProbeRequest {
   name?: string
+  // provider prefixes the final tool names (notion gives notion_search);
+  // empty lets the server's own name decide.
+  provider?: string
   endpoint?: string
   headers?: Record<string, string>
   token?: string
@@ -1378,6 +1381,8 @@ export interface ConnectorProbe {
   tool_count: number
   index_threshold: number
   message?: string
+  // The provider prefix the final names use.
+  provider?: string
   // Fingerprint of the server's full tool list.
   hash?: string
   // Re-probe only: tool names that appeared or disappeared since the

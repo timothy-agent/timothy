@@ -565,7 +565,7 @@ describe('Connectors tab', () => {
     expect(createConnector).toHaveBeenCalledWith({
       name: 'github-mcp',
       kind: 'mcp',
-      config: { endpoint: 'https://api.githubcopilot.com/mcp/' },
+      config: { endpoint: 'https://api.githubcopilot.com/mcp/', provider: 'github' },
       credential_ref: 'GITHUB_MCP_TOKEN',
       enabled: false,
     })
@@ -1125,8 +1125,11 @@ describe('ConnectorEdit rotate token and copy key', () => {
     vi.mocked(listConnectors).mockResolvedValue([mcpConnector])
     renderTab(`/settings/connectors/${mcpConnector.id}`)
 
-    expect(await screen.findByText('Endpoint:')).toBeTruthy()
+    expect(await screen.findByText(/^Endpoint:/)).toBeTruthy()
     expect(screen.getByText('https://mcp.example.com')).toBeTruthy()
+    // No provider saved: the tool prefix is the connector name.
+    expect(screen.getByText(/Tool prefix:/)).toBeTruthy()
+    expect(screen.getByText('custom-mcp', { selector: 'span.font-mono' })).toBeTruthy()
     expect(screen.getByText('Rotate bearer token')).toBeTruthy()
   })
 })

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { ConnectorProbe } from '../../api/types'
 import {
+  allowedBy,
   allowlistName,
+  catalogProvider,
   appendAllowlist,
   buildArgs,
   indexNote,
@@ -9,6 +11,7 @@ import {
   lastProbeOf,
   missionReadsOf,
   parseMCPInput,
+  providerPattern,
   schemaFields,
   stdioReason,
 } from './mcpAddFlow'
@@ -245,5 +248,28 @@ describe('last probe record', () => {
   it('allowlistName prefers the final name', () => {
     expect(allowlistName({ name: 'shell', final_name: 'notion_shell', read_only_hint: null })).toBe('notion_shell')
     expect(allowlistName({ name: 'plain', read_only_hint: null })).toBe('plain')
+  })
+})
+
+describe('provider naming helpers', () => {
+  it('allowedBy follows the backend suffix rule', () => {
+    expect(allowedBy(['notion_search'], 'notion_search')).toBe('notion_search')
+    expect(allowedBy(['shell', 'search'], 'notion_search')).toBe('search')
+    expect(allowedBy(['arch'], 'notion_search')).toBeUndefined()
+    expect(allowedBy([], 'notion_search')).toBeUndefined()
+  })
+
+  it('catalogProvider names hosted tiles only', () => {
+    expect(catalogProvider({ id: 'notion', kind: 'mcp' })).toBe('notion')
+    expect(catalogProvider({ id: 'custom-mcp', kind: 'mcp' })).toBeUndefined()
+    expect(catalogProvider({ id: 'gmail', kind: 'google' })).toBeUndefined()
+  })
+
+  it('providerPattern accepts slugs only', () => {
+    expect(providerPattern.test('notion')).toBe(true)
+    expect(providerPattern.test('google_analytics')).toBe(true)
+    expect(providerPattern.test('Notion')).toBe(false)
+    expect(providerPattern.test('notion-work')).toBe(false)
+    expect(providerPattern.test('a'.repeat(33))).toBe(false)
   })
 })

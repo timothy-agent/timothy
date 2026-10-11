@@ -150,6 +150,23 @@ export function allowlistName(tool: MCPProbedTool): string {
   return tool.final_name || tool.name
 }
 
+// providerPattern is a valid MCP provider prefix (D-158).
+export const providerPattern = /^[a-z0-9_]{1,32}$/
+
+// allowedBy names the allowlist entry that admits tool, using the
+// backend's rule: an exact match, or the tool ending in "_" + entry
+// (so "search" admits notion_search). undefined when none does.
+export function allowedBy(allowlist: string[], tool: string): string | undefined {
+  if (allowlist.includes(tool)) return tool
+  return allowlist.find((entry) => tool.endsWith(`_${entry}`))
+}
+
+// catalogProvider is the provider a preset tile saves: its id for a
+// hosted MCP server, none for the custom tile, whose add flow asks.
+export function catalogProvider(preset: { id: string; kind: string }): string | undefined {
+  return preset.kind === 'mcp' && preset.id !== 'custom-mcp' ? preset.id : undefined
+}
+
 // indexNote explains whether chat sees the tools directly or through
 // the deferred index, mirroring the backend's count > threshold rule.
 export function indexNote(count: number, threshold: number): string {

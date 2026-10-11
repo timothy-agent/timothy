@@ -29,6 +29,7 @@ import {
   indexNote,
   lastProbeFrom,
   parseMCPInput,
+  providerPattern,
   schemaFields,
   stdioIssueURL,
   stdioReason,
@@ -55,6 +56,7 @@ export function ConnectorAddMCP() {
   const [pick, setPick] = useState(0)
   const candidate = parsed.candidates[pick]
   const [name, setName] = useState('')
+  const [provider, setProvider] = useState('')
   const [token, setToken] = useState('')
   const [askToken, setAskToken] = useState(false)
   const [clientID, setClientID] = useState('')
@@ -78,6 +80,7 @@ export function ConnectorAddMCP() {
     setInput(text)
     setPick(index)
     setName(c?.name ?? '')
+    setProvider('')
     setToken(c?.token ?? '')
     setAskToken(false)
     setClientID('')
@@ -94,11 +97,13 @@ export function ConnectorAddMCP() {
     try {
       const res = await probeConnector({
         name: name.trim(),
+        ...(provider.trim() ? { provider: provider.trim() } : {}),
         endpoint: candidate.endpoint,
         ...(Object.keys(candidate.headers).length > 0 ? { headers: candidate.headers } : {}),
         ...(token.trim() ? { token: token.trim() } : {}),
       })
       setProbe(res)
+      if (!provider.trim() && res.status === 'ok' && res.provider) setProvider(res.provider)
       setSelected(new Set(res.tools.map((t) => t.name)))
       if (res.status === 'needs_token') setAskToken(true)
     } catch (err) {
@@ -122,6 +127,7 @@ export function ConnectorAddMCP() {
         config: {
           endpoint: candidate.endpoint,
           ...(Object.keys(headers).length > 0 ? { headers } : {}),
+          ...(provider.trim() ? { provider: provider.trim() } : {}),
           last_probe: lastProbeFrom(probe),
         },
         credential_ref: ref,
@@ -170,6 +176,7 @@ export function ConnectorAddMCP() {
         config: {
           endpoint: candidate.endpoint,
           ...(Object.keys(headers).length > 0 ? { headers } : {}),
+          ...(provider.trim() ? { provider: provider.trim() } : {}),
           auth_mode: 'oauth',
           ...(pastedClient ? { client_id: clientID.trim() } : {}),
           ...(pastedClient && clientSecret ? { client_secret_ref: refs.clientSecret } : {}),
@@ -185,9 +192,17 @@ export function ConnectorAddMCP() {
   }
 
   const needsOAuth = probe?.status === 'needs_oauth'
+  const providerError =
+    provider.trim() !== '' && !providerPattern.test(provider.trim())
+      ? 'Lowercase letters, digits and underscores, up to 32.'
+      : undefined
   const httpsEndpoint = candidate?.endpoint.startsWith('https://') === true
   const canConnectOAuth =
-    needsOAuth && name.trim() !== '' && httpsEndpoint && (clientSecret === '' || clientID.trim() !== '')
+    needsOAuth &&
+    name.trim() !== '' &&
+    !providerError &&
+    httpsEndpoint &&
+    (clientSecret === '' || clientID.trim() !== '')
 
   const toggle = <T,>(set: Set<T>, item: T, on: boolean): Set<T> => {
     const next = new Set(set)
@@ -281,6 +296,21 @@ export function ConnectorAddMCP() {
                   placeholder="my-server"
                 />
               </Field>
+              <Field
+                label="Provider"
+                required={false}
+                error={providerError}
+                description="prefixes this server's tool names, e.g. notion gives notion_search; connectors with the same provider share their tools. Empty takes the server's own name."
+              >
+                <Input
+                  value={provider}
+                  onChange={(e) => {
+                    setProvider(e.target.value)
+                    setProbe(null)
+                  }}
+                  placeholder="from the server"
+                />
+              </Field>
               {(askToken || token !== '') && (
                 <Field label="Bearer token" description="stored as a secret when you add the connector">
                   <Input
@@ -299,7 +329,7 @@ export function ConnectorAddMCP() {
                 <Button
                   type="button"
                   variant="test"
-                  disabled={probing || !name.trim() || candidate.placeholders.length > 0}
+                  disabled={probing || !name.trim() || !!providerError || candidate.placeholders.length > 0}
                   onClick={() => void runProbe()}
                 >
                   {probe ? 'Check again' : 'Check server'}
@@ -430,7 +460,7 @@ export function ConnectorAddMCP() {
           ) : (
             <Button
               type="button"
-              disabled={saving || probe?.status !== 'ok' || !name.trim()}
+              disabled={saving || probe?.status !== 'ok' || !name.trim() || !!providerError}
               onClick={() => void save()}
             >
               Add connector

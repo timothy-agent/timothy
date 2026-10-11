@@ -278,58 +278,51 @@ func TestMCPStatusErrorNeverLeaksRawJSON(t *testing.T) {
 	}
 }
 
-// TestManagerMergesLoneMCPToolUnderRawName pins the raw-name refactor's
-// default case: a single MCP connector with no reserved-name collision
-// and nothing else sharing its tools' raw names joins the unified
-// surface exactly like any other source (see groupByRawName) — no
-// prefix, "account" left off the schema since there's only one
-// contributor.
-func TestManagerMergesLoneMCPToolUnderRawName(t *testing.T) {
+// TestManagerPrefixesMCPToolsWithProvider pins D-158: every MCP tool
+// carries its provider prefix, the connector name when config sets no
+// provider, so its name never depends on what else is connected.
+func TestManagerPrefixesMCPToolsWithProvider(t *testing.T) {
 	t.Parallel()
 	m := testManager(fakeRows{})
 	m.sources = map[string]Source{
 		"github": &mcpSource{name: "github", toolList: []*tools.Tool{
 			{Name: "create_issue", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		}},
+		"Work Notion": &mcpSource{name: "Work Notion", provider: "notion", toolList: []*tools.Tool{
+			{Name: "create_page", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		}},
 	}
 	names := map[string]bool{}
 	for _, tl := range m.Tools(nil) {
 		names[tl.Name] = true
 	}
-	if !names["create_issue"] {
-		t.Fatalf("tools = %v, want create_issue un-namespaced", names)
-	}
-	if names["github_create_issue"] {
-		t.Fatalf("tools = %v, must not also appear namespaced", names)
+	if !names["github_create_issue"] || !names["notion_create_page"] || len(names) != 2 {
+		t.Fatalf("tools = %v, want github_create_issue and notion_create_page only", names)
 	}
 }
 
-// TestManagerNamespacesMCPToolReservedByBuiltin pins Guard A: a raw
-// name in the reserved set (the agent's non-connector tools) never
-// merges, MCP included — an MCP tool sharing that name falls back to
-// "<connector>_<tool>" (namespacedTools' sanitizer intact, hence the
-// space in "search code") instead of shadowing the reserved tool.
-func TestManagerNamespacesMCPToolReservedByBuiltin(t *testing.T) {
+// TestManagerMCPToolNeverShadowsReservedName pins that a reserved raw
+// name (the agent's non-connector tools) cannot be taken by an MCP
+// tool: the provider prefix keeps them apart, and the sanitizer still
+// cleans a server-chosen name ("search code").
+func TestManagerMCPToolNeverShadowsReservedName(t *testing.T) {
 	t.Parallel()
 	m := testManager(fakeRows{})
 	m.sources = map[string]Source{
 		"github": &mcpSource{name: "github", toolList: []*tools.Tool{
 			{Name: "create_issue", InputSchema: json.RawMessage(`{"type":"object"}`)},
-			{Name: "search code", InputSchema: json.RawMessage(`{"type":"object"}`)}, // space sanitized
+			{Name: "search code", InputSchema: json.RawMessage(`{"type":"object"}`)},
 		}},
 	}
 	names := map[string]bool{}
-	for _, tl := range m.Tools(map[string]bool{"search code": true}) {
+	for _, tl := range m.Tools(map[string]bool{"create_issue": true, "search code": true}) {
 		names[tl.Name] = true
 	}
-	if !names["create_issue"] {
-		t.Fatalf("tools = %v, want unreserved create_issue un-namespaced", names)
+	if names["create_issue"] || names["search code"] {
+		t.Fatalf("tools = %v, an MCP tool must not take a reserved raw name", names)
 	}
-	if !names["github_search_code"] {
-		t.Fatalf("tools = %v, want the reserved name namespaced", names)
-	}
-	if names["search code"] {
-		t.Fatalf("tools = %v, reserved raw name must never be served directly", names)
+	if !names["github_create_issue"] || !names["github_search_code"] {
+		t.Fatalf("tools = %v, want both under the provider prefix", names)
 	}
 }
 
@@ -562,4 +555,33 @@ func toolDefs(ts []*tools.Tool) []provider.ToolDef {
 		out = append(out, provider.ToolDef{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
 	}
 	return out
+}
+
+// TestMCPBuilderProviderPrefix pins that config.provider reaches the
+// built source: every tool, including one loaded through load_tool,
+// carries it (D-158).
+func TestMCPBuilderProviderPrefix(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer((&fakeMCP{}).handler())
+	t.Cleanup(srv.Close)
+	src, err := MCPBuilder(srv.Client(), MCPDeferral{})(t.Context(), Connector{
+		Name: "Work GitHub", Kind: "mcp",
+		Config: json.RawMessage(`{"endpoint":"` + srv.URL + `","provider":" gh "}`),
+	}, func(context.Context, string) (string, error) { return "", nil })
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	ms := src.(*mcpSource)
+	if ms.prefix() != "gh" || ms.loadedPrefix() != "gh" {
+		t.Fatalf("prefix = %q, loaded = %q, want gh", ms.prefix(), ms.loadedPrefix())
+	}
+	m := testManager(fakeRows{})
+	m.sources = map[string]Source{"Work GitHub": src}
+	names := map[string]bool{}
+	for _, tl := range m.Tools(nil) {
+		names[tl.Name] = true
+	}
+	if !names["gh_create_issue"] || !names["gh_search_code"] {
+		t.Fatalf("tools = %v", names)
+	}
 }

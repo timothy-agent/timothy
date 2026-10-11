@@ -712,7 +712,7 @@ describe('ConnectorAdd mcp oauth login', () => {
     expect(createConnector).toHaveBeenCalledWith({
       name: 'github-mcp',
       kind: 'mcp',
-      config: { endpoint: 'https://api.githubcopilot.com/mcp/', auth_mode: 'oauth' },
+      config: { endpoint: 'https://api.githubcopilot.com/mcp/', provider: 'github', auth_mode: 'oauth' },
       credential_ref: 'GITHUB_MCP_OAUTH',
       enabled: false,
     })
@@ -781,6 +781,21 @@ describe('ConnectorAdd without custom-mcp branches', () => {
     )
     expect(screen.getByText(/endpoint checked on 2026-10-11/)).toBeInTheDocument()
     expect(screen.queryByText(/has no automatic client registration/)).not.toBeInTheDocument()
+  })
+
+  it('saves the catalog tile id as the provider', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-linear')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('linear')
+    await screen.findByPlaceholderText('linear')
+    fireEvent.click(screen.getByRole('radio', { name: 'Bearer token' }))
+    fireEvent.change(screen.getByPlaceholderText('token'), { target: { value: 'lin-key' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(vi.mocked(createConnector).mock.calls[0][0].config).toEqual({
+      endpoint: 'https://mcp.linear.app/mcp',
+      provider: 'linear',
+    })
   })
 
   it('shows the client registration note for a catalog server without automatic registration', async () => {
