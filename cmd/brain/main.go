@@ -471,6 +471,13 @@ func main() {
 	}
 	if missionDriver != nil && destinationStore != nil {
 		missionDriver.SetGitHubPolicyResolver(destinationStore.RepoPolicy)
+		missionDriver.SetDestinationNameResolver(func(ctx context.Context, id string) string {
+			dest, err := destinationStore.Get(ctx, id)
+			if err != nil {
+				return ""
+			}
+			return dest.Name
+		})
 	}
 	if missionDriver != nil {
 		// D-071: close the unvalidated Driver.Create path (the workflows

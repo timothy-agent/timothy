@@ -81,6 +81,33 @@ type WorkPacket struct {
 	// WritingSamples marks that a writing-samples kb collection is
 	// configured, adding WritingSamplesNote to the same block.
 	WritingSamples bool
+	// DeliversPR marks a mission that can end in a pull request, by
+	// destination or by hand (D-152): the turn that can finish the plan asks for the
+	// PR summary in final_output.
+	DeliversPR bool
+}
+
+// prSummaryRequest (D-152, issue #1174) asks the worker that can finish
+// the plan for the PR description; destinations.PRBody renders
+// final_output under "## Summary" in place of the goal.
+const prSummaryRequest = "Pull request summary: this work becomes a pull request. On done, start final_output with a short summary of the whole change for its description: what changed and why, a few sentences of markdown, without restating the goal. A report the goal asks for follows the summary.\n"
+
+// prSummary is prSummaryRequest when the packet delivers a PR and at
+// most one unit is left without harness evidence, "" otherwise.
+func (p WorkPacket) prSummary() string {
+	if !p.DeliversPR || p.Light || len(p.Plan.Units) == 0 {
+		return ""
+	}
+	pending := 0
+	for _, u := range p.Plan.Units {
+		if !u.verified() {
+			pending++
+		}
+	}
+	if pending > 1 {
+		return ""
+	}
+	return prSummaryRequest
 }
 
 // WritingStyleHeading and WritingSamplesNote are the operator
@@ -207,6 +234,9 @@ func (p WorkPacket) RenderForDelegated(runDir string) (system, user string, file
 	}
 
 	b.WriteString(sc.tail)
+	if req := p.prSummary(); req != "" {
+		b.WriteString("\n" + req)
+	}
 
 	if len(p.Plan.Units) > 0 {
 		if unit, _ := currentUnit(p.Plan); unit != nil {
@@ -332,6 +362,9 @@ func (p WorkPacket) render(preamble string) (system, user string) {
 			}
 		}
 		b.WriteString("\n")
+		if req := p.prSummary(); req != "" {
+			b.WriteString(req + "\n")
+		}
 	}
 
 	b.WriteString(renderOpenFindings(p.Findings, p.ReworkRound, p.MaxRounds))
