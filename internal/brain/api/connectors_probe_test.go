@@ -139,8 +139,19 @@ func TestConnectorProbeNeutralizesAndNames(t *testing.T) {
 	if search.ReadOnlyHint == nil || !*search.ReadOnlyHint || shell.ReadOnlyHint != nil {
 		t.Fatalf("hints = %v %v", shell.ReadOnlyHint, search.ReadOnlyHint)
 	}
-	if shell.FinalName != "notion_shell" || search.FinalName != "search" {
-		t.Fatalf("final names = %q %q, want the builtin clash namespaced", shell.FinalName, search.FinalName)
+	// No provider in the request: it comes from the server's own name.
+	if got.Provider != "system_srv" || shell.FinalName != "system_srv_shell" || search.FinalName != "system_srv_search" {
+		t.Fatalf("provider %q, final names %q %q, want the server-derived prefix", got.Provider, shell.FinalName, search.FinalName)
+	}
+
+	rec = httptest.NewRecorder()
+	h.probe(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"work","provider":"notion","endpoint":"`+srv.URL+`"}`)))
+	got = probeResponse{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body)
+	}
+	if got.Provider != "notion" || got.Tools[0].FinalName != "notion_shell" || got.Tools[1].FinalName != "notion_search" {
+		t.Fatalf("provider %q, final names %+v, want the requested prefix", got.Provider, got.Tools)
 	}
 }
 

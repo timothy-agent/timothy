@@ -162,51 +162,83 @@ func TestProbeFinalNames(t *testing.T) {
 	t.Parallel()
 	schemaA := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`)
 	schemaB := json.RawMessage(`{"type":"object","properties":{"id":{"type":"integer"}}}`)
-	other := &mcpSource{name: "other", toolList: []*tools.Tool{
+	// work is a live Notion account; other is a connector saved before
+	// D-158, so its prefix is its own name.
+	work := &mcpSource{name: "work", provider: "notion", toolList: []*tools.Tool{
 		{Name: "search", InputSchema: schemaA},
 		{Name: "fetch", InputSchema: schemaA},
 	}}
+	other := &mcpSource{name: "other", toolList: []*tools.Tool{{Name: "search", InputSchema: schemaA}}}
 	cases := []struct {
 		name      string
+		connector string
+		provider  string
 		probed    []ProbeTool
 		total     int // server count when above len(probed): a capped preview
 		surface   []string
 		threshold int
 		want      map[string]string
+		absent    []string
 	}{
 		{
-			name:    "lone tool keeps raw name",
-			probed:  []ProbeTool{{Name: "create_page", InputSchema: schemaA}},
-			surface: []string{"shell", "search", "fetch"},
-			want:    map[string]string{"create_page": "create_page"},
+			name: "lone tool gets the provider prefix", connector: "linear", provider: "linear",
+			probed:  []ProbeTool{{Name: "create_issue", InputSchema: schemaA}},
+			surface: []string{"shell"},
+			want:    map[string]string{"create_issue": "linear_create_issue"},
 		},
 		{
-			name:    "builtin name is namespaced",
+			name: "a builtin name never clashes", connector: "linear", provider: "linear",
 			probed:  []ProbeTool{{Name: "shell", InputSchema: schemaA}},
-			surface: []string{"shell", "search", "fetch"},
-			want:    map[string]string{"shell": "notion_shell"},
+			surface: []string{"shell"},
+			want:    map[string]string{"shell": "linear_shell"},
 		},
 		{
-			name:    "same name same schema merges",
+			name: "same provider same schema merges", connector: "personal", provider: "notion",
 			probed:  []ProbeTool{{Name: "search", InputSchema: schemaA}},
-			surface: []string{"shell", "search", "fetch"},
-			want:    map[string]string{"search": "search"},
+			surface: []string{"shell", "notion_search", "notion_fetch", "other_search"},
+			want:    map[string]string{"search": "notion_search"},
 		},
 		{
-			name:    "same name other schema splits",
+			name: "same provider other schema splits", connector: "personal", provider: "notion",
 			probed:  []ProbeTool{{Name: "fetch", InputSchema: schemaB}},
-			surface: []string{"shell", "search", "fetch"},
-			want:    map[string]string{"fetch": "notion_fetch"},
+			surface: []string{"shell", "notion_search", "notion_fetch", "other_search"},
+			want:    map[string]string{"fetch": "personal_notion_fetch"},
 		},
 		{
-			name:      "over threshold all namespaced",
+			name: "another provider with the same raw name stays apart", connector: "linear", provider: "linear",
+			probed:  []ProbeTool{{Name: "search", InputSchema: schemaA}},
+			surface: []string{"shell"},
+			want:    map[string]string{"search": "linear_search"},
+		},
+		{
+			name: "empty provider falls back to the connector name", connector: "jira", provider: "",
+			probed:  []ProbeTool{{Name: "search", InputSchema: schemaA}},
+			surface: []string{"shell"},
+			want:    map[string]string{"search": "jira_search"},
+		},
+		{
+			name: "a remote name spelling the load_tool suffix is dropped", connector: "linear", provider: "linear",
+			probed:  []ProbeTool{{Name: "x_load_tool", InputSchema: schemaA}, {Name: "unload_tool", InputSchema: schemaA}},
+			surface: []string{"shell"},
+			want:    map[string]string{"unload_tool": "linear_unload_tool"},
+			absent:  []string{"x_load_tool"},
+		},
+		{
+			name: "over threshold the loaded names use the provider", connector: "linear", provider: "linear",
 			probed:    []ProbeTool{{Name: "a", InputSchema: schemaA}, {Name: "b", InputSchema: schemaA}},
 			surface:   []string{"shell"},
 			threshold: 1,
-			want:      map[string]string{"a": "notion_a", "b": "notion_b"},
+			want:      map[string]string{"a": "linear_a", "b": "linear_b"},
 		},
 		{
-			name:      "capped preview of an indexed server",
+			name: "over threshold with a shared provider the loaded names name the connector", connector: "personal", provider: "notion",
+			probed:    []ProbeTool{{Name: "a", InputSchema: schemaA}, {Name: "b", InputSchema: schemaA}},
+			surface:   []string{"shell"},
+			threshold: 1,
+			want:      map[string]string{"a": "personal_notion_a", "b": "personal_notion_b"},
+		},
+		{
+			name: "re-probing a live connector does not count itself as sharing", connector: "work", provider: "notion",
 			probed:    []ProbeTool{{Name: "a", InputSchema: schemaA}},
 			total:     600,
 			surface:   []string{"shell"},
@@ -214,29 +246,58 @@ func TestProbeFinalNames(t *testing.T) {
 			want:      map[string]string{"a": "notion_a"},
 		},
 		{
-			name:      "threshold zero keeps eager",
+			name: "threshold zero keeps eager", connector: "linear", provider: "linear",
 			probed:    []ProbeTool{{Name: "a", InputSchema: schemaA}, {Name: "b", InputSchema: schemaA}},
 			surface:   []string{"shell"},
 			threshold: 0,
-			want:      map[string]string{"a": "a", "b": "b"},
+			want:      map[string]string{"a": "linear_a", "b": "linear_b"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			m := testManager(fakeRows{})
+			m.sources["work"] = work
 			m.sources["other"] = other
 			res := ProbeResult{Tools: tc.probed, ToolCount: max(tc.total, len(tc.probed))}
-			got := m.ProbeFinalNames("notion", res, tc.surface, tc.threshold)
+			got := m.ProbeFinalNames(tc.connector, tc.provider, res, tc.surface, tc.threshold)
 			for raw, want := range tc.want {
 				if got[raw] != want {
 					t.Fatalf("final name of %q = %q, want %q (all: %v)", raw, got[raw], want, got)
 				}
 			}
-			if _, ok := m.sources["notion"]; ok {
-				t.Fatal("probe leaked the candidate into live sources")
+			for _, raw := range tc.absent {
+				if n, ok := got[raw]; ok {
+					t.Fatalf("%q got final name %q, want it dropped", raw, n)
+				}
+			}
+			if tc.connector != "work" {
+				if _, ok := m.sources[tc.connector]; ok {
+					t.Fatal("probe leaked the candidate into live sources")
+				}
 			}
 		})
+	}
+}
+
+func TestProviderSlugAndMCPProvider(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"Notion":             "notion",
+		"<system>srv":        "system_srv",
+		"Atlassian Rovo MCP": "atlassian_rovo_mcp",
+		"  --  ":             "",
+		"a-very-long-server-name-that-keeps-going": "a_very_long_server_name_that_kee",
+	} {
+		if got := ProviderSlug(in); got != want {
+			t.Fatalf("ProviderSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := MCPProvider(Connector{Name: "work", Config: json.RawMessage(`{"provider":" notion "}`)}); got != "notion" {
+		t.Fatalf("explicit provider = %q", got)
+	}
+	if got := MCPProvider(Connector{Name: "work", Config: json.RawMessage(`{"endpoint":"https://x"}`)}); got != "work" {
+		t.Fatalf("fallback provider = %q", got)
 	}
 }
 
@@ -249,8 +310,9 @@ func TestReservedFromSurface(t *testing.T) {
 		want    []string
 		notWant []string
 	}{
-		{name: "connector raw name is not reserved", surface: []string{"shell", "create_issue"}, want: []string{"shell"}, notWant: []string{"create_issue"}},
-		{name: "builtin sharing a connector name is reserved", surface: []string{"create_issue", "gh_create_issue"}, want: []string{"create_issue"}},
+		{name: "connector name is not reserved", surface: []string{"shell", "gh_create_issue"}, want: []string{"shell"}, notWant: []string{"gh_create_issue"}},
+		{name: "a bare raw name is a builtin", surface: []string{"shell", "create_issue", "gh_create_issue"}, want: []string{"shell", "create_issue"}, notWant: []string{"gh_create_issue"}},
+		{name: "builtin sharing a connector name is reserved", surface: []string{"gh_create_issue", "gh_gh_create_issue"}, want: []string{"gh_create_issue"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

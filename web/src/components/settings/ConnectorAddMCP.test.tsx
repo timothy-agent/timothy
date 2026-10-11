@@ -232,6 +232,44 @@ describe('ConnectorAddMCP save', () => {
   })
 })
 
+describe('ConnectorAddMCP provider', () => {
+  it('takes the provider from the probe and saves it', async () => {
+    vi.mocked(probeConnector).mockResolvedValue({ ...okProbe, provider: 'notion' })
+    renderPage()
+    paste(config)
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'notion-work' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Search pages')
+    expect(probeConnector).toHaveBeenLastCalledWith({ name: 'notion-work', endpoint: 'https://mcp.notion.com/mcp' })
+    expect(screen.getByLabelText('Provider')).toHaveValue('notion')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add connector' }))
+    await screen.findByText('connectors list')
+    expect(vi.mocked(createConnector).mock.calls[0][0].config).toMatchObject({ provider: 'notion' })
+  })
+
+  it('sends a typed provider, and editing it invalidates the probe', async () => {
+    vi.mocked(probeConnector).mockResolvedValue({ ...okProbe, provider: 'wiki' })
+    renderPage()
+    paste(config)
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'wiki' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check server' }))
+    await screen.findByText('Search pages')
+    expect(probeConnector).toHaveBeenLastCalledWith({ name: 'notion', provider: 'wiki', endpoint: 'https://mcp.notion.com/mcp' })
+
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'wiki2' } })
+    expect(screen.queryByText('Search pages')).not.toBeInTheDocument()
+  })
+
+  it('rejects a provider outside the allowed characters', () => {
+    renderPage()
+    paste(config)
+    fireEvent.change(screen.getByLabelText('Provider'), { target: { value: 'Notion Work' } })
+    expect(screen.getByText('Lowercase letters, digits and underscores, up to 32.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check server' })).toBeDisabled()
+  })
+})
+
 describe('ConnectorAddMCP oauth login', () => {
   const assign = vi.fn()
   beforeEach(() => {

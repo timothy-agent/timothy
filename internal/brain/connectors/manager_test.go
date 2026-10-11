@@ -359,34 +359,36 @@ func TestWaitReadyReturnsAfterReload(t *testing.T) {
 }
 
 // TestDeferredToolsFollowsTheMergedName pins issue #729's input to
-// chat: indexed mcp sources contribute their hidden tools under the
-// namespaced name the load path gives them, keyed by the load_tool
-// name the surface actually exposes. Every indexed connector serves
-// load_tool with the same schema, so that is the single raw
-// "load_tool", shared across connectors; eager sources of any kind
+// chat under D-158: an indexed source's hidden tools are listed under
+// the names its load path gives them, keyed by the entry point the
+// surface exposes, "<provider>_load_tool". Two accounts of one
+// provider share that entry point, and their loaded names carry the
+// connector too so neither can stand in for the other; eager sources
 // contribute nothing.
 func TestDeferredToolsFollowsTheMergedName(t *testing.T) {
 	t.Parallel()
-	loadSchema := json.RawMessage(`{"type":"object"}`)
-	indexed := func(name string, hidden ...string) *mcpSource {
-		src := &mcpSource{name: name, indexed: true}
+	indexed := func(name, provider string, hidden ...string) *mcpSource {
+		src := &mcpSource{name: name, provider: provider, indexed: true}
 		for _, h := range hidden {
-			src.toolList = append(src.toolList, &tools.Tool{Name: h, InputSchema: loadSchema})
+			src.toolList = append(src.toolList, &tools.Tool{Name: h, InputSchema: json.RawMessage(`{"type":"object"}`)})
 		}
 		return src
 	}
 	m := testManager(fakeRows{})
 	m.sources = map[string]Source{
-		"gmail":  &fakeSource{tools: []*tools.Tool{{Name: "search"}}},
-		"eager":  &mcpSource{name: "eager", toolList: []*tools.Tool{{Name: "ping"}}},
-		"jira":   indexed("jira", "search.issues", "get_issue"),
-		"wiki":   indexed("wiki", "get_page"),
-		"hidden": &mcpSource{name: "hidden", indexed: true},
+		"gmail":    &fakeSource{tools: []*tools.Tool{{Name: "search"}}},
+		"eager":    &mcpSource{name: "eager", toolList: []*tools.Tool{{Name: "ping"}}},
+		"jira":     indexed("jira", "", "search.issues", "get_issue"),
+		"work":     indexed("work", "notion", "get_page"),
+		"personal": indexed("personal", "notion", "get_page"),
+		"hidden":   &mcpSource{name: "hidden", indexed: true},
 	}
+	setLoadPrefixes(m.sources)
 
 	got := m.DeferredTools()
 	want := map[string][]string{
-		"load_tool": {"jira_get_issue", "jira_search_issues", "wiki_get_page"},
+		"jira_load_tool":   {"jira_get_issue", "jira_search_issues"},
+		"notion_load_tool": {"personal_notion_get_page", "work_notion_get_page"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("DeferredTools = %v, want %v", got, want)
@@ -396,27 +398,28 @@ func TestDeferredToolsFollowsTheMergedName(t *testing.T) {
 			t.Fatalf("DeferredTools[%s] = %v, want %v", k, got[k], names)
 		}
 	}
-	if got := m.liveLoadTool("jira"); got != "load_tool" {
-		t.Fatalf("liveLoadTool(jira) = %q, want load_tool", got)
+	if got := m.liveLoadTool("work"); got != "notion_load_tool" {
+		t.Fatalf("liveLoadTool(work) = %q, want notion_load_tool", got)
 	}
 	if got := m.liveLoadTool("not-built"); got != "load_tool" {
 		t.Fatalf("liveLoadTool(unbuilt) = %q, want load_tool default", got)
 	}
 }
 
-// A load_tool whose schema disagrees with another connector's (only
-// possible if a remote server ever ships its own tool named load_tool)
-// splits, and the map keys it by the namespaced name the surface uses.
-func TestDeferredToolsSplitsOnSchemaMismatch(t *testing.T) {
+// TestSetLoadPrefixes pins when a loaded tool names its connector:
+// only while another live source shares the provider.
+func TestSetLoadPrefixes(t *testing.T) {
 	t.Parallel()
-	m := testManager(fakeRows{})
-	m.sources = map[string]Source{
-		"jira":  &mcpSource{name: "jira", indexed: true, toolList: []*tools.Tool{{Name: "get_issue"}}},
-		"other": &mcpSource{name: "other", toolList: []*tools.Tool{{Name: "load_tool", InputSchema: json.RawMessage(`{"type":"object","properties":{"x":{}}}`)}}},
+	work := &mcpSource{name: "work", provider: "notion"}
+	personal := &mcpSource{name: "personal", provider: "notion"}
+	jira := &mcpSource{name: "jira"}
+	setLoadPrefixes(map[string]Source{"work": work, "personal": personal, "jira": jira})
+	if work.loadedPrefix() != "work_notion" || personal.loadedPrefix() != "personal_notion" || jira.loadedPrefix() != "jira" {
+		t.Fatalf("prefixes = %q %q %q", work.loadedPrefix(), personal.loadedPrefix(), jira.loadedPrefix())
 	}
-	got := m.DeferredTools()
-	if !slices.Equal(got["jira_load_tool"], []string{"jira_get_issue"}) || len(got) != 1 {
-		t.Fatalf("DeferredTools = %v, want jira_load_tool only", got)
+	setLoadPrefixes(map[string]Source{"work": work})
+	if work.loadedPrefix() != "notion" {
+		t.Fatalf("alone, prefix = %q, want notion", work.loadedPrefix())
 	}
 }
 
@@ -438,18 +441,26 @@ func TestLoadToolNames(t *testing.T) {
 			},
 		},
 		{
-			name: "indexed connectors share the merged raw name",
+			name: "each provider exposes its own entry point",
 			sources: map[string]Source{
 				"jira": &mcpSource{name: "jira", indexed: true, toolList: []*tools.Tool{{Name: "get_issue"}}},
 				"wiki": &mcpSource{name: "wiki", indexed: true, toolList: []*tools.Tool{{Name: "get_page"}}},
 			},
-			want: []string{"load_tool"},
+			want: []string{"jira_load_tool", "wiki_load_tool"},
 		},
 		{
-			name: "split entry point is listed under its namespaced name only",
+			name: "accounts of one provider share it",
 			sources: map[string]Source{
-				"jira":  &mcpSource{name: "jira", indexed: true, toolList: []*tools.Tool{{Name: "get_issue"}}},
-				"other": &mcpSource{name: "other", toolList: []*tools.Tool{{Name: "load_tool", InputSchema: json.RawMessage(`{"type":"object","properties":{"x":{}}}`)}}},
+				"work":     &mcpSource{name: "work", provider: "notion", indexed: true, toolList: []*tools.Tool{{Name: "get_page"}}},
+				"personal": &mcpSource{name: "personal", provider: "notion", indexed: true, toolList: []*tools.Tool{{Name: "get_page"}}},
+			},
+			want: []string{"notion_load_tool"},
+		},
+		{
+			name: "a remote name spelling the suffix never joins it",
+			sources: map[string]Source{
+				"jira": &mcpSource{name: "jira", indexed: true, toolList: []*tools.Tool{{Name: "get_issue"}}},
+				"evil": &mcpSource{name: "evil", provider: "jira", toolList: []*tools.Tool{{Name: "x_load_tool"}}},
 			},
 			want: []string{"jira_load_tool"},
 		},

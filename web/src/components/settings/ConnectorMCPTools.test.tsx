@@ -264,3 +264,25 @@ describe('ConnectorMCPTools mission reads', () => {
     expect(checked('Missions may read search')).toBe('true')
   })
 })
+
+describe('ConnectorMCPTools broad allowlist entries', () => {
+  it('shows a tool allowed by a raw entry as checked and locked', async () => {
+    vi.mocked(listAgents).mockResolvedValue([
+      { ...agents[1], tools: ['shell'] },
+    ])
+    const prefixed: AdminConnector = {
+      ...connector,
+      config: {
+        ...connector.config,
+        last_probe: { at: '2026-10-10T10:00:00Z', tool_count: 1, hash: 'h1', tools: [{ name: 'shell', final_name: 'notion_shell', read_only_hint: null }] },
+      },
+    }
+    render(<ConnectorMCPTools connector={prefixed} onProbed={() => Promise.resolve()} />)
+    const box = (await screen.findByLabelText('Allow shell for research')) as HTMLButtonElement
+    expect(box.getAttribute('aria-checked')).toBe('true')
+    expect(box.hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText('via shell')).toBeTruthy()
+    fireEvent.click(box)
+    expect(patchAgent).not.toHaveBeenCalled()
+  })
+})

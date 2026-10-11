@@ -123,6 +123,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 		}
 		fresh[c.Name] = src
 	}
+	setLoadPrefixes(fresh)
 
 	m.mu.Lock()
 	old := m.sources
@@ -204,10 +205,10 @@ func (m *Manager) ReadOnlyTools() []*tools.Tool {
 func (m *Manager) AccountConnector(toolName string, args json.RawMessage) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	merged, _ := groupByRawName(m.sources, nil)
+	merged, split := groupByRawName(m.sources, nil)
 	accounts, ok := merged[toolName]
 	if !ok {
-		return ""
+		return m.namespacedConnector(toolName, split)
 	}
 	acc, _, err := resolveAccount(accounts, args)
 	if err != nil {
@@ -216,23 +217,68 @@ func (m *Manager) AccountConnector(toolName string, args json.RawMessage) string
 	return acc.connector
 }
 
-// namespacedTools clones ts renamed "<name>_<tool>", sanitized and
-// length-capped: MCP's tool-naming scheme, kept for a name that stays
-// split (see groupByRawName).
-func namespacedTools(name string, ts []*tools.Tool) []*tools.Tool {
-	out := make([]*tools.Tool, 0, len(ts))
-	for _, t := range ts {
-		clone := *t
-		clone.Name = NamespacedName(name, t.Name)
-		out = append(out, &clone)
+// namespacedConnector names the one connector behind a tool that is
+// not a merged aggregate: a split tool or a tool loaded through
+// load_tool. "" when toolName is neither. Caller holds m.mu.
+func (m *Manager) namespacedConnector(toolName string, split map[string][]toolAccount) string {
+	for key, accounts := range split {
+		for _, a := range accounts {
+			if NamespacedName(a.connector, key) == toolName {
+				return a.connector
+			}
+		}
 	}
-	return out
+	for _, e := range m.deferredEntries() {
+		if slices.Contains(e.tools, toolName) {
+			return e.connector
+		}
+	}
+	return ""
 }
 
-// NamespacedName is the "<connector>_<tool>" form namespacedTools
-// gives a split tool: sanitized and length-capped. Exported so a
-// deferred MCP tool loaded mid-session (mcp.go's load_tool) lands on
-// exactly the name the eager path would have produced.
+// toolKey is the name a source's tool groups under (D-158): an MCP
+// tool is "<provider>_<raw>", every other connector tool keeps its
+// raw name so native kinds share one verb (search_mail). ok is false
+// for a remote tool whose key would end in "_load_tool": that suffix
+// belongs to the synthetic index entry point the permission chain
+// exempts by name (D-108), and a provider plus a remote name must
+// never spell it.
+func toolKey(src Source, raw string) (string, bool) {
+	ms, ok := src.(*mcpSource)
+	if !ok {
+		return raw, true
+	}
+	key := NamespacedName(ms.prefix(), raw)
+	if raw != LoadToolName && strings.HasSuffix(key, "_"+LoadToolName) {
+		return "", false
+	}
+	return key, true
+}
+
+// setLoadPrefixes gives every MCP source that shares its provider with
+// another live source a connector-specific prefix for loaded tools:
+// two accounts' loaded copies of one tool must not share a name.
+func setLoadPrefixes(sources map[string]Source) {
+	count := map[string]int{}
+	for _, src := range sources {
+		if ms, ok := src.(*mcpSource); ok {
+			count[ms.prefix()]++
+		}
+	}
+	for name, src := range sources {
+		if ms, ok := src.(*mcpSource); ok {
+			ms.loadPrefix = ""
+			if count[ms.prefix()] > 1 {
+				ms.loadPrefix = NamespacedName(name, ms.prefix())
+			}
+		}
+	}
+}
+
+// NamespacedName is the "<prefix>_<tool>" form: sanitized and
+// length-capped. Exported so a deferred MCP tool loaded mid-session
+// (mcp.go's load_tool) lands on exactly the name the eager path would
+// have produced.
 func NamespacedName(connector, tool string) string {
 	full := toolNameSanitizer.ReplaceAllString(connector+"_"+tool, "_")
 	if len(full) > 128 {
@@ -293,7 +339,11 @@ func groupByRawName(sources map[string]Source, reserved map[string]bool) (merged
 			kind, email = info.AccountInfo()
 		}
 		for _, t := range src.Tools() {
-			byName[t.Name] = append(byName[t.Name], toolAccount{connector: name, kind: kind, email: email, tool: t})
+			key, ok := toolKey(src, t.Name)
+			if !ok {
+				continue
+			}
+			byName[key] = append(byName[key], toolAccount{connector: name, kind: kind, email: email, tool: t})
 		}
 	}
 
@@ -415,21 +465,15 @@ func aggregateTools(sources map[string]Source, readOnlyOnly bool, reserved map[s
 	for _, name := range splitNames {
 		accounts := split[name]
 		sort.Slice(accounts, func(i, j int) bool { return accounts[i].connector < accounts[j].connector })
-		byConnector := map[string][]*tools.Tool{}
-		var connectorOrder []string
 		for _, a := range accounts {
 			// Namespaced tools skip aggregateTool, so the read-only
 			// rule applies per tool here.
 			if readOnlyOnly && !a.tool.ReadOnly {
 				continue
 			}
-			if _, seen := byConnector[a.connector]; !seen {
-				connectorOrder = append(connectorOrder, a.connector)
-			}
-			byConnector[a.connector] = append(byConnector[a.connector], a.tool)
-		}
-		for _, connector := range connectorOrder {
-			out = append(out, namespacedTools(connector, byConnector[connector])...)
+			clone := *a.tool
+			clone.Name = NamespacedName(a.connector, name)
+			out = append(out, &clone)
 		}
 	}
 	return out
@@ -446,7 +490,7 @@ func missionReadAccounts(sources map[string]Source, groups map[string][]toolAcco
 		var kept []toolAccount
 		for _, a := range accounts {
 			if ms, isMCP := sources[a.connector].(*mcpSource); isMCP {
-				if !ms.missionReadOK(name) {
+				if !ms.missionReadOK(a.tool.Name) {
 					continue
 				}
 				marked := *a.tool
@@ -768,12 +812,17 @@ func (m *Manager) deferredEntries() []deferredEntry {
 		if len(hidden) == 0 {
 			continue
 		}
-		e := deferredEntry{connector: name, loadTool: NamespacedName(name, LoadToolName)}
-		if _, ok := merged[LoadToolName]; ok {
-			e.loadTool = LoadToolName
+		key, _ := toolKey(src, LoadToolName)
+		e := deferredEntry{connector: name, loadTool: NamespacedName(name, key)}
+		if _, ok := merged[key]; ok {
+			e.loadTool = key
+		}
+		prefix := name
+		if ms, ok := src.(*mcpSource); ok {
+			prefix = ms.loadedPrefix()
 		}
 		for _, t := range hidden {
-			e.tools = append(e.tools, NamespacedName(name, t.Name))
+			e.tools = append(e.tools, NamespacedName(prefix, t.Name))
 		}
 		out = append(out, e)
 	}
