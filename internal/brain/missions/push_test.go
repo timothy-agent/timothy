@@ -438,7 +438,7 @@ func TestPRTitleFallsBackToTruncatedGoal(t *testing.T) {
 	}
 }
 
-// TestPRTitleFromOutput (D-153, issue #1195) covers the worker's title
+// TestPRTitleFromOutput (D-158, issue #1195) covers the worker's title
 // line: valid shapes parse, everything else leaves the output intact.
 func TestPRTitleFromOutput(t *testing.T) {
 	t.Parallel()

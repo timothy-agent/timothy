@@ -172,15 +172,15 @@ func (a *RepoAdapter) pushWith(ctx context.Context, m missions.Mission, auth mis
 const prSummaryCap = 60000
 
 // PRBody composes the pull request's markdown body: the worker's
-// summary (D-152), the harness dependency evidence, the unit list with
+// summary (D-157), the harness dependency evidence, the unit list with
 // pass state and, when attribution is on, a closing line crediting
 // Timothy Agent with a link to its repository. The goal is never in it:
 // it is instructions to the agent, not a PR description.
 func PRBody(m missions.Mission, attribution bool) string {
 	var body string
-	// D-134/D-152: final_output carries the summary (and any report the
+	// D-134/D-157: final_output carries the summary (and any report the
 	// goal asked for); model text, so neutralized like a prompt slot.
-	// D-153: a valid title line is the PR title, not part of the summary.
+	// D-158: a valid title line is the PR title, not part of the summary.
 	_, output, _ := missions.PRTitleFromOutput(m.FinalOutput)
 	if summary := missions.NeutralizeSlot(strings.TrimSpace(output)); summary != "" {
 		if r := []rune(summary); len(r) > prSummaryCap {

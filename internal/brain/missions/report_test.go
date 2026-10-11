@@ -359,7 +359,7 @@ func TestDelegatedRunWorkerCarriesScopeRule(t *testing.T) {
 	}
 }
 
-// TestPRSummaryRequest (D-152, issue #1174): a PR-delivering planned
+// TestPRSummaryRequest (D-157, issue #1174): a PR-delivering planned
 // packet asks for the summary once at most one unit is left without
 // harness evidence, on the native and delegated paths alike.
 func TestPRSummaryRequest(t *testing.T) {
@@ -401,7 +401,7 @@ func TestPRSummaryRequest(t *testing.T) {
 	}
 }
 
-// TestDriverPacketDeliversPR (D-152): the packet asks for a summary
+// TestDriverPacketDeliversPR (D-157): the packet asks for a summary
 // when a repo destination's mode is push_pr or the mission has a repo
 // connection a PR can be opened on by hand.
 func TestDriverPacketDeliversPR(t *testing.T) {
