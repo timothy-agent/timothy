@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import type { ConnectorProbe } from '../../api/types'
 import {
+  allowlistName,
   appendAllowlist,
   buildArgs,
   indexNote,
+  lastProbeFrom,
+  lastProbeOf,
   parseMCPInput,
   schemaFields,
   stdioReason,
@@ -177,5 +181,50 @@ describe('Try it schema form', () => {
   it('keeps numeric enum values as numbers', () => {
     const fields = schemaFields({ type: 'object', properties: { level: { enum: [1, 2, 3] } } })
     expect(buildArgs(fields, { level: '2' }).args).toEqual({ level: 2 })
+  })
+})
+
+describe('last probe record', () => {
+  const probe: ConnectorProbe = {
+    status: 'ok',
+    server: { name: 'Notion', version: '1' },
+    tool_count: 600,
+    index_threshold: 8,
+    tools: [
+      { name: 'search', final_name: 'search', description: 'Search', read_only_hint: true, input_schema: { type: 'object' } },
+      { name: 'shell', final_name: 'notion_shell', description: 'Clash', read_only_hint: null, input_schema: {} },
+      { name: 'plain', description: 'No final name', read_only_hint: false, input_schema: {} },
+    ],
+  }
+
+  it('lastProbeFrom keeps the table columns only', () => {
+    const at = new Date('2026-10-11T12:00:00Z')
+    expect(lastProbeFrom(probe, at)).toEqual({
+      at: '2026-10-11T12:00:00.000Z',
+      tool_count: 600,
+      tools: [
+        { name: 'search', final_name: 'search', read_only_hint: true },
+        { name: 'shell', final_name: 'notion_shell', read_only_hint: null },
+        { name: 'plain', read_only_hint: false },
+      ],
+    })
+  })
+
+  it('lastProbeOf round-trips and rejects malformed records', () => {
+    const base = { id: 'm1', name: 'notion', kind: 'mcp' as const, credential_ref: '', enabled: true, sensitive: false }
+    const rec = lastProbeFrom(probe, new Date('2026-10-11T12:00:00Z'))
+    expect(lastProbeOf({ ...base, config: { endpoint: 'https://x', last_probe: rec } })).toEqual(rec)
+    expect(lastProbeOf({ ...base, config: { endpoint: 'https://x' } })).toBeNull()
+    expect(lastProbeOf({ ...base, config: { last_probe: 'nope' } })).toBeNull()
+    expect(lastProbeOf({ ...base, config: { last_probe: { at: '2026-10-11T12:00:00Z', tools: [{ nope: 1 }, { name: 'ok' }] } } })).toEqual({
+      at: '2026-10-11T12:00:00Z',
+      tool_count: 1,
+      tools: [{ name: 'ok', read_only_hint: null }],
+    })
+  })
+
+  it('allowlistName prefers the final name', () => {
+    expect(allowlistName({ name: 'shell', final_name: 'notion_shell', read_only_hint: null })).toBe('notion_shell')
+    expect(allowlistName({ name: 'plain', read_only_hint: null })).toBe('plain')
   })
 })
