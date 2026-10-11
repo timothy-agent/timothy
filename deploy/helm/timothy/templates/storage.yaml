@@ -1,0 +1,59 @@
+{{- $root := . }}
+{{- $sandboxNS := include "timothy.sandboxNamespace" . }}
+{{- if not .Values.storage.workspace.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-workspace
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  accessModes: {{ toJson .Values.storage.workspace.accessModes }}
+  {{- with .Values.storage.workspace.className }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.workspace.size }}
+{{- end }}
+{{- if not .Values.storage.attachments.existingClaim }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Release.Name }}-attachments
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  accessModes: {{ toJson .Values.storage.attachments.accessModes }}
+  {{- with .Values.storage.attachments.className }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.storage.attachments.size }}
+{{- end }}
+{{/* Sandbox-only volumes live where the sandbox pods run. */}}
+{{- range $key, $name := dict "executorState" "executor-state" "toolchains" "toolchains" "caches" "caches" }}
+{{- $s := index $root.Values.storage $key }}
+{{- if and $s.enabled (not $s.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $root.Release.Name }}-{{ $name }}
+  namespace: {{ $sandboxNS }}
+  labels:
+    {{- include "timothy.labels" $root | nindent 4 }}
+spec:
+  accessModes: {{ toJson $s.accessModes }}
+  {{- with $s.className }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $s.size }}
+{{- end }}
+{{- end }}

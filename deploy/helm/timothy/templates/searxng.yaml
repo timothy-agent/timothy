@@ -1,0 +1,112 @@
+{{- $sel := dict "root" . "svc" "searxng" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-searxng
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: searxng
+data:
+  # Same content as the `configs:` block in deploy/release/docker-compose.yml.
+  settings.yml: |
+    use_default_settings: true
+
+    general:
+      # No telemetry to the SearXNG project; this instance serves one tool.
+      enable_metrics: false
+
+    search:
+      formats:
+        - html
+        - json
+
+    server:
+      # No published port and a single internal caller (brain): this key
+      # only signs session cookies nothing outside the namespace can
+      # reach, so a static value is fine here.
+      secret_key: "3db45963595b11ba5641234fb40bfb84c612b7aaf25ceff7cc496355337e1add"
+      limiter: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-searxng
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: searxng
+spec:
+  selector:
+    {{- include "timothy.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-searxng
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: searxng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "timothy.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "timothy.selector" $sel | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-searxng
+      automountServiceAccountToken: false
+      {{- include "timothy.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "timothy.podSecurityContext" (dict "uid" 977) | nindent 8 }}
+      containers:
+        - name: searxng
+          image: {{ .Values.searxng.image }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            {{- include "timothy.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: SEARXNG_BASE_URL
+              value: http://{{ .Release.Name }}-searxng:8080/
+            - name: SEARXNG_SETTINGS_PATH
+              value: /usr/local/searxng/settings.yml
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.searxng.resources | nindent 12 }}
+          volumeMounts:
+            - name: settings
+              mountPath: /usr/local/searxng/settings.yml
+              subPath: settings.yml
+              readOnly: true
+            - name: etc
+              mountPath: /etc/searxng
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: settings
+          configMap:
+            name: {{ .Release.Name }}-searxng
+        - name: etc
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}

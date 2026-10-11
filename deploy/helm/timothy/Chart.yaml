@@ -1,0 +1,11 @@
+apiVersion: v2
+name: timothy
+description: Timothy, a self-hosted personal AI assistant, on Kubernetes.
+type: application
+version: 0.1.0
+# The image tag every service runs; release.yml bumps it with the app.
+appVersion: 0.1.0-alpha.108
+home: https://timothy-agent.github.io/docs/
+sources:
+  - https://github.com/timothy-agent/timothy
+kubeVersion: ">=1.29.0-0"

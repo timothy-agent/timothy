@@ -1,0 +1,237 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $root := . }}
+{{- $dns := .Values.networkPolicy.dns }}
+{{/* Platform namespace: deny everything, then allow the graph. */}}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+---
+# web: reachable from the ingress controller (or anywhere when
+# webIngressFrom is empty); talks to brain only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "timothy.selector" (dict "root" . "svc" "web") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - {{- if .Values.networkPolicy.webIngressFrom }}
+      from:
+        {{- toYaml .Values.networkPolicy.webIngressFrom | nindent 8 }}
+      {{- end }}
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    {{- include "timothy.np.dnsEgress" $dns | nindent 4 }}
+    - to:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "brain") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# brain: from web; to every internal service, postgres and the
+# internet (connectors, git over https, model-authored web fetches).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-brain
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "timothy.selector" (dict "root" . "svc" "brain") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "web") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    {{- include "timothy.np.dnsEgress" $dns | nindent 4 }}
+    {{- include "timothy.np.internetEgress" (dict "except" .Values.sandbox.networkPolicy.egressExcept) | nindent 4 }}
+    - to:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "gateway") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "memoryd") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "sandboxd") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "searxng") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "markitdown") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "pdfgen") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "ocr") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "whisper") | nindent 10 }}
+        {{- if .Values.postgres.enabled }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "postgres") | nindent 10 }}
+        {{- end }}
+---
+# gateway: from brain and memoryd; to postgres and provider APIs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "timothy.selector" (dict "root" . "svc" "gateway") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "brain") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "memoryd") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 8081}
+  egress:
+    {{- include "timothy.np.dnsEgress" $dns | nindent 4 }}
+    {{- include "timothy.np.internetEgress" (dict "except" .Values.sandbox.networkPolicy.egressExcept) | nindent 4 }}
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "postgres") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 5432}
+    {{- end }}
+---
+# memoryd: from brain; to gateway and postgres.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-memoryd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "timothy.selector" (dict "root" . "svc" "memoryd") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "brain") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 8082}
+  egress:
+    {{- include "timothy.np.dnsEgress" $dns | nindent 4 }}
+    - to:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "gateway") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 8081}
+    {{- if .Values.postgres.enabled }}
+    - to:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "postgres") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 5432}
+    {{- end }}
+---
+# sandboxd: from brain; to the Kubernetes API only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandboxd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "timothy.selector" (dict "root" . "svc" "sandboxd") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "brain") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 8083}
+  egress:
+    {{- include "timothy.np.dnsEgress" $dns | nindent 4 }}
+    - {{- if .Values.networkPolicy.apiServerCIDRs }}
+      to:
+        {{- range .Values.networkPolicy.apiServerCIDRs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      {{- end }}
+      ports:
+        - {protocol: TCP, port: 443}
+        - {protocol: TCP, port: 6443}
+---
+# searxng: from brain; to the search engines it proxies.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-searxng
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "timothy.selector" (dict "root" . "svc" "searxng") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "brain") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 8080}
+  egress:
+    {{- include "timothy.np.dnsEgress" $dns | nindent 4 }}
+    {{- include "timothy.np.internetEgress" (dict "except" .Values.sandbox.networkPolicy.egressExcept) | nindent 4 }}
+{{- range $svc := list "markitdown" "pdfgen" "ocr" "whisper" }}
+---
+# {{ $svc }}: from brain; no egress beyond DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $root.Release.Name }}-{{ $svc }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" $root | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "timothy.selector" (dict "root" $root "svc" $svc) | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - {{- include "timothy.np.peer" (dict "root" $root "svc" "brain") | nindent 10 }}
+  egress:
+    {{- include "timothy.np.dnsEgress" $dns | nindent 4 }}
+{{- end }}
+{{- if .Values.postgres.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-postgres
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "timothy.selector" (dict "root" . "svc" "postgres") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "brain") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "gateway") | nindent 10 }}
+        - {{- include "timothy.np.peer" (dict "root" . "svc" "memoryd") | nindent 10 }}
+      ports:
+        - {protocol: TCP, port: 5432}
+  egress: []
+{{- end }}
+{{- end }}

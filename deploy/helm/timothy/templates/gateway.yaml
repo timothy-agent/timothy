@@ -1,0 +1,78 @@
+{{- $sel := dict "root" . "svc" "gateway" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  selector:
+    {{- include "timothy.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "timothy.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "timothy.selector" $sel | nindent 8 }}
+      annotations:
+        {{- include "timothy.metricsAnnotations" (dict "root" . "port" 8081) | nindent 8 }}
+    spec:
+      # Cloud identity for Bedrock auth=ambient rides on this
+      # ServiceAccount's annotations (gateway.serviceAccount.annotations).
+      # The projected identity token is injected by the cloud's own
+      # webhook, not by the ServiceAccount token mount.
+      serviceAccountName: {{ .Release.Name }}-gateway
+      automountServiceAccountToken: false
+      {{- include "timothy.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "timothy.podSecurityContext" (dict "uid" 65532) | nindent 8 }}
+      containers:
+        - name: gateway
+          image: {{ include "timothy.image" $sel }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "timothy.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: PORT
+              value: "8081"
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            {{- include "timothy.databaseEnv" . | nindent 12 }}
+            - name: TIMOTHY_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "timothy.secretName" . }}
+                  key: TIMOTHY_MASTER_KEY
+          ports:
+            - name: http
+              containerPort: 8081
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}

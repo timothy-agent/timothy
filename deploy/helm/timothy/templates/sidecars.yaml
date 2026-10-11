@@ -1,0 +1,85 @@
+{{- $root := . }}
+{{/* Python sidecars: brain is the sole caller; no auth, no public port. */}}
+{{- $sidecars := list
+  (dict "svc" "markitdown" "port" 8000 "health" "/healthz")
+  (dict "svc" "pdfgen" "port" 8000 "health" "/healthz")
+  (dict "svc" "ocr" "port" 8000 "health" "/healthz") }}
+{{- if .Values.whisper.enabled }}
+{{- $sidecars = append $sidecars (dict "svc" "whisper" "port" 8001 "health" "/health") }}
+{{- end }}
+{{- range $s := $sidecars }}
+{{- $sel := dict "root" $root "svc" $s.svc }}
+{{- $cfg := index $root.Values $s.svc }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $root.Release.Name }}-{{ $s.svc }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $s.svc }}
+spec:
+  selector:
+    {{- include "timothy.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $s.port }}
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $root.Release.Name }}-{{ $s.svc }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $s.svc }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "timothy.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "timothy.selector" $sel | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $root.Release.Name }}-{{ $s.svc }}
+      automountServiceAccountToken: false
+      {{- include "timothy.pullSecrets" $root | nindent 6 }}
+      securityContext:
+        {{- include "timothy.podSecurityContext" (dict "uid" 65534) | nindent 8 }}
+      containers:
+        - name: {{ $s.svc }}
+          image: {{ include "timothy.image" $sel }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          securityContext:
+            {{- include "timothy.containerSecurityContext" $root | nindent 12 }}
+          {{- if eq $s.svc "whisper" }}
+          env:
+            - name: WHISPER_MODEL
+              value: large-v3
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $s.port }}
+          readinessProbe:
+            httpGet: {path: {{ $s.health }}, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: {{ $s.health }}, port: http}
+            initialDelaySeconds: {{ if eq $s.svc "whisper" }}120{{ else }}15{{ end }}
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml $cfg.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
