@@ -27,7 +27,10 @@ class FakeIntersectionObserver {
   }
 }
 
-function scrollToSentinel() {
+// The observer is created in an effect after the list renders, so a
+// wait on the rendered rows can finish before it exists (#1212).
+async function scrollToSentinel() {
+  await waitFor(() => expect(observerCallbacks.length).toBeGreaterThan(0))
   const cb = observerCallbacks.at(-1)
   act(() => {
     cb?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
@@ -103,7 +106,7 @@ describe('useMemoryPages', () => {
     )
     render(<Harness load={load} />)
     await waitFor(() => expect(ids()).toHaveLength(memoryPageSize))
-    scrollToSentinel()
+    await scrollToSentinel()
     await waitFor(() => expect(ids()).toHaveLength(memoryPageSize + 2))
     expect(load).toHaveBeenLastCalledWith({ before: last.created_at, beforeId: last.id })
     expect(new Set(ids()).size).toBe(memoryPageSize + 2)
@@ -118,7 +121,7 @@ describe('useMemoryPages', () => {
     const loadB = vi.fn<Loader>(() => Promise.resolve(rows('b', 2)))
     const { rerender } = render(<Harness load={loadA} />)
     await waitFor(() => expect(ids()).toHaveLength(memoryPageSize))
-    scrollToSentinel()
+    await scrollToSentinel()
     rerender(<Harness load={loadB} />)
     await waitFor(() => expect(ids()).toEqual(['b000', 'b001']))
     expect(loadB).toHaveBeenCalledWith()
@@ -132,7 +135,7 @@ describe('useMemoryPages', () => {
     const load = vi.fn<Loader>((cursor) => Promise.resolve(cursor ? second : first))
     render(<Harness load={load} />)
     await waitFor(() => expect(ids()).toHaveLength(memoryPageSize))
-    scrollToSentinel()
+    await scrollToSentinel()
     await waitFor(() => expect(ids()).toHaveLength(memoryPageSize + 5))
 
     load.mockClear()

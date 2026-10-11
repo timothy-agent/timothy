@@ -76,7 +76,10 @@ class FakeIntersectionObserver {
   }
 }
 
-function scrollToSentinel() {
+// The observer is created in an effect after the list renders, so a
+// wait on the rendered rows can finish before it exists (#1212).
+async function scrollToSentinel() {
+  await waitFor(() => expect(observerCallbacks.length).toBeGreaterThan(0))
   const cb = observerCallbacks.at(-1)
   act(() => {
     cb?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
@@ -231,7 +234,7 @@ describe('Memory queue', () => {
     renderPage()
     await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(50))
     expect(await screen.findByText('52 pending')).toBeInTheDocument()
-    scrollToSentinel()
+    await scrollToSentinel()
     await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(52))
     expect(listMemories).toHaveBeenLastCalledWith('pending', {
       cursor: { before: last.created_at, beforeId: last.id },
@@ -246,7 +249,7 @@ describe('Memory queue', () => {
     )
     renderPage()
     await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(50))
-    scrollToSentinel()
+    await scrollToSentinel()
     await waitFor(() => expect(screen.getAllByTestId('queue-card')).toHaveLength(53))
 
     vi.mocked(listMemories).mockClear()
@@ -315,7 +318,7 @@ describe('Memory browser', () => {
     renderPage()
     fireEvent.click(await screen.findByRole('radio', { name: 'Browser' }))
     await screen.findByText('active fact 49')
-    scrollToSentinel()
+    await scrollToSentinel()
     await screen.findByText('active fact 53')
     expect(listMemories).toHaveBeenLastCalledWith('active', {
       cursor: { before: last.created_at, beforeId: last.id },
