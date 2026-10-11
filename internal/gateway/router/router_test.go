@@ -1755,3 +1755,51 @@ func TestResolveRouteMarksEmptyModelUnusable(t *testing.T) {
 		t.Fatalf("chain entry = usable %v, skip %q; want unusable with %q", claude[0].Usable, claude[0].SkipReason, emptyModelSkip)
 	}
 }
+
+// TestBedrockAmbientRowIsHealthyWithoutCredentialRef covers D-156 at
+// the router layer: an ambient bedrock row has no credential_ref by
+// design, so the unresolved-credential rule must not mark it
+// unhealthy, and it resolves like any other provider.
+func TestBedrockAmbientRowIsHealthyWithoutCredentialRef(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
+		DefaultModel: "us.amazon.nova-pro-v1:0", Enabled: true,
+		Region: "us-west-2", Auth: "ambient",
+	}}
+	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
+	}, Enabled: true}}
+	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	attempts, err := snap.Resolve("chat", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	b, ok := attempts[0].Provider.(*provider.Bedrock)
+	if !ok || !b.Ambient() || b.HasStaticCredentials() {
+		t.Fatalf("provider = %T ambient=%v static=%v", attempts[0].Provider, b != nil && b.Ambient(), b != nil && b.HasStaticCredentials())
+	}
+}
+
+// A bedrock row with neither credential_ref nor ambient auth stays
+// unhealthy: D-156 adds a mode, it does not relax D-047.
+func TestBedrockStaticRowWithoutCredentialRefStaysUnhealthy(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{{
+		ID: "p1", Name: "bedrock", Kind: "api", Driver: "bedrock",
+		DefaultModel: "us.amazon.nova-pro-v1:0", Enabled: true, Region: "us-west-2",
+	}}
+	routeRows := []RouteRow{{Name: "chat", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "us.amazon.nova-pro-v1:0"},
+	}, Enabled: true}}
+	snap, warnings := BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
+	if len(warnings) != 1 || !strings.Contains(warnings[0].Err.Error(), "requires static keys") {
+		t.Fatalf("warnings = %v, want the static-keys build error", warnings)
+	}
+	if _, err := snap.Resolve("chat", "", Sticky{}); err == nil || !strings.Contains(err.Error(), "unhealthy") {
+		t.Fatalf("Resolve err = %v, want unhealthy skip", err)
+	}
+}

@@ -47,6 +47,18 @@ const okProbe: ConnectorProbe = {
   ],
 }
 
+// storedProbe is the config.last_probe record okProbe leaves on the
+// created connector.
+const storedProbe = {
+  at: expect.any(String),
+  tool_count: 3,
+  tools: [
+    { name: 'search', final_name: 'search', read_only_hint: true },
+    { name: 'create_page', final_name: 'create_page', read_only_hint: false },
+    { name: 'shell', final_name: 'notion_shell', read_only_hint: null },
+  ],
+}
+
 const failedProbe = (status: ConnectorProbe['status'], message = ''): ConnectorProbe => ({
   status,
   server: { name: '', version: '' },
@@ -145,7 +157,7 @@ describe('ConnectorAddMCP probe outcomes', () => {
     expect(createConnector).toHaveBeenCalledWith({
       name: 'example',
       kind: 'mcp',
-      config: { endpoint: 'https://mcp.example.com/mcp' },
+      config: { endpoint: 'https://mcp.example.com/mcp', last_probe: storedProbe },
       credential_ref: 'EXAMPLE_MCP_TOKEN',
       enabled: true,
     })
@@ -193,7 +205,7 @@ describe('ConnectorAddMCP save', () => {
     expect(createConnector).toHaveBeenCalledWith({
       name: 'notion',
       kind: 'mcp',
-      config: { endpoint: 'https://mcp.notion.com/mcp' },
+      config: { endpoint: 'https://mcp.notion.com/mcp', last_probe: storedProbe },
       credential_ref: '',
       enabled: true,
     })
@@ -212,7 +224,9 @@ describe('ConnectorAddMCP save', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add connector' }))
     await screen.findByText('connectors list')
     expect(createConnector).toHaveBeenCalledWith(
-      expect.objectContaining({ config: { endpoint: 'https://t.example.com/mcp', headers: { 'X-Team': 'core' } } }),
+      expect.objectContaining({
+        config: { endpoint: 'https://t.example.com/mcp', headers: { 'X-Team': 'core' }, last_probe: storedProbe },
+      }),
     )
     expect(patchAgent).not.toHaveBeenCalled()
   })

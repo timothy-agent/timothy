@@ -213,3 +213,46 @@ type nopSource struct{}
 func (nopSource) Tools() []*tools.Tool       { return nil }
 func (nopSource) Test(context.Context) error { return nil }
 func (nopSource) Close() error               { return nil }
+
+func TestConnectorSetLastProbe(t *testing.T) {
+	store, _ := testStore(t)
+	ctx := t.Context()
+
+	changes := 0
+	store.SetOnChange(func(context.Context) { changes++ })
+	id, err := store.Create(ctx, Connector{
+		Name: marker + "probed", Kind: "mcp",
+		Config: json.RawMessage(`{"endpoint":"https://api.example/mcp","headers":{"X-Team":"core"}}`),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	ro := true
+	at := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
+	rec := MCPLastProbe{At: at, ToolCount: 1, Tools: []MCPProbedTool{{Name: "search", FinalName: "search", ReadOnlyHint: &ro}}}
+	if err := store.SetLastProbe(ctx, id, rec); err != nil {
+		t.Fatalf("SetLastProbe: %v", err)
+	}
+	got, err := store.Get(ctx, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(got.Config, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg["endpoint"] != "https://api.example/mcp" || cfg["headers"] == nil {
+		t.Fatalf("other config keys moved: %s", got.Config)
+	}
+	if lp := LastProbeOf(got); !lp.At.Equal(at) || len(lp.Tools) != 1 || lp.Tools[0].FinalName != "search" {
+		t.Fatalf("last probe = %+v", lp)
+	}
+	// A record is derived data: no reload, no audit row.
+	if changes != 1 {
+		t.Fatalf("changes = %d, want 1 (create only)", changes)
+	}
+	if err := store.SetLastProbe(ctx, "00000000-0000-0000-0000-000000000000", rec); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown id err = %v, want ErrNotFound", err)
+	}
+}

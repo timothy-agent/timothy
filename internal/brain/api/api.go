@@ -175,7 +175,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	a.registerOnboarding(srv.Handle, flags, onboardingProbes)
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog, msft, mcpAuth, secrets)
-	a.registerConnectorProbe(srv.Handle, conns, toolset)
+	a.registerConnectorProbe(srv.Handle, conns, mcpAuth, toolset)
 	// Same nil-box guard as connLister above, for the deferred-tool
 	// listing the tools picker appends.
 	var deferred deferredToolLister

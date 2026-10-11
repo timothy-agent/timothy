@@ -9,9 +9,12 @@ vi.mock('../../api/client', () => ({
   connectorOAuthStart: vi.fn(),
   createConnector: vi.fn(),
   deleteConnector: vi.fn(),
+  listAgents: vi.fn(() => Promise.resolve([])),
   listConnectors: vi.fn(),
   listSecretBackends: vi.fn(),
+  patchAgent: vi.fn(),
   patchConnector: vi.fn(),
+  probeConnector: vi.fn(),
   setSecret: vi.fn(),
   testConnector: vi.fn(),
 }))
