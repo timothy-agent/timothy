@@ -27,14 +27,25 @@ import (
 // (Nova and Titan families) so usage bills against AWS credits — no
 // third-party models.
 //
-// D-047/D-048: static IAM keys in the secret store are the only
-// supported auth — AWS profile/SSO mode was removed (a headless server
-// has no ~/.aws to mount). credential_ref must resolve through the
-// encrypted secret store to JSON matching StaticCredentials; a resolve
-// failure or a parse failure both fail provider construction (config
-// honesty), never a silent fallback. Region precedence: the secret
-// JSON's own "region" field, when set, wins over the provider's
-// options.region (Region below); with neither set, us-east-1 applies.
+// D-047/D-048: static IAM keys in the secret store are the default
+// auth — AWS profile/SSO mode was removed (a headless server has no
+// ~/.aws to mount). credential_ref must resolve through the encrypted
+// secret store to JSON matching StaticCredentials; a resolve failure
+// or a parse failure both fail provider construction (config honesty),
+// never a silent fallback. Region precedence: the secret JSON's own
+// "region" field, when set, wins over the provider's options.region
+// (Region below); with neither set, us-east-1 applies.
+//
+// D-156: options.auth = "ambient" is the second, explicit auth mode
+// for a gateway running under a cloud identity (EKS Pod Identity,
+// IRSA, GKE or AKS Workload Identity, IMDS). The SDK's default chain
+// supplies the credentials and Timothy stores none. It does not reopen
+// D-048: the mode is chosen per row, never a fallback; it holds no
+// secret at all, so there is nothing to mount or resolve; and a
+// runtime without an identity fails loudly on the first call with the
+// SDK's own "no credentials" error. An ambient row must have no
+// credential_ref (one source of identity) and must set options.region
+// (no secret JSON to carry it).
 //
 // Providers table example:
 //
@@ -43,16 +54,41 @@ import (
 //	credential_ref = 'bedrock-static'            -- secret store ref holding StaticCredentials JSON
 //	options = '{"region": "us-west-2"}'          -- optional; defaults to us-east-1
 //
+// Ambient example:
+//
+//	credential_ref = ''
+//	options = '{"auth": "ambient", "region": "us-west-2"}'
+//
 // Models must be enabled on the Bedrock console "Model access" page.
 type BedrockConfig struct {
 	Name   string
 	Region string // from options.region; defaults to us-east-1 unless StaticCredentials.Region overrides it
+	// Auth is options.auth: AuthStatic (default) or AuthAmbient (D-156).
+	Auth string
 	// StaticCredentials is the resolved secret-store value for
-	// credential_ref parsed as JSON — required; a non-nil pointer with an
-	// empty AccessKeyID/SecretAccessKey never happens, since
+	// credential_ref parsed as JSON — required under AuthStatic and
+	// absent under AuthAmbient; a non-nil pointer with an empty
+	// AccessKeyID/SecretAccessKey never happens, since
 	// ParseStaticCredentials rejects that at parse time.
 	StaticCredentials *StaticCredentials
 	Timeout           time.Duration
+}
+
+// Bedrock auth modes (options.auth).
+const (
+	AuthStatic  = "static"
+	AuthAmbient = "ambient"
+)
+
+// ParseBedrockAuth validates options.auth; empty means static.
+func ParseBedrockAuth(raw string) (string, error) {
+	switch raw {
+	case "", AuthStatic:
+		return AuthStatic, nil
+	case AuthAmbient:
+		return AuthAmbient, nil
+	}
+	return "", fmt.Errorf("bedrock: options.auth %q: want %q or %q", raw, AuthStatic, AuthAmbient)
 }
 
 // StaticCredentials is the secret-store JSON shape for Bedrock static
@@ -84,7 +120,14 @@ func NewBedrock(cfg BedrockConfig) *Bedrock {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultTimeout
 	}
-	if cfg.Region == "" {
+	if cfg.Auth == "" {
+		cfg.Auth = AuthStatic
+	}
+	// Ambient rows keep an empty Region so lazyClient can refuse a row
+	// with no region at all (D-156): the us-east-1 default is a static-
+	// keys convenience, and an ambient row has no secret JSON to carry
+	// one.
+	if cfg.Region == "" && cfg.Auth == AuthStatic {
 		cfg.Region = "us-east-1"
 	}
 	return &Bedrock{cfg: cfg}
@@ -94,10 +137,15 @@ func (b *Bedrock) Name() string { return b.cfg.Name }
 func (b *Bedrock) Kind() Kind   { return KindAPI }
 
 // HasStaticCredentials reports whether this provider was built with a
-// resolved secret-store credential (D-047) — always true since profile
-// mode was removed (D-048); used by router tests to verify the lookup
-// plumbing reaches the bedrock constructor.
+// resolved secret-store credential (D-047) — true for every static
+// row since profile mode was removed (D-048), false for an ambient row
+// (D-156); used by router tests to verify the lookup plumbing reaches
+// the bedrock constructor.
 func (b *Bedrock) HasStaticCredentials() bool { return b.cfg.StaticCredentials != nil }
+
+// Ambient reports whether this row authenticates through the SDK
+// default chain (D-156).
+func (b *Bedrock) Ambient() bool { return b.cfg.Auth == AuthAmbient }
 
 func (b *Bedrock) Capabilities() []Capability {
 	return []Capability{CapChat, CapStreaming, CapTools, CapEmbeddings, CapVision}
@@ -111,22 +159,43 @@ func (b *Bedrock) Capabilities() []Capability {
 // makes it safe under concurrent Stream/Embed calls; a load failure is
 // sticky, which is right — bad credentials or a bad region never heal
 // mid-process.
+//
+// Ambient rows (D-156) load the default config with the region only,
+// so the SDK default chain (Pod Identity, web identity token, IMDS,
+// env) supplies credentials; with none available the first call fails
+// with the SDK's own error, never a fallback to another row's keys.
 func (b *Bedrock) lazyClient(ctx context.Context) (*bedrockruntime.Client, error) {
 	b.initOnce.Do(func() {
-		sc := b.cfg.StaticCredentials
-		region := sc.Region
-		if region == "" {
-			region = b.cfg.Region
+		opts := []func(*config.LoadOptions) error{}
+		region := b.cfg.Region
+		switch b.cfg.Auth {
+		case AuthAmbient:
+			if b.cfg.StaticCredentials != nil {
+				b.clientErr = fmt.Errorf("bedrock: ambient auth cannot carry static credentials")
+				return
+			}
+			if region == "" {
+				b.clientErr = fmt.Errorf("bedrock: ambient auth requires the provider's options.region")
+				return
+			}
+		default:
+			sc := b.cfg.StaticCredentials
+			if sc == nil {
+				b.clientErr = fmt.Errorf("bedrock: static auth requires credentials from the secret store")
+				return
+			}
+			if sc.Region != "" {
+				region = sc.Region
+			}
+			if region == "" {
+				b.clientErr = fmt.Errorf("bedrock: static credentials require a region (set the secret JSON's %q field or the provider's options.region)", "region")
+				return
+			}
+			opts = append(opts, config.WithCredentialsProvider(
+				credentials.NewStaticCredentialsProvider(sc.AccessKeyID, sc.SecretAccessKey, sc.SessionToken)))
 		}
-		if region == "" {
-			b.clientErr = fmt.Errorf("bedrock: static credentials require a region (set the secret JSON's %q field or the provider's options.region)", "region")
-			return
-		}
-		awsCfg, err := config.LoadDefaultConfig(ctx,
-			config.WithRegion(region),
-			config.WithCredentialsProvider(
-				credentials.NewStaticCredentialsProvider(sc.AccessKeyID, sc.SecretAccessKey, sc.SessionToken)),
-		)
+		opts = append(opts, config.WithRegion(region))
+		awsCfg, err := config.LoadDefaultConfig(ctx, opts...)
 		if err != nil {
 			b.clientErr = fmt.Errorf("bedrock: load aws config: %w", err)
 			return
