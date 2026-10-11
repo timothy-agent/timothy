@@ -73,6 +73,13 @@ type probeRequest struct {
 	Headers     map[string]string `json:"headers"`
 	Token       string            `json:"token"`
 	ConnectorID string            `json:"connector_id"`
+	// Command, Args, Env and Internet probe an unsaved local server
+	// instead of Endpoint (D-162). Env values are raw for this call
+	// only, like Token.
+	Command  string            `json:"command"`
+	Args     []string          `json:"args"`
+	Env      map[string]string `json:"env"`
+	Internet bool              `json:"internet"`
 }
 
 // probeResponse adds the index threshold and, for a re-probe, the
@@ -91,20 +98,30 @@ type probeResponse struct {
 func (h *connectorProbeAPI) probe(w http.ResponseWriter, r *http.Request) {
 	var req probeRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, probeBodyMax)).Decode(&req); err != nil {
-		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON {endpoint, headers?, token?, name?} or {connector_id}")
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be JSON {endpoint, headers?, token?, name?}, {command, args?, env?, internet?, name?} or {connector_id}")
 		return
 	}
 	if req.ConnectorID != "" {
 		h.probeStored(w, r, req.ConnectorID)
 		return
 	}
-	u, err := url.Parse(req.Endpoint)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		jsonError(w, http.StatusBadRequest, "bad_request", "endpoint must be an http or https URL")
-		return
+	var res connectors.ProbeResult
+	target := "command"
+	if req.Command != "" {
+		if req.Endpoint != "" {
+			jsonError(w, http.StatusBadRequest, "bad_request", "send endpoint or command, not both")
+			return
+		}
+		res = h.mgr.ProbeCommand(r.Context(), req.Command, req.Args, req.Env, req.Internet)
+	} else {
+		u, err := url.Parse(req.Endpoint)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			jsonError(w, http.StatusBadRequest, "bad_request", "endpoint must be an http or https URL")
+			return
+		}
+		target = u.Host
+		res = connectors.ProbeMCP(r.Context(), h.client, req.Endpoint, req.Headers, req.Token)
 	}
-
-	res := connectors.ProbeMCP(r.Context(), h.client, req.Endpoint, req.Headers, req.Token)
 	provider := strings.TrimSpace(req.Provider)
 	if provider == "" && res.Status == connectors.ProbeOK {
 		provider = connectors.ProviderSlug(res.Server.Name)
@@ -113,7 +130,7 @@ func (h *connectorProbeAPI) probe(w http.ResponseWriter, r *http.Request) {
 		provider = req.Name
 	}
 	threshold := h.finish(r.Context(), req.Name, provider, &res)
-	h.log.Info("connector probe", "host", u.Host, "status", res.Status, "tools", res.ToolCount)
+	h.log.Info("connector probe", "host", target, "status", res.Status, "tools", res.ToolCount)
 	writeJSON(w, http.StatusOK, probeResponse{ProbeResult: res, IndexThreshold: threshold, Provider: provider})
 }
 

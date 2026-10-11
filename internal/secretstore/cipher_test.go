@@ -153,3 +153,29 @@ func TestDecodeMasterKey(t *testing.T) {
 		t.Fatalf("round trip mismatch")
 	}
 }
+
+func TestDeriveKey(t *testing.T) {
+	key := testKey(t)
+	s, err := New(nil, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, again := s.DeriveKey("mcp-bridge-token"), s.DeriveKey("mcp-bridge-token")
+	if !bytes.Equal(a, again) || len(a) != 32 {
+		t.Fatalf("DeriveKey is not stable: %x vs %x", a, again)
+	}
+	if bytes.Equal(a, s.DeriveKey("other")) {
+		t.Fatal("labels must derive different keys")
+	}
+	if bytes.Equal(a, key) {
+		t.Fatal("DeriveKey returned the master key")
+	}
+	other, _ := New(nil, testKey(t))
+	if bytes.Equal(a, other.DeriveKey("mcp-bridge-token")) {
+		t.Fatal("different master keys must derive different keys")
+	}
+	key[0] ^= 0xff
+	if !bytes.Equal(a, s.DeriveKey("mcp-bridge-token")) {
+		t.Fatal("DeriveKey must not alias the caller's key slice")
+	}
+}

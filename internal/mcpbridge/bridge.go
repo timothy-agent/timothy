@@ -1,6 +1,7 @@
 // Package mcpbridge serves one stdio MCP server over streamable HTTP
 // (D-161, issue #1207): POST /mcp with JSON responses only (no SSE),
-// one session shared by every client, a bearer token on every request.
+// one session shared by every client, a bearer token on every request,
+// and 404 for a session id this process did not issue.
 // Requests are serialized onto the server's stdin; the bridge assigns
 // its own JSON-RPC ids and maps responses back to the caller's id.
 package mcpbridge
@@ -179,6 +180,12 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var m message
 	if json.Unmarshal(body, &req) != nil || json.Unmarshal(body, &m) != nil || m.Method == "" {
 		http.Error(w, "invalid JSON-RPC request", http.StatusBadRequest)
+		return
+	}
+	// A session id from an earlier bridge process (the server
+	// restarted) gets 404, so the client initializes again (D-162).
+	if sid := r.Header.Get("Mcp-Session-Id"); sid != "" && sid != b.sessionID && m.Method != "initialize" {
+		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Mcp-Session-Id", b.sessionID)

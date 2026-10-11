@@ -96,9 +96,10 @@ func NewMCPAuth(secrets SecretRW, rows rowSource, publicURL string, client *http
 	}
 }
 
-// Builder is MCPBuilder over a.Client that also serves oauth mode.
-func (a *MCPAuth) Builder(deferral MCPDeferral) Builder {
-	return mcpBuilder(a.Client, deferral, a)
+// Builder is MCPBuilder over a.Client that also serves oauth mode and,
+// when services is set, command connectors (D-162).
+func (a *MCPAuth) Builder(deferral MCPDeferral, services *MCPServices) Builder {
+	return mcpBuilder(a.Client, deferral, a, services)
 }
 
 // RedirectURI is the callback route shared with google and microsoft.

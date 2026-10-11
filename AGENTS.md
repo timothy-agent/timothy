@@ -172,6 +172,17 @@ network (brain joins it, sandboxd never does), get the bridge only when
 `internet` is set, and restart on failure three times before staying
 stopped until the next Ensure. Kubernetes returns ErrServicesUnsupported.
 
+D-162 (issue #1208): an `mcp` connector may set `command`, `args`,
+`env_refs` (env name to secret ref) and `internet` instead of
+`endpoint` (`connectors/mcp_command.go`). The builder ensures a service
+running `mcp-bridge -- <command>` and connects to the address sandboxd
+reports, without netguard. The bridge token is HMAC of
+`secrets.DeriveKey("mcp-bridge-token")` and the connector id, never
+stored. Every reload removes services that are not an enabled command
+connector's, and leaves a crashed unchanged one stopped for 10 minutes;
+Test, probe or a config change start it at once. A 404 to a known
+session re-runs the handshake once.
+
 D-156 (issue #1182): Bedrock `options.auth=static|ambient`; ambient
 uses the SDK default chain (IRSA, Pod Identity), needs a region and
 rejects a `credential_ref`.

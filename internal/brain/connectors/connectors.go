@@ -108,6 +108,9 @@ func validate(c *Connector) error {
 	if len(c.Config) > 0 && !json.Valid(c.Config) {
 		return fmt.Errorf("config must be a JSON object")
 	}
+	if c.Kind == "mcp" {
+		return validateMCPConfig(c.Config)
+	}
 	return nil
 }
 
@@ -252,6 +255,11 @@ func (s *Store) Patch(ctx context.Context, id string, patch Patch) error {
 	}
 	if patch.Config != nil {
 		after.Config = *patch.Config
+		if after.Kind == "mcp" {
+			if err := validateMCPConfig(after.Config); err != nil {
+				return fmt.Errorf("%w: %w", ErrInvalid, err)
+			}
+		}
 	}
 	if patch.CredentialRef != nil {
 		after.CredentialRef = *patch.CredentialRef

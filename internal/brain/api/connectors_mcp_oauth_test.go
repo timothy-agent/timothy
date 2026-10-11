@@ -232,7 +232,7 @@ func TestMCPOAuthCallbackEndToEnd(t *testing.T) {
 	}
 
 	c, _ := rows.Get(t.Context(), "c1")
-	src, err := auth.Builder(connectors.MCPDeferral{})(t.Context(), c, secrets.Resolve)
+	src, err := auth.Builder(connectors.MCPDeferral{}, nil)(t.Context(), c, secrets.Resolve)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}

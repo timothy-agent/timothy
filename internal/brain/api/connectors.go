@@ -168,6 +168,9 @@ func (h *connectorAPI) create(w http.ResponseWriter, r *http.Request) {
 		}
 		c.Config = cfg
 	}
+	if !h.localServersOK(w, r, c) {
+		return
+	}
 	id, err := h.mgr.Store().Create(r.Context(), c)
 	if err != nil {
 		failConnector(w, h.log, err)
@@ -202,6 +205,9 @@ func (h *connectorAPI) patch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		patch.Config = &restored
+		if !h.localServersOK(w, r, connectors.Connector{Kind: existing.Kind, Config: restored}) {
+			return
+		}
 		if connectors.IsGitKind(existing.Kind) {
 			credentialRef := existing.CredentialRef
 			if patch.CredentialRef != nil {
@@ -334,6 +340,20 @@ func (h *connectorAPI) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// localServersOK answers 400 when c names a command but this instance
+// cannot run local MCP servers (D-162), so the operator learns it at
+// save rather than from a reload log.
+func (h *connectorAPI) localServersOK(w http.ResponseWriter, r *http.Request, c connectors.Connector) bool {
+	if !connectors.IsCommandMCP(c) {
+		return true
+	}
+	if err := h.mgr.LocalServersSupported(r.Context()); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
+		return false
+	}
+	return true
+}
+
 // test mirrors the provider test endpoint's shape: 200 with {ok,
 // error} for probe outcomes so the UI renders failures inline; HTTP
 // errors only for unknown ids and unbuildable kinds. A successful
@@ -351,6 +371,11 @@ func (h *connectorAPI) test(w http.ResponseWriter, r *http.Request) {
 		if report.DeferredTools > 0 {
 			out["deferred_tools"] = report.DeferredTools
 			out["load_tool"] = report.LoadTool
+		}
+		if report.Service != nil {
+			out["service"] = map[string]any{
+				"state": report.Service.State, "restarts": report.Service.Restarts, "last_error": report.Service.LastError,
+			}
 		}
 		writeJSON(w, http.StatusOK, out)
 	case errors.Is(err, connectors.ErrNotFound), errors.Is(err, connectors.ErrUnsupported):

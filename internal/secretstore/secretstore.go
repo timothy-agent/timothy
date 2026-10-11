@@ -12,6 +12,8 @@ package secretstore
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +35,8 @@ var ErrNotFound = errors.New("secretstore: not found")
 type Store struct {
 	db     *pgpool.Pool
 	cipher *sealer
+	// deriveRoot is the master key, kept only for DeriveKey.
+	deriveRoot []byte
 
 	// asm caches the AWS Secrets Manager client so Resolve doesn't
 	// re-run the SDK's config chain on every snapshot reload; cleared
@@ -49,7 +53,16 @@ func New(db *pgpool.Pool, masterKey []byte) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("secretstore: %w", err)
 	}
-	return &Store{db: db, cipher: c}, nil
+	return &Store{db: db, cipher: c, deriveRoot: append([]byte(nil), masterKey...)}, nil
+}
+
+// DeriveKey returns HMAC-SHA256(master key, label): a key that stays
+// the same across restarts for one purpose and never reveals the
+// master key (D-162, MCP bridge tokens).
+func (s *Store) DeriveKey(label string) []byte {
+	mac := hmac.New(sha256.New, s.deriveRoot)
+	_, _ = mac.Write([]byte(label))
+	return mac.Sum(nil)
 }
 
 // secretRow is one secrets-table row; shared by Resolve and the vault

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SumonMSelim/timothy/internal/brain/gitprovider"
+	"github.com/SumonMSelim/timothy/internal/brain/sandboxclient"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
 )
 
@@ -59,6 +60,8 @@ type Manager struct {
 	log      *slog.Logger
 
 	onReload func(context.Context)
+	// services runs command connectors (D-162); nil refuses them.
+	services *MCPServices
 
 	mu      sync.RWMutex
 	sources map[string]Source // by connector name
@@ -107,9 +110,13 @@ func (m *Manager) Reload(ctx context.Context) error {
 		return err
 	}
 	fresh := map[string]Source{}
+	keepServices := map[string]bool{}
 	for _, c := range rows {
 		if !c.Enabled {
 			continue
+		}
+		if IsCommandMCP(c) {
+			keepServices[c.ID] = true
 		}
 		b, ok := m.builders[c.Kind]
 		if !ok {
@@ -134,6 +141,12 @@ func (m *Manager) Reload(ctx context.Context) error {
 		if err := src.Close(); err != nil {
 			m.log.Warn("connector close failed", "connector", name, "error", err)
 		}
+	}
+	// Close leaves services running (every reload closes every
+	// source); a service outlives its source only while its connector
+	// is an enabled command connector.
+	if m.services != nil {
+		m.services.reconcile(ctx, keepServices)
 	}
 	if m.onReload != nil {
 		m.onReload(ctx)
@@ -712,6 +725,22 @@ func (m *Manager) SetOnReload(fn func(context.Context)) {
 	m.onReload = fn
 }
 
+// SetServices wires the runner command connectors need (D-162); the
+// mcp builder must get the same one. Startup-time only.
+func (m *Manager) SetServices(s *MCPServices) {
+	m.services = s
+}
+
+// LocalServersSupported reports ErrLocalServersUnsupported when command
+// connectors cannot run here: no runner, or a sandbox backend without
+// service containers.
+func (m *Manager) LocalServersSupported(ctx context.Context) error {
+	if m.services == nil {
+		return ErrLocalServersUnsupported
+	}
+	return m.services.supported(ctx)
+}
+
 // Ready returns a channel that closes once the first successful Reload
 // (and its onReload hook) has completed. A manager with zero
 // configured connectors still becomes ready — ready means "initial
@@ -922,6 +951,9 @@ type TestReport struct {
 	// LoadTool is the entry point's name as chat sees it (see
 	// LoadToolName); empty when DeferredTools is 0.
 	LoadTool string
+	// Service is a command connector's local server as sandboxd
+	// reports it (D-162); nil otherwise.
+	Service *sandboxclient.ServiceStatus
 }
 
 // TestReport builds the connector fresh, enabled or not, runs its
@@ -938,7 +970,12 @@ func (m *Manager) TestReport(ctx context.Context, id string) (TestReport, error)
 	}
 	tctx, cancel := context.WithTimeout(ctx, testTimeout)
 	defer cancel()
-	src, err := b(tctx, c, m.resolve)
+	// Testing a disabled command connector starts its service; it
+	// goes again when the test ends.
+	if !c.Enabled && m.services != nil && IsCommandMCP(c) {
+		defer m.services.remove(ctx, c.ID)
+	}
+	src, err := b(withServiceRevive(tctx), c, m.resolve)
 	if err != nil {
 		return TestReport{}, err
 	}
@@ -949,6 +986,9 @@ func (m *Manager) TestReport(ctx context.Context, id string) (TestReport, error)
 	}()
 
 	var report TestReport
+	if ms, ok := src.(*mcpSource); ok && ms.services != nil {
+		report.Service = ms.services.status(tctx, ms.serviceID)
+	}
 	if ds, ok := src.(deferredSource); ok {
 		if report.DeferredTools = len(ds.DeferredTools()); report.DeferredTools > 0 {
 			report.LoadTool = m.liveLoadTool(c.Name)

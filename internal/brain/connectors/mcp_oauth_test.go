@@ -383,7 +383,7 @@ func buildOAuthSource(t *testing.T, auth *MCPAuth, rows *patchRows) (Source, err
 	if err != nil {
 		t.Fatal(err)
 	}
-	return auth.Builder(MCPDeferral{})(t.Context(), c, auth.Secrets.Resolve)
+	return auth.Builder(MCPDeferral{}, nil)(t.Context(), c, auth.Secrets.Resolve)
 }
 
 func TestParseBearerChallenge(t *testing.T) {
@@ -1095,13 +1095,13 @@ func TestMCPOAuthBuilder(t *testing.T) {
 		want    error
 		wantMsg string
 	}{
-		{"not connected yet", func(a *MCPAuth) Builder { return a.Builder(MCPDeferral{}) },
+		{"not connected yet", func(a *MCPAuth) Builder { return a.Builder(MCPDeferral{}, nil) },
 			oauthRow("https://mcp.example/mcp", ""), errMCPNotConnected, ""},
 		{"plain MCPBuilder refuses oauth", func(*MCPAuth) Builder { return MCPBuilder(nil, MCPDeferral{}) },
 			oauthRow("https://mcp.example/mcp", connected), nil, "unavailable"},
-		{"no credential ref", func(a *MCPAuth) Builder { return a.Builder(MCPDeferral{}) },
+		{"no credential ref", func(a *MCPAuth) Builder { return a.Builder(MCPDeferral{}, nil) },
 			Connector{ID: "m1", Name: "x", Kind: "mcp", Config: json.RawMessage(`{"endpoint":"https://mcp.example/mcp","auth_mode":"oauth"` + connected + `}`)}, nil, "credential_ref"},
-		{"unknown auth mode", func(a *MCPAuth) Builder { return a.Builder(MCPDeferral{}) },
+		{"unknown auth mode", func(a *MCPAuth) Builder { return a.Builder(MCPDeferral{}, nil) },
 			Connector{ID: "m1", Name: "x", Kind: "mcp", Config: json.RawMessage(`{"endpoint":"https://mcp.example/mcp","auth_mode":"basic"}`)}, nil, "auth_mode"},
 	}
 	for _, tc := range tests {
@@ -1129,7 +1129,7 @@ func TestMCPOAuthBuilderTokenModeUnchanged(t *testing.T) {
 	srv := httptest.NewServer(f.handler())
 	t.Cleanup(srv.Close)
 	auth := NewMCPAuth(newFakeSecrets(), newPatchRows(), "", srv.Client(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	src, err := auth.Builder(MCPDeferral{})(t.Context(), Connector{
+	src, err := auth.Builder(MCPDeferral{}, nil)(t.Context(), Connector{
 		Name: "gh", Kind: "mcp", Config: json.RawMessage(`{"endpoint":"` + srv.URL + `"}`), CredentialRef: "GH",
 	}, func(context.Context, string) (string, error) { return "tok-1", nil })
 	if err != nil {
@@ -1186,7 +1186,7 @@ func TestMCPOAuthRefreshRejectedNeedsReconnect(t *testing.T) {
 
 	mgr := testManager(rows)
 	mgr.resolve = secrets.Resolve
-	mgr.RegisterBuilder("mcp", auth.Builder(MCPDeferral{}))
+	mgr.RegisterBuilder("mcp", auth.Builder(MCPDeferral{}, nil))
 	report, err := mgr.TestReport(t.Context(), "m1")
 	if err != nil {
 		t.Fatalf("TestReport: %v", err)
