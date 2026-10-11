@@ -308,6 +308,8 @@ describe('AutomationDetail run history tab', () => {
     await screen.findByTestId('runs-sentinel')
     expect(container.querySelectorAll('[data-run-id]')).toHaveLength(50)
 
+    // The observer is created in an effect after the sentinel renders (#1212).
+    await waitFor(() => expect(intersect).toBeDefined())
     act(() => intersect?.())
     await waitFor(() => expect(container.querySelectorAll('[data-run-id]')).toHaveLength(53))
     expect(listAutomationRuns).toHaveBeenLastCalledWith('s1', { before: run(49).created_at, beforeId: 'r-049' })

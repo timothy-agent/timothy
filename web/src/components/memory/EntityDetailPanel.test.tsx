@@ -54,6 +54,8 @@ describe('EntityDetailPanel', () => {
     render(<EntityDetailPanel entity={entity} />)
     await waitFor(() => expect(screen.getAllByTestId('entity-memory')).toHaveLength(50))
     expect(entityMemories).toHaveBeenCalledWith('e1')
+    // The observer is created in an effect after the list renders (#1212).
+    await waitFor(() => expect(observerCallbacks.length).toBeGreaterThan(0))
     act(() => {
       observerCallbacks.at(-1)?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
     })
