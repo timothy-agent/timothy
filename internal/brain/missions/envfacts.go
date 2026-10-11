@@ -50,7 +50,7 @@ type ToolFact struct {
 	Version string `json:"version,omitempty"`
 }
 
-// Sandbox limits as sandboxd applies them (internal/sandboxd/manager.go:
+// Sandbox limits as sandboxd applies them (internal/sandboxd/docker.go:
 // sandboxMemoryBytes, sandboxNanoCPUs, sandboxPidsLimit, the tmpfs
 // sizes, sandboxFsizeLimit). Brain does not import sandboxd; keep these
 // in sync when a limit changes there.
@@ -279,6 +279,24 @@ func (p *provisioner) collectEnvFacts(ctx context.Context, m Mission, workRoot, 
 		p.log.Warn("driver: store environment facts failed", "mission_id", m.ID, "error", err)
 	}
 	return facts
+}
+
+// deliversPR reports whether m can end in a pull request: a repo
+// destination with mode push_pr, or a repo connection, which the
+// mission page's "Push & open PR" can open a PR on after the run.
+func deliversPR(m Mission) bool {
+	if m.RepoURL() != "" && m.ConnectorID() != "" {
+		return true
+	}
+	if m.EnvFacts == nil {
+		return false
+	}
+	for _, d := range m.EnvFacts.Destinations {
+		if d.Mode == "push_pr" {
+			return true
+		}
+	}
+	return false
 }
 
 // repoDestinations lists the mission's repo destinations with kind and

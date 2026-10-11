@@ -302,6 +302,29 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+// SetLastProbe writes config.last_probe (issue #1191), merging into the
+// stored config so no other key moves. Derived data: no audit row and
+// no change hook, since a probe must not rebuild every connector.
+func (s *Store) SetLastProbe(ctx context.Context, id string, rec MCPLastProbe) error {
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("connectors last probe: %w", err)
+	}
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("connectors last probe: %w", err)
+	}
+	tag, err := db.Exec(ctx, `UPDATE connectors SET config = config || jsonb_build_object('last_probe', $2::jsonb),
+			updated_at = now() WHERE id = $1`, id, raw)
+	if err != nil {
+		return fmt.Errorf("connectors last probe: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("connector %s: %w", id, ErrNotFound)
+	}
+	return nil
+}
+
 // pgxQuerier is satisfied by both *pgxpool.Pool and pgx.Tx.
 type pgxQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row

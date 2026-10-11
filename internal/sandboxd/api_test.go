@@ -21,7 +21,7 @@ func testLog() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func testAPI(mgr *Manager) *API {
+func testAPI(mgr *Docker) *API {
 	return &API{mgr: mgr, log: testLog(), execSem: make(chan struct{}, defaultMaxExecs), maxContainers: defaultMaxContainers}
 }
 
@@ -82,7 +82,7 @@ func TestHandleExecWorkdirEscape(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected daemon call for a workdir that should 400 before ensureContainer: %s %s", r.Method, r.URL.Path)
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 
 	cases := []string{
 		"/workspace/../etc",
@@ -179,7 +179,7 @@ func TestHandleExecUnknownEnvNameRejected(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected daemon call for env that should 400 before ensureContainer: %s %s", r.Method, r.URL.Path)
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 
 	body := `{"workdir":"/workspace","command":"true","timeout_seconds":5,"env":{"AWS_SECRET_ACCESS_KEY":"leaked-value"}}`
 	rec := httptest.NewRecorder()
@@ -200,7 +200,7 @@ func TestHandleExecUnknownFieldRejected(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected daemon call: %s %s", r.Method, r.URL.Path)
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 
 	body := `{"workdir":"/workspace","command":"true","timeout_seconds":5,"image":"escape:latest"}`
 	rec := httptest.NewRecorder()
@@ -218,7 +218,7 @@ func TestHandleExecIgnoresRemovedEnvironment(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected daemon call: %s %s", r.Method, r.URL.Path)
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	for _, env := range []string{`"php"`, `"base"`, `{"any":"shape"}`} {
 		body := `{"workdir":"relative","command":"true","timeout_seconds":5,"environment":` + env + `}`
 		rec := httptest.NewRecorder()
@@ -284,7 +284,7 @@ func TestHandleExecTimeoutClampVisibleInArgv(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 
 	// 999999 seconds is far past execMaxTimeout (15m); the handler must
 	// clamp it before it ever reaches the daemon.
@@ -340,7 +340,7 @@ func TestHandleExecEnvReachesExecCreate(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 
 	body := `{"workdir":"` + validWorkdirFor + `","command":"true","timeout_seconds":5,"env":{"ANTHROPIC_API_KEY":"sk-test"}}`
 	rec := httptest.NewRecorder()
@@ -395,7 +395,7 @@ func TestHandleExecNoEnvOmitsExecEnv(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 
 	body := `{"workdir":"` + validWorkdirFor + `","command":"true","timeout_seconds":5}`
 	rec := httptest.NewRecorder()
@@ -416,7 +416,7 @@ func TestHandleRemoveIdempotent(t *testing.T) {
 	d := newFakeDaemon(map[string]map[string]string{
 		containerName(validUUID): {missionLabel: validUUID, ownerLabel: testOwner},
 	})
-	api := testAPI(newTestManager(newTestClient(t, d.handle)))
+	api := testAPI(newTestDocker(newTestClient(t, d.handle)))
 
 	for i := 0; i < 2; i++ {
 		rec := httptest.NewRecorder()
@@ -540,7 +540,7 @@ func TestSweepLeavesOtherInstancesContainers(t *testing.T) {
 		containerName(legacyUUID): {missionLabel: legacyUUID},
 	})
 	cli := newTestClient(t, d.handle)
-	mgrB := newTestManager(cli)
+	mgrB := newTestDocker(cli)
 	mgrB.owner = ownerB
 	apiB := testAPI(mgrB)
 
@@ -593,7 +593,7 @@ func TestHandleListLabelFiltering(t *testing.T) {
 		}
 		t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 
 	rec := httptest.NewRecorder()
 	testAPI(mgr).handleList(rec, httptest.NewRequest(http.MethodGet, "/v1/sandboxes", nil))
@@ -611,7 +611,7 @@ func TestHandleListLabelFiltering(t *testing.T) {
 	}
 }
 
-// TestHandleCapacity confirms the /capacity route reports Manager's
+// TestHandleCapacity confirms the /capacity route reports Docker's
 // Capacity result as JSON (D-056) — brain's admission gate reads this.
 func TestHandleCapacity(t *testing.T) {
 	t.Parallel()
@@ -624,7 +624,7 @@ func TestHandleCapacity(t *testing.T) {
 		}
 		t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 
 	rec := httptest.NewRecorder()
 	testAPI(mgr).handleCapacity(rec, httptest.NewRequest(http.MethodGet, "/capacity", nil))

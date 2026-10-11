@@ -1,0 +1,145 @@
+{{- $sel := dict "root" . "svc" "sandboxd" }}
+{{- $sandboxNS := include "timothy.sandboxNamespace" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-sandboxd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandboxd
+spec:
+  selector:
+    {{- include "timothy.selector" $sel | nindent 4 }}
+  ports:
+    - name: http
+      port: 8083
+      targetPort: http
+---
+# Namespaced, nothing cluster-scoped: pods and pods/exec in the sandbox
+# namespace, plus the quota for capacity reporting and the namespace
+# object itself for the health check.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-sandboxd
+  namespace: {{ $sandboxNS }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandboxd
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [resourcequotas]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [namespaces]
+    resourceNames: [{{ $sandboxNS }}]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-sandboxd
+  namespace: {{ $sandboxNS }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandboxd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-sandboxd
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-sandboxd
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-sandboxd
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "timothy.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandboxd
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "timothy.selector" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "timothy.selector" $sel | nindent 8 }}
+      annotations:
+        {{- include "timothy.metricsAnnotations" (dict "root" . "port" 8083) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}-sandboxd
+      # The one pod that needs its token: it creates and execs into
+      # sandbox pods through the API server.
+      automountServiceAccountToken: true
+      {{- include "timothy.pullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "timothy.podSecurityContext" (dict "uid" 65532) | nindent 8 }}
+      containers:
+        - name: sandboxd
+          image: {{ include "timothy.image" $sel }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- include "timothy.containerSecurityContext" . | nindent 12 }}
+          env:
+            - name: PORT
+              value: "8083"
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: SANDBOXD_BACKEND
+              value: kubernetes
+            - name: MISSION_SANDBOX_IMAGE
+              value: {{ include "timothy.sandboxImage" . }}
+            - name: SANDBOXD_K8S_NAMESPACE
+              value: {{ $sandboxNS }}
+            - name: SANDBOXD_K8S_OWNER
+              value: {{ .Release.Name }}
+            - name: SANDBOXD_K8S_WORKSPACE_PVC
+              value: {{ include "timothy.sandboxWorkspaceClaim" . }}
+            - name: SANDBOXD_K8S_STATE_PVC
+              value: {{ include "timothy.optionalClaim" (dict "root" . "key" "executorState" "name" "executor-state") | quote }}
+            - name: SANDBOXD_K8S_TOOLCHAINS_PVC
+              value: {{ include "timothy.optionalClaim" (dict "root" . "key" "toolchains" "name" "toolchains") | quote }}
+            - name: SANDBOXD_K8S_CACHES_PVC
+              value: {{ include "timothy.optionalClaim" (dict "root" . "key" "caches" "name" "caches") | quote }}
+            - name: SANDBOXD_K8S_RUNTIME_CLASS
+              value: {{ .Values.sandbox.runtimeClassName | quote }}
+            - name: SANDBOXD_K8S_NODE_SELECTOR
+              value: {{ $pairs := list }}{{ range $k, $v := .Values.sandbox.nodeSelector }}{{ $pairs = append $pairs (printf "%s=%s" $k $v) }}{{ end }}{{ join "," $pairs | quote }}
+            - name: SANDBOXD_K8S_TOLERATIONS
+              value: {{ if .Values.sandbox.tolerations }}{{ toJson .Values.sandbox.tolerations | quote }}{{ else }}""{{ end }}
+            - name: SANDBOXD_K8S_SANDBOX_TTL
+              value: {{ .Values.sandbox.ttl | quote }}
+            - name: SANDBOXD_K8S_READY_TIMEOUT
+              value: {{ .Values.sandbox.readyTimeout | quote }}
+            - name: SANDBOXD_K8S_SKIP_IMAGE_CHECK
+              value: {{ .Values.sandbox.skipImageCheck | quote }}
+          ports:
+            - name: http
+              containerPort: 8083
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.sandboxd.resources | nindent 12 }}

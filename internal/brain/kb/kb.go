@@ -28,12 +28,12 @@ var ErrSystem = errors.New("collection is bundled with Timothy and read-only")
 
 // Collection is one named group of documents agents can search.
 type Collection struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	DocCount    int       `json:"doc_count"`
-	ChunkCount  int       `json:"chunk_count"`
-	FailedCount int       `json:"failed_count"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	DocCount    int    `json:"doc_count"`
+	ChunkCount  int    `json:"chunk_count"`
+	FailedCount int    `json:"failed_count"`
 	// RetrievalWeight scales this collection's score at retrieval time
 	// (D-085, issue #443): 1.0 is neutral, bounded to (0, 2].
 	RetrievalWeight float64 `json:"retrieval_weight"`
@@ -316,7 +316,7 @@ func (s *Store) CreateDocument(ctx context.Context, collectionID, title, sourceT
 // SweepStale fails documents parked at pending/ingesting. Ingest runs
 // on a fire-and-forget goroutine (api's startIngest), so a brain
 // restart mid-ingest strands the row in a non-terminal status forever
-//: the UI polls a spinner that never resolves. Called once at boot on
+// : the UI polls a spinner that never resolves. Called once at boot on
 // its own goroutine, which races the freshly started API server: the
 // 30-second grace window keeps a legitimately in-flight upload from
 // being swept. The stored markdown survives, so reingest recovers the

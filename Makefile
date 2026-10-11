@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate manifest selfdocs routes-check up down logs \
-	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke
+	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke kind-up kind-down kind-sandbox-test kind-sandbox-smoke kind-deploy helm-lint helm-template helm-golden
 
 build:
 	$(GO_RUN) go build ./...
@@ -209,3 +209,58 @@ sandbox-image:
 # Checks PHP 8.1 to 8.4 with composer, build tools, mise, runtime installs under the sandbox limits, and the shared toolchain and cache volumes.
 sandbox-smoke:
 	./scripts/sandbox-smoke.sh $(SANDBOX_IMAGE)
+
+# kind cluster for the Kubernetes sandbox backend (deploy/kind/cluster.yaml).
+# kind-sandbox-test runs the backend's integration suite inside the Go
+# container on kind's own Docker network, with the cluster's internal
+# kubeconfig; KIND_TEST_IMAGE is a small coreutils image loaded into
+# the node, since the suite exercises the backend, not the toolchain.
+KIND_CLUSTER   ?= timothy
+KIND_TEST_IMAGE ?= debian:bookworm-slim
+kind-up:
+	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --config deploy/kind/cluster.yaml --name $(KIND_CLUSTER) --wait 120s
+	kubectl --context kind-$(KIND_CLUSTER) apply -f deploy/kind/sandbox.yaml
+	docker image inspect $(KIND_TEST_IMAGE) >/dev/null 2>&1 || docker pull $(KIND_TEST_IMAGE)
+	kind load docker-image $(KIND_TEST_IMAGE) --name $(KIND_CLUSTER)
+	@if docker image inspect $(SANDBOX_IMAGE) >/dev/null 2>&1; then kind load docker-image $(SANDBOX_IMAGE) --name $(KIND_CLUSTER); \
+	else echo "kind-up: $(SANDBOX_IMAGE) not built; run make sandbox-image before make kind-sandbox-smoke"; fi
+
+kind-down:
+	kind delete cluster --name $(KIND_CLUSTER)
+
+kind-sandbox-test:
+	mkdir -p build
+	kind get kubeconfig --name $(KIND_CLUSTER) --internal > build/kind-kubeconfig
+	docker run --rm -v $(CURDIR):/src -w /src \
+		-v timothy-go-mod:/go/pkg/mod -v timothy-go-cache:/root/.cache/go-build \
+		-e GOFLAGS=-buildvcs=false --network kind \
+		-e KUBECONFIG=/src/build/kind-kubeconfig -e SANDBOXD_K8S_TEST_IMAGE=$(KIND_TEST_IMAGE) \
+		$(GO_IMAGE) go test -race -count=1 -tags integration -v -run TestKubernetesLifecycle ./internal/sandboxd/
+
+# End to end: the local stack's sandboxd on the kubernetes backend, a
+# coding mission through brain, assertions on the sandbox namespace.
+# Needs kind-up, the stack up and `make sandbox-image`.
+kind-sandbox-smoke:
+	./scripts/kind-sandbox-smoke.sh
+
+# Helm chart (deploy/helm/timothy). helm-golden diffs the rendered
+# manifests against deploy/helm/tests/golden/default.yaml; UPDATE=1
+# rewrites it after a reviewed change.
+HELM_CHART := deploy/helm/timothy
+helm-lint:
+	helm lint $(HELM_CHART)
+	helm lint $(HELM_CHART) -f deploy/helm/tests/values-golden.yaml
+
+helm-template:
+	helm template timothy $(HELM_CHART) --namespace timothy -f deploy/helm/tests/values-golden.yaml
+
+helm-golden:
+	./scripts/helm-golden.sh
+
+# Whole stack on kind through the chart: builds every image locally,
+# loads them into the node, installs with deploy/kind/values-kind.yaml
+# and waits for every pod. Needs kind-up.
+kind-deploy:
+	$(COMPOSE) build brain gateway memoryd sandboxd web markitdown pdfgen ocr
+	kind load docker-image timothy-brain timothy-gateway timothy-memoryd timothy-sandboxd timothy-web timothy-markitdown timothy-pdfgen timothy-ocr $(SANDBOX_IMAGE) --name $(KIND_CLUSTER)
+	helm upgrade --install timothy $(HELM_CHART) --kube-context kind-$(KIND_CLUSTER) --namespace timothy --create-namespace -f deploy/kind/values-kind.yaml --wait --timeout 10m

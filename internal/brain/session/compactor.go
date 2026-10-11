@@ -325,11 +325,11 @@ func (c *Compactor) summarize(ctx context.Context, sessionID string, msgs []prov
 		b.WriteString(renderForSummary(m))
 	}
 	events, err := c.gw.Stream(ctx, gwclient.StreamRequest{
-		Route: route,
-		Purpose:      "compaction",
-		System:       summarizeSystem,
-		Messages:     []provider.Message{{Role: "user", Content: b.String()}},
-		MaxTokens:    summaryMaxTokens,
+		Route:     route,
+		Purpose:   "compaction",
+		System:    summarizeSystem,
+		Messages:  []provider.Message{{Role: "user", Content: b.String()}},
+		MaxTokens: summaryMaxTokens,
 		// Summaries are transcription, not reasoning. Low effort also
 		// keeps reasoning-forward models (GLM) answering in the text
 		// channel instead of burning the budget on hidden thinking.

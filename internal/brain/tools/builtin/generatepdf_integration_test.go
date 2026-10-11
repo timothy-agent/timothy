@@ -17,8 +17,8 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/brain/tools"
-	pdfgenclient "github.com/SumonMSelim/timothy/internal/platform/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
+	pdfgenclient "github.com/SumonMSelim/timothy/internal/platform/pdfgen"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/migrations"
 )

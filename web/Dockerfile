@@ -24,5 +24,9 @@ USER 101
 # Same-origin /v1 in the browser; nginx forwards to brain (the image
 # entrypoint envsubsts ${BRAIN_URL} into the template at startup).
 ENV BRAIN_URL=http://brain:8080
+# nginx resolves ${BRAIN_URL}'s host at request time through this
+# resolver: Docker's embedded DNS under Compose, kube-dns under the
+# Helm chart (which sets it per cluster).
+ENV DNS_RESOLVER=127.0.0.11
 COPY nginx/default.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html

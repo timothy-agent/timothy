@@ -29,10 +29,11 @@ server {
         try_files $uri /index.html;
     }
 
-    # proxy_pass through a variable + Docker's embedded DNS defers name
+    # proxy_pass through a variable + a runtime resolver defers name
     # resolution to request time: nginx boots before brain and survives
-    # brain getting a new address on restart.
-    resolver 127.0.0.11 valid=30s ipv6=off;
+    # brain getting a new address on restart. ${DNS_RESOLVER} is
+    # Docker's embedded DNS under Compose and kube-dns under Helm.
+    resolver ${DNS_RESOLVER} valid=30s ipv6=off;
 
     # brain's /health, for the footer's running version. Unauthenticated
     # and outside /v1/, so it needs its own location.

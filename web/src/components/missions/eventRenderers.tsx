@@ -280,11 +280,15 @@ const renderers: Record<string, (payload: unknown) => ReactNode> = {
   // mission.result_complete is the result phase's own step outcome
   // (D-086): a summary of what delivery/copy/promote did.
   'mission.result_complete': (p) => {
-    const { delivered, artifacts_copied, promoted_kb_collection_id, delivery_error, promote_kb_error } =
+    const { delivered, delivered_to, artifacts_copied, promoted_kb_collection_id, delivery_error, promote_kb_error } =
       asRecord(p)
     const parts: string[] = []
-    if (delivered) parts.push(`delivered to ${String(delivered)}`)
-    if (artifacts_copied) parts.push(`${String(artifacts_copied)} artifact(s) copied`)
+    const names = Array.isArray(delivered_to) ? delivered_to.filter((n): n is string => typeof n === 'string' && n !== '') : []
+    if (names.length > 0) parts.push(`delivered to ${names.join(', ')}`)
+    else if (delivered) parts.push(`delivered to ${String(delivered)} ${Number(delivered) === 1 ? 'destination' : 'destinations'}`)
+    if (artifacts_copied) {
+      parts.push(`${String(artifacts_copied)} ${Number(artifacts_copied) === 1 ? 'artifact' : 'artifacts'} copied`)
+    }
     if (promoted_kb_collection_id) parts.push('promoted to kb')
     const errors = [delivery_error, promote_kb_error].filter(Boolean)
     if (errors.length === 0) {
