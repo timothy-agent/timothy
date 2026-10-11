@@ -62,13 +62,13 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `brain`      | Public API: chat orchestration, agent loop, missions, event-sourced sessions, SSE streaming   |
 | `gateway`    | Internal LLM gateway: multi-provider routing, cost ledger                                     |
 | `memoryd`    | Internal memory service: pgvector-backed recall                                               |
-| `sandboxd`   | Internal service holding the Docker socket: per-mission sandbox containers                    |
+| `sandboxd`   | Internal service running per-mission sandboxes: Docker containers on Compose, pods on Kubernetes |
 | `web`        | React + Tailwind interface: chat, missions, usage, settings                                   |
 | `searxng`    | Internal metasearch backend for the search_web tool                                           |
 | `markitdown` | Internal Python sidecar: file→markdown conversion                                             |
 | `ocr`        | Internal Python sidecar: tesseract image OCR                                                  |
 | `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (opt-in, off by default) |
-| `pdfgen`     | Internal Python sidecar: markdown→PDF via Typst, powers mission PDF export                    |
+| `pdfgen`     | Internal Python sidecar: markdown→PDF via Typst for chat, mission export and any document      |
 
 Plus Postgres (18 + pgvector), internal only, no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`; brain's `/metrics`, the only one on a published port, requires `Authorization: Bearer $TIMOTHY_METRICS_TOKEN`.
 
