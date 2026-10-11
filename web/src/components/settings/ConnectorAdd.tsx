@@ -28,6 +28,7 @@ import { SegmentedControl } from '../timothy/segmented-control'
 import { connectedAs, secretDestination } from './util'
 import { errText, isTimothyAuthError } from '../../lib/errors'
 import { slugify } from '../../lib/slugify'
+import { mcpOAuthRefs, refBaseFor, tokenRefFor } from './credentialRefs'
 import { useOnboarding } from '../../onboarding/context'
 
 const area = settingsArea('connectors')
@@ -55,28 +56,6 @@ const awsEndpoints = [
 // awsRegionFor maps an AWS MCP endpoint to its signing region.
 function awsRegionFor(endpoint: string): string {
   return awsEndpoints.find((e) => e.endpoint === endpoint)?.region ?? ''
-}
-
-// tokenRefFor derives the token credential's ref name from the
-// connector name. Shared by the preview and the submit path so the name
-// shown is the name saved. Suffix without stuttering: a name already
-// ending in the flavor word ("github", "github-mcp") gets the bare
-// _PAT/_TOKEN suffix.
-function tokenRefFor(kind: string, refBase: string): string {
-  switch (kind) {
-    case 'github':
-      return refBase.endsWith('GITHUB') ? `${refBase}_PAT` : `${refBase}_GITHUB_PAT`
-    case 'bitbucket':
-      return refBase.endsWith('BITBUCKET') ? `${refBase}_TOKEN` : `${refBase}_BITBUCKET_TOKEN`
-    case 'gitlab':
-      return refBase.endsWith('GITLAB') ? `${refBase}_TOKEN` : `${refBase}_GITLAB_TOKEN`
-    case 'imap':
-      return `${refBase}_IMAP_PASSWORD`
-    case 'caldav':
-      return `${refBase}_CALDAV_PASSWORD`
-    default:
-      return refBase.endsWith('_MCP') ? `${refBase}_TOKEN` : `${refBase}_MCP_TOKEN`
-  }
 }
 
 // ConnectorAdd is preset-aware and its own page: MCP and github presets
@@ -138,7 +117,7 @@ export function ConnectorAdd() {
 
   useEffect(() => {
     if (!preset) return
-    setName(slugify(preset.id === 'custom-mcp' ? '' : preset.name))
+    setName(slugify(preset.name))
     setEndpoint(preset.endpoint ?? '')
     setToken('')
     setClientID('')
@@ -184,8 +163,7 @@ export function ConnectorAdd() {
   const isAWS = preset.kind === 'aws'
   const isGCP = preset.kind === 'gcp'
   const isMCPOAuth = preset.kind === 'mcp' && mcpAuthMode === 'oauth'
-  const slug = slugify(name)
-  const refBase = slug.toUpperCase().replace(/-/g, '_')
+  const refBase = refBaseFor(name)
   const tested = test?.ok === true
 
   const invalidate = () => {
@@ -391,15 +369,13 @@ export function ConnectorAdd() {
     }
   }
 
-  // No stutter when the connector name already ends in MCP.
-  const mcpRefBase = refBase.endsWith('_MCP') ? refBase : `${refBase}_MCP`
-  const mcpClientSecretRef = `${mcpRefBase}_CLIENT_SECRET`
+  const mcpRefs = mcpOAuthRefs(refBase)
 
   const submitMCPOAuth = async () => {
     setBusy(true)
     try {
       const pastedClient = clientID.trim() !== ''
-      if (pastedClient && clientSecret) await setSecret(mcpClientSecretRef, clientSecret)
+      if (pastedClient && clientSecret) await setSecret(mcpRefs.clientSecret, clientSecret)
       const id = await createConnector({
         name: name.trim(),
         kind: 'mcp',
@@ -407,9 +383,9 @@ export function ConnectorAdd() {
           endpoint: endpoint.trim(),
           auth_mode: 'oauth',
           ...(pastedClient ? { client_id: clientID.trim() } : {}),
-          ...(pastedClient && clientSecret ? { client_secret_ref: mcpClientSecretRef } : {}),
+          ...(pastedClient && clientSecret ? { client_secret_ref: mcpRefs.clientSecret } : {}),
         },
-        credential_ref: `${mcpRefBase}_OAUTH`,
+        credential_ref: mcpRefs.tokens,
         enabled: false,
       })
       window.location.assign(await connectorOAuthStart(id))
@@ -482,7 +458,7 @@ export function ConnectorAdd() {
                 setName(e.target.value)
                 invalidate()
               }}
-              placeholder={preset.id === 'custom-mcp' ? 'my-server' : slugify(preset.name)}
+              placeholder={slugify(preset.name)}
             />
           </Field>
 
@@ -888,9 +864,7 @@ export function ConnectorAdd() {
                       ? 'Access token'
                       : isImap || isCalDAV
                         ? 'Password'
-                        : preset.id === 'custom-mcp'
-                          ? 'Bearer token (optional)'
-                          : 'Bearer token'
+                        : 'Bearer token'
                 }
                 mode={tokenCredMode}
                 onModeChange={(m) => {

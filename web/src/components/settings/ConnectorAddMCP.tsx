@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { createConnector, listAgents, patchAgent, probeConnector, setSecret } from '../../api/client'
+import {
+  connectorOAuthStart,
+  createConnector,
+  listAgents,
+  patchAgent,
+  probeConnector,
+  setSecret,
+} from '../../api/client'
 import type { AdminAgent, ConnectorProbe, ConnectorProbeTool } from '../../api/types'
 import { Alert, AlertDescription } from '../ui/alert'
 import { Badge } from '../ui/badge'
@@ -20,14 +27,13 @@ import {
   appendAllowlist,
   buildArgs,
   indexNote,
-  mcpTokenRef,
-  oauthNotice,
   parseMCPInput,
   schemaFields,
   stdioIssueURL,
   stdioReason,
   type FieldValue,
 } from './mcpAddFlow'
+import { mcpOAuthRefs, refBaseFor, tokenRefFor } from './credentialRefs'
 import { settingsArea } from './settingsAreas'
 import { TestStatus } from './TestStatus'
 import { errText, isTimothyAuthError } from '../../lib/errors'
@@ -50,6 +56,8 @@ export function ConnectorAddMCP() {
   const [name, setName] = useState('')
   const [token, setToken] = useState('')
   const [askToken, setAskToken] = useState(false)
+  const [clientID, setClientID] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
   const [probe, setProbe] = useState<ConnectorProbe | null>(null)
   const [probing, setProbing] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
@@ -71,6 +79,8 @@ export function ConnectorAddMCP() {
     setName(c?.name ?? '')
     setToken(c?.token ?? '')
     setAskToken(false)
+    setClientID('')
+    setClientSecret('')
     setProbe(null)
     setTryTool(null)
   }
@@ -102,7 +112,7 @@ export function ConnectorAddMCP() {
     setSaving(true)
     const connectorName = name.trim()
     try {
-      const ref = token.trim() ? mcpTokenRef(connectorName) : ''
+      const ref = token.trim() ? tokenRefFor('mcp', refBaseFor(connectorName)) : ''
       if (ref) await setSecret(ref, token.trim())
       const headers = candidate.headers
       await createConnector({
@@ -138,6 +148,41 @@ export function ConnectorAddMCP() {
     void refreshOnboarding()
     navigate('/settings/connectors')
   }
+
+  // connectOAuth creates the connector disabled in oauth mode and hands
+  // off to the server's consent page, as an OAuth-mode MCP preset does.
+  const connectOAuth = async () => {
+    if (!candidate || probe?.status !== 'needs_oauth') return
+    setSaving(true)
+    const refs = mcpOAuthRefs(refBaseFor(name))
+    const pastedClient = clientID.trim() !== ''
+    const headers = candidate.headers
+    try {
+      if (pastedClient && clientSecret) await setSecret(refs.clientSecret, clientSecret)
+      const id = await createConnector({
+        name: name.trim(),
+        kind: 'mcp',
+        config: {
+          endpoint: candidate.endpoint,
+          ...(Object.keys(headers).length > 0 ? { headers } : {}),
+          auth_mode: 'oauth',
+          ...(pastedClient ? { client_id: clientID.trim() } : {}),
+          ...(pastedClient && clientSecret ? { client_secret_ref: refs.clientSecret } : {}),
+        },
+        credential_ref: refs.tokens,
+        enabled: false,
+      })
+      window.location.assign(await connectorOAuthStart(id))
+    } catch (err) {
+      toast.error('Could not connect MCP server', { description: errText(err) })
+      setSaving(false)
+    }
+  }
+
+  const needsOAuth = probe?.status === 'needs_oauth'
+  const httpsEndpoint = candidate?.endpoint.startsWith('https://') === true
+  const canConnectOAuth =
+    needsOAuth && name.trim() !== '' && httpsEndpoint && (clientSecret === '' || clientID.trim() !== '')
 
   const toggle = <T,>(set: Set<T>, item: T, on: boolean): Set<T> => {
     const next = new Set(set)
@@ -262,6 +307,33 @@ export function ConnectorAddMCP() {
         {probing && <TestStatus state="testing" message="Checking server…" />}
         {probe && <ProbeOutcome probe={probe} hadToken={token.trim() !== ''} />}
 
+        {needsOAuth && (
+          <FieldGroup title="2. OAuth login" description="This server signs in through its own authorization server.">
+            <Field label="Client ID" required={false}>
+              <Input value={clientID} onChange={(e) => setClientID(e.target.value)} placeholder="client id" />
+            </Field>
+            <Field label="Client secret" required={false}>
+              <Input
+                type="password"
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                placeholder="client secret"
+                autoComplete="off"
+              />
+            </Field>
+            <p className="-mt-2 text-sm text-muted-foreground">
+              Only for servers without automatic client registration. Register{' '}
+              <span className="font-mono">{window.location.origin}/v1/connectors/oauth/callback</span> as its redirect
+              URI.
+            </p>
+            {!httpsEndpoint && <p className="text-sm text-destructive">OAuth login needs an https endpoint.</p>}
+            <p className="text-sm text-muted-foreground">
+              Connecting redirects you to the server's sign-in page to consent. Its tools are listed only after that,
+              so add them to agent allowlists under Agents once the connector is connected.
+            </p>
+          </FieldGroup>
+        )}
+
         {probe?.status === 'ok' && (
           <FieldGroup title="2. Tools" description="Checked tools are added to the agents you pick below.">
             <p className="text-sm text-muted-foreground">
@@ -346,13 +418,19 @@ export function ConnectorAddMCP() {
           <Button type="button" variant="outline" disabled={saving} onClick={() => navigate('/settings/connectors')}>
             Cancel
           </Button>
-          <Button
-            type="button"
-            disabled={saving || probe?.status !== 'ok' || !name.trim()}
-            onClick={() => void save()}
-          >
-            Add connector
-          </Button>
+          {needsOAuth ? (
+            <Button type="button" disabled={saving || !canConnectOAuth} onClick={() => void connectOAuth()}>
+              {saving ? 'Redirecting…' : 'Connect with OAuth'}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              disabled={saving || probe?.status !== 'ok' || !name.trim()}
+              onClick={() => void save()}
+            >
+              Add connector
+            </Button>
+          )}
         </FormActions>
       </Form>
     </PageShell>
@@ -379,11 +457,7 @@ function ProbeOutcome({ probe, hadToken }: { probe: ConnectorProbe; hadToken: bo
         </Alert>
       )
     case 'needs_oauth':
-      return (
-        <Alert tone="warning">
-          <AlertDescription>{oauthNotice}</AlertDescription>
-        </Alert>
-      )
+      return null
     case 'unreachable':
       return <TestStatus state="failed" message="Could not reach the server." detail={probe.message} />
     default:
