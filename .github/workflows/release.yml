@@ -184,12 +184,7 @@ jobs:
             dockerfile: whisper-svc/Dockerfile
             build-args: |
               WHISPER_MODEL=large-v3
-          # D-141: one mission sandbox image, amd64 and arm64 like the
-          # services. The release compose pins MISSION_SANDBOX_IMAGE to
-          # this tag, so an unchanged image is copied forward below.
-          - name: sandbox
-            context: .
-            dockerfile: deploy/sandbox.Dockerfile
+          # The sandbox image builds in sandbox-build/sandbox below.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: fromJSON(needs.diff.outputs[matrix.name])
@@ -264,12 +259,128 @@ jobs:
             --tag ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${{ steps.version.outputs.value }} \
             ghcr.io/${{ github.repository_owner }}/timothy-${{ matrix.name }}:${prev_version}
 
+  # D-141: one mission sandbox image, amd64 and arm64 like the services.
+  # Each architecture builds on its own native runner (no QEMU) and is
+  # pushed by digest; the sandbox job below joins the digests into the
+  # version tag. Layers come from a per-architecture registry cache.
+  sandbox-build:
+    needs: diff
+    if: fromJSON(needs.diff.outputs.sandbox)
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/timothy-sandbox
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - id: sha
+        run: echo "short=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/sandbox.Dockerfile
+          build-args: |
+            GIT_SHA=${{ steps.sha.outputs.short }}
+            APP_VERSION=${{ steps.version.outputs.value }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }},mode=max
+      - name: Record digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sandbox-digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+
+  # Tags the sandbox image for this version: the two native builds
+  # joined into one manifest list, or the previous release's image
+  # copied forward when nothing in it changed.
+  sandbox:
+    needs: [diff, sandbox-build]
+    if: always() && needs.diff.result == 'success' && (needs.sandbox-build.result == 'success' || needs.sandbox-build.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/timothy-sandbox
+    steps:
+      - id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: fromJSON(needs.diff.outputs.sandbox)
+        with:
+          pattern: sandbox-digest-*
+          path: /tmp/digests
+          merge-multiple: true
+      - name: Join architectures
+        id: join
+        if: fromJSON(needs.diff.outputs.sandbox)
+        working-directory: /tmp/digests
+        run: |
+          tag="$IMAGE:${{ steps.version.outputs.value }}"
+          refs=()
+          for d in *; do refs+=("$IMAGE@sha256:$d"); done
+          docker buildx imagetools create --tag "$tag" "${refs[@]}"
+          echo "digest=$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest}}' | jq -r .digest)" >> "$GITHUB_OUTPUT"
+      - name: Attest build provenance
+        if: fromJSON(needs.diff.outputs.sandbox)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.join.outputs.digest }}
+          push-to-registry: true
+      - name: Copy forward unchanged image
+        if: needs.diff.outputs.prev_tag != '' && !fromJSON(needs.diff.outputs.sandbox)
+        run: |
+          prev_version="${{ needs.diff.outputs.prev_tag }}"
+          docker buildx imagetools create \
+            --tag "$IMAGE:${{ steps.version.outputs.value }}" "$IMAGE:${prev_version#v}"
+
   # After the images are pushed: commit the fresh routes export to docs
   # main and tag the validated docs commit with this version, in one
   # atomic push. Skipped when the docs tag already exists (a rebuild).
   docs-tag:
-    needs: [selfdocs, images]
-    if: needs.images.result == 'success'
+    needs: [selfdocs, images, sandbox]
+    # always(): sandbox-build is skipped when the sandbox is unchanged,
+    # and a skipped ancestor would otherwise skip this job.
+    if: always() && needs.selfdocs.result == 'success' && needs.images.result == 'success' && needs.sandbox.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -303,8 +414,8 @@ jobs:
           git push --atomic origin HEAD:refs/heads/main "refs/tags/v$version"
 
   release:
-    needs: [images]
-    if: needs.images.result == 'success'
+    needs: [images, sandbox]
+    if: always() && needs.images.result == 'success' && needs.sandbox.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
