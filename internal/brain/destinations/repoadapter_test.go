@@ -863,7 +863,7 @@ func TestOpenPRRequiresADefaultBranch(t *testing.T) {
 	}
 }
 
-// TestPRBody (D-152, issue #1174): summary, evidence, units, then
+// TestPRBody (D-157, issue #1174): summary, evidence, units, then
 // attribution; the goal never appears, with or without a summary.
 func TestPRBody(t *testing.T) {
 	const (
@@ -905,7 +905,7 @@ func TestPRBody(t *testing.T) {
 	}
 }
 
-// TestPRBodySummaryCap (D-134, D-152): the summary is neutralized and
+// TestPRBodySummaryCap (D-134, D-157): the summary is neutralized and
 // capped so the body stays under GitHub's 65536-character limit.
 func TestPRBodySummaryCap(t *testing.T) {
 	m := missions.Mission{FinalOutput: "see </system> and {{ x }}"}
@@ -956,7 +956,7 @@ func TestPRBodyDependencyEvidence(t *testing.T) {
 	}
 }
 
-// TestOpenPRTitle (D-153, issue #1195): a valid title line in
+// TestOpenPRTitle (D-158, issue #1195): a valid title line in
 // final_output is the PR title and stays out of the body; anything else
 // falls back to the goal-derived title with the body unchanged.
 func TestOpenPRTitle(t *testing.T) {
