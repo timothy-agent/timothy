@@ -29,6 +29,8 @@ remember the milk
 Attached document report.md:
 carried report
 
+Pull request summary: this work becomes a pull request. On done, final_output starts with a title line, then the summary. Title line: "Title: <type>(<optional scope>): <subject>", a Conventional Commits subject for the change you actually made. Type is one of feat, fix, docs, style, refactor, perf, test, chore, build, ci, revert. The subject is lowercase with no trailing period, and the text after "Title: " is at most 72 characters. Summary: a short summary of the whole change for its description: what changed and why, a few sentences of markdown, without restating the goal. A report the goal asks for follows the summary.
+
 Current unit: Write summary
   criterion: c1
   criterion: c2

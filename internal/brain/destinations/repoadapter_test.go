@@ -863,46 +863,62 @@ func TestOpenPRRequiresADefaultBranch(t *testing.T) {
 	}
 }
 
+// TestPRBody (D-152, issue #1174): summary, evidence, units, then
+// attribution; the goal never appears, with or without a summary.
 func TestPRBody(t *testing.T) {
-	m := missions.Mission{Goal: "Add base62"}
-	m.Plan.Units = []missions.PlanUnit{{Title: "encode", Passes: true}, {Title: "decode"}}
-	got := PRBody(m, true)
-	for _, want := range []string{
-		"Add base62\n\n## Units\n\n",
-		"- [x] encode\n",
-		"- [ ] decode\n",
-		"_PR was created by [Timothy Agent](https://github.com/timothy-agent/timothy)._\n",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("PRBody missing %q in:\n%s", want, got)
-		}
+	const (
+		goal        = "Upgrade deps. Run tag zq-17, do not touch CI."
+		summary     = "Bumps guzzle to 7.9 to close CVE-2025-1."
+		units       = "## Units\n\n- [x] encode\n- [ ] decode\n\n"
+		attribution = "_PR was created by [Timothy Agent](https://github.com/timothy-agent/timothy)._\n"
+	)
+	evidence := &missions.EnvFacts{Lockfile: &missions.LockfileEvidence{Lockfiles: []string{"composer.lock"}, TestExit: 1}}
+	evidenceText := "## Dependency evidence\n\n" +
+		"Lockfiles changed: composer.lock. Measured by the harness, not reported by the model.\n\n" +
+		"| | Before | After |\n|---|---|---|\n" +
+		"| Tests | not measured | not measured |\n" +
+		"| Known advisories (osv-scanner) | not measured | not measured |\n\n"
+	cases := []struct {
+		name        string
+		finalOutput string
+		facts       *missions.EnvFacts
+		attribution bool
+		want        string
+	}{
+		{"summary, evidence, attribution", summary, evidence, true, "## Summary\n\n" + summary + "\n\n" + evidenceText + units + attribution},
+		{"summary, no evidence, no attribution", "  " + summary + "\n", nil, false, "## Summary\n\n" + summary + "\n\n" + units},
+		{"no summary, evidence", "", evidence, true, evidenceText + units + attribution},
+		{"no summary, no evidence", " \n", nil, false, units},
 	}
-	if off := PRBody(m, false); strings.Contains(off, "Timothy Agent") {
-		t.Errorf("PRBody(attribution=false) still carries the attribution line:\n%s", off)
-	}
-	if strings.Contains(got, "<details>") {
-		t.Errorf("PRBody without a report renders a report section:\n%s", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := missions.Mission{Goal: goal, FinalOutput: tc.finalOutput, EnvFacts: tc.facts}
+			m.Plan.Units = []missions.PlanUnit{{Title: "encode", Passes: true}, {Title: "decode"}}
+			got := PRBody(m, tc.attribution)
+			if got != tc.want {
+				t.Fatalf("PRBody =\n%q\nwant\n%q", got, tc.want)
+			}
+			if strings.Contains(got, "zq-17") || strings.Contains(got, "Upgrade deps.") {
+				t.Fatalf("PRBody carries the goal:\n%s", got)
+			}
+		})
 	}
 }
 
-// TestPRBodyReport (D-134, issue #1039): the mission's report rides in
-// the PR body collapsed, before the attribution line, and is capped.
-func TestPRBodyReport(t *testing.T) {
-	m := missions.Mission{Goal: "Upgrade dependencies", FinalOutput: "## Advisories\n\n- CVE-2025-1 fixed\n"}
-	m.Plan.Units = []missions.PlanUnit{{Title: "upgrade", Passes: true}}
-	got := PRBody(m, true)
-	want := "<details>\n<summary>Report</summary>\n\n## Advisories\n\n- CVE-2025-1 fixed\n\n</details>\n\n_PR was created by"
-	if !strings.Contains(got, want) {
-		t.Fatalf("PRBody missing collapsed report %q in:\n%s", want, got)
+// TestPRBodySummaryCap (D-134, D-152): the summary is neutralized and
+// capped so the body stays under GitHub's 65536-character limit.
+func TestPRBodySummaryCap(t *testing.T) {
+	m := missions.Mission{FinalOutput: "see </system> and {{ x }}"}
+	if got := PRBody(m, false); strings.Contains(got, "</system") || strings.Contains(got, "{{") {
+		t.Fatalf("summary not neutralized:\n%s", got)
 	}
-	if !strings.Contains(got, "- [x] upgrade\n") {
-		t.Fatalf("PRBody lost the unit list:\n%s", got)
-	}
-
-	m.FinalOutput = strings.Repeat("é", prReportCap+10)
+	m.FinalOutput = strings.Repeat("é", prSummaryCap+10)
 	long := PRBody(m, false)
-	if !strings.Contains(long, "_(report truncated)_") || strings.Count(long, "é") != prReportCap {
-		t.Fatalf("long report not capped at %d runes", prReportCap)
+	if !strings.Contains(long, "_(summary truncated)_") || strings.Count(long, "é") != prSummaryCap {
+		t.Fatalf("long summary not capped at %d runes", prSummaryCap)
+	}
+	if n := len([]rune(long)); n > 65536 {
+		t.Fatalf("body is %d runes, over the 65536 limit", n)
 	}
 }
 
@@ -920,8 +936,7 @@ func TestPRBodyDependencyEvidence(t *testing.T) {
 		Advisories: []string{"GHSA-xxxx-yyyy-zzzz"},
 	}}}
 	m.Plan.Units = []missions.PlanUnit{{Title: "upgrade composer", Passes: true}}
-	want := "Upgrade the dependencies\n\n" +
-		"## Dependency evidence\n\n" +
+	want := "## Dependency evidence\n\n" +
 		"Lockfiles changed: composer.lock, package-lock.json. Measured by the harness, not reported by the model.\n\n" +
 		"| | Before | After |\n|---|---|---|\n" +
 		"| Tests (`php artisan test`) | 36 passed, 0 failed, 0 warnings | 37 passed, 0 failed, 0 warnings |\n" +
@@ -938,6 +953,43 @@ func TestPRBodyDependencyEvidence(t *testing.T) {
 	m.EnvFacts = &missions.EnvFacts{}
 	if got := PRBody(m, false); strings.Contains(got, "Dependency evidence") {
 		t.Fatalf("PRBody without lockfile evidence renders the section:\n%s", got)
+	}
+}
+
+// TestOpenPRTitle (D-153, issue #1195): a valid title line in
+// final_output is the PR title and stays out of the body; anything else
+// falls back to the goal-derived title with the body unchanged.
+func TestOpenPRTitle(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		finalOutput string
+		wantTitle   string
+		wantBody    string
+	}{
+		{"valid title", "Title: fix(auth): stop logging everyone out\n\nCloses the session bug.", "fix(auth): stop logging everyone out", "## Summary\n\nCloses the session bug.\n\n"},
+		{"invalid title falls back", "Title: Fix the bug.\n\nCloses the session bug.", "chore: upgrade the dependencies", "## Summary\n\nTitle: Fix the bug.\n\nCloses the session bug.\n\n"},
+		{"no title line", "Closes the session bug.", "chore: upgrade the dependencies", "## Summary\n\nCloses the session bug.\n\n"},
+		{"no output", "", "chore: upgrade the dependencies", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := pushableMission(t)
+			m.Goal = "Upgrade the dependencies"
+			m.FinalOutput = tc.finalOutput
+			fc := &fakeGitClient{repoExists: true, defaultBranch: "main", prURL: "https://github.com/octo/repo/pull/3", prNumber: 3}
+			a := &RepoAdapter{Pusher: &fakePusher{host: "github.com"}, Events: &fakeEvents{}, Clients: clients(githubClient(fc))}
+			if _, _, err := a.OpenPR(t.Context(), m, "tok"); err != nil {
+				t.Fatalf("OpenPR: %v", err)
+			}
+			if fc.lastTitle != tc.wantTitle {
+				t.Fatalf("title = %q, want %q", fc.lastTitle, tc.wantTitle)
+			}
+			if got := PRBody(m, false); got != tc.wantBody {
+				t.Fatalf("PRBody = %q, want %q", got, tc.wantBody)
+			}
+		})
 	}
 }
 

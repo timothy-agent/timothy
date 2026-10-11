@@ -397,9 +397,9 @@ type recSend struct {
 	buttons [][]button
 }
 
-func (a *recAdapter) connect(context.Context) (identity, error)                { return identity{}, nil }
+func (a *recAdapter) connect(context.Context) (identity, error)                  { return identity{}, nil }
 func (a *recAdapter) receive(context.Context, string) ([]inbound, string, error) { return nil, "", nil }
-func (a *recAdapter) answerPress(context.Context, string, string) error         { return nil }
+func (a *recAdapter) answerPress(context.Context, string, string) error          { return nil }
 func (a *recAdapter) caps() capabilities                                         { return a.c }
 
 func (a *recAdapter) send(_ context.Context, _ target, text string, buttons [][]button, _ bool) (string, error) {

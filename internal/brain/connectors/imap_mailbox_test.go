@@ -135,8 +135,8 @@ func TestStripHTML(t *testing.T) {
 	t.Parallel()
 	for in, want := range map[string]string{
 		"<html><body><p>One</p><p>Two <b>bold</b></p></body></html>": "One\nTwo bold",
-		"<style>p{}</style>text<br>more":                               "text\nmore",
-		"plain":                                                        "plain",
+		"<style>p{}</style>text<br>more":                             "text\nmore",
+		"plain":                                                      "plain",
 	} {
 		if got := stripHTML(in); got != want {
 			t.Errorf("stripHTML(%q) = %q, want %q", in, got, want)

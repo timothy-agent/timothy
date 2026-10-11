@@ -101,9 +101,9 @@ type PermBroker struct {
 	// answer landing between Adopt and register is seen by exactly one
 	// of them.
 	resolveMu sync.Mutex
-	store   PermStore
-	events  EventAppender
-	log     *slog.Logger
+	store     PermStore
+	events    EventAppender
+	log       *slog.Logger
 }
 
 func NewPermBroker() *PermBroker {
