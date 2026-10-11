@@ -87,7 +87,10 @@ class FakeIntersectionObserver {
   }
 }
 
-function scrollToSentinel() {
+// The observer is created in an effect after the list renders, so a
+// wait on the rendered rows can finish before it exists (#1212).
+async function scrollToSentinel() {
+  await waitFor(() => expect(observerCallbacks.length).toBeGreaterThan(0))
   const cb = observerCallbacks.at(-1)
   act(() => {
     cb?.([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver)
@@ -403,7 +406,7 @@ describe('Missions board', () => {
       await screen.findByText('p1 mission 0')
       expect(screen.getByTestId('missions-sentinel')).toBeTruthy()
 
-      scrollToSentinel()
+      await scrollToSentinel()
 
       await screen.findByText('p2 mission 9')
       expect(listMissions).toHaveBeenLastCalledWith(
@@ -430,7 +433,7 @@ describe('Missions board', () => {
       })
       renderPage()
       await screen.findByText('p1 mission 0')
-      scrollToSentinel()
+      await scrollToSentinel()
       await screen.findByText('p2 mission 0')
 
       fireEvent.click(screen.getByRole('combobox', { name: 'Filter by kind' }))
@@ -447,7 +450,7 @@ describe('Missions board', () => {
       vi.mocked(listMissions).mockImplementation(async (opts) => (opts?.cursor ? second : first))
       renderPage()
       await screen.findByText('p1 mission 0')
-      scrollToSentinel()
+      await scrollToSentinel()
       await screen.findByText('p2 mission 9')
 
       vi.mocked(listMissions).mockClear()
