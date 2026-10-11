@@ -164,6 +164,14 @@ mounts `missions/<kind>/<id>` as a subPath, the same boundary as the
 Docker mount; brain and memoryd stay single replica (in-process
 runner, automations, hub).
 
+D-159 (issue #1206): sandboxd also runs long-lived service containers
+(`internal/sandboxd/services.go`, `PUT|DELETE /v1/services/{id}`,
+`GET /v1/services`), labelled `timothy.service`, outside the mission cap
+and sweep. They join only the internal `timothy-services` compose
+network (brain joins it, sandboxd never does), get the bridge only when
+`internet` is set, and restart on failure three times before staying
+stopped until the next Ensure. Kubernetes returns ErrServicesUnsupported.
+
 D-156 (issue #1182): Bedrock `options.auth=static|ambient`; ambient
 uses the SDK default chain (IRSA, Pod Identity), needs a region and
 rejects a `credential_ref`.

@@ -32,6 +32,12 @@ type Backend interface {
 	List(ctx context.Context) ([]string, error)
 	// Capacity reports running sandboxes and memory headroom.
 	Capacity(ctx context.Context) (CapacityReport, error)
+	// EnsureService, RemoveService and ListServices manage long-lived
+	// service containers (D-159); a backend without them returns
+	// ErrServicesUnsupported.
+	EnsureService(ctx context.Context, spec ServiceSpec) (ServiceStatus, error)
+	RemoveService(ctx context.Context, id string) error
+	ListServices(ctx context.Context) ([]ServiceStatus, error)
 }
 
 // Backend names accepted by SANDBOXD_BACKEND.

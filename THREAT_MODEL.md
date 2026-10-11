@@ -190,6 +190,22 @@ resolves symlinks before writing and rejects paths outside the workspace.
 Mission file downloads force octet-stream with nosniff and collapse
 not-found and out-of-bounds into the same 404.
 
+### Service containers
+
+sandboxd also runs long-lived service containers for brain (D-159), a
+stdio MCP server behind its bridge first. They take the mission
+container hardening (uid 65534, read-only rootfs, all caps dropped,
+no-new-privileges, capped memory, CPU and PIDs, bounded tmpfs) and
+mount nothing from the workspace. They join only the internal
+`timothy-services` network, which brain joins and sandboxd does not, so
+a service can be reached by brain but cannot reach sandboxd's
+unauthenticated API, postgres, gateway or memoryd. Internet egress is
+off unless brain asks for it, and then comes from a second attachment
+to the default bridge with the same host-gateway caveat as missions.
+Env values a service is started with are never logged or echoed; they
+are visible to anyone who can inspect containers on the host, which is
+already root-equivalent.
+
 - **Mitigated:** sandboxd hardening, narrow unauthenticated-but-
   unreachable API, per-mission resource caps, read-only rootfs with
   bounded tmpfs, nofile/fsize ulimits, default seccomp profile, env
