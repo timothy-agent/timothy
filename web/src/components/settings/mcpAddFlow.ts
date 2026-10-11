@@ -26,7 +26,6 @@ export interface ParsedMCPInput {
 
 export const stdioIssueURL = 'https://github.com/timothy-agent/timothy/issues/1163'
 export const stdioReason = 'Needs a local runtime, not supported yet.'
-export const oauthNotice = 'This server needs an OAuth login. Support is coming in the next release.'
 
 const placeholderPattern = /\$\{[^}]*\}|<[^>]*>|\{\{[^}]*\}\}/
 
@@ -89,13 +88,6 @@ export function parseMCPInput(text: string): ParsedMCPInput {
   }
   if (out.candidates.length === 0 && out.unsupported.length === 0) out.error = 'No servers found in this JSON.'
   return out
-}
-
-// mcpTokenRef is the credential ref the custom MCP token is stored
-// under: the same rule the generic add page uses for kind mcp.
-export function mcpTokenRef(name: string): string {
-  const refBase = slugify(name).toUpperCase().replace(/-/g, '_')
-  return refBase.endsWith('_MCP') ? `${refBase}_TOKEN` : `${refBase}_MCP_TOKEN`
 }
 
 // appendAllowlist adds names to an agent's tools allowlist, keeping

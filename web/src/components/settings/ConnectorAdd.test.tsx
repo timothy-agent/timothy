@@ -766,54 +766,34 @@ describe('ConnectorAdd mcp oauth login', () => {
   })
 })
 
-describe('ConnectorAdd custom MCP server flow', () => {
-  it('starts with an empty name and endpoint and an optional bearer token', async () => {
+describe('ConnectorAdd without custom-mcp branches', () => {
+  // new/custom-mcp routes to ConnectorAddMCP; rendering the preset here
+  // proves the generic form treats it like any other preset.
+  it('prefills the preset name and asks for a plain bearer token', async () => {
     renderPage('custom-mcp')
-    const name = await screen.findByPlaceholderText('my-server')
-    expect(name).toHaveValue('')
-    expect(screen.getByPlaceholderText('https://…/mcp')).toHaveValue('')
-    expect(screen.getByText('Bearer token (optional)')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Test connection' })).toBeDisabled()
+    const name = await screen.findByPlaceholderText('custom-mcp-server')
+    expect(name).toHaveValue('custom-mcp-server')
+    expect(screen.queryByPlaceholderText('my-server')).not.toBeInTheDocument()
+    expect(screen.queryByText('Bearer token (optional)')).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('token')).toBeInTheDocument()
   })
 
-  it('adds an mcp connector without a token and an empty credential_ref', async () => {
-    vi.mocked(createConnector).mockResolvedValue('conn-mcp')
-    vi.mocked(testConnector).mockResolvedValue({ ok: true })
-    vi.mocked(patchConnector).mockResolvedValue()
-    renderPage('custom-mcp')
-
-    fireEvent.change(await screen.findByPlaceholderText('my-server'), { target: { value: 'notes' } })
-    fireEvent.change(screen.getByPlaceholderText('https://…/mcp'), {
-      target: { value: 'https://mcp.example.com/mcp' },
-    })
-    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
-    await waitFor(() => expect(createConnector).toHaveBeenCalled())
-    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
-      kind: 'mcp',
-      config: { endpoint: 'https://mcp.example.com/mcp' },
-      credential_ref: '',
-      enabled: false,
-    })
-    expect(setSecret).not.toHaveBeenCalled()
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Add connector' }))
-    await waitFor(() => expect(patchConnector).toHaveBeenCalledWith('conn-mcp', { enabled: true }))
-  })
-
-  it('stores a pasted bearer token under a credential ref', async () => {
+  it('names the bearer token secret with the shared ref rule', async () => {
     vi.mocked(createConnector).mockResolvedValue('conn-mcp')
     vi.mocked(testConnector).mockResolvedValue({ ok: true })
     renderPage('custom-mcp')
 
-    fireEvent.change(await screen.findByPlaceholderText('my-server'), { target: { value: 'notes' } })
+    fireEvent.change(await screen.findByPlaceholderText('custom-mcp-server'), { target: { value: 'My Server' } })
     fireEvent.change(screen.getByPlaceholderText('https://…/mcp'), {
       target: { value: 'https://mcp.example.com/mcp' },
     })
     fireEvent.change(screen.getByPlaceholderText('token'), { target: { value: 'secret-token' } })
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
     await waitFor(() => expect(createConnector).toHaveBeenCalled())
-    expect(setSecret).toHaveBeenCalledWith(expect.any(String), 'secret-token')
-    const ref = vi.mocked(setSecret).mock.calls[0][0]
-    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({ kind: 'mcp', credential_ref: ref })
+    expect(setSecret).toHaveBeenCalledWith('MY_SERVER_MCP_TOKEN', 'secret-token')
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
+      kind: 'mcp',
+      credential_ref: 'MY_SERVER_MCP_TOKEN',
+    })
   })
 })

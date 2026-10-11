@@ -3,7 +3,6 @@ import {
   appendAllowlist,
   buildArgs,
   indexNote,
-  mcpTokenRef,
   parseMCPInput,
   schemaFields,
   stdioReason,
@@ -89,16 +88,6 @@ describe('parseMCPInput', () => {
     )
     expect(got.candidates[0]).toMatchObject({ token: 'sk-live-1', headers: { 'X-Team': 'core' }, placeholders: [] })
     expect(got.candidates[1]).toMatchObject({ token: '', headers: { 'X-Api-Key': '<your key>' }, placeholders: ['X-Api-Key'] })
-  })
-})
-
-describe('mcpTokenRef', () => {
-  it.each([
-    ['notion', 'NOTION_MCP_TOKEN'],
-    ['notion-mcp', 'NOTION_MCP_TOKEN'],
-    ['My Server', 'MY_SERVER_MCP_TOKEN'],
-  ])('%s -> %s', (name, want) => {
-    expect(mcpTokenRef(name)).toBe(want)
   })
 })
 

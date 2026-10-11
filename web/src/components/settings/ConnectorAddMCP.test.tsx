@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AdminAgent, ConnectorProbe } from '../../api/types'
 import { TooltipProvider } from '../ui/tooltip'
 import { ConnectorAddMCP } from './ConnectorAddMCP'
-import { oauthNotice, stdioIssueURL } from './mcpAddFlow'
+import { stdioIssueURL } from './mcpAddFlow'
 
 vi.mock('../../api/client', () => ({
+  connectorOAuthStart: vi.fn(),
   createConnector: vi.fn(),
   listAgents: vi.fn(),
   patchAgent: vi.fn(),
@@ -19,7 +20,15 @@ vi.mock('../../onboarding/context', async () => {
   return { useOnboarding: () => onboardingState() }
 })
 
-import { createConnector, listAgents, patchAgent, probeConnector, setSecret } from '../../api/client'
+import {
+  connectorOAuthStart,
+  createConnector,
+  listAgents,
+  patchAgent,
+  probeConnector,
+  setSecret,
+} from '../../api/client'
+import { toast } from 'sonner'
 
 const agents: AdminAgent[] = [
   { id: 'a1', name: 'general', description: '', prompt_overlay: '', route: '', skills: [], tools: ['shell'], memory: true, is_default: true, enabled: true },
@@ -142,15 +151,6 @@ describe('ConnectorAddMCP probe outcomes', () => {
     })
   })
 
-  it('explains OAuth and keeps Add disabled', async () => {
-    vi.mocked(probeConnector).mockResolvedValue(failedProbe('needs_oauth'))
-    renderPage()
-    paste(config)
-    fireEvent.click(screen.getByRole('button', { name: 'Check server' }))
-    expect(await screen.findByText(oauthNotice)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Add connector' })).toBeDisabled()
-  })
-
   it.each([
     ['unreachable', 'Could not reach the server.'],
     ['error', 'The server answered, but the check failed.'],
@@ -215,6 +215,102 @@ describe('ConnectorAddMCP save', () => {
       expect.objectContaining({ config: { endpoint: 'https://t.example.com/mcp', headers: { 'X-Team': 'core' } } }),
     )
     expect(patchAgent).not.toHaveBeenCalled()
+  })
+})
+
+describe('ConnectorAddMCP oauth login', () => {
+  const assign = vi.fn()
+  beforeEach(() => {
+    vi.stubGlobal('location', { ...window.location, assign, origin: 'http://localhost:3300' })
+    vi.mocked(probeConnector).mockResolvedValue(failedProbe('needs_oauth'))
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  async function checkServer(text: string) {
+    renderPage()
+    paste(text)
+    fireEvent.click(screen.getByRole('button', { name: 'Check server' }))
+    return screen.findByRole('button', { name: 'Connect with OAuth' })
+  }
+
+  it('offers OAuth client fields in place of tools and Add', async () => {
+    await checkServer(config)
+    expect(screen.getByPlaceholderText('client id')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('client secret')).toBeInTheDocument()
+    expect(screen.getByText(/Only for servers without automatic client registration/)).toBeInTheDocument()
+    expect(screen.getByText(/add them to agent allowlists under Agents/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add connector' })).not.toBeInTheDocument()
+    expect(screen.queryByText('2. Tools')).not.toBeInTheDocument()
+  })
+
+  it('creates an oauth-mode connector and hands off to the consent URL', async () => {
+    vi.mocked(connectorOAuthStart).mockResolvedValue('https://auth.example/authorize?x=1')
+    const connect = await checkServer(
+      JSON.stringify({ mcpServers: { team: { url: 'https://t.example.com/mcp', headers: { 'X-Team': 'core' } } } }),
+    )
+    fireEvent.click(connect)
+
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://auth.example/authorize?x=1'))
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(createConnector).toHaveBeenCalledWith({
+      name: 'team',
+      kind: 'mcp',
+      config: { endpoint: 'https://t.example.com/mcp', headers: { 'X-Team': 'core' }, auth_mode: 'oauth' },
+      credential_ref: 'TEAM_MCP_OAUTH',
+      enabled: false,
+    })
+    expect(connectorOAuthStart).toHaveBeenCalledWith('conn-1')
+    expect(patchAgent).not.toHaveBeenCalled()
+  })
+
+  it('stores a pasted client secret and names it in config', async () => {
+    vi.mocked(connectorOAuthStart).mockResolvedValue('https://auth.example/authorize?x=2')
+    const connect = await checkServer(config)
+    fireEvent.change(screen.getByPlaceholderText('client secret'), { target: { value: 's3cret' } })
+    // A secret without its client id cannot be used.
+    expect(connect).toBeDisabled()
+    fireEvent.change(screen.getByPlaceholderText('client id'), { target: { value: 'pasted-id' } })
+    fireEvent.click(connect)
+
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://auth.example/authorize?x=2'))
+    expect(setSecret).toHaveBeenCalledWith('NOTION_MCP_CLIENT_SECRET', 's3cret')
+    expect(createConnector).toHaveBeenCalledWith({
+      name: 'notion',
+      kind: 'mcp',
+      config: {
+        endpoint: 'https://mcp.notion.com/mcp',
+        auth_mode: 'oauth',
+        client_id: 'pasted-id',
+        client_secret_ref: 'NOTION_MCP_CLIENT_SECRET',
+      },
+      credential_ref: 'NOTION_MCP_OAUTH',
+      enabled: false,
+    })
+  })
+
+  it('keeps Connect with OAuth disabled for a non-https endpoint', async () => {
+    renderPage()
+    paste('http://mcp.internal/mcp')
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'internal' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Check server' }))
+    expect(await screen.findByText('OAuth login needs an https endpoint.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect with OAuth' })).toBeDisabled()
+    expect(createConnector).not.toHaveBeenCalled()
+  })
+
+  it('toasts and stays on the page when the connect fails', async () => {
+    vi.mocked(connectorOAuthStart).mockRejectedValue(new Error('authorization server does not support PKCE S256'))
+    fireEvent.click(await checkServer(config))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not connect MCP server', {
+        description: 'authorization server does not support PKCE S256',
+      }),
+    )
+    expect(assign).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: 'Connect with OAuth' })).toBeEnabled()
   })
 })
 
