@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,12 +27,21 @@ const mcpProtocolVersion = "2025-06-18"
 // call's remote work.
 const mcpCallTimeout = 60 * time.Second
 
-// mcpConfig is the connectors.config shape for kind='mcp'. Only
-// streamable HTTP is supported: stdio would mean running arbitrary
-// admin-configured subprocesses inside brain's container.
+// mcpConfig is the connectors.config shape for kind='mcp'. Brain speaks
+// streamable HTTP only and never runs a subprocess itself: a command
+// server runs in a sandboxd service container behind mcp-bridge
+// (D-162, mcp_command.go).
 type mcpConfig struct {
 	Endpoint string            `json:"endpoint"`
 	Headers  map[string]string `json:"headers"`
+
+	// Command, Args, EnvRefs and Internet describe a local (stdio)
+	// server instead of Endpoint. EnvRefs maps an env var name to the
+	// secret ref its value resolves from.
+	Command  string            `json:"command,omitempty"`
+	Args     []string          `json:"args,omitempty"`
+	EnvRefs  map[string]string `json:"env_refs,omitempty"`
+	Internet bool              `json:"internet,omitempty"`
 	// Provider prefixes every tool name ("notion" gives notion_search)
 	// and groups the connectors whose accounts merge into one tool
 	// (D-160). Empty falls back to the connector name, which keeps the
@@ -115,12 +126,13 @@ type MCPDeferral struct {
 // unauthenticated services; main.go wires the operator's
 // outbound_host_allowlist.
 func MCPBuilder(client *http.Client, deferral MCPDeferral) Builder {
-	return mcpBuilder(client, deferral, nil)
+	return mcpBuilder(client, deferral, nil, nil)
 }
 
 // mcpBuilder is MCPBuilder plus the OAuth engine an oauth-mode
-// connector draws its tokens from; a nil auth refuses oauth mode.
-func mcpBuilder(client *http.Client, deferral MCPDeferral, auth *MCPAuth) Builder {
+// connector draws its tokens from (a nil auth refuses oauth mode) and
+// the runner a command connector needs (a nil services refuses one).
+func mcpBuilder(client *http.Client, deferral MCPDeferral, auth *MCPAuth, services *MCPServices) Builder {
 	if client == nil {
 		client = &http.Client{Transport: netguard.Guard{}.Transport()}
 	}
@@ -129,14 +141,27 @@ func mcpBuilder(client *http.Client, deferral MCPDeferral, auth *MCPAuth) Builde
 		if err := json.Unmarshal(c.Config, &cfg); err != nil {
 			return nil, fmt.Errorf("mcp %s: config: %w", c.Name, err)
 		}
+		src := &mcpSource{name: c.Name, provider: strings.TrimSpace(cfg.Provider), cfg: cfg, client: client}
+		if cfg.Command != "" {
+			if services == nil {
+				return nil, fmt.Errorf("mcp %s: %w", c.Name, ErrLocalServersUnsupported)
+			}
+			env, err := resolveEnv(ctx, cfg, resolve)
+			if err != nil {
+				return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
+			}
+			if err := services.attach(ctx, c.ID, src, env); err != nil {
+				return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
+			}
+			return finishMCPSource(ctx, src, deferral, c.Name)
+		}
 		if cfg.Endpoint == "" {
-			return nil, fmt.Errorf("mcp %s: config.endpoint is required", c.Name)
+			return nil, fmt.Errorf("mcp %s: config.endpoint or config.command is required", c.Name)
 		}
 		mode, err := cfg.authMode()
 		if err != nil {
 			return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
 		}
-		src := &mcpSource{name: c.Name, provider: strings.TrimSpace(cfg.Provider), cfg: cfg, client: client}
 		if mode == mcpAuthOAuth {
 			if err := auth.bind(src, c.CredentialRef); err != nil {
 				return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
@@ -146,17 +171,25 @@ func mcpBuilder(client *http.Client, deferral MCPDeferral, auth *MCPAuth) Builde
 				src.token = v
 			}
 		}
-		if err := src.connect(ctx); err != nil {
-			return nil, fmt.Errorf("mcp %s: %w", c.Name, err)
-		}
-		if deferral.Threshold != nil && deferral.OnLoad != nil {
-			if n := deferral.Threshold(ctx); n > 0 && len(src.toolList) > n {
-				src.indexed = true
-				src.onLoad = deferral.OnLoad
-			}
-		}
-		return src, nil
+		return finishMCPSource(ctx, src, deferral, c.Name)
 	}
+}
+
+// finishMCPSource connects src and applies the tool-index deferral.
+func finishMCPSource(ctx context.Context, src *mcpSource, deferral MCPDeferral, name string) (Source, error) {
+	if err := src.connect(ctx); err != nil {
+		if src.services != nil {
+			err = src.services.explain(ctx, src.serviceID, err)
+		}
+		return nil, fmt.Errorf("mcp %s: %w", name, err)
+	}
+	if deferral.Threshold != nil && deferral.OnLoad != nil {
+		if n := deferral.Threshold(ctx); n > 0 && len(src.toolList) > n {
+			src.indexed = true
+			src.onLoad = deferral.OnLoad
+		}
+	}
+	return src, nil
 }
 
 // mcpSource is one connected MCP server: initialized session plus the
@@ -182,6 +215,12 @@ type mcpSource struct {
 	// source; nil in token mode.
 	identity *GitHubIdentity
 
+	// services and serviceID are set for a command connector (D-162):
+	// a failed call reports the local server's state.
+	services  *MCPServices
+	serviceID string
+
+	sessionMu sync.Mutex
 	sessionID string // Mcp-Session-Id, captured at initialize
 	nextID    atomic.Int64
 	toolList  []*tools.Tool
@@ -197,12 +236,14 @@ type mcpSource struct {
 	onLoad  func(sessionID string, t *tools.Tool) (alreadyLoaded bool)
 }
 
-// connect runs the MCP handshake and caches the tool list.
-func (s *mcpSource) connect(ctx context.Context) error {
+// handshake opens a session: initialize, then the initialized
+// notification.
+func (s *mcpSource) handshake(ctx context.Context) error {
+	s.setSession("")
 	var initRes struct {
 		ProtocolVersion string `json:"protocolVersion"`
 	}
-	err := s.rpc(ctx, "initialize", map[string]any{
+	err := s.rpcOnce(ctx, "initialize", map[string]any{
 		"protocolVersion": mcpProtocolVersion,
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "timothy", "version": "1"},
@@ -212,6 +253,26 @@ func (s *mcpSource) connect(ctx context.Context) error {
 	}
 	if err := s.notify(ctx, "notifications/initialized"); err != nil {
 		return fmt.Errorf("initialized notification: %w", err)
+	}
+	return nil
+}
+
+func (s *mcpSource) session() string {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	return s.sessionID
+}
+
+func (s *mcpSource) setSession(id string) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	s.sessionID = id
+}
+
+// connect runs the MCP handshake and caches the tool list.
+func (s *mcpSource) connect(ctx context.Context) error {
+	if err := s.handshake(ctx); err != nil {
+		return err
 	}
 
 	var listRes struct {
@@ -438,6 +499,9 @@ func (s *mcpSource) call(ctx context.Context, tool string, args json.RawMessage)
 		} `json:"content"`
 	}
 	err := s.rpc(ctx, "tools/call", map[string]any{"name": tool, "arguments": args}, &res)
+	if err != nil && s.services != nil {
+		err = s.services.explain(ctx, s.serviceID, err)
+	}
 	if err != nil {
 		return "", fmt.Errorf("mcp %s: %s: %w", s.name, tool, err)
 	}
@@ -464,11 +528,30 @@ type jsonrpcEnvelope struct {
 	} `json:"error"`
 }
 
-// rpc posts one JSON-RPC request and decodes the response, which a
+// errMCPSessionGone is a 404 to a request that carried a session id:
+// the server no longer knows the session (a restarted local server,
+// an expired remote one) and the client must initialize again.
+var errMCPSessionGone = errors.New("session not found")
+
+// rpc is rpcOnce plus one recovery: a lost session is re-opened with a
+// fresh handshake and the request sent again.
+func (s *mcpSource) rpc(ctx context.Context, method string, params, result any) error {
+	err := s.rpcOnce(ctx, method, params, result)
+	if !errors.Is(err, errMCPSessionGone) {
+		return err
+	}
+	if herr := s.handshake(ctx); herr != nil {
+		return fmt.Errorf("%w; reconnect: %w", err, herr)
+	}
+	return s.rpcOnce(ctx, method, params, result)
+}
+
+// rpcOnce posts one JSON-RPC request and decodes the response, which a
 // streamable-HTTP server may deliver as plain JSON or as an SSE
 // stream carrying the response message.
-func (s *mcpSource) rpc(ctx context.Context, method string, params, result any) error {
+func (s *mcpSource) rpcOnce(ctx context.Context, method string, params, result any) error {
 	id := s.nextID.Add(1)
+	hadSession := s.session() != ""
 	resp, err := s.post(ctx, map[string]any{
 		"jsonrpc": "2.0", "id": id, "method": method, "params": params,
 	})
@@ -477,11 +560,14 @@ func (s *mcpSource) rpc(ctx context.Context, method string, params, result any) 
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode == http.StatusNotFound && hadSession {
+		return fmt.Errorf("%s: %w", method, errMCPSessionGone)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("%s: %w", method, mcpStatusError(resp))
 	}
 	if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
-		s.sessionID = sid
+		s.setSession(sid)
 	}
 
 	var envelope jsonrpcEnvelope
@@ -604,8 +690,8 @@ func (s *mcpSource) send(ctx context.Context, payload []byte, token string) (*ht
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	if s.sessionID != "" {
-		req.Header.Set("Mcp-Session-Id", s.sessionID)
+	if sid := s.session(); sid != "" {
+		req.Header.Set("Mcp-Session-Id", sid)
 	}
 	for k, v := range s.cfg.Headers {
 		req.Header.Set(k, v)

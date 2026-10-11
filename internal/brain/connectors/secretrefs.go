@@ -1,6 +1,9 @@
 package connectors
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // SecretRefRole is one secret-store ref a connector row resolves, with
 // the role it plays — surfaced by admin/secrets so the ref never looks
@@ -50,6 +53,23 @@ var extraSecretRefs = map[string]func(c Connector) []SecretRefRole{
 	"github":    gitKeyRefs,
 	"bitbucket": gitKeyRefs,
 	"gitlab":    gitKeyRefs,
+	// A command server's env vars (D-162), one role per variable.
+	"mcp": func(c Connector) []SecretRefRole {
+		var cfg mcpConfig
+		if json.Unmarshal(c.Config, &cfg) != nil {
+			return nil
+		}
+		names := make([]string, 0, len(cfg.EnvRefs))
+		for name := range cfg.EnvRefs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		var out []SecretRefRole
+		for _, name := range names {
+			out = append(out, SecretRefRole{RefName: cfg.EnvRefs[name], Role: "env:" + name})
+		}
+		return out
+	},
 }
 
 // gitKeyRefs is the extraSecretRefs entry every git kind shares: the

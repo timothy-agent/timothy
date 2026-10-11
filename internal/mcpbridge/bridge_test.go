@@ -342,3 +342,33 @@ func TestBridgeServerGone(t *testing.T) {
 		t.Fatalf("Err = %v", h.bridge.Err())
 	}
 }
+
+// TestBridgeRejectsForeignSession covers a server restart: a session id
+// from another bridge process gets 404 unless the request is an
+// initialize, which opens the session again.
+func TestBridgeRejectsForeignSession(t *testing.T) {
+	h := newHarness(t)
+	go func() { h.reply(t, h.recv(t), `{"serverInfo":{"name":"toy"}}`) }()
+	for _, tc := range []struct {
+		name, body string
+		want       int
+	}{
+		{"call", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, http.StatusNotFound},
+		{"notification", `{"jsonrpc":"2.0","method":"notifications/initialized"}`, http.StatusNotFound},
+		{"initialize", `{"jsonrpc":"2.0","id":2,"method":"initialize","params":{}}`, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req, _ := http.NewRequest(http.MethodPost, h.url, strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer "+testToken)
+			req.Header.Set("Mcp-Session-Id", "from-an-old-process")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tc.want)
+			}
+		})
+	}
+}

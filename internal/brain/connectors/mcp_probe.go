@@ -164,6 +164,23 @@ func ProbeMCP(ctx context.Context, client *http.Client, endpoint string, headers
 	return probeSource(ctx, client, src)
 }
 
+// ProbeCommand is ProbeMCP for an unsaved command server (D-162): a
+// throwaway service runs the handshake and is removed. env holds plain
+// values from the form; they are never stored and are redacted from
+// the message.
+func (m *Manager) ProbeCommand(ctx context.Context, command string, args []string, env map[string]string, internet bool) ProbeResult {
+	if m.services == nil {
+		return ProbeResult{Status: ProbeError, Tools: []ProbeTool{}, Message: ErrLocalServersUnsupported.Error()}
+	}
+	res := m.services.probe(ctx, mcpConfig{Command: command, Args: args, Internet: internet}, env)
+	for _, v := range env {
+		if v != "" {
+			res.Message = strings.ReplaceAll(res.Message, v, "[redacted]")
+		}
+	}
+	return res
+}
+
 // ProbeStored is ProbeMCP for a saved mcp connector (issue #1191): the
 // handshake runs with the stored bearer, or the OAuth bundle with its
 // refresh path, so a re-probe never needs the token pasted again. A
@@ -178,6 +195,22 @@ func (m *Manager) ProbeStored(ctx context.Context, client *http.Client, c Connec
 		return ProbeResult{Status: ProbeError, Tools: []ProbeTool{}, Message: err.Error()}
 	}
 	src := &mcpSource{name: c.Name, cfg: cfg}
+	if cfg.Command != "" {
+		if m.services == nil {
+			return ProbeResult{Status: ProbeError, Tools: []ProbeTool{}, Message: ErrLocalServersUnsupported.Error()}
+		}
+		env, err := resolveEnv(ctx, cfg, m.resolve)
+		if err != nil {
+			return ProbeResult{Status: ProbeError, Tools: []ProbeTool{}, Message: err.Error()}
+		}
+		if !c.Enabled {
+			defer m.services.remove(ctx, c.ID)
+		}
+		if err := m.services.attach(withServiceRevive(ctx), c.ID, src, env); err != nil {
+			return ProbeResult{Status: ProbeUnreachable, Tools: []ProbeTool{}, Message: err.Error()}
+		}
+		return probeSource(ctx, m.services.http, src)
+	}
 	if mode == mcpAuthOAuth {
 		if err := auth.bind(src, c.CredentialRef); err != nil {
 			return ProbeResult{Status: ProbeNeedsOAuth, Tools: []ProbeTool{}, Message: err.Error()}

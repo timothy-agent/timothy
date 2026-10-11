@@ -303,6 +303,18 @@ func main() {
 		channelStore = channels.NewStore(app.DB)
 	}
 
+	// Mission shell/check_cmd execution always runs sandboxed via
+	// sandboxd (it holds the Docker socket, brain no longer touches it
+	// directly), as do command MCP connectors (D-162). Brain doesn't
+	// fail closed if sandboxd itself is unreachable at boot: that
+	// surfaces as a degraded health check below, with missions failing
+	// as infra at exec time instead.
+	sandboxdURL := os.Getenv("SANDBOXD_URL")
+	if sandboxdURL == "" {
+		sandboxdURL = "http://sandboxd:8083"
+	}
+	missionSandbox := sandboxclient.New(sandboxdURL)
+
 	conns, goog, msft, markItDownURL := buildConnectors(app.DB, secrets, app.Log)
 	// recordLoadedTool is set to the chat service's recorder once that
 	// exists (below); connectors are built long before it, and a
@@ -326,7 +338,11 @@ func main() {
 		}
 		mcpHTTP := &http.Client{Transport: netguard.Guard{Allowed: flags.OutboundHosts}.Transport()}
 		mcpAuth = connectors.NewMCPAuth(secrets, conns.Store(), os.Getenv("TIMOTHY_PUBLIC_URL"), mcpHTTP, app.Log)
-		conns.RegisterBuilder("mcp", mcpAuth.Builder(mcpDeferral))
+		// conns is non-nil only with a secret store, which derives the
+		// bridge token key.
+		mcpServices := connectors.NewMCPServices(missionSandbox, secrets.DeriveKey("mcp-bridge-token"), app.Log)
+		conns.SetServices(mcpServices)
+		conns.RegisterBuilder("mcp", mcpAuth.Builder(mcpDeferral, mcpServices))
 		conns.RegisterBuilder("aws", connectors.AWSBuilder(nil, mcpDeferral))
 		conns.RegisterBuilder("gcp", connectors.GCPBuilder(nil))
 		conns.RegisterBuilder(string(gitprovider.KindGitHub), connectors.GitHubBuilder(nil))
@@ -368,17 +384,6 @@ func main() {
 			}
 		})
 	}
-
-	// Mission shell/check_cmd execution always runs sandboxed via
-	// sandboxd (it holds the Docker socket, brain no longer touches it
-	// directly). Brain doesn't fail closed if sandboxd itself is
-	// unreachable at boot: that surfaces as a degraded health check
-	// below, with missions failing as infra at exec time instead.
-	sandboxdURL := os.Getenv("SANDBOXD_URL")
-	if sandboxdURL == "" {
-		sandboxdURL = "http://sandboxd:8083"
-	}
-	missionSandbox := sandboxclient.New(sandboxdURL)
 
 	// Built here, above buildMissions, so both the create-path defaults
 	// (route/review_route/prompt_overlay resolution) and the driver

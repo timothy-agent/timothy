@@ -206,6 +206,16 @@ Env values a service is started with are never logged or echoed; they
 are visible to anyone who can inspect containers on the host, which is
 already root-equivalent.
 
+A command MCP connector (D-162) runs an operator-configured command in
+such a service, never in brain. Its secrets reach it as env resolved
+from `env_refs` at build time; the config holds only ref names. Brain
+talks to it through `mcp-bridge`, which requires a per-connector bearer
+token: HMAC-SHA256 over the connector id with a key derived from the
+master key, so it is never stored and the server process never sees it.
+Brain dials the address sandboxd reports, not one from config, so the
+netguard bypass for that client cannot be pointed at another host.
+Rotating the master key replaces every service once.
+
 - **Mitigated:** sandboxd hardening, narrow unauthenticated-but-
   unreachable API, per-mission resource caps, read-only rootfs with
   bounded tmpfs, nofile/fsize ulimits, default seccomp profile, env
