@@ -1,4 +1,4 @@
-import type { AdminConnector, ConnectorProbe, MCPLastProbe, MCPProbedTool } from '../../api/types'
+import type { AdminConnector, ConnectorProbe, MCPLastProbe, MCPMissionReads, MCPProbedTool } from '../../api/types'
 import { slugify } from '../../lib/slugify'
 
 // MCPCandidate is one HTTP server entry the add flow can probe. token
@@ -106,6 +106,7 @@ export function lastProbeFrom(probe: ConnectorProbe, at = new Date()): MCPLastPr
   return {
     at: at.toISOString(),
     tool_count: probe.tool_count,
+    ...(probe.hash ? { hash: probe.hash } : {}),
     tools: probe.tools.map((t) => ({
       name: t.name,
       ...(t.final_name ? { final_name: t.final_name } : {}),
@@ -128,7 +129,20 @@ export function lastProbeOf(connector: AdminConnector): MCPLastProbe | null {
       read_only_hint: typeof t.read_only_hint === 'boolean' ? t.read_only_hint : null,
     })
   }
-  return { at: raw.at, tool_count: typeof raw.tool_count === 'number' ? raw.tool_count : tools.length, tools }
+  return {
+    at: raw.at,
+    tool_count: typeof raw.tool_count === 'number' ? raw.tool_count : tools.length,
+    ...(typeof raw.hash === 'string' && raw.hash ? { hash: raw.hash } : {}),
+    tools,
+  }
+}
+
+// missionReadsOf reads config.mission_reads; null when absent or
+// malformed.
+export function missionReadsOf(connector: AdminConnector): MCPMissionReads | null {
+  const raw = connector.config.mission_reads
+  if (!isRecord(raw) || typeof raw.hash !== 'string' || !Array.isArray(raw.tools)) return null
+  return { hash: raw.hash, tools: raw.tools.filter((t): t is string => typeof t === 'string') }
 }
 
 // allowlistName is the name a tool carries on an agent's allowlist.

@@ -51,6 +51,10 @@ type mcpConfig struct {
 	TokenAuthMethod string   `json:"token_auth_method,omitempty"`
 	Scopes          []string `json:"scopes,omitempty"`
 	Resource        string   `json:"resource,omitempty"`
+
+	// MissionReads is the operator's review of which tools missions
+	// may read (D-157); nil keeps the connector chat-only.
+	MissionReads *MCPMissionReads `json:"mission_reads,omitempty"`
 }
 
 const (
@@ -169,6 +173,9 @@ type mcpSource struct {
 	sessionID string // Mcp-Session-Id, captured at initialize
 	nextID    atomic.Int64
 	toolList  []*tools.Tool
+	// fingerprint hashes the tool list connect fetched, compared with
+	// cfg.MissionReads.Hash by missionReadOK.
+	fingerprint string
 
 	// indexed defers this server's schemas behind load_tool (issue
 	// #643): Tools() then returns that single entry point instead of
@@ -205,6 +212,7 @@ func (s *mcpSource) connect(ctx context.Context) error {
 	if err := s.rpc(ctx, "tools/list", map[string]any{}, &listRes); err != nil {
 		return fmt.Errorf("tools/list: %w", err)
 	}
+	var fp []fpTool
 	for _, t := range listRes.Tools {
 		// LoadToolName is reserved for this package's synthetic index
 		// entry point, which the permission chain exempts by name
@@ -220,6 +228,7 @@ func (s *mcpSource) connect(ctx context.Context) error {
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object"}`)
 		}
+		fp = append(fp, fpTool{name: remote, desc: t.Description, schema: schema})
 		s.toolList = append(s.toolList, &tools.Tool{
 			Name:        remote,
 			Description: t.Description,
@@ -229,7 +238,24 @@ func (s *mcpSource) connect(ctx context.Context) error {
 			},
 		})
 	}
+	s.fingerprint = fingerprintTools(fp)
 	return nil
+}
+
+// missionReadOK reports whether the operator marked raw as a mission
+// read and the server still serves the tool list that mark was made
+// against (D-157). The server's own readOnlyHint never counts.
+func (s *mcpSource) missionReadOK(raw string) bool {
+	mr := s.cfg.MissionReads
+	if mr == nil || mr.Hash == "" || mr.Hash != s.fingerprint {
+		return false
+	}
+	for _, n := range mr.Tools {
+		if n == raw {
+			return true
+		}
+	}
+	return false
 }
 
 // Tools returns the server's tools, un-namespaced — the manager

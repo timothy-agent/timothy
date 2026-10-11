@@ -423,3 +423,56 @@ func TestLastProbeRoundTrip(t *testing.T) {
 		t.Fatalf("round trip = %+v", got)
 	}
 }
+
+func TestFingerprintTools(t *testing.T) {
+	t.Parallel()
+	a := fpTool{name: "search", desc: "Search", schema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`)}
+	b := fpTool{name: "fetch", desc: "Fetch", schema: json.RawMessage(`{"type":"object"}`)}
+	base := fingerprintTools([]fpTool{a, b})
+	if base == "" || base != fingerprintTools([]fpTool{b, a}) {
+		t.Fatal("fingerprint must not depend on order")
+	}
+	spaced := a
+	spaced.schema = json.RawMessage("{ \"type\": \"object\",\n \"properties\": { \"q\": { \"type\": \"string\" } } }")
+	if fingerprintTools([]fpTool{spaced, b}) != base {
+		t.Fatal("fingerprint must not depend on schema whitespace")
+	}
+	for name, changed := range map[string]fpTool{
+		"description": {name: a.name, desc: "Search pages", schema: a.schema},
+		"schema":      {name: a.name, desc: a.desc, schema: json.RawMessage(`{"type":"object","properties":{"q":{"type":"integer"}}}`)},
+		"name":        {name: "search2", desc: a.desc, schema: a.schema},
+	} {
+		if fingerprintTools([]fpTool{changed, b}) == base {
+			t.Fatalf("a %s change must change the fingerprint", name)
+		}
+	}
+	if fingerprintTools([]fpTool{a}) == base {
+		t.Fatal("a removed tool must change the fingerprint")
+	}
+}
+
+// TestProbeHashMatchesLiveFingerprint pins that the probe and connect
+// fingerprint the same list the same way, so a mark made from the
+// probe record is valid against the built source.
+func TestProbeHashMatchesLiveFingerprint(t *testing.T) {
+	t.Parallel()
+	f := &fakeMCP{toolsJSON: probeHintTools}
+	srv := httptest.NewServer(f.handler())
+	t.Cleanup(srv.Close)
+	res := ProbeMCP(t.Context(), srv.Client(), srv.URL, nil, "")
+	if res.Status != ProbeOK || res.Hash == "" {
+		t.Fatalf("probe = %+v", res)
+	}
+	src := buildMCP(t, f, "")
+	if got := src.(*mcpSource).fingerprint; got != res.Hash {
+		t.Fatalf("live fingerprint %s != probe hash %s", got, res.Hash)
+	}
+	rec := res.Record(time.Now())
+	if rec.Hash != res.Hash {
+		t.Fatalf("record hash = %q", rec.Hash)
+	}
+	raw, _ := json.Marshal(map[string]any{"last_probe": rec})
+	if LastProbeOf(Connector{Config: raw}).Hash != res.Hash {
+		t.Fatal("hash must round-trip through config")
+	}
+}

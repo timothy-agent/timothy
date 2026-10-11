@@ -1521,9 +1521,9 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 
 // missionConnectorReadsResolver adapts agentReg + conns to
 // missions.ConnectorReadsResolver: an agent's Tools allowlist
-// intersected with every built connector's ReadOnly-marked, non-MCP
-// tools (connectors.Manager.ReadOnlyTools already excludes MCP and
-// non-read-only tools, and aggregates the rest into one unified tool
+// intersected with every built connector's ReadOnly-marked tools
+// (connectors.Manager.ReadOnlyTools already excludes non-read-only
+// tools and unreviewed MCP tools (D-157), and aggregates the rest into one unified tool
 // per capability, e.g. "search_mail" regardless of how many accounts
 // serve it. tools.ToolMatches is the same rule filterDefs/matchGrant
 // use: its exact-match branch is what actually fires here, since an
