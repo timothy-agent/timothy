@@ -330,3 +330,36 @@ func TestValidatePricesByModel(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateProviderBedrockAuth covers D-156's shape rules at the
+// admin boundary.
+func TestValidateProviderBedrockAuth(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		p       Provider
+		wantErr string
+	}{
+		{name: "ambient with region and no ref", p: Provider{Name: "b", Kind: "api", Driver: "bedrock", DefaultModel: "m", Options: map[string]string{"auth": "ambient", "region": "us-east-1"}}},
+		{name: "ambient with credential_ref", p: Provider{Name: "b", Kind: "api", Driver: "bedrock", DefaultModel: "m", CredentialRef: "bedrock-static", Options: map[string]string{"auth": "ambient", "region": "us-east-1"}}, wantErr: "must not set credential_ref"},
+		{name: "ambient without region", p: Provider{Name: "b", Kind: "api", Driver: "bedrock", DefaultModel: "m", Options: map[string]string{"auth": "ambient"}}, wantErr: "requires options.region"},
+		{name: "unknown auth", p: Provider{Name: "b", Kind: "api", Driver: "bedrock", DefaultModel: "m", CredentialRef: "x", Options: map[string]string{"auth": "profile"}}, wantErr: "options.auth"},
+		{name: "auth on another driver", p: Provider{Name: "b", Kind: "api", Driver: "openaicompat", BaseURL: "https://x.example/v1", DefaultModel: "m", CredentialRef: "x", Options: map[string]string{"auth": "ambient"}}, wantErr: "bedrock driver only"},
+		{name: "static unchanged", p: Provider{Name: "b", Kind: "api", Driver: "bedrock", DefaultModel: "m", CredentialRef: "bedrock-static", Options: map[string]string{"region": "us-east-1"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateProvider(tt.p)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validateProvider: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}

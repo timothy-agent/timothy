@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -756,5 +757,95 @@ func TestBedrockOutputConfigRetry(t *testing.T) {
 	}
 	if _, ok := bothFields["inferenceConfig"]; !ok {
 		t.Fatal("inferenceConfig lost during stripping")
+	}
+}
+
+// D-156: options.auth parsing and the ambient row's construction rules.
+func TestParseBedrockAuth(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{raw: "", want: AuthStatic},
+		{raw: "static", want: AuthStatic},
+		{raw: "ambient", want: AuthAmbient},
+		{raw: "Ambient", wantErr: true},
+		{raw: "profile", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseBedrockAuth(tt.raw)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseBedrockAuth(%q) = %q, want error", tt.raw, got)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("ParseBedrockAuth(%q) = %q, %v; want %q", tt.raw, got, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestBedrockLazyClientAuthModes(t *testing.T) {
+	t.Parallel()
+	static := &StaticCredentials{AccessKeyID: "AKIA123", SecretAccessKey: "shh"}
+	tests := []struct {
+		name    string
+		cfg     BedrockConfig
+		wantErr string
+	}{
+		{name: "static with region builds", cfg: BedrockConfig{Name: "b", Region: "eu-west-1", StaticCredentials: static}},
+		{name: "static defaults region", cfg: BedrockConfig{Name: "b", StaticCredentials: static}},
+		{name: "static without credentials fails", cfg: BedrockConfig{Name: "b", Region: "eu-west-1"}, wantErr: "static auth requires credentials"},
+		{name: "ambient with region builds", cfg: BedrockConfig{Name: "b", Auth: AuthAmbient, Region: "eu-west-1"}},
+		{name: "ambient without region fails", cfg: BedrockConfig{Name: "b", Auth: AuthAmbient}, wantErr: "requires the provider's options.region"},
+		{name: "ambient with static credentials fails", cfg: BedrockConfig{Name: "b", Auth: AuthAmbient, Region: "eu-west-1", StaticCredentials: static}, wantErr: "cannot carry static credentials"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			b := NewBedrock(tt.cfg)
+			client, err := b.lazyClient(context.Background())
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("lazyClient err = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || client == nil {
+				t.Fatalf("lazyClient = %v, %v; want a client", client, err)
+			}
+			if b.Ambient() != (tt.cfg.Auth == AuthAmbient) {
+				t.Fatalf("Ambient() = %v", b.Ambient())
+			}
+		})
+	}
+}
+
+// An ambient row with no identity in the environment must fail on the
+// first call with the SDK's own error, not hang or fall back (D-156).
+func TestBedrockAmbientWithoutIdentityFailsLoudly(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/nonexistent")
+	t.Setenv("AWS_CONFIG_FILE", "/nonexistent")
+	t.Setenv("AWS_WEB_IDENTITY_TOKEN_FILE", "")
+	t.Setenv("AWS_CONTAINER_CREDENTIALS_FULL_URI", "")
+	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
+	b := NewBedrock(BedrockConfig{Name: "b", Auth: AuthAmbient, Region: "us-east-1", Timeout: 5 * time.Second})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _, err := b.Embed(ctx, "amazon.titan-embed-text-v2:0", []string{"x"})
+	if err == nil {
+		t.Fatal("Embed with no ambient identity = nil error, want the SDK's no-credentials failure")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "credential") {
+		t.Fatalf("err = %v, want the SDK's credentials error", err)
 	}
 }

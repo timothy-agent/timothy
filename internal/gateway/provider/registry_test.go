@@ -295,3 +295,49 @@ func TestBuildForwardsHeadersToRequests(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildBedrockAmbient covers D-156 at the Build layer: an ambient
+// row builds with no credential_ref and a region, and every shape that
+// mixes identity sources or lacks a region is a Build error.
+func TestBuildBedrockAmbient(t *testing.T) {
+	t.Parallel()
+	secretJSON := `{"access_key_id":"AKIA123","secret_access_key":"shh"}` // #nosec G101
+	lookup := func(ref string) string {
+		if ref == "bedrock-static" {
+			return secretJSON
+		}
+		return ""
+	}
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{name: "ambient builds", cfg: Config{Name: "b", Driver: "bedrock", Auth: "ambient", Region: "eu-west-1"}},
+		{name: "ambient with credential_ref fails", cfg: Config{Name: "b", Driver: "bedrock", Auth: "ambient", Region: "eu-west-1", CredentialRef: "bedrock-static"}, wantErr: "must not set credential_ref"},
+		{name: "ambient without region fails", cfg: Config{Name: "b", Driver: "bedrock", Auth: "ambient"}, wantErr: "requires options.region"},
+		{name: "unknown auth fails", cfg: Config{Name: "b", Driver: "bedrock", Auth: "profile", Region: "eu-west-1"}, wantErr: "options.auth"},
+		{name: "static still needs a key", cfg: Config{Name: "b", Driver: "bedrock", Auth: "static", Region: "eu-west-1"}, wantErr: "requires static keys"},
+		{name: "static builds", cfg: Config{Name: "b", Driver: "bedrock", CredentialRef: "bedrock-static"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			r, err := Build([]Config{tt.cfg}, lookup)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Build err = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			p, _ := r.Get("b")
+			b := p.(*Bedrock)
+			if b.Ambient() != (tt.cfg.Auth == "ambient") || b.HasStaticCredentials() == b.Ambient() {
+				t.Fatalf("Ambient=%v HasStaticCredentials=%v for auth %q", b.Ambient(), b.HasStaticCredentials(), tt.cfg.Auth)
+			}
+		})
+	}
+}
