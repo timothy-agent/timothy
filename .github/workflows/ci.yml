@@ -34,6 +34,7 @@ jobs:
       sandbox: ${{ steps.filter.outputs.sandbox }}
       deploy: ${{ steps.filter.outputs.deploy }}
       kind: ${{ steps.filter.outputs.kind }}
+      helm: ${{ steps.filter.outputs.helm }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
@@ -58,6 +59,10 @@ jobs:
               - '.github/workflows/ci.yml'
             deploy:
               - 'deploy/**'
+              - '.github/workflows/ci.yml'
+            helm:
+              - 'deploy/helm/**'
+              - 'scripts/helm-golden.sh'
               - '.github/workflows/ci.yml'
             kind:
               - 'internal/sandboxd/**'
@@ -286,6 +291,19 @@ jobs:
       - name: Lifecycle suite on kind
         run: make kind-sandbox-test
 
+  # Helm chart: lint plus the golden render diff, so a template change
+  # is reviewed as a manifest diff.
+  helm:
+    needs: changes
+    if: needs.changes.outputs.helm == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Lint
+        run: make helm-lint
+      - name: Golden render
+        run: make helm-golden
+
   # Coolify reads deploy/release/docker-compose.yml straight from git and
   # install.sh fetches it as a release asset, so both compose files must
   # parse at PR time. searxng's settings are inlined in each file; the
@@ -324,7 +342,7 @@ jobs:
   # jobs — path-awareness must not reopen that hole.)
   ci-ok:
     runs-on: ubuntu-latest
-    needs: [changes, go-test, go-integration, lint, web, images, sandbox-image, kind-sandbox, compose]
+    needs: [changes, go-test, go-integration, lint, web, images, sandbox-image, kind-sandbox, helm, compose]
     if: always()
     steps:
       - name: All relevant jobs succeeded
@@ -352,6 +370,7 @@ jobs:
           check web             "${{ needs.changes.outputs.web }}" "${{ needs.web.result }}"
           check sandbox-image   "${{ needs.changes.outputs.sandbox }}" "${{ needs.sandbox-image.result }}"
           check kind-sandbox    "${{ needs.changes.outputs.kind }}"    "${{ needs.kind-sandbox.result }}"
+          check helm            "${{ needs.changes.outputs.helm }}"    "${{ needs.helm.result }}"
           check compose         "${{ needs.changes.outputs.deploy }}"  "${{ needs.compose.result }}"
           # images always runs (per-leg skips internally) unless
           # nothing relevant touched it at all.

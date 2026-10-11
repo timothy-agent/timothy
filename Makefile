@@ -16,7 +16,7 @@ GO_RUN := docker run --rm -v $(CURDIR):/src -w /src \
 	-e GOFLAGS=-buildvcs=false $(GO_IMAGE)
 
 .PHONY: build test test-integration test-live vet lint tidy skills-validate manifest selfdocs routes-check up down logs \
-	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke kind-up kind-down kind-sandbox-test kind-sandbox-smoke
+	brain gateway memoryd web markitdown pdfgen ocr sandboxd dev canary canary-coding canary-two-unit canary-research canary-executor canary-impossible canary-onboarding test-scripts canary-ecosystems kb-eval sandbox-image sandbox-smoke kind-up kind-down kind-sandbox-test kind-sandbox-smoke kind-deploy helm-lint helm-template helm-golden
 
 build:
 	$(GO_RUN) go build ./...
@@ -242,3 +242,25 @@ kind-sandbox-test:
 # Needs kind-up, the stack up and `make sandbox-image`.
 kind-sandbox-smoke:
 	./scripts/kind-sandbox-smoke.sh
+
+# Helm chart (deploy/helm/timothy). helm-golden diffs the rendered
+# manifests against deploy/helm/tests/golden/default.yaml; UPDATE=1
+# rewrites it after a reviewed change.
+HELM_CHART := deploy/helm/timothy
+helm-lint:
+	helm lint $(HELM_CHART)
+	helm lint $(HELM_CHART) -f deploy/helm/tests/values-golden.yaml
+
+helm-template:
+	helm template timothy $(HELM_CHART) --namespace timothy -f deploy/helm/tests/values-golden.yaml
+
+helm-golden:
+	./scripts/helm-golden.sh
+
+# Whole stack on kind through the chart: builds every image locally,
+# loads them into the node, installs with deploy/kind/values-kind.yaml
+# and waits for every pod. Needs kind-up.
+kind-deploy:
+	$(COMPOSE) build brain gateway memoryd sandboxd web markitdown pdfgen ocr
+	kind load docker-image timothy-brain timothy-gateway timothy-memoryd timothy-sandboxd timothy-web timothy-markitdown timothy-pdfgen timothy-ocr $(SANDBOX_IMAGE) --name $(KIND_CLUSTER)
+	helm upgrade --install timothy $(HELM_CHART) --kube-context kind-$(KIND_CLUSTER) --namespace timothy --create-namespace -f deploy/kind/values-kind.yaml --wait --timeout 10m
