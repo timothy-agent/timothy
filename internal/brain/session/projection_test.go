@@ -1,9 +1,9 @@
 package session
 
 import (
-	"reflect"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 

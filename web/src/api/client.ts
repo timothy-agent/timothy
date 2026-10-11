@@ -32,6 +32,8 @@ import type {
   EntityGraphData,
   ExecutionPlanPhase,
   ConnectorTestResult,
+  ConnectorProbe,
+  ConnectorProbeRequest,
   GitHubRepo,
   GroupTotal,
   KbCollection,
@@ -1175,6 +1177,15 @@ export async function deleteConnector(id: string): Promise<void> {
 
 export async function testConnector(id: string): Promise<ConnectorTestResult> {
   return request<ConnectorTestResult>(`/v1/admin/connectors/${id}/test`, { method: 'POST' })
+}
+
+// probeConnector checks an unsaved MCP endpoint: handshake outcome and
+// tool preview. The token is used for this call only, never stored.
+export async function probeConnector(body: ConnectorProbeRequest): Promise<ConnectorProbe> {
+  return request<ConnectorProbe>('/v1/admin/connectors/probe', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 // listConnectorRepos lists every repo a github-kind connector's PAT

@@ -10,8 +10,8 @@ package missions
 // mission continues. Resume derives completion from mission_events.
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"

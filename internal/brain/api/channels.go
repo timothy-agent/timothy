@@ -94,8 +94,8 @@ type createChannelRequest struct {
 }
 
 type patchChannelRequest struct {
-	Name          *string             `json:"name"`
-	CredentialRef *string             `json:"credential_ref"`
+	Name          *string `json:"name"`
+	CredentialRef *string `json:"credential_ref"`
 	// AgentID stays raw so null (clear) differs from omitted.
 	AgentID json.RawMessage     `json:"agent_id"`
 	Enabled *bool               `json:"enabled"`

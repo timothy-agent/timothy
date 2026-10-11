@@ -886,7 +886,15 @@ func (m *Manager) TestReport(ctx context.Context, id string) (TestReport, error)
 	}
 	idr, ok := src.(identifier)
 	if !ok {
-		return report, src.Test(tctx)
+		if err := src.Test(tctx); err != nil {
+			return TestReport{}, err
+		}
+		// An oauth-mode MCP server reports its issuer and granted
+		// scopes; token mode leaves identity nil.
+		if ms, ok := src.(*mcpSource); ok {
+			report.Identity = ms.identity
+		}
+		return report, nil
 	}
 	identity, err := idr.Identity(tctx)
 	if err != nil {
