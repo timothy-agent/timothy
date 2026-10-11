@@ -16,6 +16,7 @@ vi.mock('../../api/client', () => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 import {
+  connectorOAuthStart,
   createConnector,
   listSecretBackends,
   listSecretRefs,
@@ -670,5 +671,129 @@ describe('ConnectorAdd cancel and retest', () => {
     vi.mocked(testConnector).mockResolvedValue({ ok: true })
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
     await waitFor(() => expect(testConnector).toHaveBeenCalledTimes(2))
+  })
+})
+
+describe('ConnectorAdd mcp oauth login', () => {
+  const assign = vi.fn()
+  beforeEach(() => {
+    vi.stubGlobal('location', { ...window.location, assign, origin: 'http://localhost:3300' })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('switches the form from the bearer token to the oauth client fields', async () => {
+    renderPage('github')
+    expect(await screen.findByPlaceholderText('ghp_… or github_pat_…')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Bearer token' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: 'OAuth login' }))
+
+    expect(screen.queryByPlaceholderText('ghp_… or github_pat_…')).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('client id')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('client secret')).toBeInTheDocument()
+    expect(screen.getByText(/Only for servers without automatic client registration/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Test connection' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add connector' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save & connect' })).toBeInTheDocument()
+  })
+
+  it('creates an oauth-mode connector and hands off to the consent URL', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-oauth')
+    vi.mocked(connectorOAuthStart).mockResolvedValue('https://auth.example/authorize?x=1')
+    renderPage('github')
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'OAuth login' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save & connect' }))
+
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://auth.example/authorize?x=1'))
+    expect(setSecret).not.toHaveBeenCalled()
+    expect(createConnector).toHaveBeenCalledWith({
+      name: 'github-mcp',
+      kind: 'mcp',
+      config: { endpoint: 'https://api.githubcopilot.com/mcp/', auth_mode: 'oauth' },
+      credential_ref: 'GITHUB_MCP_OAUTH',
+      enabled: false,
+    })
+    expect(connectorOAuthStart).toHaveBeenCalledWith('conn-oauth')
+  })
+
+  it('stores a pasted client secret and names it in config', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-oauth-2')
+    vi.mocked(connectorOAuthStart).mockResolvedValue('https://auth.example/authorize?x=2')
+    vi.mocked(setSecret).mockResolvedValue()
+    renderPage('github')
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'OAuth login' }))
+    fireEvent.change(screen.getByPlaceholderText('client secret'), { target: { value: 's3cret' } })
+    // A secret without its client id cannot be used.
+    expect((screen.getByRole('button', { name: 'Save & connect' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByPlaceholderText('client id'), { target: { value: 'pasted-id' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save & connect' }))
+
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://auth.example/authorize?x=2'))
+    expect(setSecret).toHaveBeenCalledWith('GITHUB_MCP_CLIENT_SECRET', 's3cret')
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
+      config: { auth_mode: 'oauth', client_id: 'pasted-id', client_secret_ref: 'GITHUB_MCP_CLIENT_SECRET' },
+    })
+  })
+
+  it('keeps Save & connect disabled for a non-https endpoint', async () => {
+    renderPage('github')
+    fireEvent.click(await screen.findByRole('radio', { name: 'OAuth login' }))
+    fireEvent.change(screen.getByDisplayValue('https://api.githubcopilot.com/mcp/'), {
+      target: { value: 'http://mcp.internal/mcp' },
+    })
+    expect((screen.getByRole('button', { name: 'Save & connect' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('toasts and stays on the page when the connect fails', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-oauth-3')
+    vi.mocked(connectorOAuthStart).mockRejectedValue(new Error('authorization server does not support PKCE S256'))
+    renderPage('github')
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'OAuth login' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save & connect' }))
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('Could not connect MCP server', {
+        description: 'authorization server does not support PKCE S256',
+      }),
+    )
+    expect(assign).not.toHaveBeenCalled()
+    expect((screen.getByRole('button', { name: 'Save & connect' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+})
+
+describe('ConnectorAdd without custom-mcp branches', () => {
+  // new/custom-mcp routes to ConnectorAddMCP; rendering the preset here
+  // proves the generic form treats it like any other preset.
+  it('prefills the preset name and asks for a plain bearer token', async () => {
+    renderPage('custom-mcp')
+    const name = await screen.findByPlaceholderText('custom-mcp-server')
+    expect(name).toHaveValue('custom-mcp-server')
+    expect(screen.queryByPlaceholderText('my-server')).not.toBeInTheDocument()
+    expect(screen.queryByText('Bearer token (optional)')).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('token')).toBeInTheDocument()
+  })
+
+  it('names the bearer token secret with the shared ref rule', async () => {
+    vi.mocked(createConnector).mockResolvedValue('conn-mcp')
+    vi.mocked(testConnector).mockResolvedValue({ ok: true })
+    renderPage('custom-mcp')
+
+    fireEvent.change(await screen.findByPlaceholderText('custom-mcp-server'), { target: { value: 'My Server' } })
+    fireEvent.change(screen.getByPlaceholderText('https://…/mcp'), {
+      target: { value: 'https://mcp.example.com/mcp' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('token'), { target: { value: 'secret-token' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
+    await waitFor(() => expect(createConnector).toHaveBeenCalled())
+    expect(setSecret).toHaveBeenCalledWith('MY_SERVER_MCP_TOKEN', 'secret-token')
+    expect(vi.mocked(createConnector).mock.calls[0][0]).toMatchObject({
+      kind: 'mcp',
+      credential_ref: 'MY_SERVER_MCP_TOKEN',
+    })
   })
 })

@@ -36,7 +36,7 @@ func TestConnectorsRepoEndpoints(t *testing.T) {
 	mgr := testConnectorsManager(t, src)
 	id := createGitHubConnectorRow(t, mgr)
 	m := mux(a)
-	a.registerConnectors(m.Handle, mgr, nil, nil, nil)
+	a.registerConnectors(m.Handle, mgr, nil, nil, nil, nil)
 
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, path, strings.NewReader(body))

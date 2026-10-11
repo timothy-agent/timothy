@@ -37,8 +37,10 @@ import { slugify } from '../../lib/slugify'
 const area = settingsArea('connectors')
 
 // oauthProviderLabel names the OAuth provider for a connector kind:
-// both google and microsoft share the same reconnect/test UI shape.
+// google, microsoft and oauth-mode mcp share the same reconnect/test UI
+// shape.
 function oauthProviderLabel(kind: string): string {
+  if (kind === 'mcp') return 'MCP server'
   return kind === 'microsoft' ? 'Microsoft' : 'Google'
 }
 
@@ -311,6 +313,7 @@ function ConnectorEditForm({
 
   const preset = presetFor(connector)
   const isOAuth = connector.kind === 'google' || connector.kind === 'microsoft'
+  const isMCPOAuth = connector.kind === 'mcp' && connector.config.auth_mode === 'oauth'
 
   return (
     <PageShell width="form">
@@ -673,7 +676,7 @@ function ConnectorEditForm({
                       : `Failed: ${test?.error}`
                 }
                 action={
-                  test && !test.ok && isOAuth ? (
+                  test && !test.ok && (isOAuth || isMCPOAuth) ? (
                     <Button size="sm" variant="outline" disabled={oauthBusy} onClick={() => void reconnectOAuth()}>
                       {oauthBusy ? 'Redirecting…' : 'Reconnect'}
                     </Button>
@@ -710,7 +713,19 @@ function ConnectorEditForm({
               <p className="text-sm text-muted-foreground">Paste a new access token below to replace it.</p>
             )}
 
-            {isOAuth ? (
+            {isMCPOAuth ? (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">
+                  Endpoint: <span className="font-mono">{String(connector.config.endpoint ?? '')}</span>
+                  {Array.isArray(connector.config.scopes) && connector.config.scopes.length > 0 && (
+                    <> · Scopes: {(connector.config.scopes as string[]).join(', ')}</>
+                  )}
+                </p>
+                <Button variant="outline" disabled={oauthBusy} onClick={() => void reconnectOAuth()}>
+                  {oauthBusy ? 'Redirecting…' : `Reconnect ${oauthProviderLabel(connector.kind)}`}
+                </Button>
+              </div>
+            ) : isOAuth ? (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
                   Scopes: {(connector.config.scopes as string[] | undefined)?.map((s) => s.split('/').pop()).join(', ')}

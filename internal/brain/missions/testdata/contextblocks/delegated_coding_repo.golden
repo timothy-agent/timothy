@@ -5,6 +5,8 @@ Plan:
 - [pending] Write summary
 
 
+Pull request summary: this work becomes a pull request. On done, start final_output with a short summary of the whole change for its description: what changed and why, a few sentences of markdown, without restating the goal. A report the goal asks for follows the summary.
+
 Current unit: Write summary
   criterion: c1
   criterion: c2
