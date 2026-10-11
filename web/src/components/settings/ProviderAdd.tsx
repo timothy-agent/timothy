@@ -69,6 +69,11 @@ function presetLitellmProvider(presetId: string): string {
 // OAuth token, which creates a kind='cli' row instead.
 type AnthropicAuthMode = 'api_key' | 'oauth'
 
+// BedrockAuthMode is the Bedrock preset's credential source (D-156):
+// an IAM access key pair stored as a secret (default) or the cloud
+// identity the gateway runs under, which stores nothing.
+type BedrockAuthMode = 'static' | 'ambient'
+
 interface ProviderAddProps {
   // presetId overrides the URL param.
   presetId?: string
@@ -108,6 +113,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   const [test, setTest] = useState<TestResult | null>(null)
   const [tested, setTested] = useState(false)
   const [anthropicAuth, setAnthropicAuth] = useState<AnthropicAuthMode>('api_key')
+  const [bedrockAuth, setBedrockAuth] = useState<BedrockAuthMode>('static')
   // credMode picks between typing a new secret (default) and reusing a
   // stored ref, only offered for the plain (non-bedrock-split,
   // non-CLI) API key flow, the common reuse case (e.g. the same
@@ -150,6 +156,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
     setName(preset.id === 'custom' ? '' : preset.name)
     setBaseURL(preset.baseURL)
     setRegion(preset.region ?? 'us-east-1')
+    setBedrockAuth('static')
     setKey('')
     setAccessKeyId('')
     setSecretAccessKey('')
@@ -209,10 +216,14 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   // preset (Cursor) creates a kind='cli' row (D-051) instead of the
   // plain kind='api' key flow.
   const isCli = (isAnthropic && anthropicAuth === 'oauth') || isCursor
-  const wantsKey = preset.requiresKey
+  // bedrockAmbient: the gateway's own cloud identity signs requests,
+  // so the row carries no secret and no reference (D-156).
+  const bedrockAmbient = isBedrock && bedrockAuth === 'ambient'
+  const wantsKey = preset.requiresKey && !bedrockAmbient
   // A keyless preset (Ollama) stores no secret, so it must not name a
   // reference either: the gateway treats an unresolved ref as unhealthy.
   const credentialRef = wantsKey ? ref.trim() : ''
+  const bedrockOptions = isBedrock ? { region, ...(bedrockAmbient ? { auth: 'ambient' } : {}) } : {}
 
   // Bedrock always splits into access key id / secret access key,
   // every backend now writes through the raw value Timothy is given,
@@ -330,7 +341,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
         base_url: baseURL.trim(),
         credential_ref: credentialRef,
         headers: {},
-        ...(isBedrock ? { options: { region } } : {}),
+        ...(isBedrock ? { options: bedrockOptions } : {}),
       }
       const res = await validateProvider(config, model.trim())
       if (!res.ok && isTimothyAuthDetail(res.detail)) {
@@ -368,7 +379,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
       // the driver/host heuristic to keep working as it always has.
       const litellmProvider = presetLitellmProvider(preset.id)
       const options = {
-        ...(isBedrock ? { region } : {}),
+        ...bedrockOptions,
         ...(litellmProvider ? { litellm_provider: litellmProvider } : {}),
       }
       const id = await createProvider({
@@ -523,6 +534,37 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
                 )}
               </Field>
             </>
+          )}
+
+          {!isCli && isBedrock && (
+            <Field label="Authentication">
+              {(props) => (
+                <>
+                  <Select
+                    value={bedrockAuth}
+                    onValueChange={(v) => {
+                      setBedrockAuth(v as BedrockAuthMode)
+                      setAccessKeyId('')
+                      setSecretAccessKey('')
+                      invalidate()
+                    }}
+                  >
+                    <SelectTrigger id={props.id} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="static">Access keys</SelectItem>
+                      <SelectItem value="ambient">Cloud identity</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1.5 text-sm text-muted-foreground">
+                    {bedrockAuth === 'static'
+                      ? 'An IAM access key pair, stored in the secret store.'
+                      : 'The AWS role attached to the gateway (EKS Pod Identity, IRSA, GKE or AKS Workload Identity, or an instance role). Timothy stores no key.'}
+                  </p>
+                </>
+              )}
+            </Field>
           )}
 
           {!isCli && isBedrock && (
