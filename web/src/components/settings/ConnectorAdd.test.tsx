@@ -769,6 +769,28 @@ describe('ConnectorAdd mcp oauth login', () => {
 describe('ConnectorAdd without custom-mcp branches', () => {
   // new/custom-mcp routes to ConnectorAddMCP; rendering the preset here
   // proves the generic form treats it like any other preset.
+  it('opens a catalog tile with the endpoint prefilled and OAuth login selected', async () => {
+    renderPage('notion')
+    const name = await screen.findByPlaceholderText('notion')
+    expect(name).toHaveValue('notion')
+    expect(screen.getByPlaceholderText('https://…/mcp')).toHaveValue('https://mcp.notion.com/mcp')
+    expect(screen.getByRole('radio', { name: 'OAuth login' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('link', { name: 'Notion setup guide' })).toHaveAttribute(
+      'href',
+      'https://developers.notion.com/docs/get-started-with-mcp',
+    )
+    expect(screen.getByText(/endpoint checked on 2026-10-11/)).toBeInTheDocument()
+    expect(screen.queryByText(/has no automatic client registration/)).not.toBeInTheDocument()
+  })
+
+  it('shows the client registration note for a catalog server without automatic registration', async () => {
+    renderPage('slack')
+    await screen.findByPlaceholderText('slack')
+    expect(screen.getByText(/Slack has no automatic client registration/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'Bearer token' }))
+    expect(screen.queryByText(/Slack has no automatic client registration/)).not.toBeInTheDocument()
+  })
+
   it('prefills the preset name and asks for a plain bearer token', async () => {
     renderPage('custom-mcp')
     const name = await screen.findByPlaceholderText('custom-mcp-server')

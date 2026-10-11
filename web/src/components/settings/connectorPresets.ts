@@ -20,6 +20,12 @@ export interface ConnectorPreset {
   scopes?: string[]
   // mcp: the authentication the add form starts on (default 'token')
   authMode?: 'token' | 'oauth'
+  // mcp catalog (issue #1162): the provider's setup page, a note shown
+  // in oauth mode (client registration quirks), and the day the
+  // endpoint was last checked against that page.
+  docsURL?: string
+  authHint?: string
+  verifiedOn?: string
 }
 
 const gmailScope = 'https://www.googleapis.com/auth/gmail.modify'
@@ -151,6 +157,109 @@ export const connectorPresets: ConnectorPreset[] = [
     kind: 'caldav',
     description: 'Any calendar via CalDAV, list and create events.',
     brandColor: '#64748B',
+  },
+  {
+    id: 'notion',
+    name: 'Notion',
+    kind: 'mcp',
+    description: 'Pages, databases and comments via Notion’s hosted MCP server',
+    logo: 'notion',
+    brandColor: '#000000',
+    endpoint: 'https://mcp.notion.com/mcp',
+    authMode: 'oauth',
+    docsURL: 'https://developers.notion.com/docs/get-started-with-mcp',
+    verifiedOn: '2026-10-11',
+  },
+  {
+    id: 'slack',
+    name: 'Slack',
+    kind: 'mcp',
+    description: 'Search and read messages, post to channels via Slack’s hosted MCP server',
+    logo: 'slack',
+    brandColor: '#4A154B',
+    endpoint: 'https://mcp.slack.com/mcp',
+    authMode: 'oauth',
+    authHint:
+      'Slack has no automatic client registration: create a Slack app, allow MCP on it, and paste its client ID and secret.',
+    docsURL: 'https://docs.slack.dev/ai/slack-mcp-server/',
+    verifiedOn: '2026-10-11',
+  },
+  {
+    id: 'linear',
+    name: 'Linear',
+    kind: 'mcp',
+    description: 'Issues, projects and cycles via Linear’s hosted MCP server',
+    logo: 'linear',
+    brandColor: '#5E6AD2',
+    endpoint: 'https://mcp.linear.app/mcp',
+    authMode: 'oauth',
+    tokenHint: 'A Linear API key also works as the bearer token; it acts as one shared identity.',
+    docsURL: 'https://linear.app/docs/mcp',
+    verifiedOn: '2026-10-11',
+  },
+  {
+    id: 'atlassian',
+    name: 'Atlassian',
+    kind: 'mcp',
+    description: 'Jira issues and Confluence pages via the Atlassian Rovo MCP server',
+    logo: 'atlassian',
+    brandColor: '#0052CC',
+    endpoint: 'https://mcp.atlassian.com/v1/mcp/authv2',
+    authMode: 'oauth',
+    docsURL: 'https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/',
+    verifiedOn: '2026-10-11',
+  },
+  {
+    id: 'hubspot',
+    name: 'HubSpot',
+    kind: 'mcp',
+    description: 'CRM records and activities via HubSpot’s hosted MCP server',
+    logo: 'hubspot',
+    brandColor: '#FF7A59',
+    endpoint: 'https://mcp.hubspot.com/',
+    authMode: 'oauth',
+    authHint:
+      'Create an MCP connector under Development in your HubSpot account and paste its client ID and secret.',
+    docsURL: 'https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server',
+    verifiedOn: '2026-10-11',
+  },
+  {
+    id: 'cloudflare',
+    name: 'Cloudflare',
+    kind: 'mcp',
+    description: 'Your Cloudflare account through the full API via its hosted MCP server',
+    logo: 'cloudflare',
+    brandColor: '#F38020',
+    endpoint: 'https://mcp.cloudflare.com/mcp',
+    authMode: 'oauth',
+    tokenHint: 'A Cloudflare API token also works as the bearer token for unattended use.',
+    docsURL: 'https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/',
+    verifiedOn: '2026-10-11',
+  },
+  {
+    id: 'sentry',
+    name: 'Sentry',
+    kind: 'mcp',
+    description: 'Issues, errors and traces via Sentry’s hosted MCP server',
+    logo: 'sentry',
+    brandColor: '#362D59',
+    endpoint: 'https://mcp.sentry.dev/mcp',
+    authMode: 'oauth',
+    docsURL: 'https://docs.sentry.io/ai/mcp/',
+    verifiedOn: '2026-10-11',
+  },
+  {
+    id: 'stripe',
+    name: 'Stripe',
+    kind: 'mcp',
+    description: 'Customers, payments, invoices and subscriptions via Stripe’s hosted MCP server',
+    logo: 'stripe',
+    brandColor: '#635BFF',
+    endpoint: 'https://mcp.stripe.com',
+    authMode: 'oauth',
+    tokenHint: 'An agent API key also works as the bearer token for unattended use.',
+    docsURL: 'https://docs.stripe.com/mcp',
+    verifiedOn: '2026-10-11',
   },
   {
     id: 'custom-mcp',
