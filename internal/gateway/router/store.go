@@ -222,6 +222,7 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 		ReasoningEffortByModel string `json:"reasoning_effort_by_model"`
 		RequestTimeout         string `json:"request_timeout"`
 		Region                 string `json:"region"`
+		Auth                   string `json:"auth"`
 		AnthropicBaseURL       string `json:"anthropic_base_url"`
 		OpenAIResponses        string `json:"openai_responses"`
 		LitellmProvider        string `json:"litellm_provider"`
@@ -237,6 +238,7 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 		}
 	}
 	row.Region = opts.Region
+	row.Auth = opts.Auth
 	row.AnthropicBaseURL = opts.AnthropicBaseURL
 	row.LitellmProvider = opts.LitellmProvider
 	if opts.PricesByModel != "" {

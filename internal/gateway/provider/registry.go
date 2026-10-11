@@ -23,6 +23,10 @@ type Config struct {
 	// Region comes from options.region (D-048) — the bedrock driver's AWS
 	// region; ignored by every other driver.
 	Region string
+	// Auth comes from options.auth (D-156) — the bedrock driver's
+	// credential source, static (default) or ambient; ignored by every
+	// other driver.
+	Auth string
 }
 
 // Registry holds the built providers by name. It is immutable after
@@ -88,27 +92,40 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 				ReasoningEffort: c.ReasoningEffort,
 			})
 		case "bedrock":
-			// D-047/D-048: static keys in the secret store are the only
-			// supported auth — AWS profile/SSO mode was removed (a
-			// headless server has no ~/.aws). credential_ref MUST resolve
-			// and parse as static-credentials JSON; either failure is a
-			// Build error, never a silent fallback. Region comes from
-			// options.region (c.Region), with the secret JSON's own
-			// "region" field taking precedence when set (BedrockConfig
-			// handles that precedence).
-			if key == "" {
-				return nil, fmt.Errorf("registry: provider %q: bedrock requires static keys in the secret store; AWS profile mode was removed", c.Name)
-			}
-			sc, err := ParseStaticCredentials(key)
+			// D-047/D-048: static keys in the secret store are the default
+			// auth — AWS profile/SSO mode was removed (a headless server
+			// has no ~/.aws). credential_ref MUST resolve and parse as
+			// static-credentials JSON; either failure is a Build error,
+			// never a silent fallback. Region comes from options.region
+			// (c.Region), with the secret JSON's own "region" field taking
+			// precedence when set (BedrockConfig handles that precedence).
+			// D-156: options.auth=ambient instead uses the SDK default
+			// chain; such a row must carry no credential_ref and must set
+			// options.region.
+			auth, err := ParseBedrockAuth(c.Auth)
 			if err != nil {
 				return nil, fmt.Errorf("registry: provider %q: %w", c.Name, err)
 			}
-			p = NewBedrock(BedrockConfig{
-				Name:              c.Name,
-				Region:            c.Region,
-				StaticCredentials: sc,
-				Timeout:           c.Timeout,
-			})
+			cfg := BedrockConfig{Name: c.Name, Region: c.Region, Auth: auth, Timeout: c.Timeout}
+			switch auth {
+			case AuthAmbient:
+				if c.CredentialRef != "" {
+					return nil, fmt.Errorf("registry: provider %q: bedrock ambient auth must not set credential_ref (one source of identity)", c.Name)
+				}
+				if c.Region == "" {
+					return nil, fmt.Errorf("registry: provider %q: bedrock ambient auth requires options.region", c.Name)
+				}
+			default:
+				if key == "" {
+					return nil, fmt.Errorf("registry: provider %q: bedrock requires static keys in the secret store; AWS profile mode was removed (set options.auth=ambient to use a cloud identity instead)", c.Name)
+				}
+				sc, err := ParseStaticCredentials(key)
+				if err != nil {
+					return nil, fmt.Errorf("registry: provider %q: %w", c.Name, err)
+				}
+				cfg.StaticCredentials = sc
+			}
+			p = NewBedrock(cfg)
 		default:
 			return nil, fmt.Errorf("registry: provider %q: unknown driver %q", c.Name, c.Driver)
 		}

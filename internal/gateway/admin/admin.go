@@ -475,6 +475,36 @@ func validateProvider(p Provider) error {
 	if err := validateOpenAIResponses(p.Options); err != nil {
 		return err
 	}
+	if err := validateBedrockAuth(p.Driver, p.CredentialRef, p.Options); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateBedrockAuth applies D-156's shape rules at create and patch
+// time so a misconfigured ambient row is rejected before it is ever
+// stored: ambient means no credential_ref and an explicit region.
+func validateBedrockAuth(driver, credentialRef string, opts map[string]string) error {
+	raw, ok := opts["auth"]
+	if !ok || raw == "" {
+		return nil
+	}
+	if driver != "bedrock" {
+		return fmt.Errorf("options.auth applies to the bedrock driver only")
+	}
+	auth, err := provider.ParseBedrockAuth(raw)
+	if err != nil {
+		return fmt.Errorf("options.auth %q must be \"static\" or \"ambient\"", raw)
+	}
+	if auth != provider.AuthAmbient {
+		return nil
+	}
+	if credentialRef != "" {
+		return fmt.Errorf("options.auth ambient must not set credential_ref: the pod's cloud identity is the only credential source")
+	}
+	if opts["region"] == "" {
+		return fmt.Errorf("options.auth ambient requires options.region")
+	}
 	return nil
 }
 
@@ -1377,6 +1407,7 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 		Headers:         p.Headers,
 		ReasoningEffort: p.Options["reasoning_effort"],
 		Region:          p.Options["region"],
+		Auth:            p.Options["auth"],
 		Timeout:         timeout,
 	}}, a.credentialLookup())
 	if err != nil {
