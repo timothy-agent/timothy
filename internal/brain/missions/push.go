@@ -187,14 +187,15 @@ func ConventionalPRTitle(m Mission) string {
 }
 
 // prTitlePattern is a Conventional Commits subject (D-153, issue #1195):
-// known type, optional scope, then a non-empty subject.
-var prTitlePattern = regexp.MustCompile(`^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\([a-z0-9-]+\))?: \S(.*\S)?$`)
+// known type, optional scope, then a subject that does not start with
+// an uppercase letter (acronyms inside it are fine).
+var prTitlePattern = regexp.MustCompile(`^(feat|fix|docs|style|refactor|perf|test|chore|build|ci|revert)(\([a-z0-9-]+\))?: [^\sA-Z](.*\S)?$`)
 
 // PRTitleFromOutput (D-153, issue #1195) reads the worker's
 // "Title: <type>(<scope>): <subject>" first line of final_output. ok is
 // false, with rest equal to finalOutput, when the line is missing or not
-// a lowercase subject without a trailing period of at most PRTitleGoalCap
-// bytes. Otherwise rest is the output after the title line.
+// a printable subject without a trailing period of at most
+// PRTitleGoalCap bytes. Otherwise rest is the output after the title line.
 func PRTitleFromOutput(finalOutput string) (title, rest string, ok bool) {
 	trimmed := strings.TrimLeft(NeutralizeSlot(finalOutput), " \t\r\n")
 	line, after, _ := strings.Cut(trimmed, "\n")
@@ -202,7 +203,7 @@ func PRTitleFromOutput(finalOutput string) (title, rest string, ok bool) {
 	candidate = strings.TrimSpace(candidate)
 	if !found || len(candidate) > PRTitleGoalCap || strings.HasSuffix(candidate, ".") ||
 		!prTitlePattern.MatchString(candidate) ||
-		strings.IndexFunc(candidate, func(r rune) bool { return unicode.IsUpper(r) || !unicode.IsPrint(r) }) >= 0 {
+		strings.IndexFunc(candidate, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
 		return "", finalOutput, false
 	}
 	return candidate, strings.TrimLeft(after, "\r\n"), true

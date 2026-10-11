@@ -327,7 +327,7 @@ AGENTS.md so other work does not pay for it every session.
   short what-and-why summary, then any report the goal asks for.
   D-153 (issue #1195): the same request puts a `Title: <conventional
   subject>` line first; `PRTitleFromOutput` validates it (known type,
-  lowercase, no trailing period, at most 72 bytes) and `openPRFor`
+  lowercase start, no trailing period, at most 72 bytes) and `openPRFor`
   uses it as the PR title, else `ConventionalPRTitle`; `PRBody` drops
   the line. The mission name is unchanged.
   `PRBody` is summary (neutralized, capped), dependency evidence,
