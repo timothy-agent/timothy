@@ -26,7 +26,7 @@ type fakeManager struct {
 	count                int
 	countStatus          store.Status
 	entityPage           store.Page
-	promoted            []string
+	promoted             []string
 	rejected             []string
 	inserted             []store.Memory
 	superseded           map[string]string

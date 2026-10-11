@@ -479,8 +479,37 @@ describe('mission.result_complete rendering', () => {
     )
     const row = screen.getByText(/Result complete/)
     expect(row).toHaveClass('text-good')
-    expect(row).toHaveTextContent('delivered to 2')
-    expect(row).toHaveTextContent('1 artifact(s) copied')
+    expect(row).toHaveTextContent('delivered to 2 destinations')
+    expect(row).toHaveTextContent('1 artifact copied')
+  })
+
+  it('names the destination when the payload carries names', () => {
+    render(
+      <div>
+        {renderEvent(
+          event({ delivered: 1, delivered_to: ['sumonmselim-github'], artifacts_copied: 3 }, 'mission.result_complete'),
+        )}
+      </div>,
+    )
+    expect(screen.getByText(/Result complete/)).toHaveTextContent(
+      'Result complete: delivered to sumonmselim-github, 3 artifacts copied',
+    )
+  })
+
+  it('lists several destination names comma-separated', () => {
+    render(
+      <div>
+        {renderEvent(event({ delivered: 2, delivered_to: ['alpha', 'beta'] }, 'mission.result_complete'))}
+      </div>,
+    )
+    expect(screen.getByText(/Result complete/)).toHaveTextContent('Result complete: delivered to alpha, beta')
+  })
+
+  it('keeps count wording for older events without names', () => {
+    render(<div>{renderEvent(event({ delivered: 2, artifacts_copied: 2 }, 'mission.result_complete'))}</div>)
+    expect(screen.getByText(/Result complete/)).toHaveTextContent(
+      'Result complete: delivered to 2 destinations, 2 artifacts copied',
+    )
   })
 
   it('renders a failed result step in red', () => {

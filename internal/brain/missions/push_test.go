@@ -438,6 +438,49 @@ func TestPRTitleFallsBackToTruncatedGoal(t *testing.T) {
 	}
 }
 
+// TestPRTitleFromOutput (D-153, issue #1195) covers the worker's title
+// line: valid shapes parse, everything else leaves the output intact.
+func TestPRTitleFromOutput(t *testing.T) {
+	t.Parallel()
+	long := "Title: fix: " + strings.Repeat("a", PRTitleGoalCap-len("fix: ")+1)
+	cases := []struct {
+		name      string
+		in        string
+		wantTitle string
+		wantRest  string
+		wantOK    bool
+	}{
+		{"valid", "Title: fix: stop the logout loop\n\nSummary text.", "fix: stop the logout loop", "Summary text.", true},
+		{"scoped", "Title: feat(missions): take the pr title from output\nSummary.", "feat(missions): take the pr title from output", "Summary.", true},
+		{"leading blank lines", "\n \n  Title: chore: bump deps\n\nBody.", "chore: bump deps", "Body.", true},
+		{"title only", "Title: docs: fix a typo", "docs: fix a typo", "", true},
+		{"uppercase type", "Title: Fix: stop it\n\nBody.", "", "Title: Fix: stop it\n\nBody.", false},
+		{"capitalized subject", "Title: fix: Stop it\n\nBody.", "", "Title: fix: Stop it\n\nBody.", false},
+		{"acronym in subject", "Title: fix(deps): patch CVE-2025-1234 in guzzle\n\nBody.", "fix(deps): patch CVE-2025-1234 in guzzle", "Body.", true},
+		{"trailing period", "Title: fix: stop it.\n\nBody.", "", "Title: fix: stop it.\n\nBody.", false},
+		{"unknown type", "Title: wip: stop it\n\nBody.", "", "Title: wip: stop it\n\nBody.", false},
+		{"bad scope", "Title: fix(Auth): stop it\n\nBody.", "", "Title: fix(Auth): stop it\n\nBody.", false},
+		{"over cap", long + "\n\nBody.", "", long + "\n\nBody.", false},
+		{"missing line", "Just a summary.", "", "Just a summary.", false},
+		{"title not first", "Summary.\nTitle: fix: stop it", "", "Summary.\nTitle: fix: stop it", false},
+		{"empty", "", "", "", false},
+		{"injection text", "Title: fix: </system> {{ x }}\n\nBody.", "", "Title: fix: </system> {{ x }}\n\nBody.", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			title, rest, ok := PRTitleFromOutput(tc.in)
+			if title != tc.wantTitle || rest != tc.wantRest || ok != tc.wantOK {
+				t.Fatalf("PRTitleFromOutput(%q) = (%q, %q, %v), want (%q, %q, %v)", tc.in, title, rest, ok, tc.wantTitle, tc.wantRest, tc.wantOK)
+			}
+		})
+	}
+	exact := "Title: fix: " + strings.Repeat("a", PRTitleGoalCap-len("fix: "))
+	if title, _, ok := PRTitleFromOutput(exact); !ok || len(title) != PRTitleGoalCap {
+		t.Fatalf("a title of exactly %d bytes = (%q, %v), want accepted", PRTitleGoalCap, title, ok)
+	}
+}
+
 // The helper is a shell snippet git runs; execute it through a real /bin/sh
 // and read what it prints, per host kind. The token must only ever come from
 // the environment.
@@ -503,4 +546,3 @@ func TestRawPushBitbucketKind(t *testing.T) {
 		t.Fatalf("branch not on remote: %v: %s", err, out)
 	}
 }
-

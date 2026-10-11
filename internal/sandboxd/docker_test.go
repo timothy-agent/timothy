@@ -55,11 +55,11 @@ func writeJSON(t *testing.T, w http.ResponseWriter, status int, v any) {
 	}
 }
 
-// testOwner is newTestManager's owner id (D-132).
+// testOwner is newTestDocker's owner id (D-132).
 const testOwner = "timothy-a"
 
-func newTestManager(cli *client.Client) *Manager {
-	return &Manager{cli: cli, baseImage: "img", owner: testOwner, locks: map[string]*sync.Mutex{}}
+func newTestDocker(cli *client.Client) *Docker {
+	return &Docker{cli: cli, baseImage: "img", owner: testOwner, locks: map[string]*sync.Mutex{}}
 }
 
 func TestResolveWorkspaceMountVolume(t *testing.T) {
@@ -128,7 +128,7 @@ func TestEnsureContainerRunningReusesInPlace(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
@@ -158,7 +158,7 @@ func TestEnsureContainerExitedRestarts(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err != nil {
 		t.Fatalf("ensureContainer: %v", err)
@@ -214,7 +214,7 @@ func TestEnsureContainerNotFoundCreates(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err != nil {
@@ -250,7 +250,7 @@ func TestEnsureContainerCreateConflictReinspects(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 	if err != nil {
@@ -308,7 +308,7 @@ func TestCreateContainerIncludesStateMountWhenPresent(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	mgr.stateMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_executor-claude-state", Target: executorStateMountPath}
 
@@ -355,7 +355,7 @@ func TestCreateContainerOmitsStateMountWhenAbsent(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	// mgr.stateMount left zero-value: not configured.
 
@@ -404,7 +404,7 @@ func TestCreateContainerToolchainsMount(t *testing.T) {
 					t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 				}
 			})
-			mgr := newTestManager(cli)
+			mgr := newTestDocker(cli)
 			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 			mgr.toolchainsMount = tt.tm
 
@@ -448,7 +448,7 @@ func TestResolveMountToolchainsVolume(t *testing.T) {
 
 // createMounts runs createContainer against a fake daemon and returns
 // the Mounts it sent.
-func createMounts(t *testing.T, mgr *Manager) []mount.Mount {
+func createMounts(t *testing.T, mgr *Docker) []mount.Mount {
 	t.Helper()
 	var gotMounts []mount.Mount
 	mgr.cli = newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -505,7 +505,7 @@ func TestCreateContainerCachesMount(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := newTestManager(nil)
+			mgr := newTestDocker(nil)
 			mgr.workspaceMount = tt.workspace
 			mgr.cachesMount = tt.caches
 			var got []mount.Mount
@@ -585,12 +585,12 @@ func TestBaseImagePointsCachesAtCacheMount(t *testing.T) {
 }
 
 func TestNewManagerEmptyImageErrors(t *testing.T) {
-	mgr, err := NewManager(context.Background(), "", nil)
+	mgr, err := NewDocker(context.Background(), "", nil)
 	if err == nil {
-		t.Fatal("NewManager(\"\") = nil error, want an error (sandbox is mandatory)")
+		t.Fatal("NewDocker(\"\") = nil error, want an error (sandbox is mandatory)")
 	}
 	if mgr != nil {
-		t.Fatalf("NewManager(\"\") = %v, want nil manager alongside the error", mgr)
+		t.Fatalf("NewDocker(\"\") = %v, want nil manager alongside the error", mgr)
 	}
 }
 
@@ -623,7 +623,7 @@ func TestEnsureContainerPullsMissingImage(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
 	id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
@@ -659,7 +659,7 @@ func TestEnsureContainerPullFailureNamesImage(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
 	_, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
@@ -729,7 +729,7 @@ func TestEnsureContainerConcurrentPullsDoNotOverlap(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
 	var wg sync.WaitGroup
@@ -781,7 +781,7 @@ func TestCreateContainerHardensResources(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
 	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
@@ -833,7 +833,7 @@ func TestCreateContainerHardensRootfs(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
 	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
@@ -951,7 +951,7 @@ func TestCreateContainerSetsUserPrefixPath(t *testing.T) {
 			t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 		}
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 
 	if _, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", testWorkdir); err != nil {
@@ -1006,7 +1006,7 @@ func TestManagerCapacityReadsRealMeminfo(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, http.StatusOK, []container.Summary{})
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 
 	report, err := mgr.Capacity(context.Background())
 	if err != nil {
@@ -1183,7 +1183,7 @@ func TestMissionWorkspaceDir(t *testing.T) {
 // specs, each narrowed by Subpath to its own directory, so neither
 // container has a mount covering the other's files.
 func TestMissionMountScopesPerMission(t *testing.T) {
-	mgr := &Manager{workspaceMount: mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}}
+	mgr := &Docker{workspaceMount: mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}}
 
 	a, err := mgr.missionMount("/workspace/missions/coding/m1/wt", "m1")
 	if err != nil {
@@ -1217,7 +1217,7 @@ func TestMissionMountScopesPerMission(t *testing.T) {
 // operator running a host bind instead of a named volume): the scoping
 // moves to the source path, since a bind has no Subpath option.
 func TestMissionMountBindSource(t *testing.T) {
-	mgr := &Manager{workspaceMount: mount.Mount{Type: mount.TypeBind, Source: "/srv/timothy/workspace", Target: workspaceMountPath}}
+	mgr := &Docker{workspaceMount: mount.Mount{Type: mount.TypeBind, Source: "/srv/timothy/workspace", Target: workspaceMountPath}}
 	got, err := mgr.missionMount("/workspace/missions/coding/m1/wt", "m1")
 	if err != nil {
 		t.Fatalf("missionMount: %v", err)
@@ -1237,7 +1237,7 @@ func TestCreateContainerRejectsUnscopedWorkdir(t *testing.T) {
 	cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected docker call: %s %s", r.Method, r.URL.Path)
 	})
-	mgr := newTestManager(cli)
+	mgr := newTestDocker(cli)
 	mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 	_, err := mgr.createContainer(context.Background(), "m1", "timothy-sandbox-m1", workspaceMountPath)
 	if !errors.Is(err, ErrWorkspaceScope) {
@@ -1268,7 +1268,7 @@ func TestEnsureContainerRejectsUnscopedWorkdirOnEveryPath(t *testing.T) {
 			cli := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 				t.Fatalf("unexpected docker call for a workdir that must be rejected before inspect: %s %s", r.Method, r.URL.Path)
 			})
-			mgr := newTestManager(cli)
+			mgr := newTestDocker(cli)
 			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 			if _, err := mgr.ensureContainer(context.Background(), "m1", tc.workdir); !errors.Is(err, ErrWorkspaceScope) {
 				t.Fatalf("err = %v, want ErrWorkspaceScope", err)
@@ -1291,7 +1291,7 @@ func TestListFiltersOnOwner(t *testing.T) {
 			{ID: "c3", Labels: map[string]string{missionLabel: "legacy"}},
 		})
 	})
-	ids, err := newTestManager(cli).List(context.Background())
+	ids, err := newTestDocker(cli).List(context.Background())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1325,7 +1325,7 @@ func TestRemoveOnlyOwnContainer(t *testing.T) {
 				containers[containerName("m1")] = tc.labels
 			}
 			d := newFakeDaemon(containers)
-			mgr := newTestManager(newTestClient(t, d.handle))
+			mgr := newTestDocker(newTestClient(t, d.handle))
 			if err := mgr.Remove(context.Background(), "m1"); err != nil {
 				t.Fatalf("Remove: %v", err)
 			}
@@ -1376,7 +1376,7 @@ func TestEnsureContainerRefusesForeignContainer(t *testing.T) {
 					t.Fatalf("unexpected call: %s %s", r.Method, r.URL.Path)
 				}
 			})
-			mgr := newTestManager(cli)
+			mgr := newTestDocker(cli)
 			mgr.workspaceMount = mount.Mount{Type: mount.TypeVolume, Source: "timothy_workspace", Target: workspaceMountPath}
 			id, err := mgr.ensureContainer(context.Background(), "m1", testWorkdir)
 			if tc.wantForeign {

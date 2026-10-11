@@ -155,24 +155,24 @@ type Service struct {
 	classify       agents.Classify // nil: auto-dispatch falls back to default
 	budget         func(context.Context) int
 	packs          []skills.Skill
-	skillAllow     func(context.Context, string) bool   // nil: all packs allowed
-	location       func(context.Context) *time.Location // nil: date line renders in UTC
+	skillAllow     func(context.Context, string) bool                      // nil: all packs allowed
+	location       func(context.Context) *time.Location                    // nil: date line renders in UTC
 	writing        func(context.Context) (style, samplesCollection string) // nil: both empty, no writing-style block
-	skillBodies    map[string]string                    // name -> full pack body, for skill_hint
-	flushEvery     time.Duration                        // pending-state flush cadence mid-stream
-	turnTimeout    time.Duration                        // detached-turn ceiling; defaults to the turnTimeout const, overridable in tests
-	sensitive      *session.SensitiveTools              // nil: no sensitive-tool route pin for side-calls
-	attachments    AttachmentStore                      // nil: attachments disabled (ATTACHMENTS_DIR unset)
-	markitdownURL  string                               // "": pdf attachments disabled (MARKITDOWN_URL unset)
-	markitdownHTTP *http.Client                         // shared client for the markitdown sidecar call
-	whisperURL     string                               // "": audio attachments attach without a transcript (WHISPER_URL unset)
-	whisperHTTP    *http.Client                         // shared client for the whisper sidecar call
-	kbSearch       KBSearch                             // nil: search_kb never offered, regardless of agent config; whole-KB by default, agent Knowledge only boosts ranking
-	kbRead         KBRead                               // nil: read_kb never offered, regardless of agent config; reaches any document, not just the agent's Knowledge collections
-	kbSamples      KBSamples                            // nil: writing_samples never offered
-	missions       MissionStore                         // nil: mission #-mention references never resolve
-	kbDocs         KBDocStore                           // nil: kb doc #-mention references never resolve
-	kbEnrich       *kb.Enricher                         // nil: chat PDF attachments skip image/scanned-page captioning (issue #350)
+	skillBodies    map[string]string                                       // name -> full pack body, for skill_hint
+	flushEvery     time.Duration                                           // pending-state flush cadence mid-stream
+	turnTimeout    time.Duration                                           // detached-turn ceiling; defaults to the turnTimeout const, overridable in tests
+	sensitive      *session.SensitiveTools                                 // nil: no sensitive-tool route pin for side-calls
+	attachments    AttachmentStore                                         // nil: attachments disabled (ATTACHMENTS_DIR unset)
+	markitdownURL  string                                                  // "": pdf attachments disabled (MARKITDOWN_URL unset)
+	markitdownHTTP *http.Client                                            // shared client for the markitdown sidecar call
+	whisperURL     string                                                  // "": audio attachments attach without a transcript (WHISPER_URL unset)
+	whisperHTTP    *http.Client                                            // shared client for the whisper sidecar call
+	kbSearch       KBSearch                                                // nil: search_kb never offered, regardless of agent config; whole-KB by default, agent Knowledge only boosts ranking
+	kbRead         KBRead                                                  // nil: read_kb never offered, regardless of agent config; reaches any document, not just the agent's Knowledge collections
+	kbSamples      KBSamples                                               // nil: writing_samples never offered
+	missions       MissionStore                                            // nil: mission #-mention references never resolve
+	kbDocs         KBDocStore                                              // nil: kb doc #-mention references never resolve
+	kbEnrich       *kb.Enricher                                            // nil: chat PDF attachments skip image/scanned-page captioning (issue #350)
 	logger         *slog.Logger
 
 	grants Granter // nil: chat never seeds standing grants (today's behavior)
@@ -976,11 +976,14 @@ const (
 // loop from the serving agent's config: empty means no tools (an
 // agent must opt into tools explicitly), the same flip as skills.
 // Exemptions, independent of the agent's own list:
+//
 //   - retrieve_output always stays available: it is how the model
 //     reads back its own offloaded tool results (D-019); filtering it
 //     out would silently strand any result too big to inline.
+//
 //   - timothy_help always stays available (issue #1127): the system
 //     prompt sends questions about Timothy itself to it.
+//
 //   - load_skill follows the SKILLS allowlist, not the tools one: it
 //     is present only when the agent has at least one skill to load
 //     (an agent with none has nothing load_skill could load, and

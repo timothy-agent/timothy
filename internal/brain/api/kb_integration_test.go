@@ -1028,9 +1028,9 @@ func TestKBSweepStaleFailsStuckDocuments(t *testing.T) {
 // individual fields via the returned map before marshaling.
 func clipRequest(overrides map[string]any) string {
 	body := map[string]any{
-		"url":         "https://example.com/article",
-		"title":       "Article title",
-		"markdown":    "# Article title\n\nsome content",
+		"url":      "https://example.com/article",
+		"title":    "Article title",
+		"markdown": "# Article title\n\nsome content",
 	}
 	for k, v := range overrides {
 		if v == nil {

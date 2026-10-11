@@ -63,8 +63,8 @@ type Starter struct {
 	// notify is Notifier.NotifyMessage; nil skips the notification.
 	notify func(ctx context.Context, missionID, kind, message string) error
 	kick   chan struct{}
-	log                *slog.Logger
-	now                func() time.Time
+	log    *slog.Logger
+	now    func() time.Time
 }
 
 // NewStarter wires the starter. create is Driver.Create, resolve the

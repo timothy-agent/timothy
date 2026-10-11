@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	webFetchMaxBody   = 2 << 20 // bytes read off the wire
+	webFetchMaxBody   = 2 << 20  // bytes read off the wire
 	webFetchMaxResult = 64 << 10 // bytes returned to the loop
 	webFetchTimeout   = 30 * time.Second
 )

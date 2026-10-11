@@ -1,0 +1,27 @@
+# Compose override that points the local stack's sandboxd at the kind
+# cluster (make kind-sandbox-smoke): brain, gateway and the rest stay
+# on Docker, mission sandboxes become pods. The workspace stays shared
+# because the kind node mounts brain's workspace volume
+# (deploy/kind/cluster.yaml).
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/kind/compose.kind.yml up -d sandboxd
+services:
+  sandboxd:
+    environment:
+      SANDBOXD_BACKEND: kubernetes
+      SANDBOXD_K8S_NAMESPACE: timothy-sandbox
+      SANDBOXD_K8S_OWNER: timothy
+      SANDBOXD_K8S_WORKSPACE_PVC: workspace
+      # The image is loaded into the node by `make kind-up`; it has no
+      # registry to probe.
+      SANDBOXD_K8S_SKIP_IMAGE_CHECK: "true"
+      KUBECONFIG: /kind/kubeconfig
+    volumes:
+      # `kind get kubeconfig --internal`: the API server by its address
+      # on the kind Docker network.
+      - ../build/kind-kubeconfig:/kind/kubeconfig:ro
+    networks: [timothy-sandbox, kind]
+
+networks:
+  kind:
+    external: true

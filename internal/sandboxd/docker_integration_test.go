@@ -81,9 +81,9 @@ func TestManagerLifecycle(t *testing.T) {
 		t.Skip("MISSION_SANDBOX_TEST_IMAGE not set; skipping sandbox integration test")
 	}
 	ctx := context.Background()
-	mgr, err := NewManager(ctx, image, testLogger())
+	mgr, err := NewDocker(ctx, image, testLogger())
 	if err != nil {
-		t.Fatalf("NewManager: %v", err)
+		t.Fatalf("NewDocker: %v", err)
 	}
 	missionID := "it-" + time.Now().UTC().Format("20060102-150405.000000000")
 	// D-107 mounts the mission's own workspace subdirectory, which
@@ -203,9 +203,9 @@ func TestCoreUlimitPreventsDump(t *testing.T) {
 		t.Skip("MISSION_SANDBOX_TEST_IMAGE not set; skipping sandbox integration test")
 	}
 	ctx := context.Background()
-	mgr, err := NewManager(ctx, image, testLogger())
+	mgr, err := NewDocker(ctx, image, testLogger())
 	if err != nil {
-		t.Fatalf("NewManager: %v", err)
+		t.Fatalf("NewDocker: %v", err)
 	}
 	missionID := "it-core-" + time.Now().UTC().Format("20060102-150405.000000000")
 	missionDir := newMissionDir(t, missionID)
@@ -249,9 +249,9 @@ func TestPingAndCheckImage(t *testing.T) {
 		t.Skip("MISSION_SANDBOX_TEST_IMAGE not set; skipping sandbox integration test")
 	}
 	ctx := context.Background()
-	mgr, err := NewManager(ctx, image, testLogger())
+	mgr, err := NewDocker(ctx, image, testLogger())
 	if err != nil {
-		t.Fatalf("NewManager: %v", err)
+		t.Fatalf("NewDocker: %v", err)
 	}
 	if err := mgr.Ping(ctx); err != nil {
 		t.Errorf("Ping: %v", err)
@@ -267,9 +267,9 @@ func TestCheckImageMissingErrors(t *testing.T) {
 		t.Skip("MISSION_SANDBOX_TEST_IMAGE not set; skipping sandbox integration test")
 	}
 	ctx := context.Background()
-	mgr, err := NewManager(ctx, "timothy-sandbox-test-image-that-does-not-exist:latest", testLogger())
+	mgr, err := NewDocker(ctx, "timothy-sandbox-test-image-that-does-not-exist:latest", testLogger())
 	if err != nil {
-		t.Fatalf("NewManager: %v", err)
+		t.Fatalf("NewDocker: %v", err)
 	}
 	if err := mgr.CheckImage(ctx); err == nil {
 		t.Fatal("CheckImage: want an error for a nonexistent image, got nil")
@@ -286,10 +286,10 @@ func TestTwoOwnersOnOneDaemon(t *testing.T) {
 	}
 	ctx := context.Background()
 	run := time.Now().UTC().Format("20060102-150405.000000000")
-	newMgr := func(owner string) *Manager {
-		mgr, err := NewManager(ctx, image, testLogger())
+	newMgr := func(owner string) *Docker {
+		mgr, err := NewDocker(ctx, image, testLogger())
 		if err != nil {
-			t.Fatalf("NewManager: %v", err)
+			t.Fatalf("NewDocker: %v", err)
 		}
 		mgr.owner = owner
 		return mgr

@@ -50,7 +50,7 @@ type execRequest struct {
 // command in missionID's sandbox container via sandboxd, streaming
 // decoded output to out, and returns the exit code. err is non-nil only
 // for infrastructure failures or a timeout — mirroring
-// sandboxd.Manager.Exec's own contract (a command that ran and exited
+// sandboxd.Docker.Exec's own contract (a command that ran and exited
 // non-zero is reported via exitCode, not err).
 func (c *Client) Exec(ctx context.Context, missionID, workdir, command string, timeout time.Duration, out io.Writer) (int, error) {
 	return c.ExecEnv(ctx, missionID, workdir, command, nil, timeout, out)
@@ -166,7 +166,7 @@ func (c *Client) Remove(ctx context.Context, missionID string) error {
 
 // Sweep lists every sandbox container sandboxd knows about and removes
 // each one isTerminal reports true for — the inversion of
-// sandboxd.Manager.Sweep now that sandboxd holds no Postgres state to
+// sandboxd.Docker.Sweep now that sandboxd holds no Postgres state to
 // make that call itself. Continues past a single mission's removal
 // failure so one bad container never blocks the rest; all failures
 // join into the returned error.

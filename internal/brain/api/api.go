@@ -86,8 +86,8 @@ type API struct {
 	// missionPerms clears a mission's pending_permission when a prompt
 	// is answered here; nil when missions are disabled.
 	missionPerms missionPermissionRecorder
-	token string
-	log   *slog.Logger
+	token        string
+	log          *slog.Logger
 
 	// flags/rates drive display-currency conversion of chat cost (the
 	// terminal SSE meta event and the transcript replay) — same
@@ -175,7 +175,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 	a.registerOnboarding(srv.Handle, flags, onboardingProbes)
 	a.registerAgents(srv.Handle, agentReg)
 	a.registerConnectors(srv.Handle, conns, goog, msft, mcpAuth, secrets)
-	a.registerConnectorProbe(srv.Handle, conns, toolset)
+	a.registerConnectorProbe(srv.Handle, conns, mcpAuth, toolset)
 	// Same nil-box guard as connLister above, for the deferred-tool
 	// listing the tools picker appends.
 	var deferred deferredToolLister
