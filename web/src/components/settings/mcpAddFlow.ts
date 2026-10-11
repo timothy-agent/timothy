@@ -150,7 +150,7 @@ export function allowlistName(tool: MCPProbedTool): string {
   return tool.final_name || tool.name
 }
 
-// providerPattern is a valid MCP provider prefix (D-158).
+// providerPattern is a valid MCP provider prefix (D-160).
 export const providerPattern = /^[a-z0-9_]{1,32}$/
 
 // allowedBy names the allowlist entry that admits tool, using the

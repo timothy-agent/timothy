@@ -163,7 +163,7 @@ func TestProbeFinalNames(t *testing.T) {
 	schemaA := json.RawMessage(`{"type":"object","properties":{"q":{"type":"string"}}}`)
 	schemaB := json.RawMessage(`{"type":"object","properties":{"id":{"type":"integer"}}}`)
 	// work is a live Notion account; other is a connector saved before
-	// D-158, so its prefix is its own name.
+	// D-160, so its prefix is its own name.
 	work := &mcpSource{name: "work", provider: "notion", toolList: []*tools.Tool{
 		{Name: "search", InputSchema: schemaA},
 		{Name: "fetch", InputSchema: schemaA},

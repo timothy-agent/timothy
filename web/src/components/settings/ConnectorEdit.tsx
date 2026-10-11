@@ -38,7 +38,7 @@ import { slugify } from '../../lib/slugify'
 const area = settingsArea('connectors')
 
 // mcpToolPrefix is the prefix every tool of an mcp connector carries
-// (D-158): config.provider, or the connector name for one saved before
+// (D-160): config.provider, or the connector name for one saved before
 // providers existed.
 function mcpToolPrefix(connector: AdminConnector): string {
   const p = connector.config.provider

@@ -236,7 +236,7 @@ func (m *Manager) namespacedConnector(toolName string, split map[string][]toolAc
 	return ""
 }
 
-// toolKey is the name a source's tool groups under (D-158): an MCP
+// toolKey is the name a source's tool groups under (D-160): an MCP
 // tool is "<provider>_<raw>", every other connector tool keeps its
 // raw name so native kinds share one verb (search_mail). ok is false
 // for a remote tool whose key would end in "_load_tool": that suffix
