@@ -359,7 +359,7 @@ func TestWaitReadyReturnsAfterReload(t *testing.T) {
 }
 
 // TestDeferredToolsFollowsTheMergedName pins issue #729's input to
-// chat under D-158: an indexed source's hidden tools are listed under
+// chat under D-160: an indexed source's hidden tools are listed under
 // the names its load path gives them, keyed by the entry point the
 // surface exposes, "<provider>_load_tool". Two accounts of one
 // provider share that entry point, and their loaded names carry the

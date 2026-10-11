@@ -225,7 +225,7 @@ func TestAggregateReadOnlyRequiresAllAccountsReadOnly(t *testing.T) {
 	}
 }
 
-// TestAggregateMCPToolsStayOutOfNativeAggregates pins D-158: native
+// TestAggregateMCPToolsStayOutOfNativeAggregates pins D-160: native
 // kinds share one verb (search_mail), and an MCP tool never joins it,
 // even under the same raw name and schema: it keeps its provider
 // prefix.
@@ -253,7 +253,7 @@ func TestAggregateMCPToolsStayOutOfNativeAggregates(t *testing.T) {
 	}
 }
 
-// TestAggregateSameProviderAccountsMerge pins D-158's merge: two
+// TestAggregateSameProviderAccountsMerge pins D-160's merge: two
 // connectors of one provider serving a tool with an identical schema
 // share "<provider>_<tool>" with a required account argument, while a
 // different provider with the same raw name stays apart.
@@ -294,7 +294,7 @@ func TestAggregateSameProviderAccountsMerge(t *testing.T) {
 }
 
 // TestAggregateSameProviderSchemaDriftSplits pins Guard B under
-// D-158: two accounts of one provider whose schemas for a tool differ
+// D-160: two accounts of one provider whose schemas for a tool differ
 // never merge; each falls back to "<connector>_<provider>_<tool>".
 func TestAggregateSameProviderSchemaDriftSplits(t *testing.T) {
 	t.Parallel()

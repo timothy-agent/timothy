@@ -33,8 +33,8 @@ type mcpConfig struct {
 	Headers  map[string]string `json:"headers"`
 	// Provider prefixes every tool name ("notion" gives notion_search)
 	// and groups the connectors whose accounts merge into one tool
-	// (D-158). Empty falls back to the connector name, which keeps the
-	// names connectors saved before D-158 already had when split.
+	// (D-160). Empty falls back to the connector name, which keeps the
+	// names connectors saved before D-160 already had when split.
 	Provider string `json:"provider,omitempty"`
 
 	// AuthMode is "token" (or empty): credential_ref resolves to a
