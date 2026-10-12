@@ -34,7 +34,7 @@ func TestRuntimeToolsInCatalog(t *testing.T) {
 	// buildAgent cannot reach them: deliver, mission tools, share_file,
 	// generate_pdf, timothy_help. Chat and mission turns add the kb, memory and
 	// write_file tools themselves.
-	names = append(names, "deliver", "list_missions", "get_mission", "followup_mission",
+	names = append(names, "deliver", "list_missions", "read_mission", "fork_mission",
 		"create_mission", "push_mission_branch", "share_file", "generate_pdf",
 		"search_kb", "read_kb", "writing_samples", "search_memory", "write_file", "timothy_help")
 	for _, name := range names {

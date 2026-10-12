@@ -44,6 +44,10 @@ type Store struct {
 	// nil, before SetDefaultMaxIterations is called, means the built-in
 	// fallback.
 	defaultMaxIterations func(context.Context) int
+	// maxChainDepth resolves the mission-spawns-mission chain ceiling
+	// (settings.mission_max_chain_depth); nil means the built-in
+	// fallback.
+	maxChainDepth func(context.Context) int
 }
 
 func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
@@ -79,6 +83,51 @@ func (s *Store) maxIterationsFor(ctx context.Context, want int) int {
 // gets: the configured default, else fallbackMaxIterations.
 func (s *Store) DefaultMaxIterations(ctx context.Context) int {
 	return s.maxIterationsFor(ctx, 0)
+}
+
+// fallbackMaxChainDepth is the mission-spawns-mission ceiling used
+// when the settings getter is not wired.
+const fallbackMaxChainDepth = 3
+
+// SetMaxChainDepth wires the settings-backed mission chain ceiling
+// (settings.mission_max_chain_depth), same setter pattern as
+// SetDefaultMaxIterations.
+func (s *Store) SetMaxChainDepth(fn func(context.Context) int) {
+	s.maxChainDepth = fn
+}
+
+// MaxChainDepth is the mission-spawns-mission chain ceiling: the
+// configured setting, else the built-in fallback.
+func (s *Store) MaxChainDepth(ctx context.Context) int {
+	if s.maxChainDepth != nil {
+		if n := s.maxChainDepth(ctx); n > 0 {
+			return n
+		}
+	}
+	return fallbackMaxChainDepth
+}
+
+// maxChainWalk bounds ChainDepth's upward walk: deeper than any legal
+// chain, so a corrupted cycle cannot loop forever.
+const maxChainWalk = 64
+
+// ChainDepth walks the parent_mission_id chain up from id and returns
+// its length: 0 when id has no parent.
+func (s *Store) ChainDepth(ctx context.Context, id string) (int, error) {
+	depth := 0
+	cur := id
+	for i := 0; i < maxChainWalk; i++ {
+		m, err := s.Get(ctx, cur)
+		if err != nil {
+			return 0, err
+		}
+		if m.ParentMissionID == "" {
+			return depth, nil
+		}
+		depth++
+		cur = m.ParentMissionID
+	}
+	return depth, nil
 }
 
 // SetHub wires the push-notification hub: a nil hub (the default,

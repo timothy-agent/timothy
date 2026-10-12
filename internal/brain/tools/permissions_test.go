@@ -501,15 +501,15 @@ func TestResolveShortCircuits(t *testing.T) {
 		}
 	})
 
-	// list_missions/get_mission are pure reads (list/status snapshot)
+	// list_missions/read_mission are pure reads (list/status snapshot)
 	// and exempt, same reasoning as search_web; push_mission_branch must
 	// never be exempt (see TestResolvePushMissionBranchAsksWithoutGrant,
 	// the integration counterpart proving its full no-grant path) —
 	// this only pins the exempt-map membership the short-circuit above
 	// depends on.
-	t.Run("list_missions and get_mission tools exempt", func(t *testing.T) {
+	t.Run("list_missions and read_mission tools exempt", func(t *testing.T) {
 		t.Parallel()
-		for _, tool := range []string{"list_missions", "get_mission"} {
+		for _, tool := range []string{"list_missions", "read_mission"} {
 			res, err := p.Resolve(ctx, "s1", tool, json.RawMessage(`{}`))
 			if err != nil {
 				t.Fatalf("Resolve(%s): %v", tool, err)

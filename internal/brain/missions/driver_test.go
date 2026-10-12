@@ -274,6 +274,30 @@ func (f *fakeStore) AnswerPendingInput(ctx context.Context, id, eventKind string
 	return nil
 }
 
+// ChainDepth mirrors Store.ChainDepth over the fake's missions.
+func (f *fakeStore) ChainDepth(ctx context.Context, id string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	depth := 0
+	cur := id
+	for i := 0; i < 64; i++ {
+		m, ok := f.missions[cur]
+		if !ok {
+			return 0, fmt.Errorf("mission %s not found", cur)
+		}
+		if m.ParentMissionID == "" {
+			return depth, nil
+		}
+		depth++
+		cur = m.ParentMissionID
+	}
+	return depth, nil
+}
+
+// MaxChainDepth mirrors Store.MaxChainDepth with the built-in
+// fallback (the fake wires no settings).
+func (f *fakeStore) MaxChainDepth(ctx context.Context) int { return fallbackMaxChainDepth }
+
 // scriptedRunner replays fixed responses for RunWorker/RunReview/
 // PlanSession, one entry consumed per call — lets a test script an
 // exact sequence of outcomes across several Advance calls. workerErr,
