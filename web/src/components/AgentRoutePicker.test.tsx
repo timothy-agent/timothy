@@ -259,6 +259,46 @@ describe('AgentRoutePicker', () => {
     expect(onModelHint).toHaveBeenCalledWith('Anthropic/opus')
   })
 
+  it('leaves harness (kind cli) provider models out of the model list', async () => {
+    const { AgentRoutePicker, listAgents, listRoutes, listProviders, availableModels } =
+      await freshPicker()
+    vi.mocked(listAgents).mockResolvedValue(agents)
+    vi.mocked(listRoutes).mockResolvedValue(routes)
+    vi.mocked(listProviders).mockResolvedValue([
+      ...providers,
+      {
+        id: 'p-harness',
+        name: 'Claude Code',
+        kind: 'cli',
+        driver: 'claude-cli',
+        base_url: '',
+        default_model: 'harness-model',
+        credential_ref: '',
+        headers: {},
+        enabled: true,
+      },
+    ])
+    vi.mocked(availableModels).mockImplementation(async (id: string) =>
+      id === 'p-harness' ? [{ id: 'harness-model' }] : models,
+    )
+    render(
+      <AgentRoutePicker
+        agent="auto"
+        onAgent={vi.fn()}
+        route=""
+        onRoute={vi.fn()}
+        modelHint=""
+        onModelHint={vi.fn()}
+      />,
+    )
+
+    await screen.findByRole('button', { name: 'Agent, route and model' })
+    openMenu('Agent, route and model')
+    expect(await screen.findByText('opus')).toBeInTheDocument()
+    expect(screen.queryByText('harness-model')).not.toBeInTheDocument()
+    expect(availableModels).not.toHaveBeenCalledWith('p-harness')
+  })
+
   it('clicking an agent item calls onAgent', async () => {
     const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)

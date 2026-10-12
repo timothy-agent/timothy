@@ -76,7 +76,9 @@ export function useProviderModels(): ProviderModelOption[] | null {
     let cancelled = false
     listProviders()
       .then(async (providers) => {
-        const enabled = providers.filter((p) => p.enabled)
+        // kind='cli' rows are mission-only harness executors (D-051);
+        // the chat router never serves them, so they are not pickable.
+        const enabled = providers.filter((p) => p.enabled && p.kind !== 'cli')
         const perProvider = await Promise.all(
           enabled.map(async (p) => {
             try {
