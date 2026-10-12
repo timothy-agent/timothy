@@ -57,8 +57,9 @@ type ValidateDeps struct {
 const maxToolAllowlist = 64
 
 // validModelPin reports whether pin is well-formed "provider name/model"
-// (D-078) — a non-empty provider part and a non-empty model part
-// separated by the LAST '/', matching router.go's splitProviderModelHint.
+// (D-078): a '/' with non-empty text before it and after the last '/'.
+// The model id may contain '/' too; the gateway splits at the longest
+// configured provider name (router.go splitPin).
 // Never checks the pin against a live chain: a chain can change after
 // create, and the runtime already falls back to first-usable when a
 // wellformed pin names no current entry.

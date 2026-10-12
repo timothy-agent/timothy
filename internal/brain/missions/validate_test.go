@@ -267,6 +267,10 @@ func TestValidateCreate(t *testing.T) {
 			m.ReviewRouteModel = "Anthropic/claude-sonnet-5"
 			return m
 		}, ValidateDeps{}, false},
+		{"route_model with a slash in the model id accepted", func(m Mission) Mission {
+			m.RouteModel = "Kilo/subagent/marsai-free"
+			return m
+		}, ValidateDeps{}, false},
 		{"route_model missing a slash is rejected", func(m Mission) Mission {
 			m.RouteModel = "gpt-5-mini"
 			return m
