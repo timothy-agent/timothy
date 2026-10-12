@@ -746,11 +746,14 @@ type resolveRouteEntry struct {
 // evaluates entries exactly as chat serving would (the chat entryGate);
 // a known harness name evaluates every entry by the executor rule
 // instead (router.ResolveRoute keeps the two axes separate). An unknown
-// harness name is a 400, not a silently-empty result. Same trust plane
-// as /v1/stream — no auth, never leaves the compose network.
+// harness name is a 400, not a silently-empty result. Optional ?hint=
+// prepends a D-078 model pin (same forms as stream model_hint) when it
+// resolves. Same trust plane as /v1/stream — no auth, never leaves the
+// compose network.
 func (a *API) handleResolveRoute(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	harness := r.URL.Query().Get("harness")
+	hint := r.URL.Query().Get("hint")
 	snap := a.store.Snapshot()
 	if snap == nil {
 		jsonError(w, http.StatusServiceUnavailable, "config_unavailable", "routing configuration not loaded yet")
@@ -760,7 +763,7 @@ func (a *API) handleResolveRoute(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("unknown harness %q", harness))
 		return
 	}
-	resolved, ok := snap.ResolveRoute(name, harness)
+	resolved, ok := snap.ResolveRoute(name, harness, hint)
 	if !ok {
 		jsonError(w, http.StatusNotFound, "not_found", fmt.Sprintf("route %q not found", name))
 		return

@@ -1115,7 +1115,7 @@ func TestResolveRouteMixedChainNativeAxis(t *testing.T) {
 	// subscription-auth row (kind='cli', no chat driver built) is
 	// correctly unusable for chat, not because of any harness field but
 	// because it's not in the chat registry at all.
-	entries, ok := snap.ResolveRoute("coding", "")
+	entries, ok := snap.ResolveRoute("coding", "", "")
 	if !ok {
 		t.Fatalf("ResolveRoute: route not found")
 	}
@@ -1131,6 +1131,67 @@ func TestResolveRouteMixedChainNativeAxis(t *testing.T) {
 	}
 }
 
+// TestResolveRouteHint covers the D-078 pin preview path: an on-chain
+// hint is deduped to the front, an off-chain usable pin is prepended,
+// a capability miss stays listed as unusable, and an unknown hint is
+// ignored so the chain is unchanged.
+func TestResolveRouteHint(t *testing.T) {
+	t.Parallel()
+	snap := testSnapshot(t, allKeys())
+
+	t.Run("on-chain dedupe", func(t *testing.T) {
+		entries, ok := snap.ResolveRoute("coding", "", "anthropic/sonnet")
+		if !ok {
+			t.Fatal("route not found")
+		}
+		if len(entries) != 2 {
+			t.Fatalf("len = %d, want 2 (deduped)", len(entries))
+		}
+		if entries[0].ProviderName != "anthropic" || entries[0].Model != "sonnet" || !entries[0].Usable {
+			t.Fatalf("hint entry = %+v", entries[0])
+		}
+	})
+
+	t.Run("off-chain usable", func(t *testing.T) {
+		entries, ok := snap.ResolveRoute("coding", "", "anthropic/opus")
+		if !ok {
+			t.Fatal("route not found")
+		}
+		if len(entries) != 3 {
+			t.Fatalf("len = %d, want 3 (hint + chain)", len(entries))
+		}
+		if entries[0].ProviderName != "anthropic" || entries[0].Model != "opus" || !entries[0].Usable {
+			t.Fatalf("hint entry = %+v", entries[0])
+		}
+	})
+
+	t.Run("capability miss", func(t *testing.T) {
+		entries, ok := snap.ResolveRoute("embedding", "", "anthropic/sonnet")
+		if !ok {
+			t.Fatal("route not found")
+		}
+		if len(entries) != 3 {
+			t.Fatalf("len = %d, want 3", len(entries))
+		}
+		if entries[0].Usable || !strings.Contains(entries[0].SkipReason, "embeddings") {
+			t.Fatalf("hint entry = %+v, want unusable for lacking embeddings", entries[0])
+		}
+	})
+
+	t.Run("unknown ignored", func(t *testing.T) {
+		entries, ok := snap.ResolveRoute("coding", "", "NoSuch/model")
+		if !ok {
+			t.Fatal("route not found")
+		}
+		if len(entries) != 2 {
+			t.Fatalf("len = %d, want 2 (hint ignored)", len(entries))
+		}
+		if entries[0].ProviderName != "anthropic" || entries[0].Model != "sonnet" {
+			t.Fatalf("first entry = %+v, want chain head", entries[0])
+		}
+	})
+}
+
 func TestResolveRouteMixedChainExecutorAxis(t *testing.T) {
 	t.Parallel()
 	snap := harnessSnapshot(t)
@@ -1139,7 +1200,7 @@ func TestResolveRouteMixedChainExecutorAxis(t *testing.T) {
 	// the plain api/anthropic row is now unusable (no credential
 	// resolution issue — executorUsable just applies a different rule),
 	// the subscription row is usable.
-	entries, ok := snap.ResolveRoute("coding", "claude-cli")
+	entries, ok := snap.ResolveRoute("coding", "claude-cli", "")
 	if !ok {
 		t.Fatalf("ResolveRoute: route not found")
 	}
@@ -1198,7 +1259,7 @@ func TestResolveRouteHarnessOnly(t *testing.T) {
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
-	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
+	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli", "")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1213,7 +1274,7 @@ func TestResolveRouteUnknownHarnessParam(t *testing.T) {
 	// An unknown harness name in the query param itself is a hard
 	// "route not found" — the caller (gateway API layer) turns this
 	// into a 400, distinct from an existing route with an unusable entry.
-	if _, ok := snap.ResolveRoute("coding", "nonexistent-cli"); ok {
+	if _, ok := snap.ResolveRoute("coding", "nonexistent-cli", ""); ok {
 		t.Fatalf("ResolveRoute: want ok=false for unknown harness param")
 	}
 }
@@ -1233,7 +1294,7 @@ func TestResolveRouteWireIncompatibleProvider(t *testing.T) {
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
-	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
+	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli", "")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1259,7 +1320,7 @@ func TestResolveRouteCLIKindInherentlyWireCompatible(t *testing.T) {
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
-	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
+	entries, ok := snap.ResolveRoute("coding-exec", "claude-cli", "")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1290,7 +1351,7 @@ func TestResolveRouteCLIKindServesOnlyItsOwnHarness(t *testing.T) {
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
-	entries, ok := snap.ResolveRoute("coding-exec", "pi")
+	entries, ok := snap.ResolveRoute("coding-exec", "pi", "")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1299,7 +1360,7 @@ func TestResolveRouteCLIKindServesOnlyItsOwnHarness(t *testing.T) {
 	}
 
 	// Regression: claude-cli against its own cli row stays usable.
-	entries, ok = snap.ResolveRoute("coding-exec", "claude-cli")
+	entries, ok = snap.ResolveRoute("coding-exec", "claude-cli", "")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1311,7 +1372,7 @@ func TestResolveRouteCLIKindServesOnlyItsOwnHarness(t *testing.T) {
 func TestResolveRouteUnknownRoute(t *testing.T) {
 	t.Parallel()
 	snap := harnessSnapshot(t)
-	if _, ok := snap.ResolveRoute("no-such-route", ""); ok {
+	if _, ok := snap.ResolveRoute("no-such-route", "", ""); ok {
 		t.Fatalf("ResolveRoute: want ok=false for unknown route")
 	}
 }
@@ -1346,7 +1407,7 @@ func TestResolveRoutePiWireVariants(t *testing.T) {
 	// openai wire (pi's whole point), and the override row usable with
 	// anthropic wire (the override always exposes an anthropic-format
 	// endpoint regardless of the row's own driver).
-	piEntries, ok := snap.ResolveRoute("coding-exec", "pi")
+	piEntries, ok := snap.ResolveRoute("coding-exec", "pi", "")
 	if !ok || len(piEntries) != 3 {
 		t.Fatalf("ResolveRoute(pi) = %+v, ok=%v", piEntries, ok)
 	}
@@ -1370,7 +1431,7 @@ func TestResolveRoutePiWireVariants(t *testing.T) {
 	// wire (regression, unchanged from before pi existed), openaicompat
 	// WITHOUT the override is wire-incompatible (claude-cli has no
 	// openai wire support), the override row is usable+anthropic wire.
-	claudeEntries, ok := snap.ResolveRoute("coding-exec", "claude-cli")
+	claudeEntries, ok := snap.ResolveRoute("coding-exec", "claude-cli", "")
 	if !ok || len(claudeEntries) != 3 {
 		t.Fatalf("ResolveRoute(claude-cli) = %+v, ok=%v", claudeEntries, ok)
 	}
@@ -1394,7 +1455,7 @@ func TestResolveRoutePiWireVariants(t *testing.T) {
 func TestResolveRouteKindCliHasNoWire(t *testing.T) {
 	t.Parallel()
 	snap := harnessSnapshot(t)
-	entries, ok := snap.ResolveRoute("coding", "claude-cli")
+	entries, ok := snap.ResolveRoute("coding", "claude-cli", "")
 	if !ok || len(entries) != 2 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1427,7 +1488,7 @@ func TestResolveRouteCarriesPrices(t *testing.T) {
 	cat := &fakeCatalog{pool: []catalog.Model{glm47, catModel("glm-unpriced", "chat", nil)}}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
-	entries, ok := snap.ResolveRoute("coding", "claude-cli")
+	entries, ok := snap.ResolveRoute("coding", "claude-cli", "")
 	if !ok || len(entries) != 2 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v, want 2 entries", entries, ok)
 	}
@@ -1522,7 +1583,7 @@ func TestResolveRouteOpenAIResponsesGate(t *testing.T) {
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
-	entries, ok := snap.ResolveRoute("coding-exec", "codex-cli")
+	entries, ok := snap.ResolveRoute("coding-exec", "codex-cli", "")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1531,7 +1592,7 @@ func TestResolveRouteOpenAIResponsesGate(t *testing.T) {
 	}
 
 	// opencode speaks the same wire but doesn't need /responses.
-	entries, ok = snap.ResolveRoute("coding-exec", "opencode")
+	entries, ok = snap.ResolveRoute("coding-exec", "opencode", "")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1562,7 +1623,7 @@ func TestResolveRouteSelfPairedIgnoresChain(t *testing.T) {
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
-	entries, ok := snap.ResolveRoute("coding", "cursor-cli")
+	entries, ok := snap.ResolveRoute("coding", "cursor-cli", "")
 	if !ok {
 		t.Fatalf("ResolveRoute: route not found")
 	}
@@ -1592,7 +1653,7 @@ func TestResolveRouteSelfPairedSkipsDisabled(t *testing.T) {
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
-	entries, ok := snap.ResolveRoute("coding", "cursor-cli")
+	entries, ok := snap.ResolveRoute("coding", "cursor-cli", "")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1622,7 +1683,7 @@ func TestResolveRouteClaudeCLIStillRequiresChainMembership(t *testing.T) {
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
-	entries, ok := snap.ResolveRoute("coding", "claude-cli")
+	entries, ok := snap.ResolveRoute("coding", "claude-cli", "")
 	if !ok || len(entries) != 1 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v, want the chain's single entry only", entries, ok)
 	}
@@ -1647,7 +1708,7 @@ func TestResolveRouteSelfPairedMultipleRowsSortedByName(t *testing.T) {
 	}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, nil)
 
-	entries, ok := snap.ResolveRoute("coding", "cursor-cli")
+	entries, ok := snap.ResolveRoute("coding", "cursor-cli", "")
 	if !ok || len(entries) != 2 {
 		t.Fatalf("ResolveRoute = %+v, ok=%v", entries, ok)
 	}
@@ -1709,7 +1770,7 @@ func TestResolveRouteMarksChatOnlyHarnessUnusableOnResponsesModel(t *testing.T) 
 	cat := &fakeCatalog{pool: []catalog.Model{catModel("gpt-5.3-codex", "responses", nil)}}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
-	pi, ok := snap.ResolveRoute("builder", "pi")
+	pi, ok := snap.ResolveRoute("builder", "pi", "")
 	if !ok || len(pi) != 1 {
 		t.Fatalf("ResolveRoute pi = %v, %v", pi, ok)
 	}
@@ -1717,7 +1778,7 @@ func TestResolveRouteMarksChatOnlyHarnessUnusableOnResponsesModel(t *testing.T) 
 		t.Fatalf("pi entry = usable %v, skip %q; want unusable with a responses_only reason", pi[0].Usable, pi[0].SkipReason)
 	}
 	for _, h := range []string{"codex-cli", "opencode"} {
-		entries, _ := snap.ResolveRoute("builder", h)
+		entries, _ := snap.ResolveRoute("builder", h, "")
 		if len(entries) != 1 || !entries[0].Usable {
 			t.Fatalf("%s entry = %+v, want usable", h, entries)
 		}
@@ -1739,7 +1800,7 @@ func TestResolveRouteMarksEmptyModelUnusable(t *testing.T) {
 	routeRows := []RouteRow{{Name: "builder", Chain: []ChainEntry{{ProviderID: "p2"}}, Enabled: true}}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, &fakeCatalog{})
 
-	cursor, ok := snap.ResolveRoute("builder", "cursor-cli")
+	cursor, ok := snap.ResolveRoute("builder", "cursor-cli", "")
 	if !ok || len(cursor) != 1 {
 		t.Fatalf("ResolveRoute cursor-cli = %v, %v", cursor, ok)
 	}
@@ -1747,7 +1808,7 @@ func TestResolveRouteMarksEmptyModelUnusable(t *testing.T) {
 		t.Fatalf("self-paired entry = usable %v, skip %q; want unusable with %q", cursor[0].Usable, cursor[0].SkipReason, emptyModelSkip)
 	}
 
-	claude, _ := snap.ResolveRoute("builder", "claude-cli")
+	claude, _ := snap.ResolveRoute("builder", "claude-cli", "")
 	if len(claude) != 1 {
 		t.Fatalf("ResolveRoute claude-cli = %v", claude)
 	}

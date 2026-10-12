@@ -134,6 +134,8 @@ export function Composer({
   onAgent,
   route,
   onRoute,
+  modelHint,
+  onModelHint,
   hidePicker = false,
   skillHint,
   onRemoveSkillHint,
@@ -157,6 +159,8 @@ export function Composer({
   onAgent: (a: string) => void
   route?: string
   onRoute?: (r: string) => void
+  modelHint?: string
+  onModelHint?: (h: string) => void
   hidePicker?: boolean
   skillHint?: string
   onRemoveSkillHint?: () => void
@@ -722,7 +726,14 @@ export function Composer({
       <div className="mt-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           {!hidePicker && (
-            <AgentRoutePicker agent={agent} onAgent={onAgent} route={route} onRoute={onRoute} />
+            <AgentRoutePicker
+              agent={agent}
+              onAgent={onAgent}
+              route={route}
+              onRoute={onRoute}
+              modelHint={modelHint}
+              onModelHint={onModelHint}
+            />
           )}
           {onAttachments && (
             <>

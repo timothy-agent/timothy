@@ -11,6 +11,8 @@ vi.mock('../../api/client', () => ({
   createMission: vi.fn(),
   listAgents: vi.fn(),
   listRoutes: vi.fn(),
+  listProviders: vi.fn().mockResolvedValue([]),
+  availableModels: vi.fn().mockResolvedValue([]),
   listConnectors: vi.fn(),
   listConnectorRepos: vi.fn(),
   getSettings: vi.fn(),
@@ -1680,6 +1682,41 @@ describe('MissionForm: execution plan', () => {
     await waitFor(() =>
       expect(createMission).toHaveBeenCalledWith(
         expect.objectContaining({ route_model: 'Anthropic/sonnet-5' }),
+      ),
+    )
+  })
+
+  it('picking an off-chain Other model submits route_model', async () => {
+    const { listProviders, availableModels } = await import('../../api/client')
+    const { resetProviderModelsCache } = await import('../AgentPicker')
+    resetProviderModelsCache()
+    vi.mocked(listProviders).mockResolvedValue([
+      {
+        id: 'p2',
+        name: 'OpenAI',
+        kind: 'api',
+        driver: 'openaicompat',
+        base_url: 'https://api.openai.com',
+        default_model: 'gpt-5',
+        credential_ref: 'O',
+        headers: {},
+        enabled: true,
+      },
+    ])
+    vi.mocked(availableModels).mockResolvedValue([{ id: 'gpt-5' }])
+    vi.mocked(getMissionExecutionPlan).mockResolvedValue(fivePhases)
+    vi.mocked(createMission).mockResolvedValue({ id: 'm-off' } as Mission)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(await screen.findByLabelText('Goal'), { target: { value: 'g' } })
+    await screen.findByLabelText('Build model')
+
+    fireEvent.click(screen.getByLabelText('Build model'))
+    fireEvent.click(await screen.findByRole('option', { name: /gpt-5/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ route_model: 'OpenAI/gpt-5' }),
       ),
     )
   })

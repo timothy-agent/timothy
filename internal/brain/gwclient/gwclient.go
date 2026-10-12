@@ -244,11 +244,13 @@ type ResolvedRoute struct {
 // ResolveRoute fetches route's ordered chain with provider metadata so
 // missions can dispatch native-vs-delegated and spawn a CLI executor
 // (D-051): harness == "" resolves the chat-serving axis, a known
-// harness name resolves the executor axis for every entry. Memoized per
-// route+harness for resolveTTL, shorter than ModelWindows/RouteForRole's
-// TTL since missions dispatch directly on this result.
-func (c *Client) ResolveRoute(ctx context.Context, name, harness string) (*ResolvedRoute, error) {
-	cacheKey := name + "\x00" + harness
+// harness name resolves the executor axis for every entry. hint is the
+// optional D-078 "ProviderName/model" pin (or the other Resolve forms);
+// empty leaves the chain alone. Memoized per route+harness+hint for
+// resolveTTL, shorter than ModelWindows/RouteForRole's TTL since
+// missions dispatch directly on this result.
+func (c *Client) ResolveRoute(ctx context.Context, name, harness, hint string) (*ResolvedRoute, error) {
+	cacheKey := name + "\x00" + harness + "\x00" + hint
 	c.mu.Lock()
 	if entry, ok := c.resolved[cacheKey]; ok && time.Now().Before(entry.exp) {
 		c.mu.Unlock()
@@ -257,8 +259,15 @@ func (c *Client) ResolveRoute(ctx context.Context, name, harness string) (*Resol
 	c.mu.Unlock()
 
 	reqURL := c.baseURL + "/v1/routes/" + url.PathEscape(name) + "/resolve"
+	q := url.Values{}
 	if harness != "" {
-		reqURL += "?harness=" + url.QueryEscape(harness)
+		q.Set("harness", harness)
+	}
+	if hint != "" {
+		q.Set("hint", hint)
+	}
+	if enc := q.Encode(); enc != "" {
+		reqURL += "?" + enc
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {

@@ -1,10 +1,12 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AdminAgent, AdminRoute } from '../api/types'
+import type { AdminAgent, AdminProvider, AdminRoute, AvailableModel } from '../api/types'
 
 vi.mock('../api/client', () => ({
   listAgents: vi.fn(),
   listRoutes: vi.fn(),
+  listProviders: vi.fn(),
+  availableModels: vi.fn(),
 }))
 
 const agents: AdminAgent[] = [
@@ -49,6 +51,22 @@ const routes: AdminRoute[] = [
   { name: 'local', strategy: 'price', enabled: true, chain: [] },
 ]
 
+const providers: AdminProvider[] = [
+  {
+    id: 'p1',
+    name: 'Anthropic',
+    kind: 'api',
+    driver: 'anthropic',
+    base_url: '',
+    default_model: 'sonnet',
+    credential_ref: 'A',
+    headers: {},
+    enabled: true,
+  },
+]
+
+const models: AvailableModel[] = [{ id: 'sonnet' }, { id: 'opus' }]
+
 // Radix opens dropdowns on pointerdown, not click.
 function openMenu(name: string) {
   const trigger = screen.getByRole('button', { name })
@@ -61,14 +79,24 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-// AgentRoutePicker composes AgentPicker's useAgents and its own
-// useRoutes, both module-level caches — each test resets modules and
-// re-imports fresh to avoid one test's fetch leaking into the next.
+// AgentRoutePicker composes AgentPicker's useAgents/useRoutes/
+// useProviderModels, all module-level caches — each test resets modules
+// and re-imports fresh to avoid one test's fetch leaking into the next.
 async function freshPicker() {
   vi.resetModules()
   const client = await import('../api/client')
+  const picker = await import('./AgentPicker')
+  picker.resetProviderModelsCache()
   const { AgentRoutePicker } = await import('./AgentRoutePicker')
-  return { AgentRoutePicker, listAgents: client.listAgents, listRoutes: client.listRoutes }
+  vi.mocked(client.listProviders).mockResolvedValue(providers)
+  vi.mocked(client.availableModels).mockResolvedValue(models)
+  return {
+    AgentRoutePicker,
+    listAgents: client.listAgents,
+    listRoutes: client.listRoutes,
+    listProviders: client.listProviders,
+    availableModels: client.availableModels,
+  }
 }
 
 describe('AgentRoutePicker', () => {
@@ -76,21 +104,39 @@ describe('AgentRoutePicker', () => {
     const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)
     vi.mocked(listRoutes).mockResolvedValue(routes)
-    render(<AgentRoutePicker agent="auto" onAgent={vi.fn()} route="" onRoute={vi.fn()} />)
+    render(
+      <AgentRoutePicker
+        agent="auto"
+        onAgent={vi.fn()}
+        route=""
+        onRoute={vi.fn()}
+        modelHint=""
+        onModelHint={vi.fn()}
+      />,
+    )
 
-    expect(await screen.findByRole('button', { name: 'Agent and route' })).toHaveTextContent(
+    expect(await screen.findByRole('button', { name: 'Agent, route and model' })).toHaveTextContent(
       'Auto',
     )
   })
 
-  it("shows a combined 'agent · route' label when both are set", async () => {
+  it("shows a combined 'agent · route · model' label when all are set", async () => {
     const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)
     vi.mocked(listRoutes).mockResolvedValue(routes)
-    render(<AgentRoutePicker agent="1" onAgent={vi.fn()} route="local" onRoute={vi.fn()} />)
+    render(
+      <AgentRoutePicker
+        agent="1"
+        onAgent={vi.fn()}
+        route="local"
+        onRoute={vi.fn()}
+        modelHint="Anthropic/opus"
+        onModelHint={vi.fn()}
+      />,
+    )
 
-    const trigger = await screen.findByRole('button', { name: 'Agent and route' })
-    await waitFor(() => expect(trigger).toHaveTextContent('general · local'))
+    const trigger = await screen.findByRole('button', { name: 'Agent, route and model' })
+    await waitFor(() => expect(trigger).toHaveTextContent('general · local · opus'))
   })
 
   it('falls back to the agent label when the selected route is disabled', async () => {
@@ -109,24 +155,35 @@ describe('AgentRoutePicker', () => {
       />,
     )
 
-    const trigger = await screen.findByRole('button', { name: 'Agent and route' })
+    const trigger = await screen.findByRole('button', { name: 'Agent, route and model' })
     await waitFor(() => expect(trigger).toHaveTextContent('general'))
     expect(trigger).not.toHaveTextContent('disabled-route')
   })
 
-  it('shows both Agent and Route sections when onRoute is given', async () => {
+  it('shows Agent, Route and Model sections when handlers are given', async () => {
     const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)
     vi.mocked(listRoutes).mockResolvedValue(routes)
-    render(<AgentRoutePicker agent="auto" onAgent={vi.fn()} route="" onRoute={vi.fn()} />)
+    render(
+      <AgentRoutePicker
+        agent="auto"
+        onAgent={vi.fn()}
+        route=""
+        onRoute={vi.fn()}
+        modelHint=""
+        onModelHint={vi.fn()}
+      />,
+    )
 
-    await screen.findByRole('button', { name: 'Agent and route' })
-    openMenu('Agent and route')
+    await screen.findByRole('button', { name: 'Agent, route and model' })
+    openMenu('Agent, route and model')
     expect(await screen.findByText('Agent')).toBeTruthy()
     expect(await screen.findByText('Route')).toBeTruthy()
+    expect(await screen.findByText('Model')).toBeTruthy()
     expect(screen.getByText('researcher')).toBeTruthy()
     expect(screen.getByText('default')).toBeTruthy()
     expect(screen.getByText('local')).toBeTruthy()
+    expect(await screen.findByText('opus')).toBeTruthy()
   })
 
   it('omits the Route section when onRoute is not passed', async () => {
@@ -135,8 +192,8 @@ describe('AgentRoutePicker', () => {
     vi.mocked(listRoutes).mockResolvedValue(routes)
     render(<AgentRoutePicker agent="auto" onAgent={vi.fn()} />)
 
-    await screen.findByRole('button', { name: 'Agent and route' })
-    openMenu('Agent and route')
+    await screen.findByRole('button', { name: 'Agent, route and model' })
+    openMenu('Agent, route and model')
     expect(await screen.findByText('Agent')).toBeTruthy()
     expect(screen.queryByText('Route')).toBeNull()
   })
@@ -147,9 +204,9 @@ describe('AgentRoutePicker', () => {
     vi.mocked(listRoutes).mockRejectedValue(new Error('forbidden'))
     render(<AgentRoutePicker agent="auto" onAgent={vi.fn()} route="" onRoute={vi.fn()} />)
 
-    await screen.findByRole('button', { name: 'Agent and route' })
+    await screen.findByRole('button', { name: 'Agent, route and model' })
     await waitFor(() => expect(listRoutes).toHaveBeenCalled())
-    openMenu('Agent and route')
+    openMenu('Agent, route and model')
     expect(await screen.findByText('Agent')).toBeTruthy()
     expect(screen.getByText('researcher')).toBeTruthy()
     expect(screen.queryByText('Route')).toBeNull()
@@ -161,8 +218,8 @@ describe('AgentRoutePicker', () => {
     vi.mocked(listRoutes).mockResolvedValue(routes)
     render(<AgentRoutePicker agent="auto" onAgent={vi.fn()} route="" onRoute={vi.fn()} />)
 
-    await screen.findByRole('button', { name: 'Agent and route' })
-    openMenu('Agent and route')
+    await screen.findByRole('button', { name: 'Agent, route and model' })
+    openMenu('Agent, route and model')
     expect(await screen.findByText('glm-5.2 → nova-pro')).toBeTruthy()
     expect(screen.getByText('No models configured')).toBeTruthy()
   })
@@ -174,10 +231,32 @@ describe('AgentRoutePicker', () => {
     const onRoute = vi.fn()
     render(<AgentRoutePicker agent="auto" onAgent={vi.fn()} route="" onRoute={onRoute} />)
 
-    await screen.findByRole('button', { name: 'Agent and route' })
-    openMenu('Agent and route')
+    await screen.findByRole('button', { name: 'Agent, route and model' })
+    openMenu('Agent, route and model')
     fireEvent.click(await screen.findByText('local'))
     expect(onRoute).toHaveBeenCalledWith('local')
+  })
+
+  it('clicking a model item calls onModelHint', async () => {
+    const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
+    vi.mocked(listAgents).mockResolvedValue(agents)
+    vi.mocked(listRoutes).mockResolvedValue(routes)
+    const onModelHint = vi.fn()
+    render(
+      <AgentRoutePicker
+        agent="auto"
+        onAgent={vi.fn()}
+        route=""
+        onRoute={vi.fn()}
+        modelHint=""
+        onModelHint={onModelHint}
+      />,
+    )
+
+    await screen.findByRole('button', { name: 'Agent, route and model' })
+    openMenu('Agent, route and model')
+    fireEvent.click(await screen.findByText('opus'))
+    expect(onModelHint).toHaveBeenCalledWith('Anthropic/opus')
   })
 
   it('clicking an agent item calls onAgent', async () => {
@@ -187,8 +266,8 @@ describe('AgentRoutePicker', () => {
     const onAgent = vi.fn()
     render(<AgentRoutePicker agent="auto" onAgent={onAgent} route="" onRoute={vi.fn()} />)
 
-    await screen.findByRole('button', { name: 'Agent and route' })
-    openMenu('Agent and route')
+    await screen.findByRole('button', { name: 'Agent, route and model' })
+    openMenu('Agent, route and model')
     fireEvent.click(await screen.findByText('researcher'))
     expect(onAgent).toHaveBeenCalledWith('2')
   })

@@ -23,6 +23,8 @@ vi.mock('../api/client', () => ({
   answerPermission: vi.fn(),
   listRoutes: vi.fn().mockResolvedValue([]),
   listAgents: vi.fn().mockResolvedValue([]),
+  listProviders: vi.fn().mockResolvedValue([]),
+  availableModels: vi.fn().mockResolvedValue([]),
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: false }, values: {} }),
   listKbCollections: vi.fn().mockResolvedValue([]),
   setSessionKnowledge: vi.fn().mockResolvedValue(undefined),

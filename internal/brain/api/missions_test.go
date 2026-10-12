@@ -1287,7 +1287,7 @@ func TestMissionsDecorateTopModels(t *testing.T) {
 func TestMissionsExecutorOptionsSurfacesSkipReason(t *testing.T) {
 	t.Parallel()
 
-	h := &missionAPI{log: discard(), resolveRoute: func(_ context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+	h := &missionAPI{log: discard(), resolveRoute: func(_ context.Context, route, harness, _ string) (*gwclient.ResolvedRoute, error) {
 		switch harness {
 		case "codex-cli":
 			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
@@ -1597,13 +1597,33 @@ func TestPRRejectsNonGitHubConnectionMission(t *testing.T) {
 // matching gwclient.ResolveRoute's own behavior for an unknown route.
 // harness is accepted but ignored — none of the execution-plan tests
 // need axis-dependent chain content.
-func stubResolveRoute(routes map[string]*gwclient.ResolvedRoute) func(context.Context, string, string) (*gwclient.ResolvedRoute, error) {
-	return func(_ context.Context, name, _ string) (*gwclient.ResolvedRoute, error) {
+func stubResolveRoute(routes map[string]*gwclient.ResolvedRoute) func(context.Context, string, string, string) (*gwclient.ResolvedRoute, error) {
+	return func(_ context.Context, name, _, hint string) (*gwclient.ResolvedRoute, error) {
 		r, ok := routes[name]
 		if !ok {
 			return nil, errors.New("route not found")
 		}
-		return r, nil
+		if hint == "" {
+			return r, nil
+		}
+		// Mirror gateway ResolveRoute's hint prepend: when the pin is
+		// already in the chain, leave the chain alone (selection picks
+		// it); when it is off-chain, prepend a usable entry so the
+		// execution-plan preview can mark it selected.
+		for _, e := range r.Entries {
+			if hint == e.ProviderName+"/"+e.Model {
+				return r, nil
+			}
+		}
+		i := strings.LastIndex(hint, "/")
+		if i < 0 {
+			return r, nil
+		}
+		out := *r
+		out.Entries = append([]gwclient.ResolvedRouteEntry{
+			usableEntry(hint[:i], hint[i+1:]),
+		}, r.Entries...)
+		return &out, nil
 	}
 }
 
@@ -2019,6 +2039,33 @@ func TestExecutionPlanRouteModelPinSelectsPinnedEntry(t *testing.T) {
 	}
 }
 
+// TestExecutionPlanRouteModelPinOffChainSelectsHint confirms a pin that
+// is not in the route chain still appears (via the resolve hint) and is
+// marked selected — the chat/mission model picker can pin any enabled
+// provider model without editing the route first.
+func TestExecutionPlanRouteModelPinOffChainSelectsHint(t *testing.T) {
+	t.Parallel()
+	h := &missionAPI{
+		log: discard(),
+		resolveRoute: stubResolveRoute(map[string]*gwclient.ResolvedRoute{
+			"mixed": {Route: "mixed", Entries: []gwclient.ResolvedRouteEntry{
+				usableEntry("B", "b"),
+			}},
+		}),
+	}
+	byPhase := getExecutionPlan(t, h, "kind=general&route=mixed&route_model="+url.QueryEscape("Other/opus"))
+	entries := byPhase["build"].Entries
+	if len(entries) != 2 {
+		t.Fatalf("entries = %d, want 2 (hint + chain)", len(entries))
+	}
+	if entries[0].ProviderName != "Other" || entries[0].Model != "opus" || !entries[0].Selected {
+		t.Fatalf("entries[0] = %+v, want Other/opus selected", entries[0])
+	}
+	if entries[1].Selected {
+		t.Fatalf("entries[1] (chain) selected = true, want false")
+	}
+}
+
 // TestExecutionPlanRouteModelPinUnusableDegradesToFirstUsable confirms
 // a pin naming an entry that IS present but not usable leaves selected
 // on the first usable entry — the pinned entry keeps its own
@@ -2296,7 +2343,9 @@ func TestPromoteKBReachesStore(t *testing.T) {
 // resolveRouteFixture fakes gwclient.ResolveRoute for the D-100 route
 // gate tests: "dead" has only unusable entries, "empty" has no chain,
 // "unknown" fails to resolve, everything else has one usable entry.
-func resolveRouteFixture(_ context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+// The hint arg is accepted so the fixture matches missionAPI.resolveRoute;
+// create-path helpers that still take the 3-arg routeResolver wrap it.
+func resolveRouteFixture(_ context.Context, route, harness, _ string) (*gwclient.ResolvedRoute, error) {
 	switch route {
 	case "dead":
 		return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
@@ -2313,6 +2362,10 @@ func resolveRouteFixture(_ context.Context, route, harness string) (*gwclient.Re
 		}
 	}
 	return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{{ProviderName: "ok", Model: "m", Usable: true}}}, nil
+}
+
+func resolveRouteFixtureNoHint(ctx context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+	return resolveRouteFixture(ctx, route, harness, "")
 }
 
 // TestMissionsUnusableCreateRoute table-tests the create-time route
@@ -2337,7 +2390,7 @@ func TestMissionsUnusableCreateRoute(t *testing.T) {
 		{name: "harness axis resolves separately", req: createMissionRequest{Route: "harness-only-dead", Harness: "claude-cli", ReviewRoute: "alive"}, flow: missions.FlowFull, wantRoute: "harness-only-dead", wantReason: "no executor entry"},
 		{name: "resolve error never blocks", req: createMissionRequest{Route: "unknown", ReviewRoute: "unknown"}, flow: missions.FlowFull},
 	} {
-		route, reason, unusable := missions.UnusableCreateRoute(context.Background(), resolveRouteFixture, missions.Mission{
+		route, reason, unusable := missions.UnusableCreateRoute(context.Background(), resolveRouteFixtureNoHint, missions.Mission{
 			Route: tc.req.Route, PlanRoute: tc.req.PlanRoute, ReviewRoute: tc.req.ReviewRoute, EscalationRoute: tc.req.EscalationRoute,
 			Harness: tc.req.Harness, Flow: tc.flow,
 		})

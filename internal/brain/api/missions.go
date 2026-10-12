@@ -76,7 +76,7 @@ type missionAttachmentStore interface {
 // (a nil *attachments.Store boxed here would be a non-nil interface
 // value) happens once, at the call site, same shape as
 // chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error), topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, whisperURL string, caption func(context.Context, string, []byte) string) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string, string) (*gwclient.ResolvedRoute, error), topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, whisperURL string, caption func(context.Context, string, []byte) string) {
 	if store == nil {
 		return
 	}
@@ -173,7 +173,7 @@ type missionAPI struct {
 	// resolveRoute is gwclient.Client.ResolveRoute: backs GET
 	// /v1/missions/executor-options and GET /v1/missions/execution-plan;
 	// nil (no gateway wiring) makes either endpoint 404.
-	resolveRoute func(context.Context, string, string) (*gwclient.ResolvedRoute, error)
+	resolveRoute func(context.Context, string, string, string) (*gwclient.ResolvedRoute, error)
 	// topModels resolves the top-served provider/model per mission id
 	// from the cost ledger; nil (no ledger wiring) omits top_model/
 	// top_model_provider from list/get responses entirely.
@@ -245,7 +245,7 @@ func (h *missionAPI) routeExists(ctx context.Context, name string) bool {
 	if h.resolveRoute == nil {
 		return false
 	}
-	_, err := h.resolveRoute(ctx, name, "")
+	_, err := h.resolveRoute(ctx, name, "", "")
 	return err == nil
 }
 
@@ -841,7 +841,9 @@ func (h *missionAPI) resolveDeps() missions.ResolveDeps {
 		RouteForRole:          h.routeForRole,
 		RouteExists:           h.routeExists,
 		CodingExecutorDefault: h.codingExecutorDefault,
-		ResolveRoute:          h.resolveRoute,
+		ResolveRoute: func(ctx context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+			return h.resolveRoute(ctx, route, harness, "")
+		},
 	}
 	if h.agentReg != nil {
 		deps.Agent = func(ctx context.Context, id string) (missions.AgentDefaults, bool) {
@@ -861,7 +863,9 @@ func (h *missionAPI) resolveDeps() missions.ResolveDeps {
 // routeUnusable reports whether route has entries on the given axis
 // but none usable (missions.RouteUnusable).
 func (h *missionAPI) routeUnusable(ctx context.Context, route, harness string) (reason string, unusable bool) {
-	return missions.RouteUnusable(ctx, h.resolveRoute, route, harness)
+	return missions.RouteUnusable(ctx, func(ctx context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+		return h.resolveRoute(ctx, route, harness, "")
+	}, route, harness)
 }
 
 // routing handles PATCH /v1/missions/{id}/routing (D-100, issue #536):
@@ -882,7 +886,7 @@ func (h *missionAPI) routing(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "not_found", "route validation is not enabled")
 		return
 	}
-	if _, err := h.resolveRoute(r.Context(), body.ReviewRoute, ""); err != nil {
+	if _, err := h.resolveRoute(r.Context(), body.ReviewRoute, "", ""); err != nil {
 		jsonError(w, http.StatusBadRequest, "unknown_route", fmt.Sprintf("route %q did not resolve: %s", body.ReviewRoute, err.Error()))
 		return
 	}
@@ -1114,7 +1118,7 @@ func (h *missionAPI) executorOptions(w http.ResponseWriter, r *http.Request) {
 	options := make([]executorOption, 0, len(harnesses))
 	for _, harness := range harnesses {
 		opt := executorOption{Harness: harness}
-		resolved, err := h.resolveRoute(r.Context(), route, harness)
+		resolved, err := h.resolveRoute(r.Context(), route, harness, "")
 		switch {
 		case err != nil:
 			opt.Reason = err.Error()
@@ -1220,12 +1224,13 @@ func (h *missionAPI) resolveHarness(ctx context.Context, kind, explicitHarness, 
 // yields no entries, with the failure reason returned for the phase's
 // skip_reason — never a failed request, matching executorOptions' own
 // degrade-on-resolve-error behavior. modelPin ("provider name/model",
-// D-078), when it names a USABLE entry, marks that entry selected
-// instead of the first-usable one; when the pin names no entry, or an
-// unusable one, the first-usable entry keeps Selected and the pin's own
-// entry (if present) keeps its Usable/SkipReason as-is so the UI can
-// show why the pin will not apply — resolveEntries never fails a
-// request over a pin that doesn't currently resolve.
+// D-078) is forwarded as the resolve hint so an off-chain pin still
+// appears in the entry list; when it names a USABLE entry, that entry
+// is Selected instead of the first-usable one; when the pin names no
+// entry, or an unusable one, the first-usable entry keeps Selected and
+// the pin's own entry (if present) keeps its Usable/SkipReason as-is so
+// the UI can show why the pin will not apply — resolveEntries never
+// fails a request over a pin that doesn't currently resolve.
 func (h *missionAPI) resolveEntries(ctx context.Context, route, harness, modelPin string) ([]executionPlanEntry, string) {
 	if route == "" {
 		return nil, ""
@@ -1233,7 +1238,7 @@ func (h *missionAPI) resolveEntries(ctx context.Context, route, harness, modelPi
 	if h.resolveRoute == nil {
 		return nil, ""
 	}
-	resolved, err := h.resolveRoute(ctx, route, harness)
+	resolved, err := h.resolveRoute(ctx, route, harness, modelPin)
 	if err != nil {
 		return nil, err.Error()
 	}

@@ -16,6 +16,7 @@ import { SetupGate } from '../onboarding/SetupGate'
 
 const agentKey = 'timothy.agent'
 const routeKey = 'timothy.route'
+const modelHintKey = 'timothy.model_hint'
 
 // ChatIntent carries a home-screen action into the chat page: `send`
 // fires immediately, `draft` only prefills the composer, `skillHint`
@@ -27,6 +28,7 @@ export interface ChatIntent {
   draft?: string
   agent?: string
   route?: string
+  modelHint?: string
   skillHint?: string
   attachments?: PendingAttachment[]
   knowledge?: string[]
@@ -45,6 +47,7 @@ export function Home() {
   const [draft, setDraft] = useState('')
   const [agent, setAgent] = useState(() => localStorage.getItem(agentKey) ?? '')
   const [route, setRoute] = useState(() => localStorage.getItem(routeKey) ?? '')
+  const [modelHint, setModelHint] = useState(() => localStorage.getItem(modelHintKey) ?? '')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [knowledge, setKnowledge] = useState<string[]>([])
   // Same fallback as AgentRoutePicker: an empty/unmatched agent id
@@ -62,6 +65,11 @@ export function Home() {
     localStorage.setItem(routeKey, r)
   }
 
+  const pickModelHint = (h: string) => {
+    setModelHint(h)
+    localStorage.setItem(modelHintKey, h)
+  }
+
   const send = () => {
     const message = draft.trim()
     const ready = attachments.filter((a) => !a.uploading)
@@ -71,6 +79,7 @@ export function Home() {
         send: message,
         agent,
         route: route || undefined,
+        modelHint: modelHint || undefined,
         attachments: ready.length > 0 ? ready : undefined,
         knowledge: knowledge.length > 0 ? knowledge : undefined,
       } satisfies ChatIntent,
@@ -99,6 +108,8 @@ export function Home() {
             onAgent={pickAgent}
             route={route}
             onRoute={pickRoute}
+            modelHint={modelHint}
+            onModelHint={pickModelHint}
             autoFocus
             disabled={chatBlocked}
             placeholder="Ask anything…"
