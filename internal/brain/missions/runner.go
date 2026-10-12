@@ -265,11 +265,11 @@ type nativeRunner struct {
 	// a given turn needs.
 	recall SearchMemoryFunc
 
-	// connectorReads resolves a mission's agent to the read-only
-	// connector tools (gmail/calendar reads) it may use on worker/discover
-	// turns (see SetConnectorReads): nil-safe: unset means no connector
-	// reads are offered, same as before this existed.
-	connectorReads ConnectorReadsResolver
+	// connectorTools resolves a mission's agent to the connector tools
+	// (native reads/writes plus marked MCP reads) it may use on
+	// worker/discover turns (see SetConnectorTools): nil-safe: unset
+	// means no connector tools are offered, same as before this existed.
+	connectorTools ConnectorToolsResolver
 
 	// crudTools resolves a mission to the mission/automation CRUD tool
 	// instances its agent's Tools allowlist permits on worker turns
@@ -316,7 +316,7 @@ type nativeRunner struct {
 // SetAskParker wires the store ask_user parks against: a setter (not
 // a NewNativeRunner parameter) so cmd/brain/main.go can pass the same
 // *Store it builds the runner alongside, same pattern as
-// SetProgressReader/SetConnectorReads.
+// SetProgressReader/SetConnectorTools.
 func (r *nativeRunner) SetAskParker(p askUserParker) {
 	r.askParker = p
 }
@@ -347,7 +347,7 @@ type ProgressReader interface {
 // SetProgressReader wires the reader RunWorker uses to poll for
 // mid-turn operator notes: a setter (not a NewNativeRunner parameter)
 // so cmd/brain/main.go can pass the same *Store it builds the runner
-// alongside, same pattern as SetConnectorReads.
+// alongside, same pattern as SetConnectorTools.
 func (r *nativeRunner) SetProgressReader(pr ProgressReader) {
 	r.progressReader = pr
 }
@@ -519,37 +519,37 @@ func countOperatorNotes(notes []ProgressNote) int {
 	return n
 }
 
-// ConnectorReadsResolver resolves an agent id to the read-only
-// connector tools a mission turn for that agent may use: the
-// intersection of the agent's Tools allowlist and every built
-// connector's ReadOnly-marked, non-MCP tools (see
-// connectors.Manager.ReadOnlyTools). Connector WRITES are never
-// included regardless of the allowlist: mission turns stay
-// BuiltinsOnly for the base surface, and this resolver only ever
-// layers reads on top via ExtraTools: a worker can never side-channel
-// a connector write around the worktree/human-consented push
-// pipeline. Resolved at DRIVE time (every RunWorker/DiscoverSession
-// call), not cached on the mission, so an agent's allowlist or a
-// connector's enabled state edited mid-mission applies on the very
-// next turn. Being offered a read tool here is separate from being
-// pre-approved to call it without asking: these tools are not in
-// tools.Permissions' exempt set (same as chat), so an unattended
-// mission (Unattended: true, D-039) still needs a
-// standing grant or the call fails fast instead of parking. That grant
-// already exists: driver.go's grantSessionDefaults seeds one from the
-// mission's agent's ApprovalAllowlist (a separate field from Tools) at
-// provisioning time, the same path a chat agent's connector-tool
-// grants take. An agent that wants its automation missions to actually
-// read gmail/calendar unattended must list the tool in BOTH Tools (to
-// be offered here) and ApprovalAllowlist (to be pre-approved).
-type ConnectorReadsResolver func(ctx context.Context, agentID string) []*tools.Tool
+// ConnectorToolsResolver resolves an agent id to the connector tools a
+// mission turn for that agent may use: the intersection of the agent's
+// Tools allowlist with the agent-parity surface (native reads and
+// writes plus D-157 operator-marked MCP reads — see
+// connectors.Manager.ReadOnlyTools and NativeTools). Mission turns stay
+// BuiltinsOnly for the base surface; this resolver layers connector
+// tools on top via ExtraTools. Worker turns get the whole set (writes
+// included, the operator's opt-in being the agent's own Tools list);
+// discover turns filter to ReadOnly (connectorReadTools). Resolved at
+// DRIVE time (every RunWorker/DiscoverSession call), not cached on the
+// mission, so an agent's allowlist or a connector's enabled state
+// edited mid-mission applies on the very next turn. Being offered a
+// tool here is separate from being pre-approved to call it without
+// asking: these tools are not in tools.Permissions' exempt set (same
+// as chat), so an unattended mission (Unattended: true, D-039) still
+// needs a standing grant or the call fails fast instead of parking.
+// That grant already exists: driver.go's grantSessionDefaults seeds one
+// from the mission's agent's ApprovalAllowlist (a separate field from
+// Tools) at provisioning time, the same path a chat agent's
+// connector-tool grants take. An agent that wants its automation
+// missions to actually read gmail/calendar or write mail/calendar
+// unattended must list the tool in BOTH Tools (to be offered here) and
+// ApprovalAllowlist (to be pre-approved).
+type ConnectorToolsResolver func(ctx context.Context, agentID string) []*tools.Tool
 
-// SetConnectorReads wires the resolver RunWorker/DiscoverSession use to
-// layer read-only connector tools onto a mission turn: a setter (not
-// a NewNativeRunner parameter) because cmd/brain/main.go builds the
+// SetConnectorTools wires the resolver RunWorker/DiscoverSession use to
+// layer connector tools onto a mission turn: a setter (not a
+// NewNativeRunner parameter) because cmd/brain/main.go builds the
 // runner before the connectors.Manager it closes over.
-func (r *nativeRunner) SetConnectorReads(resolve ConnectorReadsResolver) {
-	r.connectorReads = resolve
+func (r *nativeRunner) SetConnectorTools(resolve ConnectorToolsResolver) {
+	r.connectorTools = resolve
 }
 
 // MissionCrudResolver resolves a mission to the mission/automation
@@ -604,7 +604,7 @@ func NewNativeRunner(agent *loop.Agent, parker parkNotifier, log *slog.Logger) R
 // backend (nil disables search_kb on every mission turn, matching
 // SetKBSearch's nil-safe contract).
 // The return type is the unexported *nativeRunner, not Runner: callers
-// that need to wire SetConnectorReads (cmd/brain/main.go) must hold the
+// that need to wire SetConnectorTools (cmd/brain/main.go) must hold the
 // concrete type to call it, before handing the result on as a Runner
 // to buildDelegatedRunner.
 func NewNativeRunnerWithFloor(agent *loop.Agent, parker parkNotifier, floorDeny []string, sandbox sandboxExec, kbSearch KBSearchFunc, kbRead KBReadFunc, log *slog.Logger) *nativeRunner {
@@ -767,23 +767,35 @@ func (r *nativeRunner) crudToolsFor(ctx context.Context, m Mission) []*tools.Too
 	return out
 }
 
-// connectorReadTools resolves m's read-only connector tools (nil
-// resolver or no agent id means none): appended to worker/discover
-// ExtraTools so an automation mission (daily inbox digest, calendar
-// summary) can read gmail/calendar without the base connector surface
-// (which BuiltinsOnly excludes) ever reopening for a write.
-// Descriptions are neutralized: an MCP server's text reaches the
-// prompt here (D-157), and a native description loses nothing.
-func (r *nativeRunner) connectorReadTools(ctx context.Context, m Mission) []*tools.Tool {
-	if r.connectorReads == nil {
+// connectorToolSet resolves m's agent-parity connector tools (nil
+// resolver means none), descriptions neutralized: an MCP server's text
+// reaches the prompt here (D-157), and a native description loses
+// nothing. The full set (writes included) is layered onto worker
+// turns; discover turns take connectorReadTools, its ReadOnly subset.
+func (r *nativeRunner) connectorToolSet(ctx context.Context, m Mission) []*tools.Tool {
+	if r.connectorTools == nil {
 		return nil
 	}
-	read := r.connectorReads(ctx, m.AgentID)
-	out := make([]*tools.Tool, 0, len(read))
-	for _, t := range read {
+	set := r.connectorTools(ctx, m.AgentID)
+	out := make([]*tools.Tool, 0, len(set))
+	for _, t := range set {
 		c := *t
 		c.Description = NeutralizeSlot(t.Description)
 		out = append(out, &c)
+	}
+	return out
+}
+
+// connectorReadTools is connectorToolSet filtered to ReadOnly tools:
+// the discover turn's surface, so a mission may read gmail/calendar
+// before planning without carrying writes into exploration.
+func (r *nativeRunner) connectorReadTools(ctx context.Context, m Mission) []*tools.Tool {
+	set := r.connectorToolSet(ctx, m)
+	out := make([]*tools.Tool, 0, len(set))
+	for _, t := range set {
+		if t.ReadOnly {
+			out = append(out, t)
+		}
 	}
 	return out
 }
@@ -1336,7 +1348,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 	if t := r.searchMemoryTool(); t != nil {
 		extra = append(extra, t)
 	}
-	extra = append(extra, r.connectorReadTools(ctx, m)...)
+	extra = append(extra, r.connectorToolSet(ctx, m)...)
 	extra = append(extra, r.crudToolsFor(ctx, m)...)
 	extra = append(extra, r.noteTools(ctx, m, PhaseBuild)...)
 	if t := r.askUserTool(m, PhaseBuild); t != nil {
