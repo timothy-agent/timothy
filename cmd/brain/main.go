@@ -1524,24 +1524,45 @@ func missionAgentResolver(agentReg *agents.Store) missions.AgentResolver {
 	}
 }
 
-// missionConnectorReadsResolver adapts agentReg + conns to
-// missions.ConnectorReadsResolver: an agent's Tools allowlist
-// intersected with every built connector's ReadOnly-marked tools
-// (connectors.Manager.ReadOnlyTools already excludes non-read-only
-// tools and unreviewed MCP tools (D-157), and aggregates the rest into one unified tool
-// per capability, e.g. "search_mail" regardless of how many accounts
-// serve it. tools.ToolMatches is the same rule filterDefs/matchGrant
-// use: its exact-match branch is what actually fires here, since an
-// allowlist entry like "search_mail" IS the aggregated tool's own name,
-// with no connector-prefix suffix to resolve.
-func missionConnectorReadsResolver(agentReg *agents.Store, conns *connectors.Manager) missions.ConnectorReadsResolver {
+// missionConnectorToolsResolver adapts agentReg + conns to
+// missions.ConnectorToolsResolver: an agent's Tools allowlist
+// intersected with the agent-parity connector surface — every built
+// connector's native tools, reads and writes (connectors.Manager.
+// NativeTools), plus the D-157 operator-marked MCP reads
+// (connectors.Manager.ReadOnlyTools) — aggregated into one unified
+// tool per capability, e.g. "search_mail" regardless of how many
+// accounts serve it. The resolver is the operator's opt-in: an agent
+// never opted into a write tool never sees it on a mission turn.
+// tools.ToolMatches is the same rule filterDefs/matchGrant use: its
+// exact-match branch is what actually fires here, since an allowlist
+// entry like "search_mail" IS the aggregated tool's own name, with no
+// connector-prefix suffix to resolve.
+func missionConnectorToolsResolver(agentReg *agents.Store, conns *connectors.Manager) missions.ConnectorToolsResolver {
 	return func(ctx context.Context, agentID string) []*tools.Tool {
 		a, ok := agentReg.ResolveByID(ctx, agentID)
 		if !ok {
 			return nil
 		}
-		return intersectReadOnlyConnectorTools(a.Tools, conns.ReadOnlyTools())
+		available := append(conns.ReadOnlyTools(), conns.NativeTools()...)
+		return intersectConnectorTools(a.Tools, dedupeToolsByName(available))
 	}
+}
+
+// dedupeToolsByName keeps the first tool per name: ReadOnlyTools and
+// NativeTools overlap on native reads (NativeTools is the superset
+// there, but the merge is order-stable either way since both return
+// the same aggregated tool for a shared name).
+func dedupeToolsByName(in []*tools.Tool) []*tools.Tool {
+	seen := make(map[string]bool, len(in))
+	out := make([]*tools.Tool, 0, len(in))
+	for _, t := range in {
+		if seen[t.Name] {
+			continue
+		}
+		seen[t.Name] = true
+		out = append(out, t)
+	}
+	return out
 }
 
 // prStateResolver adapts a connector's gitprovider.Client to
@@ -1562,15 +1583,15 @@ func prStateResolver(gitClient func(ctx context.Context, id string) (gitprovider
 	}
 }
 
-// intersectReadOnlyConnectorTools is missionConnectorReadsResolver's
-// pure matching step, split out so it's unit-testable without a real
+// intersectConnectorTools is missionConnectorToolsResolver's pure
+// matching step, split out so it's unit-testable without a real
 // agents.Store/connectors.Manager (both need a live Postgres pool):
-// every available (already ReadOnly-marked, non-MCP) tool whose name
-// tools.ToolMatches an entry in allow. Empty allow (agent has no Tools
-// at all) matches nothing, same as filterDefs' empty-allow-means-
-// everything convention does NOT apply here: an agent that has never
-// opted into any tool gets no connector reads either.
-func intersectReadOnlyConnectorTools(allow []string, available []*tools.Tool) []*tools.Tool {
+// every available tool whose name tools.ToolMatches an entry in allow.
+// Empty allow (agent has no Tools at all) matches nothing, same as
+// filterDefs' empty-allow-means-everything convention does NOT apply
+// here: an agent that has never opted into any tool gets no connector
+// tools either.
+func intersectConnectorTools(allow []string, available []*tools.Tool) []*tools.Tool {
 	if len(allow) == 0 {
 		return nil
 	}
@@ -1660,7 +1681,7 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 		return out, nil
 	})
 	if conns != nil {
-		nativeRunner.SetConnectorReads(missionConnectorReadsResolver(agentReg, conns))
+		nativeRunner.SetConnectorTools(missionConnectorToolsResolver(agentReg, conns))
 	}
 	nativeRunner.SetProgressReader(store)
 	nativeRunner.SetLocation(flags.Location)

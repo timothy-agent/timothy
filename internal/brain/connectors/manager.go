@@ -196,6 +196,31 @@ func (m *Manager) ReadOnlyTools() []*tools.Tool {
 	return aggregateTools(m.sources, true, nil)
 }
 
+// NativeTools returns the aggregated non-MCP connector surface, reads
+// and writes, for mission worker turns (see the mission runner's
+// ConnectorToolsResolver): unlike ReadOnlyTools it carries native
+// writes, but MCP
+// stays out entirely — a remote server's write cannot be verified, so
+// D-157's operator-marked reads (ReadOnlyTools) remain the only MCP
+// surface a mission ever sees.
+func (m *Manager) NativeTools() []*tools.Tool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return aggregateTools(nonMCPSources(m.sources), false, nil)
+}
+
+// nonMCPSources drops every mcpSource from sources: the native
+// (Timothy-owned) connector kinds only.
+func nonMCPSources(sources map[string]Source) map[string]Source {
+	out := make(map[string]Source, len(sources))
+	for name, src := range sources {
+		if _, isMCP := src.(*mcpSource); !isMCP {
+			out[name] = src
+		}
+	}
+	return out
+}
+
 // AccountConnector resolves which connector name a unified tool call
 // (toolName plus its args) would actually route to: the same account
 // resolution aggregateTool's Execute applies, exposed standalone so

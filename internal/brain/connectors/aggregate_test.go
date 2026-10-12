@@ -225,6 +225,38 @@ func TestAggregateReadOnlyRequiresAllAccountsReadOnly(t *testing.T) {
 	}
 }
 
+// TestNativeToolsCarriesWritesExcludesMCP pins issue #1229's manager
+// half: NativeTools is the mission worker surface — native reads AND
+// writes, MCP dropped entirely (D-157's marked reads still arrive via
+// ReadOnlyTools, never here).
+func TestNativeToolsCarriesWritesExcludesMCP(t *testing.T) {
+	t.Parallel()
+	m := testManager(fakeRows{})
+	m.sources = map[string]Source{
+		"gmail": &fakeAccountSource{fakeSource: fakeSource{tools: []*tools.Tool{
+			searchTool("gmail", true),
+			{Name: "gmail_send", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		}}, kind: "google"},
+		"fastmail": &mcpSource{name: "fastmail", toolList: []*tools.Tool{
+			{Name: "gmail_send", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		}},
+	}
+
+	names := map[string]bool{}
+	for _, tl := range m.NativeTools() {
+		names[tl.Name] = true
+	}
+	if !names["search_mail"] {
+		t.Fatalf("NativeTools = %v, want native read search_mail", names)
+	}
+	if !names["gmail_send"] {
+		t.Fatalf("NativeTools = %v, want native write gmail_send", names)
+	}
+	if names["fastmail_gmail_send"] {
+		t.Fatalf("NativeTools = %v, MCP write leaked in", names)
+	}
+}
+
 // TestAggregateMCPToolsStayOutOfNativeAggregates pins D-160: native
 // kinds share one verb (search_mail), and an MCP tool never joins it,
 // even under the same raw name and schema: it keeps its provider
