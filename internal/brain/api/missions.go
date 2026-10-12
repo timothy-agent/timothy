@@ -842,6 +842,9 @@ func (h *missionAPI) resolveDeps() missions.ResolveDeps {
 		RouteExists:           h.routeExists,
 		CodingExecutorDefault: h.codingExecutorDefault,
 		ResolveRoute: func(ctx context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+			if h.resolveRoute == nil {
+				return nil, nil
+			}
 			return h.resolveRoute(ctx, route, harness, "")
 		},
 	}
@@ -863,6 +866,9 @@ func (h *missionAPI) resolveDeps() missions.ResolveDeps {
 // routeUnusable reports whether route has entries on the given axis
 // but none usable (missions.RouteUnusable).
 func (h *missionAPI) routeUnusable(ctx context.Context, route, harness string) (reason string, unusable bool) {
+	if h.resolveRoute == nil {
+		return "", false
+	}
 	return missions.RouteUnusable(ctx, func(ctx context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
 		return h.resolveRoute(ctx, route, harness, "")
 	}, route, harness)
