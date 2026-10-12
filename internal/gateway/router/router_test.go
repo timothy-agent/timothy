@@ -242,6 +242,52 @@ func TestResolveHintMissFallsToChain(t *testing.T) {
 	}
 }
 
+// TestResolveHintModelIDWithSlash covers issue #1235: some providers
+// publish model ids containing '/' (subagent/marsai-free), so a pin
+// splits at the longest configured provider name, not the last '/'.
+func TestResolveHintModelIDWithSlash(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "kilo", Kind: "api", Driver: "openaicompat", BaseURL: "https://kilo.example/v1", DefaultModel: "glm-5.3-flash", CredentialRef: "K", Enabled: true},
+		{ID: "p2", Name: "gw", Kind: "api", Driver: "openaicompat", BaseURL: "https://gw.example/v1", DefaultModel: "m1", CredentialRef: "K", Enabled: true},
+		{ID: "p3", Name: "gw/eu", Kind: "api", Driver: "openaicompat", BaseURL: "https://eu.gw.example/v1", DefaultModel: "m1", CredentialRef: "K", Enabled: true},
+	}
+	routeRows := []RouteRow{
+		{Name: "default", Chain: []ChainEntry{{ProviderID: "p1", Model: "glm-5.3-flash"}}, Enabled: true},
+	}
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("subagent/marsai-free", "chat", nil)}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(ref string) string { return "key" }, cat)
+
+	tests := []struct {
+		name, hint, want string
+	}{
+		{"pin with slash in model id", "kilo/subagent/marsai-free", "kilo/subagent/marsai-free,kilo/glm-5.3-flash"},
+		{"bare model id with slash", "subagent/marsai-free", "gw/subagent/marsai-free,kilo/glm-5.3-flash"},
+		{"provider name with slash wins as longest prefix", "gw/eu/m1", "gw/eu/m1,kilo/glm-5.3-flash"},
+		{"shorter provider name still pins", "gw/m1", "gw/m1,kilo/glm-5.3-flash"},
+		{"unknown provider falls to chain", "nope/subagent/marsai-free", "kilo/glm-5.3-flash"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			attempts, err := snap.Resolve("default", tt.hint, Sticky{})
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if got := attemptNames(attempts); got != tt.want {
+				t.Fatalf("attempts = %s, want %s", got, tt.want)
+			}
+			entries, ok := snap.ResolveRoute("default", "", tt.hint)
+			if !ok {
+				t.Fatal("ResolveRoute: route not found")
+			}
+			if got := entries[0].ProviderName + "/" + entries[0].Model; got != strings.Split(tt.want, ",")[0] {
+				t.Fatalf("ResolveRoute first entry = %s, want %s", got, strings.Split(tt.want, ",")[0])
+			}
+		})
+	}
+}
+
 func TestResolveSkipsUnhealthy(t *testing.T) {
 	t.Parallel()
 	snap := testSnapshot(t, map[string]string{"X_KEY": "sk-x"}) // A_KEY unresolved

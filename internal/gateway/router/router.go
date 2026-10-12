@@ -424,26 +424,7 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.
 	}
 
 	if hint != "" {
-		// "provider name/model" (D-078 mission model pins) names one
-		// exact chain entry, splitting on the LAST '/'. Checked before
-		// the bare-hint forms below so a pin can never be misresolved to
-		// the wrong provider when the same model id is served by more
-		// than one row (this is the whole reason the pin format exists -
-		// see mission route_model/plan_route_model/review_route_model).
-		// A model id that itself contains '/' (some catalog buckets
-		// publish those) cannot be pinned: the split hands the leading
-		// segment to the provider lookup, which misses, and the hint is
-		// reported as matching nothing rather than resolving to the
-		// wrong row. No configured provider name or model uses one.
-		if providerName, model, ok := splitProviderModelHint(hint); ok {
-			if row, ok := s.byName[providerName]; ok {
-				add(row, model, "hint")
-			} else {
-				skipped = append(skipped, fmt.Sprintf("hint %q matched nothing", hint))
-			}
-		} else if row, ok := s.byName[hint]; ok && row.DefaultModel != "" {
-			add(row, row.DefaultModel, "hint")
-		} else if row, model, ok := s.findModel(hint); ok {
+		if row, model, ok := s.resolveHint(hint); ok {
 			add(row, model, "hint")
 		} else {
 			skipped = append(skipped, fmt.Sprintf("hint %q matched nothing", hint))
@@ -758,15 +739,14 @@ func (s *Snapshot) ResolveRoute(route, harness, hint string) ([]ResolvedRouteEnt
 }
 
 // resolveHint maps a Resolve/ResolveRoute hint string to one provider
-// row and model id. Same forms as Resolve: "ProviderName/model", a bare
-// provider name (its default_model), or a bare model id (first enabled
-// catalog match). ok is false when nothing matches.
+// row and model id: "ProviderName/model" (D-078 pin), a bare provider
+// name (its default_model), or a bare model id (first enabled catalog
+// match). The pin form is checked first so a model id served by more
+// than one row resolves to the named provider. ok is false when
+// nothing matches.
 func (s *Snapshot) resolveHint(hint string) (ProviderRow, string, bool) {
-	if providerName, model, ok := splitProviderModelHint(hint); ok {
-		if row, ok := s.byName[providerName]; ok {
-			return row, model, true
-		}
-		return ProviderRow{}, "", false
+	if row, model, ok := s.splitPin(hint); ok {
+		return row, model, true
 	}
 	if row, ok := s.byName[hint]; ok && row.DefaultModel != "" {
 		return row, row.DefaultModel, true
@@ -1055,16 +1035,17 @@ func hasCapability(p provider.Provider, want provider.Capability) bool {
 	return false
 }
 
-// splitProviderModelHint splits a "provider name/model" hint on its
-// last '/', returning ok=false for a hint with no '/' (a bare
-// provider-or-model hint, handled by the existing byName/findModel
-// paths).
-func splitProviderModelHint(hint string) (providerName, model string, ok bool) {
-	i := strings.LastIndex(hint, "/")
-	if i < 0 {
-		return "", "", false
+// splitPin splits a "provider name/model" pin at the longest prefix
+// that names a configured provider, so a model id may contain '/'
+// itself (subagent/marsai-free). ok is false when no provider name
+// prefixes hint.
+func (s *Snapshot) splitPin(hint string) (ProviderRow, string, bool) {
+	for i := strings.LastIndex(hint, "/"); i > 0; i = strings.LastIndex(hint[:i], "/") {
+		if row, ok := s.byName[hint[:i]]; ok {
+			return row, hint[i+1:], true
+		}
 	}
-	return hint[:i], hint[i+1:], true
+	return ProviderRow{}, "", false
 }
 
 // findModel locates the first provider whose catalog entry has the

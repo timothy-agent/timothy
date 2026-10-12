@@ -634,12 +634,17 @@ func GatewayReviewWindow(resolve routeResolver, windows func(ctx context.Context
 		if err != nil {
 			return 0
 		}
-		// A D-078 pin is "provider name/model"; the catalog keys by model id.
-		if i := strings.LastIndex(model, "/"); i >= 0 {
-			model = model[i+1:]
-		}
-		if w := ws[model]; w > 0 {
-			return w
+		// A D-078 pin is "provider name/model" and a model id may contain
+		// '/' itself; the catalog keys by model id, so try each suffix.
+		for m := model; m != ""; {
+			if w := ws[m]; w > 0 {
+				return w
+			}
+			i := strings.Index(m, "/")
+			if i < 0 {
+				break
+			}
+			m = m[i+1:]
 		}
 		resolved, err := resolve(ctx, route, "")
 		if err != nil {

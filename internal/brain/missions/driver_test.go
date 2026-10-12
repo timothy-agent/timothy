@@ -4462,7 +4462,7 @@ func TestDriverReviewTokenCeiling(t *testing.T) {
 // 0 (unknown), never a guess.
 func TestGatewayReviewWindow(t *testing.T) {
 	windows := func(context.Context) (map[string]int, error) {
-		return map[string]int{"big": 1_000_000, "mid": 200_000}, nil
+		return map[string]int{"big": 1_000_000, "mid": 200_000, "subagent/marsai-free": 128_000, "marsai-free": 8_000}, nil
 	}
 	resolve := func(_ context.Context, route, _ string) (*gwclient.ResolvedRoute, error) {
 		switch route {
@@ -4482,6 +4482,8 @@ func TestGatewayReviewWindow(t *testing.T) {
 	}{
 		{"pinned model wins", "review", "Anthropic/big", 1_000_000},
 		{"bare model hint", "review", "mid", 200_000},
+		{"pinned model id with slash", "review", "kilo/subagent/marsai-free", 128_000},
+		{"bare model id with slash", "review", "subagent/marsai-free", 128_000},
 		{"first usable chain entry", "review", "", 200_000},
 		{"catalog miss is unknown", "unknown-model", "", 0},
 		{"resolve error is unknown", "missing", "", 0},
