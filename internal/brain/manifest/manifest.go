@@ -95,6 +95,11 @@ var availableWhen = map[string]string{
 	"fork_mission":    "WORKSPACES is set.",
 	"create_mission":      "WORKSPACES is set.",
 	"push_mission_branch": "WORKSPACES is set and connectors are enabled.",
+	"list_automations":    "Automations are enabled.",
+	"read_automation":     "Automations are enabled.",
+	"create_automation":   "Automations are enabled.",
+	"update_automation":   "Automations are enabled.",
+	"delete_automation":   "Automations are enabled.",
 	"write_file":          "Inside mission workspaces.",
 	"search_memory":       "Inside missions.",
 }
