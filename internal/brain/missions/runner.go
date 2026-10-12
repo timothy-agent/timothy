@@ -271,6 +271,11 @@ type nativeRunner struct {
 	// reads are offered, same as before this existed.
 	connectorReads ConnectorReadsResolver
 
+	// crudTools resolves a mission to the mission/automation CRUD tool
+	// instances its agent's Tools allowlist permits on worker turns
+	// (issue #1230, SetCrudTools): nil-safe: unset means none.
+	crudTools MissionCrudResolver
+
 	// automationTools resolves an automation mission's note tools per
 	// turn (see SetAutomationTools); nil means none.
 	automationTools func(ctx context.Context, m Mission) []*tools.Tool
@@ -547,6 +552,21 @@ func (r *nativeRunner) SetConnectorReads(resolve ConnectorReadsResolver) {
 	r.connectorReads = resolve
 }
 
+// MissionCrudResolver resolves a mission to the mission/automation
+// CRUD tools a worker turn for it may use (issue #1230): the
+// intersection of the mission's agent's Tools allowlist with the CRUD
+// surface, where create_mission is a mission-scoped instance whose
+// children link back via parent_mission_id (Driver.CreateChild, chain
+// depth capped in Go by settings.mission_max_chain_depth). Worker
+// turns only: discover/plan/review never see CRUD tools.
+type MissionCrudResolver func(ctx context.Context, m Mission) []*tools.Tool
+
+// SetCrudTools wires the crudTools resolver RunWorker layers onto
+// worker turns: a setter for the same reason SetConnectorReads is.
+func (r *nativeRunner) SetCrudTools(resolve MissionCrudResolver) {
+	r.crudTools = resolve
+}
+
 // KBSearchFunc runs one search_kb call over the whole KB: main curries
 // memclient.Client.KBSearch in, same shape as chat.go's KBSearch type.
 // boostCollections carries the operator's writing-samples collection
@@ -728,6 +748,23 @@ func (r *nativeRunner) skillsNudge(ctx context.Context, m Mission) string {
 		return ""
 	}
 	return "\n\n" + index + "\nLoad a skill with load_skill before deciding how to approach the goal: a skill that fits sets the output contract this mission is judged against."
+}
+
+// crudToolsFor is crudTools' nil-safe worker-turn layer (issue
+// #1230): descriptions neutralized like every other layered tool, so
+// an automation-authored name or goal never reaches the prompt raw.
+func (r *nativeRunner) crudToolsFor(ctx context.Context, m Mission) []*tools.Tool {
+	if r.crudTools == nil {
+		return nil
+	}
+	set := r.crudTools(ctx, m)
+	out := make([]*tools.Tool, 0, len(set))
+	for _, t := range set {
+		c := *t
+		c.Description = NeutralizeSlot(t.Description)
+		out = append(out, &c)
+	}
+	return out
 }
 
 // connectorReadTools resolves m's read-only connector tools (nil
@@ -1300,6 +1337,7 @@ func (r *nativeRunner) RunWorker(ctx context.Context, m Mission, packet WorkPack
 		extra = append(extra, t)
 	}
 	extra = append(extra, r.connectorReadTools(ctx, m)...)
+	extra = append(extra, r.crudToolsFor(ctx, m)...)
 	extra = append(extra, r.noteTools(ctx, m, PhaseBuild)...)
 	if t := r.askUserTool(m, PhaseBuild); t != nil {
 		extra = append(extra, t)

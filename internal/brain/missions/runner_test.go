@@ -4171,3 +4171,67 @@ func TestRunWorkerNeutralizesConnectorReadDescriptions(t *testing.T) {
 	}
 	t.Fatal("notion_search missing from worker ExtraTools")
 }
+
+// TestRunWorkerLayersCrudTools pins issue #1230: worker turns get the
+// mission/automation CRUD tools the crudTools resolver returns.
+func TestRunWorkerLayersCrudTools(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	r.crudTools = func(ctx context.Context, m Mission) []*tools.Tool {
+		return []*tools.Tool{{Name: "create_mission"}, {Name: "list_automations", ReadOnly: true}}
+	}
+	m := Mission{ID: "m1", AgentID: "a1", Route: "default", Workspace: "/workspace/missions/m1"}
+	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	var names []string
+	for _, tool := range agent.requests[0].ExtraTools {
+		names = append(names, tool.Name)
+	}
+	for _, want := range []string{"create_mission", "list_automations"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("worker ExtraTools = %v, want %s", names, want)
+		}
+	}
+}
+
+// TestRunWorkerCrudToolsNilSafe proves an unset resolver never adds
+// CRUD tools, matching SetConnectorReads' nil-safety contract.
+func TestRunWorkerCrudToolsNilSafe(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(missionStatusToolName, `{"outcome":"done","evidence":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	m := Mission{ID: "m1", Route: "default", Workspace: "/workspace/missions/m1"}
+	if _, _, err := r.RunWorker(context.Background(), m, WorkPacket{Goal: "test"}); err != nil {
+		t.Fatalf("RunWorker: %v", err)
+	}
+	for _, tool := range agent.requests[0].ExtraTools {
+		if strings.Contains(tool.Name, "automation") || tool.Name == "create_mission" || tool.Name == "fork_mission" {
+			t.Fatalf("worker ExtraTools = %v, want no CRUD tools", tool.Name)
+		}
+	}
+}
+
+// TestDiscoverSessionNeverLayersCrudTools pins the worker-only rule:
+// discover turns never see CRUD tools even with the resolver set.
+func TestDiscoverSessionNeverLayersCrudTools(t *testing.T) {
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(discoverNotesToolName, `{"findings":"ok"}`)},
+	}}
+	r := newTestRunner(agent)
+	r.crudTools = func(ctx context.Context, m Mission) []*tools.Tool {
+		return []*tools.Tool{{Name: "create_mission"}}
+	}
+	m := Mission{ID: "m1", AgentID: "a1", Route: "default"}
+	if _, _, _, err := r.DiscoverSession(context.Background(), m); err != nil {
+		t.Fatalf("DiscoverSession: %v", err)
+	}
+	for _, tool := range agent.requests[0].ExtraTools {
+		if tool.Name == "create_mission" {
+			t.Fatalf("discover ExtraTools includes %q", tool.Name)
+		}
+	}
+}

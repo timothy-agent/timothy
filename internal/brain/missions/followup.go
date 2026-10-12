@@ -256,6 +256,43 @@ func (d *Driver) CreateFollowUp(ctx context.Context, parentID string, opts Follo
 	return id, nil
 }
 
+// CreateChild spawns a new mission from a RUNNING parent mission's
+// worker turn (issue #1230): the fan-out shape an automation mission
+// needs (fetch the list, one child per item), where the parent is not
+// terminal and carries no outcome digest yet, so unlike CreateFollowUp
+// the child gets only the parent_mission_id link, no lineage source.
+// Refused in Go once the parent's chain depth reaches the
+// mission_max_chain_depth ceiling.
+func (d *Driver) CreateChild(ctx context.Context, parentID string, req CreateRequest) (string, error) {
+	goal := strings.TrimSpace(req.Goal)
+	if goal == "" {
+		return "", fmt.Errorf("create child: goal is required")
+	}
+	depth, err := d.store.ChainDepth(ctx, parentID)
+	if err != nil {
+		return "", fmt.Errorf("create child: %w", err)
+	}
+	if depth >= d.store.MaxChainDepth(ctx) {
+		return "", fmt.Errorf("create child: mission chain depth %d reached the mission_max_chain_depth ceiling; run this work from the operator level instead", depth)
+	}
+	parent, err := d.store.Get(ctx, parentID)
+	if err != nil {
+		return "", fmt.Errorf("create child: parent mission %s not found: %w", parentID, err)
+	}
+	req.Goal = goal
+	req.ParentMissionID = parent.ID
+	req.OriginKind = OriginFollowup
+	m, err := ResolveDefaults(ctx, req, d.resolveDeps)
+	if err != nil {
+		return "", fmt.Errorf("create child: %w", err)
+	}
+	id, err := d.Create(ctx, m)
+	if err != nil {
+		return "", fmt.Errorf("create child: %w", err)
+	}
+	return id, nil
+}
+
 // resolveFollowUpAttachments turns parent workspace-relative paths into
 // "pdf" source entries carrying the file's markdown plus the parent id
 // the provisioner copies the bytes from. Every path must resolve to a

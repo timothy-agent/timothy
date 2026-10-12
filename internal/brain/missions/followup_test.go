@@ -694,3 +694,66 @@ func TestInheritParentKindChangeExplicitFieldsStillWin(t *testing.T) {
 		t.Fatalf("explicit fields lost across a kind change: %+v", got)
 	}
 }
+
+// TestCreateChildFromRunningParent pins issue #1230: a worker turn's
+// create_mission spawns a child from a RUNNING parent, linked via
+// parent_mission_id but carrying no outcome-digest lineage source
+// (the parent has no outcome yet).
+func TestCreateChildFromRunningParent(t *testing.T) {
+	store := newFakeStore()
+	store.put("parent", Mission{ID: "parent", Goal: "fan out", Kind: KindGeneral, Phase: PhaseBuild, Status: StatusWorking})
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+
+	id, err := d.CreateChild(context.Background(), "parent", CreateRequest{Goal: "post to one url", Kind: KindGeneral, Light: true})
+	if err != nil {
+		t.Fatalf("CreateChild: %v", err)
+	}
+	child, err := store.Get(context.Background(), id)
+	if err != nil {
+		t.Fatalf("get child: %v", err)
+	}
+	if child.ParentMissionID != "parent" {
+		t.Fatalf("child.ParentMissionID = %q, want parent", child.ParentMissionID)
+	}
+	if child.OriginKind != OriginFollowup {
+		t.Fatalf("child.OriginKind = %q, want %q", child.OriginKind, OriginFollowup)
+	}
+	for _, s := range child.Sources {
+		if s.ID == ParentLineageID {
+			t.Fatal("running parent's child must not carry an outcome-digest lineage source")
+		}
+	}
+}
+
+// TestCreateChildDepthCap proves the Go refusal at the ceiling: with
+// the fallback cap of 3, a chain root -> a -> b -> c gives c depth 3,
+// so spawning FROM c is refused while spawning FROM b still works.
+func TestCreateChildDepthCap(t *testing.T) {
+	store := newFakeStore()
+	store.put("root", Mission{ID: "root", Goal: "g", Kind: KindGeneral, Phase: PhaseBuild, Status: StatusWorking})
+	store.put("a", Mission{ID: "a", Goal: "g", Kind: KindGeneral, Phase: PhaseBuild, Status: StatusWorking, ParentMissionID: "root"})
+	store.put("b", Mission{ID: "b", Goal: "g", Kind: KindGeneral, Phase: PhaseBuild, Status: StatusWorking, ParentMissionID: "a"})
+	store.put("c", Mission{ID: "c", Goal: "g", Kind: KindGeneral, Phase: PhaseBuild, Status: StatusWorking, ParentMissionID: "b"})
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+
+	if _, err := d.CreateChild(context.Background(), "b", CreateRequest{Goal: "still allowed"}); err != nil {
+		t.Fatalf("CreateChild from b (depth 2 under cap 3): %v", err)
+	}
+	_, err := d.CreateChild(context.Background(), "c", CreateRequest{Goal: "over the cap"})
+	if err == nil {
+		t.Fatal("expected the depth-cap refusal from c (depth 3)")
+	}
+	if !strings.Contains(err.Error(), "mission_max_chain_depth") {
+		t.Fatalf("error %q should name mission_max_chain_depth", err.Error())
+	}
+}
+
+// TestCreateChildRequiresGoal proves the empty-goal refusal before
+// any store access.
+func TestCreateChildRequiresGoal(t *testing.T) {
+	store := newFakeStore()
+	d := NewDriver(store, followUpBlockedRunner(), nil, &fakeSessionCreator{}, &fakeGranter{}, nil, nil, slog.Default())
+	if _, err := d.CreateChild(context.Background(), "x", CreateRequest{Goal: "  "}); err == nil {
+		t.Fatal("expected the empty-goal refusal")
+	}
+}
