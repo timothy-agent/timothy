@@ -627,8 +627,8 @@ func main() {
 		missionAdapter := missionToolStore{missionStore}
 		newTools := []*tools.Tool{
 			builtin.ListMissions(missionAdapter),
-			builtin.GetMission(missionAdapter, missionAdapter),
-			builtin.FollowupMission(missionAdapter, missionFollowUpCreatorAdapter{missionDriver}),
+			builtin.ReadMission(missionAdapter, missionAdapter),
+			builtin.ForkMission(missionAdapter, missionFollowUpCreatorAdapter{missionDriver}),
 			builtin.CreateMission(chatMissionCreator(agentReg, missionDriver, missionResolve), chatMissionOrigin(channelStore), flags.WebBaseURL),
 		}
 		if conns != nil && secrets != nil {
@@ -647,6 +647,29 @@ func main() {
 			swapAgentTools(agent, current, conns, app.Log, toolCalls)
 		} else if constrained, defs, err := compileToolset(current, nil, app.Log, toolCalls); err != nil {
 			app.Log.Warn("mission tool registration failed; agent keeps its previous tool surface", "error", err)
+		} else {
+			agent.SwapTools(constrained, defs)
+		}
+	}
+
+	// Chat-facing automation CRUD tools, registered beside the mission
+	// tools for the same reason: they need automationStore, which is
+	// built after buildAgent. The adapter resolves agent names to ids
+	// and ids-or-names to automations, so the tools accept either.
+	if automationStore != nil {
+		autoAdapter := automationToolsAdapter{store: automationStore, agents: agentReg}
+		newTools := []*tools.Tool{
+			builtin.ListAutomations(autoAdapter),
+			builtin.ReadAutomation(autoAdapter),
+			builtin.CreateAutomation(autoAdapter),
+			builtin.UpdateAutomation(autoAdapter),
+			builtin.DeleteAutomation(autoAdapter),
+		}
+		current := builtinSet.add(newTools...)
+		if conns != nil {
+			swapAgentTools(agent, current, conns, app.Log, toolCalls)
+		} else if constrained, defs, err := compileToolset(current, nil, app.Log, toolCalls); err != nil {
+			app.Log.Warn("automation tool registration failed; agent keeps its previous tool surface", "error", err)
 		} else {
 			agent.SwapTools(constrained, defs)
 		}
@@ -1722,8 +1745,14 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	})
 	driver.SetAutoResumeMax(flags.MissionAutoResumeBackoffMax, flags.MissionAutoResumeInfraMax)
 	store.SetDefaultMaxIterations(flags.MissionDefaultMaxIterations)
+	store.SetMaxChainDepth(flags.MissionMaxChainDepth)
 	resolveAgent := missionAgentResolver(agentReg)
 	driver.SetAgentResolver(resolveAgent)
+	// Issue #1230: worker turns may carry the mission/automation CRUD
+	// tools the mission's agent allows. The create_mission instance is
+	// mission-scoped, routing through Driver.CreateChild so children
+	// link back via parent_mission_id under the Go chain-depth cap.
+	nativeRunner.SetCrudTools(missionCrudToolsResolver(agentReg, driver, store, noteStore))
 	driver.SetNameMission(chat.TitleOverGateway(gwc, log))
 	// Mission workers see the same per-agent skill index chat sessions
 	// get (skills.Index over the agent's allowlist), resolved at packet
@@ -1883,7 +1912,7 @@ func toMissionRecord(m missions.Mission) builtin.MissionRecord {
 }
 
 // missionToolStore adapts *missions.Store to the builtin package's
-// list_missions/get_mission/push_mission_branch tool interfaces
+// list_missions/read_mission/push_mission_branch tool interfaces
 // (missionLister, missionEventReader): a thin translation layer since
 // builtin cannot import missions.Mission/missions.Event directly
 // (import cycle, see MissionRecord's doc comment).
@@ -1923,6 +1952,132 @@ func (a missionToolStore) MissionEvents(ctx context.Context, id string) ([]built
 	return out, nil
 }
 
+// automationToolsAdapter adapts *automations.Store + the agent
+// registry to the builtin package's automationStore interface: the
+// CRUD tools resolve agent names to ids (agents.Store.Resolve, the
+// same path chatMissionCreator takes) and automation ids-or-exact-
+// names to automations. builtin cannot import automations directly
+// (import cycle via missions, see builtin.AutomationRecord).
+type automationToolsAdapter struct {
+	store  *automations.Store
+	agents *agents.Store
+}
+
+func (a automationToolsAdapter) toRecord(auto automations.Automation) builtin.AutomationRecord {
+	rec := builtin.AutomationRecord{
+		ID: auto.ID, Name: auto.Name, Description: auto.Description, AgentID: auto.AgentID,
+		Concurrency: auto.Concurrency, MaxConcurrent: auto.MaxConcurrent, MaxRunsPerHour: auto.MaxRunsPerHour,
+		Enabled: auto.Enabled, DisabledReason: auto.DisabledReason,
+		CreatedAt: auto.CreatedAt, UpdatedAt: auto.UpdatedAt,
+		Triggers: make([]builtin.AutomationTriggerView, 0, len(auto.Triggers)),
+	}
+	if auto.Action.Kind != "" {
+		rec.ActionKind = auto.Action.Kind
+	}
+	if auto.Action.Mission != nil {
+		rec.MissionGoal = auto.Action.Mission.Goal
+		rec.MissionName = auto.Action.Mission.Name
+		rec.MissionKind = auto.Action.Mission.Kind
+		rec.Light = auto.Action.Mission.Light
+	}
+	for _, t := range auto.Triggers {
+		rec.Triggers = append(rec.Triggers, builtin.AutomationTriggerView{Kind: t.Kind, Config: t.Config, Enabled: t.Enabled})
+	}
+	return rec
+}
+
+// resolveAutomation maps an automation id or exact name to its id.
+func (a automationToolsAdapter) resolveAutomation(ctx context.Context, idOrName string) (string, error) {
+	list, err := a.store.List(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, auto := range list {
+		if auto.ID == idOrName || auto.Name == idOrName {
+			return auto.ID, nil
+		}
+	}
+	return "", fmt.Errorf("no automation found with id or name %q", idOrName)
+}
+
+func (a automationToolsAdapter) ListAutomations(ctx context.Context) ([]builtin.AutomationRecord, error) {
+	list, err := a.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]builtin.AutomationRecord, len(list))
+	for i, auto := range list {
+		out[i] = a.toRecord(auto)
+	}
+	return out, nil
+}
+
+func (a automationToolsAdapter) GetAutomation(ctx context.Context, idOrName string) (builtin.AutomationRecord, error) {
+	id, err := a.resolveAutomation(ctx, idOrName)
+	if err != nil {
+		return builtin.AutomationRecord{}, err
+	}
+	auto, err := a.store.Get(ctx, id)
+	if err != nil {
+		return builtin.AutomationRecord{}, err
+	}
+	return a.toRecord(auto), nil
+}
+
+func (a automationToolsAdapter) CreateAutomation(ctx context.Context, in builtin.AutomationCreateInput) (string, error) {
+	agent, ok := a.agents.Resolve(ctx, in.AgentID)
+	if !ok {
+		return "", fmt.Errorf("unknown agent %q", in.AgentID)
+	}
+	auto := automations.Automation{
+		Name: in.Name, Description: in.Description, AgentID: agent.ID,
+		Concurrency: in.Concurrency, MaxConcurrent: in.MaxConcurrent, MaxRunsPerHour: in.MaxRunsPerHour,
+		Enabled: in.Enabled,
+		Action: automations.Action{Kind: automations.ActionMission, Mission: &missions.MissionTemplate{
+			Goal: in.MissionGoal, Name: in.MissionName, Kind: in.MissionKind,
+			Light: in.Light, AutoApproveTools: in.AutoApproveTools,
+		}},
+	}
+	for _, t := range in.Triggers {
+		auto.Triggers = append(auto.Triggers, automations.Trigger{Kind: t.Kind, Config: t.Config, Enabled: t.Enabled})
+	}
+	return a.store.Create(ctx, auto)
+}
+
+func (a automationToolsAdapter) PatchAutomation(ctx context.Context, idOrName string, p builtin.AutomationPatchInput) error {
+	id, err := a.resolveAutomation(ctx, idOrName)
+	if err != nil {
+		return err
+	}
+	patch := automations.Patch{
+		Name: p.Name, Description: p.Description,
+		Enabled: p.Enabled, MaxRunsPerHour: p.MaxRunsPerHour,
+	}
+	if p.AgentID != nil {
+		agent, ok := a.agents.Resolve(ctx, *p.AgentID)
+		if !ok {
+			return fmt.Errorf("unknown agent %q", *p.AgentID)
+		}
+		patch.AgentID = &agent.ID
+	}
+	if p.Triggers != nil {
+		ts := make([]automations.Trigger, 0, len(*p.Triggers))
+		for _, t := range *p.Triggers {
+			ts = append(ts, automations.Trigger{Kind: t.Kind, Config: t.Config, Enabled: t.Enabled})
+		}
+		patch.Triggers = &ts
+	}
+	return a.store.Patch(ctx, id, patch)
+}
+
+func (a automationToolsAdapter) DeleteAutomation(ctx context.Context, idOrName string) error {
+	id, err := a.resolveAutomation(ctx, idOrName)
+	if err != nil {
+		return err
+	}
+	return a.store.Delete(ctx, id)
+}
+
 // missionCompleterAdapter adapts *destinations.RepoAdapter to the
 // builtin package's missionCompleter interface: push_mission_branch's
 // push/PR calls go through the exact same RepoAdapter the button/
@@ -1951,8 +2106,66 @@ func (a missionCompleterAdapter) OpenMissionPR(ctx context.Context, id, token st
 	return a.completer.OpenPR(ctx, m, token)
 }
 
+// missionCrudToolsResolver builds the per-mission CRUD surface
+// (issue #1230): the mission/automation tools filtered by the
+// mission's agent's Tools allowlist (same match rule and empty-means-
+// none convention as the connector tools resolver). create_mission is
+// a mission-scoped instance (Driver.CreateChild) so a child mission
+// links back to its spawning mission; every other tool is the same
+// instance chat uses, with the same approval gates.
+func missionCrudToolsResolver(agentReg *agents.Store, driver *missions.Driver, store *missions.Store, autoStore *automations.Store) missions.MissionCrudResolver {
+	return func(ctx context.Context, m missions.Mission) []*tools.Tool {
+		if m.AgentID == "" {
+			return nil
+		}
+		a, ok := agentReg.ResolveByID(ctx, m.AgentID)
+		if !ok {
+			return nil
+		}
+		adapter := missionToolStore{store}
+		set := []*tools.Tool{
+			builtin.ListMissions(adapter),
+			builtin.ReadMission(adapter, adapter),
+			builtin.ForkMission(adapter, missionFollowUpCreatorAdapter{driver}),
+			builtin.CreateMission(missionChildCreator(agentReg, driver, m.ID), nil, nil),
+		}
+		if autoStore != nil {
+			auto := automationToolsAdapter{store: autoStore, agents: agentReg}
+			set = append(set,
+				builtin.ListAutomations(auto),
+				builtin.ReadAutomation(auto),
+				builtin.CreateAutomation(auto),
+				builtin.UpdateAutomation(auto),
+				builtin.DeleteAutomation(auto),
+			)
+		}
+		return intersectConnectorTools(a.Tools, set)
+	}
+}
+
+// missionChildCreator adapts Driver.CreateChild to the builtin
+// create_mission tool for one spawning mission: children carry
+// parent_mission_id back to it, depth-capped in Go by
+// settings.mission_max_chain_depth (the same refusal an operator-level
+// chain would hit).
+func missionChildCreator(agentReg *agents.Store, driver *missions.Driver, parentID string) func(ctx context.Context, req builtin.MissionCreateRequest) (string, error) {
+	return func(ctx context.Context, req builtin.MissionCreateRequest) (string, error) {
+		var agentID string
+		if req.Agent != "" {
+			a, ok := agentReg.Resolve(ctx, req.Agent)
+			if !ok {
+				return "", fmt.Errorf("unknown agent %q", req.Agent)
+			}
+			agentID = a.ID
+		}
+		return driver.CreateChild(ctx, parentID, missions.CreateRequest{
+			Goal: req.Goal, Name: req.Name, Kind: req.Kind, AgentID: agentID, Light: req.Light,
+		})
+	}
+}
+
 // missionFollowUpCreatorAdapter adapts *missions.Driver to the builtin
-// package's missionFollowUpCreator interface: followup_mission's
+// package's missionFollowUpCreator interface: fork_mission's
 // create call goes through the exact same Driver.CreateFollowUp the
 // mission-create API's own ParentMissionID branch uses.
 type missionFollowUpCreatorAdapter struct {

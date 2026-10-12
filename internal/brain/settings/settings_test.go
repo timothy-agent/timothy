@@ -148,6 +148,7 @@ func TestMissionCeilingDefaults(t *testing.T) {
 		{ValueMissionHarnessRetryCap, s.MissionHarnessRetryCap(ctx), DefaultMissionHarnessRetryCap},
 		{ValueMissionAutoResumeBackoffMax, s.MissionAutoResumeBackoffMax(ctx), DefaultMissionAutoResumeBackoffMax},
 		{ValueMissionAutoResumeInfraMax, s.MissionAutoResumeInfraMax(ctx), DefaultMissionAutoResumeInfraMax},
+		{ValueMissionMaxChainDepth, s.MissionMaxChainDepth(ctx), DefaultMissionMaxChainDepth},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)

@@ -118,13 +118,18 @@ func exemptTools() map[string]bool {
 		// there is nothing for a prompt to guard that the tool
 		// doesn't already enforce harder.
 		"write_file": true,
-		// list_missions/get_mission are pure reads over the missions
+		// list_missions/read_mission are pure reads over the missions
 		// store (list / status snapshot), zero side effects, same
 		// reasoning as search_web. push_mission_branch is
 		// deliberately NOT here: it must always ask (see
 		// PushMissionBranch's doc comment).
 		"list_missions": true,
-		"get_mission":   true,
+		"read_mission":   true,
+		// list_automations/read_automation are the same pure reads over
+		// the automations store; the write verbs (create/update/delete)
+		// are deliberately NOT here: they must always ask.
+		"list_automations":  true,
+		"read_automation":   true,
 		// search_kb is a pure read scoped to collections bound in Go
 		// at construction (D-060), never model input, same reasoning
 		// as search_web/missions.

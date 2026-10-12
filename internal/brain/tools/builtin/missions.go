@@ -57,7 +57,7 @@ type missionLister interface {
 }
 
 // missionEventReader is the narrow slice of missions access
-// get_mission needs to find a mission's latest PR URL, if any.
+// read_mission needs to find a mission's latest PR URL, if any.
 type missionEventReader interface {
 	MissionEvents(ctx context.Context, id string) ([]MissionEvent, error)
 }
@@ -205,7 +205,7 @@ func ListMissions(store missionLister) *tools.Tool {
 Arguments (optional):
 - limit (int): max missions to list (default 10, max 50).
 
-Each list item has id/name/phase/status/updated_at. Use get_mission
+Each list item has id/name/phase/status/updated_at. Use read_mission
 with the id to read a full status snapshot.
 
 Example: {} → the 10 most recently updated missions.`,
@@ -251,9 +251,9 @@ Example: {} → the 10 most recently updated missions.`,
 // worker/reviewer's own claims — same D-0xx discipline as the harness
 // itself). Registered only when store/events are non-nil (missions
 // engine wired, see cmd/brain/main.go's WORKSPACES gate).
-func GetMission(store missionLister, events missionEventReader) *tools.Tool {
+func ReadMission(store missionLister, events missionEventReader) *tools.Tool {
 	return &tools.Tool{
-		Name: "get_mission",
+		Name: "read_mission",
 		// Trusted: same harness snapshot list_missions reads from.
 		Trusted: true,
 		Description: `Reads one mission's status: answers "is mission X done?", "what's the status of my last mission?", and similar questions from the harness's own records — never the worker/reviewer's claims.
@@ -411,7 +411,7 @@ a PR, returns the PR url.`,
 var missionTerminalPhases = map[string]bool{"done": true, "failed": true}
 
 // missionFollowUpCreator is the narrow slice of missions access
-// followup_mission needs — *missions.Driver.CreateFollowUp satisfies
+// fork_mission needs — *missions.Driver.CreateFollowUp satisfies
 // it via cmd/brain/main.go's adapter.
 type missionFollowUpCreator interface {
 	CreateFollowUpMission(ctx context.Context, parentID string, req FollowUpRequest) (string, error)
@@ -427,7 +427,7 @@ type FollowUpBrief struct {
 	References         []string
 }
 
-// FollowUpRequest is one followup_mission call's inputs: the child's
+// FollowUpRequest is one fork_mission call's inputs: the child's
 // goal, the parent workspace files to carry over, and the brief.
 type FollowUpRequest struct {
 	Goal   string
@@ -455,9 +455,9 @@ type missionFollowupArgs struct {
 // is — deliberately left out of Permissions' exempt map (see
 // internal/brain/tools/permissions.go) so spawning a new mission
 // against a finished one always parks on an explicit human approval.
-func FollowupMission(store missionLister, creator missionFollowUpCreator) *tools.Tool {
+func ForkMission(store missionLister, creator missionFollowUpCreator) *tools.Tool {
 	return &tools.Tool{
-		Name:    "followup_mission",
+		Name:    "fork_mission",
 		Trusted: true,
 		Description: `Spawns a NEW mission continuing a finished one. Requires explicit human approval every time — this tool is never auto-approved.
 
