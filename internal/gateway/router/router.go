@@ -725,8 +725,12 @@ func selfPaired(harness string) bool {
 // harness the route must still exist (callers rely on that contract)
 // but its chain is ignored: entries are synthesized from every enabled
 // kind='cli' row whose driver matches the harness, sorted by provider
-// name for determinism.
-func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bool) {
+// name for determinism. hint (same forms Resolve accepts —
+// "ProviderName/model", bare provider, or bare model id) prepends that
+// entry when it resolves, gated like a chain member, and dedupes it out
+// of the chain so a D-078 model pin off the route still appears in the
+// preview; an unmatched hint is ignored.
+func (s *Snapshot) ResolveRoute(route, harness, hint string) ([]ResolvedRouteEntry, bool) {
 	_, ok := s.routes[route]
 	if !ok {
 		return nil, false
@@ -734,11 +738,11 @@ func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bo
 	if harness != "" && !KnownHarnesses[harness] {
 		return nil, false
 	}
+	required := []provider.Capability{s.requiredCapability(route)}
 	if harness != "" && selfPaired(harness) {
-		return s.resolveSelfPaired(harness), true
+		return s.withRouteHint(s.resolveSelfPaired(harness), hint, harness, required), true
 	}
 	chain := s.routes[route]
-	required := []provider.Capability{s.requiredCapability(route)}
 	out := make([]ResolvedRouteEntry, 0, len(chain))
 	for _, e := range chain {
 		re := ResolvedRouteEntry{ProviderID: e.ProviderID, Model: e.Model}
@@ -748,49 +752,100 @@ func (s *Snapshot) ResolveRoute(route, harness string) ([]ResolvedRouteEntry, bo
 			out = append(out, re)
 			continue
 		}
-		re.ProviderName, re.Driver, re.Kind, re.CredentialRef = row.Name, row.Driver, row.Kind, row.CredentialRef
-		if re.Model == "" {
-			re.Model = row.DefaultModel
-		}
-		re.BaseURL = row.BaseURL
-		re.Prices = s.Prices(row.Name, re.Model)
-		if harness == "" {
-			if _, _, reason := s.entryGate(row, re.Model, required); reason != "" {
-				re.SkipReason = reason
-			} else {
-				re.Usable = true
-			}
-		} else {
-			// The anthropic_base_url override only applies to a kind='api'
-			// row pointed at a third-party anthropic-compatible endpoint,
-			// for a harness that actually accepts the anthropic wire
-			// (codex-cli never does — it speaks openai only) — a kind='cli'
-			// row (subscription/oauth-auth) talks to the vendor's own
-			// default endpoint and must keep BaseURL empty, or
-			// BuildInvocation's AuthSubscription/AuthOAuthToken checks
-			// reject the spawn outright (they require no BaseURL at all).
-			overrideApplied := row.Kind != "cli" && row.Driver != "anthropic" &&
-				row.AnthropicBaseURL != "" && harnessDrivers[harness]["anthropic"]
-			if overrideApplied {
-				re.BaseURL = row.AnthropicBaseURL
-			}
-			re.Usable, re.SkipReason = executorUsable(row, harness)
-			// A harness whose openai wire is chat/completions only cannot
-			// run a model the catalog marks Responses-only (issue #718: pi
-			// on gpt-5.3-codex got a 404 every turn).
-			if re.Usable && harnessChatOnly[harness] && s.responsesOnly(row, re.Model) {
-				re.Usable, re.SkipReason = false, "responses_only: "+harness+" speaks chat/completions and this model serves only /v1/responses"
-			}
-			if re.Usable && re.Model == "" {
-				re.Usable, re.SkipReason = false, emptyModelSkip
-			}
-			if row.Kind != "cli" {
-				re.Wire = harnessWire(row.Driver, overrideApplied)
-			}
-		}
-		out = append(out, re)
+		out = append(out, s.annotateResolvedEntry(row, re.Model, harness, required))
 	}
-	return out, true
+	return s.withRouteHint(out, hint, harness, required), true
+}
+
+// resolveHint maps a Resolve/ResolveRoute hint string to one provider
+// row and model id. Same forms as Resolve: "ProviderName/model", a bare
+// provider name (its default_model), or a bare model id (first enabled
+// catalog match). ok is false when nothing matches.
+func (s *Snapshot) resolveHint(hint string) (ProviderRow, string, bool) {
+	if providerName, model, ok := splitProviderModelHint(hint); ok {
+		if row, ok := s.byName[providerName]; ok {
+			return row, model, true
+		}
+		return ProviderRow{}, "", false
+	}
+	if row, ok := s.byName[hint]; ok && row.DefaultModel != "" {
+		return row, row.DefaultModel, true
+	}
+	if row, model, ok := s.findModel(hint); ok {
+		return row, model, true
+	}
+	return ProviderRow{}, "", false
+}
+
+// annotateResolvedEntry builds one ResolveRoute entry for row+model on
+// the given axis — shared by chain walk and the optional hint prepend.
+func (s *Snapshot) annotateResolvedEntry(row ProviderRow, model, harness string, required []provider.Capability) ResolvedRouteEntry {
+	re := ResolvedRouteEntry{
+		ProviderID: row.ID, ProviderName: row.Name, Driver: row.Driver, Kind: row.Kind,
+		CredentialRef: row.CredentialRef, Model: model, BaseURL: row.BaseURL,
+	}
+	if re.Model == "" {
+		re.Model = row.DefaultModel
+	}
+	re.Prices = s.Prices(row.Name, re.Model)
+	if harness == "" {
+		if _, _, reason := s.entryGate(row, re.Model, required); reason != "" {
+			re.SkipReason = reason
+		} else {
+			re.Usable = true
+		}
+		return re
+	}
+	// The anthropic_base_url override only applies to a kind='api'
+	// row pointed at a third-party anthropic-compatible endpoint,
+	// for a harness that actually accepts the anthropic wire
+	// (codex-cli never does — it speaks openai only) — a kind='cli'
+	// row (subscription/oauth-auth) talks to the vendor's own
+	// default endpoint and must keep BaseURL empty, or
+	// BuildInvocation's AuthSubscription/AuthOAuthToken checks
+	// reject the spawn outright (they require no BaseURL at all).
+	overrideApplied := row.Kind != "cli" && row.Driver != "anthropic" &&
+		row.AnthropicBaseURL != "" && harnessDrivers[harness]["anthropic"]
+	if overrideApplied {
+		re.BaseURL = row.AnthropicBaseURL
+	}
+	re.Usable, re.SkipReason = executorUsable(row, harness)
+	// A harness whose openai wire is chat/completions only cannot
+	// run a model the catalog marks Responses-only (issue #718: pi
+	// on gpt-5.3-codex got a 404 every turn).
+	if re.Usable && harnessChatOnly[harness] && s.responsesOnly(row, re.Model) {
+		re.Usable, re.SkipReason = false, "responses_only: "+harness+" speaks chat/completions and this model serves only /v1/responses"
+	}
+	if re.Usable && re.Model == "" {
+		re.Usable, re.SkipReason = false, emptyModelSkip
+	}
+	if row.Kind != "cli" {
+		re.Wire = harnessWire(row.Driver, overrideApplied)
+	}
+	return re
+}
+
+// withRouteHint prepends a resolved hint entry (when the hint matches)
+// and drops the same provider/model from the rest of the list so the
+// pin is not listed twice.
+func (s *Snapshot) withRouteHint(out []ResolvedRouteEntry, hint, harness string, required []provider.Capability) []ResolvedRouteEntry {
+	if hint == "" {
+		return out
+	}
+	row, model, ok := s.resolveHint(hint)
+	if !ok {
+		return out
+	}
+	hintEntry := s.annotateResolvedEntry(row, model, harness, required)
+	key := hintEntry.ProviderName + "/" + hintEntry.Model
+	filtered := make([]ResolvedRouteEntry, 0, len(out))
+	for _, e := range out {
+		if e.ProviderName+"/"+e.Model == key {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	return append([]ResolvedRouteEntry{hintEntry}, filtered...)
 }
 
 // resolveSelfPaired builds entries for a self-paired harness directly

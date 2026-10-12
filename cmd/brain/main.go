@@ -411,12 +411,12 @@ func main() {
 		Agent:        missionAgentResolver(agentReg),
 		RouteForRole: routeForRole,
 		RouteExists: func(ctx context.Context, name string) bool {
-			_, err := gwc.ResolveRoute(ctx, name, "")
+			_, err := gwc.ResolveRoute(ctx, name, "", "")
 			return err == nil
 		},
 		CodingExecutorDefault: flags.CodingExecutor,
 		DefaultMaxIterations:  flags.MissionDefaultMaxIterations,
-		ResolveRoute:          gwc.ResolveRoute,
+		ResolveRoute:          resolveRouteNoHint(gwc),
 	}
 	missionStore, missionDriver, missionNotifier, missionWorkspace, missionHub := buildMissions(ctx, app.DB, agent, store, workspace, flags, missionSandbox, agentReg, fxStore, gwc, secrets, conns, mc, packs, app.Log)
 	if missionDriver != nil {
@@ -493,7 +493,7 @@ func main() {
 		// (see ValidateDeps' nil-gating).
 		deps := missions.ValidateDeps{
 			RouteExists: func(ctx context.Context, name string) bool {
-				_, err := gwc.ResolveRoute(ctx, name, "")
+				_, err := gwc.ResolveRoute(ctx, name, "", "")
 				return err == nil
 			},
 		}
@@ -1198,6 +1198,14 @@ func main() {
 	}
 }
 
+// resolveRouteNoHint adapts gwclient.ResolveRoute for call sites that
+// never pass a D-078 model pin (mission dispatch, onboarding, gates).
+func resolveRouteNoHint(gwc *gwclient.Client) func(context.Context, string, string) (*gwclient.ResolvedRoute, error) {
+	return func(ctx context.Context, route, harness string) (*gwclient.ResolvedRoute, error) {
+		return gwc.ResolveRoute(ctx, route, harness, "")
+	}
+}
+
 // onboardingProbes wires setup readiness to existing deps; a nil store
 // leaves its probe nil, which reads as false/0.
 func onboardingProbes(gwc *gwclient.Client, sandbox *sandboxclient.Client, sessions *session.Store, missionStore *missions.Store, conns *connectors.Manager, channelStore *channels.Store, kbStore *kb.Store, automationStore *automations.Store, flags *settings.Store) onboarding.Probes {
@@ -1205,7 +1213,7 @@ func onboardingProbes(gwc *gwclient.Client, sandbox *sandboxclient.Client, sessi
 		Invalidate:         gwc.InvalidateRoutes,
 		GatewayReady:       gwc.Ready,
 		RouteForRole:       gwc.RouteForRole,
-		ResolveRoute:       gwc.ResolveRoute,
+		ResolveRoute:       resolveRouteNoHint(gwc),
 		SandboxHealth:      sandbox.Health,
 		HasAssistantReply:  sessions.HasAssistantReply,
 		CountKBCollections: kbStore.CountOperatorCollections,
@@ -1735,8 +1743,8 @@ func buildMissions(ctx context.Context, db *pgpool.Pool, agent *loop.Agent, sess
 	driver.SetGitBranchPattern(flags.GitBranchPattern)
 	driver.SetGitCommitStyle(flags.GitCommitStyle)
 	driver.SetLocation(flags.Location)
-	driver.SetReviewWindow(missions.GatewayReviewWindow(gwc.ResolveRoute, gwc.ModelWindows))
-	driver.SetRouteResolver(gwc.ResolveRoute)
+	driver.SetReviewWindow(missions.GatewayReviewWindow(resolveRouteNoHint(gwc), gwc.ModelWindows))
+	driver.SetRouteResolver(resolveRouteNoHint(gwc))
 	driver.SetReviewTokenCeiling(flags.ReviewTokenCeiling)
 	// issue #718: every retry ceiling is an operator setting, read per
 	// turn so a change lands on the next turn without a restart.
@@ -2281,7 +2289,7 @@ func buildDelegatedRunner(native missions.Runner, store *missions.Store, gwc *gw
 		}
 	}
 	led := ledger.New(db, log, nil)
-	runner := missions.NewDelegatedRunner(native, gwc.ResolveRoute, resolveCred, sandboxMgr.ExecEnv, store, store.LastRunState, led, flags.ExecutorRunBudget, log)
+	runner := missions.NewDelegatedRunner(native, resolveRouteNoHint(gwc), resolveCred, sandboxMgr.ExecEnv, store, store.LastRunState, led, flags.ExecutorRunBudget, log)
 	// issue #358: wires mid-run steering delivery for a Steerer
 	// adapter (pi), same setter/wiring pattern as nativeRunner's own
 	// SetProgressReader a few lines up in buildMissions.

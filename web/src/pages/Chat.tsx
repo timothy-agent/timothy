@@ -53,6 +53,7 @@ import type { ChatIntent } from './Home'
 
 const agentKey = 'timothy.agent'
 const routeKey = 'timothy.route'
+const modelHintKey = 'timothy.model_hint'
 // Issue #1113: a chat opens on its newest events and fetches older or
 // newer ones by seq instead of refetching the whole transcript.
 const transcriptPageSize = 200
@@ -112,6 +113,12 @@ export function Chat({
   // server default).
   const [route, setRoute] = useState(
     () => (lockedSkillHint ? '' : (localStorage.getItem(routeKey) ?? '')),
+  )
+  // Optional "ProviderName/model" pin (gateway model_hint). Empty =
+  // Auto (first usable on the route). Same locked-page carve-out as
+  // route: dedicated pages leave the shared preference alone.
+  const [modelHint, setModelHint] = useState(
+    () => (lockedSkillHint ? '' : (localStorage.getItem(modelHintKey) ?? '')),
   )
   // A skill picked from the home screen: pinned, not text the user
   // can accidentally mangle. Rides every turn until removed. Locked
@@ -389,6 +396,11 @@ export function Chat({
     localStorage.setItem(routeKey, r)
   }
 
+  const pickModelHint = (h: string) => {
+    setModelHint(h)
+    localStorage.setItem(modelHintKey, h)
+  }
+
   const updateLast = (fn: (m: AssistantState) => AssistantState) =>
     setItems((prev) => {
       const next = [...prev]
@@ -492,6 +504,7 @@ export function Chat({
     sentAttachments: PendingAttachment[] = [],
     sentKnowledge = knowledge,
     sentReferences = references,
+    modelHintName = modelHint,
   ) => {
     const message = text.trim()
     // Uploads still in flight aren't sendable ids yet: only completed
@@ -546,6 +559,7 @@ export function Chat({
           message,
           agent: agentName,
           route: routeName || undefined,
+          model_hint: modelHintName || undefined,
           skill_hint: hint,
           attachments:
             ready.length > 0 ? ready.map((a) => ({ id: a.id, name: a.name })) : undefined,
@@ -702,6 +716,7 @@ export function Chat({
         !intent.draft &&
         !intent.agent &&
         !intent.route &&
+        !intent.modelHint &&
         !intent.skillHint &&
         !intent.attachments &&
         !intent.knowledge)
@@ -711,8 +726,10 @@ export function Chat({
     window.history.replaceState(null, '') // don't refire on back/refresh
     const who = intent.agent ?? agent
     const whichRoute = intent.route ?? route
+    const whichModel = intent.modelHint ?? modelHint
     if (intent.agent) pickAgent(intent.agent)
     if (intent.route) pickRoute(intent.route)
+    if (intent.modelHint) pickModelHint(intent.modelHint)
     if (intent.skillHint) setSkillHint(intent.skillHint)
     if (intent.knowledge) setKnowledge(intent.knowledge)
     if (intent.send || intent.attachments)
@@ -726,6 +743,8 @@ export function Chat({
         whichRoute,
         intent.attachments,
         intent.knowledge ?? knowledge,
+        undefined,
+        whichModel,
       )
     else if (intent.draft) setDraft(intent.draft)
     // Mount-time only by design: the intent rides the navigation that
@@ -934,6 +953,8 @@ export function Chat({
               onAgent={pickAgent}
               route={route}
               onRoute={pickRoute}
+              modelHint={modelHint}
+              onModelHint={pickModelHint}
               hidePicker={Boolean(lockedSkillHint)}
               skillHint={skillHint}
               onRemoveSkillHint={lockedSkillHint ? undefined : () => setSkillHint(undefined)}

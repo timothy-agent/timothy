@@ -8,6 +8,8 @@ vi.mock('../api/client', () => ({
   listAgents: vi.fn(),
   countMemories: vi.fn().mockResolvedValue(0),
   listRoutes: vi.fn(),
+  listProviders: vi.fn().mockResolvedValue([]),
+  availableModels: vi.fn().mockResolvedValue([]),
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: false }, values: {} }),
   listKbCollections: vi.fn().mockResolvedValue([]),
 }))
@@ -111,8 +113,8 @@ describe('Home', () => {
     vi.mocked(listRoutes).mockResolvedValue(routes)
     renderHome()
 
-    await screen.findByRole('button', { name: 'Agent and route' })
-    openMenu('Agent and route')
+    await screen.findByRole('button', { name: 'Agent, route and model' })
+    openMenu('Agent, route and model')
     fireEvent.click(await screen.findByText('summarize'))
 
     const input = screen.getByLabelText('Message')

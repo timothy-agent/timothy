@@ -25,6 +25,8 @@ vi.mock('../api/client', () => ({
   answerPermission: vi.fn(),
   listRoutes: vi.fn(),
   listAgents: vi.fn(),
+  listProviders: vi.fn().mockResolvedValue([]),
+  availableModels: vi.fn().mockResolvedValue([]),
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: false }, values: {} }),
   listKbCollections: vi.fn().mockResolvedValue([]),
   setSessionKnowledge: vi.fn().mockResolvedValue(undefined),
@@ -154,8 +156,8 @@ describe('Chat route picker', () => {
   it('includes the chosen route in the request body', async () => {
     renderChat()
 
-    await screen.findByRole('button', { name: 'Agent and route' })
-    openMenu('Agent and route')
+    await screen.findByRole('button', { name: 'Agent, route and model' })
+    openMenu('Agent, route and model')
     fireEvent.click(await screen.findByText('summarize'))
 
     const input = screen.getByLabelText('Message')
@@ -166,6 +168,29 @@ describe('Chat route picker', () => {
     const [req] = vi.mocked(chatStream).mock.calls[0]
     expect(req.route).toBe('summarize')
     expect(localStorage.getItem('timothy.route')).toBe('summarize')
+  })
+
+  it('omits model_hint from the request body when Auto is selected', async () => {
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(chatStream).toHaveBeenCalled())
+    const [req] = vi.mocked(chatStream).mock.calls[0]
+    expect(req.model_hint).toBeUndefined()
+  })
+
+  it('includes model_hint from the persisted preference in the request body', async () => {
+    localStorage.setItem('timothy.model_hint', 'Anthropic/opus')
+    renderChat()
+    const input = screen.getByLabelText('Message')
+    fireEvent.change(input, { target: { value: 'hello' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() => expect(chatStream).toHaveBeenCalled())
+    const [req] = vi.mocked(chatStream).mock.calls[0]
+    expect(req.model_hint).toBe('Anthropic/opus')
   })
 })
 
@@ -309,7 +334,7 @@ describe('live reattach', () => {
 
   it('does not attach live when turn_active is false', async () => {
     renderChat()
-    await screen.findByRole('button', { name: 'Agent and route' })
+    await screen.findByRole('button', { name: 'Agent, route and model' })
     expect(streamLive).not.toHaveBeenCalled()
   })
 
@@ -617,7 +642,7 @@ describe('session knowledge', () => {
     expect(screen.queryByRole('button', { name: 'Remove runbooks knowledge' })).toBeNull()
     expect(screen.queryByText('#papers')).toBeNull()
 
-    openMenu('Agent and route')
+    openMenu('Agent, route and model')
     fireEvent.click(await screen.findByText('research'))
 
     await screen.findByText('#papers')

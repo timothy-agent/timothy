@@ -218,7 +218,7 @@ func TestResolveRoute(t *testing.T) {
 		]}`)
 	})
 
-	resolved, err := c.ResolveRoute(t.Context(), "coding", "claude-cli")
+	resolved, err := c.ResolveRoute(t.Context(), "coding", "claude-cli", "")
 	if err != nil {
 		t.Fatalf("ResolveRoute: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestResolveRoute(t *testing.T) {
 	}
 
 	// A second read inside the TTL serves from the memo.
-	if _, err := c.ResolveRoute(t.Context(), "coding", "claude-cli"); err != nil {
+	if _, err := c.ResolveRoute(t.Context(), "coding", "claude-cli", ""); err != nil {
 		t.Fatalf("ResolveRoute (cached): %v", err)
 	}
 	if hits != 1 {
@@ -249,13 +249,13 @@ func TestResolveRouteCachesPerRouteNameAndHarness(t *testing.T) {
 		_, _ = fmt.Fprintf(w, `{"route":%q,"entries":[]}`, route) //nolint:gosec // G705: test stub echoing a fixed test path segment as JSON.
 	})
 
-	if _, err := c.ResolveRoute(t.Context(), "coding", ""); err != nil {
+	if _, err := c.ResolveRoute(t.Context(), "coding", "", ""); err != nil {
 		t.Fatalf("ResolveRoute(coding, native): %v", err)
 	}
-	if _, err := c.ResolveRoute(t.Context(), "coding", "claude-cli"); err != nil {
+	if _, err := c.ResolveRoute(t.Context(), "coding", "claude-cli", ""); err != nil {
 		t.Fatalf("ResolveRoute(coding, claude-cli): %v", err)
 	}
-	if _, err := c.ResolveRoute(t.Context(), "mini", ""); err != nil {
+	if _, err := c.ResolveRoute(t.Context(), "mini", "", ""); err != nil {
 		t.Fatalf("ResolveRoute(mini, native): %v", err)
 	}
 	if hits["coding\x00"] != 1 || hits["coding\x00claude-cli"] != 1 || hits["mini\x00"] != 1 {
@@ -269,7 +269,7 @@ func TestResolveRouteNotFound(t *testing.T) {
 		http.Error(w, `{"error":"not_found"}`, http.StatusNotFound)
 	})
 
-	if _, err := c.ResolveRoute(t.Context(), "no-such-route", ""); err == nil {
+	if _, err := c.ResolveRoute(t.Context(), "no-such-route", "", ""); err == nil {
 		t.Fatal("ResolveRoute() = nil error for 404 gateway response")
 	}
 }
@@ -295,7 +295,7 @@ func TestResolveRouteConfigUnavailableWrapsErrGatewayUnavailable(t *testing.T) {
 		http.Error(w, `{"error":"config_unavailable","message":"routing configuration not loaded yet"}`, http.StatusServiceUnavailable)
 	})
 
-	_, err := c.ResolveRoute(t.Context(), "coding", "claude-cli")
+	_, err := c.ResolveRoute(t.Context(), "coding", "claude-cli", "")
 	if err == nil {
 		t.Fatal("ResolveRoute() = nil error for 503 config_unavailable")
 	}
@@ -311,7 +311,7 @@ func TestResolveRouteUnreachableWrapsErrGatewayUnavailable(t *testing.T) {
 	t.Parallel()
 	c := New("http://127.0.0.1:1") // nothing listens here
 
-	_, err := c.ResolveRoute(t.Context(), "coding", "claude-cli")
+	_, err := c.ResolveRoute(t.Context(), "coding", "claude-cli", "")
 	if err == nil {
 		t.Fatal("ResolveRoute() = nil error for an unreachable gateway")
 	}
@@ -331,7 +331,7 @@ func TestResolveRouteNotFoundDoesNotWrapErrGatewayUnavailable(t *testing.T) {
 		http.Error(w, `{"error":"not_found"}`, http.StatusNotFound)
 	})
 
-	_, err := c.ResolveRoute(t.Context(), "no-such-route", "")
+	_, err := c.ResolveRoute(t.Context(), "no-such-route", "", "")
 	if err == nil {
 		t.Fatal("ResolveRoute() = nil error for 404 gateway response")
 	}
@@ -404,7 +404,7 @@ func TestInvalidateRoutesDropsMemoizedRouting(t *testing.T) {
 		if _, _, err := c.RouteForRole(t.Context(), "default"); err != nil {
 			t.Fatalf("RouteForRole: %v", err)
 		}
-		if _, err := c.ResolveRoute(t.Context(), "main", ""); err != nil {
+		if _, err := c.ResolveRoute(t.Context(), "main", "", ""); err != nil {
 			t.Fatalf("ResolveRoute: %v", err)
 		}
 	}
@@ -415,7 +415,7 @@ func TestInvalidateRoutesDropsMemoizedRouting(t *testing.T) {
 	if _, _, err := c.RouteForRole(t.Context(), "default"); err != nil {
 		t.Fatalf("RouteForRole after invalidate: %v", err)
 	}
-	if _, err := c.ResolveRoute(t.Context(), "main", ""); err != nil {
+	if _, err := c.ResolveRoute(t.Context(), "main", "", ""); err != nil {
 		t.Fatalf("ResolveRoute after invalidate: %v", err)
 	}
 	if hits["/v1/routes/roles"] != 2 || hits["/v1/routes/main/resolve"] != 2 {

@@ -1,4 +1,5 @@
 import type { ExecutionPlanEntry, ExecutionPlanPhase } from '../../api/types'
+import { type ProviderModelOption, useProviderModels } from '../AgentPicker'
 import { unusablePhases, unusableReason } from './executionPlan'
 import { executorChoices } from './MissionForm'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
@@ -183,7 +184,7 @@ function PhaseRow({
       <span className="w-20 shrink-0 font-medium">{label}</span>
       <span className="w-28 shrink-0 text-muted-foreground">{axisLabel(phase)}</span>
       {route && <span className="text-muted-foreground">{route}</span>}
-      {onChange && phase.entries.length > 0 ? (
+      {onChange ? (
         <ModelPinSelect
           label={`${label} model`}
           entries={phase.entries}
@@ -211,11 +212,12 @@ function PhaseRow({
 }
 
 // ModelPinSelect is the resolved-model cell for a pinnable phase: a
-// select over that phase's entries, "Auto" plus every entry — unusable
-// ones stay listed and disabled with their skip_reason as a tooltip,
-// same pattern PhaseRow already used for display-only unusable counts.
-// The Auto item names the entry it actually resolves to when one is
-// selected and usable, so "Auto" isn't a mystery next to a picked model.
+// select over that phase's route entries plus every enabled provider
+// model (D-078 pins are not limited to the chain). "Auto" plus every
+// entry — unusable chain ones stay listed and disabled with their
+// skip_reason as a tooltip. The Auto item names the entry it actually
+// resolves to when one is selected and usable, so "Auto" isn't a
+// mystery next to a picked model.
 export function ModelPinSelect({
   label,
   entries,
@@ -229,6 +231,14 @@ export function ModelPinSelect({
   onChange: (v: string) => void
   selected: ExecutionPlanEntry | undefined
 }) {
+  const allModels = useProviderModels()
+  const inRoute = new Set(entries.map(pinValue))
+  const others: ProviderModelOption[] = (allModels ?? []).filter((m) => !inRoute.has(m.value))
+  // A stale pin that is in neither list still needs a selectable item
+  // so the control can show and clear it.
+  const orphanPin =
+    pin && !inRoute.has(pin) && !others.some((m) => m.value === pin) ? pin : ''
+
   return (
     <Select
       value={pin || MODEL_AUTO}
@@ -249,6 +259,9 @@ export function ModelPinSelect({
             'Auto (first usable)'
           )}
         </SelectItem>
+        {entries.length > 0 && (
+          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">In route</div>
+        )}
         {entries.map((entry) => {
           const value = pinValue(entry)
           return (
@@ -259,6 +272,16 @@ export function ModelPinSelect({
             </SelectItem>
           )
         })}
+        {others.length > 0 && (
+          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">Other</div>
+        )}
+        {others.map((m) => (
+          <SelectItem key={m.value} value={m.value}>
+            <span className="text-muted-foreground">{m.provider_name}</span>
+            {m.display_name ?? m.model}
+          </SelectItem>
+        ))}
+        {orphanPin && <SelectItem value={orphanPin}>{orphanPin}</SelectItem>}
       </SelectContent>
     </Select>
   )

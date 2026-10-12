@@ -7,6 +7,8 @@ import { Composer, type PendingAttachment } from './Composer'
 vi.mock('../api/client', () => ({
   listAgents: vi.fn().mockResolvedValue([]),
   listRoutes: vi.fn().mockResolvedValue([]),
+  listProviders: vi.fn().mockResolvedValue([]),
+  availableModels: vi.fn().mockResolvedValue([]),
   transcribe: vi.fn(),
   uploadAttachment: vi.fn(),
   getSettings: vi.fn().mockResolvedValue({ settings: { transcribe_enabled: true }, values: {} }),

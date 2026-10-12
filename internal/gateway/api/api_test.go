@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1075,12 +1076,19 @@ func resolveSnapshot(t *testing.T) *router.Snapshot {
 	return snap
 }
 
-func resolveReq(name, harness string) *http.Request {
-	url := "/v1/routes/" + name + "/resolve"
+func resolveReq(name, harness, hint string) *http.Request {
+	u := "/v1/routes/" + name + "/resolve"
+	q := url.Values{}
 	if harness != "" {
-		url += "?harness=" + harness
+		q.Set("harness", harness)
 	}
-	req := httptest.NewRequest(http.MethodGet, url, nil)
+	if hint != "" {
+		q.Set("hint", hint)
+	}
+	if enc := q.Encode(); enc != "" {
+		u += "?" + enc
+	}
+	req := httptest.NewRequest(http.MethodGet, u, nil)
 	req.SetPathValue("name", name)
 	return req
 }
@@ -1090,7 +1098,7 @@ func TestResolveRouteChatAxisDefault(t *testing.T) {
 	a, _ := newAPI(resolveSnapshot(t))
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding", ""))
+	a.handleResolveRoute(w, resolveReq("coding", "", ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -1118,12 +1126,35 @@ func TestResolveRouteChatAxisDefault(t *testing.T) {
 	}
 }
 
+func TestResolveRouteHintQuery(t *testing.T) {
+	t.Parallel()
+	a, _ := newAPI(resolveSnapshot(t))
+
+	w := httptest.NewRecorder()
+	a.handleResolveRoute(w, resolveReq("coding", "", "anthropic/other"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		Entries []resolveRouteEntry `json:"entries"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Entries) != 3 {
+		t.Fatalf("entries = %d, want 3 (hint + chain)", len(out.Entries))
+	}
+	if out.Entries[0].ProviderName != "anthropic" || out.Entries[0].Model != "other" || !out.Entries[0].Usable {
+		t.Fatalf("hint entry = %+v", out.Entries[0])
+	}
+}
+
 func TestResolveRouteExecutorAxis(t *testing.T) {
 	t.Parallel()
 	a, _ := newAPI(resolveSnapshot(t))
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding", "claude-cli"))
+	a.handleResolveRoute(w, resolveReq("coding", "claude-cli", ""))
 	if w.Code != http.StatusOK {
 		t.Fatalf("code = %d, body = %s", w.Code, w.Body.String())
 	}
@@ -1169,7 +1200,7 @@ func TestResolveRouteHarnessOnly(t *testing.T) {
 	a, _ := newAPI(snap)
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding-exec", "claude-cli"))
+	a.handleResolveRoute(w, resolveReq("coding-exec", "claude-cli", ""))
 	var out struct {
 		Entries []resolveRouteEntry `json:"entries"`
 	}
@@ -1186,7 +1217,7 @@ func TestResolveRouteUnknownHarnessParamRejected(t *testing.T) {
 	a, _ := newAPI(resolveSnapshot(t))
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding", "nonexistent-cli"))
+	a.handleResolveRoute(w, resolveReq("coding", "nonexistent-cli", ""))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want 400 for unknown harness param", w.Code)
 	}
@@ -1207,7 +1238,7 @@ func TestResolveRouteWireIncompatibleProvider(t *testing.T) {
 	a, _ := newAPI(snap)
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding-exec", "claude-cli"))
+	a.handleResolveRoute(w, resolveReq("coding-exec", "claude-cli", ""))
 	var out struct {
 		Entries []resolveRouteEntry `json:"entries"`
 	}
@@ -1222,7 +1253,7 @@ func TestResolveRouteNotFound(t *testing.T) {
 	a, _ := newAPI(resolveSnapshot(t))
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("no-such-route", ""))
+	a.handleResolveRoute(w, resolveReq("no-such-route", "", ""))
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("code = %d, want 404", w.Code)
 	}
@@ -1233,7 +1264,7 @@ func TestResolveRouteConfigUnavailable(t *testing.T) {
 	a, _ := newAPI(nil)
 
 	w := httptest.NewRecorder()
-	a.handleResolveRoute(w, resolveReq("coding", ""))
+	a.handleResolveRoute(w, resolveReq("coding", "", ""))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("code = %d, want 503", w.Code)
 	}

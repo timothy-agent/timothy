@@ -4,6 +4,8 @@ import type { AdminRoute, ExecutionPlanPhase, Mission } from '../../api/types'
 
 vi.mock('../../api/client', () => ({
   listRoutes: vi.fn(),
+  listProviders: vi.fn().mockResolvedValue([]),
+  availableModels: vi.fn().mockResolvedValue([]),
   getMissionExecutionPlan: vi.fn(),
   patchMissionRouting: vi.fn(),
 }))

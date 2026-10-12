@@ -13,6 +13,8 @@ vi.mock('../api/client', () => ({
   getToken: vi.fn(() => ''),
   listAgents: vi.fn(),
   listRoutes: vi.fn(),
+  listProviders: vi.fn().mockResolvedValue([]),
+  availableModels: vi.fn().mockResolvedValue([]),
   getSettings: vi.fn(),
   listMemories: vi.fn(),
   countMemories: vi.fn().mockResolvedValue(0),

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listAgents, listRoutes } from '../api/client'
+import { availableModels, listAgents, listProviders, listRoutes } from '../api/client'
 import type { AdminAgent, AdminRoute } from '../api/types'
 
 // Sentinel value meaning "let the system pick" (D-034 follow-up) —
@@ -42,4 +42,85 @@ export function useRoutes(): AdminRoute[] | null {
     )
   }, [])
   return routes
+}
+
+// ProviderModelOption is one pin value for the chat/mission model
+// pickers: "ProviderName/model" matches gateway model_hint / D-078 pins.
+export type ProviderModelOption = {
+  provider_name: string
+  model: string
+  display_name?: string
+  value: string
+}
+
+// Module-level cache: listing every provider's models is chatty; the
+// picker remounts often and a stale list self-heals on the next full
+// page load. null means "not loaded or failed" — callers hide the
+// Model section rather than showing a broken picker.
+let cachedProviderModels: ProviderModelOption[] | null = null
+let providerModelsFailed = false
+
+// resetProviderModelsCache clears the module cache so a test can drive
+// a fresh listProviders/availableModels round without resetModules.
+export function resetProviderModelsCache() {
+  cachedProviderModels = null
+  providerModelsFailed = false
+}
+
+export function useProviderModels(): ProviderModelOption[] | null {
+  const [models, setModels] = useState<ProviderModelOption[] | null>(
+    providerModelsFailed ? null : cachedProviderModels,
+  )
+  useEffect(() => {
+    if (cachedProviderModels !== null || providerModelsFailed) return
+    let cancelled = false
+    listProviders()
+      .then(async (providers) => {
+        const enabled = providers.filter((p) => p.enabled)
+        const perProvider = await Promise.all(
+          enabled.map(async (p) => {
+            try {
+              const listed = await availableModels(p.id)
+              if (listed.length === 0 && p.default_model) {
+                return [
+                  {
+                    provider_name: p.name,
+                    model: p.default_model,
+                    value: `${p.name}/${p.default_model}`,
+                  },
+                ]
+              }
+              return listed.map((m) => ({
+                provider_name: p.name,
+                model: m.id,
+                display_name: m.display_name,
+                value: `${p.name}/${m.id}`,
+              }))
+            } catch {
+              // bedrock (and similar) cannot list: fall back to the
+              // provider's configured default_model when present.
+              if (!p.default_model) return []
+              return [
+                {
+                  provider_name: p.name,
+                  model: p.default_model,
+                  value: `${p.name}/${p.default_model}`,
+                },
+              ]
+            }
+          }),
+        )
+        const flat = perProvider.flat()
+        cachedProviderModels = flat
+        if (!cancelled) setModels(flat)
+      })
+      .catch(() => {
+        providerModelsFailed = true
+        if (!cancelled) setModels(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  return models
 }
