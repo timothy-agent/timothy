@@ -201,6 +201,12 @@ const (
 	ValueMissionAutoResumeBackoffMax = "mission_auto_resume_backoff_max"
 	// ValueMissionAutoResumeInfraMax is the same bound for infra pauses.
 	ValueMissionAutoResumeInfraMax = "mission_auto_resume_infra_max"
+	// ValueMissionMaxChainDepth bounds how deep a mission-spawns-mission
+	// chain may go: a worker turn's create_mission/fork_mission call is
+	// refused in Go once the parent_mission_id chain from the calling
+	// mission reaches this depth (issue #1230). "" defers to
+	// DefaultMissionMaxChainDepth.
+	ValueMissionMaxChainDepth = "mission_max_chain_depth"
 	// ValueOutboundHostAllowlist lists the hosts (comma-separated
 	// hostnames or IP literals) that operator-configured outbound URLs
 	// (webhook destinations, MCP endpoints, the mission notify webhook)
@@ -237,6 +243,10 @@ const (
 	DefaultMissionHarnessRetryCap      = 3
 	DefaultMissionAutoResumeBackoffMax = 4
 	DefaultMissionAutoResumeInfraMax   = 3
+	// DefaultMissionMaxChainDepth allows an automation's mission to
+	// fan out one level of children (automation -> fan-out -> child
+	// is depth 2) plus one spare hop before the Go refusal.
+	DefaultMissionMaxChainDepth = 3
 )
 
 // DefaultExecutorWorkerMaxTurns is the delegated worker run's turn cap
@@ -281,6 +291,7 @@ var knownValueKeys = map[string]bool{
 	ValueMissionDefaultMaxIterations: true, ValueMissionBackoffFailures: true,
 	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
+	ValueMissionMaxChainDepth: true,
 	ValueOutboundHostAllowlist: true, ValueGitHubPollSeconds: true, ValueEmailPollSeconds: true,
 }
 
@@ -300,6 +311,7 @@ var nonNegativeIntKeys = map[string]bool{
 	ValueMissionDefaultMaxIterations: true, ValueMissionBackoffFailures: true,
 	ValueMissionStallRounds: true, ValueMissionHarnessRetryCap: true,
 	ValueMissionAutoResumeBackoffMax: true, ValueMissionAutoResumeInfraMax: true,
+	ValueMissionMaxChainDepth: true,
 	ValueGitHubPollSeconds: true, ValueEmailPollSeconds: true,
 }
 
@@ -461,6 +473,11 @@ func (s *Store) MissionBackoffFailures(ctx context.Context) int {
 // MissionStallRounds is the statemachine's no-progress brake.
 func (s *Store) MissionStallRounds(ctx context.Context) int {
 	return s.nonNegativeInt(ctx, ValueMissionStallRounds, DefaultMissionStallRounds)
+}
+
+// MissionMaxChainDepth bounds the mission-spawns-mission chain depth.
+func (s *Store) MissionMaxChainDepth(ctx context.Context) int {
+	return s.nonNegativeInt(ctx, ValueMissionMaxChainDepth, DefaultMissionMaxChainDepth)
 }
 
 // MissionHarnessRetryCap bounds a mission's harness-caused retries.

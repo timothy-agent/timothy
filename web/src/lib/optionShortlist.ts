@@ -129,7 +129,7 @@ export function parseOptionShortlist(text: string): OptionShortlist | null {
 }
 
 // followUpGoal formats a picked option as follow-up goal text, in the
-// objective/scope shape the followup_mission brief uses.
+// objective/scope shape the fork_mission brief uses.
 export function followUpGoal(option: ShortlistOption): string {
   const build = option.fields.find((f) => normalizeLabel(f.label) === 'build')?.text ?? ''
   const parts = [`Build "${option.name}".`, '', `Objective: ${option.pitch}`]

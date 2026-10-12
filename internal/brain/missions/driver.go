@@ -78,6 +78,8 @@ type driverStore interface {
 	Spend(ctx context.Context, missionID string) (MissionSpend, error)
 	ReviewInputTokens(ctx context.Context, missionID string) (int64, error)
 	AnswerPendingInput(ctx context.Context, id, eventKind string, payload map[string]any) error
+	ChainDepth(ctx context.Context, id string) (int, error)
+	MaxChainDepth(ctx context.Context) int
 }
 
 // fxRateSource is the narrow slice of *fxrates.Store Driver needs for
