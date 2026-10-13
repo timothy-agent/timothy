@@ -9,6 +9,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/gateway/catalog"
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
 // fakeCatalog is a minimal in-memory catalogLookup for tests: it
@@ -1908,5 +1909,60 @@ func TestBedrockStaticRowWithoutCredentialRefStaysUnhealthy(t *testing.T) {
 	}
 	if _, err := snap.Resolve("chat", "", Sticky{}); err == nil || !strings.Contains(err.Error(), "unhealthy") {
 		t.Fatalf("Resolve err = %v, want unhealthy skip", err)
+	}
+}
+
+// capsOnlyProvider declares a fixed capability set and never streams.
+type capsOnlyProvider struct {
+	name string
+	caps []provider.Capability
+}
+
+func (p capsOnlyProvider) Name() string                        { return p.name }
+func (p capsOnlyProvider) Kind() provider.Kind                 { return provider.KindAPI }
+func (p capsOnlyProvider) Capabilities() []provider.Capability { return p.caps }
+func (p capsOnlyProvider) Stream(context.Context, provider.CompletionRequest) (<-chan stream.StreamEvent, error) {
+	ch := make(chan stream.StreamEvent)
+	close(ch)
+	return ch, nil
+}
+
+// TestResolveDecideAcceptsChatOrDecider (D-163): a decide route takes
+// a native decision model (CapDecide, no chat) and any chat entry (the
+// llm fallback serves it); an embeddings-only entry is a capability
+// miss named after the route's own capability.
+func TestResolveDecideAcceptsChatOrDecider(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "laya", Kind: "api", Driver: "openaicompat", BaseURL: "https://laya.example/v1", DefaultModel: "laya-1", Enabled: true},
+		{ID: "p2", Name: "chat", Kind: "api", Driver: "openaicompat", BaseURL: "https://chat.example/v1", DefaultModel: "m", Enabled: true},
+		{ID: "p3", Name: "embed", Kind: "api", Driver: "openaicompat", BaseURL: "https://embed.example/v1", DefaultModel: "e", Enabled: true},
+	}
+	routeRows := []RouteRow{{Name: "decide", Capability: "decide", Role: "decide", Chain: []ChainEntry{
+		{ProviderID: "p1", Model: "laya-1"},
+		{ProviderID: "p2", Model: "m"},
+		{ProviderID: "p3", Model: "e"},
+	}, Enabled: true}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
+	snap.registry.Add("laya", capsOnlyProvider{name: "laya", caps: []provider.Capability{provider.CapDecide}})
+	snap.registry.Add("chat", capsOnlyProvider{name: "chat", caps: []provider.Capability{provider.CapChat}})
+	snap.registry.Add("embed", capsOnlyProvider{name: "embed", caps: []provider.Capability{provider.CapEmbeddings}})
+
+	attempts, err := snap.Resolve("decide", "", Sticky{})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got := attemptNames(attempts); got != "laya/laya-1,chat/m" {
+		t.Fatalf("attempts = %s, want the decider then the chat entry", got)
+	}
+
+	routeRows[0].Chain = routeRows[0].Chain[2:]
+	snap, _ = BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
+	snap.registry.Add("embed", capsOnlyProvider{name: "embed", caps: []provider.Capability{provider.CapEmbeddings}})
+	if _, err := snap.Resolve("decide", "", Sticky{}); err == nil || !strings.Contains(err.Error(), "embed/e (lacks decide capability") {
+		t.Fatalf("err = %v, want the decide capability miss", err)
+	}
+	if name, ok := snap.RouteForRole("decide"); !ok || name != "decide" {
+		t.Fatalf("RouteForRole(decide) = %q, %v", name, ok)
 	}
 }

@@ -359,7 +359,7 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 }
 
 // RouteForRole returns the name of the route currently bound to role
-// ("default", "embedding", "vision", or "summarize"), or false if no
+// ("default", "embedding", "vision", "summarize", or "decide"), or false if no
 // route holds that role yet (e.g. not bootstrapped on a fresh
 // install).
 func (s *Snapshot) RouteForRole(role string) (string, bool) {
@@ -377,6 +377,8 @@ func (s *Snapshot) requiredCapability(route string) provider.Capability {
 		return provider.CapEmbeddings
 	case "vision":
 		return provider.CapVision
+	case "decide":
+		return provider.CapDecide
 	default:
 		return provider.CapChat
 	}
@@ -959,6 +961,11 @@ func harnessWire(driver string, overrideApplied bool) string {
 // sourced from the in-memory catalog cache instead of a stored models
 // jsonb column.
 func (s *Snapshot) attemptCapable(p provider.Provider, row ProviderRow, model string, want provider.Capability) bool {
+	// A decide route accepts a native decision model or any chat entry,
+	// which the llm fallback serves (D-163).
+	if want == provider.CapDecide && !hasCapability(p, want) {
+		want = provider.CapChat
+	}
 	if !hasCapability(p, want) {
 		return false
 	}
