@@ -43,3 +43,35 @@ func TestRuntimeToolsInCatalog(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildAgentOmitsSearchWhenSearxngUnset(t *testing.T) {
+	t.Parallel()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	// Without searxngURL: search_web should not be in the toolset.
+	_, _, _, withoutSearch, _, err := buildAgent(nil, nil, nil, t.TempDir(), "", "", nil, nil, nil, nil, log, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildAgent without search: %v", err)
+	}
+	for _, tool := range withoutSearch {
+		if tool.Name == "search_web" {
+			t.Errorf("search_web present in toolset when searxngURL is empty")
+		}
+	}
+
+	// With searxngURL: search_web should be in the toolset.
+	_, _, _, withSearch, _, err := buildAgent(nil, nil, nil, t.TempDir(), "http://searxng:8080", "", nil, nil, nil, nil, log, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildAgent with search: %v", err)
+	}
+	found := false
+	for _, tool := range withSearch {
+		if tool.Name == "search_web" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("search_web missing from toolset when searxngURL is provided")
+	}
+}

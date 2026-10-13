@@ -42,6 +42,7 @@ services:
 
   searxng:
     <<: *service
+    profiles: [search, full]
     image: searxng/searxng@sha256:aaf56bb5ad737d48a8a375778d42eb4ab1757231e6b1eb7980e71d8dd5bdf0de
     environment:
       SEARXNG_BASE_URL: http://searxng:8080/
@@ -68,6 +69,7 @@ services:
 
   markitdown:
     <<: *service
+    profiles: [docs, full]
     build:
       context: ../markitdown-svc
     # internal-only: no published ports, no auth; brain is the sole
@@ -80,6 +82,7 @@ services:
 
   pdfgen:
     <<: *service
+    profiles: [docs, full]
     build:
       context: ../pdfgen-svc
     # internal-only: no published ports, no auth; brain is the sole
@@ -92,11 +95,12 @@ services:
 
   ocr:
     <<: *service
+    profiles: [docs, full]
     build:
       context: ../ocr-svc
     # internal-only: no published ports, no auth; brain is the sole
-    # caller, same trust boundary as searxng/markitdown. Always on,
-    # unlike whisper: tesseract loads no model and idles at a few MiB.
+    # caller, same trust boundary as searxng/markitdown. Gated under the
+    # docs profile: tesseract loads no model and idles at a few MiB.
     # Headroom for a Pillow decode plus the tesseract pass on a 32MiB
     # image, the sidecar's body cap.
     mem_limit: 2g
@@ -105,7 +109,7 @@ services:
 
   whisper:
     <<: *service
-    profiles: [whisper]
+    profiles: [whisper, full]
     build:
       context: ../whisper-svc
       args:
@@ -182,18 +186,21 @@ services:
       # Non-empty: osv-scanner audits use the local database in the
       # sandbox-caches volume (make canary-ecosystems refreshes it).
       MISSION_OSV_OFFLINE: ${MISSION_OSV_OFFLINE:-}
-      # Compose-internal only: the model never sees this address.
-      SEARXNG_URL: http://searxng:8080
+      # Compose-internal only: the model never sees this address. Empty
+      # by default (search tool omitted) when the search profile is inactive.
+      SEARXNG_URL: ${SEARXNG_URL:-}
       # Converts Gmail attachments (PDFs) and HTML-only email bodies to
-      # markdown/text; compose-internal only.
-      MARKITDOWN_URL: http://markitdown:8000
+      # markdown/text; compose-internal only. Empty by default when the
+      # docs profile is inactive.
+      MARKITDOWN_URL: ${MARKITDOWN_URL:-}
       # Renders markdown to PDF (mission export, chat export, PDF
-      # tool); compose-internal only.
-      PDFGEN_URL: http://pdfgen:8000
+      # tool); compose-internal only. Empty by default when the docs
+      # profile is inactive.
+      PDFGEN_URL: ${PDFGEN_URL:-}
       # Local OCR for KB images when no vision route is bound;
       # compose-internal only. Empty degrades to no description at all,
-      # never a failed ingest.
-      OCR_URL: http://ocr:8000
+      # never a failed ingest; empty by default when the docs profile is inactive.
+      OCR_URL: ${OCR_URL:-}
       # Local speech-to-text for the web mic button; compose-internal
       # only, audio never leaves the box. Empty by default (feature
       # off) since whisper itself defaults off — see its service
@@ -214,10 +221,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      searxng:
-        condition: service_started
-      markitdown:
-        condition: service_started
       sandboxd:
         condition: service_started
     networks: [timothy, timothy-sandbox, timothy-services]
