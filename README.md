@@ -63,6 +63,7 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `gateway`    | Internal LLM gateway: multi-provider routing, cost ledger                                         |
 | `memoryd`    | Internal memory service: pgvector-backed recall                                                   |
 | `sandboxd`   | Internal service running per-mission sandboxes: Docker containers on Compose, pods on Kubernetes  |
+| `cliproxy`   | Internal proxy: wraps ChatGPT Plus/Pro and Claude subscriptions into OpenAI-compatible API on :8317 |
 | `web`        | React + Tailwind interface: chat, missions, usage, settings                                       |
 | `searxng`    | Internal metasearch backend for `search_web` (profile `search`, `full`)                           |
 | `markitdown` | Internal Python sidecar: file→markdown conversion (profile `docs`, `full`)                        |
@@ -70,7 +71,7 @@ Go microservices behind a single public API, one PostgreSQL database, React web 
 | `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (profile `whisper`, `full`)  |
 | `pdfgen`     | Internal Python sidecar: markdown→PDF via Typst for chat, mission export (profile `docs`, `full`) |
 
-Timothy defaults to a lightweight core footprint (~300–500 MiB RAM: `brain`, `gateway`, `memoryd`, `sandboxd`, `web`, `postgres`). Heavy Python sidecars and SearXNG run under opt-in Compose profiles (`search`, `docs`, `whisper`, or `full` to enable all; ~6–10 GiB RAM total).
+Timothy defaults to a lightweight core footprint (~300–500 MiB RAM: `brain`, `gateway`, `memoryd`, `sandboxd`, `cliproxy`, `web`, `postgres`). Heavy Python sidecars and SearXNG run under opt-in Compose profiles (`search`, `docs`, `whisper`, or `full` to enable all; ~6–10 GiB RAM total).
 
 Plus Postgres (18 + pgvector), internal only, no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`; brain's `/metrics`, the only one on a published port, requires `Authorization: Bearer $TIMOTHY_METRICS_TOKEN`.
 
@@ -82,9 +83,10 @@ Sessions are an append-only event log: every turn, tool run, and compaction is a
 |--------|------------------------------|
 | `3300` | Web UI                       |
 | `8300` | Brain (public API)           |
+| `8317` | CLIProxyAPI (Subscription proxy) |
 | `3301` | Vite dev server (`make dev`) |
 
-Both published ports serve plain HTTP and are meant for a trusted LAN. For any exposure beyond that, put a reverse proxy in front that terminates TLS. Authentication uses HttpOnly, SameSite=Strict post-quantum hybrid session cookies (or `TIMOTHY_API_TOKEN` bearer authentication for CLI and automations). The web UI ships a Content-Security-Policy, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: strict-origin-when-cross-origin`; a proxy that rewrites response headers should preserve them.
+Published ports serve plain HTTP and are meant for a trusted LAN. For any exposure beyond that, put a reverse proxy in front that terminates TLS. Authentication uses HttpOnly, SameSite=Strict post-quantum hybrid session cookies (or `TIMOTHY_API_TOKEN` bearer authentication for CLI and automations). The web UI ships a Content-Security-Policy, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: strict-origin-when-cross-origin`; a proxy that rewrites response headers should preserve them.
 
 ## Quick start (prebuilt images)
 

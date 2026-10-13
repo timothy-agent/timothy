@@ -46,6 +46,31 @@ services:
       timeout: 3s
       retries: 10
 
+  # CLIProxyAPI: local proxy exposing ChatGPT Plus/Pro and Claude subscriptions
+  # as an OpenAI-compatible API on :8317. Mandatory service.
+  cliproxy:
+    <<: *service
+    image: eceasy/cli-proxy-api:latest
+    container_name: timothy-cliproxy
+    ports:
+      - "${CLIPROXY_PORT:-8317}:8317"
+      - "${CLAUDE_CALLBACK_PORT:-54545}:54545"
+      - "${CODEX_CALLBACK_PORT:-1455}:1455"
+    volumes:
+      - cliproxy-data:/root/.cli-proxy-api
+    configs:
+      - source: cliproxy_config
+        target: /CLIProxyAPI/config.yaml
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/8317'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+
   searxng:
     <<: *service
     profiles: [search, full]
@@ -327,10 +352,22 @@ configs:
         secret_key: "3db45963595b11ba5641234fb40bfb84c612b7aaf25ceff7cc496355337e1add"
         limiter: false
 
+  cliproxy_config:
+    content: |
+      config-version: 8
+
+      server:
+        host: ""
+        port: 8317
+
+      access:
+        api-keys: []
+
 volumes:
   pgdata:
   workspace:
   attachments:
+  cliproxy-data:
   sandbox-toolchains:
   sandbox-caches:
 

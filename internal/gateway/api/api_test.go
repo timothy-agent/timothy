@@ -1300,6 +1300,7 @@ func TestIsLocalBaseURL(t *testing.T) {
 		{"http://host.docker.internal:11434", true},
 		{"http://127.0.0.1:11434", true},
 		{"http://192.168.1.5:11434", true},
+		{"http://cliproxy:8317/v1", true},
 		{"https://api.openai.com/v1", false},
 		{"https://api.anthropic.com", false},
 	}

@@ -134,6 +134,18 @@ export const providerPresets: ProviderPreset[] = [
     validateModel: 'gpt-4o-mini',
   },
   {
+    id: 'chatgpt',
+    name: 'ChatGPT Subscription',
+    driver: 'openaicompat',
+    description: 'ChatGPT Plus/Pro via local proxy',
+    logo: 'openai',
+    brandColor: '#10A37F',
+    baseURL: 'http://cliproxy:8317/v1',
+    requiresKey: false,
+    keyHint: 'Requires local proxy authentication: docker exec -it timothy-cliproxy ./CLIProxyAPI -codex-device-login',
+    validateModel: 'gpt-4o',
+  },
+  {
     id: 'anthropic',
     name: 'Anthropic',
     driver: 'anthropic',
@@ -147,6 +159,18 @@ export const providerPresets: ProviderPreset[] = [
     keyHint: 'Create one at console.anthropic.com, keys start with sk-ant-.',
     keyURL: 'https://console.anthropic.com/settings/keys',
     validateModel: 'claude-haiku-4-5',
+  },
+  {
+    id: 'claude',
+    name: 'Claude Subscription',
+    driver: 'openaicompat',
+    description: 'Claude Pro/Team via local proxy',
+    logo: 'anthropic',
+    brandColor: '#D97757',
+    baseURL: 'http://cliproxy:8317/v1',
+    requiresKey: false,
+    keyHint: 'Requires local proxy authentication: docker exec -it timothy-cliproxy ./CLIProxyAPI -claude-login',
+    validateModel: 'claude-3-7-sonnet-20250219',
   },
   {
     id: 'cursor',
@@ -257,8 +281,12 @@ export function matchPreset(p: MatchPresetSource): ProviderPreset {
   // hostname, which varies across deployments (ollama, localhost,
   // host.docker.internal).
   try {
-    if (new URL(p.base_url).port === '11434') {
+    const u = new URL(p.base_url)
+    if (u.port === '11434') {
       return providerPresets.find((x) => x.id === 'ollama') ?? custom
+    }
+    if (u.port === '8317' || u.hostname === 'cliproxy') {
+      return providerPresets.find((x) => x.id === 'chatgpt') ?? custom
     }
   } catch {
     // fall through to host matching below

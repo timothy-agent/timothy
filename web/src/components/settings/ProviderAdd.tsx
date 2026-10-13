@@ -56,19 +56,15 @@ function referentsOf(refs: SecretRefEntry[], ref: string): string[] {
 function presetLitellmProvider(presetId: string): string {
   return {
     openai: 'openai',
+    chatgpt: 'openai',
     anthropic: 'anthropic',
+    claude: 'anthropic',
     bedrock: 'bedrock',
     glm: 'zai',
     grok: 'xai',
     ollama: 'ollama',
   }[presetId] ?? ''
 }
-
-// AnthropicAuthMode is the Anthropic preset's auth picker (D-051,
-// folded into the single Anthropic preset): the plain metered API key
-// (default, today's kind=api flow, unchanged) or a Claude subscription
-// OAuth token, which creates a kind='cli' row instead.
-type AnthropicAuthMode = 'api_key' | 'oauth'
 
 // BedrockAuthMode is the Bedrock preset's credential source (D-156):
 // an IAM access key pair stored as a secret (default) or the cloud
@@ -113,7 +109,6 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   const [keyError, setKeyError] = useState<string | null>(null)
   const [test, setTest] = useState<TestResult | null>(null)
   const [tested, setTested] = useState(false)
-  const [anthropicAuth, setAnthropicAuth] = useState<AnthropicAuthMode>('api_key')
   const [bedrockAuth, setBedrockAuth] = useState<BedrockAuthMode>('static')
   // credMode picks between typing a new secret (default) and reusing a
   // stored ref, only offered for the plain (non-bedrock-split,
@@ -171,7 +166,6 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
     setKeyError(null)
     setTest(null)
     setTested(false)
-    setAnthropicAuth('api_key')
     setCredMode('new')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.id])
@@ -242,15 +236,13 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   const isBedrock = preset.driver === 'bedrock'
   const isAnthropic = preset.id === 'anthropic'
   const isCursor = preset.id === 'cursor'
-  // isCli: the subscription-token auth mode (Anthropic) or a CLI-only
-  // preset (Cursor) creates a kind='cli' row (D-051) instead of the
-  // plain kind='api' key flow.
-  const isCli = (isAnthropic && anthropicAuth === 'oauth') || isCursor
+  // isCli: Cursor creates a kind='cli' row (D-051) for coding missions.
+  const isCli = isCursor
   // bedrockAmbient: the gateway's own cloud identity signs requests,
   // so the row carries no secret and no reference (D-156).
   const bedrockAmbient = isBedrock && bedrockAuth === 'ambient'
   const wantsKey = preset.requiresKey && !bedrockAmbient
-  // A keyless preset (Ollama) stores no secret, so it must not name a
+  // A keyless preset (Ollama, ChatGPT/Claude subscription) stores no secret, so it must not name a
   // reference either: the gateway treats an unresolved ref as unhealthy.
   const credentialRef = wantsKey ? ref.trim() : ''
   const bedrockOptions = isBedrock ? { region, ...(bedrockAmbient ? { auth: 'ambient' } : {}) } : {}
@@ -288,8 +280,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
 
   // submitCli validates the pasted subscription token, stores it, and
   // creates the kind='cli' row. No probe: no chat driver exists for
-  // these rows (D-051), so there is nothing to test against. Anthropic
-  // subscription tokens must carry the sk-ant-oat prefix; Cursor's API
+  // these rows (D-051), so there is nothing to test against. Cursor's API
   // key has no fixed prefix to check, so any non-empty value passes.
   const submitCli = async () => {
     if (!name.trim()) {
@@ -298,11 +289,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
     }
     const trimmedKey = stripPaste(key)
     if (!trimmedKey) {
-      setKeyError(isCursor ? 'An API key is required.' : 'A subscription token is required.')
-      return
-    }
-    if (!isCursor && !trimmedKey.startsWith('sk-ant-oat')) {
-      setKeyError('Subscription tokens start with sk-ant-oat. Run `claude setup-token` to generate one.')
+      setKeyError('An API key is required.')
       return
     }
     if (!ref.trim()) {
@@ -317,10 +304,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
       const id = await createProvider({
         name: name.trim(),
         kind: 'cli',
-        // Anthropic's preset.driver is 'anthropic' (its api-kind
-        // flow); the oauth mode's kind='cli' row is always claude-cli.
-        // Cursor is a CLI-only preset, so its driver is used as-is.
-        driver: isCursor ? preset.driver : 'claude-cli',
+        driver: preset.driver,
         base_url: '',
         credential_ref: ref.trim(),
         headers: {},
@@ -347,8 +331,8 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
       )
       return
     }
-    if (!usingExistingCred && isAnthropic && anthropicAuth === 'api_key' && stripPaste(key).startsWith('sk-ant-oat')) {
-      setKeyError('This looks like a subscription token, use "Subscription token" instead.')
+    if (!usingExistingCred && isAnthropic && stripPaste(key).startsWith('sk-ant-oat')) {
+      setKeyError('This looks like a subscription token. Add the "Claude Subscription" provider preset instead.')
       return
     }
     if (!name.trim()) {
@@ -454,6 +438,34 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
           http://192.168.1.20:11434/v1.
         </p>
       )}
+      {preset.id === 'chatgpt' && (
+        <div className="mb-4 rounded-md border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Requires ChatGPT Plus or Pro subscription</p>
+          <p className="mt-1">
+            Authenticate once with your OpenAI account by running on your host:
+          </p>
+          <code className="mt-2 block rounded bg-muted px-2 py-1 font-mono text-xs text-foreground">
+            docker exec -it timothy-cliproxy ./CLIProxyAPI -codex-device-login
+          </code>
+          <p className="mt-1.5 text-xs">
+            Open the displayed OpenAI link, sign in, and enter the one-time device code. Once authenticated, click Test below.
+          </p>
+        </div>
+      )}
+      {preset.id === 'claude' && (
+        <div className="mb-4 rounded-md border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
+          <p className="font-medium text-foreground">Requires Claude Pro or Team subscription</p>
+          <p className="mt-1">
+            Authenticate once with your Anthropic account by running on your host:
+          </p>
+          <code className="mt-2 block rounded bg-muted px-2 py-1 font-mono text-xs text-foreground">
+            docker exec -it timothy-cliproxy ./CLIProxyAPI -claude-login
+          </code>
+          <p className="mt-1.5 text-xs">
+            Approve the OAuth prompt in your browser. Once authenticated, click Test below.
+          </p>
+        </div>
+      )}
       <Form onSubmit={(e) => e.preventDefault()}>
         <FieldGroup>
           <Field label="Name (unique)">
@@ -466,44 +478,6 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
               placeholder={preset.id === 'custom' ? 'my-gateway' : preset.name}
             />
           </Field>
-
-          {isAnthropic && (
-            <Field label="Auth">
-              {(props) => (
-                <>
-                  <Select
-                    value={anthropicAuth}
-                    onValueChange={(v) => {
-                      setAnthropicAuth(v as AnthropicAuthMode)
-                      setKey('')
-                      invalidate()
-                    }}
-                  >
-                    <SelectTrigger id={props.id} className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="api_key">API key</SelectItem>
-                      <SelectItem value="oauth">Subscription token</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="mt-1.5 text-sm text-muted-foreground">
-                    {anthropicAuth === 'api_key' ? (
-                      'Create an API key in the Anthropic Console (console.anthropic.com → API keys) and paste it here.'
-                    ) : (
-                      <>
-                        Uses your Claude Pro/Max subscription. On any machine with Claude Code installed, run{' '}
-                        <code className="rounded-md bg-muted px-1 py-0.5 font-mono text-xs">claude setup-token</code>,
-                        approve in the browser, and paste the generated token (starts with{' '}
-                        <code className="rounded-md bg-muted px-1 py-0.5 font-mono text-xs">sk-ant-oat…</code>). The
-                        token is long-lived (~1 year).
-                      </>
-                    )}
-                  </p>
-                </>
-              )}
-            </Field>
-          )}
 
           {isCli && (
             <>
