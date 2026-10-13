@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -2524,5 +2525,59 @@ func TestRemovedEnvironmentFieldIgnored(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"goal":"g","enviroment":"php"}`))
 	if err := decodeStrict(r, &createMissionRequest{}); err == nil {
 		t.Fatal("a misspelled field must still be rejected")
+	}
+}
+
+// TestMissionsExecutorOptionsListsCLIConnections: a harness that
+// resolves to more than one of its own kind='cli' rows reports each as
+// a connection with its route_model pin (issue #1237); a single row,
+// or kind='api' rows, report none.
+func TestMissionsExecutorOptionsListsCLIConnections(t *testing.T) {
+	t.Parallel()
+
+	h := &missionAPI{log: discard(), resolveRoute: func(_ context.Context, route, harness, _ string) (*gwclient.ResolvedRoute, error) {
+		switch harness {
+		case "cursor-cli":
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
+				{ProviderName: "Cursor - a", Driver: "cursor-cli", Kind: "cli", Model: "grok-4.7", Usable: true},
+				{ProviderName: "Cursor - b", Driver: "cursor-cli", Kind: "cli", Model: "grok-4.7", Usable: false, SkipReason: "provider is disabled"},
+			}}, nil
+		case "claude-cli":
+			return &gwclient.ResolvedRoute{Route: route, Entries: []gwclient.ResolvedRouteEntry{
+				{ProviderName: "Claude sub", Driver: "claude-cli", Kind: "cli", Model: "sonnet", Usable: true},
+				{ProviderName: "anthropic", Driver: "anthropic", Kind: "api", Model: "claude-sonnet-4-5", Usable: true},
+			}}, nil
+		default:
+			return &gwclient.ResolvedRoute{Route: route, Entries: nil}, nil
+		}
+	}}
+
+	req := httptest.NewRequest("GET", "/v1/missions/executor-options?route=coding", nil)
+	w := httptest.NewRecorder()
+	h.executorOptions(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	var body struct {
+		Options []executorOption `json:"options"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byHarness := map[string]executorOption{}
+	for _, o := range body.Options {
+		byHarness[o.Harness] = o
+	}
+
+	cursor := byHarness["cursor-cli"]
+	want := []executorConnection{
+		{ProviderName: "Cursor - a", Model: "grok-4.7", Pin: "Cursor - a/grok-4.7", Usable: true},
+		{ProviderName: "Cursor - b", Model: "grok-4.7", Pin: "Cursor - b/grok-4.7", Usable: false, SkipReason: "provider is disabled"},
+	}
+	if !cursor.Usable || cursor.ProviderName != "Cursor - a" || !reflect.DeepEqual(cursor.Connections, want) {
+		t.Fatalf("cursor-cli option = %+v, want usable via Cursor - a with connections %+v", cursor, want)
+	}
+	if claude := byHarness["claude-cli"]; claude.Connections != nil {
+		t.Fatalf("claude-cli connections = %+v, want none for a single cli row", claude.Connections)
 	}
 }
