@@ -1,4 +1,4 @@
-import { Trash2 } from 'lucide-react'
+import { CircleAlert, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
@@ -10,6 +10,10 @@ import {
   patchProvider,
   secretStatus,
   setSecret,
+  subscriptionAuthCallback,
+  subscriptionAuthCancel,
+  subscriptionAuthStart,
+  subscriptionAuthStatus,
   testProvider,
 } from '../../api/client'
 import type { AdminProvider } from '../../api/types'
@@ -220,13 +224,15 @@ function ProviderEditForm({
   const isBedrock = provider.driver === 'bedrock'
   const bedrockAmbient = isBedrock && staged.values.auth === 'ambient'
   const isOpenaicompat = provider.driver === 'openaicompat'
+  const preset = matchPreset(provider)
+  const isCliproxy = preset?.id === 'chatgpt' || preset?.id === 'claude'
 
   return (
     <PageShell width="form">
       <PageHeader
         title={provider.name}
         description={`driver: ${provider.driver}`}
-        meta={<ProviderLogo preset={matchPreset(provider)} className="size-9" />}
+        meta={<ProviderLogo preset={preset} className="size-9" />}
         breadcrumbs={[
           { label: 'Settings', href: '/settings' },
           { label: area.label, href: '/settings/providers' },
@@ -370,7 +376,21 @@ function ProviderEditForm({
         </FormActions>
       </Form>
 
-      {!bedrockAmbient && (
+      {isCliproxy ? (
+        <div className="mt-10">
+          <Panel title="Subscription authentication">
+            <SubscriptionSessionPanel
+              provider={provider}
+              preset={preset}
+              onSuccess={() => {
+                void doRefresh().then((refetched) => {
+                  if (refetched) staged.rebase(baselineFrom(refetched))
+                })
+              }}
+            />
+          </Panel>
+        </div>
+      ) : !bedrockAmbient && (
         <div className="mt-10">
           <Panel title={isBedrock ? 'AWS credentials' : isCli && provider.driver === 'claude-cli' ? 'Subscription token' : 'API key'}>
             <CredentialPanel
@@ -468,6 +488,180 @@ function useProviderTestState() {
   }, [])
 
   return { ...state, run }
+}
+
+function SubscriptionSessionPanel({
+  provider,
+  preset,
+  onSuccess,
+}: {
+  provider: AdminProvider
+  preset?: ReturnType<typeof matchPreset>
+  onSuccess: () => void
+}) {
+  const providerType = preset?.id === 'claude' ? 'claude' : 'chatgpt'
+  const [session, setSession] = useState<{ url: string; state: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [redirectUrlInput, setRedirectUrlInput] = useState('')
+  const [submittingManual, setSubmittingManual] = useState(false)
+  const [statusError, setStatusError] = useState<string | null>(null)
+
+  const startReauth = async () => {
+    setBusy(true)
+    setStatusError(null)
+    setElapsed(0)
+    try {
+      const res = await subscriptionAuthStart(providerType)
+      setSession({ url: res.url, state: res.state })
+      window.open(res.url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      toast.error('Could not start login flow', { description: errText(err) })
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!session) return
+    const timer = setInterval(() => {
+      setElapsed((s) => s + 1)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [session])
+
+  useEffect(() => {
+    if (!session) return
+    let active = true
+
+    const poll = async () => {
+      try {
+        const res = await subscriptionAuthStatus(session.state)
+        if (!active) return
+        if (res.status === 'ok') {
+          toast.success('Authentication renewed', { description: `${provider.name} session is active.` })
+          setBusy(false)
+          setSession(null)
+          onSuccess()
+          return
+        }
+        if (res.status === 'error') {
+          setStatusError(res.error || 'Authentication failed or was cancelled')
+          setBusy(false)
+          setSession(null)
+          return
+        }
+      } catch {
+        // Retry next interval
+      }
+    }
+
+    void poll()
+    const interval = setInterval(poll, 2000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [session, provider.name, onSuccess])
+
+  const cancelSession = async () => {
+    if (session) {
+      try {
+        await subscriptionAuthCancel(session.state)
+      } catch {
+        // Best-effort cancellation
+      }
+    }
+    setSession(null)
+    setBusy(false)
+    setStatusError(null)
+  }
+
+  const submitManualCallback = async () => {
+    if (!redirectUrlInput.trim()) return
+    setSubmittingManual(true)
+    try {
+      const res = await subscriptionAuthCallback(providerType, redirectUrlInput.trim())
+      if (res.status === 'ok') {
+        toast.info('Callback submitted, verifying session…')
+      } else {
+        toast.error('Callback error', { description: res.error || 'Invalid callback URL' })
+      }
+    } catch (err) {
+      toast.error('Could not submit callback', { description: errText(err) })
+    } finally {
+      setSubmittingManual(false)
+    }
+  }
+
+  if (session) {
+    return (
+      <div className="space-y-6 rounded-lg border border-border bg-card p-6 shadow-sm">
+        <div className="space-y-2">
+          <h3 className="text-base font-semibold text-foreground">Waiting for authorization in your browser…</h3>
+          <p className="text-sm text-muted-foreground">
+            A new browser tab opened to sign into {providerType === 'chatgpt' ? 'OpenAI' : 'Anthropic'}. Approve the access request there to continue.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button asChild variant="outline" size="sm">
+            <a href={session.url} target="_blank" rel="noopener noreferrer">
+              Re-open login page
+            </a>
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => void cancelSession()}>
+            Cancel
+          </Button>
+          <span className="text-xs text-muted-foreground">Elapsed: {elapsed}s</span>
+        </div>
+
+        {elapsed > 8 && (
+          <div className="rounded-md border border-border/70 bg-muted/30 p-4 text-xs space-y-2">
+            <p className="font-medium text-foreground">Running on a remote server or headless host?</p>
+            <p className="text-muted-foreground">
+              If your browser says &ldquo;Unable to connect&rdquo; to localhost after logging in, copy the full URL from your browser&apos;s address bar and paste it below:
+            </p>
+            <div className="flex gap-2">
+              <Input
+                placeholder="http://localhost:1455/auth/callback?code=..."
+                value={redirectUrlInput}
+                onChange={(e) => setRedirectUrlInput(e.target.value)}
+                className="text-xs font-mono"
+              />
+              <Button size="sm" disabled={submittingManual || !redirectUrlInput.trim()} onClick={() => void submitManualCallback()}>
+                {submittingManual ? 'Submitting…' : 'Submit'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4 text-sm">
+      {statusError && (
+        <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <CircleAlert className="size-4 shrink-0" aria-hidden />
+          <span>{statusError}</span>
+        </div>
+      )}
+
+      <p className="text-muted-foreground">
+        Routed through CLIProxyAPI on port 8317. Flat-rate subscription models cost $0.00 on your Timothy ledger. No API key required.
+      </p>
+
+      <div>
+        <Button onClick={() => void startReauth()} disabled={busy}>
+          {busy
+            ? 'Opening login page…'
+            : providerType === 'chatgpt'
+              ? 'Re-authenticate with ChatGPT'
+              : 'Re-authenticate with Claude'}
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 function CredentialPanel({

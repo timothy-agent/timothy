@@ -16,6 +16,10 @@ vi.mock('../../api/client', () => ({
   patchProvider: vi.fn(),
   secretStatus: vi.fn(),
   setSecret: vi.fn(),
+  subscriptionAuthCallback: vi.fn(),
+  subscriptionAuthCancel: vi.fn(),
+  subscriptionAuthStart: vi.fn(),
+  subscriptionAuthStatus: vi.fn(),
   testProvider: vi.fn(),
 }))
 
@@ -29,6 +33,8 @@ import {
   patchProvider,
   secretStatus,
   setSecret,
+  subscriptionAuthStart,
+  subscriptionAuthStatus,
   testProvider,
 } from '../../api/client'
 import { toast } from 'sonner'
@@ -81,6 +87,30 @@ const openaicompatProvider: AdminProvider = {
   driver: 'openaicompat',
   base_url: 'http://ollama.local/v1',
   default_model: 'qwen3',
+  credential_ref: '',
+  headers: {},
+  enabled: true,
+}
+
+const chatgptSubscriptionProvider: AdminProvider = {
+  id: 'p-cgpt',
+  name: 'ChatGPT Subscription',
+  kind: 'api',
+  driver: 'openaicompat',
+  base_url: 'http://cliproxy:8317/v1',
+  default_model: 'gpt-4o',
+  credential_ref: '',
+  headers: {},
+  enabled: true,
+}
+
+const claudeSubscriptionProvider: AdminProvider = {
+  id: 'p-claude-sub',
+  name: 'Claude Subscription',
+  kind: 'api',
+  driver: 'openaicompat',
+  base_url: 'http://cliproxy:8317/v1',
+  default_model: 'claude-3-7-sonnet-20250219',
   credential_ref: '',
   headers: {},
   enabled: true,
@@ -588,6 +618,42 @@ describe('ProviderEdit credential panel', () => {
     renderPage('p3')
 
     expect(await screen.findByText('Subscription token')).toBeInTheDocument()
+  })
+
+  it('renders subscription authentication panel for cliproxy chatgpt and claude providers', async () => {
+    vi.mocked(listProviders).mockResolvedValue([chatgptSubscriptionProvider])
+    renderPage('p-cgpt')
+
+    expect(await screen.findByText('Subscription authentication')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Re-authenticate with ChatGPT' })).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('paste key')).toBeNull()
+  })
+
+  it('renders claude reauth button for cliproxy claude provider', async () => {
+    vi.mocked(listProviders).mockResolvedValue([claudeSubscriptionProvider])
+    renderPage('p-claude-sub')
+
+    expect(await screen.findByText('Subscription authentication')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Re-authenticate with Claude' })).toBeInTheDocument()
+  })
+
+  it('starts re-authentication and handles success status for cliproxy chatgpt', async () => {
+    vi.mocked(listProviders).mockResolvedValue([chatgptSubscriptionProvider])
+    vi.mocked(subscriptionAuthStart).mockResolvedValue({ status: 'ok', url: 'https://auth.openai.com/oauth', state: 'test-state' })
+    vi.mocked(subscriptionAuthStatus).mockResolvedValue({ status: 'ok' })
+    const windowOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+
+    renderPage('p-cgpt')
+
+    const button = await screen.findByRole('button', { name: 'Re-authenticate with ChatGPT' })
+    fireEvent.click(button)
+
+    await waitFor(() => expect(subscriptionAuthStart).toHaveBeenCalledWith('chatgpt'))
+    expect(windowOpenSpy).toHaveBeenCalledWith('https://auth.openai.com/oauth', '_blank', 'noopener,noreferrer')
+    await waitFor(() => expect(subscriptionAuthStatus).toHaveBeenCalledWith('test-state'))
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Authentication renewed', expect.anything()))
+
+    windowOpenSpy.mockRestore()
   })
 
   it('typing a key and Save rotates the stored secret for a non-bedrock provider', async () => {

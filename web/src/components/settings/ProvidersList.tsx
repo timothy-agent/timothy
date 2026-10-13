@@ -142,8 +142,9 @@ function ProviderCard({
     )
   }
 
-  const healthLabel = isCli
-    ? `subscription · ${health?.healthy ? 'healthy' : 'auth failed'}`
+  const isSubscription = isCli || preset?.id === 'chatgpt' || preset?.id === 'claude'
+  const healthLabel = isSubscription
+    ? `subscription · ${health?.healthy ? 'healthy' : isCli ? 'auth failed' : health?.last_error ? 'login required' : 'ready'}`
     : health?.healthy
       ? 'healthy'
       : 'credential missing'

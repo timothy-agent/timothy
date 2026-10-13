@@ -171,7 +171,7 @@ func isLocalBaseURL(baseURL string) bool {
 		return false
 	}
 	host := u.Hostname()
-	if host == "localhost" || host == "host.docker.internal" {
+	if host == "localhost" || host == "host.docker.internal" || host == "cliproxy" {
 		return true
 	}
 	if ip := net.ParseIP(host); ip != nil {

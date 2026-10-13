@@ -40,6 +40,30 @@ services:
       timeout: 3s
       retries: 10
 
+  # CLIProxyAPI: local proxy exposing ChatGPT Plus/Pro and Claude subscriptions
+  # as an OpenAI-compatible API on :8317. Mandatory service.
+  cliproxy:
+    <<: *service
+    image: eceasy/cli-proxy-api@sha256:b7cf456bf6ef7f6489f18144e7cc166dbb8b2e5f46d6ee8881a321aaea563730
+    container_name: timothy-cliproxy
+    ports:
+      - "127.0.0.1:${CLAUDE_CALLBACK_PORT:-54545}:54545"
+      - "127.0.0.1:${CODEX_CALLBACK_PORT:-1455}:1455"
+    volumes:
+      - cliproxy-data:/root/.cli-proxy-api
+    configs:
+      - source: cliproxy_config
+        target: /CLIProxyAPI/config.yaml
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/127.0.0.1/8317'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+
   searxng:
     <<: *service
     profiles: [search, full]
@@ -153,6 +177,8 @@ services:
       PORT: "8080"
       GATEWAY_URL: http://gateway:8081
       MEMORYD_URL: http://memoryd:8082
+      CLIPROXY_URL: http://cliproxy:8317
+      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY:-}
       # Brain-only secret: the public API bearer token.
       TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
       # Bearer token Prometheus presents to /metrics on the published
@@ -417,11 +443,28 @@ configs:
         secret_key: "3db45963595b11ba5641234fb40bfb84c612b7aaf25ceff7cc496355337e1add"
         limiter: false
 
+  cliproxy_config:
+    content: |
+      config-version: 8
+
+      server:
+        host: ""
+        port: 8317
+
+      access:
+        api-keys: []
+
+      remote-management:
+        allow-remote: true
+        secret-key: "${CLIPROXY_MANAGEMENT_KEY:-}"
+        disable-control-panel: false
+
 volumes:
   pgdata:
   web_node_modules:
   workspace:
   attachments:
+  cliproxy-data:
   # D-054: headless claude CLI's subscription auth state, shared across
   # mission containers — see the sandboxd service comment above for the
   # one-off login command.

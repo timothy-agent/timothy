@@ -134,6 +134,18 @@ export const providerPresets: ProviderPreset[] = [
     validateModel: 'gpt-4o-mini',
   },
   {
+    id: 'chatgpt',
+    name: 'ChatGPT Subscription',
+    driver: 'openaicompat',
+    description: 'ChatGPT Plus/Pro via local proxy',
+    logo: 'openai',
+    brandColor: '#10A37F',
+    baseURL: 'http://cliproxy:8317/v1',
+    requiresKey: false,
+    keyHint: 'Zero per-token cost. Managed via CLIProxyAPI.',
+    validateModel: 'gpt-4o',
+  },
+  {
     id: 'anthropic',
     name: 'Anthropic',
     driver: 'anthropic',
@@ -147,6 +159,18 @@ export const providerPresets: ProviderPreset[] = [
     keyHint: 'Create one at console.anthropic.com, keys start with sk-ant-.',
     keyURL: 'https://console.anthropic.com/settings/keys',
     validateModel: 'claude-haiku-4-5',
+  },
+  {
+    id: 'claude',
+    name: 'Claude Subscription',
+    driver: 'openaicompat',
+    description: 'Claude Pro/Team via local proxy',
+    logo: 'anthropic',
+    brandColor: '#D97757',
+    baseURL: 'http://cliproxy:8317/v1',
+    requiresKey: false,
+    keyHint: 'Zero per-token cost. Managed via CLIProxyAPI.',
+    validateModel: 'claude-3-7-sonnet-20250219',
   },
   {
     id: 'cursor',
@@ -236,7 +260,8 @@ export const providerPresets: ProviderPreset[] = [
 // widened so it also accepts an ExecutionPlanEntry, which carries the
 // same driver/kind/base_url fields trimmed from the gateway resolve
 // response.
-export type MatchPresetSource = Pick<AdminProvider, 'kind' | 'driver' | 'base_url'>
+export type MatchPresetSource = Pick<AdminProvider, 'kind' | 'driver' | 'base_url'> &
+  Partial<Pick<AdminProvider, 'name' | 'default_model'>>
 
 // matchPreset finds the preset a configured provider was (probably)
 // created from, for card branding: exact drivers first, then base_url
@@ -257,8 +282,17 @@ export function matchPreset(p: MatchPresetSource): ProviderPreset {
   // hostname, which varies across deployments (ollama, localhost,
   // host.docker.internal).
   try {
-    if (new URL(p.base_url).port === '11434') {
+    const u = new URL(p.base_url)
+    if (u.port === '11434') {
       return providerPresets.find((x) => x.id === 'ollama') ?? custom
+    }
+    if (u.port === '8317' || u.hostname === 'cliproxy') {
+      const name = (p.name ?? '').toLowerCase()
+      const model = (p.default_model ?? '').toLowerCase()
+      if (name.includes('claude') || name.includes('anthropic') || model.startsWith('claude')) {
+        return providerPresets.find((x) => x.id === 'claude') ?? custom
+      }
+      return providerPresets.find((x) => x.id === 'chatgpt') ?? custom
     }
   } catch {
     // fall through to host matching below

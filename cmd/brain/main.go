@@ -231,6 +231,14 @@ func main() {
 	if markitdownURL == "" {
 		app.Log.Warn("MARKITDOWN_URL not set; PDF attachments in chat are unavailable")
 	}
+	cliproxyURL := os.Getenv("CLIPROXY_URL")
+	if cliproxyURL == "" {
+		cliproxyURL = "http://cliproxy:8317"
+	}
+	cliproxyKey := os.Getenv("CLIPROXY_MANAGEMENT_KEY")
+	if cliproxyKey == "" || cliproxyKey == "change-me" {
+		app.Log.Warn("CLIPROXY_MANAGEMENT_KEY not set; subscription auth management is unavailable")
+	}
 	whisperURL := os.Getenv("WHISPER_URL")
 	if whisperURL == "" {
 		app.Log.Warn("WHISPER_URL not set; the web mic button's /v1/transcribe endpoint is unavailable")
@@ -1220,7 +1228,7 @@ func main() {
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, mcpAuth, openrouterAuth, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
-		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
+		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, cliproxyURL, cliproxyKey, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
 		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags),
 		authStore, authKeyPair)
 

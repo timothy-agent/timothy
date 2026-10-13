@@ -17,6 +17,7 @@ registered as an openaicompat provider.
 | `gateway`    | Internal LLM gateway: provider routing, cost ledger                   |
 | `memoryd`    | Internal memory service: pgvector recall                              |
 | `sandboxd`   | Per-mission sandboxes: Docker containers (Compose) or pods (Kubernetes) |
+| `cliproxy`   | Internal proxy: wraps ChatGPT Plus/Pro and Claude subscriptions into OpenAI-compatible API on :8317 |
 | `web`        | React UI (:3300)                                                      |
 | `searxng`    | Metasearch backend for search_web (profile `search`, `full`)          |
 | `markitdown` | Python sidecar: file → markdown (profile `docs`, `full`)              |

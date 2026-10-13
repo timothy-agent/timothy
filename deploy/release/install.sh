@@ -120,6 +120,7 @@ else
   postgres_password=$(openssl rand -hex 24)
   master_key=$(openssl rand -base64 32)
   api_token=$(openssl rand -hex 32)
+  cliproxy_key=$(openssl rand -hex 24)
 
   if [ "$(uname -s)" = "Linux" ] && [ -S /var/run/docker.sock ]; then
     sock_gid=$(stat -c '%g' /var/run/docker.sock)
@@ -135,6 +136,7 @@ else
   sed_inplace "s#^POSTGRES_PASSWORD=.*#POSTGRES_PASSWORD=${postgres_password}#"
   sed_inplace "s#^TIMOTHY_MASTER_KEY=.*#TIMOTHY_MASTER_KEY=${master_key}#"
   sed_inplace "s#^TIMOTHY_API_TOKEN=.*#TIMOTHY_API_TOKEN=${api_token}#"
+  sed_inplace "s#^CLIPROXY_MANAGEMENT_KEY=.*#CLIPROXY_MANAGEMENT_KEY=${cliproxy_key}#"
   sed_inplace "s#^DOCKER_SOCK_GID=.*#DOCKER_SOCK_GID=${sock_gid}#"
   sed_inplace "s#^TIMOTHY_VERSION=.*#TIMOTHY_VERSION=${TAG}#"
   sed_inplace "s#__TIMOTHY_TAG__#${TAG}#"
