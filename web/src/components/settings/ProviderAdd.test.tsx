@@ -14,6 +14,7 @@ vi.mock('../../api/client', async (importOriginal) => {
     listProviders: vi.fn(),
     listSecretBackends: vi.fn(),
     listSecretRefs: vi.fn(),
+    providerOAuthStart: vi.fn(),
     searchCatalog: vi.fn(),
     setSecret: vi.fn(),
     validateProvider: vi.fn(),
@@ -25,6 +26,7 @@ import {
   listProviders,
   listSecretBackends,
   listSecretRefs,
+  providerOAuthStart,
   searchCatalog,
   setSecret,
   validateProvider,
@@ -944,5 +946,57 @@ describe('ProviderAdd Ollama help', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
     await screen.findByText(/^Failed after/)
     expect(screen.queryByText(linuxHint)).not.toBeInTheDocument()
+  })
+})
+
+describe('ProviderAdd openrouter connect (D-163)', () => {
+  const assign = vi.fn()
+  beforeEach(() => {
+    vi.stubGlobal('location', { ...window.location, assign, origin: 'http://localhost:3300' })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('offers Connect instead of a paste box and sends the browser to the login', async () => {
+    vi.mocked(providerOAuthStart).mockResolvedValue('https://openrouter.ai/auth?state=s')
+    renderPage('openrouter')
+    const connect = await screen.findByRole('button', { name: 'Connect OpenRouter' })
+    expect(screen.queryByPlaceholderText('sk-or-v1-…')).not.toBeInTheDocument()
+    expect(screen.getByText(/50 requests a day/)).toBeInTheDocument()
+    expect(screen.getByText(/train on your prompts/)).toBeInTheDocument()
+
+    fireEvent.click(connect)
+    await waitFor(() => expect(providerOAuthStart).toHaveBeenCalledWith('settings'))
+    await waitFor(() => expect(assign).toHaveBeenCalledWith('https://openrouter.ai/auth?state=s'))
+  })
+
+  it('embedded (wizard) starts with return_to wizard', async () => {
+    vi.mocked(providerOAuthStart).mockResolvedValue('https://openrouter.ai/auth?state=w')
+    render(
+      <TooltipProvider>
+        <MemoryRouter>
+          <ProviderAdd presetId="openrouter" embedded onCreated={vi.fn()} onCancel={vi.fn()} />
+        </MemoryRouter>
+      </TooltipProvider>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect OpenRouter' }))
+    await waitFor(() => expect(providerOAuthStart).toHaveBeenCalledWith('wizard'))
+  })
+
+  it('falls back to the paste flow on request', async () => {
+    renderPage('openrouter')
+    fireEvent.click(await screen.findByRole('button', { name: 'I have a key, paste it instead' }))
+    expect(await screen.findByPlaceholderText('sk-or-v1-…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Connect OpenRouter' })).not.toBeInTheDocument()
+  })
+
+  it('surfaces a failed start without leaving the page', async () => {
+    vi.mocked(providerOAuthStart).mockRejectedValue(new ChatError(422, 'TIMOTHY_PUBLIC_URL is not set'))
+    renderPage('openrouter')
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect OpenRouter' }))
+    await waitFor(() => expect(providerOAuthStart).toHaveBeenCalled())
+    expect(assign).not.toHaveBeenCalled()
+    expect(await screen.findByRole('button', { name: 'Connect OpenRouter' })).toBeEnabled()
   })
 })

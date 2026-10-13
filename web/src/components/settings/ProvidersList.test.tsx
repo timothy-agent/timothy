@@ -184,3 +184,27 @@ describe('ProvidersList empty state', () => {
     expect(await screen.findByRole('link', { name: 'Open the setup guide' })).toHaveAttribute('href', '/welcome')
   })
 })
+
+describe('ProvidersList oauth outcome (D-163)', () => {
+  it('shows the connected notice from the callback query', async () => {
+    vi.mocked(listProviders).mockResolvedValue([apiProvider])
+    vi.mocked(providersHealth).mockResolvedValue([])
+    render(
+      <MemoryRouter initialEntries={['/settings/providers?oauth_connected=OpenRouter']}>
+        <ProvidersList />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('“OpenRouter” is connected and ready to chat.')).toBeInTheDocument()
+  })
+
+  it('shows the failure notice from the callback query', async () => {
+    vi.mocked(listProviders).mockResolvedValue([])
+    vi.mocked(providersHealth).mockResolvedValue([])
+    render(
+      <MemoryRouter initialEntries={['/settings/providers?oauth_error=access_denied']}>
+        <ProvidersList />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('Connection failed: access_denied')).toBeInTheDocument()
+  })
+})

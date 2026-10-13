@@ -1205,6 +1205,17 @@ export async function listConnectorRepos(id: string): Promise<GitHubRepo[]> {
   return repos ?? []
 }
 
+// providerOAuthStart begins the OpenRouter PKCE login (D-163) and
+// returns the URL to send the browser to; the callback lands on the
+// wizard or the providers list depending on returnTo.
+export async function providerOAuthStart(returnTo: 'wizard' | 'settings'): Promise<string> {
+  const { url } = await request<{ url: string }>('/v1/admin/providers/openrouter/oauth/start', {
+    method: 'POST',
+    body: JSON.stringify({ return_to: returnTo }),
+  })
+  return url
+}
+
 // connectorOAuthStart returns the Google consent URL to send the
 // browser to; the callback lands back on /settings?tab=connectors.
 export async function connectorOAuthStart(id: string): Promise<string> {

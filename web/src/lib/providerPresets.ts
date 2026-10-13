@@ -27,6 +27,9 @@ export interface ProviderPreset {
   // Prefill for the validation model — editable in the dialog, becomes
   // the first declared model and the default on create.
   validateModel: string
+  // oauth marks a preset whose key Timothy mints through a browser
+  // login (D-163): the add form offers Connect instead of a paste box.
+  oauth?: 'openrouter'
 }
 
 // bedrockRegions lists AWS regions where Bedrock serves models, for the
@@ -84,6 +87,22 @@ export const awsRegions: { value: string; label: string }[] = [
 ]
 
 export const providerPresets: ProviderPreset[] = [
+  {
+    id: 'openrouter',
+    name: 'OpenRouter',
+    driver: 'openaicompat',
+    description: 'Free models to start, one login',
+    logo: 'openrouter',
+    brandColor: '#6467F2',
+    baseURL: 'https://openrouter.ai/api/v1',
+    requiresKey: true,
+    defaultRef: 'OPENROUTER_API_KEY',
+    keyPlaceholder: 'sk-or-v1-…',
+    keyHint: 'Create one at openrouter.ai/keys, keys start with sk-or-.',
+    keyURL: 'https://openrouter.ai/keys',
+    validateModel: 'nvidia/nemotron-3-super-120b-a12b:free',
+    oauth: 'openrouter',
+  },
   {
     id: 'openai',
     name: 'OpenAI',
