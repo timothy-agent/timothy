@@ -6,6 +6,7 @@ import {
   classifyMission,
   type CreateMissionInput,
   createMission,
+  type ExecutorConnection,
   type ExecutorOption,
   getMissionExecutionPlan,
   getMissionExecutorOptions,
@@ -155,6 +156,30 @@ export const executorChoices: { value: string; label: string }[] = [
   { value: 'opencode', label: 'OpenCode' },
   { value: 'cursor-cli', label: 'Cursor CLI' },
 ]
+
+// CONNECTION_PREFIX marks a Harness select value that names one of a
+// harness's kind='cli' provider rows (issue #1237): "connection:<harness>:<i>"
+// indexes that harness's executor option connections. Picking one sets
+// the harness and pins route_model to that row.
+const CONNECTION_PREFIX = 'connection:'
+
+function connectionValue(harness: string, i: number): string {
+  return `${CONNECTION_PREFIX}${harness}:${i}`
+}
+
+function connectionsOf(options: ExecutorOption[] | null, harness: string): ExecutorConnection[] {
+  const conns = options?.find((o) => o.harness === harness)?.connections ?? []
+  return conns.length > 1 ? conns : []
+}
+
+// harnessSelectValue maps harness + route_model back to the select's
+// value: a connection item when the pin names one of the harness's
+// rows, else the harness itself (or the default sentinel).
+function harnessSelectValue(options: ExecutorOption[] | null, harness: string, routeModel: string): string {
+  const i = connectionsOf(options, harness).findIndex((c) => c.pin === routeModel)
+  if (i >= 0) return connectionValue(harness, i)
+  return harness || EXECUTOR_DEFAULT
+}
 
 // reviewHarnessChoices is the Review harness select's list (issue #582):
 // Native (the default, wire value '') plus the registered adapters.
@@ -1051,8 +1076,23 @@ export function MissionForm({
           <div className="space-y-1.5">
             <Label htmlFor="mission-executor">Harness</Label>
             <Select
-              value={harness || EXECUTOR_DEFAULT}
-              onValueChange={(v) => setHarness(v === EXECUTOR_DEFAULT ? '' : v)}
+              value={harnessSelectValue(executorOptions, harness, routeModel)}
+              onValueChange={(v) => {
+                if (v.startsWith(CONNECTION_PREFIX)) {
+                  const [h, i] = v.slice(CONNECTION_PREFIX.length).split(':')
+                  const conn = connectionsOf(executorOptions, h)[Number(i)]
+                  if (!conn) return
+                  setHarness(h)
+                  setRouteModel(conn.pin)
+                  return
+                }
+                setHarness(v === EXECUTOR_DEFAULT ? '' : v)
+                // A row pin from a previous connection pick must not
+                // outlive the harness it belongs to.
+                if (executorOptions?.some((o) => o.connections?.some((c) => c.pin === routeModel))) {
+                  setRouteModel('')
+                }
+              }}
             >
               <SelectTrigger id="mission-executor" className="w-full">
                 <SelectValue />
@@ -1060,6 +1100,19 @@ export function MissionForm({
               <SelectContent>
                 {executorChoices.map((c) => {
                   const opt = executorOptions?.find((o) => o.harness === c.value)
+                  const conns = connectionsOf(executorOptions, c.value)
+                  if (conns.length > 0) {
+                    return conns.map((conn, i) => (
+                      <SelectItem
+                        key={connectionValue(c.value, i)}
+                        value={connectionValue(c.value, i)}
+                        disabled={!conn.usable}
+                        title={!conn.usable ? conn.skip_reason : undefined}
+                      >
+                        {c.label} - {conn.provider_name}
+                      </SelectItem>
+                    ))
+                  }
                   const disabled = !!opt && !opt.usable
                   const label = c.value === EXECUTOR_DEFAULT ? defaultHarnessLabel(defaultHarnessName) : c.label
                   return (
