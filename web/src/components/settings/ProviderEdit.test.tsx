@@ -99,7 +99,7 @@ const chatgptSubscriptionProvider: AdminProvider = {
   driver: 'openaicompat',
   base_url: 'http://cliproxy:8317/v1',
   default_model: 'gpt-4o',
-  credential_ref: 'local',
+  credential_ref: '',
   headers: {},
   enabled: true,
 }
@@ -111,7 +111,7 @@ const claudeSubscriptionProvider: AdminProvider = {
   driver: 'openaicompat',
   base_url: 'http://cliproxy:8317/v1',
   default_model: 'claude-3-7-sonnet-20250219',
-  credential_ref: 'local',
+  credential_ref: '',
   headers: {},
   enabled: true,
 }

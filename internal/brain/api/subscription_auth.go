@@ -32,6 +32,11 @@ func normalizeSubscriptionProvider(p string) (string, error) {
 }
 
 func (s *subscriptionAuthHandler) start(w http.ResponseWriter, r *http.Request) {
+	if s.secret == "" || s.secret == "change-me" {
+		jsonError(w, http.StatusServiceUnavailable, "service_unavailable", "CLIPROXY_MANAGEMENT_KEY is not configured")
+		return
+	}
+
 	var body struct {
 		Provider string `json:"provider"`
 	}
@@ -59,14 +64,15 @@ func (s *subscriptionAuthHandler) start(w http.ResponseWriter, r *http.Request) 
 		jsonError(w, http.StatusBadGateway, "bad_gateway", "failed to contact cliproxy: "+err.Error())
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	s.forwardResponse(w, resp)
 }
 
 func (s *subscriptionAuthHandler) status(w http.ResponseWriter, r *http.Request) {
+	if s.secret == "" || s.secret == "change-me" {
+		jsonError(w, http.StatusServiceUnavailable, "service_unavailable", "CLIPROXY_MANAGEMENT_KEY is not configured")
+		return
+	}
+
 	state := r.URL.Query().Get("state")
 	if state == "" {
 		jsonError(w, http.StatusBadRequest, "bad_request", "query parameter state is required")
@@ -87,14 +93,15 @@ func (s *subscriptionAuthHandler) status(w http.ResponseWriter, r *http.Request)
 		jsonError(w, http.StatusBadGateway, "bad_gateway", "failed to contact cliproxy: "+err.Error())
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	s.forwardResponse(w, resp)
 }
 
 func (s *subscriptionAuthHandler) callback(w http.ResponseWriter, r *http.Request) {
+	if s.secret == "" || s.secret == "change-me" {
+		jsonError(w, http.StatusServiceUnavailable, "service_unavailable", "CLIPROXY_MANAGEMENT_KEY is not configured")
+		return
+	}
+
 	var body struct {
 		Provider    string `json:"provider"`
 		RedirectURL string `json:"redirect_url"`
@@ -137,14 +144,15 @@ func (s *subscriptionAuthHandler) callback(w http.ResponseWriter, r *http.Reques
 		jsonError(w, http.StatusBadGateway, "bad_gateway", "failed to contact cliproxy: "+err.Error())
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	s.forwardResponse(w, resp)
 }
 
 func (s *subscriptionAuthHandler) cancel(w http.ResponseWriter, r *http.Request) {
+	if s.secret == "" || s.secret == "change-me" {
+		jsonError(w, http.StatusServiceUnavailable, "service_unavailable", "CLIPROXY_MANAGEMENT_KEY is not configured")
+		return
+	}
+
 	state := r.URL.Query().Get("state")
 	if state == "" {
 		jsonError(w, http.StatusBadRequest, "bad_request", "query parameter state is required")
@@ -165,7 +173,17 @@ func (s *subscriptionAuthHandler) cancel(w http.ResponseWriter, r *http.Request)
 		jsonError(w, http.StatusBadGateway, "bad_gateway", "failed to contact cliproxy: "+err.Error())
 		return
 	}
+	s.forwardResponse(w, resp)
+}
+
+func (s *subscriptionAuthHandler) forwardResponse(w http.ResponseWriter, resp *http.Response) {
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		s.log.Error("cliproxy rejected management authentication", "status", resp.StatusCode)
+		jsonError(w, http.StatusBadGateway, "bad_gateway", "cliproxy rejected management authentication")
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(resp.StatusCode)
@@ -175,9 +193,6 @@ func (s *subscriptionAuthHandler) cancel(w http.ResponseWriter, r *http.Request)
 func (a *API) registerSubscriptionAuth(handle func(pattern string, h http.Handler), cliproxyURL, cliproxyKey string) {
 	if cliproxyURL == "" {
 		cliproxyURL = "http://cliproxy:8317"
-	}
-	if cliproxyKey == "" {
-		cliproxyKey = "timothy"
 	}
 	sub := &subscriptionAuthHandler{
 		baseURL: cliproxyURL,

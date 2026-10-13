@@ -962,7 +962,7 @@ function SubscriptionConnectPanel({
               kind: 'api',
               driver: 'openaicompat',
               base_url: 'http://cliproxy:8317/v1',
-              credential_ref: 'local',
+              credential_ref: '',
               headers: {},
               default_model: preset.validateModel || (providerType === 'chatgpt' ? 'gpt-4o' : 'claude-3-7-sonnet-20250219'),
               enabled: true,

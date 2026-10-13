@@ -236,8 +236,8 @@ func main() {
 		cliproxyURL = "http://cliproxy:8317"
 	}
 	cliproxyKey := os.Getenv("CLIPROXY_MANAGEMENT_KEY")
-	if cliproxyKey == "" {
-		cliproxyKey = "timothy"
+	if cliproxyKey == "" || cliproxyKey == "change-me" {
+		app.Log.Warn("CLIPROXY_MANAGEMENT_KEY not set; subscription auth management is unavailable")
 	}
 	whisperURL := os.Getenv("WHISPER_URL")
 	if whisperURL == "" {

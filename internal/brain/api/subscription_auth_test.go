@@ -155,4 +155,37 @@ func TestSubscriptionAuth(t *testing.T) {
 			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 		}
 	})
+
+	t.Run("upstream 401 translated to 502 bad gateway", func(t *testing.T) {
+		unauthMux := http.NewServeMux()
+		api.registerSubscriptionAuth(unauthMux.Handle, server.URL, "wrong-key")
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/providers/subscription/auth/start", strings.NewReader(`{"provider":"chatgpt"}`))
+		req.Header.Set("Authorization", "Bearer test-token")
+		unauthMux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadGateway {
+			t.Fatalf("expected 502, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var res map[string]any
+		_ = json.NewDecoder(rec.Body).Decode(&res)
+		if res["error"] != "bad_gateway" {
+			t.Errorf("expected error=bad_gateway, got %v", res["error"])
+		}
+	})
+
+	t.Run("unconfigured secret returns 503", func(t *testing.T) {
+		noSecretMux := http.NewServeMux()
+		api.registerSubscriptionAuth(noSecretMux.Handle, server.URL, "")
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/providers/subscription/auth/start", strings.NewReader(`{"provider":"chatgpt"}`))
+		req.Header.Set("Authorization", "Bearer test-token")
+		noSecretMux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
 }

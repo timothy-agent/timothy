@@ -50,12 +50,11 @@ services:
   # as an OpenAI-compatible API on :8317. Mandatory service.
   cliproxy:
     <<: *service
-    image: eceasy/cli-proxy-api:latest
+    image: eceasy/cli-proxy-api@sha256:b7cf456bf6ef7f6489f18144e7cc166dbb8b2e5f46d6ee8881a321aaea563730
     container_name: timothy-cliproxy
     ports:
-      - "${CLIPROXY_PORT:-8317}:8317"
-      - "${CLAUDE_CALLBACK_PORT:-54545}:54545"
-      - "${CODEX_CALLBACK_PORT:-1455}:1455"
+      - "127.0.0.1:${CLAUDE_CALLBACK_PORT:-54545}:54545"
+      - "127.0.0.1:${CODEX_CALLBACK_PORT:-1455}:1455"
     volumes:
       - cliproxy-data:/root/.cli-proxy-api
     configs:
@@ -170,7 +169,7 @@ services:
       GATEWAY_URL: http://gateway:8081
       MEMORYD_URL: http://memoryd:8082
       CLIPROXY_URL: http://cliproxy:8317
-      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY:-timothy}
+      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY:-}
       # Brain-only secret: the public API bearer token.
       TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
       # Connector credentials resolve through brain's own secret-store
@@ -367,7 +366,7 @@ configs:
 
       remote-management:
         allow-remote: true
-        secret-key: "${CLIPROXY_MANAGEMENT_KEY:-timothy}"
+        secret-key: "${CLIPROXY_MANAGEMENT_KEY:-}"
         disable-control-panel: false
 
 volumes:
