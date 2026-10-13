@@ -63,7 +63,9 @@ func TestOpenRouterStartHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	u, err := url.Parse(out.URL)
-	if err != nil || u.Query().Get("state") == "" || u.Query().Get("code_challenge") == "" {
+	// The state rides inside callback_url, not as a top-level param.
+	cb, cbErr := url.Parse(u.Query().Get("callback_url"))
+	if err != nil || cbErr != nil || cb.Query().Get("state") == "" || u.Query().Get("code_challenge") == "" {
 		t.Fatalf("url = %s, %v", out.URL, err)
 	}
 
@@ -90,7 +92,8 @@ func TestOpenRouterCallbackLandings(t *testing.T) {
 			t.Fatal(err)
 		}
 		u, _ := url.Parse(authURL)
-		return u.Query().Get("state")
+		cb, _ := url.Parse(u.Query().Get("callback_url"))
+		return cb.Query().Get("state")
 	}
 	callback := func(rawQuery string) string {
 		t.Helper()

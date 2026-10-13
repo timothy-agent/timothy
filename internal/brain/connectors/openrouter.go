@@ -127,11 +127,20 @@ func (a *OpenRouterAuth) StartAuth(returnTo string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("openrouter auth url: %w", err)
 	}
+	// OpenRouter passes only the callback_url through; sibling params
+	// never reach the redirect. The state rides inside the callback's
+	// own query, the only place it survives the roundtrip.
+	cb, err := url.Parse(a.RedirectURI())
+	if err != nil {
+		return "", fmt.Errorf("openrouter callback url: %w", err)
+	}
+	cbq := cb.Query()
+	cbq.Set("state", state)
+	cb.RawQuery = cbq.Encode()
 	q := u.Query()
-	q.Set("callback_url", a.RedirectURI())
+	q.Set("callback_url", cb.String())
 	q.Set("code_challenge", pkceChallenge(verifier))
 	q.Set("code_challenge_method", "S256")
-	q.Set("state", state)
 	q.Set("key_label", "Timothy")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
