@@ -17,27 +17,27 @@ Timothy runs on your hardware and works for you around the clock. Shape agents w
 
 Use any model you want: Anthropic, OpenAI, Amazon Bedrock, GLM, a local Ollama, or any compatible endpoint. Route each kind of work to whichever model does it best, switch anytime from settings, no code changes, no lock-in.
 
-**Status: early, under active development.** 
+**Status: alpha, under active development.** 
 
 Alpha releases with prebuilt images are available on the [Releases page](https://github.com/timothy-agent/timothy/releases); expect rough edges and breaking changes between releases.
 
 ## Features
 
-| Feature                        | What you get                                                                                                                                                                                                                                                            |
-|--------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **One assistant, every model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider, all behind one interface. Pick which model handles chat, coding, research, or briefings, and let Timothy fail over to a backup when a provider has a bad day.                   |
-| **Give it real work**          | Hand Timothy a task (research a topic, write a report, fix a bug) and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done.                     |
-| **Results find you**           | Any task or schedule can deliver its result to Telegram, email, a webhook, or GitHub (a pushed branch or an opened pull request) the moment it finishes, files attached. No checking a dashboard: the answer lands where you already are.                               |
+| Feature                        | What you get                                                                                                                                                                                                                                                                                                                                           |
+|--------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **One assistant, every model** | Anthropic, OpenAI, Amazon Bedrock, local models via Ollama, or any compatible provider, all behind one interface. Pick which model handles chat, coding, research, or briefings, and let Timothy fail over to a backup when a provider has a bad day.                                                                                                  |
+| **Give it real work**          | Hand Timothy a task (research a topic, write a report, fix a bug) and it works unattended: plans, executes, verifies its own output, and shows you the result with a full timeline of what it did. Quick tasks skip the ceremony and just get done.                                                                                                    |
+| **Results find you**           | Any task or schedule can deliver its result to Telegram, email, a webhook, or GitHub (a pushed branch or an opened pull request) the moment it finishes, files attached. No checking a dashboard: the answer lands where you already are.                                                                                                              |
 | **It writes code safely**      | Coding tasks run in an isolated sandbox with the toolchains each repo pins (Go, Node, Python, Java, PHP, Ruby, Rust), on their own git branch, with the work verified before you see it. It can also hand the coding work to a CLI agent you already use, Claude Code, Codex, Cursor, opencode, or pi, while keeping review and budgets in your hands. |
-| **Your daily briefings**       | Wake up to a digest of your inbox, calendar, and spending, delivered to Telegram or email in your timezone, saying only what actually needs your attention. Schedule any task to run on your clock.                                                                     |
-| **Connected to your life**     | Gmail, Google Calendar, Docs, Drive, GitHub, Outlook, IMAP, CalDAV, and any MCP server. Timothy reads them when a task needs it, and asks before doing anything destructive.                                                                                            |
-| **Shape your own assistants**  | Create named agents with their own personality, favorite model, and exactly the tools and knowledge they need, nothing more. A briefing agent that reads only your mail and calendar can never touch your code or send a message on your behalf.                        |
-| **It remembers you**           | Preferences, projects, and facts you share carry across conversations, and recurring patterns become insights over time. You approve what becomes a standing instruction; noise gets filtered before it ever reaches you.                                               |
-| **Your documents, searchable** | Drop in files or URLs; Timothy files them into topic collections and uses them to answer your questions. Your own knowledge base, on your own disk.                                                                                                                     |
-| **Nothing gets lost**          | Conversations survive restarts, crashes, and upgrades. Pick up any session exactly where it left off.                                                                                                                                                                   |
-| **You control the spend**      | Every model call is priced and logged honestly. Set budgets with alerts, see exactly where the money goes, and route routine work to cheap or free models.                                                                                                              |
-| **Private by design**          | Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager), never in logs, never in the UI.                         |
-| **Talk to it**                 | Optional voice input with fully local speech-to-text. Audio never leaves your machine.                                                                                                                                                                                  |
+| **Your daily briefings**       | Wake up to a digest of your inbox, calendar, and spending, delivered to Telegram or email in your timezone, saying only what actually needs your attention. Schedule any task to run on your clock.                                                                                                                                                    |
+| **Connected to your life**     | Gmail, Google Calendar, Docs, Drive, GitHub, Outlook, IMAP, CalDAV, and any MCP server. Timothy reads them when a task needs it, and asks before doing anything destructive.                                                                                                                                                                           |
+| **Shape your own assistants**  | Create named agents with their own personality, favorite model, and exactly the tools and knowledge they need, nothing more. A briefing agent that reads only your mail and calendar can never touch your code or send a message on your behalf.                                                                                                       |
+| **It remembers you**           | Preferences, projects, and facts you share carry across conversations, and recurring patterns become insights over time. You approve what becomes a standing instruction; noise gets filtered before it ever reaches you.                                                                                                                              |
+| **Your documents, searchable** | Drop in files or URLs; Timothy files them into topic collections and uses them to answer your questions. Your own knowledge base, on your own disk.                                                                                                                                                                                                    |
+| **Nothing gets lost**          | Conversations survive restarts, crashes, and upgrades. Pick up any session exactly where it left off.                                                                                                                                                                                                                                                  |
+| **You control the spend**      | Every model call is priced and logged honestly. Set budgets with alerts, see exactly where the money goes, and route routine work to cheap or free models.                                                                                                                                                                                             |
+| **Private by design**          | Runs entirely on your hardware. Sensitive content like email can be pinned to a local model so it never leaves your network, and API keys live in an encrypted store (or your own Vault / AWS Secrets Manager), never in logs, never in the UI.                                                                                                        |
+| **Talk to it**                 | Optional voice input with fully local speech-to-text. Audio never leaves your machine.                                                                                                                                                                                                                                                                 |
 
 ## A day with Timothy
 
@@ -57,18 +57,20 @@ Each of these is a schedule, a chat message, or a one-line task. No plugins to w
 
 Go microservices behind a single public API, one PostgreSQL database, React web UI. All run via Docker Compose.
 
-| Service      | Role                                                                                          |
-|--------------|-----------------------------------------------------------------------------------------------|
-| `brain`      | Public API: chat orchestration, agent loop, missions, event-sourced sessions, SSE streaming   |
-| `gateway`    | Internal LLM gateway: multi-provider routing, cost ledger                                     |
-| `memoryd`    | Internal memory service: pgvector-backed recall                                               |
-| `sandboxd`   | Internal service running per-mission sandboxes: Docker containers on Compose, pods on Kubernetes |
-| `web`        | React + Tailwind interface: chat, missions, usage, settings                                   |
-| `searxng`    | Internal metasearch backend for the search_web tool                                           |
-| `markitdown` | Internal Python sidecar: file→markdown conversion                                             |
-| `ocr`        | Internal Python sidecar: tesseract image OCR                                                  |
-| `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (opt-in, off by default) |
-| `pdfgen`     | Internal Python sidecar: markdown→PDF via Typst for chat, mission export and any document      |
+| Service      | Role                                                                                              |
+|--------------|---------------------------------------------------------------------------------------------------|
+| `brain`      | Public API: chat orchestration, agent loop, missions, event-sourced sessions, SSE streaming       |
+| `gateway`    | Internal LLM gateway: multi-provider routing, cost ledger                                         |
+| `memoryd`    | Internal memory service: pgvector-backed recall                                                   |
+| `sandboxd`   | Internal service running per-mission sandboxes: Docker containers on Compose, pods on Kubernetes  |
+| `web`        | React + Tailwind interface: chat, missions, usage, settings                                       |
+| `searxng`    | Internal metasearch backend for `search_web` (profile `search`, `full`)                           |
+| `markitdown` | Internal Python sidecar: file→markdown conversion (profile `docs`, `full`)                        |
+| `ocr`        | Internal Python sidecar: tesseract image OCR (profile `docs`, `full`)                             |
+| `whisper`    | Internal Python sidecar: local speech-to-text for the web mic button (profile `whisper`, `full`)  |
+| `pdfgen`     | Internal Python sidecar: markdown→PDF via Typst for chat, mission export (profile `docs`, `full`) |
+
+Timothy defaults to a lightweight core footprint (~300–500 MiB RAM: `brain`, `gateway`, `memoryd`, `sandboxd`, `web`, `postgres`). Heavy Python sidecars and SearXNG run under opt-in Compose profiles (`search`, `docs`, `whisper`, or `full` to enable all; ~6–10 GiB RAM total).
 
 Plus Postgres (18 + pgvector), internal only, no host port. Migrations are embedded in each Go binary and applied automatically at startup; there's no separate migrate command. Every Go service exposes `GET /health` and `GET /metrics`; brain's `/metrics`, the only one on a published port, requires `Authorization: Bearer $TIMOTHY_METRICS_TOKEN`.
 
@@ -82,7 +84,7 @@ Sessions are an append-only event log: every turn, tool run, and compaction is a
 | `8300` | Brain (public API)           |
 | `3301` | Vite dev server (`make dev`) |
 
-Both published ports serve plain HTTP and are meant for a trusted LAN. For any exposure beyond that, put a reverse proxy in front that terminates TLS: the API token travels in an `Authorization` header on every request and is stored in the browser's `localStorage`, so over plain HTTP anyone on the path can read it. The web UI ships a Content-Security-Policy, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: strict-origin-when-cross-origin`; a proxy that rewrites response headers should preserve them.
+Both published ports serve plain HTTP and are meant for a trusted LAN. For any exposure beyond that, put a reverse proxy in front that terminates TLS. Authentication uses HttpOnly, SameSite=Strict post-quantum hybrid session cookies (or `TIMOTHY_API_TOKEN` bearer authentication for CLI and automations). The web UI ships a Content-Security-Policy, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: strict-origin-when-cross-origin`; a proxy that rewrites response headers should preserve them.
 
 ## Quick start (prebuilt images)
 
@@ -92,7 +94,7 @@ The fastest way to run Timothy: no Go/Node toolchain, no build step, just Docker
 curl -fsSL https://raw.githubusercontent.com/timothy-agent/timothy/main/deploy/release/install.sh | sh
 ```
 
-The installer resolves the newest release, installs into `~/timothy` (override with `TIMOTHY_HOME=/some/dir`), generates a `.env` with fresh secrets (`POSTGRES_PASSWORD`, `TIMOTHY_MASTER_KEY`, `TIMOTHY_API_TOKEN`), pulls the images, starts the stack, and prints a magic sign-in link once the web UI is up. Open the link: the web UI signs in automatically.
+The installer resolves the newest release, installs into `~/timothy` (override with `TIMOTHY_HOME=/some/dir`), generates a `.env` with fresh secrets (`POSTGRES_PASSWORD`, `TIMOTHY_MASTER_KEY`, `TIMOTHY_API_TOKEN`), pulls the images, and starts the core lightweight stack. Open `http://localhost:3300/` to complete the first-run admin account setup.
 
 Prefer to inspect scripts before running them? Every release also ships `install.sh` as an asset: download it from the [releases page](https://github.com/timothy-agent/timothy/releases), read it, then `sh install.sh`.
 
@@ -100,16 +102,16 @@ Everything else about running Timothy lives in the docs: [timothy-agent.github.i
 
 ## Documentation
 
-| Topic | Where |
-|-------|-------|
-| Requirements, quick start, build from source | [Install](https://timothy-agent.github.io/docs/install/) |
-| Upgrading, pending schema changes | [Upgrade](https://timothy-agent.github.io/docs/install/upgrade/) |
-| Backups and restoring onto a fresh host | [Backup and restore](https://timothy-agent.github.io/docs/install/backup-and-restore/) |
-| Sign in, welcome wizard, first chat, first mission | [First run](https://timothy-agent.github.io/docs/first-run/) |
-| Agents, routes, missions, memory, knowledge, automations | [Concepts](https://timothy-agent.github.io/docs/concepts/) |
-| Gmail, GitHub, Telegram and the rest | [Connectors and channels](https://timothy-agent.github.io/docs/connectors/) |
-| Every settings tab and field | [Settings reference](https://timothy-agent.github.io/docs/settings/) |
-| Something broke | [Troubleshooting](https://timothy-agent.github.io/docs/troubleshooting/) |
+| Topic                                                    | Where                                                                                  |
+|----------------------------------------------------------|----------------------------------------------------------------------------------------|
+| Requirements, quick start, build from source             | [Install](https://timothy-agent.github.io/docs/install/)                               |
+| Upgrading, pending schema changes                        | [Upgrade](https://timothy-agent.github.io/docs/install/upgrade/)                       |
+| Backups and restoring onto a fresh host                  | [Backup and restore](https://timothy-agent.github.io/docs/install/backup-and-restore/) |
+| Sign in, welcome wizard, first chat, first mission       | [First run](https://timothy-agent.github.io/docs/first-run/)                           |
+| Agents, routes, missions, memory, knowledge, automations | [Concepts](https://timothy-agent.github.io/docs/concepts/)                             |
+| Gmail, GitHub, Telegram and the rest                     | [Connectors and channels](https://timothy-agent.github.io/docs/connectors/)            |
+| Every settings tab and field                             | [Settings reference](https://timothy-agent.github.io/docs/settings/)                   |
+| Something broke                                          | [Troubleshooting](https://timothy-agent.github.io/docs/troubleshooting/)               |
 
 ## Local development
 
