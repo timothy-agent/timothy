@@ -5,6 +5,10 @@
       "label": "Home"
     },
     {
+      "path": "/agents/*",
+      "label": "Agents"
+    },
+    {
       "path": "/analytics",
       "label": "Analytics"
     },
@@ -40,8 +44,7 @@
       "label": "Login"
     },
     {
-      "path": "/memory/*",
-      "label": "Memory"
+      "path": "/memory/*"
     },
     {
       "path": "/memory/knowledge/*"
@@ -83,11 +86,6 @@
   ],
   "settings_areas": [
     {
-      "key": "agents",
-      "label": "Agents",
-      "path": "/settings/agents"
-    },
-    {
       "key": "channels",
       "label": "Channels",
       "path": "/settings/channels"
@@ -111,6 +109,11 @@
       "key": "features",
       "label": "Features",
       "path": "/settings/features"
+    },
+    {
+      "key": "memory",
+      "label": "Memory",
+      "path": "/settings/memory"
     },
     {
       "key": "providers",
