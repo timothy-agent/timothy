@@ -31,7 +31,9 @@ func TestBootstrapChainSeedsEmptyRoutes(t *testing.T) {
 
 	got := BootstrapChain(p, map[string][]ChainEntry{}, candidates)
 
-	for _, route := range []string{"default", "summarize"} {
+	// decide seeds onto the same chat model as summarize (D-163): the
+	// llm fallback serves it until a decision model is chained.
+	for _, route := range []string{"default", "summarize", "decide"} {
 		chain := got[route]
 		if len(chain) != 1 || chain[0].ProviderID != "p1" || chain[0].Model != "cheap" {
 			t.Fatalf("%s chain = %+v, want single cheap entry", route, chain)
@@ -230,7 +232,7 @@ func TestBootstrapChainPrefersDefaultModelForChatRoles(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := BootstrapChain(ProviderRow{ID: "p1", DefaultModel: tc.defaultModel}, map[string][]ChainEntry{}, candidates)
-			for _, route := range []string{"default", "summarize"} {
+			for _, route := range []string{"default", "summarize", "decide"} {
 				if chain := got[route]; len(chain) != 1 || chain[0].Model != tc.wantChat {
 					t.Fatalf("%s chain = %+v, want single %q entry", route, chain, tc.wantChat)
 				}

@@ -75,7 +75,7 @@ func TestStoreLoadsSeededConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	for _, want := range []string{"default", "summarize", "embedding", "vision"} {
+	for _, want := range []string{"default", "summarize", "embedding", "vision", "decide"} {
 		var n int
 		if err := db.QueryRow(t.Context(),
 			"SELECT count(*) FROM routes WHERE name = $1", want).Scan(&n); err != nil {

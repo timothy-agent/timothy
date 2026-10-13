@@ -10,16 +10,18 @@ import (
 // SystemRoles are the roles Timothy requires to work at all — chat
 // (role "default"), the session/turn-memory summarizer (role
 // "summarize"), embeddings (role "embedding"), and vision (role
-// "vision", D-046) — each paired with the driver capability its
-// bound route must serve. A newly connected provider auto-fills
-// whichever of these roles it can. Any other route (e.g. a hand-made
-// "research" or "coding" route) is plain user configuration and is
-// never auto-filled.
+// "vision", D-046), and fixed-choice decisions (role "decide", D-163)
+// — each paired with the driver capability its bound route must
+// serve. A newly connected provider auto-fills whichever of these
+// roles it can. Any other route (e.g. a hand-made "research" or
+// "coding" route) is plain user configuration and is never
+// auto-filled.
 var SystemRoles = []struct{ Role, Capability string }{
 	{"default", "chat"},
 	{"summarize", "chat"},
 	{"embedding", "embeddings"},
 	{"vision", "vision"},
+	{"decide", "decide"},
 }
 
 // BootstrapChain computes role -> new-chain-entry for a newly
@@ -50,7 +52,7 @@ func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry, candidates 
 		// The operator validated default_model against the live
 		// provider; the catalog's cheapest chat row may not exist there
 		// (an Ollama host serves only what is pulled).
-		if sr.Capability == "chat" && defaultModelServesChat(p.DefaultModel, candidates) {
+		if servedByChat(sr.Capability) && defaultModelServesChat(p.DefaultModel, candidates) {
 			model, ok = p.DefaultModel, true
 		}
 		if !ok {
@@ -97,16 +99,24 @@ func CheapestCapable(models []catalog.Model, cap string) (string, bool) {
 // modelHasCapability derives a catalog model's capability from its
 // Mode ("embedding" -> embeddings) and SupportsVision field (vision);
 // any other mode (typically "chat") counts as chat-capable, and also
-// as vision-capable when SupportsVision is true.
+// as vision-capable when SupportsVision is true. No catalog model is a
+// decision model, so "decide" bootstraps onto a chat model (D-163).
 func modelHasCapability(m catalog.Model, cap string) bool {
 	switch cap {
 	case "embeddings":
 		return m.Mode == "embedding"
 	case "vision":
 		return m.SupportsVision != nil && *m.SupportsVision
-	default: // "chat"
+	default: // "chat", "decide"
 		return m.Mode != "embedding"
 	}
+}
+
+// servedByChat reports whether a role's capability bootstraps onto the
+// provider's chat model: chat itself, and decide through the llm
+// fallback (D-163).
+func servedByChat(cap string) bool {
+	return cap == "chat" || cap == "decide"
 }
 
 // catalogPrice returns a catalog model's input cost, or +Inf when
