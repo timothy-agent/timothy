@@ -592,6 +592,10 @@ func ClassifyOverGateway(gw Gateway) agents.Classify {
 			// MaxTokens includes a thinking model's reasoning tokens; 512
 			// leaves room to think before the one-word answer.
 			MaxTokens: 512,
+			// Effort low (D-020): a one-word pick doesn't need a
+			// reasoning model's default budget, which was the whole
+			// latency of the mission form's kind preview.
+			Effort: "low",
 		})
 		if err != nil {
 			return "", err

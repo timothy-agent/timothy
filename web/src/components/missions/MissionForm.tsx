@@ -645,9 +645,14 @@ export function MissionForm({
   useEffect(() => {
     if (goal.trim() === '' || kindLocked) return
     setClassifying(true)
+    // The classify call outlives the debounce: a further edit aborts
+    // the in-flight request so a slow, stale answer never lands on
+    // top of a newer goal's chip.
+    const ctrl = new AbortController()
     const t = setTimeout(() => {
-      classifyMission(goal.trim())
+      classifyMission(goal.trim(), ctrl.signal)
         .then((r) => {
+          if (ctrl.signal.aborted) return
           setKind(r.kind)
           // light only ever defaults the toggle, never overrides an
           // operator's own choice (lightTouched): and only makes sense
@@ -661,10 +666,13 @@ export function MissionForm({
           // Best-effort preview: a failed classify leaves whatever kind
           // was already showing rather than blocking the form.
         })
-        .finally(() => setClassifying(false))
+        .finally(() => {
+          if (!ctrl.signal.aborted) setClassifying(false)
+        })
     }, 600)
     return () => {
       clearTimeout(t)
+      ctrl.abort()
       setClassifying(false)
     }
   }, [goal, kindLocked, lightTouched, hasPlanTouched])
