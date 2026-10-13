@@ -28,6 +28,43 @@ func NewStore(db *pgpool.Pool, log *slog.Logger) *Store {
 	return &Store{db: db, log: log}
 }
 
+// EnsureSchema creates the users and user_passkeys tables if they do not exist.
+// This guarantees that existing databases with pre-recorded 0001_init.sql migrations
+// self-heal safely on startup.
+func (s *Store) EnsureSchema(ctx context.Context) error {
+	db, err := s.db.Get()
+	if err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+	const q = `
+CREATE TABLE IF NOT EXISTS users (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    username       text UNIQUE NOT NULL,
+    email          text UNIQUE NOT NULL,
+    password_hash  text NOT NULL,
+    role           text NOT NULL DEFAULT 'admin',
+    recovery_token text,
+    recovery_exp   timestamptz,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS user_passkeys (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key_name      text NOT NULL DEFAULT 'Passkey',
+    credential_id bytea UNIQUE NOT NULL,
+    public_key    bytea NOT NULL,
+    sign_count    bigint NOT NULL DEFAULT 0,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS user_passkeys_user_idx ON user_passkeys (user_id);
+`
+	_, err = db.Exec(ctx, q)
+	return err
+}
+
 // HasUsers checks if at least one user account exists in the database.
 func (s *Store) HasUsers(ctx context.Context) (bool, error) {
 	db, err := s.db.Get()
@@ -37,6 +74,12 @@ func (s *Store) HasUsers(ctx context.Context) (bool, error) {
 	var exists bool
 	err = db.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM users)").Scan(&exists)
 	if err != nil {
+		// If users table is absent on an existing pre-migrated DB, create it and return false
+		if strings.Contains(err.Error(), "relation \"users\" does not exist") {
+			if errSchema := s.EnsureSchema(ctx); errSchema == nil {
+				return false, nil
+			}
+		}
 		return false, fmt.Errorf("check users existence: %w", err)
 	}
 	return exists, nil
