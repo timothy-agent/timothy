@@ -65,6 +65,11 @@ func Validate(req *provider.DecideRequest) error {
 // than from the question text.
 func Prompt(req provider.DecideRequest) (system, user string) {
 	var b strings.Builder
+	if req.Context != "" {
+		b.WriteString("Context:\n")
+		b.WriteString(req.Context)
+		b.WriteString("\n\n")
+	}
 	b.WriteString(req.Question)
 	b.WriteString("\n\n")
 	if req.Kind == provider.DecideScore {
@@ -77,6 +82,10 @@ func Prompt(req provider.DecideRequest) (system, user string) {
 	for _, o := range req.Options {
 		b.WriteString("- ")
 		b.WriteString(o)
+		if desc := req.Descriptions[o]; desc != "" {
+			b.WriteString(": ")
+			b.WriteString(desc)
+		}
 		b.WriteString("\n")
 	}
 	b.WriteString("\nReply with one option.")

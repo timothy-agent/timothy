@@ -23,6 +23,7 @@ func TestCandidateProviders(t *testing.T) {
 		{"docker internal ollama", "openaicompat", "http://host.docker.internal:11434/v1", []string{"ollama"}},
 		{"port 11434 non-loopback host", "openaicompat", "http://ollama-box:11434/v1", []string{"ollama"}},
 		{"unrecognized host: no restriction", "openaicompat", "https://example.com/v1", nil},
+		{"laya never matches the catalog", "laya", "http://laya:8000", []string{"laya"}},
 		{"unknown driver", "weird", "", nil},
 	}
 	for _, tc := range cases {

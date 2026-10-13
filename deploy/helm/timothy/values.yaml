@@ -230,3 +230,14 @@ whisper:
   resources:
     requests: {cpu: 500m, memory: 4Gi}
     limits: {cpu: "2", memory: 6Gi}
+
+laya:
+  # Off by default: the typed-decisions checkpoint holds about 2 GiB
+  # resident at idle. The gateway reaches it through a provider row
+  # with driver laya and base_url http://<release>-laya:8000 (D-164).
+  enabled: false
+  image: {repository: timothy-laya, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 500m, memory: 2Gi}
+    limits: {cpu: "2", memory: 4Gi}

@@ -1,11 +1,17 @@
 package admin
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SumonMSelim/timothy/internal/gateway/ledger"
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
+	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
 func TestParseRequestTimeout(t *testing.T) {
@@ -361,5 +367,62 @@ func TestValidateProviderBedrockAuth(t *testing.T) {
 				t.Fatalf("err = %v, want containing %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// decideProbeProvider is a decision model (provider.Decider) for the
+// connection probe: it records the request and answers or fails.
+type decideProbeProvider struct {
+	got  provider.DecideRequest
+	fail bool
+}
+
+func (p *decideProbeProvider) Name() string        { return "laya" }
+func (p *decideProbeProvider) Kind() provider.Kind { return provider.KindAPI }
+func (p *decideProbeProvider) Capabilities() []provider.Capability {
+	return []provider.Capability{provider.CapDecide}
+}
+func (p *decideProbeProvider) Stream(context.Context, provider.CompletionRequest) (<-chan stream.StreamEvent, error) {
+	return nil, errors.New("decision models never chat")
+}
+func (p *decideProbeProvider) Decide(_ context.Context, _ string, req provider.DecideRequest) (provider.DecideResult, *stream.Usage, error) {
+	p.got = req
+	if p.fail {
+		return provider.DecideResult{}, nil, errors.New("laya: connection refused")
+	}
+	return provider.DecideResult{Choice: "no"}, &stream.Usage{InputTokens: 9}, nil
+}
+
+type probeRecorder struct{ entries []ledger.Entry }
+
+func (r *probeRecorder) Record(_ context.Context, e ledger.Entry) { r.entries = append(r.entries, e) }
+
+// TestProbeDecisionModel (D-164): a Decider is probed with one yes/no
+// question instead of a completion, and books under purpose test.
+func TestProbeDecisionModel(t *testing.T) {
+	t.Parallel()
+	rec := &probeRecorder{}
+	a := &Admin{rec: rec}
+	drv := &decideProbeProvider{}
+
+	res := a.probe(t.Context(), drv, "laya", "typed-decisions", nil, 2*time.Second)
+	if !res.OK || res.Model != "typed-decisions" {
+		t.Fatalf("res = %+v", res)
+	}
+	if drv.got.Kind != provider.DecideYesNo || drv.got.Question == "" {
+		t.Fatalf("probe request = %+v", drv.got)
+	}
+	if len(rec.entries) != 1 || rec.entries[0].Status != "ok" || rec.entries[0].Purpose != "test" || rec.entries[0].Usage == nil {
+		t.Fatalf("entries = %+v", rec.entries)
+	}
+
+	rec = &probeRecorder{}
+	a = &Admin{rec: rec}
+	res = a.probe(t.Context(), &decideProbeProvider{fail: true}, "laya", "typed-decisions", nil, 2*time.Second)
+	if res.OK || !strings.Contains(res.Detail, "connection refused") {
+		t.Fatalf("res = %+v", res)
+	}
+	if len(rec.entries) != 1 || rec.entries[0].Status != "error" || rec.entries[0].ErrorCode != "provider_error" {
+		t.Fatalf("entries = %+v", rec.entries)
 	}
 }

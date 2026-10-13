@@ -129,6 +129,11 @@ func TestBuildErrors(t *testing.T) {
 			wantErr: "requires base_url",
 		},
 		{
+			name:    "laya without base url",
+			cfgs:    []Config{{Name: "p", Driver: "laya"}},
+			wantErr: "requires base_url",
+		},
+		{
 			name:    "empty name",
 			cfgs:    []Config{{Driver: "anthropic"}},
 			wantErr: "empty name",
@@ -339,5 +344,34 @@ func TestBuildBedrockAmbient(t *testing.T) {
 				t.Fatalf("Ambient=%v HasStaticCredentials=%v for auth %q", b.Ambient(), b.HasStaticCredentials(), tt.cfg.Auth)
 			}
 		})
+	}
+}
+
+// TestBuildLaya (D-164): the laya driver builds from a base_url with
+// the credential as its bearer and declares decide only.
+func TestBuildLaya(t *testing.T) {
+	t.Parallel()
+	r, err := Build([]Config{
+		{Name: "laya", Kind: KindAPI, Driver: "laya", BaseURL: "http://laya:8000", CredentialRef: "LAYA_KEY"},
+	}, func(ref string) string { return map[string]string{"LAYA_KEY": "k"}[ref] })
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	p, ok := r.Get("laya")
+	if !ok {
+		t.Fatal("laya missing")
+	}
+	l, ok := p.(*Laya)
+	if !ok {
+		t.Fatalf("provider type = %T, want *Laya", p)
+	}
+	if l.cfg.APIKey != "k" || l.cfg.Timeout != layaTimeout {
+		t.Fatalf("cfg = %+v", l.cfg)
+	}
+	if _, ok := p.(Decider); !ok {
+		t.Fatal("laya does not implement Decider")
+	}
+	if caps := p.Capabilities(); len(caps) != 1 || caps[0] != CapDecide {
+		t.Fatalf("capabilities = %v", caps)
 	}
 }

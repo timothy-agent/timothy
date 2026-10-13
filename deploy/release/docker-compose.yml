@@ -127,6 +127,27 @@ services:
     cpus: 2.0
     pids_limit: 128
 
+  laya:
+    <<: *service
+    profiles: [laya]
+    image: ghcr.io/timothy-agent/timothy-laya:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
+    # internal-only: no published ports, no auth; the gateway is the
+    # sole caller (a provider row with driver laya and base_url
+    # http://laya:8000), same trust boundary as the other sidecars.
+    # Off by default: the typed-decisions checkpoint holds ~2 GiB RSS at
+    # idle. Enable with COMPOSE_PROFILES=laya, then add the provider in
+    # Settings (D-164).
+    # The server preloads before it binds, so /health means ready.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
+    mem_limit: 4g
+    cpus: 2.0
+    pids_limit: 128
+
   # Local models: run Ollama natively on the host (Metal/CUDA — a
   # containerized runner gets CPU only and can't serve big models) and
   # register http://host.docker.internal:11434/v1 in Settings as a

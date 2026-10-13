@@ -246,3 +246,35 @@ func TestBootstrapChainPrefersDefaultModelForChatRoles(t *testing.T) {
 		})
 	}
 }
+
+// TestBootstrapChainDecisionDriver (D-164): a laya row chains first on
+// the decide route and nowhere else; the chat entries already there
+// stay behind it as the llm fallback.
+func TestBootstrapChainDecisionDriver(t *testing.T) {
+	p := ProviderRow{ID: "laya1", Driver: "laya", DefaultModel: "typed-decisions"}
+	candidates := []catalog.Model{priced("cheap", 1, "chat", false), priced("embed-1", 0.1, "embedding", false)}
+	existing := map[string][]ChainEntry{
+		"default": {{ProviderID: "p1", Model: "cheap"}},
+		"decide":  {{ProviderID: "p1", Model: "cheap"}},
+	}
+
+	got := BootstrapChain(p, existing, candidates)
+
+	if len(got) != 1 {
+		t.Fatalf("roles touched = %v, want decide only", got)
+	}
+	chain := got["decide"]
+	if len(chain) != 2 || chain[0].ProviderID != "laya1" || chain[0].Model != "typed-decisions" || chain[1].ProviderID != "p1" {
+		t.Fatalf("decide chain = %+v, want laya first then the chat fallback", chain)
+	}
+	if len(existing["decide"]) != 1 {
+		t.Fatal("existing chain mutated")
+	}
+
+	if got := BootstrapChain(p, map[string][]ChainEntry{"decide": chain}, candidates); got != nil {
+		t.Fatalf("second bootstrap = %+v, want nil (already chained)", got)
+	}
+	if got := BootstrapChain(ProviderRow{ID: "laya2", Driver: "laya"}, existing, candidates); got != nil {
+		t.Fatalf("no default model = %+v, want nil", got)
+	}
+}

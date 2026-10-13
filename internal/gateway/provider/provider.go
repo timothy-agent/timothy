@@ -52,9 +52,17 @@ const (
 type DecideRequest struct {
 	Kind     string
 	Question string
+	// Context is the text the question is about (a goal, a document,
+	// a message), kept apart from the question so a decision model can
+	// take it as its state and truncate it on its own. Optional: a
+	// self-contained question leaves it empty.
+	Context string
 	// Options is the closed answer set for a choice (already yes/no
 	// for a yesno); empty for a score.
 	Options []string
+	// Descriptions says what each option means, keyed by option.
+	// Optional; an option without one is described by its own name.
+	Descriptions map[string]string
 }
 
 // DecideResult is a typed answer: Choice for choice/yesno, Score for

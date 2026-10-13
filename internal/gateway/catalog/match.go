@@ -18,6 +18,11 @@ func CandidateProviders(driver, baseURL string) []string {
 		return []string{"bedrock", "bedrock_converse"}
 	case "openaicompat", "openai-responses":
 		return candidatesForHost(baseURL)
+	case "laya":
+		// A decision model has no catalog entry (D-164); naming a
+		// provider the catalog never lists keeps every match empty
+		// instead of searching the whole catalog.
+		return []string{"laya"}
 	default:
 		return nil
 	}

@@ -46,6 +46,9 @@ func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry, candidates 
 	if p.ExcludeFromBootstrap || p.Kind == "cli" {
 		return nil
 	}
+	if decisionDrivers[p.Driver] {
+		return bootstrapDecision(p, existing["decide"])
+	}
 	out := map[string][]ChainEntry{}
 	for _, sr := range SystemRoles {
 		model, ok := CheapestCapable(candidates, sr.Capability)
@@ -68,6 +71,25 @@ func BootstrapChain(p ProviderRow, existing map[string][]ChainEntry, candidates 
 		out[sr.Role] = append(next, entry)
 	}
 	return out
+}
+
+// decisionDrivers are drivers that serve the decide role only (D-164):
+// they never chat, so bootstrap keeps them off every other role.
+var decisionDrivers = map[string]bool{"laya": true}
+
+// bootstrapDecision chains a decision model FIRST on the decide route:
+// the chat entries already there are the llm fallback, and a fallback
+// behind the real thing is the only order in which the decision model
+// ever answers. A row with no default model has nothing to chain; a
+// row already chained is left alone.
+func bootstrapDecision(p ProviderRow, existing []ChainEntry) map[string][]ChainEntry {
+	if p.DefaultModel == "" || alreadyChained(existing, p.ID, p.DefaultModel) {
+		return nil
+	}
+	chain := make([]ChainEntry, 0, len(existing)+1)
+	chain = append(chain, ChainEntry{ProviderID: p.ID, Model: p.DefaultModel})
+	chain = append(chain, existing...)
+	return map[string][]ChainEntry{"decide": chain}
 }
 
 // CheapestCapable returns the id of the cheapest catalog model

@@ -220,3 +220,20 @@ func TestViaChatRelaysProviderErrors(t *testing.T) {
 		t.Fatal("immediate Stream error not relayed")
 	}
 }
+
+// TestPromptRendersContextAndDescriptions: the context precedes the
+// question and an option carries its description when given.
+func TestPromptRendersContextAndDescriptions(t *testing.T) {
+	t.Parallel()
+	_, user := Prompt(provider.DecideRequest{
+		Kind: "choice", Question: "Which kind?", Context: "Survey vector databases",
+		Options:      []string{"coding", "research"},
+		Descriptions: map[string]string{"research": "gathers and compares information"},
+	})
+	if !strings.HasPrefix(user, "Context:\nSurvey vector databases\n\nWhich kind?") {
+		t.Fatalf("user = %q", user)
+	}
+	if !strings.Contains(user, "- coding\n") || !strings.Contains(user, "- research: gathers and compares information\n") {
+		t.Fatalf("user = %q", user)
+	}
+}

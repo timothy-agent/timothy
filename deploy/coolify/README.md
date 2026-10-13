@@ -117,5 +117,8 @@ supported once a newer version's migrations have run.
   `extra_hosts: ["host.docker.internal:host-gateway"]` to `gateway`.
 - **Speech-to-text**: set `COMPOSE_PROFILES=whisper` and
   `WHISPER_URL=http://whisper:8001`. The model holds ~3 GiB RSS at idle.
+- **Decision model**: set `COMPOSE_PROFILES=laya` (or `whisper,laya`),
+  then add a provider with driver `laya` and base URL
+  `http://laya:8000` in Settings. The checkpoint holds ~2 GiB RSS at idle.
 - Keep volume preservation enabled for `pgdata`, `workspace` and
   `attachments`.

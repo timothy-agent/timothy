@@ -126,6 +126,12 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 				cfg.StaticCredentials = sc
 			}
 			p = NewBedrock(cfg)
+		case "laya":
+			// D-164: a decision-model sidecar; serves decide routes only.
+			if c.BaseURL == "" {
+				return nil, fmt.Errorf("registry: provider %q: laya requires base_url", c.Name)
+			}
+			p = NewLaya(LayaConfig{Name: c.Name, BaseURL: c.BaseURL, APIKey: key, Timeout: c.Timeout})
 		default:
 			return nil, fmt.Errorf("registry: provider %q: unknown driver %q", c.Name, c.Driver)
 		}

@@ -18,13 +18,18 @@ import (
 // decideRequest is the POST /v1/decide body (D-163). Route is
 // optional: empty resolves the decide role.
 type decideRequest struct {
-	Route     string   `json:"route,omitempty"`
-	Kind      string   `json:"kind"`
-	Question  string   `json:"question"`
-	Options   []string `json:"options,omitempty"`
-	Purpose   string   `json:"purpose,omitempty"` // ledger tag; defaults to "decide"
-	SessionID string   `json:"session_id,omitempty"`
-	MissionID string   `json:"mission_id,omitempty"`
+	Route    string `json:"route,omitempty"`
+	Kind     string `json:"kind"`
+	Question string `json:"question"`
+	// Context is the text the question is about, when the caller can
+	// separate it from the question (provider.DecideRequest.Context).
+	Context string   `json:"context,omitempty"`
+	Options []string `json:"options,omitempty"`
+	// Descriptions says what each option means, keyed by option.
+	Descriptions map[string]string `json:"descriptions,omitempty"`
+	Purpose      string            `json:"purpose,omitempty"` // ledger tag; defaults to "decide"
+	SessionID    string            `json:"session_id,omitempty"`
+	MissionID    string            `json:"mission_id,omitempty"`
 }
 
 // decideResponse is the typed answer plus the entry that served it.
@@ -46,7 +51,7 @@ func (a *API) handleDecide(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	dreq := provider.DecideRequest{Kind: req.Kind, Question: req.Question, Options: req.Options}
+	dreq := provider.DecideRequest{Kind: req.Kind, Question: req.Question, Context: req.Context, Options: req.Options, Descriptions: req.Descriptions}
 	if err := decide.Validate(&dreq); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
