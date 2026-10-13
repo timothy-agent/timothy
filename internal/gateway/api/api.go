@@ -60,6 +60,7 @@ func Register(srv *httpserver.Server, store ConfigSource, rec ledger.Recorder, l
 	}
 	srv.Handle("POST /v1/stream", http.HandlerFunc(a.handleStream))
 	srv.Handle("POST /v1/embed", http.HandlerFunc(a.handleEmbed))
+	srv.Handle("POST /v1/decide", http.HandlerFunc(a.handleDecide))
 	srv.Handle("GET /v1/providers", http.HandlerFunc(a.handleProviders))
 	srv.Handle("GET /v1/routes/roles", http.HandlerFunc(a.handleRoleRoutes))
 	srv.Handle("GET /v1/routes/{name}/resolve", http.HandlerFunc(a.handleResolveRoute))
@@ -701,9 +702,9 @@ func (a *API) handleProviders(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRoleRoutes reports which route currently serves each of the 4
-// roles Timothy requires to work (D-049) — brain resolves the routes
-// for chat/embedding/vision/summarize through this instead of a
+// handleRoleRoutes reports which route currently serves each of the
+// system roles (D-049) — brain resolves the routes for
+// chat/embedding/vision/summarize/decide through this instead of a
 // hardcoded name, so a route rename or reassignment never needs a
 // brain-side code change.
 func (a *API) handleRoleRoutes(w http.ResponseWriter, r *http.Request) {
@@ -713,7 +714,8 @@ func (a *API) handleRoleRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	roles := map[string]string{}
-	for _, role := range []string{"default", "embedding", "vision", "summarize"} {
+	for _, sr := range router.SystemRoles {
+		role := sr.Role
 		if name, ok := snap.RouteForRole(role); ok {
 			roles[role] = name
 		}

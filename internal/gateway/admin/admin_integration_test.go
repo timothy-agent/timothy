@@ -113,7 +113,7 @@ func testAdminWithCatalog(t *testing.T, cat *catalog.Store) (*Admin, *router.Sto
 				FROM jsonb_array_elements(chain) e
 				WHERE EXISTS (SELECT 1 FROM providers WHERE id = (e->>'provider_id')::uuid)
 			)
-			WHERE name IN ('default', 'summarize', 'embedding')
+			WHERE name IN ('default', 'summarize', 'embedding', 'decide')
 			  AND chain <> '[]'::jsonb`)
 	}
 	sweep(ctx, db)
@@ -273,7 +273,7 @@ func TestProviderCRUDAuditsAndReloads(t *testing.T) {
 			FROM jsonb_array_elements(chain) e
 			WHERE e->>'provider_id' <> $1
 		)
-		WHERE name IN ('default', 'summarize', 'embedding')`, id); err != nil {
+		WHERE name IN ('default', 'summarize', 'embedding', 'decide')`, id); err != nil {
 		t.Fatalf("strip bootstrapped chain refs: %v", err)
 	}
 	if err := adm.Delete(ctx, id); err != nil {
@@ -756,7 +756,7 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 		enabled bool
 	}
 	origs := map[string]saved{}
-	for _, name := range []string{"default", "summarize", "embedding"} {
+	for _, name := range []string{"default", "summarize", "embedding", "decide"} {
 		var s saved
 		if err := db.QueryRow(ctx, `SELECT chain, enabled FROM routes WHERE name = $1`, name).Scan(&s.chain, &s.enabled); err != nil {
 			t.Fatalf("read %s route: %v", name, err)
@@ -774,7 +774,7 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	// Force every fixed route disabled first — a seeded (was-empty)
 	// chain must flip enabled on; an appended (already-had-a-chain)
 	// fallback must leave it exactly as found.
-	for _, name := range []string{"default", "summarize", "embedding"} {
+	for _, name := range []string{"default", "summarize", "embedding", "decide"} {
 		if _, err := db.Exec(ctx, `UPDATE routes SET chain = '[]', enabled = false WHERE name = $1`, name); err != nil {
 			t.Fatalf("reset %s route: %v", name, err)
 		}
@@ -799,6 +799,7 @@ func TestCreateBootstrapsFixedRoutes(t *testing.T) {
 	for _, tc := range []struct{ route, wantModel string }{
 		{"default", "chat-cheap"},
 		{"summarize", "chat-cheap"},
+		{"decide", "chat-cheap"},
 		{"embedding", "embed-only"},
 	} {
 		chain := byName[tc.route].Chain
@@ -879,7 +880,7 @@ func TestCreateExcludeFromBootstrapSkipsFixedRoutes(t *testing.T) {
 		enabled bool
 	}
 	origs := map[string]saved{}
-	for _, name := range []string{"default", "summarize", "embedding"} {
+	for _, name := range []string{"default", "summarize", "embedding", "decide"} {
 		var s saved
 		if err := db.QueryRow(ctx, `SELECT chain, enabled FROM routes WHERE name = $1`, name).Scan(&s.chain, &s.enabled); err != nil {
 			t.Fatalf("read %s route: %v", name, err)

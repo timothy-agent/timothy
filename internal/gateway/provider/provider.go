@@ -32,7 +32,46 @@ const (
 	// model row's own capability declaration (router.attemptCapable
 	// double-checks both — D-045).
 	CapVision Capability = "vision"
+	// CapDecide marks a driver that answers fixed-choice questions
+	// natively (a decision model, D-163). A chat driver never declares
+	// it: routing lets any chat-capable entry serve a decide route
+	// through the llm fallback (decide.ViaChat) instead.
+	CapDecide Capability = "decide"
 )
+
+// Decision kinds (D-163). A choice picks one of the given options, a
+// yesno is a choice over the fixed yes/no pair, and a score is one
+// number in [0, 1].
+const (
+	DecideChoice = "choice"
+	DecideYesNo  = "yesno"
+	DecideScore  = "score"
+)
+
+// DecideRequest is one fixed-choice question for a decision model.
+type DecideRequest struct {
+	Kind     string
+	Question string
+	// Options is the closed answer set for a choice (already yes/no
+	// for a yesno); empty for a score.
+	Options []string
+}
+
+// DecideResult is a typed answer: Choice for choice/yesno, Score for
+// score. Scores carries per-option probabilities when the model
+// reports them; the llm fallback never does.
+type DecideResult struct {
+	Choice string             `json:"choice,omitempty"`
+	Score  *float64           `json:"score,omitempty"`
+	Scores map[string]float64 `json:"scores,omitempty"`
+}
+
+// Decider is implemented by providers that answer DecideRequests
+// natively (CapDecide). Callers type-assert; a chat-only provider on a
+// decide route goes through decide.ViaChat instead.
+type Decider interface {
+	Decide(ctx context.Context, model string, req DecideRequest) (DecideResult, *stream.Usage, error)
+}
 
 // Message is one conversation turn. The tool fields ride only on
 // agent-loop round-trips: an assistant message carries the calls it

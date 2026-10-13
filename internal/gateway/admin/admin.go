@@ -1162,7 +1162,7 @@ func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) e
 	return nil
 }
 
-var validCapabilities = map[string]bool{"chat": true, "embeddings": true, "vision": true}
+var validCapabilities = map[string]bool{"chat": true, "embeddings": true, "vision": true, "decide": true}
 
 // CreateRoute makes a new, plain user-owned route: no role, empty
 // chain, disabled until chained (D-049 — routing has no hardcoded
@@ -1219,7 +1219,7 @@ func (a *Admin) DeleteRoute(ctx context.Context, name string) error {
 	return nil
 }
 
-var validRoles = map[string]bool{"default": true, "embedding": true, "vision": true, "summarize": true}
+var validRoles = map[string]bool{"default": true, "embedding": true, "vision": true, "summarize": true, "decide": true}
 
 // SetRouteRole moves role to be served by the route named name,
 // unbinding whichever route currently holds it (if any) in the same

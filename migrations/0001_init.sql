@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS providers (
 -- capability is what a route can serve (chat/embeddings/vision,
 -- replacing a name=="embedding" special case in
 -- internal/gateway/router/router.go); role marks which route serves
--- one of the 4 functions Timothy requires to work at all
--- (default/embedding/vision/summarize). A route's name is free text
+-- one of the functions Timothy requires to work at all
+-- (default/embedding/vision/summarize/decide). A route's name is free text
 -- the user can rename at will: code resolves "the route with
 -- role = X", never a literal name.
 CREATE TABLE IF NOT EXISTS routes (
@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS routes (
     enabled    boolean NOT NULL DEFAULT false,
     updated_at timestamptz NOT NULL DEFAULT now(),
     capability text NOT NULL DEFAULT 'chat'
-        CHECK (capability IN ('chat', 'embeddings', 'vision')),
-    role       text CHECK (role IN ('default', 'embedding', 'vision', 'summarize'))
+        CHECK (capability IN ('chat', 'embeddings', 'vision', 'decide')),
+    role       text CHECK (role IN ('default', 'embedding', 'vision', 'summarize', 'decide'))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS routes_role_unique_idx ON routes (role) WHERE role IS NOT NULL;
@@ -178,6 +178,12 @@ WHERE NOT EXISTS (SELECT 1 FROM routes WHERE name = 'embedding' OR role = 'embed
 INSERT INTO routes (name, capability, role)
 SELECT 'vision', 'vision', 'vision'
 WHERE NOT EXISTS (SELECT 1 FROM routes WHERE name = 'vision' OR role = 'vision');
+
+-- decide (D-163): fixed-choice questions. A chat entry serves it
+-- through the gateway's llm fallback until a decision model is chained.
+INSERT INTO routes (name, capability, role)
+SELECT 'decide', 'decide', 'decide'
+WHERE NOT EXISTS (SELECT 1 FROM routes WHERE name = 'decide' OR role = 'decide');
 
 -- Event-sourced sessions: an append-only log per session with two
 -- projections (UI transcript, LLM context) derived in code.
