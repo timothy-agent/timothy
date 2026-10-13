@@ -17,6 +17,10 @@ vi.mock('../../api/client', async (importOriginal) => {
     providerOAuthStart: vi.fn(),
     searchCatalog: vi.fn(),
     setSecret: vi.fn(),
+    subscriptionAuthCallback: vi.fn(),
+    subscriptionAuthCancel: vi.fn(),
+    subscriptionAuthStart: vi.fn(),
+    subscriptionAuthStatus: vi.fn(),
     validateProvider: vi.fn(),
   }
 })
@@ -29,6 +33,8 @@ import {
   providerOAuthStart,
   searchCatalog,
   setSecret,
+  subscriptionAuthStart,
+  subscriptionAuthStatus,
   validateProvider,
 } from '../../api/client'
 
@@ -487,32 +493,15 @@ describe('ProviderAdd anthropic auth folding', () => {
   })
 })
 
-describe('ProviderAdd subscription presets', () => {
+describe('ProviderAdd subscription manual config fallback', () => {
   beforeEach(() => {
     vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 12, model: 'gpt-4o' })
     vi.mocked(createProvider).mockResolvedValue('p-sub')
   })
 
-  it('renders ChatGPT subscription preset with login instructions and no key field', async () => {
+  it('allows manual configuration for ChatGPT subscription', async () => {
     renderPage('chatgpt')
-
-    expect(await screen.findByText(/Requires ChatGPT Plus or Pro subscription/)).toBeInTheDocument()
-    expect(screen.getByText(/codex-device-login/)).toBeInTheDocument()
-    expect(screen.queryByPlaceholderText(/paste key/)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Test connection' })).toBeInTheDocument()
-  })
-
-  it('renders Claude subscription preset with login instructions and no key field', async () => {
-    renderPage('claude')
-
-    expect(await screen.findByText(/Requires Claude Pro or Team subscription/)).toBeInTheDocument()
-    expect(screen.getByText(/claude-login/)).toBeInTheDocument()
-    expect(screen.queryByPlaceholderText(/paste key/)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Test connection' })).toBeInTheDocument()
-  })
-
-  it('tests and adds a ChatGPT subscription provider pointing to cliproxy', async () => {
-    renderPage('chatgpt')
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure endpoint manually' }))
 
     fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
     await waitFor(() => expect(validateProvider).toHaveBeenCalled())
@@ -964,3 +953,74 @@ describe('ProviderAdd openrouter connect (D-163)', () => {
     expect(await screen.findByRole('button', { name: 'Connect OpenRouter' })).toBeEnabled()
   })
 })
+
+describe('ProviderAdd subscription connect', () => {
+  it('renders subscription connect panel for chatgpt preset', async () => {
+    renderPage('chatgpt')
+    expect(await screen.findByRole('button', { name: 'Sign in with ChatGPT' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Configure endpoint manually' })).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('model id')).not.toBeInTheDocument()
+  })
+
+  it('connects chatgpt subscription and creates provider row on successful auth', async () => {
+    vi.mocked(subscriptionAuthStart).mockResolvedValue({ status: 'ok', url: 'https://auth.openai.com/oauth', state: 'cgpt-state' })
+    vi.mocked(subscriptionAuthStatus).mockResolvedValue({ status: 'ok' })
+    vi.mocked(createProvider).mockResolvedValue('new-cgpt-id')
+    const windowOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+
+    renderPage('chatgpt')
+
+    const button = await screen.findByRole('button', { name: 'Sign in with ChatGPT' })
+    fireEvent.click(button)
+
+    await waitFor(() => expect(subscriptionAuthStart).toHaveBeenCalledWith('chatgpt'))
+    expect(windowOpenSpy).toHaveBeenCalledWith('https://auth.openai.com/oauth', '_blank', 'noopener,noreferrer')
+    await waitFor(() => expect(subscriptionAuthStatus).toHaveBeenCalledWith('cgpt-state'))
+    await waitFor(() =>
+      expect(createProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'ChatGPT Subscription',
+          driver: 'openaicompat',
+          base_url: 'http://cliproxy:8317/v1',
+          default_model: 'gpt-4o',
+        }),
+      ),
+    )
+
+    windowOpenSpy.mockRestore()
+  })
+
+  it('renders claude connect panel and creates claude subscription provider', async () => {
+    vi.mocked(subscriptionAuthStart).mockResolvedValue({ status: 'ok', url: 'https://auth.claude.ai/oauth', state: 'claude-state' })
+    vi.mocked(subscriptionAuthStatus).mockResolvedValue({ status: 'ok' })
+    vi.mocked(createProvider).mockResolvedValue('new-claude-id')
+    const windowOpenSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+
+    renderPage('claude')
+
+    const button = await screen.findByRole('button', { name: 'Sign in with Claude' })
+    fireEvent.click(button)
+
+    await waitFor(() => expect(subscriptionAuthStart).toHaveBeenCalledWith('claude'))
+    await waitFor(() =>
+      expect(createProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Claude Subscription',
+          driver: 'openaicompat',
+          base_url: 'http://cliproxy:8317/v1',
+          default_model: 'claude-3-7-sonnet-20250219',
+        }),
+      ),
+    )
+
+    windowOpenSpy.mockRestore()
+  })
+
+  it('falls back to manual configuration form on request', async () => {
+    renderPage('chatgpt')
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure endpoint manually' }))
+    expect(await screen.findByPlaceholderText('model id')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Sign in with ChatGPT' })).not.toBeInTheDocument()
+  })
+})
+

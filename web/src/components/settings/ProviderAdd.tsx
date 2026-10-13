@@ -8,6 +8,10 @@ import {
   providerOAuthStart,
   searchCatalog,
   setSecret,
+  subscriptionAuthCallback,
+  subscriptionAuthCancel,
+  subscriptionAuthStart,
+  subscriptionAuthStatus,
   validateProvider,
   type SecretRefEntry,
 } from '../../api/client'
@@ -226,6 +230,39 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
             { label: 'Settings', href: '/settings' },
             { label: area.label, href: '/settings/providers' },
             { label: `Add ${preset.name}` },
+          ]}
+        />
+        {panel}
+      </PageShell>
+    )
+  }
+
+  const isSubscriptionPreset = preset.id === 'chatgpt' || preset.id === 'claude'
+
+  if (isSubscriptionPreset && !pasteKey) {
+    const panel = (
+      <SubscriptionConnectPanel
+        preset={preset}
+        onConnected={(id, pName) => {
+          void refreshOnboarding()
+          if (onCreated) onCreated(id, pName)
+          else navigate('/settings/providers')
+        }}
+        onManualConfig={() => setPasteKey(true)}
+        onCancel={embedded ? onCancel : () => navigate('/settings/providers')}
+      />
+    )
+    if (embedded) return panel
+    return (
+      <PageShell width="form">
+        <PageHeader
+          title={`Connect ${preset.name}`}
+          description={`subscription: ${preset.id === 'chatgpt' ? 'OpenAI ChatGPT' : 'Anthropic Claude'}`}
+          meta={<ProviderLogo preset={preset} className="size-9" />}
+          breadcrumbs={[
+            { label: 'Settings', href: '/settings' },
+            { label: area.label, href: '/settings/providers' },
+            { label: `Connect ${preset.name}` },
           ]}
         />
         {panel}
@@ -867,3 +904,207 @@ function OAuthConnectPanel({
     </div>
   )
 }
+
+function SubscriptionConnectPanel({
+  preset,
+  onConnected,
+  onManualConfig,
+  onCancel,
+}: {
+  preset: ProviderPreset
+  onConnected: (id: string, name: string) => void
+  onManualConfig: () => void
+  onCancel?: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [session, setSession] = useState<{ url: string; state: string } | null>(null)
+  const [elapsed, setElapsed] = useState(0)
+  const [redirectUrlInput, setRedirectUrlInput] = useState('')
+  const [submittingManual, setSubmittingManual] = useState(false)
+  const [statusError, setStatusError] = useState<string | null>(null)
+
+  const providerType = preset.id === 'chatgpt' ? 'chatgpt' : 'claude'
+
+  const startConnect = async () => {
+    setBusy(true)
+    setStatusError(null)
+    setElapsed(0)
+    try {
+      const res = await subscriptionAuthStart(providerType)
+      setSession({ url: res.url, state: res.state })
+      window.open(res.url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      toast.error('Could not start login flow', { description: errText(err) })
+      setBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!session) return
+    const timer = setInterval(() => {
+      setElapsed((s) => s + 1)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [session])
+
+  useEffect(() => {
+    if (!session) return
+    let active = true
+
+    const poll = async () => {
+      try {
+        const res = await subscriptionAuthStatus(session.state)
+        if (!active) return
+        if (res.status === 'ok') {
+          try {
+            const id = await createProvider({
+              name: preset.name,
+              kind: 'api',
+              driver: 'openaicompat',
+              base_url: 'http://cliproxy:8317/v1',
+              credential_ref: 'local',
+              headers: {},
+              default_model: preset.validateModel || (providerType === 'chatgpt' ? 'gpt-4o' : 'claude-3-7-sonnet-20250219'),
+              enabled: true,
+            })
+            toast.success('Connected', { description: `${preset.name} is ready to use.` })
+            onConnected(id, preset.name)
+          } catch (createErr) {
+            toast.error('Authenticated, but failed to create provider', { description: errText(createErr) })
+            setBusy(false)
+            setSession(null)
+          }
+          return
+        }
+        if (res.status === 'error') {
+          setStatusError(res.error || 'Authentication failed or was cancelled')
+          setBusy(false)
+          setSession(null)
+          return
+        }
+      } catch {
+        // Retry next interval
+      }
+    }
+
+    void poll()
+    const interval = setInterval(poll, 2000)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
+  }, [session, preset, providerType, onConnected])
+
+  const cancelSession = async () => {
+    if (session) {
+      try {
+        await subscriptionAuthCancel(session.state)
+      } catch {
+        // Best-effort cancellation
+      }
+    }
+    setSession(null)
+    setBusy(false)
+    setStatusError(null)
+  }
+
+  const submitManualCallback = async () => {
+    if (!redirectUrlInput.trim()) return
+    setSubmittingManual(true)
+    try {
+      const res = await subscriptionAuthCallback(providerType, redirectUrlInput.trim())
+      if (res.status === 'ok') {
+        toast.info('Callback submitted, verifying session…')
+      } else {
+        toast.error('Callback error', { description: res.error || 'Invalid callback URL' })
+      }
+    } catch (err) {
+      toast.error('Could not submit callback', { description: errText(err) })
+    } finally {
+      setSubmittingManual(false)
+    }
+  }
+
+  if (session) {
+    return (
+      <div className="space-y-6 rounded-lg border border-border bg-card p-6 shadow-sm">
+        <div className="space-y-2">
+          <h3 className="text-base font-semibold text-foreground">Waiting for authorization in your browser…</h3>
+          <p className="text-sm text-muted-foreground">
+            A new browser tab opened to sign into {providerType === 'chatgpt' ? 'OpenAI' : 'Anthropic'}. Approve the access request there to continue.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button asChild variant="outline" size="sm">
+            <a href={session.url} target="_blank" rel="noopener noreferrer">
+              Re-open login page
+            </a>
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => void cancelSession()}>
+            Cancel
+          </Button>
+          <span className="text-xs text-muted-foreground">Elapsed: {elapsed}s</span>
+        </div>
+
+        {elapsed > 8 && (
+          <div className="rounded-md border border-border/70 bg-muted/30 p-4 text-xs space-y-2">
+            <p className="font-medium text-foreground">Running on a remote server or headless host?</p>
+            <p className="text-muted-foreground">
+              If your browser says &ldquo;Unable to connect&rdquo; to localhost after logging in, copy the full URL from your browser&apos;s address bar and paste it below:
+            </p>
+            <div className="flex gap-2">
+              <Input
+                placeholder="http://localhost:1455/auth/callback?code=..."
+                value={redirectUrlInput}
+                onChange={(e) => setRedirectUrlInput(e.target.value)}
+                className="text-xs font-mono"
+              />
+              <Button size="sm" disabled={submittingManual || !redirectUrlInput.trim()} onClick={() => void submitManualCallback()}>
+                {submittingManual ? 'Submitting…' : 'Submit'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {statusError && (
+        <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <CircleAlert className="size-4 shrink-0" aria-hidden />
+          <span>{statusError}</span>
+        </div>
+      )}
+
+      <p className="text-sm text-muted-foreground">
+        {providerType === 'chatgpt'
+          ? 'Sign in with your ChatGPT Plus or Pro subscription. Timothy routes inference through your existing flat-rate account with zero per-token cost.'
+          : 'Sign in with your Claude Pro or Team subscription. Timothy routes inference through your existing flat-rate account with zero per-token cost.'}
+      </p>
+
+      <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+        <li>Flat-rate subscription models cost $0.00 on your Timothy ledger.</li>
+        <li>Sessions are managed securely by CLIProxyAPI inside your Docker network.</li>
+        <li>No API keys to paste, generate, or renew manually.</li>
+      </ul>
+
+      <FormActions>
+        <Button onClick={() => void startConnect()} disabled={busy}>
+          {busy ? 'Opening login page…' : providerType === 'chatgpt' ? 'Sign in with ChatGPT' : 'Sign in with Claude'}
+        </Button>
+        <Button variant="ghost" onClick={onManualConfig} disabled={busy}>
+          Configure endpoint manually
+        </Button>
+        {onCancel && (
+          <Button variant="ghost" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+        )}
+      </FormActions>
+    </div>
+  )
+}
+

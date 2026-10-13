@@ -178,6 +178,8 @@ services:
       PORT: "8080"
       GATEWAY_URL: http://gateway:8081
       MEMORYD_URL: http://memoryd:8082
+      CLIPROXY_URL: http://cliproxy:8317
+      CLIPROXY_MANAGEMENT_KEY: ${CLIPROXY_MANAGEMENT_KEY:-timothy}
       # Brain-only secret: the public API bearer token.
       TIMOTHY_API_TOKEN: ${TIMOTHY_API_TOKEN:-}
       # Bearer token Prometheus presents to /metrics on the published
@@ -452,6 +454,11 @@ configs:
 
       access:
         api-keys: []
+
+      remote-management:
+        allow-remote: true
+        secret-key: "${CLIPROXY_MANAGEMENT_KEY:-timothy}"
+        disable-control-panel: false
 
 volumes:
   pgdata:

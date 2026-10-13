@@ -1246,6 +1246,47 @@ export async function providerOAuthStart(returnTo: 'wizard' | 'settings'): Promi
   return url
 }
 
+export interface SubscriptionAuthStartResult {
+  url: string
+  state: string
+  user_code?: string
+  status: string
+}
+
+export interface SubscriptionAuthStatusResult {
+  status: 'wait' | 'ok' | 'error'
+  error?: string
+}
+
+export async function subscriptionAuthStart(provider: 'chatgpt' | 'claude'): Promise<SubscriptionAuthStartResult> {
+  return request<SubscriptionAuthStartResult>('/v1/providers/subscription/auth/start', {
+    method: 'POST',
+    body: JSON.stringify({ provider }),
+  })
+}
+
+export async function subscriptionAuthStatus(state: string): Promise<SubscriptionAuthStatusResult> {
+  const params = new URLSearchParams({ state })
+  return request<SubscriptionAuthStatusResult>(`/v1/providers/subscription/auth/status?${params}`)
+}
+
+export async function subscriptionAuthCallback(
+  provider: 'chatgpt' | 'claude',
+  redirectURL: string,
+): Promise<{ status: string; error?: string }> {
+  return request<{ status: string; error?: string }>('/v1/providers/subscription/auth/callback', {
+    method: 'POST',
+    body: JSON.stringify({ provider, redirect_url: redirectURL }),
+  })
+}
+
+export async function subscriptionAuthCancel(state: string): Promise<void> {
+  const params = new URLSearchParams({ state })
+  await request(`/v1/providers/subscription/auth/session?${params}`, {
+    method: 'DELETE',
+  })
+}
+
 // connectorOAuthStart returns the Google consent URL to send the
 // browser to; the callback lands back on /settings?tab=connectors.
 export async function connectorOAuthStart(id: string): Promise<string> {

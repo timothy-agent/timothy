@@ -75,4 +75,9 @@ describe('cliproxy presets', () => {
     const p = provider({ base_url: 'http://cliproxy:8317/v1' })
     expect(matchPreset(p).id).toBe('chatgpt')
   })
+
+  it('matches the claude preset by port 8317 when name or model refers to claude', () => {
+    const p = provider({ name: 'Claude Subscription', base_url: 'http://cliproxy:8317/v1' })
+    expect(matchPreset(p).id).toBe('claude')
+  })
 })

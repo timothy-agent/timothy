@@ -142,7 +142,7 @@ export const providerPresets: ProviderPreset[] = [
     brandColor: '#10A37F',
     baseURL: 'http://cliproxy:8317/v1',
     requiresKey: false,
-    keyHint: 'Requires local proxy authentication: docker exec -it timothy-cliproxy ./CLIProxyAPI -codex-device-login',
+    keyHint: 'Zero per-token cost. Managed via CLIProxyAPI.',
     validateModel: 'gpt-4o',
   },
   {
@@ -169,7 +169,7 @@ export const providerPresets: ProviderPreset[] = [
     brandColor: '#D97757',
     baseURL: 'http://cliproxy:8317/v1',
     requiresKey: false,
-    keyHint: 'Requires local proxy authentication: docker exec -it timothy-cliproxy ./CLIProxyAPI -claude-login',
+    keyHint: 'Zero per-token cost. Managed via CLIProxyAPI.',
     validateModel: 'claude-3-7-sonnet-20250219',
   },
   {
@@ -260,7 +260,8 @@ export const providerPresets: ProviderPreset[] = [
 // widened so it also accepts an ExecutionPlanEntry, which carries the
 // same driver/kind/base_url fields trimmed from the gateway resolve
 // response.
-export type MatchPresetSource = Pick<AdminProvider, 'kind' | 'driver' | 'base_url'>
+export type MatchPresetSource = Pick<AdminProvider, 'kind' | 'driver' | 'base_url'> &
+  Partial<Pick<AdminProvider, 'name' | 'default_model'>>
 
 // matchPreset finds the preset a configured provider was (probably)
 // created from, for card branding: exact drivers first, then base_url
@@ -286,6 +287,11 @@ export function matchPreset(p: MatchPresetSource): ProviderPreset {
       return providerPresets.find((x) => x.id === 'ollama') ?? custom
     }
     if (u.port === '8317' || u.hostname === 'cliproxy') {
+      const name = (p.name ?? '').toLowerCase()
+      const model = (p.default_model ?? '').toLowerCase()
+      if (name.includes('claude') || name.includes('anthropic') || model.startsWith('claude')) {
+        return providerPresets.find((x) => x.id === 'claude') ?? custom
+      }
       return providerPresets.find((x) => x.id === 'chatgpt') ?? custom
     }
   } catch {
