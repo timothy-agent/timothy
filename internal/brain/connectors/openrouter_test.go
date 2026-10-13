@@ -110,7 +110,20 @@ func start(t *testing.T, a *OpenRouterAuth, f *fakeOpenRouter, returnTo string) 
 	f.mu.Lock()
 	f.challenge = u.Query().Get("code_challenge")
 	f.mu.Unlock()
-	return u.Query()
+	q := u.Query()
+	// OpenRouter passes only the callback's own query through to the
+	// redirect, so the state must ride inside callback_url and must
+	// not appear as a top-level param. Surface it as "state" for the
+	// assertions below.
+	if q.Get("state") != "" {
+		t.Fatal("state leaked to the top-level auth params")
+	}
+	cb, err := url.Parse(q.Get("callback_url"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Set("state", cb.Query().Get("state"))
+	return q
 }
 
 func TestOpenRouterStartAndCallback(t *testing.T) {
@@ -119,7 +132,8 @@ func TestOpenRouterStartAndCallback(t *testing.T) {
 	a, f, secrets := testOpenRouter(t, admin)
 
 	q := start(t, a, f, OpenRouterReturnWizard)
-	if q.Get("callback_url") != "https://timothy.example/v1/connectors/oauth/callback" {
+	cb, err := url.Parse(q.Get("callback_url"))
+	if err != nil || cb.String() != "https://timothy.example/v1/connectors/oauth/callback?state="+url.QueryEscape(q.Get("state")) {
 		t.Fatalf("callback_url = %s", q.Get("callback_url"))
 	}
 	if q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" || q.Get("state") == "" {
