@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import type { TestResult } from '../api/types'
 import { BrandMark } from '../components/BrandMark'
@@ -14,19 +14,38 @@ import { HelloStep } from '../onboarding/wizard/HelloStep'
 import { RolesStep } from '../onboarding/wizard/RolesStep'
 import { SourceStep } from '../onboarding/wizard/SourceStep'
 import { VerifyStep } from '../onboarding/wizard/VerifyStep'
-import { initialWizardState, wizardReducer, wizardSteps } from '../onboarding/wizard/wizardState'
+import { initialWizardState, wizardReducer, wizardSteps, type WizardResume } from '../onboarding/wizard/wizardState'
 import type { ChatIntent } from './Home'
 
 // Welcome is the first-run wizard: a full-screen page outside the app
 // shell, so the provider form's popovers work and browser Back leaves.
 export function Welcome() {
   const { readiness, loading } = useOnboarding()
+  const [params, setParams] = useSearchParams()
+  // An OAuth callback (D-163) lands here with the outcome in the
+  // query; read it once and clear it so a reload does not replay it.
+  const [resume] = useState<WizardResume | null>(() => resumeFromParams(params))
+  useEffect(() => {
+    if (resume) setParams({}, { replace: true })
+  }, [resume, setParams])
+  useEffect(() => {
+    if (resume && 'error' in resume) toast.error('Could not connect OpenRouter', { description: resume.error })
+  }, [resume])
   if (loading) return null
-  return <Wizard chatReady={readiness?.chat_route ?? false} />
+  return <Wizard chatReady={readiness?.chat_route ?? false} resume={resume} />
 }
 
-function Wizard({ chatReady }: { chatReady: boolean }) {
-  const [state, dispatch] = useReducer(wizardReducer, chatReady, initialWizardState)
+function resumeFromParams(params: URLSearchParams): WizardResume | null {
+  const id = params.get('provider_id')
+  const name = params.get('oauth_connected')
+  if (id && name) return { provider: { id, name } }
+  const error = params.get('oauth_error')
+  if (error) return { presetId: 'openrouter', error }
+  return null
+}
+
+function Wizard({ chatReady, resume }: { chatReady: boolean; resume: WizardResume | null }) {
+  const [state, dispatch] = useReducer(wizardReducer, undefined, () => initialWizardState(chatReady, resume))
   const { updateProgress, readiness } = useOnboarding()
   const navigate = useNavigate()
   const [busy, setBusy] = useState(false)

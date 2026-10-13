@@ -83,3 +83,22 @@ describe('wizardReducer', () => {
     expect(s.step).toBe(step)
   })
 })
+
+describe('initialWizardState resume (D-163)', () => {
+  it('lands on verify for a provider the OAuth callback created', () => {
+    const s = initialWizardState(true, { provider: { id: 'p-or', name: 'OpenRouter' } })
+    expect(s.step).toBe('verify')
+    expect(s.provider).toEqual({ id: 'p-or', name: 'OpenRouter' })
+  })
+
+  it('returns to the provider step after a failed login', () => {
+    const s = initialWizardState(false, { presetId: 'openrouter', error: 'access_denied' })
+    expect(s.step).toBe('provider')
+    expect(s.presetId).toBe('openrouter')
+    expect(s.provider).toBeNull()
+  })
+
+  it('ignores a null resume', () => {
+    expect(initialWizardState(false, null).step).toBe('welcome')
+  })
+})

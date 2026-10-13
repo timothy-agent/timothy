@@ -23,10 +23,18 @@ export type WizardAction =
   | { type: 'verifyFailed'; detail: string }
   | { type: 'skip' }
 
+// WizardResume is what an OAuth callback brings back (D-163): the
+// provider it created, or the error it ended with.
+export type WizardResume =
+  | { provider: { id: string; name: string } }
+  | { presetId: string; error: string }
+
 // initialWizardState starts at the roles step when a chat model already
-// works: there is nothing to connect.
-export function initialWizardState(chatReady: boolean): WizardState {
-  return {
+// works: there is nothing to connect. A resume lands on the verify
+// step for the created provider, or back on the provider step after a
+// failed login.
+export function initialWizardState(chatReady: boolean, resume?: WizardResume | null): WizardState {
+  const base: WizardState = {
     step: chatReady ? 'roles' : 'welcome',
     presetId: null,
     provider: null,
@@ -34,6 +42,9 @@ export function initialWizardState(chatReady: boolean): WizardState {
     verifyError: null,
     skipped: false,
   }
+  if (!resume) return base
+  if ('provider' in resume) return { ...base, step: 'verify', provider: resume.provider }
+  return { ...base, step: 'provider', presetId: resume.presetId }
 }
 
 const nextStep: Record<WizardStep, WizardStep> = {

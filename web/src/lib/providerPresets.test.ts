@@ -62,3 +62,10 @@ describe('matchPreset', () => {
     expect(matchPreset(p).id).toBe('openai-responses')
   })
 })
+
+describe('openrouter preset (D-163)', () => {
+  it('matches a connected row by host', () => {
+    const p = provider({ base_url: 'https://openrouter.ai/api/v1' })
+    expect(matchPreset(p).id).toBe('openrouter')
+  })
+})

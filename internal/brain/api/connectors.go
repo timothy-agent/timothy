@@ -21,11 +21,11 @@ import (
 // secrets, when nil, just skips signing-key generation on a
 // sign_commits create/patch — same as any other secret-store-gated
 // feature elsewhere in brain.
-func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mgr *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, mcpAuth *connectors.MCPAuth, secrets *secretstore.Store) {
+func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mgr *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, mcpAuth *connectors.MCPAuth, openrouter *connectors.OpenRouterAuth, secrets *secretstore.Store) {
 	if mgr == nil {
 		return
 	}
-	h := &connectorAPI{mgr: mgr, goog: goog, msft: msft, mcp: mcpAuth, secrets: secrets, log: a.log}
+	h := &connectorAPI{mgr: mgr, goog: goog, msft: msft, mcp: mcpAuth, openrouter: openrouter, secrets: secrets, log: a.log}
 	handle("GET /v1/admin/connectors", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/admin/connectors", a.auth(http.HandlerFunc(h.create)))
 	handle("PATCH /v1/admin/connectors/{id}", a.auth(http.HandlerFunc(h.patch)))
@@ -34,7 +34,12 @@ func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mg
 	handle("GET /v1/admin/connectors/{id}/service", a.auth(http.HandlerFunc(h.service)))
 	handle("GET /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.listRepos)))
 	handle("POST /v1/admin/connectors/{id}/repos", a.auth(http.HandlerFunc(h.createRepo)))
-	if goog != nil || msft != nil || mcpAuth != nil {
+	if openrouter != nil {
+		// The OpenRouter PKCE dance (D-163) creates a provider row, not
+		// a connector, but rides the same callback route.
+		handle("POST /v1/admin/providers/openrouter/oauth/start", a.auth(http.HandlerFunc(h.openRouterStart)))
+	}
+	if goog != nil || msft != nil || mcpAuth != nil || openrouter != nil {
 		handle("POST /v1/admin/connectors/{id}/oauth/start", a.auth(http.HandlerFunc(h.oauthStart)))
 		// The callback is an identity provider redirecting the user's
 		// browser, so no bearer is possible; the single-use expiring state token is the
@@ -45,12 +50,42 @@ func (a *API) registerConnectors(handle func(pattern string, h http.Handler), mg
 }
 
 type connectorAPI struct {
-	mgr     *connectors.Manager
-	goog    *connectors.Google
-	msft    *connectors.Microsoft
-	mcp     *connectors.MCPAuth
-	secrets *secretstore.Store
-	log     *slog.Logger
+	mgr  *connectors.Manager
+	goog *connectors.Google
+	msft *connectors.Microsoft
+	mcp  *connectors.MCPAuth
+	// openrouter is nil-gated like the engines above (D-163).
+	openrouter *connectors.OpenRouterAuth
+	secrets    *secretstore.Store
+	log        *slog.Logger
+}
+
+// openRouterStart begins the OpenRouter PKCE dance and returns the URL
+// the browser should visit; return_to picks where the callback lands.
+func (h *connectorAPI) openRouterStart(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ReturnTo string `json:"return_to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad_request", "body must be a JSON object with return_to")
+		return
+	}
+	authURL, err := h.openrouter.StartAuth(body.ReturnTo)
+	if err != nil {
+		failConnector(w, h.log, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"url": authURL})
+}
+
+// openRouterLanding is where the browser goes after an OpenRouter
+// callback: the wizard resumes on its verify step, Settings shows the
+// providers list.
+func openRouterLanding(returnTo string, q url.Values) string {
+	if returnTo == connectors.OpenRouterReturnWizard {
+		return "/welcome?" + q.Encode()
+	}
+	return "/settings/providers?" + q.Encode()
 }
 
 // oauthStart begins the OAuth dance and returns the URL the browser
@@ -91,14 +126,30 @@ func (h *connectorAPI) oauthStart(w http.ResponseWriter, r *http.Request) {
 // started it, via HasState.
 func (h *connectorAPI) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	state := q.Get("state")
 	if errCode := q.Get("error"); errCode != "" {
+		if to, ok := h.openrouter.Cancel(state); ok {
+			http.Redirect(w, r, openRouterLanding(to, url.Values{"oauth_error": {errCode}}), http.StatusFound)
+			return
+		}
 		http.Redirect(w, r, "/settings/connectors?oauth_error="+url.QueryEscape(errCode), http.StatusFound)
 		return
 	}
-	state := q.Get("state")
 	var name string
 	var err error
 	switch {
+	case h.openrouter.HasState(state):
+		var done connectors.OpenRouterConnected
+		done, err = h.openrouter.HandleCallback(r.Context(), state, q.Get("code"))
+		if err != nil {
+			http.Redirect(w, r, openRouterLanding(done.ReturnTo, url.Values{"oauth_error": {err.Error()}}), http.StatusFound)
+			return
+		}
+		http.Redirect(w, r, openRouterLanding(done.ReturnTo, url.Values{
+			"oauth_connected": {done.Name},
+			"provider_id":     {done.ProviderID},
+		}), http.StatusFound)
+		return
 	case h.goog != nil && h.goog.HasState(state):
 		name, err = h.goog.HandleCallback(r.Context(), state, q.Get("code"))
 	case h.msft != nil && h.msft.HasState(state):

@@ -514,3 +514,76 @@ func (c *Client) Stream(ctx context.Context, req StreamRequest) (<-chan stream.S
 	}()
 	return ch, nil
 }
+
+// AdminProvider is the gateway's providers row as its admin API
+// serves and accepts it. credential_ref is a NAME; no secret value
+// ever travels in this shape.
+type AdminProvider struct {
+	ID            string            `json:"id,omitempty"`
+	Name          string            `json:"name"`
+	Kind          string            `json:"kind"`
+	Driver        string            `json:"driver"`
+	BaseURL       string            `json:"base_url"`
+	DefaultModel  string            `json:"default_model"`
+	CredentialRef string            `json:"credential_ref"`
+	Headers       map[string]string `json:"headers"`
+	Enabled       bool              `json:"enabled"`
+}
+
+// ListProviders fetches the gateway's provider rows (header values
+// already redacted by the gateway).
+func (c *Client) ListProviders(ctx context.Context) ([]AdminProvider, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/internal/admin/providers", nil)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: request: %w", err)
+	}
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: gateway unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out struct {
+		Providers []AdminProvider `json:"providers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("gwclient: decode providers: %w", err)
+	}
+	return out.Providers, nil
+}
+
+// CreateProvider adds one provider row through the gateway's admin
+// API, which validates it and reloads routing, and returns its id.
+func (c *Client) CreateProvider(ctx context.Context, p AdminProvider) (string, error) {
+	body, err := json.Marshal(p)
+	if err != nil {
+		return "", fmt.Errorf("gwclient: encode provider: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/internal/admin/providers", bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("gwclient: request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("gwclient: gateway unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return "", fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", fmt.Errorf("gwclient: decode provider: %w", err)
+	}
+	if out.ID == "" {
+		return "", fmt.Errorf("gwclient: gateway returned no provider id")
+	}
+	return out.ID, nil
+}

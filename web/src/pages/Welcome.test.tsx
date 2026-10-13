@@ -70,7 +70,7 @@ describe('Welcome', () => {
     expect(screen.getByText('Step 1 of 7')).toBeInTheDocument()
   })
 
-  it('lists the sources with Ollama first under its own title', async () => {
+  it('lists the sources with OpenRouter first under its own title', async () => {
     renderWelcome()
     fireEvent.click(await screen.findByRole('button', { name: "Let's start" }))
     const tiles = screen
@@ -78,6 +78,7 @@ describe('Welcome', () => {
       .map((b) => b.textContent ?? '')
       .filter((t) => t !== 'Skip for now')
     const titles = [
+      'Free to start (OpenRouter)',
       'Local model (Ollama)',
       'OpenAI',
       'Anthropic',
@@ -89,7 +90,8 @@ describe('Welcome', () => {
     ]
     expect(tiles).toHaveLength(titles.length)
     titles.forEach((title, i) => expect(tiles[i]).toContain(title))
-    expect(tiles[0]).toContain('Runs on your own machine, no key needed')
+    expect(tiles[0]).toContain('One login, hundreds of models, free tier included')
+    expect(tiles[1]).toContain('Runs on your own machine, no key needed')
     expect(screen.getByText('You can add more providers later in Settings.')).toBeInTheDocument()
   })
 

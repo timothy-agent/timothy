@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import {
   createProvider,
   listSecretRefs,
+  providerOAuthStart,
   searchCatalog,
   setSecret,
   validateProvider,
@@ -119,6 +120,9 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   // non-CLI) API key flow, the common reuse case (e.g. the same
   // OpenAI-compatible key across two provider rows).
   const [credMode, setCredMode] = useState<CredentialMode>('new')
+  // pasteKey switches an oauth preset from Connect to the plain paste
+  // flow for operators who already hold a key.
+  const [pasteKey, setPasteKey] = useState(false)
   // secretRefs: the stored-ref directory, for steering the derived
   // ref away from names other providers use and refusing to overwrite
   // one on submit.
@@ -208,6 +212,32 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   }, [preset, catalogModels])
 
   if (!preset) return <Navigate to="/settings/providers" replace />
+
+  if (preset.oauth && !pasteKey) {
+    const panel = (
+      <OAuthConnectPanel
+        returnTo={embedded ? 'wizard' : 'settings'}
+        onPasteKey={() => setPasteKey(true)}
+        onCancel={embedded ? onCancel : () => navigate('/settings/providers')}
+      />
+    )
+    if (embedded) return panel
+    return (
+      <PageShell width="form">
+        <PageHeader
+          title={`Add ${preset.name}`}
+          description={`driver: ${preset.driver}`}
+          meta={<ProviderLogo preset={preset} className="size-9" />}
+          breadcrumbs={[
+            { label: 'Settings', href: '/settings' },
+            { label: area.label, href: '/settings/providers' },
+            { label: `Add ${preset.name}` },
+          ]}
+        />
+        {panel}
+      </PageShell>
+    )
+  }
 
   const isBedrock = preset.driver === 'bedrock'
   const isAnthropic = preset.id === 'anthropic'
@@ -811,5 +841,55 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
       />
       {form}
     </PageShell>
+  )
+}
+
+// OAuthConnectPanel is the Connect flow for an oauth preset (D-163):
+// the browser logs in at the provider, the key is minted and stored
+// server-side, and the callback brings the operator back here.
+function OAuthConnectPanel({
+  returnTo,
+  onPasteKey,
+  onCancel,
+}: {
+  returnTo: 'wizard' | 'settings'
+  onPasteKey: () => void
+  onCancel?: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const connect = async () => {
+    setBusy(true)
+    try {
+      window.location.assign(await providerOAuthStart(returnTo))
+    } catch (err) {
+      toast.error('Could not start the login', { description: errText(err) })
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Log in or sign up at OpenRouter and approve Timothy. OpenRouter creates an API key for Timothy and
+        stores it here. You never paste anything.
+      </p>
+      <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+        <li>Free models cost nothing: 50 requests a day, or 1000 a day after you buy 10 credits once.</li>
+        <li>Paid models on the same account use your OpenRouter credits.</li>
+        <li>Your OpenRouter privacy settings decide whether free models may train on your prompts.</li>
+      </ul>
+      <FormActions>
+        <Button onClick={() => void connect()} disabled={busy}>
+          {busy ? 'Opening OpenRouter…' : 'Connect OpenRouter'}
+        </Button>
+        <Button variant="ghost" onClick={onPasteKey} disabled={busy}>
+          I have a key, paste it instead
+        </Button>
+        {onCancel && (
+          <Button variant="ghost" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+        )}
+      </FormActions>
+    </div>
   )
 }

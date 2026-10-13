@@ -324,7 +324,11 @@ func main() {
 	// schema and nothing sticks.
 	var recordLoadedTool func(sessionID string, t *tools.Tool) bool
 	var mcpAuth *connectors.MCPAuth
+	var openrouterAuth *connectors.OpenRouterAuth
 	if conns != nil {
+		// OpenRouter's PKCE key mint (D-163) talks to one fixed host, so
+		// a plain client, not the operator's outbound allowlist.
+		openrouterAuth = connectors.NewOpenRouterAuth(secrets, gwc, os.Getenv("TIMOTHY_PUBLIC_URL"), &http.Client{Timeout: 30 * time.Second}, app.Log)
 		// Shared by every MCP-backed kind, so a settings change to the
 		// index threshold reaches all of them.
 		mcpDeferral := connectors.MCPDeferral{
@@ -1188,7 +1192,7 @@ func main() {
 	}
 	api.Register(app.Server, svc, store, broker,
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
-		agentReg, conns, goog, msft, mcpAuth, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
+		agentReg, conns, goog, msft, mcpAuth, openrouterAuth, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
 		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
 		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags))
 

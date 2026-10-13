@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Link, useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { catalogStatus, listProviders, patchProvider, providersHealth, refreshCatalog } from '../../api/client'
 import type { AdminProvider, CatalogSyncStatus, ProviderHealth } from '../../api/types'
@@ -7,6 +7,7 @@ import { relativeTime } from '../../lib/format'
 import { PageHeader, SectionHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { EmptyState } from '../timothy/empty-state'
+import { Alert, AlertDescription } from '../ui/alert'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
 import { AddPresetTile } from './AddPresetTile'
@@ -24,6 +25,12 @@ export function ProvidersList() {
   const [providers, setProviders] = useState<AdminProvider[]>([])
   const [health, setHealth] = useState<Record<string, ProviderHealth>>({})
   const navigate = useNavigate()
+  const [params, setParams] = useSearchParams()
+
+  // The OpenRouter callback (D-163) bounces back here with the outcome.
+  const oauthConnected = params.get('oauth_connected')
+  const oauthError = params.get('oauth_error')
+  const clearOAuthParams = () => setParams({}, { replace: true })
 
   const refresh = useCallback(() => {
     Promise.all([listProviders(), providersHealth()])
@@ -44,6 +51,26 @@ export function ProvidersList() {
       />
       <div className="space-y-10">
         <CatalogStatusLine />
+        {oauthConnected && (
+          <Alert tone="good">
+            <AlertDescription className="flex items-center gap-3">
+              <span>“{oauthConnected}” is connected and ready to chat.</span>
+              <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
+                dismiss
+              </button>
+            </AlertDescription>
+          </Alert>
+        )}
+        {oauthError && (
+          <Alert tone="destructive">
+            <AlertDescription className="flex items-center gap-3">
+              <span>Connection failed: {oauthError}</span>
+              <button type="button" onClick={clearOAuthParams} className="ml-auto text-sm underline-offset-2 hover:underline">
+                dismiss
+              </button>
+            </AlertDescription>
+          </Alert>
+        )}
 
         <section className="space-y-4">
           <SectionHeader title={providers.length > 0 ? `Your providers · ${providers.length}` : 'Your providers'} />
