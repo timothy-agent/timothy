@@ -224,6 +224,9 @@ func main() {
 	mc := memclient.New(memorydURL)
 
 	searxngURL := os.Getenv("SEARXNG_URL")
+	if searxngURL == "" {
+		app.Log.Warn("SEARXNG_URL not set; web search tool is unavailable")
+	}
 	markitdownURL := os.Getenv("MARKITDOWN_URL")
 	if markitdownURL == "" {
 		app.Log.Warn("MARKITDOWN_URL not set; PDF attachments in chat are unavailable")

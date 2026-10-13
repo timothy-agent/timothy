@@ -18,11 +18,11 @@ registered as an openaicompat provider.
 | `memoryd`    | Internal memory service: pgvector recall                              |
 | `sandboxd`   | Per-mission sandboxes: Docker containers (Compose) or pods (Kubernetes) |
 | `web`        | React UI (:3300)                                                      |
-| `searxng`    | Metasearch backend for search_web                                     |
-| `markitdown` | Python sidecar: file → markdown                                       |
-| `ocr`        | Python sidecar: tesseract image OCR (always on)                       |
-| `whisper`    | Python sidecar: local speech-to-text (off unless `COMPOSE_PROFILES=whisper`) |
-| `pdfgen`     | Python sidecar: markdown → PDF via Typst (mission export), SVG → PNG (KB captions) |
+| `searxng`    | Metasearch backend for search_web (profile `search`, `full`)          |
+| `markitdown` | Python sidecar: file → markdown (profile `docs`, `full`)              |
+| `ocr`        | Python sidecar: tesseract image OCR (profile `docs`, `full`)          |
+| `whisper`    | Python sidecar: local speech-to-text (profile `whisper`, `full`)      |
+| `pdfgen`     | Python sidecar: markdown → PDF via Typst (mission export), SVG → PNG (KB captions; profile `docs`, `full`) |
 
 ## Commands
 
