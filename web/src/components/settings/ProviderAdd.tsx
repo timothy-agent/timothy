@@ -216,7 +216,6 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   if (preset.oauth && !pasteKey) {
     const panel = (
       <OAuthConnectPanel
-        preset={preset}
         returnTo={embedded ? 'wizard' : 'settings'}
         onPasteKey={() => setPasteKey(true)}
         onCancel={embedded ? onCancel : () => navigate('/settings/providers')}
@@ -849,12 +848,10 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
 // the browser logs in at the provider, the key is minted and stored
 // server-side, and the callback brings the operator back here.
 function OAuthConnectPanel({
-  preset,
   returnTo,
   onPasteKey,
   onCancel,
 }: {
-  preset: ProviderPreset
   returnTo: 'wizard' | 'settings'
   onPasteKey: () => void
   onCancel?: () => void
