@@ -51,10 +51,10 @@ beforeEach(() => {
 
 function renderList() {
   return render(
-    <MemoryRouter initialEntries={['/settings/agents']}>
+    <MemoryRouter initialEntries={['/agents']}>
       <Routes>
-        <Route path="/settings/agents" element={<AgentsList />} />
-        <Route path="/settings/agents/new" element={<p>new agent page</p>} />
+        <Route path="/agents" element={<AgentsList />} />
+        <Route path="/agents/new" element={<p>new agent page</p>} />
       </Routes>
     </MemoryRouter>,
   )
@@ -117,10 +117,10 @@ describe('AgentsList', () => {
 
   it('New agent navigates to the add page', async () => {
     render(
-      <MemoryRouter initialEntries={['/settings/agents']}>
+      <MemoryRouter initialEntries={['/agents']}>
         <Routes>
-          <Route path="/settings/agents" element={<AgentsList />} />
-          <Route path="/settings/agents/new" element={<div>add page</div>} />
+          <Route path="/agents" element={<AgentsList />} />
+          <Route path="/agents/new" element={<div>add page</div>} />
         </Routes>
       </MemoryRouter>,
     )
@@ -132,10 +132,10 @@ describe('AgentsList', () => {
 
   it('Manage navigates to the agent edit page', async () => {
     render(
-      <MemoryRouter initialEntries={['/settings/agents']}>
+      <MemoryRouter initialEntries={['/agents']}>
         <Routes>
-          <Route path="/settings/agents" element={<AgentsList />} />
-          <Route path="/settings/agents/:id" element={<div>edit page</div>} />
+          <Route path="/agents" element={<AgentsList />} />
+          <Route path="/agents/:id" element={<div>edit page</div>} />
         </Routes>
       </MemoryRouter>,
     )

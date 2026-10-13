@@ -20,6 +20,7 @@ import (
 
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
+	"github.com/SumonMSelim/timothy/internal/brain/auth"
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
@@ -105,6 +106,17 @@ type API struct {
 	// message export, #380) — nil-gated the same way missionAPI's
 	// pdfService is (PDFGEN_URL unset or attachments disabled).
 	pdfService *pdfgen.Service
+
+	authStore AuthStore
+	keyPair   *auth.KeyPair
+}
+
+// AuthStore manages user identity, credentials, and recovery.
+type AuthStore interface {
+	HasUsers(ctx context.Context) (bool, error)
+	CreateUser(ctx context.Context, username, email, password, role string) (*auth.User, error)
+	Authenticate(ctx context.Context, usernameOrEmail, password string) (*auth.User, error)
+	ResetPasswordWithToken(ctx context.Context, token, newPassword string) error
 }
 
 // memoryRoutePatterns is the EXHAUSTIVE list of memoryd routes brain
@@ -131,8 +143,8 @@ var memoryRoutePatterns = []string{
 // and automation attachment resolution; nil (no gateway wiring) makes
 // every image attachment fail with attachmentResolver's "could not be
 // described" error.
-func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, mcpAuth *connectors.MCPAuth, openrouter *connectors.OpenRouterAuth, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string, string) (*gwclient.ResolvedRoute, error), topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, kbEnrich *kb.Enricher, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, automationStore *automations.Store, eventStore *events.Store, eventsKick func(), pdfService *pdfgen.Service, caption func(context.Context, string, []byte) string, channelStore *channels.Store, channelService *channels.Service, onboardingProbes onboarding.Probes) {
-	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates, pdfService: pdfService}
+func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms PermissionResolver, memories, admin http.Handler, flags *settings.Store, rates *fxrates.Store, agentReg *agents.Store, conns *connectors.Manager, goog *connectors.Google, msft *connectors.Microsoft, mcpAuth *connectors.MCPAuth, openrouter *connectors.OpenRouterAuth, secrets *secretstore.Store, toolset Toolset, packs []skills.Skill, missionStore *missions.Store, missionDriver *missions.Driver, missionNotifier *missions.Notifier, missionWorkspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, missionClassify agents.Classify, resolveRoute func(context.Context, string, string, string) (*gwclient.ResolvedRoute, error), topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), hub *missions.Hub, attachmentStore *attachments.Store, whisperClient *http.Client, whisperURL string, markitdownURL string, token string, log *slog.Logger, gwSecrets GatewaySecrets, kbStore *kb.Store, kbIngest kbIngester, kbClassify kbClassifier, kbTitle kbTitler, kbEnrich *kb.Enricher, destinationStore *destinations.Store, destinationTest destinationTester, workflowStore *workflows.Store, workflowEngine *workflows.Engine, automationStore *automations.Store, eventStore *events.Store, eventsKick func(), pdfService *pdfgen.Service, caption func(context.Context, string, []byte) string, channelStore *channels.Store, channelService *channels.Service, onboardingProbes onboarding.Probes, authStore AuthStore, keyPair *auth.KeyPair) {
+	a := &API{svc: svc, dir: dir, perms: perms, token: token, log: log, flags: flags, rates: rates, pdfService: pdfService, authStore: authStore, keyPair: keyPair}
 	if missionStore != nil {
 		a.missionPerms = missionStore
 	}
@@ -144,6 +156,7 @@ func Register(srv *httpserver.Server, svc *chat.Service, dir Directory, perms Pe
 			srv.Handle(pattern, a.auth(memories))
 		}
 	}
+	a.registerAuth(srv.Handle, authStore, keyPair)
 	a.registerAdmin(srv.Handle, admin)
 	// conns is a *connectors.Manager: boxing a nil pointer straight into
 	// the connectorLister interface would make registerSecrets' nil
@@ -330,20 +343,54 @@ func (a *API) handlePendingPermissions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"pending": pending})
 }
 
-// auth enforces the single bearer token. An unconfigured token fails
-// closed with 503 — never open.
+// auth enforces authentication:
+// 1. Session cookie (timothy_session) with valid Ed25519/PQ hybrid JWT signature.
+// 2. Bearer token matching a.token (TIMOTHY_API_TOKEN) or valid Bearer JWT for programmatic/CLI access.
 func (a *API) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if a.token == "" {
-			jsonError(w, http.StatusServiceUnavailable, "auth_not_configured", "TIMOTHY_API_TOKEN is not set")
+		// 1. Check session cookie if keyPair is configured
+		if a.keyPair != nil {
+			if cookie, err := r.Cookie(sessionCookieName); err == nil && cookie.Value != "" {
+				claims, err := a.keyPair.Verify(cookie.Value)
+				if err == nil && claims != nil {
+					ctx := context.WithValue(r.Context(), userContextKey, claims)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+		}
+
+		// 2. Check Bearer token (CLI / automation / legacy token / bearer JWT)
+		if got, ok := bearerToken(r); ok && got != "" {
+			if a.token != "" && subtle.ConstantTimeCompare([]byte(got), []byte(a.token)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+			if a.keyPair != nil {
+				claims, err := a.keyPair.Verify(got)
+				if err == nil && claims != nil {
+					ctx := context.WithValue(r.Context(), userContextKey, claims)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+		}
+
+		// If no token and no session, check if setup is needed
+		if a.authStore != nil {
+			hasUsers, err := a.authStore.HasUsers(r.Context())
+			if err == nil && !hasUsers {
+				jsonError(w, http.StatusUnauthorized, "setup_required", "no admin user configured; visit /setup")
+				return
+			}
+		}
+
+		if a.token == "" && a.keyPair == nil {
+			jsonError(w, http.StatusServiceUnavailable, "auth_not_configured", "authentication is not configured")
 			return
 		}
-		got, ok := bearerToken(r)
-		if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(a.token)) != 1 {
-			jsonError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid bearer token")
-			return
-		}
-		next.ServeHTTP(w, r)
+
+		jsonError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid authentication")
 	})
 }
 

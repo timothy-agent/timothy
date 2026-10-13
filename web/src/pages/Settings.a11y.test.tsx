@@ -21,12 +21,16 @@ vi.mock('../api/client', async (importOriginal) => {
     createAgent: vi.fn(),
     deleteAgent: vi.fn(),
     listAgents: vi.fn(),
+    listChannels: vi.fn(),
     listConnectors: vi.fn(),
     listDestinations: vi.fn(),
+    listMemories: vi.fn(),
     listProviders: vi.fn(),
     listRoutes: vi.fn(),
     listSecretBackends: vi.fn(),
     listSecretRefs: vi.fn(),
+    resolveMemory: vi.fn(),
+    searchMemories: vi.fn(),
     migrateAllSecrets: vi.fn(),
     patchAgent: vi.fn(),
     patchConnector: vi.fn(),
@@ -59,8 +63,10 @@ import {
   getSecretBackendConfig,
   getSettings,
   listAgents,
+  listChannels,
   listConnectors,
   listDestinations,
+  listMemories,
   listProviders,
   listRoutes,
   listSecretBackends,
@@ -108,7 +114,9 @@ beforeEach(() => {
   vi.mocked(listRoutes).mockResolvedValue([])
   vi.mocked(listConnectors).mockResolvedValue([])
   vi.mocked(listDestinations).mockResolvedValue([])
+  vi.mocked(listChannels).mockResolvedValue([])
   vi.mocked(listAgents).mockResolvedValue([])
+  vi.mocked(listMemories).mockResolvedValue([])
   vi.mocked(listSecretRefs).mockResolvedValue([])
   vi.mocked(listSecretBackends).mockResolvedValue([
     { backend: 'db', configured: true, default: true },
@@ -157,8 +165,8 @@ describe('Settings pages accessibility', () => {
     expect(results.violations).toEqual([])
   })
 
-  it('has no axe violations on the agents page', async () => {
-    const { container } = renderPage('/settings/agents')
+  it('has no axe violations on the memory page', async () => {
+    const { container } = renderPage('/settings/memory')
     await screen.findByRole('heading', { level: 1 })
     expectSingleH1()
     const results = await axe.run(container, axeOptions)

@@ -36,6 +36,10 @@
       "label": "Knowledge"
     },
     {
+      "path": "/login",
+      "label": "Login"
+    },
+    {
       "path": "/memory/*",
       "label": "Memory"
     },
@@ -67,6 +71,10 @@
     {
       "path": "/settings/*",
       "label": "Settings"
+    },
+    {
+      "path": "/setup",
+      "label": "Setup"
     },
     {
       "path": "/welcome",
@@ -132,12 +140,14 @@
     "Features",
     "Home",
     "Knowledge",
+    "Login",
     "Memory",
     "Missions",
     "Providers",
     "Routing",
     "Secrets",
     "Settings",
+    "Setup",
     "Welcome"
   ]
 }

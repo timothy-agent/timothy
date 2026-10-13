@@ -205,9 +205,9 @@ describe('Memory', () => {
 
   function renderMemory() {
     return render(
-      <MemoryRouter initialEntries={['/memory']}>
+      <MemoryRouter initialEntries={['/settings/memory']}>
         <Routes>
-          <Route path="/memory/*" element={<Memory />} />
+          <Route path="/settings/memory/*" element={<Memory />} />
         </Routes>
       </MemoryRouter>,
     )

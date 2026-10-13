@@ -39,11 +39,11 @@ function renderAt(initialEntry: string) {
 }
 
 describe('Sidebar nav', () => {
-  it('lists Knowledge directly above Memory', async () => {
+  it('lists Agents directly after Automations', async () => {
     renderAt('/')
     const links = await screen.findAllByRole('link')
-    const labels = links.map((l) => l.textContent).filter((t) => t === 'Knowledge' || t === 'Memory')
-    expect(labels).toEqual(['Knowledge', 'Memory'])
+    const labels = links.map((l) => l.textContent).filter((t) => t === 'Automations' || t === 'Agents')
+    expect(labels).toEqual(['Automations', 'Agents'])
   })
 
   it('lists Automations directly below Missions', async () => {
@@ -130,9 +130,15 @@ describe('Settings sidebar submenu', () => {
   })
 
   it('is collapsed by default off a settings route', () => {
-    renderAt('/memory')
+    renderAt('/chat')
     const sidebar = document.querySelector('[data-sidebar="sidebar"]') as HTMLElement
     expect(within(sidebar).queryByRole('link', { name: 'Providers' })).toBeNull()
+  })
+
+  it('lists Memory under the Settings submenu', async () => {
+    renderAt('/settings/memory')
+    const sidebar = document.querySelector('[data-sidebar="sidebar"]') as HTMLElement
+    expect(await within(sidebar).findByRole('link', { name: 'Memory' })).toBeTruthy()
   })
 })
 
@@ -144,7 +150,7 @@ describe('Help', () => {
 
   it('lists the help actions in the command palette', async () => {
     Element.prototype.scrollIntoView = vi.fn()
-    renderAt('/memory')
+    renderAt('/settings/memory')
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('Help')).toBeInTheDocument()

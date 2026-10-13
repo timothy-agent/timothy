@@ -194,7 +194,7 @@ export function Home() {
         </button>
         <button
           type="button"
-          onClick={() => navigate('/memory')}
+          onClick={() => navigate('/settings/memory')}
           className="group flex flex-col items-center gap-2"
         >
           <span className="relative flex size-11 items-center justify-center rounded-md border border-transparent text-muted-foreground transition group-hover:border-border group-hover:bg-muted">

@@ -11,10 +11,7 @@ import { Form, FormActions } from '../timothy/field'
 import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { AgentForm, useAgentEditForm } from './AgentForm'
-import { settingsArea } from './settingsAreas'
 import { errText } from '../../lib/errors'
-
-const area = settingsArea('agents')
 
 export function AgentEdit() {
   const { id } = useParams()
@@ -38,7 +35,7 @@ export function AgentEdit() {
     void refresh()
   }, [refresh])
 
-  if (agent === null) return <Navigate to="/settings/agents" replace />
+  if (agent === null) return <Navigate to="/agents" replace />
   if (agent === undefined) return null
 
   return <AgentEditForm key={agent.id} initialAgent={agent} routes={routes} refresh={refresh} />
@@ -93,7 +90,7 @@ function AgentEditForm({
     try {
       await deleteAgent(agent.id)
       toast.success('Agent removed', { description: `${agent.name} no longer serves sessions.` })
-      navigate('/settings/agents')
+      navigate('/agents')
     } catch (err) {
       toast.error('Could not remove agent', { description: errText(err) })
       setConfirmDelete(false)
@@ -106,8 +103,7 @@ function AgentEditForm({
         title={agent.name}
         description={agent.is_default ? 'Default agent' : 'Agent'}
         breadcrumbs={[
-          { label: 'Settings', href: '/settings' },
-          { label: area.label, href: '/settings/agents' },
+          { label: 'Agents', href: '/agents' },
           { label: agent.name },
         ]}
         actions={

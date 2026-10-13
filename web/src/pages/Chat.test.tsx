@@ -158,6 +158,7 @@ describe('Chat route picker', () => {
 
     await screen.findByRole('button', { name: 'Agent, route and model' })
     openMenu('Agent, route and model')
+    fireEvent.click(await screen.findByRole('button', { name: 'Route' }))
     fireEvent.click(await screen.findByText('summarize'))
 
     const input = screen.getByLabelText('Message')
@@ -643,6 +644,7 @@ describe('session knowledge', () => {
     expect(screen.queryByText('#papers')).toBeNull()
 
     openMenu('Agent, route and model')
+    fireEvent.click(await screen.findByRole('button', { name: 'Agent' }))
     fireEvent.click(await screen.findByText('research'))
 
     await screen.findByText('#papers')

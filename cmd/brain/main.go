@@ -25,6 +25,7 @@ import (
 	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/api"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
+	"github.com/SumonMSelim/timothy/internal/brain/auth"
 	"github.com/SumonMSelim/timothy/internal/brain/automations"
 	"github.com/SumonMSelim/timothy/internal/brain/channels"
 	"github.com/SumonMSelim/timothy/internal/brain/chat"
@@ -120,6 +121,8 @@ const (
 func main() {
 	healthcheck := flag.Bool("healthcheck", false,
 		"probe /health and exit; used as the container health check")
+	resetPassword := flag.String("reset-password", "",
+		"generate a one-time recovery token for the specified user email")
 	flag.Parse()
 	if *healthcheck {
 		os.Exit(service.ProbeHealth(defaultPort))
@@ -136,13 +139,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	authStore := auth.NewStore(app.DB, app.Log)
+
+	if *resetPassword != "" {
+		token, err := authStore.GenerateRecoveryToken(ctx, *resetPassword)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to generate recovery token: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Recovery token generated for %s:\n\n  %s\n\nValid for 15 minutes. Use via the UI password reset screen or POST /v1/auth/reset-password.\n", *resetPassword, token)
+		os.Exit(0)
+	}
+
+	var authKeyPair *auth.KeyPair
+	if masterKey, err := secretstore.DecodeMasterKey(os.Getenv(secretstore.MasterKeyEnv)); err != nil {
+		app.Log.Warn("TIMOTHY_MASTER_KEY not set or invalid; asymmetric JWT cookie authentication disabled", "error", err)
+	} else if kp, err := auth.DeriveKeyPair(masterKey); err != nil {
+		app.Log.Warn("failed to derive auth key pair", "error", err)
+	} else {
+		authKeyPair = kp
+	}
+
 	token := os.Getenv("TIMOTHY_API_TOKEN")
-	if token == "" {
-		app.Log.Warn("TIMOTHY_API_TOKEN not set; API requests will be rejected")
+	if token == "" && authKeyPair == nil {
+		app.Log.Warn("neither TIMOTHY_API_TOKEN nor TIMOTHY_MASTER_KEY set; API requests will be rejected")
 	}
 	app.AddCheck("auth", func() httpserver.Check {
-		if token == "" {
-			return httpserver.Check{Status: "degraded", Detail: "TIMOTHY_API_TOKEN not set"}
+		if token == "" && authKeyPair == nil {
+			return httpserver.Check{Status: "degraded", Detail: "neither TIMOTHY_API_TOKEN nor TIMOTHY_MASTER_KEY set"}
 		}
 		return httpserver.Check{Status: "ok"}
 	})
@@ -1194,7 +1218,8 @@ func main() {
 		memoryProxy(memorydURL, app.Log), adminProxy(gatewayURL, usageDecorator.Decorate, app.Log), flags, fxStore,
 		agentReg, conns, goog, msft, mcpAuth, openrouterAuth, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
 		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
-		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags))
+		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags),
+		authStore, authKeyPair)
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)

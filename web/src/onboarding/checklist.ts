@@ -62,7 +62,7 @@ export function buildChecklist(readiness: Readiness, progress: OnboardingProgres
       key: 'memory',
       title: 'See what Timothy remembers',
       why: 'Review what it learned and correct it.',
-      to: '/memory',
+      to: '/settings/memory',
       done: visited.includes('memory'),
     },
     {

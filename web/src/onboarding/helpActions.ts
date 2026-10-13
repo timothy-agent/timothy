@@ -16,8 +16,9 @@ export function tourPageFor(pathname: string): string | null {
   if (p === '/missions') return 'missions'
   if (p === '/automations') return 'automations'
   if (p === '/knowledge') return 'knowledge'
-  if (under('/memory')) return 'memory'
+  if (under('/settings/memory') || under('/memory')) return 'memory'
   if (p === '/analytics') return 'analytics'
+  if (under('/agents')) return null
   if (under('/settings')) return 'settings'
   return null
 }

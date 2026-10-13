@@ -1,8 +1,8 @@
-import { Brain, ChartColumn, ChevronRight, House, KeyRound, Library, MessageCircle, Moon, Repeat, Rocket, Search, Settings as SettingsIcon, Sun } from 'lucide-react'
+import { Bot, ChartColumn, ChevronRight, House, KeyRound, Library, LogOut, MessageCircle, Moon, Repeat, Rocket, Search, Settings as SettingsIcon, Sun } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router'
 import { toast, Toaster } from 'sonner'
-import { backendVersion, getToken, loginExpiredMessage, subscribeLoginExpired, subscribeNeedToken } from './api/client'
+import { backendVersion, loginExpiredMessage, subscribeLoginExpired, subscribeNeedToken } from './api/client'
 import { BrandMark } from './components/BrandMark'
 import { SessionList } from './components/SessionList'
 import { SessionsProvider } from './components/SessionsProvider'
@@ -50,7 +50,8 @@ import { AutomationEditor } from './pages/AutomationEditor'
 import { Automations } from './pages/Automations'
 import { Home } from './pages/Home'
 import { Knowledge } from './pages/Knowledge'
-import { KnowledgeRedirect, Memory } from './pages/Memory'
+import { KnowledgeRedirect } from './pages/Memory'
+import { AgentsTab } from './components/settings/AgentsTab'
 import { MissionDetail } from './pages/MissionDetail'
 import { Missions } from './pages/Missions'
 import { NewMission } from './pages/NewMission'
@@ -64,6 +65,9 @@ import { Research } from './pages/Research'
 import { Settings, settingsAreas } from './pages/Settings'
 import { DesignSystem } from './pages/DesignSystem'
 import { Welcome } from './pages/Welcome'
+import { AuthProvider, useAuth } from './lib/auth'
+import { Login } from './pages/Login'
+import { Setup } from './pages/Setup'
 
 // Analytics pulls in ECharts (a large dependency), so it stays a
 // lazily-loaded chunk rather than bundling into the initial app load.
@@ -74,8 +78,8 @@ const nav = [
   { label: 'Chat', href: '/chat', icon: MessageCircle },
   { label: 'Missions', href: '/missions', icon: Rocket },
   { label: 'Automations', href: '/automations', icon: Repeat },
+  { label: 'Agents', href: '/agents', icon: Bot },
   { label: 'Knowledge', href: '/knowledge', icon: Library },
-  { label: 'Memory', href: '/memory', icon: Brain },
   { label: 'Analytics', href: '/analytics', icon: ChartColumn },
   { label: 'Settings', href: '/settings', icon: SettingsIcon },
 ]
@@ -88,6 +92,7 @@ function isActive(pathname: string, href: string): boolean {
   if (href === '/chat') return pathname === '/chat' || pathname.startsWith('/chat/')
   if (href === '/missions') return pathname === '/missions' || pathname.startsWith('/missions/')
   if (href === '/automations') return pathname === '/automations' || pathname.startsWith('/automations/')
+  if (href === '/agents') return pathname === '/agents' || pathname.startsWith('/agents/')
   if (href === '/knowledge') return pathname === '/knowledge' || pathname.startsWith('/knowledge/')
   if (href === '/settings') return pathname.startsWith('/settings')
   return pathname === href
@@ -142,6 +147,7 @@ function AppSidebar({
 }) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
+  const { user, handleLogout } = useAuth()
   const { state: sidebarState, isMobile } = useSidebar()
   const ThemeIcon = themeIcon[theme]
   // Settings starts expanded when the app loads into a settings route
@@ -202,13 +208,21 @@ function AppSidebar({
                               isActive={pathname.startsWith(`/settings/${area.key}`)}
                               data-tour={`settings.${area.key}`}
                             >
-                              <Link to={`/settings/${area.key}`}>
+                              <Link to={`/settings/${area.key}`} className="flex w-full items-center gap-2">
                                 <span>{area.label}</span>
+                                {area.key === 'memory' && pendingMemories > 0 && (
+                                  <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-md bg-sidebar-accent px-1 text-xs font-medium tabular-nums">
+                                    {pendingMemories}
+                                  </span>
+                                )}
                               </Link>
                             </SidebarMenuSubButton>
                           </SidebarMenuSubItem>
                         ))}
                       </SidebarMenuSub>
+                    )}
+                    {!settingsOpen && pendingMemories > 0 && (
+                      <SidebarMenuBadge>{pendingMemories}</SidebarMenuBadge>
                     )}
                   </SidebarMenuItem>
                 ) : (
@@ -222,9 +236,6 @@ function AppSidebar({
                         <span>{item.label}</span>
                       </Link>
                     </SidebarMenuButton>
-                    {item.href === '/memory' && pendingMemories > 0 && (
-                      <SidebarMenuBadge>{pendingMemories}</SidebarMenuBadge>
-                    )}
                     {item.href === '/chat' && pendingPermissions > 0 && (
                       <SidebarMenuBadge>{pendingPermissions}</SidebarMenuBadge>
                     )}
@@ -255,6 +266,14 @@ function AppSidebar({
               <span>API token</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          {user && (
+            <SidebarMenuItem>
+              <SidebarMenuButton onClick={handleLogout} tooltip={`Sign out (${user.username})`}>
+                <LogOut />
+                <span>Sign out</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
           <SidebarMenuItem>
             <SidebarMenuButton asChild tooltip="View on GitHub">
               <a href="https://github.com/timothy-agent/timothy" target="_blank" rel="noreferrer">
@@ -399,6 +418,26 @@ function WelcomeRedirect() {
   return null
 }
 
+// AuthRedirect routes users to /setup or /login when unauthenticated,
+// and redirects authenticated users back to the app from auth pages.
+function AuthRedirect() {
+  const { setupRequired, authenticated } = useAuth()
+  const { pathname } = useLocation()
+  const navigate = useNavigate()
+
+  useEffect(() => {
+    if (setupRequired && pathname !== '/setup') {
+      navigate('/setup', { replace: true })
+    } else if (!setupRequired && !authenticated && pathname !== '/login') {
+      navigate('/login', { replace: true })
+    } else if (authenticated && (pathname === '/login' || pathname === '/setup')) {
+      navigate('/', { replace: true })
+    }
+  }, [setupRequired, authenticated, pathname, navigate])
+
+  return null
+}
+
 function App() {
   const [tokenOpen, setTokenOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -407,10 +446,6 @@ function App() {
   const pendingPermissions = usePendingPermissions()
   const navigate = useNavigate()
   const { pathname } = useLocation()
-
-  useEffect(() => {
-    if (getToken() === '') setTokenOpen(true)
-  }, [])
 
   useEffect(() => {
     let lastToast = 0
@@ -503,19 +538,25 @@ function App() {
 
   return (
     <TooltipProvider delayDuration={300}>
-      <SessionsProvider>
-        <OnboardingProvider>
-          <LogoSprite />
-          <ConnectorLogoSprite />
-          <Toaster richColors closeButton theme={theme} />
-          <WelcomeRedirect />
-          {pathname === '/welcome' ? (
-            <>
-              <Welcome />
-              <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
-            </>
-          ) : (
-            <SidebarProvider className="min-h-dvh">
+      <AuthProvider>
+        <SessionsProvider>
+          <OnboardingProvider>
+            <LogoSprite />
+            <ConnectorLogoSprite />
+            <Toaster richColors closeButton theme={theme} />
+            <AuthRedirect />
+            <WelcomeRedirect />
+            {pathname === '/setup' ? (
+              <Setup />
+            ) : pathname === '/login' ? (
+              <Login />
+            ) : pathname === '/welcome' ? (
+              <>
+                <Welcome />
+                <SettingsDialog open={tokenOpen} onClose={() => setTokenOpen(false)} />
+              </>
+            ) : (
+              <SidebarProvider className="min-h-dvh">
               <AppSidebar
                 pendingMemories={pendingMemories}
                 pendingPermissions={pendingPermissions.filter((p) => p.origin_kind === 'chat').length}
@@ -571,9 +612,10 @@ function App() {
                     <Route path="/automations/new" element={<AutomationEditor mode="create" />} />
                     <Route path="/automations/:id/edit" element={<AutomationEditor mode="edit" />} />
                     <Route path="/automations/:id" element={<AutomationDetail />} />
+                    <Route path="/agents/*" element={<AgentsTab />} />
                     <Route path="/knowledge/*" element={<Knowledge />} />
                     <Route path="/memory/knowledge/*" element={<KnowledgeRedirect />} />
-                    <Route path="/memory/*" element={<Memory />} />
+                    <Route path="/memory/*" element={<Navigate to="/settings/memory" replace />} />
                     <Route path="/settings/*" element={<Settings />} />
                     {/* Old bookmark: Settings lived at one page with ?tab= before sub-routes. */}
                     <Route path="/settings" element={<Navigate to="/settings/providers" replace />} />
@@ -587,7 +629,8 @@ function App() {
           <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
         </OnboardingProvider>
       </SessionsProvider>
-    </TooltipProvider>
+    </AuthProvider>
+  </TooltipProvider>
   )
 }
 

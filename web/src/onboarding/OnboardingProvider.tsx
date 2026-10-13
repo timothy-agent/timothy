@@ -2,20 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation } from 'react-router'
 import { errorText, getOnboarding, getToken, patchOnboarding, subscribeTokenChanged } from '../api/client'
 import type { OnboardingProgress, OnboardingProgressPatch, Readiness } from '../api/types'
+import { useAuth } from '../lib/auth'
 import { OnboardingContext } from './context'
 
 export function OnboardingProvider({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation()
+  const { authenticated } = useAuth()
   const [readiness, setReadiness] = useState<Readiness | null>(null)
   const [progress, setProgress] = useState<OnboardingProgress>({})
-  const [loading, setLoading] = useState(() => getToken() !== '')
+  const [loading, setLoading] = useState(() => getToken() !== '' || authenticated)
   const [error, setError] = useState<string | null>(null)
   const inFlight = useRef(false)
 
-  // No token yet: skip, a 401 would reopen the token dialog in a loop.
+  // No token/cookie yet: skip, a 401 would reopen the token dialog in a loop.
   // loading covers the first fetch only; later ones refresh in place.
   const refresh = useCallback(async () => {
-    if (inFlight.current || !getToken()) return
+    if (inFlight.current || (!getToken() && !authenticated)) return
     inFlight.current = true
     try {
       const o = await getOnboarding()
@@ -28,7 +30,7 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
       inFlight.current = false
       setLoading(false)
     }
-  }, [])
+  }, [authenticated])
 
   const updateProgress = useCallback(async (patch: OnboardingProgressPatch) => {
     setProgress(await patchOnboarding(patch))

@@ -63,36 +63,36 @@ describe('HelpMenu', () => {
   it('restarts the current page tour', () => {
     const onRestart = vi.fn()
     window.addEventListener('timothy:tour-restart', onRestart)
-    const updateProgress = renderMenu('/memory')
+    const updateProgress = renderMenu('/settings/memory')
     const restart = item("Restart this page's tour")
     expect(restart).not.toHaveAttribute('aria-disabled')
     fireEvent.click(restart)
     expect(updateProgress).toHaveBeenCalledWith({ tours_seen: { memory: 0 } })
     expect(onRestart).toHaveBeenCalledOnce()
     expect((onRestart.mock.calls[0][0] as CustomEvent).detail).toBe('memory')
-    expect(where()).toHaveTextContent('/memory')
+    expect(where()).toHaveTextContent('/settings/memory')
     window.removeEventListener('timothy:tour-restart', onRestart)
   })
 
   it('reopens the setup checklist on home', async () => {
-    const updateProgress = renderMenu('/memory')
+    const updateProgress = renderMenu('/settings/memory')
     fireEvent.click(item('Setup checklist'))
     expect(updateProgress).toHaveBeenCalledWith({ checklist_dismissed: false })
     await waitFor(() => expect(where()).toHaveTextContent(/^\/$/))
   })
 
   it('restarts the welcome wizard', async () => {
-    const updateProgress = renderMenu('/memory')
+    const updateProgress = renderMenu('/settings/memory')
     fireEvent.click(item('Restart welcome'))
     expect(updateProgress).toHaveBeenCalledWith({ wizard: 'pending' })
     await waitFor(() => expect(where()).toHaveTextContent('/welcome'))
   })
 
   it('opens chat with a draft naming the current page', async () => {
-    renderMenu('/memory')
+    renderMenu('/settings/memory')
     fireEvent.click(item('Ask Timothy about this page'))
     await waitFor(() => expect(where()).toHaveTextContent('/chat'))
-    expect(screen.getByTestId('draft')).toHaveTextContent('How do I use this page: /memory?')
+    expect(screen.getByTestId('draft')).toHaveTextContent('How do I use this page: /settings/memory?')
   })
 
   it('links the docs site in a new tab', () => {

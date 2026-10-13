@@ -4,12 +4,10 @@ import { DestinationKindIcon } from './DestinationKindIcon'
 
 afterEach(cleanup)
 
-// lucide stamps a `lucide-<kebab-name>` class on every glyph it
-// renders, so asserting on it pins which icon a kind maps to.
 describe('DestinationKindIcon', () => {
-  it('renders the mail glyph for an email destination', () => {
+  it('renders a Gmail image tile for an email destination', () => {
     const { container } = render(<DestinationKindIcon kind="email" />)
-    expect(container.querySelector('.lucide-mail')).toBeInTheDocument()
+    expect(container.querySelector('img')).toBeInTheDocument()
   })
 
   it('renders the globe glyph for a webhook destination', () => {
@@ -37,8 +35,8 @@ describe('DestinationKindIcon', () => {
     expect(container.querySelector('use')).toHaveAttribute('href', '#clogo-gitlab')
   })
 
-  it('passes the size class through to the rendered glyph', () => {
+  it('passes the size class through to the brand tile', () => {
     const { container } = render(<DestinationKindIcon kind="email" className="size-8" />)
-    expect(container.querySelector('.lucide-mail')).toHaveClass('size-8')
+    expect(container.firstElementChild).toHaveClass('size-8')
   })
 })

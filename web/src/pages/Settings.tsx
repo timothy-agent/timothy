@@ -1,6 +1,5 @@
 import type { ComponentType } from 'react'
 import { Navigate, Route, Routes, useParams } from 'react-router'
-import { AgentsTab } from '../components/settings/AgentsTab'
 import { ChannelsTab } from '../components/settings/ChannelsTab'
 import { ConnectorsTab } from '../components/settings/ConnectorsTab'
 import { CredentialsTab } from '../components/settings/CredentialsTab'
@@ -14,6 +13,7 @@ import { settingsAreas, type SettingsAreaKey } from '../components/settings/sett
 import { TourOverlay } from '../onboarding/tour/TourOverlay'
 import { useTour } from '../onboarding/tour/useTour'
 import { settingsTour } from '../onboarding/tours/settings'
+import { Memory } from './Memory'
 
 export { settingsAreas }
 
@@ -24,12 +24,12 @@ export { settingsAreas }
 const areaComponents: Record<SettingsAreaKey, ComponentType> = {
   providers: ProvidersTab,
   connectors: ConnectorsTab,
-  agents: AgentsTab,
   routes: RoutesTab,
   secrets: SecretsTab,
   credentials: CredentialsTab,
   destinations: DestinationsTab,
   channels: ChannelsTab,
+  memory: Memory,
   features: FeaturesTab,
 }
 
@@ -55,6 +55,13 @@ function KnowledgeRedirect() {
   return <Navigate to={`/knowledge${rest ? `/${rest}` : ''}`} replace />
 }
 
+// AgentsRedirect keeps old /settings/agents(/...) links working after
+// Agents moved to its own top-level page.
+function AgentsRedirect() {
+  const { '*': rest } = useParams()
+  return <Navigate to={`/agents${rest ? `/${rest}` : ''}`} replace />
+}
+
 export function Settings() {
   const tour = useTour(settingsTour, { enabled: true })
   return (
@@ -62,6 +69,7 @@ export function Settings() {
       <Routes>
         <Route path="/" element={<Navigate to="providers" replace />} />
         <Route path="knowledge/*" element={<KnowledgeRedirect />} />
+        <Route path="agents/*" element={<AgentsRedirect />} />
         {settingsAreas.map((area) => (
           <Route key={area.key} path={`${area.key}/*`} element={<SettingsPage area={area} />} />
         ))}

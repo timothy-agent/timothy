@@ -36,7 +36,7 @@ function renderHome() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/chat" element={<ChatProbe />} />
-        <Route path="/memory" element={<div>memory page</div>} />
+        <Route path="/settings/memory" element={<div>memory page</div>} />
         <Route path="/research" element={<div>research page</div>} />
         <Route path="/analytics" element={<div>analytics page</div>} />
         <Route path="/missions" element={<div>missions page</div>} />
@@ -115,6 +115,7 @@ describe('Home', () => {
 
     await screen.findByRole('button', { name: 'Agent, route and model' })
     openMenu('Agent, route and model')
+    fireEvent.click(await screen.findByRole('button', { name: 'Route' }))
     fireEvent.click(await screen.findByText('summarize'))
 
     const input = screen.getByLabelText('Message')
