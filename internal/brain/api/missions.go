@@ -1103,6 +1103,44 @@ type executorOption struct {
 	ProviderName string `json:"provider_name,omitempty"`
 	Model        string `json:"model,omitempty"`
 	Reason       string `json:"reason,omitempty"`
+	// Connections lists the harness's own kind='cli' provider rows
+	// (one subscription each) when more than one resolves, so the
+	// Harness select can offer each row instead of the kind alone
+	// (issue #1237). Picking one pins route_model to that row.
+	Connections []executorConnection `json:"connections,omitempty"`
+}
+
+// executorConnection is one kind='cli' provider row behind a harness:
+// Pin is the route_model value ("provider name/model") that selects it.
+type executorConnection struct {
+	ProviderName string `json:"provider_name"`
+	Model        string `json:"model"`
+	Pin          string `json:"pin"`
+	Usable       bool   `json:"usable"`
+	SkipReason   string `json:"skip_reason,omitempty"`
+}
+
+// cliConnections returns entries' kind='cli' rows for harness as
+// connections, or nil when fewer than two resolve: a single row needs
+// no per-row choice.
+func cliConnections(harness string, entries []gwclient.ResolvedRouteEntry) []executorConnection {
+	var out []executorConnection
+	for _, e := range entries {
+		if e.Kind != "cli" || e.Driver != harness {
+			continue
+		}
+		out = append(out, executorConnection{
+			ProviderName: e.ProviderName,
+			Model:        e.Model,
+			Pin:          e.ProviderName + "/" + e.Model,
+			Usable:       e.Usable,
+			SkipReason:   e.SkipReason,
+		})
+	}
+	if len(out) < 2 {
+		return nil
+	}
+	return out
 }
 
 // executorOptions serves GET /v1/missions/executor-options?route=<name>,
@@ -1147,6 +1185,7 @@ func (h *missionAPI) executorOptions(w http.ResponseWriter, r *http.Request) {
 					break
 				}
 			}
+			opt.Connections = cliConnections(harness, resolved.Entries)
 		}
 		options = append(options, opt)
 	}

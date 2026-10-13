@@ -928,6 +928,74 @@ describe('MissionForm: harness select placement', () => {
   })
 })
 
+describe('MissionForm: harness select lists CLI connections (issue #1237)', () => {
+  const cursorOptions = [
+    {
+      harness: 'cursor-cli',
+      usable: true,
+      provider_name: 'Cursor - a',
+      model: 'grok-4.7',
+      connections: [
+        { provider_name: 'Cursor - a', model: 'grok-4.7', pin: 'Cursor - a/grok-4.7', usable: true },
+        { provider_name: 'Cursor - b', model: 'grok-4.6', pin: 'Cursor - b/grok-4.6', usable: true },
+      ],
+    },
+  ]
+
+  it('offers one item per connection instead of the kind', async () => {
+    vi.mocked(getMissionExecutorOptions).mockResolvedValue(cursorOptions)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    await waitFor(() => expect(getMissionExecutorOptions).toHaveBeenCalled())
+    fireEvent.click(screen.getByLabelText('Harness'))
+
+    expect(await screen.findByText('Cursor CLI - Cursor - a')).toBeInTheDocument()
+    expect(screen.getByText('Cursor CLI - Cursor - b')).toBeInTheDocument()
+    expect(screen.queryByText('Cursor CLI')).toBeNull()
+  })
+
+  it('submits the harness and the picked row as route_model', async () => {
+    vi.mocked(getMissionExecutorOptions).mockResolvedValue(cursorOptions)
+    vi.mocked(createMission).mockResolvedValue({ id: 'm8' } as Mission)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    await waitFor(() => expect(getMissionExecutorOptions).toHaveBeenCalled())
+    fireEvent.click(screen.getByLabelText('Harness'))
+    fireEvent.click(await screen.findByText('Cursor CLI - Cursor - b'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(
+        expect.objectContaining({ harness: 'cursor-cli', route_model: 'Cursor - b/grok-4.6' }),
+      ),
+    )
+  })
+
+  it('drops the row pin when a plain harness is picked afterwards', async () => {
+    vi.mocked(getMissionExecutorOptions).mockResolvedValue(cursorOptions)
+    vi.mocked(createMission).mockResolvedValue({ id: 'm9' } as Mission)
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'g' } })
+    fireEvent.click(await screen.findByText('General · scratch workspace'))
+    await waitFor(() => expect(getMissionExecutorOptions).toHaveBeenCalled())
+    fireEvent.click(screen.getByLabelText('Harness'))
+    fireEvent.click(await screen.findByText('Cursor CLI - Cursor - b'))
+    fireEvent.click(screen.getByLabelText('Harness'))
+    fireEvent.click(await screen.findByText('Claude Code'))
+    fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
+
+    await waitFor(() =>
+      expect(createMission).toHaveBeenCalledWith(expect.objectContaining({ harness: 'claude-cli' })),
+    )
+    expect(vi.mocked(createMission).mock.calls[0][0].route_model).toBeUndefined()
+  })
+})
+
 describe('MissionForm: one sandbox image (D-141)', () => {
   it('has no environment select and sends no environment for a coding mission', async () => {
     vi.mocked(createMission).mockResolvedValue({ id: 'm6' } as Mission)
@@ -1627,10 +1695,10 @@ describe('MissionForm: execution plan', () => {
     expect(screen.getByLabelText('Discover model')).toHaveTextContent('Autoglm-5.3')
     expect(screen.getByLabelText('Build model')).toHaveTextContent('Autosonnet-5')
     fireEvent.click(screen.getByLabelText('Discover model'))
-    expect(await screen.findByRole('option', { name: 'glm-5.3' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'GLM (Z.ai)glm-5.3' })).toBeInTheDocument()
     fireEvent.click(screen.getByLabelText('Discover model'))
     fireEvent.click(screen.getByLabelText('Build model'))
-    expect(await screen.findByRole('option', { name: 'sonnet-5' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'Anthropicsonnet-5' })).toBeInTheDocument()
     expect(screen.getByText('$0.60/$2.20 per Mtok')).toBeInTheDocument()
     expect(screen.getByText('Naming and memory extraction use the summarize route.')).toBeInTheDocument()
   })
@@ -1702,8 +1770,8 @@ describe('MissionForm: execution plan', () => {
     await screen.findByLabelText('Build model')
 
     fireEvent.click(screen.getByLabelText('Build model'))
-    fireEvent.click(await screen.findByRole('option', { name: 'sonnet-5' }))
-    expect(screen.getByLabelText('Build model')).toHaveTextContent('sonnet-5')
+    fireEvent.click(await screen.findByRole('option', { name: 'Anthropicsonnet-5' }))
+    expect(screen.getByLabelText('Build model')).toHaveTextContent('Anthropicsonnet-5')
 
     fireEvent.click(screen.getByRole('button', { name: 'Create mission' }))
     await waitFor(() =>
@@ -1770,8 +1838,8 @@ describe('MissionForm: execution plan', () => {
     await screen.findByLabelText('Build model')
 
     fireEvent.click(screen.getByLabelText('Build model'))
-    fireEvent.click(await screen.findByRole('option', { name: 'sonnet-5' }))
-    expect(screen.getByLabelText('Build model')).toHaveTextContent('sonnet-5')
+    fireEvent.click(await screen.findByRole('option', { name: 'Anthropicsonnet-5' }))
+    expect(screen.getByLabelText('Build model')).toHaveTextContent('Anthropicsonnet-5')
 
     fireEvent.click(screen.getByLabelText('Build model'))
     fireEvent.click(await screen.findByRole('option', { name: 'Autosonnet-5' }))

@@ -267,6 +267,7 @@ export function ModelPinSelect({
           return (
             <SelectItem key={value} value={value} disabled={!entry.usable} title={entry.skip_reason || undefined}>
               <ProviderLogo preset={matchPreset(entry)} className="size-4" />
+              <span className="text-muted-foreground">{entry.provider_name}</span>
               {entry.model}
               {!entry.usable && entry.skip_reason ? ` - ${entry.skip_reason}` : ''}
             </SelectItem>

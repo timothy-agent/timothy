@@ -1469,6 +1469,18 @@ export interface ExecutorOption {
   provider_name?: string
   model?: string
   reason?: string
+  // connections lists the harness's own kind='cli' provider rows when
+  // more than one resolves (issue #1237); pin is the route_model value
+  // that selects one.
+  connections?: ExecutorConnection[]
+}
+
+export interface ExecutorConnection {
+  provider_name: string
+  model: string
+  pin: string
+  usable: boolean
+  skip_reason?: string
 }
 
 export async function getMissionExecutorOptions(route?: string): Promise<ExecutorOption[]> {
