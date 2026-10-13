@@ -8,10 +8,7 @@ import { Form, FormActions } from '../timothy/field'
 import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { AgentForm, useAgentForm } from './AgentForm'
-import { settingsArea } from './settingsAreas'
 import { errText } from '../../lib/errors'
-
-const area = settingsArea('agents')
 
 export function AgentAdd() {
   const navigate = useNavigate()
@@ -40,7 +37,7 @@ export function AgentAdd() {
         enabled: true,
       })
       toast.success('Agent created', { description: `${name} is ready to serve sessions.` })
-      navigate('/settings/agents')
+      navigate('/agents')
     } catch (err) {
       toast.error('Could not create agent', { description: errText(err) })
     } finally {
@@ -54,8 +51,7 @@ export function AgentAdd() {
         title="New agent"
         description="Who serves a session: prompt, route, skill and tool allowlists, memory."
         breadcrumbs={[
-          { label: 'Settings', href: '/settings' },
-          { label: area.label, href: '/settings/agents' },
+          { label: 'Agents', href: '/agents' },
           { label: 'New agent' },
         ]}
       />
@@ -69,7 +65,7 @@ export function AgentAdd() {
         <AgentForm routes={routes} fields={fields} />
 
         <FormActions>
-          <Button type="button" variant="outline" disabled={busy} onClick={() => navigate('/settings/agents')}>
+          <Button type="button" variant="outline" disabled={busy} onClick={() => navigate('/agents')}>
             Cancel
           </Button>
           <Button type="submit" disabled={!canSubmit || busy}>

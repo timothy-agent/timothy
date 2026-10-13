@@ -15,7 +15,7 @@ describe('isAppPath', () => {
     ['/chat/abc/def', false],
     ['/settings', true],
     ['/settings/features', true],
-    ['/settings/agents/new', true],
+    ['/agents/new', true],
     ['/knowledge', true],
     ['/knowledge/a/b', true],
     ['/welcome', true],

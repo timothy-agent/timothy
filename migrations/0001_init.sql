@@ -345,6 +345,30 @@ CREATE TABLE IF NOT EXISTS entities (
     UNIQUE (type, name)
 );
 
+CREATE TABLE IF NOT EXISTS users (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    username       text UNIQUE NOT NULL,
+    email          text UNIQUE NOT NULL,
+    password_hash  text NOT NULL,
+    role           text NOT NULL DEFAULT 'admin', -- 'admin' | 'user'
+    recovery_token text,
+    recovery_exp   timestamptz,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS user_passkeys (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key_name      text NOT NULL DEFAULT 'Passkey',
+    credential_id bytea UNIQUE NOT NULL,
+    public_key    bytea NOT NULL,
+    sign_count    bigint NOT NULL DEFAULT 0,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS user_passkeys_user_idx ON user_passkeys (user_id);
+
 -- Brain-owned runtime settings (D-032): boolean feature switches and
 -- typed string knobs in one table, value as jsonb. Absent key = the
 -- built-in default (switches enabled, knobs empty): defaults live in
@@ -533,13 +557,16 @@ CREATE TABLE IF NOT EXISTS workflows (
 -- recognize a newer status must degrade safely in Go, not have
 -- Postgres reject the row.
 CREATE TABLE IF NOT EXISTS workflow_runs (
-    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    workflow_id   uuid NOT NULL REFERENCES workflows(id),
-    status        text NOT NULL DEFAULT 'running', -- running | paused | done | failed | cancelled
-    current_step  text NOT NULL DEFAULT '',
-    context       jsonb NOT NULL DEFAULT '{}',
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    updated_at    timestamptz NOT NULL DEFAULT now()
+    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    workflow_id      uuid NOT NULL REFERENCES workflows(id),
+    status           text NOT NULL DEFAULT 'running', -- running | paused | done | failed | cancelled | waiting_approval
+    current_step     text NOT NULL DEFAULT '',
+    context          jsonb NOT NULL DEFAULT '{}',
+    pending_gate     jsonb DEFAULT NULL,
+    artifacts        jsonb NOT NULL DEFAULT '{}',
+    iteration_counts jsonb NOT NULL DEFAULT '{}',
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS workflow_runs_workflow_created_idx ON workflow_runs (workflow_id, created_at DESC, id DESC);

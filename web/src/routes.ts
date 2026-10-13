@@ -16,12 +16,15 @@ export const appRoutes: { path: string; label?: string }[] = [
   { path: '/automations/new' },
   { path: '/automations/:id/edit' },
   { path: '/automations/:id' },
+  { path: '/agents/*', label: 'Agents' },
   { path: '/knowledge/*', label: 'Knowledge' },
   { path: '/memory/knowledge/*' },
-  { path: '/memory/*', label: 'Memory' },
+  { path: '/memory/*' },
   { path: '/settings/*', label: 'Settings' },
   { path: '/settings' },
   { path: '/design' },
   // Rendered outside <Routes> (App.tsx matches pathname directly).
   { path: '/welcome', label: 'Welcome' },
+  { path: '/login', label: 'Login' },
+  { path: '/setup', label: 'Setup' },
 ]

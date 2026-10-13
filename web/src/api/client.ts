@@ -211,6 +211,27 @@ export function subscribeLoginExpired(listener: () => void): () => void {
 
 export const loginExpiredMessage = 'Your login session expired. Sign in again to continue.'
 
+const authStateListeners = new Set<(status: AuthNotification) => void>()
+
+export type AuthNotification = 'setup_required' | 'unauthorized'
+
+export function subscribeAuth(listener: (status: AuthNotification) => void): () => void {
+  authStateListeners.add(listener)
+  return () => {
+    authStateListeners.delete(listener)
+  }
+}
+
+function emitAuth(status: AuthNotification) {
+  for (const listener of authStateListeners) listener(status)
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getToken()
+  if (token) return { Authorization: `Bearer ${token}` }
+  return {}
+}
+
 // apiFetch is fetch with redirects surfaced instead of followed: brain
 // never redirects, so any redirect is an auth proxy sending the call to
 // a cross-origin login page, which the browser would otherwise report
@@ -226,7 +247,14 @@ export async function apiFetch(input: string, init: RequestInit = {}): Promise<R
 }
 
 function failChat(status: number, message: string, code?: string, sessionId?: string): never {
-  if (status === 401 || code === 'auth_not_configured') emitNeedToken()
+  if (status === 401 || code === 'auth_not_configured') {
+    if (code === 'setup_required') {
+      emitAuth('setup_required')
+    } else {
+      emitAuth('unauthorized')
+    }
+    emitNeedToken()
+  }
   throw new ChatError(status, message, code, sessionId)
 }
 
@@ -328,9 +356,10 @@ async function postSSE(
 ): Promise<void> {
   const res = await apiFetch(url, {
     method: 'POST',
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${getToken()}`,
+      ...authHeaders(),
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
     signal,
@@ -369,10 +398,11 @@ async function postSSE(
 // structured errors.
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await apiFetch(path, {
+    credentials: 'same-origin',
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${getToken()}`,
+      ...authHeaders(),
       ...init.headers,
     },
   })
@@ -2011,3 +2041,68 @@ export async function backendVersion(): Promise<string> {
     return ''
   }
 }
+
+export interface AuthUser {
+  sub: string
+  username: string
+  email: string
+  role: string
+}
+
+export interface AuthStatus {
+  setup_required: boolean
+  authenticated: boolean
+  user: AuthUser | null
+}
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  const res = await apiFetch('/v1/auth/status', { credentials: 'same-origin' })
+  if (!res.ok) {
+    throw new ChatError(res.status, 'failed to fetch auth status')
+  }
+  return (await res.json()) as AuthStatus
+}
+
+export async function setupAdmin(username: string, email: string, password: string): Promise<void> {
+  const res = await apiFetch('/v1/auth/setup', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, email, password }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ChatError(res.status, body.message || 'setup failed', body.error)
+  }
+}
+
+export async function login(usernameOrEmail: string, password: string): Promise<void> {
+  const res = await apiFetch('/v1/auth/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: usernameOrEmail, password }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ChatError(res.status, body.message || 'login failed', body.error)
+  }
+}
+
+export async function logout(): Promise<void> {
+  await apiFetch('/v1/auth/logout', { method: 'POST', credentials: 'same-origin' })
+}
+
+export async function resetPasswordWithToken(token: string, newPassword: string): Promise<void> {
+  const res = await apiFetch('/v1/auth/reset-password', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token, new_password: newPassword }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ChatError(res.status, body.message || 'password reset failed', body.error)
+  }
+}
+

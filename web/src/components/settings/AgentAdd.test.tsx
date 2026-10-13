@@ -28,10 +28,10 @@ beforeEach(() => {
 
 function renderAdd() {
   return render(
-    <MemoryRouter initialEntries={['/settings/agents/new']}>
+    <MemoryRouter initialEntries={['/agents/new']}>
       <Routes>
-        <Route path="/settings/agents/new" element={<AgentAdd />} />
-        <Route path="/settings/agents" element={<div>agents list</div>} />
+        <Route path="/agents/new" element={<AgentAdd />} />
+        <Route path="/agents" element={<div>agents list</div>} />
       </Routes>
     </MemoryRouter>,
   )

@@ -110,11 +110,11 @@ const pendingMemory: MemoryItem = {
   created_at: '2026-07-11T10:00:00Z',
 }
 
-function renderPage(initialEntry = '/memory') {
+function renderPage(initialEntry = '/settings/memory') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
-        <Route path="/memory/*" element={<Memory />} />
+        <Route path="/settings/memory/*" element={<Memory />} />
       </Routes>
     </MemoryRouter>,
   )

@@ -49,9 +49,9 @@ beforeEach(() => {
 
 function renderEdit(id = 'a1') {
   return render(
-    <MemoryRouter initialEntries={[`/settings/agents/${id}`]}>
+    <MemoryRouter initialEntries={[`/agents/${id}`]}>
       <Routes>
-        <Route path="/settings/agents/:id" element={<AgentEdit />} />
+        <Route path="/agents/:id" element={<AgentEdit />} />
       </Routes>
     </MemoryRouter>,
   )
@@ -241,9 +241,9 @@ describe('AgentEdit', () => {
 
   it('redirects away and renders nothing when the agent id is not found', async () => {
     render(
-      <MemoryRouter initialEntries={['/settings/agents/missing']}>
+      <MemoryRouter initialEntries={['/agents/missing']}>
         <Routes>
-          <Route path="/settings/agents/:id" element={<AgentEdit />} />
+          <Route path="/agents/:id" element={<AgentEdit />} />
         </Routes>
       </MemoryRouter>,
     )

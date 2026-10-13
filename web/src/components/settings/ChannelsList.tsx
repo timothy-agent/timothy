@@ -1,10 +1,7 @@
-import { Mail } from 'lucide-react'
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { deleteChannel, listAgents, listChannels, patchChannel, testChannel } from '../../api/client'
 import type { AdminAgent, Channel } from '../../api/types'
-import { SlackIcon } from '../icons/SlackIcon'
-import { TelegramIcon } from '../icons/TelegramIcon'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Switch } from '../ui/switch'
@@ -13,6 +10,7 @@ import { EmptyState } from '../timothy/empty-state'
 import { PageHeader, SectionHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { AddPresetTile } from './AddPresetTile'
+import { ChannelKindLogo } from './ChannelKindLogo'
 import { EntityCard } from './EntityCard'
 import { channelAgentLabel } from './channelAgent'
 import { settingsArea } from './settingsAreas'
@@ -20,12 +18,6 @@ import { TestStatus } from './TestStatus'
 import { errText } from '../../lib/errors'
 
 const area = settingsArea('channels')
-
-function channelTile(kind: Channel['kind']): ReactNode {
-  if (kind === 'slack') return <SlackIcon className="size-9" />
-  if (kind === 'email') return <Mail className="size-9" />
-  return <TelegramIcon className="size-9" />
-}
 
 export function ChannelsList() {
   const [channels, setChannels] = useState<Channel[]>([])
@@ -81,19 +73,19 @@ export function ChannelsList() {
               to="/settings/channels/new"
               title="Telegram"
               description="Chat with Timothy through a Telegram bot."
-              tile={<TelegramIcon className="size-9" />}
+              tile={<ChannelKindLogo kind="telegram" />}
             />
             <AddPresetTile
               to="/settings/channels/new?kind=slack"
               title="Slack"
               description="Chat with Timothy through a Slack app."
-              tile={<SlackIcon className="size-9" />}
+              tile={<ChannelKindLogo kind="slack" />}
             />
             <AddPresetTile
               to="/settings/channels/new?kind=email"
               title="Email"
               description="Chat with Timothy by email over an IMAP connector."
-              tile={<Mail className="size-9" />}
+              tile={<ChannelKindLogo kind="email" />}
             />
           </div>
         </section>
@@ -146,7 +138,7 @@ function ChannelCard({ channel, agents, onChanged }: { channel: Channel; agents:
       <EntityCard
         to={`/settings/channels/${channel.id}`}
         title={channel.name}
-        tile={channelTile(channel.kind)}
+        tile={<ChannelKindLogo kind={channel.kind} />}
         badges={
           <Badge variant="outline" size="sm">
             {channel.kind}

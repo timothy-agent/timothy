@@ -397,6 +397,8 @@ export function Memory() {
     <PageShell>
       <PageHeader
         title="Memory"
+        description="Review what Timothy learned, confirm pending facts, and correct mistakes."
+        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: 'Memory' }]}
         actions={
           <div data-tour="memory.view">
             <SegmentedControl

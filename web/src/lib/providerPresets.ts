@@ -93,7 +93,7 @@ export const providerPresets: ProviderPreset[] = [
     driver: 'openaicompat',
     description: 'Free models to start, one login',
     logo: 'openrouter',
-    brandColor: '#6467F2',
+    brandColor: '#7624F4',
     baseURL: 'https://openrouter.ai/api/v1',
     requiresKey: true,
     defaultRef: 'OPENROUTER_API_KEY',

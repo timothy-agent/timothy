@@ -52,7 +52,7 @@ const cases: [string, TourDef][] = [
   ['/missions/new', missionNewTour],
   ['/automations', automationsTour],
   ['/knowledge', knowledgeTour],
-  ['/memory', memoryTour],
+  ['/settings/memory', memoryTour],
   ['/analytics', analyticsTour],
   // The submenu starts open on a settings path.
   ['/settings/providers', settingsTour],

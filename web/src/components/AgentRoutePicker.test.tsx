@@ -67,11 +67,15 @@ const providers: AdminProvider[] = [
 
 const models: AvailableModel[] = [{ id: 'sonnet' }, { id: 'opus' }]
 
-// Radix opens dropdowns on pointerdown, not click.
+// Radix opens popovers on pointerdown, not click.
 function openMenu(name: string) {
   const trigger = screen.getByRole('button', { name })
   fireEvent.pointerDown(trigger, { button: 0, pointerId: 1 })
   fireEvent.click(trigger)
+}
+
+function openPanel(title: string) {
+  fireEvent.click(screen.getByRole('button', { name: title }))
 }
 
 afterEach(cleanup)
@@ -160,7 +164,7 @@ describe('AgentRoutePicker', () => {
     expect(trigger).not.toHaveTextContent('disabled-route')
   })
 
-  it('shows Agent, Route and Model sections when handlers are given', async () => {
+  it('shows Agent, Route and Model rows in the root panel', async () => {
     const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)
     vi.mocked(listRoutes).mockResolvedValue(routes)
@@ -177,16 +181,13 @@ describe('AgentRoutePicker', () => {
 
     await screen.findByRole('button', { name: 'Agent, route and model' })
     openMenu('Agent, route and model')
-    expect(await screen.findByText('Agent')).toBeTruthy()
-    expect(await screen.findByText('Route')).toBeTruthy()
-    expect(await screen.findByText('Model')).toBeTruthy()
-    expect(screen.getByText('researcher')).toBeTruthy()
-    expect(screen.getByText('default')).toBeTruthy()
-    expect(screen.getByText('local')).toBeTruthy()
-    expect(await screen.findByText('opus')).toBeTruthy()
+    expect(await screen.findByText('Select')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Agent' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Route' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Model' })).toBeTruthy()
   })
 
-  it('omits the Route section when onRoute is not passed', async () => {
+  it('omits the Route row when onRoute is not passed', async () => {
     const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)
     vi.mocked(listRoutes).mockResolvedValue(routes)
@@ -194,11 +195,11 @@ describe('AgentRoutePicker', () => {
 
     await screen.findByRole('button', { name: 'Agent, route and model' })
     openMenu('Agent, route and model')
-    expect(await screen.findByText('Agent')).toBeTruthy()
-    expect(screen.queryByText('Route')).toBeNull()
+    expect(await screen.findByRole('button', { name: 'Agent' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Route' })).toBeNull()
   })
 
-  it('omits the Route section when listRoutes rejects, Agent section still works', async () => {
+  it('omits the Route row when listRoutes rejects, Agent panel still works', async () => {
     const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)
     vi.mocked(listRoutes).mockRejectedValue(new Error('forbidden'))
@@ -207,9 +208,10 @@ describe('AgentRoutePicker', () => {
     await screen.findByRole('button', { name: 'Agent, route and model' })
     await waitFor(() => expect(listRoutes).toHaveBeenCalled())
     openMenu('Agent, route and model')
-    expect(await screen.findByText('Agent')).toBeTruthy()
-    expect(screen.getByText('researcher')).toBeTruthy()
-    expect(screen.queryByText('Route')).toBeNull()
+    expect(await screen.findByRole('button', { name: 'Agent' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Route' })).toBeNull()
+    openPanel('Agent')
+    expect(await screen.findByText('researcher')).toBeTruthy()
   })
 
   it('shows the chain models on a route item, or a placeholder when empty', async () => {
@@ -220,6 +222,7 @@ describe('AgentRoutePicker', () => {
 
     await screen.findByRole('button', { name: 'Agent, route and model' })
     openMenu('Agent, route and model')
+    openPanel('Route')
     expect(await screen.findByText('glm-5.2 → nova-pro')).toBeTruthy()
     expect(screen.getByText('No models configured')).toBeTruthy()
   })
@@ -233,12 +236,14 @@ describe('AgentRoutePicker', () => {
 
     await screen.findByRole('button', { name: 'Agent, route and model' })
     openMenu('Agent, route and model')
+    openPanel('Route')
     fireEvent.click(await screen.findByText('local'))
     expect(onRoute).toHaveBeenCalledWith('local')
   })
 
   it('clicking a model item calls onModelHint', async () => {
-    const { AgentRoutePicker, listAgents, listRoutes } = await freshPicker()
+    const { AgentRoutePicker, listAgents, listRoutes, listProviders, availableModels } =
+      await freshPicker()
     vi.mocked(listAgents).mockResolvedValue(agents)
     vi.mocked(listRoutes).mockResolvedValue(routes)
     const onModelHint = vi.fn()
@@ -254,7 +259,11 @@ describe('AgentRoutePicker', () => {
     )
 
     await screen.findByRole('button', { name: 'Agent, route and model' })
+    await waitFor(() => expect(listProviders).toHaveBeenCalled())
+    await waitFor(() => expect(availableModels).toHaveBeenCalled())
     openMenu('Agent, route and model')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Model' })).toBeInTheDocument())
+    openPanel('Model')
     fireEvent.click(await screen.findByText('opus'))
     expect(onModelHint).toHaveBeenCalledWith('Anthropic/opus')
   })
@@ -294,6 +303,7 @@ describe('AgentRoutePicker', () => {
 
     await screen.findByRole('button', { name: 'Agent, route and model' })
     openMenu('Agent, route and model')
+    openPanel('Model')
     expect(await screen.findByText('opus')).toBeInTheDocument()
     expect(screen.queryByText('harness-model')).not.toBeInTheDocument()
     expect(availableModels).not.toHaveBeenCalledWith('p-harness')
@@ -308,6 +318,7 @@ describe('AgentRoutePicker', () => {
 
     await screen.findByRole('button', { name: 'Agent, route and model' })
     openMenu('Agent, route and model')
+    openPanel('Agent')
     fireEvent.click(await screen.findByText('researcher'))
     expect(onAgent).toHaveBeenCalledWith('2')
   })

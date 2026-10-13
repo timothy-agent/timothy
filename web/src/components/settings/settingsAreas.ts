@@ -15,11 +15,6 @@ export const settingsAreas = [
     description: 'External services Timothy can act on, like Google, Outlook, GitHub, or AWS.',
   },
   {
-    key: 'agents',
-    label: 'Agents',
-    description: 'Prompt overlays, skills, and tools bundled per agent.',
-  },
-  {
     key: 'routes',
     label: 'Routing',
     description: 'Task routes decide which provider chain handles a given job.',
@@ -33,6 +28,11 @@ export const settingsAreas = [
     key: 'channels',
     label: 'Channels',
     description: 'Talk to Timothy from chat apps like Telegram, with the same agents and memory.',
+  },
+  {
+    key: 'memory',
+    label: 'Memory',
+    description: 'Review what Timothy learned, confirm pending facts, and correct mistakes.',
   },
   {
     key: 'features',

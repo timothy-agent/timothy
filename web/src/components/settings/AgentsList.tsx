@@ -12,10 +12,12 @@ import { EmptyState } from '../timothy/empty-state'
 import { PageHeader, SectionHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { EntityCard } from './EntityCard'
-import { settingsArea } from './settingsAreas'
 import { errText } from '../../lib/errors'
 
-const area = settingsArea('agents')
+const agentsMeta = {
+  label: 'Agents',
+  description: 'Prompt overlays, skills, and tools bundled per agent.',
+}
 
 export function AgentsList() {
   const [agents, setAgents] = useState<AdminAgent[]>([])
@@ -45,11 +47,11 @@ export function AgentsList() {
   return (
     <PageShell>
       <PageHeader
-        title={area.label}
-        description={area.description}
-        breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
+        title={agentsMeta.label}
+        description={agentsMeta.description}
+        breadcrumbs={[{ label: agentsMeta.label }]}
         actions={
-          <Button onClick={() => navigate('/settings/agents/new')}>
+          <Button onClick={() => navigate('/agents/new')}>
             <Plus />
             New agent
           </Button>
@@ -66,7 +68,7 @@ export function AgentsList() {
               title="No agents yet"
               description="An agent is a named assistant with its own instructions, model and tools. The default agent already serves chats."
               action={
-                <Button onClick={() => navigate('/settings/agents/new')}>
+                <Button onClick={() => navigate('/agents/new')}>
                   <Plus />
                   New agent
                 </Button>
@@ -79,7 +81,7 @@ export function AgentsList() {
                   key={a.id}
                   agent={a}
                   onChanged={refresh}
-                  onManage={() => navigate(`/settings/agents/${a.id}`)}
+                  onManage={() => navigate(`/agents/${a.id}`)}
                   onDelete={() => setConfirmDelete(a)}
                 />
               ))}
@@ -125,7 +127,7 @@ function AgentCard({
 
   return (
     <EntityCard
-      to={`/settings/agents/${agent.id}`}
+      to={`/agents/${agent.id}`}
       title={agent.name}
       tile={
         <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-brand-soft text-brand-soft-foreground">

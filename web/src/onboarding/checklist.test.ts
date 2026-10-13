@@ -26,7 +26,7 @@ describe('buildChecklist', () => {
       ['first_mission', '/missions/new'],
       ['connect', '/settings/connectors'],
       ['knowledge', '/knowledge'],
-      ['memory', '/memory'],
+      ['memory', '/settings/memory'],
       ['automations', '/automations'],
       ['analytics', '/analytics'],
     ])

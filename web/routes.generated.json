@@ -5,6 +5,10 @@
       "label": "Home"
     },
     {
+      "path": "/agents/*",
+      "label": "Agents"
+    },
+    {
       "path": "/analytics",
       "label": "Analytics"
     },
@@ -36,8 +40,11 @@
       "label": "Knowledge"
     },
     {
-      "path": "/memory/*",
-      "label": "Memory"
+      "path": "/login",
+      "label": "Login"
+    },
+    {
+      "path": "/memory/*"
     },
     {
       "path": "/memory/knowledge/*"
@@ -69,16 +76,15 @@
       "label": "Settings"
     },
     {
+      "path": "/setup",
+      "label": "Setup"
+    },
+    {
       "path": "/welcome",
       "label": "Welcome"
     }
   ],
   "settings_areas": [
-    {
-      "key": "agents",
-      "label": "Agents",
-      "path": "/settings/agents"
-    },
     {
       "key": "channels",
       "label": "Channels",
@@ -103,6 +109,11 @@
       "key": "features",
       "label": "Features",
       "path": "/settings/features"
+    },
+    {
+      "key": "memory",
+      "label": "Memory",
+      "path": "/settings/memory"
     },
     {
       "key": "providers",
@@ -132,12 +143,14 @@
     "Features",
     "Home",
     "Knowledge",
+    "Login",
     "Memory",
     "Missions",
     "Providers",
     "Routing",
     "Secrets",
     "Settings",
+    "Setup",
     "Welcome"
   ]
 }

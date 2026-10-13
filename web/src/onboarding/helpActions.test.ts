@@ -16,9 +16,10 @@ describe('tourPageFor', () => {
     ['/knowledge', 'knowledge'],
     ['/knowledge/abc', null],
     ['/memory', 'memory'],
+    ['/settings/memory', 'memory'],
     ['/analytics', 'analytics'],
     ['/settings/providers', 'settings'],
-    ['/settings/agents/new', 'settings'],
+    ['/agents/new', null],
     ['/welcome', null],
     ['/research', null],
   ])('%s maps to %s', (path, page) => {
