@@ -1566,12 +1566,14 @@ export async function createMission(input: CreateMissionInput): Promise<Mission>
 // create() still requires the operator's explicit flag.
 export async function classifyMission(
   goal: string,
+  signal?: AbortSignal,
 ): Promise<{ kind: 'coding' | 'general'; light: boolean; has_plan: boolean }> {
   return request<{ kind: 'coding' | 'general'; light: boolean; has_plan: boolean }>(
     '/v1/missions/classify',
     {
       method: 'POST',
       body: JSON.stringify({ goal }),
+      signal,
     },
   )
 }

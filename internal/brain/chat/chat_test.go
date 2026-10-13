@@ -3471,6 +3471,9 @@ func TestClassifyOverGatewayResolvesSummarizeRole(t *testing.T) {
 	if got := gw.requests[0].Route; got != "cheap-cloud" {
 		t.Fatalf("route = %q, want cheap-cloud (resolved via summarize role)", got)
 	}
+	if got := gw.requests[0].Effort; got != "low" {
+		t.Fatalf("effort = %q, want low (one-word pick skips the reasoning budget)", got)
+	}
 }
 
 // When the "summarize" role is unbound, ClassifyOverGateway returns an

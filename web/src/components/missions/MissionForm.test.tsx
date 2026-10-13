@@ -740,8 +740,35 @@ describe('MissionForm: kind chip', () => {
     await vi.advanceTimersByTimeAsync(600)
     await vi.advanceTimersByTimeAsync(0)
 
-    expect(classifyMission).toHaveBeenCalledWith('Fix a bug in the repo')
+    expect(classifyMission).toHaveBeenCalledWith('Fix a bug in the repo', expect.any(AbortSignal))
     expect(screen.getByText('Coding · branches from repo')).toBeInTheDocument()
+  })
+
+  it('a further edit aborts the in-flight classify and drops its late answer', async () => {
+    let resolveFirst!: (r: { kind: 'coding' | 'general'; light: boolean; has_plan: boolean }) => void
+    vi.mocked(classifyMission)
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve }))
+      .mockResolvedValueOnce({ kind: 'general', light: false, has_plan: false })
+    renderForm(<MissionForm onDone={vi.fn()} onCancel={vi.fn()} />)
+
+    const goalInput = screen.getByLabelText('Goal')
+    fireEvent.change(goalInput, { target: { value: 'Fix a bug' } })
+    await vi.advanceTimersByTimeAsync(600)
+    const firstSignal = vi.mocked(classifyMission).mock.calls[0][1] as AbortSignal
+    expect(firstSignal.aborted).toBe(false)
+
+    fireEvent.change(goalInput, { target: { value: 'Write a book about bugs' } })
+    expect(firstSignal.aborted).toBe(true)
+    await vi.advanceTimersByTimeAsync(600)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
+
+    // The stale first answer lands after the newer goal classified:
+    // it must not flip the chip.
+    resolveFirst({ kind: 'coding', light: false, has_plan: false })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(screen.getByText('General · scratch workspace')).toBeInTheDocument()
+    expect(screen.queryByText('Detecting…')).not.toBeInTheDocument()
   })
 
   it('debounces repeated goal edits into a single classify call', async () => {
@@ -754,7 +781,7 @@ describe('MissionForm: kind chip', () => {
     await vi.advanceTimersByTimeAsync(600)
 
     expect(classifyMission).toHaveBeenCalledTimes(1)
-    expect(classifyMission).toHaveBeenCalledWith('Fix a bug')
+    expect(classifyMission).toHaveBeenCalledWith('Fix a bug', expect.any(AbortSignal))
   })
 
   it('submits the mission with the classified kind', async () => {
