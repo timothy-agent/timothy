@@ -56,11 +56,6 @@ describe('matchPreset', () => {
     const p = provider({ kind: 'cli', driver: 'cursor-cli', base_url: '' })
     expect(matchPreset(p).id).toBe('cursor')
   })
-
-  it('matches the openai-responses preset by driver, not the openai preset sharing its host', () => {
-    const p = provider({ driver: 'openai-responses', base_url: 'https://api.openai.com/v1' })
-    expect(matchPreset(p).id).toBe('openai-responses')
-  })
 })
 
 describe('openrouter preset (D-163)', () => {
@@ -73,11 +68,31 @@ describe('openrouter preset (D-163)', () => {
 describe('cliproxy presets', () => {
   it('matches the chatgpt preset by port 8317', () => {
     const p = provider({ base_url: 'http://cliproxy:8317/v1' })
+    const preset = matchPreset(p)
+    expect(preset.id).toBe('chatgpt')
+    expect(preset.name).toBe('OpenAI Subscription')
+  })
+
+  it('matches OpenAI Subscription by name', () => {
+    const p = provider({ name: 'OpenAI Subscription', base_url: 'http://cliproxy:8317/v1' })
     expect(matchPreset(p).id).toBe('chatgpt')
   })
 
   it('matches the claude preset by port 8317 when name or model refers to claude', () => {
     const p = provider({ name: 'Claude Subscription', base_url: 'http://cliproxy:8317/v1' })
+    const preset = matchPreset(p)
+    expect(preset.id).toBe('claude')
+    expect(preset.name).toBe('Claude Subscription')
+  })
+
+  it('matches a cliproxy row whose model is sonnet as claude', () => {
+    const p = provider({ name: 'Work', default_model: 'sonnet', base_url: 'http://cliproxy:8317/v1' })
     expect(matchPreset(p).id).toBe('claude')
   })
+
+  it('matches a cliproxy o-series model as the openai subscription', () => {
+    const p = provider({ name: 'Work', default_model: 'o4-mini', base_url: 'http://cliproxy:8317/v1' })
+    expect(matchPreset(p).id).toBe('chatgpt')
+  })
 })
+

@@ -1,10 +1,12 @@
 package catalog
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -297,6 +299,81 @@ func TestSearchProvidersFiltersBySet(t *testing.T) {
 	}
 	if len(models) != 1 || models[0].ModelKey != "bedrock/claude-3-opus" {
 		t.Fatalf("models = %+v, want only the opus match", models)
+	}
+}
+
+func TestSearchProvidersListsChatModesBeforeOthers(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"openai/dall-e-3": {"litellm_provider": "openai", "mode": "image_generation"},
+			"openai/gpt-4o": {"litellm_provider": "openai", "mode": "chat"},
+			"openai/text-embedding-3-small": {"litellm_provider": "openai", "mode": "embedding"}
+		}`))
+	}))
+	defer srv.Close()
+	s.url = srv.URL
+	if _, err := s.Sync(ctx); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	models, err := s.SearchProviders(ctx, "", []string{"openai"}, 0)
+	if err != nil {
+		t.Fatalf("SearchProviders: %v", err)
+	}
+	if len(models) != 3 || models[0].ModelKey != "openai/gpt-4o" {
+		t.Fatalf("models = %+v, want the chat model before image and embedding", models)
+	}
+
+	// A typed query keeps prefix-then-substring order, so an embedding
+	// the operator searched for is not buried under chat models.
+	models, err = s.SearchProviders(ctx, "text-embedding", []string{"openai"}, 0)
+	if err != nil {
+		t.Fatalf("SearchProviders: %v", err)
+	}
+	if len(models) != 1 || models[0].ModelKey != "openai/text-embedding-3-small" {
+		t.Fatalf("models = %+v, want the embedding match", models)
+	}
+}
+
+func TestSearchProvidersNegativeLimitReturnsEveryMatch(t *testing.T) {
+	s := testStore(t)
+	ctx := t.Context()
+
+	var b strings.Builder
+	b.WriteByte('{')
+	for i := 0; i < maxSearchLimit+5; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `"m-%03d": {"litellm_provider": "openai", "mode": "chat"}`, i)
+	}
+	b.WriteByte('}')
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(b.String()))
+	}))
+	defer srv.Close()
+	s.url = srv.URL
+	if _, err := s.Sync(ctx); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	capped, err := s.SearchProviders(ctx, "", []string{"openai"}, 0)
+	if err != nil {
+		t.Fatalf("SearchProviders: %v", err)
+	}
+	if len(capped) != defaultSearchLimit {
+		t.Fatalf("capped len = %d, want %d", len(capped), defaultSearchLimit)
+	}
+	all, err := s.SearchProviders(ctx, "", []string{"openai"}, -1)
+	if err != nil {
+		t.Fatalf("SearchProviders: %v", err)
+	}
+	if len(all) != maxSearchLimit+5 {
+		t.Fatalf("unlimited len = %d, want %d", len(all), maxSearchLimit+5)
 	}
 }
 

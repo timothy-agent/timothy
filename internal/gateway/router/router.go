@@ -235,6 +235,9 @@ type Attempt struct {
 	// provider.CompletionRequest.ReasoningEffortOverride without
 	// re-deriving it from the row.
 	ReasoningEffort string
+	// ResponsesMode indicates that this attempt requires the Responses API
+	// endpoint rather than chat/completions.
+	ResponsesMode bool
 }
 
 // NoRouteError reports that resolution produced zero usable attempts.
@@ -421,7 +424,13 @@ func (s *Snapshot) Resolve(route, hint string, sticky Sticky, extra ...provider.
 		key := row.Name + "/" + model
 		if !seen[key] {
 			seen[key] = true
-			attempts = append(attempts, Attempt{Provider: p, ProviderName: row.Name, Model: model, ReasoningEffort: row.reasoningEffortFor(model)})
+			attempts = append(attempts, Attempt{
+				Provider:        p,
+				ProviderName:    row.Name,
+				Model:           model,
+				ReasoningEffort: row.reasoningEffortFor(model),
+				ResponsesMode:   s.responsesOnly(row, model),
+			})
 		}
 	}
 
@@ -484,24 +493,34 @@ func (s *Snapshot) entryGate(row ProviderRow, model string, required []provider.
 			return nil, row.Name + "/" + model, fmt.Sprintf("lacks %s capability", want)
 		}
 	}
-	if s.responsesOnly(row, model) {
-		return nil, row.Name + "/" + model, "responses_only: the model serves /v1/responses only, not chat/completions; use an openai-responses provider row"
-	}
 	return p, "", ""
 }
 
 // responsesOnly reports whether row would send model over
 // chat/completions when the catalog says the model only speaks the
 // Responses API (LiteLLM mode "responses", the gpt-5.x-codex family),
-// issue #708. The chat driver gets a 404 on every call there, so the
-// native walk skips the row instead of failing over into it. A
-// missing catalog match keeps the row usable: the driver decides.
+// used by chat-only mission harnesses (issue #718).
 func (s *Snapshot) responsesOnly(row ProviderRow, model string) bool {
-	if row.Driver != "openaicompat" {
+	if row.Driver == "openai-responses" {
+		return true
+	}
+	if row.Driver != "openaicompat" || !catalog.IsOpenAIHost(row.BaseURL) {
 		return false
 	}
-	m, ok := s.catalogModel(row, model)
-	return ok && m.Mode == "responses"
+	if m, ok := s.catalogModel(row, model); ok {
+		return m.Mode == "responses"
+	}
+	return strings.Contains(strings.ToLower(model), "codex")
+}
+
+// ResponsesMode reports whether (providerName, model) should dispatch
+// over /v1/responses rather than /chat/completions.
+func (s *Snapshot) ResponsesMode(providerName, model string) bool {
+	row, ok := s.byName[providerName]
+	if !ok {
+		return false
+	}
+	return s.responsesOnly(row, model)
 }
 
 // Strategy weights: relative importance of each additive factor,
@@ -984,9 +1003,10 @@ func (s *Snapshot) attemptCapable(p provider.Provider, row ProviderRow, model st
 
 // CatalogModelsForRow returns every catalog model within row's
 // candidate litellm_provider(s) — the /v1/providers listing's live
-// model source (replaces the removed providers.models column) and the
-// admin Models-list/default_model-picker's data source. Empty when no
-// catalog lookup is wired.
+// model source (replaces the removed providers.models column), which
+// brain reads for context windows. limit -1 skips the search page
+// cap; a capped slice would drop windows for any model past it.
+// Empty when no catalog lookup is wired.
 func (s *Snapshot) CatalogModelsForRow(row ProviderRow) []catalog.Model {
 	if s.cat == nil {
 		return nil
@@ -995,8 +1015,8 @@ func (s *Snapshot) CatalogModelsForRow(row ProviderRow) []catalog.Model {
 	if row.LitellmProvider != "" {
 		opts = map[string]string{"litellm_provider": row.LitellmProvider}
 	}
-	candidates := catalog.CandidateProvidersForRow(row.Kind, row.Driver, row.BaseURL, opts)
-	pool, err := s.cat.SearchProviders(context.Background(), "", candidates, 0)
+	candidates := catalog.CandidateProvidersForRow(row.Kind, row.Driver, row.BaseURL, opts, row.Name, row.DefaultModel)
+	pool, err := s.cat.SearchProviders(context.Background(), "", candidates, -1)
 	if err != nil {
 		return nil
 	}
@@ -1014,7 +1034,7 @@ func (s *Snapshot) catalogModel(row ProviderRow, model string) (catalog.Model, b
 	if row.LitellmProvider != "" {
 		opts = map[string]string{"litellm_provider": row.LitellmProvider}
 	}
-	candidates := catalog.CandidateProvidersForRow(row.Kind, row.Driver, row.BaseURL, opts)
+	candidates := catalog.CandidateProvidersForRow(row.Kind, row.Driver, row.BaseURL, opts, row.Name, row.DefaultModel, model)
 	// model as the query, not "", to avoid the default result cap
 	// dropping real matches for large litellm_provider buckets.
 	pool, err := s.cat.SearchProviders(context.Background(), model, candidates, 0)

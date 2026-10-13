@@ -18,6 +18,7 @@ func TestCandidateProviders(t *testing.T) {
 		{"gemini host", "openaicompat", "https://generativelanguage.googleapis.com/v1beta", []string{"gemini"}},
 		{"zai host", "openaicompat", "https://api.z.ai/v1", []string{"zai"}},
 		{"xai host", "openaicompat", "https://api.x.ai/v1", []string{"xai"}},
+		{"openrouter host", "openaicompat", "https://openrouter.ai/api/v1", []string{"openrouter"}},
 		{"localhost ollama", "openaicompat", "http://localhost:11434/v1", []string{"ollama"}},
 		{"127.0.0.1 ollama", "openaicompat", "http://127.0.0.1:11434/v1", []string{"ollama"}},
 		{"docker internal ollama", "openaicompat", "http://host.docker.internal:11434/v1", []string{"ollama"}},
@@ -96,5 +97,124 @@ func TestSuggestPreservesUnmatchedOrder(t *testing.T) {
 	want := []string{"openai/gpt-4o", ""}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestCandidateProvidersForRow(t *testing.T) {
+	cases := []struct {
+		name    string
+		kind    string
+		driver  string
+		baseURL string
+		opts    map[string]string
+		hints   []string
+		want    []string
+	}{
+		{
+			name:   "explicit litellm_provider option",
+			kind:   "api",
+			driver: "openaicompat",
+			opts:   map[string]string{"litellm_provider": "anthropic"},
+			want:   []string{"anthropic"},
+		},
+		{
+			name:   "explicit bedrock option expands to pair",
+			kind:   "api",
+			driver: "bedrock",
+			opts:   map[string]string{"litellm_provider": "bedrock"},
+			want:   []string{"bedrock", "bedrock_converse"},
+		},
+		{
+			name:   "claude-cli cli row",
+			kind:   "cli",
+			driver: "claude-cli",
+			want:   []string{"anthropic"},
+		},
+		{
+			name:    "cliproxy with claude name hint",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "http://cliproxy:8317/v1",
+			hints:   []string{"Claude Subscription", "claude-3-7-sonnet-20250219"},
+			want:    []string{"anthropic"},
+		},
+		{
+			name:    "cliproxy with openai name hint",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "http://cliproxy:8317/v1",
+			hints:   []string{"OpenAI Subscription", "gpt-4o"},
+			want:    []string{"openai"},
+		},
+		{
+			name:    "cliproxy with chatgpt hint",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "http://cliproxy:8317/v1",
+			hints:   []string{"ChatGPT Subscription"},
+			want:    []string{"openai"},
+		},
+		{
+			name:    "cliproxy port 8317 on localhost",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "http://127.0.0.1:8317/v1",
+			hints:   []string{"claude"},
+			want:    []string{"anthropic"},
+		},
+		{
+			name:    "cliproxy with no hints",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "http://cliproxy:8317/v1",
+			want:    []string{"anthropic", "openai"},
+		},
+		{
+			name:    "cliproxy o-series model is openai",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "http://cliproxy:8317/v1",
+			hints:   []string{"Work", "o4-mini"},
+			want:    []string{"openai"},
+		},
+		{
+			name:    "cliproxy conflicting hints keep both sections",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "http://cliproxy:8317/v1",
+			hints:   []string{"Claude Subscription", "gpt-4o"},
+			want:    []string{"anthropic", "openai"},
+		},
+		{
+			name:    "cliproxy ignores gpt buried in an unrelated token",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "http://127.0.0.1:8317/v1",
+			hints:   []string{"fingpt-local"},
+			want:    []string{"anthropic", "openai"},
+		},
+		{
+			name:    "cliproxy sonnet hint is anthropic",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "http://cliproxy:8317/v1",
+			hints:   []string{"sonnet"},
+			want:    []string{"anthropic"},
+		},
+		{
+			name:    "unrecognized host with no hints or opts",
+			kind:    "api",
+			driver:  "openaicompat",
+			baseURL: "https://example.com/v1",
+			want:    nil,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CandidateProvidersForRow(tc.kind, tc.driver, tc.baseURL, tc.opts, tc.hints...)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("CandidateProvidersForRow() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

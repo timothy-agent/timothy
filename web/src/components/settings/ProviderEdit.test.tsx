@@ -625,7 +625,7 @@ describe('ProviderEdit credential panel', () => {
     renderPage('p-cgpt')
 
     expect(await screen.findByText('Subscription authentication')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Re-authenticate with ChatGPT' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Re-authenticate with OpenAI' })).toBeInTheDocument()
     expect(screen.queryByPlaceholderText('paste key')).toBeNull()
   })
 
@@ -645,7 +645,7 @@ describe('ProviderEdit credential panel', () => {
 
     renderPage('p-cgpt')
 
-    const button = await screen.findByRole('button', { name: 'Re-authenticate with ChatGPT' })
+    const button = await screen.findByRole('button', { name: 'Re-authenticate with OpenAI' })
     fireEvent.click(button)
 
     await waitFor(() => expect(subscriptionAuthStart).toHaveBeenCalledWith('chatgpt'))
@@ -654,6 +654,37 @@ describe('ProviderEdit credential panel', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Authentication renewed', expect.anything()))
 
     windowOpenSpy.mockRestore()
+  })
+
+  it('omits credential reference, reasoning, request timeout, and litellm provider for cliproxy providers', async () => {
+    vi.mocked(listProviders).mockResolvedValue([chatgptSubscriptionProvider])
+    renderPage('p-cgpt')
+
+    await screen.findByDisplayValue('ChatGPT Subscription')
+    expect(screen.queryByText('Credential reference')).toBeNull()
+    expect(screen.queryByRole('switch', { name: 'Disable reasoning' })).toBeNull()
+    expect(screen.queryByLabelText('Request timeout')).toBeNull()
+    expect(screen.queryByLabelText('LiteLLM provider')).toBeNull()
+  })
+
+  it('omits litellm provider for anthropic direct API provider', async () => {
+    vi.mocked(listProviders).mockResolvedValue([
+      {
+        id: 'p-anthropic',
+        name: 'Anthropic',
+        kind: 'api',
+        driver: 'anthropic',
+        base_url: '',
+        default_model: 'claude-haiku-4-5',
+        credential_ref: 'ANTHROPIC_API_KEY',
+        headers: {},
+        enabled: true,
+      },
+    ])
+    renderPage('p-anthropic')
+
+    await screen.findByDisplayValue('Anthropic')
+    expect(screen.queryByLabelText('LiteLLM provider')).toBeNull()
   })
 
   it('typing a key and Save rotates the stored secret for a non-bedrock provider', async () => {

@@ -293,6 +293,7 @@ func (a *API) handleStream(w http.ResponseWriter, r *http.Request) {
 	for i, att := range attempts {
 		completion.Model = att.Model
 		completion.ReasoningEffortOverride = att.ReasoningEffort
+		completion.ResponsesMode = att.ResponsesMode
 		// Last chain entry gets the full in-provider retry budget;
 		// earlier entries fail fast so the chain can advance.
 		completion.FinalAttempt = i == len(attempts)-1

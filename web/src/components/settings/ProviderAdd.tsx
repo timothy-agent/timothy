@@ -59,6 +59,7 @@ function referentsOf(refs: SecretRefEntry[], ref: string): string[] {
 // driver/host server-side.
 function presetLitellmProvider(presetId: string): string {
   return {
+    openrouter: 'openrouter',
     openai: 'openai',
     chatgpt: 'openai',
     anthropic: 'anthropic',
@@ -257,7 +258,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
       <PageShell width="form">
         <PageHeader
           title={`Connect ${preset.name}`}
-          description={`subscription: ${preset.id === 'chatgpt' ? 'OpenAI ChatGPT' : 'Anthropic Claude'}`}
+          description={`subscription: ${preset.id === 'chatgpt' ? 'OpenAI' : 'Anthropic Claude'}`}
           meta={<ProviderLogo preset={preset} className="size-9" />}
           breadcrumbs={[
             { label: 'Settings', href: '/settings' },
@@ -474,34 +475,6 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
           Same machine as Timothy? Keep the default address. Another machine? Enter its address, for example
           http://192.168.1.20:11434/v1.
         </p>
-      )}
-      {preset.id === 'chatgpt' && (
-        <div className="mb-4 rounded-md border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
-          <p className="font-medium text-foreground">Requires ChatGPT Plus or Pro subscription</p>
-          <p className="mt-1">
-            Authenticate once with your OpenAI account by running on your host:
-          </p>
-          <code className="mt-2 block rounded bg-muted px-2 py-1 font-mono text-xs text-foreground">
-            docker exec -it timothy-cliproxy ./CLIProxyAPI -codex-device-login
-          </code>
-          <p className="mt-1.5 text-xs">
-            Open the displayed OpenAI link, sign in, and enter the one-time device code. Once authenticated, click Test below.
-          </p>
-        </div>
-      )}
-      {preset.id === 'claude' && (
-        <div className="mb-4 rounded-md border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
-          <p className="font-medium text-foreground">Requires Claude Pro or Team subscription</p>
-          <p className="mt-1">
-            Authenticate once with your Anthropic account by running on your host:
-          </p>
-          <code className="mt-2 block rounded bg-muted px-2 py-1 font-mono text-xs text-foreground">
-            docker exec -it timothy-cliproxy ./CLIProxyAPI -claude-login
-          </code>
-          <p className="mt-1.5 text-xs">
-            Approve the OAuth prompt in your browser. Once authenticated, click Test below.
-          </p>
-        </div>
       )}
       <Form onSubmit={(e) => e.preventDefault()}>
         <FieldGroup>
@@ -966,6 +939,7 @@ function SubscriptionConnectPanel({
               headers: {},
               default_model: preset.validateModel || (providerType === 'chatgpt' ? 'gpt-4o' : 'claude-3-7-sonnet-20250219'),
               enabled: true,
+              options: { litellm_provider: providerType === 'chatgpt' ? 'openai' : 'anthropic' },
             })
             toast.success('Connected', { description: `${preset.name} is ready to use.` })
             onConnected(id, preset.name)
@@ -1081,7 +1055,7 @@ function SubscriptionConnectPanel({
 
       <p className="text-sm text-muted-foreground">
         {providerType === 'chatgpt'
-          ? 'Sign in with your ChatGPT Plus or Pro subscription. Timothy routes inference through your existing flat-rate account with zero per-token cost.'
+          ? 'Sign in with your OpenAI account (ChatGPT Plus or Pro). Timothy routes inference through your existing flat-rate account with zero per-token cost.'
           : 'Sign in with your Claude Pro or Team subscription. Timothy routes inference through your existing flat-rate account with zero per-token cost.'}
       </p>
 
@@ -1093,7 +1067,7 @@ function SubscriptionConnectPanel({
 
       <FormActions>
         <Button onClick={() => void startConnect()} disabled={busy}>
-          {busy ? 'Opening login page…' : providerType === 'chatgpt' ? 'Sign in with ChatGPT' : 'Sign in with Claude'}
+          {busy ? 'Opening login page…' : providerType === 'chatgpt' ? 'Sign in with OpenAI' : 'Sign in with Claude'}
         </Button>
         <Button variant="ghost" onClick={onManualConfig} disabled={busy}>
           Configure endpoint manually

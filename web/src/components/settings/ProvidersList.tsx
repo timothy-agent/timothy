@@ -155,13 +155,15 @@ function ProviderCard({
       title={provider.name}
       tile={<ProviderLogo preset={preset} className="size-9" />}
       summary={
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className={`size-1.5 shrink-0 rounded-full ${health?.healthy ? 'bg-good' : 'bg-destructive'}`} />
-          {healthLabel}
+        <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5">
+            <span className={`size-1.5 shrink-0 rounded-full ${health?.healthy ? 'bg-good' : 'bg-destructive'}`} />
+            <span>{healthLabel}</span>
+          </div>
           {provider.default_model && (
-            <span className="truncate">
-              · default <span className="font-mono text-foreground">{provider.default_model}</span>
-            </span>
+            <div className="truncate">
+              default <span className="font-mono text-foreground">{provider.default_model}</span>
+            </div>
           )}
         </div>
       }

@@ -692,7 +692,7 @@ func (a *Admin) Create(ctx context.Context, p Provider) (string, error) {
 		return "", err
 	}
 	candidates, err := a.catalog.SearchProviders(ctx, "",
-		catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options), 0)
+		catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options, p.Name, p.DefaultModel), 0)
 	if err != nil {
 		a.log.Warn("provider create: catalog lookup failed", "error", err)
 	}
@@ -1329,7 +1329,8 @@ func (a *Admin) Test(ctx context.Context, id, model string) (TestResult, error) 
 	}
 
 	timeout := probeTimeout(p.Options)
-	res := a.probe(ctx, drv, p.Name, model, snap.Prices(p.Name, model), timeout)
+	responsesMode := snap.ResponsesMode(p.Name, model)
+	res := a.probe(ctx, drv, p.Name, model, snap.Prices(p.Name, model), timeout, responsesMode)
 	if res.OK && (p.Driver == "openaicompat" || p.Driver == "openai-responses") && p.BaseURL != "" {
 		res.ResponsesOK = a.probeResponses(ctx, p.BaseURL, p.CredentialRef, model, timeout)
 		if res.ResponsesOK != nil {
@@ -1416,7 +1417,8 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 	drv, _ := reg.Get(p.Name)
 
 	probeTO := probeTimeout(p.Options)
-	res := a.probe(ctx, drv, p.Name, model, nil, probeTO)
+	responsesMode := a.isResponsesMode(ctx, p, model)
+	res := a.probe(ctx, drv, p.Name, model, nil, probeTO, responsesMode)
 	if res.OK && (p.Driver == "openaicompat" || p.Driver == "openai-responses") && p.BaseURL != "" {
 		// Report-only: Validate probes an unsaved config, so there is
 		// nothing to persist the result onto.
@@ -1490,18 +1492,40 @@ func probeTimeout(opts map[string]string) time.Duration {
 	return testTimeout
 }
 
+func (a *Admin) isResponsesMode(ctx context.Context, p Provider, model string) bool {
+	if p.Driver == "openai-responses" {
+		return true
+	}
+	if p.Driver != "openaicompat" || !catalog.IsOpenAIHost(p.BaseURL) {
+		return false
+	}
+	if a.catalog != nil {
+		litellmProviders := catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options, p.Name, model)
+		models, err := a.catalog.SearchProviders(ctx, model, litellmProviders, 10)
+		if err == nil {
+			for _, m := range models {
+				if m.ID == model || strings.HasSuffix(m.ID, "/"+model) {
+					return m.Mode == "responses"
+				}
+			}
+		}
+	}
+	return strings.Contains(strings.ToLower(model), "codex")
+}
+
 // probe runs one one-token completion against drv and books it under
 // purpose='test'. Shared by Test (persisted provider) and Validate
 // (unsaved config). timeout bounds the probe's context — testTimeout
 // (20s) unless the provider declares its own options.request_timeout.
-func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, model string, prices *router.ModelPrices, timeout time.Duration) TestResult {
+func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, model string, prices *router.ModelPrices, timeout time.Duration, responsesMode bool) TestResult {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	start := time.Now()
 	ch, err := drv.Stream(tctx, provider.CompletionRequest{
-		Model:     model,
-		Messages:  []provider.Message{{Role: "user", Content: "ping"}},
-		MaxTokens: 1,
+		Model:         model,
+		Messages:      []provider.Message{{Role: "user", Content: "ping"}},
+		MaxTokens:     1,
+		ResponsesMode: responsesMode,
 	})
 	res := TestResult{Model: model}
 	entry := ledger.Entry{Provider: providerName, Model: model, Route: "admin", Purpose: "test"}

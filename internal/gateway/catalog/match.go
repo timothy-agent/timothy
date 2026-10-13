@@ -23,19 +23,23 @@ func CandidateProviders(driver, baseURL string) []string {
 	}
 }
 
-// CandidateProvidersForRow is CandidateProviders extended with two
-// admin-layer additions, relocated here so both admin and router can
-// call it without an import cycle. First, options["litellm_provider"]
-// (when set) always wins over the driver/host heuristic — an
-// operator's explicit mapping beats inference, and "bedrock" still
-// expands to the pair ["bedrock", "bedrock_converse"] like the
-// heuristic does, since the catalog files Bedrock models under either
-// key. Second, absent that override, a kind='cli' claude-cli row has
-// no chat driver (D-051), but the CLI talks Anthropic's own API under
-// the hood, so its candidate pool is "anthropic" rather than falling
-// back to an unrestricted search. Every other row (api-kind, or a cli
-// driver other than claude-cli) defers to CandidateProviders as-is.
-func CandidateProvidersForRow(kind, driver, baseURL string, opts map[string]string) []string {
+// CandidateProvidersForRow is CandidateProviders extended with admin-layer
+// additions, relocated here so both admin and router can call it without an
+// import cycle. First, options["litellm_provider"] (when set) always wins over
+// the driver/host heuristic — an operator's explicit mapping beats inference,
+// and "bedrock" still expands to the pair ["bedrock", "bedrock_converse"] like
+// the heuristic does, since the catalog files Bedrock models under either
+// key. Second, absent that override, a kind='cli' claude-cli row has no chat
+// driver (D-051), but the CLI talks Anthropic's own API under the hood, so its
+// candidate pool is "anthropic" rather than falling back to an unrestricted
+// search. Third, when baseURL points to cliproxy (host cliproxy or port 8317),
+// the proxy serves one of Claude or ChatGPT. Hints (provider name, default
+// model, the model being priced) are scanned as tokens: only Claude signals
+// → anthropic, only OpenAI signals → openai, both or neither → both sections.
+// A single hint must not win just because it was listed first, and a
+// substring like "gpt" inside an unrelated token must not count. Every other
+// row defers to CandidateProviders as-is.
+func CandidateProvidersForRow(kind, driver, baseURL string, opts map[string]string, hints ...string) []string {
 	if lp := opts["litellm_provider"]; lp != "" {
 		if lp == "bedrock" {
 			return []string{"bedrock", "bedrock_converse"}
@@ -45,7 +49,80 @@ func CandidateProvidersForRow(kind, driver, baseURL string, opts map[string]stri
 	if kind == "cli" && driver == "claude-cli" {
 		return []string{"anthropic"}
 	}
+	if isCliproxy(baseURL) {
+		return cliproxyCandidates(hints)
+	}
 	return CandidateProviders(driver, baseURL)
+}
+
+// cliproxyCandidates picks the catalog section for a cliproxy row from
+// hints. Tokens are split on anything that isn't a letter or digit, so
+// "gpt-4o" yields "gpt" but "fingpt" does not.
+func cliproxyCandidates(hints []string) []string {
+	var anthropic, openai bool
+	for _, h := range hints {
+		for _, tok := range vendorTokens(h) {
+			switch {
+			case anthropicToken(tok):
+				anthropic = true
+			case openaiToken(tok):
+				openai = true
+			}
+		}
+	}
+	switch {
+	case anthropic && !openai:
+		return []string{"anthropic"}
+	case openai && !anthropic:
+		return []string{"openai"}
+	default:
+		return []string{"anthropic", "openai"}
+	}
+}
+
+func vendorTokens(h string) []string {
+	return strings.FieldsFunc(strings.ToLower(h), func(r rune) bool {
+		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	})
+}
+
+func anthropicToken(tok string) bool {
+	switch tok {
+	case "claude", "anthropic", "sonnet", "opus", "haiku":
+		return true
+	default:
+		return strings.HasPrefix(tok, "claude")
+	}
+}
+
+func openaiToken(tok string) bool {
+	switch tok {
+	case "openai", "chatgpt", "codex":
+		return true
+	}
+	if strings.HasPrefix(tok, "gpt") {
+		return true
+	}
+	// o-series ids (o1, o3, o4) share no "gpt" token. "o4-mini" splits
+	// to "o4" + "mini", so the family is the two-character token.
+	return len(tok) == 2 && tok[0] == 'o' && (tok[1] == '1' || tok[1] == '3' || tok[1] == '4')
+}
+
+func isCliproxy(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	return u.Hostname() == "cliproxy" || u.Port() == "8317"
+}
+
+// IsOpenAIHost reports whether baseURL points to official OpenAI (api.openai.com).
+func IsOpenAIHost(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	return u.Hostname() == "api.openai.com"
 }
 
 func candidatesForHost(baseURL string) []string {
@@ -55,7 +132,7 @@ func candidatesForHost(baseURL string) []string {
 	}
 	host := u.Hostname()
 	switch {
-	case host == "api.openai.com":
+	case IsOpenAIHost(baseURL):
 		return []string{"openai"}
 	case host == "generativelanguage.googleapis.com":
 		return []string{"gemini"}
@@ -63,6 +140,8 @@ func candidatesForHost(baseURL string) []string {
 		return []string{"zai"}
 	case host == "api.x.ai":
 		return []string{"xai"}
+	case host == "openrouter.ai":
+		return []string{"openrouter"}
 	case host == "localhost" || host == "127.0.0.1" || host == "host.docker.internal" || u.Port() == "11434":
 		return []string{"ollama"}
 	default:

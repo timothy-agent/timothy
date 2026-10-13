@@ -598,3 +598,63 @@ func TestOpenAICompatReasoningEffortOverrideEmptyLeavesOtherDialsInPlace(t *test
 		t.Fatalf("reasoning_effort = %q, want the provider config to still apply when no override is set", gotEffort)
 	}
 }
+
+func TestOpenAICompatAutoSwitchesToResponsesEndpoint(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.URL.Path == "/responses" {
+			orsWrite(w, "response.output_item.added", `{"item":{"type":"message","content":[]}}`)
+			orsWrite(w, "response.output_text.delta", `{"delta":"hello from responses"}`)
+			orsWrite(w, "response.completed", `{"response":{"id":"resp_1","status":"completed","usage":{"input_tokens":5,"output_tokens":2}}}`)
+			return
+		}
+		if r.URL.Path == "/chat/completions" {
+			oaiWrite(w, `{"choices":[{"delta":{"content":"hello from chat"}}]}`)
+			oaiWrite(w, "[DONE]")
+			return
+		}
+		http.Error(w, "wrong path", http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	p := NewOpenAICompat(OpenAICompatConfig{
+		Name:    "my-endpoint",
+		BaseURL: srv.URL,
+		APIKey:  "test-key",
+		Timeout: 10 * time.Second,
+	})
+
+	// 1. Non-OpenAI host (e.g. OpenRouter, CLIProxy, Ollama) always hits
+	// /chat/completions, even when model contains "codex" or ResponsesMode is set.
+	ch, err := p.Stream(t.Context(), CompletionRequest{
+		Model:         "gpt-5.3-codex",
+		ResponsesMode: true,
+		Messages:      []Message{{Role: "user", Content: "code"}},
+	})
+	if err != nil {
+		t.Fatalf("Stream gpt-5.3-codex on non-OpenAI host: %v", err)
+	}
+	collect(t, ch)
+	if gotPath != "/chat/completions" {
+		t.Fatalf("got path = %q, want /chat/completions for non-OpenAI host even with ResponsesMode/codex", gotPath)
+	}
+
+	// 2. Official OpenAI host (api.openai.com) switches to /responses
+	// strictly when ResponsesMode is set by the router / probe.
+	pOpenAI := NewOpenAICompat(OpenAICompatConfig{
+		Name:    "openai",
+		BaseURL: "https://api.openai.com/v1",
+		APIKey:  "sk-test",
+	})
+	if !pOpenAI.shouldUseResponses(CompletionRequest{Model: "gpt-5.3-codex", ResponsesMode: true}) {
+		t.Fatalf("shouldUseResponses = false, want true when ResponsesMode is set on api.openai.com")
+	}
+	if pOpenAI.shouldUseResponses(CompletionRequest{Model: "gpt-5.3-codex", ResponsesMode: false}) {
+		t.Fatalf("shouldUseResponses = true, want false when ResponsesMode is false even for codex model")
+	}
+	if pOpenAI.shouldUseResponses(CompletionRequest{Model: "gpt-4o"}) {
+		t.Fatalf("shouldUseResponses = true, want false for non-responses model on api.openai.com")
+	}
+}
