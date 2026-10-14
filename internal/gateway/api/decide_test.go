@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -377,7 +378,7 @@ func TestDecideLayaProviderNative(t *testing.T) {
 	layaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"model": "convaiinnovations/laya-typed-decisions",
+			"model": "typed-decisions",
 			"answers": {
 				"q": {
 					"type": "choice",
@@ -396,7 +397,7 @@ func TestDecideLayaProviderNative(t *testing.T) {
 	}
 	routeRows := []router.RouteRow{
 		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
-			{ProviderID: "p-laya", Model: "convaiinnovations/laya-typed-decisions"},
+			{ProviderID: "p-laya", Model: "typed-decisions"},
 		}, Enabled: true},
 	}
 	snap, err := router.BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
@@ -443,7 +444,7 @@ func TestDecideLayaFailoverToLLM(t *testing.T) {
 	}
 	routeRows := []router.RouteRow{
 		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
-			{ProviderID: "p-laya", Model: "convaiinnovations/laya-typed-decisions"},
+			{ProviderID: "p-laya", Model: "typed-decisions"},
 			{ProviderID: "p-chat", Model: "chat-1"},
 		}, Enabled: true},
 	}
@@ -479,7 +480,7 @@ func TestDecideLayaInvalidChoiceFailsOverToLLM(t *testing.T) {
 	layaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"model": "convaiinnovations/laya-typed-decisions",
+			"model": "typed-decisions",
 			"answers": {
 				"q": {
 					"type": "choice",
@@ -502,7 +503,7 @@ func TestDecideLayaInvalidChoiceFailsOverToLLM(t *testing.T) {
 	}
 	routeRows := []router.RouteRow{
 		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
-			{ProviderID: "p-laya", Model: "convaiinnovations/laya-typed-decisions"},
+			{ProviderID: "p-laya", Model: "typed-decisions"},
 			{ProviderID: "p-chat", Model: "chat-1"},
 		}, Enabled: true},
 	}
@@ -532,3 +533,137 @@ func TestDecideLayaInvalidChoiceFailsOverToLLM(t *testing.T) {
 		t.Fatalf("entry[1] = %+v, want fallback success", entries[1])
 	}
 }
+
+func TestDecideJevNativeSuccessAndPricing(t *testing.T) {
+	t.Parallel()
+	jevSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer jv_live_sec_123" {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model": "jev-latest",
+			"answers": {
+				"q": {
+					"type": "choice",
+					"choice": "coding",
+					"confidence": 0.98,
+					"probabilities": {"coding": 0.98, "research": 0.02}
+				}
+			},
+			"usage": {"input_tokens": 1000, "output_tokens": 0}
+		}`))
+	}))
+	defer jevSrv.Close()
+
+	provRows := []router.ProviderRow{
+		{
+			ID: "p-jev", Name: "jev-prod", Kind: "api", Driver: "jev",
+			BaseURL: jevSrv.URL, DefaultModel: "jev-latest", CredentialRef: "JEV_KEY",
+			PricesByModel: map[string]router.ModelPrices{
+				"jev-latest": {InputPerMTok: 0.042, OutputPerMTok: 0, Currency: "USD"},
+			},
+			Enabled: true,
+		},
+	}
+	routeRows := []router.RouteRow{
+		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
+			{ProviderID: "p-jev", Model: "jev-latest"},
+		}, Enabled: true},
+	}
+	snap, err := router.BuildSnapshot(provRows, routeRows, func(ref string) string {
+		if ref == "JEV_KEY" {
+			return "jv_live_sec_123"
+		}
+		return ""
+	}, nil)
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	a, rec := newAPI(snap)
+	w := postJSON(t, a.handleDecide, choiceBody)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", w.Code, w.Body.String())
+	}
+	out := decodeDecide(t, w.Body.Bytes())
+	if out.Choice != "coding" || out.Provider != "jev-prod" {
+		t.Fatalf("out = %+v", out)
+	}
+	if out.Scores["coding"] != 0.98 {
+		t.Fatalf("out.Scores = %v, want 0.98", out.Scores)
+	}
+
+	entries := rec.all()
+	if len(entries) != 1 {
+		t.Fatalf("ledger entries = %d, want 1", len(entries))
+	}
+	e := entries[0]
+	if e.Status != "ok" || e.Effort != "" {
+		t.Fatalf("ledger entry = %+v, want status=ok and empty effort for native decider", e)
+	}
+	if e.Usage == nil || e.Usage.InputTokens != 1000 {
+		t.Fatalf("e.Usage = %+v, want 1000 input tokens", e.Usage)
+	}
+	// 1000 tokens at $0.042/Mtok = $0.000042
+	if e.Cost == nil || math.Abs(*e.Cost-0.000042) > 1e-8 {
+		t.Fatalf("e.Cost = %v, want 0.000042", e.Cost)
+	}
+	if e.Currency != "USD" {
+		t.Fatalf("e.Currency = %q, want USD", e.Currency)
+	}
+}
+
+func TestDecideJev4xxFailsOverToLLM(t *testing.T) {
+	t.Parallel()
+	jevSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error": "invalid_api_key", "message": "unauthorized"}`))
+	}))
+	defer jevSrv.Close()
+
+	chatSrv := oaiOK(t, "research")
+	defer chatSrv.Close()
+
+	provRows := []router.ProviderRow{
+		{ID: "p-jev", Name: "jev-prod", Kind: "api", Driver: "jev", BaseURL: jevSrv.URL, DefaultModel: "jev-latest", Enabled: true},
+		{ID: "p-chat", Name: "chat-fallback", Kind: "api", Driver: "openaicompat", BaseURL: chatSrv.URL, DefaultModel: "chat-1", Enabled: true},
+	}
+	routeRows := []router.RouteRow{
+		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
+			{ProviderID: "p-jev", Model: "jev-latest"},
+			{ProviderID: "p-chat", Model: "chat-1"},
+		}, Enabled: true},
+	}
+	snap, err := router.BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	a, rec := newAPI(snap)
+	w := postJSON(t, a.handleDecide, choiceBody)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", w.Code, w.Body.String())
+	}
+	out := decodeDecide(t, w.Body.Bytes())
+	if out.Choice != "research" || out.Provider != "chat-fallback" {
+		t.Fatalf("out = %+v, want chat-fallback result", out)
+	}
+
+	entries := rec.all()
+	if len(entries) != 2 {
+		t.Fatalf("ledger entries = %d, want 2 (fail then ok)", len(entries))
+	}
+	if entries[0].Provider != "jev-prod" || entries[0].Status != "error" || entries[0].ErrorCode != "provider_error" {
+		t.Fatalf("entry[0] = %+v, want jev provider_error", entries[0])
+	}
+	// Unpriced provider has Cost == nil (NULL in DB)
+	if entries[0].Cost != nil {
+		t.Fatalf("unpriced entry[0].Cost = %v, want nil", entries[0].Cost)
+	}
+	if entries[1].Provider != "chat-fallback" || entries[1].Status != "ok" || entries[1].Effort != "low" {
+		t.Fatalf("entry[1] = %+v, want chat fallback success with low effort", entries[1])
+	}
+}
+

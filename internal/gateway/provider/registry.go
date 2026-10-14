@@ -12,7 +12,7 @@ import (
 type Config struct {
 	Name          string
 	Kind          Kind
-	Driver        string // "anthropic" | "openaicompat" | "openai-responses" | "bedrock" | "laya"
+	Driver        string // "anthropic" | "openaicompat" | "openai-responses" | "bedrock" | "laya" | "jev"
 	BaseURL       string
 	CredentialRef string
 	Headers       map[string]string
@@ -132,6 +132,15 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 			}
 			p = NewLaya(LayaConfig{
 				Name: c.Name, BaseURL: c.BaseURL,
+				Headers: c.Headers, Timeout: c.Timeout,
+			})
+		case "jev":
+			baseURL := c.BaseURL
+			if baseURL == "" {
+				baseURL = DefaultJevBaseURL
+			}
+			p = NewJev(JevConfig{
+				Name: c.Name, BaseURL: baseURL, APIKey: key,
 				Headers: c.Headers, Timeout: c.Timeout,
 			})
 		default:

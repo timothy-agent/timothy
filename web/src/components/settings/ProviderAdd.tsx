@@ -68,6 +68,7 @@ function presetLitellmProvider(presetId: string): string {
     glm: 'zai',
     grok: 'xai',
     ollama: 'ollama',
+    jev: 'typesafe',
   }[presetId] ?? ''
 }
 

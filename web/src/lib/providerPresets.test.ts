@@ -47,6 +47,16 @@ describe('matchPreset', () => {
     expect(matchPreset(p).id).toBe('anthropic')
   })
 
+  it('matches the laya preset by driver', () => {
+    const p = provider({ driver: 'laya', base_url: 'http://laya:8000' })
+    expect(matchPreset(p).id).toBe('laya')
+  })
+
+  it('matches the jev preset by driver', () => {
+    const p = provider({ driver: 'jev', base_url: 'https://api.typesafe.ai' })
+    expect(matchPreset(p).id).toBe('jev')
+  })
+
   it('matches the anthropic preset for a kind=cli row regardless of base_url', () => {
     const p = provider({ kind: 'cli', driver: 'claude-cli', base_url: '' })
     expect(matchPreset(p).id).toBe('anthropic')

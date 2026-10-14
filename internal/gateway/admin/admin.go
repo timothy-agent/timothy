@@ -37,11 +37,14 @@ type pgxQuerier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
-// drivers whitelists what the gateway can actually construct a chat
+// drivers whitelists what the gateway can actually construct a provider
 // driver for — kind='api' rows only. kind='cli' rows (D-051) validate
 // against cliDrivers instead: they're mission-only executor providers
 // the gateway never builds a chat driver for at all.
-var drivers = map[string]bool{"anthropic": true, "openaicompat": true, "openai-responses": true, "bedrock": true}
+var drivers = map[string]bool{
+	"anthropic": true, "openaicompat": true, "openai-responses": true, "bedrock": true,
+	"laya": true, "jev": true,
+}
 
 // cliDrivers whitelists driver names valid on a kind='cli' provider
 // row. These never go through provider.Build; only their name and
@@ -1521,14 +1524,38 @@ func (a *Admin) probe(ctx context.Context, drv provider.Provider, providerName, 
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	start := time.Now()
+	res := TestResult{Model: model}
+	entry := ledger.Entry{Provider: providerName, Model: model, Route: "admin", Purpose: "test"}
+
+	if dec, ok := drv.(provider.Decider); ok {
+		_, usage, err := dec.Decide(tctx, model, provider.DecideRequest{
+			Kind:     provider.DecideYesNo,
+			Question: "ping",
+		})
+		if err != nil {
+			res.Detail = err.Error()
+			entry.Status, entry.ErrorCode = "error", "provider_error"
+		} else {
+			res.OK = true
+			entry.Status = "ok"
+			entry.Usage = usage
+			entry.Cost = ledger.Cost(prices, entry.Usage)
+			if prices != nil {
+				entry.Currency = prices.Currency
+			}
+		}
+		res.LatencyMS = time.Since(start).Milliseconds()
+		entry.LatencyMS = res.LatencyMS
+		a.rec.Record(ctx, entry)
+		return res
+	}
+
 	ch, err := drv.Stream(tctx, provider.CompletionRequest{
 		Model:         model,
 		Messages:      []provider.Message{{Role: "user", Content: "ping"}},
 		MaxTokens:     1,
 		ResponsesMode: responsesMode,
 	})
-	res := TestResult{Model: model}
-	entry := ledger.Entry{Provider: providerName, Model: model, Route: "admin", Purpose: "test"}
 	if err != nil {
 		res.Detail = err.Error()
 		entry.Status, entry.ErrorCode = "error", "invalid_request"

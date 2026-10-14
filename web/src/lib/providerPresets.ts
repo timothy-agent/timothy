@@ -6,7 +6,7 @@ import type { AdminProvider } from '../api/types'
 export interface ProviderPreset {
   id: string
   name: string
-  driver: 'openaicompat' | 'anthropic' | 'bedrock' | 'claude-cli' | 'cursor-cli'
+  driver: 'openaicompat' | 'anthropic' | 'bedrock' | 'claude-cli' | 'cursor-cli' | 'laya' | 'jev'
   description: string
   // Sprite symbol in ProviderLogo; custom endpoints render a glyph.
   logo?: string
@@ -229,6 +229,31 @@ export const providerPresets: ProviderPreset[] = [
     validateModel: 'qwen3:8b',
   },
   {
+    id: 'laya',
+    name: 'Laya',
+    driver: 'laya',
+    description: 'Self-hosted decision model',
+    brandColor: '#10B981',
+    baseURL: 'http://laya:8000',
+    requiresKey: false,
+    keyHint: 'Runs in the laya compose profile, no API key needed.',
+    validateModel: 'typed-decisions',
+  },
+  {
+    id: 'jev',
+    name: 'TypeSafe Jev',
+    driver: 'jev',
+    description: 'Hosted decision model for fast routing',
+    brandColor: '#2563EB',
+    baseURL: 'https://api.typesafe.ai',
+    requiresKey: true,
+    defaultRef: 'JEV_API_KEY',
+    keyPlaceholder: 'jv_live_…',
+    keyHint: 'Create an API key at typesafe.ai.',
+    keyURL: 'https://typesafe.ai',
+    validateModel: 'jev-latest',
+  },
+  {
     id: 'custom',
     name: 'Custom endpoint',
     driver: 'openaicompat',
@@ -260,7 +285,7 @@ export function matchPreset(p: MatchPresetSource): ProviderPreset {
     if (p.driver === 'cursor-cli') return providerPresets.find((x) => x.id === 'cursor') ?? custom
     return providerPresets.find((x) => x.id === 'anthropic') ?? custom
   }
-  if (p.driver === 'anthropic' || p.driver === 'bedrock') {
+  if (p.driver === 'anthropic' || p.driver === 'bedrock' || p.driver === 'laya' || p.driver === 'jev') {
     return providerPresets.find((x) => x.driver === p.driver) ?? custom
   }
   // Ollama's fixed default port (11434) is a stronger signal than

@@ -14,6 +14,7 @@ func TestBuildRegistry(t *testing.T) {
 	lookups := map[string]string{
 		"ANTHROPIC_API_KEY": "sk-a", "XAI_API_KEY": "sk-x", // #nosec G101
 		"bedrock-static": `{"access_key_id":"AKIA123","secret_access_key":"shh"}`, // #nosec G101
+		"JEV_API_KEY":    "jv_live_test_key",                                       // #nosec G101
 	}
 	r, err := Build([]Config{
 		// CredentialRef values are env var *names*, not secrets.
@@ -21,6 +22,7 @@ func TestBuildRegistry(t *testing.T) {
 		{Name: "xai-grok", Kind: KindAPI, Driver: "openaicompat", BaseURL: "https://api.x.ai/v1", CredentialRef: "XAI_API_KEY"}, // #nosec G101
 		{Name: "bedrock", Kind: KindAPI, Driver: "bedrock", CredentialRef: "bedrock-static"},
 		{Name: "laya", Kind: KindAPI, Driver: "laya", BaseURL: "http://laya:8000"},
+		{Name: "jev", Kind: KindAPI, Driver: "jev", CredentialRef: "JEV_API_KEY"}, // #nosec G101
 	}, func(ref string) string { return lookups[ref] })
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -43,11 +45,25 @@ func TestBuildRegistry(t *testing.T) {
 	if _, ok := l.(*Laya); !ok {
 		t.Fatalf("laya provider type = %T, want *Laya", l)
 	}
+	j, ok := r.Get("jev")
+	if !ok || j.Name() != "jev" {
+		t.Fatal("jev missing")
+	}
+	jevProv, ok := j.(*Jev)
+	if !ok {
+		t.Fatalf("jev provider type = %T, want *Jev", j)
+	}
+	if jevProv.cfg.APIKey != "jv_live_test_key" {
+		t.Fatalf("jev APIKey = %q, want jv_live_test_key", jevProv.cfg.APIKey)
+	}
+	if jevProv.cfg.BaseURL != DefaultJevBaseURL {
+		t.Fatalf("jev BaseURL = %q, want %q", jevProv.cfg.BaseURL, DefaultJevBaseURL)
+	}
 	if _, ok := r.Get("nope"); ok {
 		t.Fatal("unknown name resolved")
 	}
-	if got := len(r.Names()); got != 4 {
-		t.Fatalf("Names() = %d, want 4", got)
+	if got := len(r.Names()); got != 5 {
+		t.Fatalf("Names() = %d, want 5", got)
 	}
 }
 
