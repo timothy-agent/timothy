@@ -2,6 +2,7 @@ package provider
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -54,9 +55,9 @@ func TestLayaCapabilitiesAndStream(t *testing.T) {
 }
 
 // TestLayaDecideChoice pins the wire mapping: a choice becomes
-// a Laya choice question whose criteria are the options described,
-// the question is the state, the chain entry's model is forwarded, and
-// the reply's probabilities come back as scores.
+// a Laya choice question whose criteria are the options, the question
+// is the state, the chain entry's model is forwarded, and the reply's
+// probabilities come back as scores.
 func TestLayaDecideChoice(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"research","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)
@@ -86,8 +87,12 @@ func TestLayaDecideChoice(t *testing.T) {
 	if q.Type != "choice" || q.Instructions != "Which kind of mission is this?" {
 		t.Fatalf("question = %+v", q)
 	}
-	if len(q.Criteria) != 3 || q.Criteria["coding"] != "coding" || q.Criteria["research"] != "research" {
-		t.Fatalf("criteria = %v", q.Criteria)
+	crit, ok := q.Criteria.(map[string]any)
+	if !ok {
+		t.Fatalf("criteria = %T, want map", q.Criteria)
+	}
+	if len(crit) != 3 || crit["coding"] != "coding" || crit["research"] != "research" {
+		t.Fatalf("criteria = %v", crit)
 	}
 }
 
@@ -104,26 +109,23 @@ func TestLayaDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	}
 }
 
-// TestLayaDecideYesNoAndScore: both kinds ride a noul question with
-// the question as its own state; yesno thresholds the probability, score returns it.
-func TestLayaDecideYesNoAndScore(t *testing.T) {
+// TestLayaDecideYesNo pins that yesno questions ride a noul question,
+// thresholding the probability at 0.5.
+func TestLayaDecideYesNo(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name       string
-		kind       string
 		noul       string
 		wantChoice string
-		wantScore  float64
 	}{
-		{"yes", DecideYesNo, "0.91", "yes", 0},
-		{"no", DecideYesNo, "0.2", "no", 0},
-		{"score", DecideScore, "0.37", "", 0.37},
+		{"yes", "0.91", "yes"},
+		{"no", "0.2", "no"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			stub := newLayaStub(t, `{"type":"noul","noul":`+tc.noul+`,"confidence":0.9}`)
 			l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
-			res, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: tc.kind, Question: "Does the user ask for a refund?", Options: []string{"yes", "no"}})
+			res, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Does the user ask for a refund?", Options: []string{"yes", "no"}})
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
 			}
@@ -131,27 +133,82 @@ func TestLayaDecideYesNoAndScore(t *testing.T) {
 			if q.Type != "noul" || q.Criteria != nil || stub.got.State != "Does the user ask for a refund?" || stub.got.Model != "" {
 				t.Fatalf("request = %+v", stub.got)
 			}
-			if tc.kind == DecideYesNo {
-				if res.Choice != tc.wantChoice || res.Scores["yes"]+res.Scores["no"] != 1 {
-					t.Fatalf("res = %+v", res)
-				}
-				return
-			}
-			if res.Score == nil || *res.Score != tc.wantScore || res.Choice != "" {
+			if res.Choice != tc.wantChoice || res.Scores["yes"]+res.Scores["no"] != 1 {
 				t.Fatalf("res = %+v", res)
 			}
 		})
 	}
 }
 
+// TestLayaDecideScore pins that score questions use type "score" with level
+// descriptions and map the resulting ordinal scale onto [0, 1].
+func TestLayaDecideScore(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default criteria 4 levels", func(t *testing.T) {
+		t.Parallel()
+		// 4 levels -> 0 to 3 scale; raw 1.5 -> 1.5 / 3 = 0.5
+		stub := newLayaStub(t, `{"type":"score","score":1.5,"probabilities":{"0":0.1,"1":0.3,"2":0.4,"3":0.2}}`)
+		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+		res, usage, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "How relevant is this document?"})
+		if err != nil {
+			t.Fatalf("Decide: %v", err)
+		}
+		if res.Score == nil || math.Abs(*res.Score-0.5) > 1e-4 {
+			t.Fatalf("res.Score = %v, want 0.5", res.Score)
+		}
+		if res.Choice != "" {
+			t.Fatalf("res.Choice = %q, want empty", res.Choice)
+		}
+		if usage == nil || usage.InputTokens != 83 {
+			t.Fatalf("usage = %+v", usage)
+		}
+		q := stub.got.Questions["q"]
+		if q.Type != "score" {
+			t.Fatalf("q.Type = %q, want score", q.Type)
+		}
+		crit, ok := q.Criteria.([]any)
+		if !ok || len(crit) != 4 {
+			t.Fatalf("criteria = %v, want 4 levels", q.Criteria)
+		}
+	})
+
+	t.Run("custom 3 levels 0 to 2 scale", func(t *testing.T) {
+		t.Parallel()
+		// 3 levels -> 0 to 2 scale; raw 1.84 -> 1.84 / 2 = 0.92
+		stub := newLayaStub(t, `{"type":"score","score":1.84,"probabilities":{"0":0.05,"1":0.11,"2":0.84}}`)
+		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+		res, _, err := l.Decide(t.Context(), "", DecideRequest{
+			Kind:     DecideScore,
+			Question: "How urgent is this incident?",
+			Options:  []string{"not urgent", "soon", "blocking"},
+		})
+		if err != nil {
+			t.Fatalf("Decide: %v", err)
+		}
+		if res.Score == nil || math.Abs(*res.Score-0.92) > 1e-4 {
+			t.Fatalf("res.Score = %v, want 0.92", res.Score)
+		}
+		q := stub.got.Questions["q"]
+		if q.Type != "score" {
+			t.Fatalf("q.Type = %q, want score", q.Type)
+		}
+		crit, ok := q.Criteria.([]any)
+		if !ok || len(crit) != 3 {
+			t.Fatalf("criteria = %v, want 3 levels", q.Criteria)
+		}
+	})
+}
+
 func TestLayaDecideScoreOutsideRangeIsAnError(t *testing.T) {
 	t.Parallel()
-	for _, badScore := range []string{"-0.1", "1.5"} {
-		stub := newLayaStub(t, `{"type":"noul","noul":`+badScore+`}`)
+	// On 4 default levels (0-3 scale), raw < 0 or > 3 must error
+	for _, badScore := range []string{"-0.1", "3.5"} {
+		stub := newLayaStub(t, `{"type":"score","score":`+badScore+`}`)
 		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
 		_, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "score"})
-		if err == nil || !strings.Contains(err.Error(), "outside [0, 1]") {
-			t.Fatalf("score %s: err = %v, want 'outside [0, 1]'", badScore, err)
+		if err == nil || !strings.Contains(err.Error(), "outside [0, 3]") {
+			t.Fatalf("score %s: err = %v, want 'outside [0, 3]'", badScore, err)
 		}
 	}
 }

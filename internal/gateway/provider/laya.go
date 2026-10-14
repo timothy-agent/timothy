@@ -16,6 +16,15 @@ import (
 // DefaultLayaModel is the default English typed-decisions checkpoint (D-163).
 const DefaultLayaModel = "convaiinnovations/laya-typed-decisions"
 
+// defaultScoreLevels provides a standard ordinal scale for score questions when
+// the request does not provide explicit level descriptions.
+var defaultScoreLevels = []string{
+	"none: not at all present or relevant",
+	"low: minor or slight presence",
+	"medium: moderate or noticeable presence",
+	"high: strong or critical presence",
+}
+
 // LayaConfig configures one Laya decision-model provider instance.
 type LayaConfig struct {
 	Name    string
@@ -54,9 +63,9 @@ func (l *Laya) Stream(context.Context, CompletionRequest) (<-chan stream.StreamE
 
 // layaQuestion is one entry of the request's questions map.
 type layaQuestion struct {
-	Type         string            `json:"type"`
-	Instructions string            `json:"instructions"`
-	Criteria     map[string]string `json:"criteria,omitempty"`
+	Type         string `json:"type"`
+	Instructions string `json:"instructions"`
+	Criteria     any    `json:"criteria,omitempty"`
 }
 
 // layaRequest is the POST /v1/systemone body.
@@ -96,6 +105,13 @@ func (l *Laya) healthEndpoint() string {
 	endpoint = strings.TrimSuffix(endpoint, "/v1/systemone")
 	endpoint = strings.TrimSuffix(endpoint, "/v1")
 	return endpoint + "/health"
+}
+
+func scoreCriteria(req DecideRequest) []string {
+	if len(req.Options) >= 2 {
+		return req.Options
+	}
+	return defaultScoreLevels
 }
 
 // Decide evaluates a DecideRequest via Laya's /v1/systemone endpoint.
@@ -177,32 +193,44 @@ func (l *Laya) Decide(ctx context.Context, model string, req DecideRequest) (Dec
 		}
 		return DecideResult{}, usage, fmt.Errorf("laya: reply carries no noul probability")
 	default: // DecideScore
-		if ans.Noul != nil {
-			p := *ans.Noul
-			if p < 0 || p > 1 {
-				return DecideResult{}, usage, fmt.Errorf("laya: score %v is outside [0, 1]", p)
-			}
-			return DecideResult{Score: &p, Scores: map[string]float64{"0": 1 - p, "1": p}}, usage, nil
+		levels := scoreCriteria(req)
+		maxIdx := float64(len(levels) - 1)
+		if maxIdx <= 0 {
+			maxIdx = 1.0
 		}
+
 		if ans.Score != nil {
-			s := *ans.Score
-			if s < 0 || s > 1 {
-				return DecideResult{}, usage, fmt.Errorf("laya: score %v is outside [0, 1]", s)
+			raw := *ans.Score
+			if raw < 0 || raw > maxIdx {
+				return DecideResult{}, usage, fmt.Errorf("laya: score %v is outside [0, %g]", raw, maxIdx)
 			}
-			return DecideResult{Score: &s, Scores: ans.Probabilities}, usage, nil
+			norm := raw / maxIdx
+			if norm < 0 {
+				norm = 0
+			} else if norm > 1 {
+				norm = 1
+			}
+			return DecideResult{Score: &norm, Scores: ans.Probabilities}, usage, nil
 		}
-		return DecideResult{}, usage, fmt.Errorf("laya: reply carries no noul probability")
+		return DecideResult{}, usage, fmt.Errorf("laya: reply carries no score")
 	}
 }
 
 func layaBody(model string, req DecideRequest) layaRequest {
-	q := layaQuestion{Type: "noul", Instructions: req.Question}
-	if req.Kind == DecideChoice {
+	q := layaQuestion{Instructions: req.Question}
+	switch req.Kind {
+	case DecideChoice:
 		q.Type = "choice"
-		q.Criteria = make(map[string]string, len(req.Options))
+		crit := make(map[string]string, len(req.Options))
 		for _, o := range req.Options {
-			q.Criteria[o] = o
+			crit[o] = o
 		}
+		q.Criteria = crit
+	case DecideScore:
+		q.Type = "score"
+		q.Criteria = scoreCriteria(req)
+	default: // DecideYesNo
+		q.Type = "noul"
 	}
 	state := req.Question
 	return layaRequest{Model: model, State: state, Questions: map[string]layaQuestion{layaQuestionID: q}}
