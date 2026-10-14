@@ -5,6 +5,8 @@ secrets:
   existingSecret: timothy-secrets
 whisper:
   enabled: true
+laya:
+  enabled: true
 ingress:
   enabled: true
   className: nginx

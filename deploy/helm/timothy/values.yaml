@@ -230,3 +230,12 @@ whisper:
   resources:
     requests: {cpu: 500m, memory: 4Gi}
     limits: {cpu: "2", memory: 6Gi}
+
+laya:
+  # Off by default: typed decision-model sidecar for calibrated probabilities and fast routing.
+  enabled: false
+  image: {repository: timothy-laya, tag: "", digest: ""}
+  serviceAccount: {annotations: {}}
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: "2", memory: 2Gi}

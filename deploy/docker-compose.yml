@@ -159,6 +159,18 @@ services:
     cpus: 2.0
     pids_limit: 128
 
+  laya:
+    <<: *service
+    profiles: [laya, full]
+    build:
+      context: ../laya-svc
+    # internal-only: no published ports, no auth; gateway is the sole
+    # caller, same trust boundary as searxng/markitdown.
+    # Evaluator memory footprint and CPU headroom for decision scoring.
+    mem_limit: 2g
+    cpus: 2.0
+    pids_limit: 128
+
   # Local models: run Ollama natively on the host (Metal/CUDA — a
   # containerized runner gets CPU only and can't serve big models) and
   # register http://host.docker.internal:11434/v1 in Settings as a
