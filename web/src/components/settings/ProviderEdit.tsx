@@ -226,6 +226,12 @@ function ProviderEditForm({
   const isOpenaicompat = provider.driver === 'openaicompat'
   const preset = matchPreset(provider)
   const isCliproxy = preset?.id === 'chatgpt' || preset?.id === 'claude'
+  const showLitellmProvider =
+    !isCli &&
+    !isCliproxy &&
+    provider.driver !== 'anthropic' &&
+    provider.driver !== 'bedrock' &&
+    (preset?.id === 'custom' || Boolean(staged.values.litellm_provider))
 
   return (
     <PageShell width="form">
@@ -280,7 +286,7 @@ function ProviderEditForm({
             </Field>
           )}
 
-          {!bedrockAmbient && (
+          {!bedrockAmbient && !isCliproxy && (
             <Field label="Credential reference" description="Storage name for this provider's key, choose an existing one or rotate the value below.">
               <ExistingCredentialSelect
                 value={staged.values.credential_ref}
@@ -289,7 +295,7 @@ function ProviderEditForm({
             </Field>
           )}
 
-          {isOpenaicompat && (
+          {isOpenaicompat && !isCliproxy && (
             <Field label="Disable reasoning" required={false}>
               {() => (
                 <div className="flex items-center gap-3 text-sm">
@@ -306,7 +312,7 @@ function ProviderEditForm({
             </Field>
           )}
 
-          {isOpenaicompat && (
+          {isOpenaicompat && !isCliproxy && (
             <OptionStringField
               label="Request timeout"
               description='Go duration, e.g. "20m", empty uses the default.'
@@ -335,7 +341,7 @@ function ProviderEditForm({
             </Field>
           )}
 
-          {!isCli && (
+          {showLitellmProvider && (
             <OptionStringField
               label="LiteLLM provider"
               description="Which LiteLLM provider section this provider's models are priced under. Empty infers it from driver/base URL."
@@ -656,7 +662,7 @@ function SubscriptionSessionPanel({
           {busy
             ? 'Opening login page…'
             : providerType === 'chatgpt'
-              ? 'Re-authenticate with ChatGPT'
+              ? 'Re-authenticate with OpenAI'
               : 'Re-authenticate with Claude'}
         </Button>
       </div>
@@ -870,9 +876,18 @@ function ProviderCatalogPanel({ provider }: { provider: AdminProvider }) {
     [provider.id],
   )
   const models = useCatalogSearch(q, search)
+  const capped = models.length >= providerCatalogSearchLimit
 
   return (
-    <Panel title={`Models · ${models.length}`} description="Every catalog model this provider can serve, with live pricing. Pick which one actually runs on the Routing page." density="operational">
+    <Panel
+      title={capped ? `Models · ${models.length}+` : `Models · ${models.length}`}
+      description={
+        capped
+          ? 'Chat models are listed first. Filter by id to reach the rest of this catalog, including embeddings and image models.'
+          : 'Every catalog model this provider can serve, with live pricing. Pick which one actually runs on the Routing page.'
+      }
+      density="operational"
+    >
       <div className="p-3">
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="filter by model id…" size="sm" />
       </div>

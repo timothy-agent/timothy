@@ -160,14 +160,16 @@ describe('AssistantMessage', () => {
     )
   })
 
-  it('omits the provider brand mark for an unrecognized provider name', () => {
+  it('uses a generic server mark for an unrecognized provider name', () => {
     const msg = play([
       { type: 'chunk', text: 'hi' },
       { type: 'meta', session_id: 's', provider: 'my-custom-endpoint', model: 'whatever' },
     ])
     render(<AssistantMessage msg={msg} />)
 
-    expect(screen.getByTestId('meta-badge').querySelector('svg use')).not.toBeInTheDocument()
+    const badge = screen.getByTestId('meta-badge')
+    expect(badge.querySelector('svg use')).not.toBeInTheDocument()
+    expect(badge.querySelector('svg.lucide-server')).toBeInTheDocument()
   })
 
   it('resolves "GLM (Z.ai)" to the zai preset via adjacent-segment join', () => {

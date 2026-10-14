@@ -176,6 +176,9 @@ type CompletionRequest struct {
 	// by the caller from the previous response's Meta.ProviderState.
 	// Drivers ignore state naming a different driver or absent entirely.
 	ProviderState json.RawMessage
+	// ResponsesMode indicates that the model requires the Responses API endpoint
+	// (/responses) rather than /chat/completions.
+	ResponsesMode bool
 }
 
 // Provider is one configured LLM provider. Stream returns quickly; all

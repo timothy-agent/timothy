@@ -291,7 +291,7 @@ describe('MissionDetail spend', () => {
     expect(screen.queryByText(/% of budget/)).toBeNull()
   })
 
-  it('omits the provider brand mark for an unrecognized provider name', async () => {
+  it('uses a generic server mark for an unrecognized provider name', async () => {
     vi.mocked(missionUsage).mockResolvedValue({
       mission_id: 'm1',
       cost_by_currency: { USD: 0.5 },
@@ -311,7 +311,9 @@ describe('MissionDetail spend', () => {
     })
     renderPage()
     expect(await screen.findByText('whatever')).toBeTruthy()
-    expect(screen.getByText('whatever').closest('span')?.querySelector('svg use')).not.toBeInTheDocument()
+    const badge = screen.getByText('whatever').closest('span')
+    expect(badge?.querySelector('svg use')).not.toBeInTheDocument()
+    expect(badge?.querySelector('svg.lucide-server')).toBeInTheDocument()
   })
 
   it('filters harness-flagged models out of the brain pill row', async () => {

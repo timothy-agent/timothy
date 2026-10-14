@@ -178,6 +178,17 @@ describe('ProviderAdd seeds options.litellm_provider', () => {
     })
   })
 
+  it('searches the openrouter catalog section when pasting a key', async () => {
+    renderPage('openrouter')
+    fireEvent.click(await screen.findByRole('button', { name: 'I have a key, paste it instead' }))
+    await waitFor(() => expect(searchCatalog).toHaveBeenCalledWith(expect.any(String), 'openrouter'))
+  })
+
+  it('searches the openai catalog section for the openai preset', async () => {
+    renderPage('openai')
+    await waitFor(() => expect(searchCatalog).toHaveBeenCalledWith('gpt-4o-mini', 'openai'))
+  })
+
   it('leaves options.litellm_provider unset for the custom preset', async () => {
     renderPage('custom')
     fireEvent.change(await screen.findByPlaceholderText('my-gateway'), { target: { value: 'my-custom' } })
@@ -957,7 +968,7 @@ describe('ProviderAdd openrouter connect (D-163)', () => {
 describe('ProviderAdd subscription connect', () => {
   it('renders subscription connect panel for chatgpt preset', async () => {
     renderPage('chatgpt')
-    expect(await screen.findByRole('button', { name: 'Sign in with ChatGPT' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Sign in with OpenAI' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Configure endpoint manually' })).toBeInTheDocument()
     expect(screen.queryByPlaceholderText('model id')).not.toBeInTheDocument()
   })
@@ -970,7 +981,7 @@ describe('ProviderAdd subscription connect', () => {
 
     renderPage('chatgpt')
 
-    const button = await screen.findByRole('button', { name: 'Sign in with ChatGPT' })
+    const button = await screen.findByRole('button', { name: 'Sign in with OpenAI' })
     fireEvent.click(button)
 
     await waitFor(() => expect(subscriptionAuthStart).toHaveBeenCalledWith('chatgpt'))
@@ -979,10 +990,11 @@ describe('ProviderAdd subscription connect', () => {
     await waitFor(() =>
       expect(createProvider).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'ChatGPT Subscription',
+          name: 'OpenAI Subscription',
           driver: 'openaicompat',
           base_url: 'http://cliproxy:8317/v1',
           default_model: 'gpt-4o',
+          options: { litellm_provider: 'openai' },
         }),
       ),
     )
@@ -1009,6 +1021,7 @@ describe('ProviderAdd subscription connect', () => {
           driver: 'openaicompat',
           base_url: 'http://cliproxy:8317/v1',
           default_model: 'claude-3-7-sonnet-20250219',
+          options: { litellm_provider: 'anthropic' },
         }),
       ),
     )
@@ -1020,7 +1033,7 @@ describe('ProviderAdd subscription connect', () => {
     renderPage('chatgpt')
     fireEvent.click(await screen.findByRole('button', { name: 'Configure endpoint manually' }))
     expect(await screen.findByPlaceholderText('model id')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Sign in with ChatGPT' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Sign in with OpenAI' })).not.toBeInTheDocument()
   })
 })
 

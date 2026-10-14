@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -114,17 +115,12 @@ const maxSearchLimit = 200
 // group alphabetical by model_key (rankedMatches). limit defaults to
 // 50, capped at 200.
 func (s *Store) Search(ctx context.Context, q, litellmProvider string, limit int) ([]Model, error) {
-	if limit <= 0 {
-		limit = defaultSearchLimit
-	}
-	if limit > maxSearchLimit {
-		limit = maxSearchLimit
-	}
+	limit = clampSearchLimit(limit, false)
 	qLower := strings.ToLower(q)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return rankedMatches(s.entries, qLower, limit, func(e Entry) bool {
+	return rankedMatches(s.entries, qLower, limit, false, func(e Entry) bool {
 		return litellmProvider == "" || e.LitellmProvider == litellmProvider
 	}), nil
 }
@@ -134,14 +130,13 @@ func (s *Store) Search(ctx context.Context, q, litellmProvider string, limit int
 // restriction is a set (nil/empty means no restriction) rather than a
 // single exact value — the admin catalog-models endpoint's candidate
 // litellm_provider(s) from a driver/base_url can be more than one
-// (e.g. bedrock's "bedrock"/"bedrock_converse").
+// (e.g. bedrock's "bedrock"/"bedrock_converse"). limit < 0 returns
+// every match (the provider listing's context-window source). An empty
+// query lists chat-like modes before the rest, still alphabetical
+// within each group, so a capped picker is not filled with embeddings
+// and image models that sort first.
 func (s *Store) SearchProviders(ctx context.Context, q string, litellmProviders []string, limit int) ([]Model, error) {
-	if limit <= 0 {
-		limit = defaultSearchLimit
-	}
-	if limit > maxSearchLimit {
-		limit = maxSearchLimit
-	}
+	limit = clampSearchLimit(limit, true)
 	qLower := strings.ToLower(q)
 	want := make(map[string]bool, len(litellmProviders))
 	for _, p := range litellmProviders {
@@ -150,9 +145,25 @@ func (s *Store) SearchProviders(ctx context.Context, q string, litellmProviders 
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return rankedMatches(s.entries, qLower, limit, func(e Entry) bool {
+	return rankedMatches(s.entries, qLower, limit, true, func(e Entry) bool {
 		return len(want) == 0 || want[e.LitellmProvider]
 	}), nil
+}
+
+// clampSearchLimit applies the default and the max. allowUnlimited
+// treats a negative limit as "every match" — Search itself never does,
+// so a client cannot dump the catalog through the search endpoint.
+func clampSearchLimit(limit int, allowUnlimited bool) int {
+	if allowUnlimited && limit < 0 {
+		return math.MaxInt
+	}
+	if limit <= 0 {
+		limit = defaultSearchLimit
+	}
+	if limit > maxSearchLimit {
+		limit = maxSearchLimit
+	}
+	return limit
 }
 
 // rankedMatches filters s's entries (already sorted alphabetically by
@@ -162,7 +173,7 @@ func (s *Store) SearchProviders(ctx context.Context, q string, litellmProviders 
 // each group in the alphabetical order entries already carry. Same
 // deterministic order regardless of qLower's position in the key, so
 // which `limit` rows a caller gets never depends on map iteration.
-func rankedMatches(entries []Entry, qLower string, limit int, keep func(Entry) bool) []Model {
+func rankedMatches(entries []Entry, qLower string, limit int, chatFirst bool, keep func(Entry) bool) []Model {
 	prefix := []Model{}
 	substring := []Model{}
 	for _, e := range entries {
@@ -177,11 +188,39 @@ func rankedMatches(entries []Entry, qLower string, limit int, keep func(Entry) b
 			substring = append(substring, toModel(e))
 		}
 	}
+	if chatFirst && qLower == "" {
+		prefix = chatFirstModels(prefix)
+	}
 	out := append(prefix, substring...)
 	if len(out) > limit {
 		out = out[:limit]
 	}
 	return out
+}
+
+// chatLike is a mode a person picks as a chat/default model. Other
+// modes (embedding, image, audio, moderation) stay in the catalog but
+// sort after these when a list is capped.
+func chatLike(mode string) bool {
+	switch mode {
+	case "chat", "completion", "responses":
+		return true
+	default:
+		return false
+	}
+}
+
+func chatFirstModels(models []Model) []Model {
+	chat := make([]Model, 0, len(models))
+	rest := make([]Model, 0)
+	for _, m := range models {
+		if chatLike(m.Mode) {
+			chat = append(chat, m)
+		} else {
+			rest = append(rest, m)
+		}
+	}
+	return append(chat, rest...)
 }
 
 // byProvider returns every catalog entry for one of litellmProviders —

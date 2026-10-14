@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -33,8 +34,9 @@ type OpenAICompatConfig struct {
 
 // OpenAICompat streams from an OpenAI-compatible chat/completions API.
 type OpenAICompat struct {
-	cfg    OpenAICompatConfig
-	client *http.Client
+	cfg       OpenAICompatConfig
+	client    *http.Client
+	responses *OpenAIResponses
 }
 
 // NewOpenAICompat builds the driver; it performs no I/O.
@@ -42,7 +44,8 @@ func NewOpenAICompat(cfg OpenAICompatConfig) *OpenAICompat {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultTimeout
 	}
-	return &OpenAICompat{cfg: cfg, client: &http.Client{}}
+	responses := NewOpenAIResponses(OpenAIResponsesConfig(cfg))
+	return &OpenAICompat{cfg: cfg, client: &http.Client{}, responses: responses}
 }
 
 func (o *OpenAICompat) Name() string { return o.cfg.Name }
@@ -229,6 +232,9 @@ type oaiChunk struct {
 func (o *OpenAICompat) Stream(ctx context.Context, req CompletionRequest) (<-chan stream.StreamEvent, error) {
 	if req.Model == "" {
 		return nil, fmt.Errorf("openaicompat: model is required")
+	}
+	if o.responses != nil && o.shouldUseResponses(req) {
+		return o.responses.Stream(ctx, req)
 	}
 	wire := o.buildRequest(req)
 	body, err := json.Marshal(wire)
@@ -539,4 +545,20 @@ func (o *OpenAICompat) relay(ctx context.Context, body io.Reader, ch chan<- stre
 		return ctx.Err() == nil
 	})
 	return finished, err
+}
+
+// shouldUseResponses reports whether req requires OpenAI's Responses API
+// endpoint (/responses) instead of /chat/completions. Only official OpenAI
+// (api.openai.com) ever changes URL to /responses when req.ResponsesMode is set;
+// every other OpenAI-compatible host stays on /chat/completions.
+func (o *OpenAICompat) shouldUseResponses(req CompletionRequest) bool {
+	return isOpenAIHost(o.cfg.BaseURL) && req.ResponsesMode
+}
+
+func isOpenAIHost(baseURL string) bool {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return false
+	}
+	return u.Hostname() == "api.openai.com"
 }

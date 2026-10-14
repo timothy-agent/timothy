@@ -43,7 +43,7 @@ func (a *Admin) CatalogModelsForProvider(ctx context.Context, id, q string, limi
 	if err != nil {
 		return nil, err
 	}
-	models, err := a.catalog.SearchProviders(ctx, q, catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options), limit)
+	models, err := a.catalog.SearchProviders(ctx, q, catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options, p.Name, p.DefaultModel), limit)
 	if err != nil {
 		return nil, fmt.Errorf("admin catalog models: %w", err)
 	}
@@ -123,7 +123,7 @@ func resolvePricedModel(ctx context.Context, cat catalogSuggester, pair Provider
 		return out, nil
 	}
 
-	candidates := catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options)
+	candidates := catalog.CandidateProvidersForRow(p.Kind, p.Driver, p.BaseURL, p.Options, p.Name, p.DefaultModel, pair.Model)
 	sugs, err := cat.Suggest(ctx, candidates, []string{pair.Model})
 	if err != nil {
 		return PricedModel{}, err

@@ -6,7 +6,7 @@ import type { AdminProvider } from '../api/types'
 export interface ProviderPreset {
   id: string
   name: string
-  driver: 'openaicompat' | 'openai-responses' | 'anthropic' | 'bedrock' | 'claude-cli' | 'cursor-cli'
+  driver: 'openaicompat' | 'anthropic' | 'bedrock' | 'claude-cli' | 'cursor-cli'
   description: string
   // Sprite symbol in ProviderLogo; custom endpoints render a glyph.
   logo?: string
@@ -119,25 +119,10 @@ export const providerPresets: ProviderPreset[] = [
     validateModel: 'gpt-4o-mini',
   },
   {
-    id: 'openai-responses',
-    name: 'OpenAI (Responses)',
-    driver: 'openai-responses',
-    description: 'GPT reasoning models via the Responses API',
-    logo: 'openai',
-    brandColor: '#10A37F',
-    baseURL: 'https://api.openai.com/v1',
-    requiresKey: true,
-    defaultRef: 'OPENAI_API_KEY',
-    keyPlaceholder: 'sk-…',
-    keyHint: 'Create one at platform.openai.com/api-keys.',
-    keyURL: 'https://platform.openai.com/api-keys',
-    validateModel: 'gpt-4o-mini',
-  },
-  {
     id: 'chatgpt',
-    name: 'ChatGPT Subscription',
+    name: 'OpenAI Subscription',
     driver: 'openaicompat',
-    description: 'ChatGPT Plus/Pro via local proxy',
+    description: 'ChatGPT Plus or Pro, via local proxy',
     logo: 'openai',
     brandColor: '#10A37F',
     baseURL: 'http://cliproxy:8317/v1',
@@ -275,7 +260,7 @@ export function matchPreset(p: MatchPresetSource): ProviderPreset {
     if (p.driver === 'cursor-cli') return providerPresets.find((x) => x.id === 'cursor') ?? custom
     return providerPresets.find((x) => x.id === 'anthropic') ?? custom
   }
-  if (p.driver === 'anthropic' || p.driver === 'bedrock' || p.driver === 'openai-responses') {
+  if (p.driver === 'anthropic' || p.driver === 'bedrock') {
     return providerPresets.find((x) => x.driver === p.driver) ?? custom
   }
   // Ollama's fixed default port (11434) is a stronger signal than
@@ -287,12 +272,8 @@ export function matchPreset(p: MatchPresetSource): ProviderPreset {
       return providerPresets.find((x) => x.id === 'ollama') ?? custom
     }
     if (u.port === '8317' || u.hostname === 'cliproxy') {
-      const name = (p.name ?? '').toLowerCase()
-      const model = (p.default_model ?? '').toLowerCase()
-      if (name.includes('claude') || name.includes('anthropic') || model.startsWith('claude')) {
-        return providerPresets.find((x) => x.id === 'claude') ?? custom
-      }
-      return providerPresets.find((x) => x.id === 'chatgpt') ?? custom
+      const id = cliproxyPresetId(p.name ?? '', p.default_model ?? '')
+      return providerPresets.find((x) => x.id === id) ?? custom
     }
   } catch {
     // fall through to host matching below
@@ -306,4 +287,19 @@ export function matchPreset(p: MatchPresetSource): ProviderPreset {
     }
   })
   return byURL ?? custom
+}
+
+// cliproxyPresetId brands a cliproxy row as Claude or ChatGPT from the
+// same token signals the gateway uses to pick a catalog section. An
+// ambiguous row stays ChatGPT, which is the historical default.
+function cliproxyPresetId(name: string, model: string): 'claude' | 'chatgpt' {
+  const tokens = `${name} ${model}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
+  const anthropic = tokens.some(
+    (t) => t === 'anthropic' || t === 'sonnet' || t === 'opus' || t === 'haiku' || t.startsWith('claude'),
+  )
+  const openai = tokens.some(
+    (t) => t === 'openai' || t === 'chatgpt' || t === 'codex' || t.startsWith('gpt') || t === 'o1' || t === 'o3' || t === 'o4',
+  )
+  if (anthropic && !openai) return 'claude'
+  return 'chatgpt'
 }

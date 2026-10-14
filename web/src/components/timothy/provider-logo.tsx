@@ -1,3 +1,4 @@
+import { Server } from 'lucide-react'
 import { CursorIcon } from '../icons/CursorIcon'
 import { BrandTile } from './brand-tile'
 import { providerPresets, type ProviderPreset } from '../../lib/providerPresets'
@@ -56,8 +57,9 @@ export function LogoSprite() {
   )
 }
 
-// ProviderLogo renders a preset's mark on its brand-color tile, or a
-// dashed glyph for custom endpoints. Sizes via className (size-*).
+// ProviderLogo renders a preset's mark on its brand-color tile. A
+// preset with no vendor mark (a custom endpoint) gets a server glyph
+// on the same tile, not an empty dashed box. Sizes via className (size-*).
 export function ProviderLogo({
   preset,
   className = 'size-9',
@@ -69,7 +71,13 @@ export function ProviderLogo({
     return <BrandTile icon={<CursorIcon className="size-[60%]" />} color={preset.brandColor} className={className} />
   }
   if (!preset.logo) {
-    return <BrandTile className={className} />
+    return (
+      <BrandTile
+        icon={<Server className="size-[55%]" strokeWidth={1.75} aria-hidden />}
+        color={preset.brandColor}
+        className={className}
+      />
+    )
   }
   return <BrandTile spriteId={`plogo-${preset.logo}`} color={preset.brandColor} className={className} />
 }
@@ -86,8 +94,8 @@ export function ProviderLogo({
 // inside an unrelated word). When more than one preset matches, the
 // longest id wins so a specific preset (bedrock) beats a shorter
 // generic one that happens to also match (aws) on the same name.
-// Returns undefined — never the 'custom' fallback — so callers can
-// render no icon rather than a meaningless dashed glyph.
+// Returns undefined — never the 'custom' fallback — so a name that
+// matches nothing gets the generic server mark in ProviderMark.
 export function presetForProviderName(name: string | undefined): ProviderPreset | undefined {
   if (!name) return undefined
   const parts = name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)
@@ -99,10 +107,17 @@ export function presetForProviderName(name: string | undefined): ProviderPreset 
   return matches.reduce((best, p) => (p.id.length > best.id.length ? p : best))
 }
 
+// logoPresetForName is presetForProviderName with the custom preset as
+// the fallback, for tiles that should always show a mark.
+export function logoPresetForName(name: string | undefined): ProviderPreset {
+  return presetForProviderName(name) ?? providerPresets.find((p) => p.id === 'custom')!
+}
+
 // ProviderMark renders a preset's brand mark alone, in the current
 // text color, sized to sit inline with small metadata text (badges,
 // captions) — the tile treatment ProviderLogo uses elsewhere would be
-// too heavy at that scale. Renders nothing for an unmatched provider.
+// too heavy at that scale. An unmatched or custom provider gets a
+// generic server mark so the row still has an icon.
 export function ProviderMark({
   preset,
   className = 'size-3.5',
@@ -111,7 +126,7 @@ export function ProviderMark({
   className?: string
 }) {
   if (preset?.id === 'cursor') return <CursorIcon className={className} />
-  if (!preset?.logo) return null
+  if (!preset?.logo) return <Server className={`${className} shrink-0`} aria-hidden />
   return (
     <svg className={`${className} shrink-0 fill-current`} aria-hidden="true">
       <use href={`#plogo-${preset.logo}`} />

@@ -14,10 +14,12 @@ describe('ModelBadge', () => {
     )
   })
 
-  it('omits the mark for an unrecognized provider name', () => {
+  it('uses a generic server mark for an unrecognized provider name', () => {
     render(<ModelBadge provider="my-custom-endpoint" model="whatever" />)
     expect(screen.getByText('whatever')).toBeInTheDocument()
-    expect(screen.getByText('whatever').closest('span')?.querySelector('svg use')).not.toBeInTheDocument()
+    const badge = screen.getByText('whatever').closest('span')
+    expect(badge?.querySelector('svg use')).not.toBeInTheDocument()
+    expect(badge?.querySelector('svg.lucide-server')).toBeInTheDocument()
   })
 
   it('renders extra children after the model name', () => {

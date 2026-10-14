@@ -424,38 +424,78 @@ func TestResolveModelCapabilityExhaustionNamesModel(t *testing.T) {
 	}
 }
 
-// TestResolveDetailSkipsResponsesOnlyModelOnChatDriver (issue #708): a
-// catalog model in Responses-only mode is unusable on an openaicompat
-// row, whose native calls go to chat/completions, but stays usable on
-// an openai-responses row for the same model.
-func TestResolveDetailSkipsResponsesOnlyModelOnChatDriver(t *testing.T) {
+// TestResolveDetailAllowsModelOnChatDriver verifies that a standard
+// openaicompat row stays usable natively, sets ResponsesMode=true when
+// catalog mode is "responses" or when an unknown model on api.openai.com
+// has "codex" in its name, and keeps ResponsesMode=false on non-OpenAI hosts
+// or chat-mode models.
+func TestResolveDetailAllowsModelOnChatDriver(t *testing.T) {
 	t.Parallel()
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "openai", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.com/v1",
 			DefaultModel: "gpt-5.3-codex", CredentialRef: "OPENAI_KEY", Enabled: true},
-		{ID: "p2", Name: "openai-responses", Kind: "api", Driver: "openai-responses", BaseURL: "https://api.openai.com/v1",
-			DefaultModel: "gpt-5.3-codex", CredentialRef: "OPENAI_KEY", Enabled: true},
+		{ID: "p2", Name: "ollama", Kind: "api", Driver: "openaicompat", BaseURL: "http://localhost:11434/v1",
+			DefaultModel: "my-codex", CredentialRef: "OLLAMA_KEY", Enabled: true},
+		{ID: "p3", Name: "openrouter", Kind: "api", Driver: "openaicompat", BaseURL: "https://openrouter.ai/api/v1",
+			DefaultModel: "gpt-5.3-codex", CredentialRef: "OR_KEY", Enabled: true},
 	}
-	routeRows := []RouteRow{{Name: "builder", Chain: []ChainEntry{
-		{ProviderID: "p1", Model: "gpt-5.3-codex"},
-		{ProviderID: "p2", Model: "gpt-5.3-codex"},
-	}, Enabled: true}}
-	cat := &fakeCatalog{pool: []catalog.Model{catModel("gpt-5.3-codex", "responses", nil)}}
+	routeRows := []RouteRow{
+		{Name: "openai-route", Chain: []ChainEntry{{ProviderID: "p1", Model: "gpt-5.3-codex"}}, Enabled: true},
+		{Name: "ollama-route", Chain: []ChainEntry{{ProviderID: "p2", Model: "my-codex"}}, Enabled: true},
+		{Name: "openrouter-route", Chain: []ChainEntry{{ProviderID: "p3", Model: "gpt-5.3-codex"}}, Enabled: true},
+	}
+	cat := &fakeCatalog{pool: []catalog.Model{
+		catModel("gpt-5.3-codex", "responses", nil),
+		catModel("my-codex", "chat", nil),
+	}}
 	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
 
-	d := snap.ResolveDetail("builder")
-	if len(d) != 2 {
-		t.Fatalf("ResolveDetail = %d entries, want 2", len(d))
+	// 1. OpenAI row with catalog responses model
+	d := snap.ResolveDetail("openai-route")
+	if len(d) != 1 || !d[0].Usable {
+		t.Fatalf("ResolveDetail openai-route = %+v, want 1 usable entry", d)
 	}
-	if d[0].Usable || !strings.HasPrefix(d[0].SkipReason, "responses_only") {
-		t.Fatalf("chat row = usable %v, skip %q; want unusable with a responses_only reason", d[0].Usable, d[0].SkipReason)
+	attempts, err := snap.Resolve("openai-route", "", Sticky{})
+	if err != nil || len(attempts) != 1 || attempts[0].ProviderName != "openai" {
+		t.Fatalf("Resolve = %d attempts, %v; want only the openai row", len(attempts), err)
 	}
-	if !d[1].Usable {
-		t.Fatalf("openai-responses row skip = %q, want usable", d[1].SkipReason)
+	if !attempts[0].ResponsesMode {
+		t.Fatalf("attempts[0].ResponsesMode = false, want true for responses catalog model on openai")
 	}
-	attempts, err := snap.Resolve("builder", "", Sticky{})
-	if err != nil || len(attempts) != 1 || attempts[0].ProviderName != "openai-responses" {
-		t.Fatalf("Resolve = %d attempts, %v; want only the openai-responses row", len(attempts), err)
+	if !snap.ResponsesMode("openai", "gpt-5.3-codex") {
+		t.Fatalf("snap.ResponsesMode = false, want true")
+	}
+
+	// 2. Ollama row with chat model whose name contains "codex"
+	d2 := snap.ResolveDetail("ollama-route")
+	if len(d2) != 1 || !d2[0].Usable {
+		t.Fatalf("ResolveDetail ollama-route = %+v, want 1 usable entry", d2)
+	}
+	attempts2, err := snap.Resolve("ollama-route", "", Sticky{})
+	if err != nil || len(attempts2) != 1 || attempts2[0].ProviderName != "ollama" {
+		t.Fatalf("Resolve = %d attempts, %v; want only the ollama row", len(attempts2), err)
+	}
+	if attempts2[0].ResponsesMode {
+		t.Fatalf("attempts2[0].ResponsesMode = true, want false for chat model on ollama")
+	}
+	if snap.ResponsesMode("ollama", "my-codex") {
+		t.Fatalf("snap.ResponsesMode = true, want false for ollama")
+	}
+
+	// 3. OpenRouter row with catalog responses model: stays false because host is not api.openai.com
+	d3 := snap.ResolveDetail("openrouter-route")
+	if len(d3) != 1 || !d3[0].Usable {
+		t.Fatalf("ResolveDetail openrouter-route = %+v, want 1 usable entry", d3)
+	}
+	attempts3, err := snap.Resolve("openrouter-route", "", Sticky{})
+	if err != nil || len(attempts3) != 1 || attempts3[0].ProviderName != "openrouter" {
+		t.Fatalf("Resolve = %d attempts, %v; want only the openrouter row", len(attempts3), err)
+	}
+	if attempts3[0].ResponsesMode {
+		t.Fatalf("attempts3[0].ResponsesMode = true, want false for responses model on openrouter")
+	}
+	if snap.ResponsesMode("openrouter", "gpt-5.3-codex") {
+		t.Fatalf("snap.ResponsesMode = true, want false for openrouter")
 	}
 }
 
@@ -1829,6 +1869,44 @@ func TestResolveRouteMarksChatOnlyHarnessUnusableOnResponsesModel(t *testing.T) 
 		if len(entries) != 1 || !entries[0].Usable {
 			t.Fatalf("%s entry = %+v, want usable", h, entries)
 		}
+	}
+}
+
+func TestResolveRouteAllowsChatOnlyHarnessOnChatModeModelWithCodexName(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "ollama", Kind: "api", Driver: "openaicompat", BaseURL: "http://localhost:11434/v1",
+			DefaultModel: "qwen-codex", CredentialRef: "OLLAMA_KEY", Enabled: true},
+	}
+	routeRows := []RouteRow{{Name: "builder", Chain: []ChainEntry{{ProviderID: "p1", Model: "qwen-codex"}}, Enabled: true}}
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("qwen-codex", "chat", nil)}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
+
+	pi, ok := snap.ResolveRoute("builder", "pi", "")
+	if !ok || len(pi) != 1 {
+		t.Fatalf("ResolveRoute pi = %v, %v", pi, ok)
+	}
+	if !pi[0].Usable {
+		t.Fatalf("pi entry = unusable (%q), want usable for chat-mode model even with codex in name", pi[0].SkipReason)
+	}
+}
+
+func TestResolveRouteAllowsChatOnlyHarnessOnOpenRouterResponsesModel(t *testing.T) {
+	t.Parallel()
+	provRows := []ProviderRow{
+		{ID: "p1", Name: "openrouter", Kind: "api", Driver: "openaicompat", BaseURL: "https://openrouter.ai/api/v1",
+			DefaultModel: "gpt-5.3-codex", CredentialRef: "OR_KEY", Enabled: true},
+	}
+	routeRows := []RouteRow{{Name: "builder", Chain: []ChainEntry{{ProviderID: "p1", Model: "gpt-5.3-codex"}}, Enabled: true}}
+	cat := &fakeCatalog{pool: []catalog.Model{catModel("gpt-5.3-codex", "responses", nil)}}
+	snap, _ := BuildSnapshot(provRows, routeRows, func(string) string { return "sk" }, cat)
+
+	pi, ok := snap.ResolveRoute("builder", "pi", "")
+	if !ok || len(pi) != 1 {
+		t.Fatalf("ResolveRoute pi = %v, %v", pi, ok)
+	}
+	if !pi[0].Usable {
+		t.Fatalf("pi entry = unusable (%q), want usable for responses model on openrouter", pi[0].SkipReason)
 	}
 }
 

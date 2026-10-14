@@ -11,7 +11,7 @@ import {
   useProviderModels,
   useRoutes,
 } from './AgentPicker'
-import { ProviderLogo, presetForProviderName } from './timothy/provider-logo'
+import { ProviderLogo, logoPresetForName } from './timothy/provider-logo'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 
 type Panel = 'root' | 'agent' | 'route' | 'model'
@@ -277,7 +277,6 @@ export function AgentRoutePicker({
                   onSelect={() => closeAfter(() => onModelHint?.(''))}
                 />
                 {filteredProviders.map((name) => {
-                  const preset = presetForProviderName(name)
                   const selectedInGroup = currentModel?.provider_name === name
                   const active = activeProvider === name
                   const pinned = byProvider.get(name)?.find((m) => m.value === modelHint)
@@ -292,13 +291,7 @@ export function AgentRoutePicker({
                       onClick={() => setModelProvider(name)}
                       onMouseEnter={() => setModelProvider(name)}
                     >
-                      {preset ? (
-                        <ProviderLogo preset={preset} className="size-7" />
-                      ) : (
-                        <span className="grid size-7 place-items-center rounded-md border border-dashed border-border text-xs text-muted-foreground">
-                          ⌁
-                        </span>
-                      )}
+                      <ProviderLogo preset={logoPresetForName(name)} className="size-7" />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium">{name}</span>
                         {selectedInGroup && pinned && (
@@ -323,7 +316,6 @@ export function AgentRoutePicker({
                     </div>
                     {filteredModels.map((m) => {
                       const selected = m.value === modelHint
-                      const preset = presetForProviderName(m.provider_name)
                       return (
                         <button
                           key={m.value}
@@ -332,13 +324,7 @@ export function AgentRoutePicker({
                           className="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left outline-none hover:bg-muted/60 data-selected:bg-muted"
                           onClick={() => closeAfter(() => onModelHint?.(m.value))}
                         >
-                          {preset ? (
-                            <ProviderLogo preset={preset} className="mt-0.5 size-7" />
-                          ) : (
-                            <span className="mt-0.5 grid size-7 place-items-center rounded-md border border-dashed border-border text-xs text-muted-foreground">
-                              ⌁
-                            </span>
-                          )}
+                          <ProviderLogo preset={logoPresetForName(m.provider_name)} className="mt-0.5 size-7" />
                           <span className="min-w-0 flex-1">
                             <span className="block truncate font-mono text-sm font-medium">
                               {m.display_name ?? m.model}
