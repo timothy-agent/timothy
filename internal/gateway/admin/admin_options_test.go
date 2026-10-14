@@ -143,6 +143,14 @@ func TestValidateProviderCLIKind(t *testing.T) {
 				Options: map[string]string{"anthropic_base_url": "http://localhost:9999"}},
 		},
 		{
+			name: "laya decision driver passes",
+			p:    Provider{Name: "laya-svc", Kind: "api", Driver: "laya", BaseURL: "http://laya:8000"},
+		},
+		{
+			name: "jev decision driver passes",
+			p:    Provider{Name: "jev-prod", Kind: "api", Driver: "jev", BaseURL: "https://api.typesafe.ai", CredentialRef: "JEV_KEY"},
+		},
+		{
 			name:    "unknown cli driver rejected",
 			p:       Provider{Name: "p", Kind: "cli", Driver: "made-up"},
 			wantErr: "unknown cli driver",

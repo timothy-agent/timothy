@@ -378,7 +378,7 @@ func TestDecideLayaProviderNative(t *testing.T) {
 	layaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"model": "convaiinnovations/laya-typed-decisions",
+			"model": "typed-decisions",
 			"answers": {
 				"q": {
 					"type": "choice",
@@ -397,7 +397,7 @@ func TestDecideLayaProviderNative(t *testing.T) {
 	}
 	routeRows := []router.RouteRow{
 		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
-			{ProviderID: "p-laya", Model: "convaiinnovations/laya-typed-decisions"},
+			{ProviderID: "p-laya", Model: "typed-decisions"},
 		}, Enabled: true},
 	}
 	snap, err := router.BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
@@ -444,7 +444,7 @@ func TestDecideLayaFailoverToLLM(t *testing.T) {
 	}
 	routeRows := []router.RouteRow{
 		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
-			{ProviderID: "p-laya", Model: "convaiinnovations/laya-typed-decisions"},
+			{ProviderID: "p-laya", Model: "typed-decisions"},
 			{ProviderID: "p-chat", Model: "chat-1"},
 		}, Enabled: true},
 	}
@@ -480,7 +480,7 @@ func TestDecideLayaInvalidChoiceFailsOverToLLM(t *testing.T) {
 	layaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"model": "convaiinnovations/laya-typed-decisions",
+			"model": "typed-decisions",
 			"answers": {
 				"q": {
 					"type": "choice",
@@ -503,7 +503,7 @@ func TestDecideLayaInvalidChoiceFailsOverToLLM(t *testing.T) {
 	}
 	routeRows := []router.RouteRow{
 		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
-			{ProviderID: "p-laya", Model: "convaiinnovations/laya-typed-decisions"},
+			{ProviderID: "p-laya", Model: "typed-decisions"},
 			{ProviderID: "p-chat", Model: "chat-1"},
 		}, Enabled: true},
 	}

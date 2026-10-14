@@ -256,12 +256,41 @@ func TestJevURLVariations(t *testing.T) {
 
 func TestJevListModels(t *testing.T) {
 	t.Parallel()
-	j := NewJev(JevConfig{Name: "jev"})
-	models, err := j.ListModels(t.Context())
-	if err != nil {
-		t.Fatalf("ListModels: %v", err)
-	}
-	if len(models) < 1 || models[0].ID != "jev-latest" {
-		t.Fatalf("models = %+v, want jev-latest", models)
-	}
+
+	t.Run("dynamic /v1/models response", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/models" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"models":[{"name":"jev-latest","description":"Default fast decision model"},{"name":"jev-preview","description":"Experimental preview model"}]}`))
+		}))
+		defer srv.Close()
+
+		j := NewJev(JevConfig{Name: "jev", BaseURL: srv.URL})
+		models, err := j.ListModels(t.Context())
+		if err != nil {
+			t.Fatalf("ListModels: %v", err)
+		}
+		if len(models) != 2 || models[0].ID != "jev-latest" || models[1].ID != "jev-preview" {
+			t.Fatalf("models = %+v, want jev-latest and jev-preview", models)
+		}
+		if models[0].DisplayName != "Default fast decision model" {
+			t.Fatalf("models[0].DisplayName = %q", models[0].DisplayName)
+		}
+	})
+
+	t.Run("fallback when endpoint unavailable", func(t *testing.T) {
+		t.Parallel()
+		j := NewJev(JevConfig{Name: "jev", BaseURL: "http://127.0.0.1:1"})
+		models, err := j.ListModels(t.Context())
+		if err != nil {
+			t.Fatalf("ListModels fallback: %v", err)
+		}
+		if len(models) != 3 || models[0].ID != "jev-latest" || models[1].ID != "jev-preview" || models[2].ID != "jev-1.13.0" {
+			t.Fatalf("models = %+v, want default static list", models)
+		}
+	})
 }

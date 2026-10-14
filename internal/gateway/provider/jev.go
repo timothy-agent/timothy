@@ -221,10 +221,70 @@ func jevBody(model string, req DecideRequest) jevRequest {
 	return jevRequest{Model: model, State: state, Questions: map[string]jevQuestion{jevQuestionID: q}}
 }
 
-// ListModels returns available Jev models.
+func (j *Jev) modelsEndpoint() string {
+	endpoint := strings.TrimRight(j.cfg.BaseURL, "/")
+	endpoint = strings.TrimSuffix(endpoint, "/v1/systemone")
+	endpoint = strings.TrimSuffix(endpoint, "/v1")
+	return endpoint + "/v1/models"
+}
+
+// listJevModels queries TypeSafe's GET /v1/models and parses its {"models": [{"name": "...", "description": "..."}]} envelope.
+func (j *Jev) listJevModels(ctx context.Context) ([]AvailableModel, error) {
+	resp, err := doWithRetry(ctx, j.client, maxRetries, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, j.modelsEndpoint(), nil)
+		if err != nil {
+			return nil, err
+		}
+		if j.cfg.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+j.cfg.APIKey)
+		}
+		for k, v := range j.cfg.Headers {
+			req.Header.Set(k, v)
+		}
+		return req, nil
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var out struct {
+		Models []struct {
+			Name        string `json:"name"`
+			ID          string `json:"id"`
+			Description string `json:"description"`
+		} `json:"models"`
+		Data []AvailableModel `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("jev: decode models: %w", err)
+	}
+
+	var res []AvailableModel
+	for _, m := range out.Models {
+		id := m.Name
+		if id == "" {
+			id = m.ID
+		}
+		if id != "" {
+			res = append(res, AvailableModel{ID: id, DisplayName: m.Description})
+		}
+	}
+	if len(res) == 0 && len(out.Data) > 0 {
+		res = out.Data
+	}
+	return res, nil
+}
+
+// ListModels implements ModelLister via GET /v1/models, falling back to known models on error.
 func (j *Jev) ListModels(ctx context.Context) ([]AvailableModel, error) {
+	models, err := j.listJevModels(ctx)
+	if err == nil && len(models) > 0 {
+		return models, nil
+	}
 	return []AvailableModel{
 		{ID: "jev-latest"},
+		{ID: "jev-preview"},
 		{ID: "jev-1.13.0"},
 	}, nil
 }

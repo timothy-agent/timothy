@@ -14,7 +14,7 @@ import (
 )
 
 // DefaultLayaModel is the default English typed-decisions checkpoint (D-163).
-const DefaultLayaModel = "convaiinnovations/laya-typed-decisions"
+const DefaultLayaModel = "typed-decisions"
 
 // defaultScoreLevels provides a standard ordinal scale for score questions when
 // the request does not provide explicit level descriptions.
