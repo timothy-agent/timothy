@@ -7,6 +7,9 @@
 {{- if .Values.whisper.enabled }}
 {{- $sidecars = append $sidecars (dict "svc" "whisper" "port" 8001 "health" "/health") }}
 {{- end }}
+{{- if .Values.laya.enabled }}
+{{- $sidecars = append $sidecars (dict "svc" "laya" "port" 8000 "health" "/healthz") }}
+{{- end }}
 {{- range $s := $sidecars }}
 {{- $sel := dict "root" $root "svc" $s.svc }}
 {{- $cfg := index $root.Values $s.svc }}

@@ -20,6 +20,7 @@ func TestBuildRegistry(t *testing.T) {
 		{Name: "anthropic", Kind: KindAPI, Driver: "anthropic", CredentialRef: "ANTHROPIC_API_KEY"},                             // #nosec G101
 		{Name: "xai-grok", Kind: KindAPI, Driver: "openaicompat", BaseURL: "https://api.x.ai/v1", CredentialRef: "XAI_API_KEY"}, // #nosec G101
 		{Name: "bedrock", Kind: KindAPI, Driver: "bedrock", CredentialRef: "bedrock-static"},
+		{Name: "laya", Kind: KindAPI, Driver: "laya", BaseURL: "http://laya:8000"},
 	}, func(ref string) string { return lookups[ref] })
 	if err != nil {
 		t.Fatalf("Build: %v", err)
@@ -35,11 +36,18 @@ func TestBuildRegistry(t *testing.T) {
 	if _, ok := r.Get("bedrock"); !ok {
 		t.Fatal("bedrock missing")
 	}
+	l, ok := r.Get("laya")
+	if !ok || l.Name() != "laya" {
+		t.Fatal("laya missing")
+	}
+	if _, ok := l.(*Laya); !ok {
+		t.Fatalf("laya provider type = %T, want *Laya", l)
+	}
 	if _, ok := r.Get("nope"); ok {
 		t.Fatal("unknown name resolved")
 	}
-	if got := len(r.Names()); got != 3 {
-		t.Fatalf("Names() = %d, want 3", got)
+	if got := len(r.Names()); got != 4 {
+		t.Fatalf("Names() = %d, want 4", got)
 	}
 }
 

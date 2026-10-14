@@ -12,7 +12,7 @@ import (
 type Config struct {
 	Name          string
 	Kind          Kind
-	Driver        string // "anthropic" | "openaicompat" | "openai-responses" | "bedrock"
+	Driver        string // "anthropic" | "openaicompat" | "openai-responses" | "bedrock" | "laya"
 	BaseURL       string
 	CredentialRef string
 	Headers       map[string]string
@@ -126,6 +126,14 @@ func Build(cfgs []Config, lookup func(string) string) (*Registry, error) {
 				cfg.StaticCredentials = sc
 			}
 			p = NewBedrock(cfg)
+		case "laya":
+			if c.BaseURL == "" {
+				return nil, fmt.Errorf("registry: provider %q: laya requires base_url", c.Name)
+			}
+			p = NewLaya(LayaConfig{
+				Name: c.Name, BaseURL: c.BaseURL,
+				Headers: c.Headers, Timeout: c.Timeout,
+			})
 		default:
 			return nil, fmt.Errorf("registry: provider %q: unknown driver %q", c.Name, c.Driver)
 		}

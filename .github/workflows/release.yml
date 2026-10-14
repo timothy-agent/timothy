@@ -42,6 +42,7 @@ jobs:
       pdfgen: ${{ steps.diff.outputs.pdfgen }}
       ocr: ${{ steps.diff.outputs.ocr }}
       whisper: ${{ steps.diff.outputs.whisper }}
+      laya: ${{ steps.diff.outputs.laya }}
       sandbox: ${{ steps.diff.outputs.sandbox }}
       prev_tag: ${{ steps.prev.outputs.tag }}
     steps:
@@ -56,7 +57,7 @@ jobs:
         run: |
           if [ -z "${{ steps.prev.outputs.tag }}" ]; then
             echo "no previous release tag; building everything"
-            for name in brain gateway memoryd sandboxd web markitdown pdfgen ocr whisper sandbox; do
+            for name in brain gateway memoryd sandboxd web markitdown pdfgen ocr whisper laya sandbox; do
               echo "$name=true" >> "$GITHUB_OUTPUT"
             done
             exit 0
@@ -75,6 +76,7 @@ jobs:
           changed '^pdfgen-svc/' && echo "pdfgen=true" >> "$GITHUB_OUTPUT" || echo "pdfgen=false" >> "$GITHUB_OUTPUT"
           changed '^ocr-svc/' && echo "ocr=true" >> "$GITHUB_OUTPUT" || echo "ocr=false" >> "$GITHUB_OUTPUT"
           changed '^whisper-svc/' && echo "whisper=true" >> "$GITHUB_OUTPUT" || echo "whisper=false" >> "$GITHUB_OUTPUT"
+          changed '^laya-svc/' && echo "laya=true" >> "$GITHUB_OUTPUT" || echo "laya=false" >> "$GITHUB_OUTPUT"
           changed '^(deploy/sandbox\.Dockerfile$|cmd/mcp-bridge/|internal/mcpbridge/)' && echo "sandbox=true" >> "$GITHUB_OUTPUT" || echo "sandbox=false" >> "$GITHUB_OUTPUT"
 
   # Self-docs for the brain image: capability pages generated from this
@@ -184,6 +186,9 @@ jobs:
             dockerfile: whisper-svc/Dockerfile
             build-args: |
               WHISPER_MODEL=large-v3
+          - name: laya
+            context: laya-svc
+            dockerfile: laya-svc/Dockerfile
           # The sandbox image builds in sandbox-build/sandbox below.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
