@@ -8,7 +8,7 @@
 {{- $sidecars = append $sidecars (dict "svc" "whisper" "port" 8001 "health" "/health") }}
 {{- end }}
 {{- if .Values.laya.enabled }}
-{{- $sidecars = append $sidecars (dict "svc" "laya" "port" 8000 "health" "/healthz") }}
+{{- $sidecars = append $sidecars (dict "svc" "laya" "port" 8000 "health" "/health") }}
 {{- end }}
 {{- range $s := $sidecars }}
 {{- $sel := dict "root" $root "svc" $s.svc }}
@@ -73,7 +73,7 @@ spec:
             timeoutSeconds: 5
           livenessProbe:
             httpGet: {path: {{ $s.health }}, port: http}
-            initialDelaySeconds: {{ if eq $s.svc "whisper" }}120{{ else }}15{{ end }}
+            initialDelaySeconds: {{ if or (eq $s.svc "whisper") (eq $s.svc "laya") }}120{{ else }}15{{ end }}
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3

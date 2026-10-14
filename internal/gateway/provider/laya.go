@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,12 +19,17 @@ const DefaultLayaModel = "convaiinnovations/laya-typed-decisions"
 // LayaConfig configures one Laya decision-model provider instance.
 type LayaConfig struct {
 	Name    string
-	BaseURL string            // e.g. http://laya:8000 — no trailing slash
-	Headers map[string]string // extra request headers
-	Timeout time.Duration     // hard per-request timeout
+	BaseURL string // e.g. http://laya:8000 — no trailing slash
+	APIKey  string // optional bearer token
+	Headers map[string]string
+	Timeout time.Duration
 }
 
-// Laya answers fixed-choice questions via the Laya System One API (/v1/systemone).
+// layaTimeout bounds one decision: a forward pass takes tens of
+// milliseconds, so anything near a chat timeout only delays failover.
+const layaTimeout = 30 * time.Second
+
+// Laya answers fixed-choice questions on a laya-serve endpoint.
 type Laya struct {
 	cfg    LayaConfig
 	client *http.Client
@@ -34,115 +38,93 @@ type Laya struct {
 // NewLaya builds the driver; it performs no I/O.
 func NewLaya(cfg LayaConfig) *Laya {
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = defaultTimeout
+		cfg.Timeout = layaTimeout
 	}
 	return &Laya{cfg: cfg, client: &http.Client{}}
 }
 
-func (l *Laya) Name() string { return l.cfg.Name }
-func (l *Laya) Kind() Kind   { return KindAPI }
+func (l *Laya) Name() string               { return l.cfg.Name }
+func (l *Laya) Kind() Kind                 { return KindAPI }
+func (l *Laya) Capabilities() []Capability { return []Capability{CapDecide} }
 
-func (l *Laya) Capabilities() []Capability {
-	return []Capability{CapDecide}
-}
-
-// Stream is not supported on a dedicated decision-model provider.
+// Stream always fails: a decision model has no completion to stream.
 func (l *Laya) Stream(context.Context, CompletionRequest) (<-chan stream.StreamEvent, error) {
-	return nil, errors.New("laya: does not support streaming chat completions")
+	return nil, fmt.Errorf("laya: %s is a decision model and cannot chat", l.cfg.Name)
 }
 
+// layaQuestion is one entry of the request's questions map.
+type layaQuestion struct {
+	Type         string            `json:"type"`
+	Instructions string            `json:"instructions"`
+	Criteria     map[string]string `json:"criteria,omitempty"`
+}
+
+// layaRequest is the POST /v1/systemone body.
 type layaRequest struct {
-	Model     string                      `json:"model,omitempty"`
-	State     string                      `json:"state,omitempty"`
-	Questions map[string]layaQuestionSpec `json:"questions"`
+	Model     string                  `json:"model,omitempty"`
+	State     string                  `json:"state"`
+	Questions map[string]layaQuestion `json:"questions"`
 }
 
-type layaQuestionSpec struct {
-	Type         string `json:"type"`
-	Instructions string `json:"instructions"`
-	Criteria     any    `json:"criteria,omitempty"`
-}
+const layaQuestionID = "q"
 
+// layaResponse is the part of the reply the driver reads.
 type layaResponse struct {
-	Model   string                    `json:"model"`
-	Answers map[string]layaAnswerSpec `json:"answers"`
-	Usage   *layaUsage                `json:"usage,omitempty"`
+	Answers map[string]struct {
+		Type          string             `json:"type"`
+		Choice        string             `json:"choice"`
+		Noul          *float64           `json:"noul"`
+		Score         *float64           `json:"score"`
+		Probabilities map[string]float64 `json:"probabilities"`
+	} `json:"answers"`
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
 }
 
-type layaAnswerSpec struct {
-	Type          string             `json:"type"`
-	Choice        string             `json:"choice,omitempty"`
-	Confidence    float64            `json:"confidence,omitempty"`
-	Probabilities map[string]float64 `json:"probabilities,omitempty"`
-	Noul          *float64           `json:"noul,omitempty"`
-	Score         *float64           `json:"score,omitempty"`
-}
-
-type layaUsage struct {
-	InputTokens int `json:"input_tokens"`
-}
-
-// Decide evaluates a DecideRequest via Laya's /v1/systemone endpoint.
-func (l *Laya) Decide(ctx context.Context, model string, req DecideRequest) (DecideResult, *stream.Usage, error) {
-	if l.cfg.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, l.cfg.Timeout)
-		defer cancel()
-	}
-
-	if model == "" {
-		model = DefaultLayaModel
-	}
-
-	qSpec := layaQuestionSpec{
-		Instructions: req.Question,
-	}
-
-	switch req.Kind {
-	case DecideChoice:
-		qSpec.Type = "choice"
-		criteria := make(map[string]string, len(req.Options))
-		for _, opt := range req.Options {
-			criteria[opt] = opt
-		}
-		qSpec.Criteria = criteria
-	case DecideYesNo:
-		qSpec.Type = "noul"
-	case DecideScore:
-		qSpec.Type = "score"
-		qSpec.Criteria = []string{"0", "1"}
-	default:
-		return DecideResult{}, nil, fmt.Errorf("laya: unsupported question kind %q", req.Kind)
-	}
-
-	bodyBytes, err := json.Marshal(layaRequest{
-		Model: model,
-		State: req.Question,
-		Questions: map[string]layaQuestionSpec{
-			"q": qSpec,
-		},
-	})
-	if err != nil {
-		return DecideResult{}, nil, fmt.Errorf("laya: marshal request: %w", err)
-	}
-
+func (l *Laya) systemoneEndpoint() string {
 	endpoint := strings.TrimRight(l.cfg.BaseURL, "/")
 	if !strings.HasSuffix(endpoint, "/v1/systemone") {
 		endpoint = strings.TrimSuffix(endpoint, "/v1") + "/v1/systemone"
 	}
+	return endpoint
+}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
+func (l *Laya) healthEndpoint() string {
+	endpoint := strings.TrimRight(l.cfg.BaseURL, "/")
+	endpoint = strings.TrimSuffix(endpoint, "/v1/systemone")
+	endpoint = strings.TrimSuffix(endpoint, "/v1")
+	return endpoint + "/health"
+}
+
+// Decide evaluates a DecideRequest via Laya's /v1/systemone endpoint.
+func (l *Laya) Decide(ctx context.Context, model string, req DecideRequest) (DecideResult, *stream.Usage, error) {
+	body, err := json.Marshal(layaBody(model, req))
 	if err != nil {
-		return DecideResult{}, nil, fmt.Errorf("laya: new request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	for k, v := range l.cfg.Headers {
-		httpReq.Header.Set(k, v)
+		return DecideResult{}, nil, fmt.Errorf("laya: marshal request: %w", err)
 	}
 
-	resp, err := l.client.Do(httpReq)
+	callCtx, cancel := context.WithTimeout(ctx, l.cfg.Timeout)
+	defer cancel()
+
+	endpoint := l.systemoneEndpoint()
+	resp, err := doWithRetry(callCtx, l.client, maxRetries, func() (*http.Request, error) {
+		httpReq, err := http.NewRequestWithContext(callCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		if l.cfg.APIKey != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+l.cfg.APIKey)
+		}
+		for k, v := range l.cfg.Headers {
+			httpReq.Header.Set(k, v)
+		}
+		return httpReq, nil
+	}, nil)
 	if err != nil {
-		return DecideResult{}, nil, fmt.Errorf("laya: do request: %w", err)
+		return DecideResult{}, nil, fmt.Errorf("laya: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -151,58 +133,110 @@ func (l *Laya) Decide(ctx context.Context, model string, req DecideRequest) (Dec
 		return DecideResult{}, nil, fmt.Errorf("laya: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 
-	var layaResp layaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&layaResp); err != nil {
+	var out layaResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
 		return DecideResult{}, nil, fmt.Errorf("laya: decode response: %w", err)
 	}
 
-	ans, ok := layaResp.Answers["q"]
+	usage := &stream.Usage{
+		InputTokens:  out.Usage.InputTokens,
+		OutputTokens: out.Usage.OutputTokens,
+	}
+
+	ans, ok := out.Answers[layaQuestionID]
 	if !ok {
-		return DecideResult{}, nil, errors.New("laya: response missing answer for question")
+		return DecideResult{}, usage, fmt.Errorf("laya: reply carries no answer")
 	}
 
-	var usage *stream.Usage
-	if layaResp.Usage != nil {
-		usage = &stream.Usage{
-			InputTokens: layaResp.Usage.InputTokens,
-		}
-	}
-
-	var res DecideResult
 	switch req.Kind {
 	case DecideChoice:
-		if ans.Choice == "" {
-			return DecideResult{}, usage, errors.New("laya: empty choice in reply")
+		for _, o := range req.Options {
+			if ans.Choice == o {
+				return DecideResult{Choice: o, Scores: ans.Probabilities}, usage, nil
+			}
 		}
-		res.Choice = ans.Choice
-		res.Scores = ans.Probabilities
+		return DecideResult{}, usage, fmt.Errorf("laya: choice %q is not an allowed option", ans.Choice)
 	case DecideYesNo:
 		if ans.Noul != nil {
 			p := *ans.Noul
+			if p < 0 || p > 1 {
+				return DecideResult{}, usage, fmt.Errorf("laya: noul probability %v is outside [0, 1]", p)
+			}
+			choice := "no"
 			if p >= 0.5 {
-				res.Choice = "yes"
-			} else {
-				res.Choice = "no"
+				choice = "yes"
 			}
-			res.Scores = map[string]float64{
-				"yes": p,
-				"no":  1.0 - p,
-			}
-		} else if ans.Choice != "" {
-			res.Choice = strings.ToLower(ans.Choice)
-			res.Scores = ans.Probabilities
-		} else {
-			return DecideResult{}, usage, errors.New("laya: missing noul probability in reply")
+			return DecideResult{Choice: choice, Scores: map[string]float64{"yes": p, "no": 1 - p}}, usage, nil
 		}
-	case DecideScore:
+		if ans.Choice != "" {
+			for _, o := range []string{"yes", "no"} {
+				if strings.EqualFold(ans.Choice, o) {
+					return DecideResult{Choice: o, Scores: ans.Probabilities}, usage, nil
+				}
+			}
+		}
+		return DecideResult{}, usage, fmt.Errorf("laya: reply carries no noul probability")
+	default: // DecideScore
+		if ans.Noul != nil {
+			p := *ans.Noul
+			if p < 0 || p > 1 {
+				return DecideResult{}, usage, fmt.Errorf("laya: score %v is outside [0, 1]", p)
+			}
+			return DecideResult{Score: &p, Scores: map[string]float64{"0": 1 - p, "1": p}}, usage, nil
+		}
 		if ans.Score != nil {
-			score := *ans.Score
-			res.Score = &score
-			res.Scores = ans.Probabilities
-		} else {
-			return DecideResult{}, usage, errors.New("laya: missing score in reply")
+			s := *ans.Score
+			if s < 0 || s > 1 {
+				return DecideResult{}, usage, fmt.Errorf("laya: score %v is outside [0, 1]", s)
+			}
+			return DecideResult{Score: &s, Scores: ans.Probabilities}, usage, nil
+		}
+		return DecideResult{}, usage, fmt.Errorf("laya: reply carries no noul probability")
+	}
+}
+
+func layaBody(model string, req DecideRequest) layaRequest {
+	q := layaQuestion{Type: "noul", Instructions: req.Question}
+	if req.Kind == DecideChoice {
+		q.Type = "choice"
+		q.Criteria = make(map[string]string, len(req.Options))
+		for _, o := range req.Options {
+			q.Criteria[o] = o
 		}
 	}
+	state := req.Question
+	return layaRequest{Model: model, State: state, Questions: map[string]layaQuestion{layaQuestionID: q}}
+}
 
-	return res, usage, nil
+// ListModels implements ModelLister from GET /health.
+func (l *Laya) ListModels(ctx context.Context) ([]AvailableModel, error) {
+	resp, err := doWithRetry(ctx, l.client, maxRetries, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.healthEndpoint(), nil)
+		if err != nil {
+			return nil, err
+		}
+		if l.cfg.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+l.cfg.APIKey)
+		}
+		return req, nil
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("laya: list models: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var out struct {
+		Loaded []string `json:"loaded"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return nil, fmt.Errorf("laya: decode health: %w", err)
+	}
+	if len(out.Loaded) == 0 {
+		return []AvailableModel{{ID: "typed-decisions"}}, nil
+	}
+	models := make([]AvailableModel, 0, len(out.Loaded))
+	for _, id := range out.Loaded {
+		models = append(models, AvailableModel{ID: id})
+	}
+	return models, nil
 }

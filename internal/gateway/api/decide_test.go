@@ -473,3 +473,62 @@ func TestDecideLayaFailoverToLLM(t *testing.T) {
 		t.Fatalf("entry[1] = %+v, want chat fallback success with low effort", entries[1])
 	}
 }
+
+func TestDecideLayaInvalidChoiceFailsOverToLLM(t *testing.T) {
+	t.Parallel()
+	layaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"model": "convaiinnovations/laya-typed-decisions",
+			"answers": {
+				"q": {
+					"type": "choice",
+					"choice": "unallowed_option",
+					"confidence": 0.99,
+					"probabilities": {"unallowed_option": 0.99}
+				}
+			},
+			"usage": {"input_tokens": 12}
+		}`))
+	}))
+	defer layaSrv.Close()
+
+	chatSrv := oaiOK(t, "research")
+	defer chatSrv.Close()
+
+	provRows := []router.ProviderRow{
+		{ID: "p-laya", Name: "laya-svc", Kind: "api", Driver: "laya", BaseURL: layaSrv.URL, DefaultModel: "laya-english", Enabled: true},
+		{ID: "p-chat", Name: "chat-fallback", Kind: "api", Driver: "openaicompat", BaseURL: chatSrv.URL, DefaultModel: "chat-1", Enabled: true},
+	}
+	routeRows := []router.RouteRow{
+		{Name: "decide-route", Role: "decide", Capability: "decide", Chain: []router.ChainEntry{
+			{ProviderID: "p-laya", Model: "convaiinnovations/laya-typed-decisions"},
+			{ProviderID: "p-chat", Model: "chat-1"},
+		}, Enabled: true},
+	}
+	snap, err := router.BuildSnapshot(provRows, routeRows, func(string) string { return "" }, nil)
+	if err != nil {
+		t.Fatalf("BuildSnapshot: %v", err)
+	}
+
+	a, rec := newAPI(snap)
+	w := postJSON(t, a.handleDecide, choiceBody)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d body = %s", w.Code, w.Body.String())
+	}
+	out := decodeDecide(t, w.Body.Bytes())
+	if out.Choice != "research" || out.Provider != "chat-fallback" {
+		t.Fatalf("out = %+v, want fallback result", out)
+	}
+
+	entries := rec.all()
+	if len(entries) != 2 {
+		t.Fatalf("ledger entries = %d, want 2 (fail then ok)", len(entries))
+	}
+	if entries[0].Provider != "laya-svc" || entries[0].Status != "error" {
+		t.Fatalf("entry[0] = %+v, want laya error for invalid option", entries[0])
+	}
+	if entries[1].Provider != "chat-fallback" || entries[1].Status != "ok" {
+		t.Fatalf("entry[1] = %+v, want fallback success", entries[1])
+	}
+}

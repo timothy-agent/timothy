@@ -1,4 +1,1 @@
-fastapi==0.139.2
-uvicorn[standard]==0.51.0
-httpx==0.28.1
-pytest==8.3.5
+laya[serve]==0.4.6

@@ -2,184 +2,166 @@ package provider
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
-	"time"
 )
 
-func TestLayaCapabilities(t *testing.T) {
+// layaStub answers /v1/systemone with the given answer object and
+// records the last request body and headers.
+type layaStub struct {
+	srv    *httptest.Server
+	got    layaRequest
+	auth   string
+	answer string
+	status int
+}
+
+func newLayaStub(t *testing.T, answer string) *layaStub {
+	t.Helper()
+	s := &layaStub{answer: answer, status: http.StatusOK}
+	s.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			_, _ = w.Write([]byte(`{"status":"ok","loaded":["typed-decisions"]}`))
+			return
+		}
+		if r.URL.Path != "/v1/systemone" || r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		s.auth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&s.got); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(s.status)
+		_, _ = w.Write([]byte(`{"model":"laya-rl-agent","answers":{"q":` + s.answer + `},"usage":{"input_tokens":83,"output_tokens":0,"state_tokens":12},"routing":{"model":"typed-decisions"}}`))
+	}))
+	t.Cleanup(s.srv.Close)
+	return s
+}
+
+func TestLayaCapabilitiesAndStream(t *testing.T) {
 	t.Parallel()
-	l := NewLaya(LayaConfig{Name: "laya-test", BaseURL: "http://localhost:8000"})
-	if l.Name() != "laya-test" {
-		t.Fatalf("Name() = %q, want laya-test", l.Name())
+	l := NewLaya(LayaConfig{Name: "laya", BaseURL: "http://laya:8000"})
+	if caps := l.Capabilities(); len(caps) != 1 || caps[0] != CapDecide {
+		t.Fatalf("capabilities = %v, want decide only", caps)
 	}
-	if l.Kind() != KindAPI {
-		t.Fatalf("Kind() = %v, want KindAPI", l.Kind())
-	}
-	caps := l.Capabilities()
-	if len(caps) != 1 || caps[0] != CapDecide {
-		t.Fatalf("Capabilities() = %v, want [CapDecide]", caps)
-	}
-	if _, err := l.Stream(t.Context(), CompletionRequest{}); err == nil {
-		t.Fatal("Stream() did not return error")
+	if _, err := l.Stream(t.Context(), CompletionRequest{Model: "typed-decisions"}); err == nil {
+		t.Fatal("Stream succeeded on a decision model")
 	}
 }
 
+// TestLayaDecideChoice pins the wire mapping: a choice becomes
+// a Laya choice question whose criteria are the options described,
+// the question is the state, the chain entry's model is forwarded, and
+// the reply's probabilities come back as scores.
 func TestLayaDecideChoice(t *testing.T) {
 	t.Parallel()
-	var (
-		gotPath    string
-		gotBody    layaRequest
-		gotHeaders http.Header
-	)
+	stub := newLayaStub(t, `{"type":"choice","choice":"research","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)
+	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL, APIKey: "k"})
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotHeaders = r.Header.Clone()
-		raw, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(raw, &gotBody)
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"model": "convaiinnovations/laya-typed-decisions",
-			"answers": {
-				"q": {
-					"type": "choice",
-					"choice": "coding",
-					"confidence": 0.88,
-					"probabilities": {
-						"coding": 0.88,
-						"research": 0.12
-					}
-				}
-			},
-			"usage": {
-				"input_tokens": 42
-			}
-		}`))
-	}))
-	defer srv.Close()
-
-	l := NewLaya(LayaConfig{
-		Name:    "laya",
-		BaseURL: srv.URL,
-		Headers: map[string]string{"X-Test": "123"},
-		Timeout: 5 * time.Second,
-	})
-
-	req := DecideRequest{
+	res, usage, err := l.Decide(t.Context(), "typed-decisions", DecideRequest{
 		Kind:     DecideChoice,
-		Question: "Which mission kind?",
-		Options:  []string{"coding", "research"},
-	}
-
-	res, usage, err := l.Decide(t.Context(), "convaiinnovations/laya-typed-decisions", req)
+		Question: "Which kind of mission is this?",
+		Options:  []string{"coding", "research", "general"},
+	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
-
-	if gotPath != "/v1/systemone" {
-		t.Fatalf("Path = %q, want /v1/systemone", gotPath)
+	if res.Choice != "research" || res.Scores["research"] != 0.85 || res.Score != nil {
+		t.Fatalf("res = %+v", res)
 	}
-	if gotHeaders.Get("X-Test") != "123" {
-		t.Fatalf("Header X-Test = %q, want 123", gotHeaders.Get("X-Test"))
+	if usage == nil || usage.InputTokens != 83 {
+		t.Fatalf("usage = %+v", usage)
 	}
-	if gotBody.Questions["q"].Type != "choice" {
-		t.Fatalf("question type = %q, want choice", gotBody.Questions["q"].Type)
+	if stub.auth != "Bearer k" {
+		t.Fatalf("auth = %q", stub.auth)
 	}
-	if gotBody.State != "Which mission kind?" {
-		t.Fatalf("state = %q, want 'Which mission kind?'", gotBody.State)
+	if stub.got.Model != "typed-decisions" || stub.got.State != "Which kind of mission is this?" {
+		t.Fatalf("request = %+v", stub.got)
 	}
-
-	if res.Choice != "coding" {
-		t.Fatalf("res.Choice = %q, want coding", res.Choice)
+	q := stub.got.Questions["q"]
+	if q.Type != "choice" || q.Instructions != "Which kind of mission is this?" {
+		t.Fatalf("question = %+v", q)
 	}
-	if res.Scores["coding"] != 0.88 || res.Scores["research"] != 0.12 {
-		t.Fatalf("res.Scores = %v, want probabilities map", res.Scores)
-	}
-	if usage == nil || usage.InputTokens != 42 {
-		t.Fatalf("usage = %+v, want InputTokens 42", usage)
+	if len(q.Criteria) != 3 || q.Criteria["coding"] != "coding" || q.Criteria["research"] != "research" {
+		t.Fatalf("criteria = %v", q.Criteria)
 	}
 }
 
-func TestLayaDecideYesNo(t *testing.T) {
+func TestLayaDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		name       string
-		noul       float64
-		wantChoice string
-	}{
-		{"high probability is yes", 0.92, "yes"},
-		{"low probability is no", 0.08, "no"},
+	stub := newLayaStub(t, `{"type":"choice","choice":"other","probabilities":{"other":1}}`)
+	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+	_, usage, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: []string{"a", "b"}})
+	if err == nil || !strings.Contains(err.Error(), "not an allowed option") {
+		t.Fatalf("err = %v, want 'not an allowed option'", err)
 	}
+	if usage == nil {
+		t.Fatal("usage dropped on a bad answer")
+	}
+}
 
-	for _, tc := range cases {
-		tc := tc
+// TestLayaDecideYesNoAndScore: both kinds ride a noul question with
+// the question as its own state; yesno thresholds the probability, score returns it.
+func TestLayaDecideYesNoAndScore(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		kind       string
+		noul       string
+		wantChoice string
+		wantScore  float64
+	}{
+		{"yes", DecideYesNo, "0.91", "yes", 0},
+		{"no", DecideYesNo, "0.2", "no", 0},
+		{"score", DecideScore, "0.37", "", 0.37},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				resp := map[string]any{
-					"model": "laya",
-					"answers": map[string]any{
-						"q": map[string]any{
-							"type": "noul",
-							"noul": tc.noul,
-						},
-					},
-					"usage": map[string]int{"input_tokens": 10},
-				}
-				_ = json.NewEncoder(w).Encode(resp)
-			}))
-			defer srv.Close()
-
-			l := NewLaya(LayaConfig{Name: "laya", BaseURL: srv.URL})
-			res, usage, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Is it complete?"})
+			stub := newLayaStub(t, `{"type":"noul","noul":`+tc.noul+`,"confidence":0.9}`)
+			l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+			res, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: tc.kind, Question: "Does the user ask for a refund?", Options: []string{"yes", "no"}})
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
 			}
-			if res.Choice != tc.wantChoice {
-				t.Fatalf("Choice = %q, want %q", res.Choice, tc.wantChoice)
+			q := stub.got.Questions["q"]
+			if q.Type != "noul" || q.Criteria != nil || stub.got.State != "Does the user ask for a refund?" || stub.got.Model != "" {
+				t.Fatalf("request = %+v", stub.got)
 			}
-			if res.Scores["yes"] != tc.noul {
-				t.Fatalf("Scores[yes] = %f, want %f", res.Scores["yes"], tc.noul)
+			if tc.kind == DecideYesNo {
+				if res.Choice != tc.wantChoice || res.Scores["yes"]+res.Scores["no"] != 1 {
+					t.Fatalf("res = %+v", res)
+				}
+				return
 			}
-			if usage == nil || usage.InputTokens != 10 {
-				t.Fatalf("usage = %+v, want 10 input tokens", usage)
+			if res.Score == nil || *res.Score != tc.wantScore || res.Choice != "" {
+				t.Fatalf("res = %+v", res)
 			}
 		})
 	}
 }
 
-func TestLayaDecideScore(t *testing.T) {
+func TestLayaDecideScoreOutsideRangeIsAnError(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"model": "laya",
-			"answers": {
-				"q": {
-					"type": "score",
-					"score": 0.73,
-					"probabilities": {"0": 0.27, "1": 0.73}
-				}
-			}
-		}`))
-	}))
-	defer srv.Close()
+	for _, badScore := range []string{"-0.1", "1.5"} {
+		stub := newLayaStub(t, `{"type":"noul","noul":`+badScore+`}`)
+		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+		_, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "score"})
+		if err == nil || !strings.Contains(err.Error(), "outside [0, 1]") {
+			t.Fatalf("score %s: err = %v, want 'outside [0, 1]'", badScore, err)
+		}
+	}
+}
 
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: srv.URL})
-	res, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideScore, Question: "Urgency score"})
-	if err != nil {
-		t.Fatalf("Decide: %v", err)
-	}
-	if res.Score == nil || *res.Score != 0.73 {
-		t.Fatalf("Score = %v, want 0.73", res.Score)
-	}
-	if res.Scores["1"] != 0.73 {
-		t.Fatalf("Scores = %v, want probabilities", res.Scores)
+func TestLayaDecideMissingAnswerIsAnError(t *testing.T) {
+	t.Parallel()
+	stub := newLayaStub(t, `{"type":"choice","choice":"a"}`)
+	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+	if _, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "q", Options: []string{"yes", "no"}}); err == nil || !strings.Contains(err.Error(), "no noul probability") {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -189,7 +171,7 @@ func TestLayaBaseURLNormalization(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		paths <- r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"answers":{"q":{"type":"choice","choice":"coding"}}}`))
+		_, _ = w.Write([]byte(`{"answers":{"q":{"type":"choice","choice":"coding"}},"usage":{"input_tokens":10}}`))
 	}))
 	defer srv.Close()
 
@@ -205,17 +187,27 @@ func TestLayaBaseURLNormalization(t *testing.T) {
 	}
 }
 
-func TestLayaServerError(t *testing.T) {
+func TestLayaDecideHTTPErrorsSurface(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"detail": "model loading"}`))
-	}))
-	defer srv.Close()
+	for _, status := range []int{http.StatusUnprocessableEntity, http.StatusServiceUnavailable} {
+		stub := newLayaStub(t, `{}`)
+		stub.status = status
+		l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+		if _, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "q", Options: []string{"yes", "no"}}); err == nil {
+			t.Fatalf("status %d: no error", status)
+		}
+	}
+}
 
-	l := NewLaya(LayaConfig{Name: "laya", BaseURL: srv.URL})
-	_, _, err := l.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: []string{"a", "b"}})
-	if err == nil {
-		t.Fatal("expected error on 503, got nil")
+func TestLayaListModels(t *testing.T) {
+	t.Parallel()
+	stub := newLayaStub(t, `{}`)
+	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+	models, err := l.ListModels(t.Context())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "typed-decisions" {
+		t.Fatalf("models = %+v", models)
 	}
 }

@@ -2296,12 +2296,12 @@ spec:
             - name: http
               containerPort: 8000
           readinessProbe:
-            httpGet: {path: /healthz, port: http}
+            httpGet: {path: /health, port: http}
             periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
-            httpGet: {path: /healthz, port: http}
-            initialDelaySeconds: 15
+            httpGet: {path: /health, port: http}
+            initialDelaySeconds: 120
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
