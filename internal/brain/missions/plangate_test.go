@@ -2,9 +2,13 @@ package missions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -580,3 +584,361 @@ func TestAcceptPlanScope(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckPlanGatesGrepPipeline (issue #993): piping grep into grep
+// almost never passes on line-based files and must be rejected with
+// an && suggestion; wc -l, head, single grep and && greps stay fine.
+func TestCheckPlanGatesGrepPipeline(t *testing.T) {
+	cases := []struct {
+		name    string
+		cmd     string
+		wantErr bool
+	}{
+		{"two greps piped", "grep A f | grep B f", true},
+		{"three greps piped", "grep A f | grep B | grep C", true},
+		{"grep piped with flags", "grep -q 'root = true' .editorconfig | grep -q 'end_of_line = lf'", true},
+		{"usr bin grep piped", "/usr/bin/grep A f | grep B", true},
+		{"usr bin grep both files", "/usr/bin/grep A f | /usr/bin/grep B f", true},
+		{"cat grep pipeline", "cat .editorconfig | grep 'root = true' | grep 'end_of_line = lf'", true},
+		{"cat two greps", "cat file | grep A | grep B", true},
+		{"head two greps", "head -n 50 file | grep A | grep B", true},
+		{"grep quoted pipe", "grep -q 'foo | grep' file", false},
+		{"some cmd filter pipeline", "some-cmd | grep A | grep B", false},
+		{"cat single grep", "cat file | grep A", false},
+		{"grep into wc", "grep A f | wc -l", false},
+		{"grep into head", "grep A f | head -n 1", false},
+		{"single grep", "grep -q A f", false},
+		{"grep and grep", "grep -q A f && grep -q B f", false},
+		{"grep or grep", "grep -q A f || grep -q B f", false},
+		{"grep semicolon grep", "grep -q A f; grep -q B f", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := Plan{Units: []PlanUnit{{Title: "u", CheckCmd: tc.cmd}}}
+			err := checkPlanGates(plan, Mission{Kind: KindCoding})
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "pipes grep into grep") {
+					t.Fatalf("checkPlanGates(%q) = %v, want grep pipeline rejection", tc.cmd, err)
+				}
+				if !strings.Contains(err.Error(), "grep -q A f && grep -q B f") {
+					t.Fatalf("checkPlanGates(%q) = %v, want suggestion in error message", tc.cmd, err)
+				}
+				return
+			}
+			if err != nil && strings.Contains(err.Error(), "pipes grep into grep") {
+				t.Fatalf("checkPlanGates(%q) unexpectedly rejected as grep pipeline: %v", tc.cmd, err)
+			}
+		})
+	}
+}
+
+func gitRepoAt(t *testing.T, dir string, files map[string]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...) //nolint:gosec
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("commit", "--allow-empty", "-q", "-m", "base")
+	for path, content := range files {
+		full := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(files) > 0 {
+		run("add", "-A")
+		run("commit", "-q", "-m", "changes")
+	}
+	return dir
+}
+
+// TestProbeCheckCmdsReplanDirtyArtifact (issue #993): on replan
+// (ReplanUsed true), a probe that exits 0 is accepted when the unit's
+// declared artifact exists in the workspace and is modified or
+// untracked in git. When the artifact is clean or absent, or on a
+// fresh plan (ReplanUsed false), it fails as vacuous.
+func TestProbeCheckCmdsReplanDirtyArtifact(t *testing.T) {
+	ws := t.TempDir()
+	wt := filepath.Join(ws, "wt")
+	gitRepoAt(t, wt, map[string]string{
+		"clean.txt":       "committed content\n",
+		"other_clean.txt": "committed other\n",
+	})
+	const origEditorconfig = "root = true\n# original untracked content\n"
+	if err := os.WriteFile(filepath.Join(wt, ".editorconfig"), []byte(origEditorconfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wt, "clean.txt"), []byte("modified content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	r := &nativeRunner{log: slog.Default()}
+	r.sandbox = func(ctx context.Context, _, workdir, command string, _ time.Duration, _ io.Writer) (int, error) {
+		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command) //nolint:gosec
+		cmd.Dir = workdir
+		if err := cmd.Run(); err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				return exitErr.ExitCode(), nil
+			}
+			return 1, nil
+		}
+		return 0, nil
+	}
+
+	// 1. Replan with untracked artifact -> accepted
+	mReplan := Mission{ID: "m1", Workspace: ws, Kind: KindCoding, ReplanUsed: true}
+	planUntracked := Plan{Units: []PlanUnit{{Title: "Editorconfig", Artifacts: []string{".editorconfig"}, CheckCmd: "test -f .editorconfig"}}}
+	if err := r.probeCheckCmds(context.Background(), mReplan, planUntracked); err != nil {
+		t.Fatalf("probeCheckCmds(replan with untracked artifact) = %v, want accepted", err)
+	}
+
+	// 2. Replan with modified artifact -> accepted
+	planModified := Plan{Units: []PlanUnit{{Title: "Clean modified", Artifacts: []string{"clean.txt"}, CheckCmd: "grep -q modified clean.txt"}}}
+	if err := r.probeCheckCmds(context.Background(), mReplan, planModified); err != nil {
+		t.Fatalf("probeCheckCmds(replan with modified artifact) = %v, want accepted", err)
+	}
+
+	// 3. Replan with dirty artifact but check_cmd does not name it -> rejected as vacuous
+	planVacuousTrue := Plan{Units: []PlanUnit{{Title: "Vacuous true", Artifacts: []string{".editorconfig"}, CheckCmd: "true"}}}
+	if err := r.probeCheckCmds(context.Background(), mReplan, planVacuousTrue); err == nil || !strings.Contains(err.Error(), "already exits 0 on replan") {
+		t.Fatalf("probeCheckCmds(replan with check_cmd 'true') = %v, want rejection naming 'already exits 0 on replan'", err)
+	}
+
+	// Replan with command naming artifact in a comment -> rejected
+	planTrueComment := Plan{Units: []PlanUnit{{Title: "True comment", Artifacts: []string{".editorconfig"}, CheckCmd: "true # .editorconfig"}}}
+	if err := r.probeCheckCmds(context.Background(), mReplan, planTrueComment); err == nil || !strings.Contains(err.Error(), "already exits 0 on replan") {
+		t.Fatalf("probeCheckCmds(replan with check_cmd 'true # .editorconfig') = %v, want rejection naming 'already exits 0 on replan'", err)
+	}
+
+	// Replan with command that exits 0 regardless of artifact presence (echo) -> rejected
+	planEcho := Plan{Units: []PlanUnit{{Title: "Echo artifact", Artifacts: []string{".editorconfig"}, CheckCmd: "echo .editorconfig"}}}
+	if err := r.probeCheckCmds(context.Background(), mReplan, planEcho); err == nil || !strings.Contains(err.Error(), "already exits 0 on replan") {
+		t.Fatalf("probeCheckCmds(replan with check_cmd 'echo .editorconfig') = %v, want rejection naming 'already exits 0 on replan'", err)
+	}
+
+	// Replan with command that unconditionally passes even if artifact is missing -> rejected
+	planAlwaysTrue := Plan{Units: []PlanUnit{{Title: "Always true", Artifacts: []string{".editorconfig"}, CheckCmd: "test -f .editorconfig || true"}}}
+	if err := r.probeCheckCmds(context.Background(), mReplan, planAlwaysTrue); err == nil || !strings.Contains(err.Error(), "already exits 0 on replan") {
+		t.Fatalf("probeCheckCmds(replan with check_cmd 'test -f .editorconfig || true') = %v, want rejection naming 'already exits 0 on replan'", err)
+	}
+
+	// Replan with command that recreates the file if absent -> rejected, and original file restored
+	planRecreate := Plan{Units: []PlanUnit{{Title: "Recreate file", Artifacts: []string{".editorconfig"}, CheckCmd: "test -f .editorconfig || printf 'root = true\n' > .editorconfig"}}}
+	if err := r.probeCheckCmds(context.Background(), mReplan, planRecreate); err == nil || !strings.Contains(err.Error(), "already exits 0 on replan") {
+		t.Fatalf("probeCheckCmds(replan with self-recreating check_cmd) = %v, want rejection naming 'already exits 0 on replan'", err)
+	}
+	content, err := os.ReadFile(filepath.Join(wt, ".editorconfig")) //nolint:gosec
+	if err != nil {
+		t.Fatalf("reading .editorconfig after recreate probe: %v", err)
+	}
+	if string(content) != origEditorconfig {
+		t.Fatalf(".editorconfig content = %q, want original %q", string(content), origEditorconfig)
+	}
+	for _, root := range []string{ws, wt} {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.Contains(e.Name(), "replan-park") || strings.Contains(e.Name(), "replan-probe") {
+				t.Fatalf("found leaked temp file %q in %s", e.Name(), root)
+			}
+		}
+	}
+
+	planUnrelatedCheck := Plan{Units: []PlanUnit{{Title: "Unrelated check", Artifacts: []string{".editorconfig", "other_clean.txt"}, CheckCmd: "grep -q 'committed' other_clean.txt"}}}
+	if err := r.probeCheckCmds(context.Background(), mReplan, planUnrelatedCheck); err == nil || !strings.Contains(err.Error(), "already exits 0 on replan") {
+		t.Fatalf("probeCheckCmds(replan checking other clean file) = %v, want rejection naming 'already exits 0 on replan'", err)
+	}
+
+	// Commit clean.txt again so it is clean in git
+	gitRun(t, wt, "add", "clean.txt")
+	gitRun(t, wt, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-m", "update clean.txt")
+
+	// 4. Replan with clean artifact in git -> rejected with replan message
+	if err := r.probeCheckCmds(context.Background(), mReplan, planModified); err == nil || !strings.Contains(err.Error(), "already exits 0 on replan") {
+		t.Fatalf("probeCheckCmds(replan with clean artifact) = %v, want rejection naming 'already exits 0 on replan'", err)
+	}
+
+	// 5. Replan with absent artifact -> rejected with replan message
+	planAbsent := Plan{Units: []PlanUnit{{Title: "Missing", Artifacts: []string{"missing.txt"}, CheckCmd: "true"}}}
+	if err := r.probeCheckCmds(context.Background(), mReplan, planAbsent); err == nil || !strings.Contains(err.Error(), "already exits 0 on replan") {
+		t.Fatalf("probeCheckCmds(replan with absent artifact) = %v, want rejection naming 'already exits 0 on replan'", err)
+	}
+
+	// 6. Fresh mission (ReplanUsed == false) with untracked artifact -> rejected with "before any work was done"
+	mFresh := Mission{ID: "m2", Workspace: ws, Kind: KindCoding, ReplanUsed: false}
+	if err := r.probeCheckCmds(context.Background(), mFresh, planUntracked); err == nil || !strings.Contains(err.Error(), "before any work was done") {
+		t.Fatalf("probeCheckCmds(fresh plan) = %v, want rejection naming 'before any work was done'", err)
+	}
+}
+
+// TestDirtyArtifactRealShell (issue #993): verifies dirtyArtifact against
+// real git status --porcelain output created in a temp repo.
+func TestDirtyArtifactRealShell(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("/bin/sh not available")
+	}
+	dir := t.TempDir()
+	sh := func(script string) {
+		cmd := exec.Command("/bin/sh", "-c", script) //nolint:gosec // script is a fixed test-fixture string, not user input
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.com",
+			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("sh script %q: %v\n%s", script, err, out)
+		}
+	}
+	sh(`git init -q && git commit --allow-empty -q -m "initial commit"`)
+	sh(`echo "clean" > clean.txt && git add clean.txt && git commit -q -m "add clean"`)
+	sh(`echo "untracked" > untracked.txt`)
+	sh(`echo "modified" >> clean.txt`)
+	sh(`mkdir -p sub && echo "nested" > sub/nested.txt`)
+
+	// untracked.txt is dirty
+	if anchor, ok := dirtyArtifact(dir, "", []string{"untracked.txt"}); !ok || anchor != "untracked.txt" {
+		t.Fatalf("dirtyArtifact(untracked.txt) = (%q, %v), want (untracked.txt, true)", anchor, ok)
+	}
+	// clean.txt is modified so dirty
+	if anchor, ok := dirtyArtifact(dir, "", []string{"clean.txt"}); !ok || anchor != "clean.txt" {
+		t.Fatalf("dirtyArtifact(clean.txt) = (%q, %v), want (clean.txt, true)", anchor, ok)
+	}
+	// sub/nested.txt in untracked dir
+	if anchor, ok := dirtyArtifact(dir, "", []string{"sub/nested.txt"}); !ok || anchor != "sub/nested.txt" {
+		t.Fatalf("dirtyArtifact(sub/nested.txt) = (%q, %v), want (sub/nested.txt, true)", anchor, ok)
+	}
+	// missing file
+	if anchor, ok := dirtyArtifact(dir, "", []string{"missing.txt"}); ok {
+		t.Fatalf("dirtyArtifact(missing.txt) = (%q, %v), want false", anchor, ok)
+	}
+	// non-local path is rejected
+	if anchor, ok := dirtyArtifact(dir, "", []string{"../outside.txt"}); ok {
+		t.Fatalf("dirtyArtifact(../outside.txt) = (%q, %v), want false", anchor, ok)
+	}
+	// check_cmd naming filter: accepts when check_cmd names artifact, rejects when it does not
+	if anchor, ok := dirtyArtifact(dir, "grep -q untracked untracked.txt", []string{"untracked.txt"}); !ok || anchor != "untracked.txt" {
+		t.Fatalf("dirtyArtifact with check_cmd naming artifact = (%q, %v), want (untracked.txt, true)", anchor, ok)
+	}
+	if anchor, ok := dirtyArtifact(dir, "true", []string{"untracked.txt"}); ok {
+		t.Fatalf("dirtyArtifact with check_cmd 'true' = (%q, %v), want false", anchor, ok)
+	}
+}
+
+// TestPlanSessionReplanAfterBuild (issue #993): drives PlanSession
+// through a replan after build created the artifact, asserting acceptance.
+func TestPlanSessionReplanAfterBuild(t *testing.T) {
+	ws := t.TempDir()
+	wt := filepath.Join(ws, "wt")
+	gitRepoAt(t, wt, map[string]string{"README.md": "# Readme\n"})
+	m := Mission{ID: "m1", Workspace: ws, Route: "default", Kind: KindCoding, ReplanUsed: true}
+
+	// Unit adds .editorconfig, written during the earlier build turn
+	if err := os.WriteFile(filepath.Join(wt, ".editorconfig"), []byte("root = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	planJSON := `{"units":[{"title":"Add editorconfig","artifacts":[".editorconfig"],"criteria":["c1","c2"],"check_cmd":"grep -q 'root = true' .editorconfig"}]}`
+	agent := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, planJSON)},
+	}}
+	r := newTestRunner(agent)
+	r.sandbox = func(ctx context.Context, _, workdir, cmd string, _ time.Duration, _ io.Writer) (int, error) {
+		c := exec.CommandContext(ctx, "/bin/sh", "-c", cmd) //nolint:gosec
+		c.Dir = workdir
+		if err := c.Run(); err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				return exitErr.ExitCode(), nil
+			}
+			return 1, nil
+		}
+		return 0, nil
+	}
+
+	plan, err := r.PlanSession(context.Background(), m, "")
+	if err != nil {
+		t.Fatalf("PlanSession on replan with dirty artifact: %v, want accepted", err)
+	}
+	if len(plan.Units) != 1 || plan.Units[0].Title != "Add editorconfig" {
+		t.Fatalf("accepted plan = %+v, want 1 unit", plan)
+	}
+}
+
+// TestPlanSequence6e58f15eFixture (issue #993): replays the recorded plan
+// sequence from mission 6e58f15e: first plan submits a grep pipeline that checkPlanGates
+// rejects; after a build attempt writes the file and stalls, replan submits the
+// corrected && gate, which probeCheckCmds accepts over the untracked artifact.
+func TestPlanSequence6e58f15eFixture(t *testing.T) {
+	ws := t.TempDir()
+	wt := filepath.Join(ws, "wt")
+	gitRepoAt(t, wt, map[string]string{"README.md": "# Readme\n"})
+	m := Mission{ID: "6e58f15e", Workspace: ws, Route: "default", Kind: KindCoding, Goal: "add .editorconfig"}
+
+	// Step 1: Initial plan with grep pipeline is rejected statically by checkPlanGates
+	pipelinePlan := `{"units":[{"title":"Add editorconfig","artifacts":[".editorconfig"],"criteria":["c1","c2"],"check_cmd":"grep 'root = true' .editorconfig | grep 'end_of_line = lf' | grep 'charset = utf-8'"}]}`
+	agent1 := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, pipelinePlan)},
+	}}
+	r1 := newTestRunner(agent1)
+	if _, err := r1.acceptPlan(context.Background(), m, pipelinePlan); err == nil || !strings.Contains(err.Error(), "pipes grep into grep") {
+		t.Fatalf("acceptPlan(pipelinePlan) = %v, want grep pipeline rejection", err)
+	}
+
+	// Step 2: Build turn runs and worker creates .editorconfig
+	if err := os.WriteFile(filepath.Join(wt, ".editorconfig"), []byte("root = true\nend_of_line = lf\ncharset = utf-8\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Step 3: Mission replans after build failure
+	m.ReplanUsed = true
+
+	// Step 4: Planner submits corrected && gate
+	correctedPlan := `{"units":[{"title":"Add editorconfig","artifacts":[".editorconfig"],"criteria":["c1","c2"],"check_cmd":"grep -q 'root = true' .editorconfig && grep -q 'end_of_line = lf' .editorconfig"}]}`
+	agent2 := &scriptedAgent{batches: [][]stream.StreamEvent{
+		{toolEndEvent(planToolName, correctedPlan)},
+	}}
+	r2 := newTestRunner(agent2)
+	r2.sandbox = func(ctx context.Context, _, workdir, cmd string, _ time.Duration, _ io.Writer) (int, error) {
+		c := exec.CommandContext(ctx, "/bin/sh", "-c", cmd) //nolint:gosec
+		c.Dir = workdir
+		if err := c.Run(); err != nil {
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				return exitErr.ExitCode(), nil
+			}
+			return 1, nil
+		}
+		return 0, nil
+	}
+	plan, err := r2.PlanSession(context.Background(), m, "")
+	if err != nil {
+		t.Fatalf("PlanSession on replan for 6e58f15e fixture = %v, want accepted", err)
+	}
+	if len(plan.Units) != 1 || plan.Units[0].CheckCmd != "grep -q 'root = true' .editorconfig && grep -q 'end_of_line = lf' .editorconfig" {
+		t.Fatalf("accepted plan = %+v, want corrected plan accepted", plan)
+	}
+}
+
