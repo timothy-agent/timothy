@@ -29,6 +29,249 @@ var emptyOutputIdiom = regexp.MustCompile(`\|\s*grep(\s+-\w+)*\s+(['"]?)\^\$(['"
 // banned, so `[ -z "$(...)" ]` is not available to it).
 const emptyOutputHint = "awk 'END{exit NR>0}'"
 
+// isGrepPipeline reports whether cmd contains a pipeline stage running grep
+// with a file argument that pipes into another grep command, or a file reader
+// (cat, head, tail, < file) piped into grep piped into grep (issue #993).
+// On line-based files this can almost never pass when searching for distinct lines,
+// and `&&` should be used instead.
+func isGrepPipeline(cmd string) bool {
+	for _, pipeline := range splitPipelines(cmd) {
+		if len(pipeline) < 2 {
+			continue
+		}
+		// Direct grep with file piped into grep: grep A f | grep B
+		for i := 0; i < len(pipeline)-1; i++ {
+			if isGrepWithFile(pipeline[i]) && isGrepCommand(pipeline[i+1]) {
+				return true
+			}
+		}
+		// File reader piped into grep into grep: cat f | grep A | grep B
+		for i := 0; i < len(pipeline)-2; i++ {
+			if isFileReaderWithFile(pipeline[i]) && isGrepCommand(pipeline[i+1]) && isGrepCommand(pipeline[i+2]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isFileReaderWithFile reports whether stage runs a file reader command (cat, head, tail)
+// with a file argument, or uses input redirection `< file`.
+func isFileReaderWithFile(stage string) bool {
+	words := splitWords(stage)
+	if len(words) == 0 {
+		return false
+	}
+	base := grepCommandName(words)
+	switch base {
+	case "cat":
+		for _, w := range words[1:] {
+			if !strings.HasPrefix(w, "-") {
+				return true
+			}
+		}
+	case "head", "tail":
+		for i := 1; i < len(words); i++ {
+			w := words[i]
+			if strings.HasPrefix(w, "-") {
+				if (w == "-n" || w == "-c") && i+1 < len(words) {
+					i++
+				}
+				continue
+			}
+			return true
+		}
+	}
+	for i, w := range words {
+		if w == "<" && i+1 < len(words) {
+			return true
+		}
+		if strings.HasPrefix(w, "<") && len(w) > 1 {
+			return true
+		}
+	}
+	return false
+}
+
+// splitPipelines splits a shell script into pipelines, where each pipeline
+// is a slice of command stages separated by unquoted `|`. Statements separated
+// by `;`, `&&`, `||`, or newlines are split into separate pipelines.
+func splitPipelines(cmd string) [][]string {
+	var pipelines [][]string
+	var curPipeline []string
+	var curStage strings.Builder
+	var inSingle, inDouble, escaped bool
+
+	flushStage := func() {
+		s := strings.TrimSpace(curStage.String())
+		if s != "" {
+			curPipeline = append(curPipeline, s)
+		}
+		curStage.Reset()
+	}
+
+	flushPipeline := func() {
+		flushStage()
+		if len(curPipeline) > 0 {
+			pipelines = append(pipelines, curPipeline)
+			curPipeline = nil
+		}
+	}
+
+	n := len(cmd)
+	for i := 0; i < n; i++ {
+		c := cmd[i]
+		if escaped {
+			curStage.WriteByte(c)
+			escaped = false
+			continue
+		}
+		if c == '\\' && !inSingle {
+			escaped = true
+			curStage.WriteByte(c)
+			continue
+		}
+		if c == '\'' && !inDouble {
+			inSingle = !inSingle
+			curStage.WriteByte(c)
+			continue
+		}
+		if c == '"' && !inSingle {
+			inDouble = !inDouble
+			curStage.WriteByte(c)
+			continue
+		}
+		if !inSingle && !inDouble {
+			if c == '\n' || c == ';' {
+				flushPipeline()
+				continue
+			}
+			if c == '&' && i+1 < n && cmd[i+1] == '&' {
+				flushPipeline()
+				i++ // skip second &
+				continue
+			}
+			if c == '|' {
+				if i+1 < n && cmd[i+1] == '|' {
+					flushPipeline()
+					i++ // skip second |
+					continue
+				}
+				flushStage()
+				continue
+			}
+		}
+		curStage.WriteByte(c)
+	}
+	flushPipeline()
+	return pipelines
+}
+
+// splitWords tokenizes a shell stage into words, respecting single and double quotes.
+func splitWords(s string) []string {
+	var words []string
+	var cur strings.Builder
+	var inSingle, inDouble, escaped bool
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			cur.WriteByte(c)
+			escaped = false
+			continue
+		}
+		if c == '\\' && !inSingle {
+			escaped = true
+			continue
+		}
+		if c == '\'' && !inDouble {
+			inSingle = !inSingle
+			continue
+		}
+		if c == '"' && !inSingle {
+			inDouble = !inDouble
+			continue
+		}
+		if (c == ' ' || c == '\t' || c == '\n') && !inSingle && !inDouble {
+			if cur.Len() > 0 {
+				words = append(words, cur.String())
+				cur.Reset()
+			}
+			continue
+		}
+		cur.WriteByte(c)
+	}
+	if cur.Len() > 0 {
+		words = append(words, cur.String())
+	}
+	return words
+}
+
+func grepCommandName(words []string) string {
+	for _, w := range words {
+		if strings.Contains(w, "=") && !strings.HasPrefix(w, "-") {
+			continue // skip environment assignment e.g. LC_ALL=C
+		}
+		w = strings.TrimLeft(w, "()")
+		return path.Base(w)
+	}
+	return ""
+}
+
+// isGrepCommand reports whether the command executable in stage is grep, egrep, or fgrep.
+func isGrepCommand(stage string) bool {
+	words := splitWords(stage)
+	base := grepCommandName(words)
+	return base == "grep" || base == "egrep" || base == "fgrep"
+}
+
+// isGrepWithFile reports whether stage runs grep (or egrep, fgrep) with at least one file argument.
+func isGrepWithFile(stage string) bool {
+	words := splitWords(stage)
+	base := grepCommandName(words)
+	if base != "grep" && base != "egrep" && base != "fgrep" {
+		return false
+	}
+	cmdIdx := -1
+	for idx, w := range words {
+		if strings.Contains(w, "=") && !strings.HasPrefix(w, "-") {
+			continue
+		}
+		cmdIdx = idx
+		break
+	}
+	if cmdIdx == -1 {
+		return false
+	}
+
+	var nonFlags []string
+	var endOfFlags bool
+	for i := cmdIdx + 1; i < len(words); i++ {
+		w := words[i]
+		if !endOfFlags && strings.HasPrefix(w, "-") {
+			if w == "--" {
+				endOfFlags = true
+				continue
+			}
+			// Skip argument for flags taking an argument
+			if (w == "-e" || w == "-f" || w == "-m" || w == "-A" || w == "-B" || w == "-C") && i+1 < len(words) {
+				i++
+			}
+			continue
+		}
+		nonFlags = append(nonFlags, w)
+	}
+	return len(nonFlags) >= 2 || (len(nonFlags) >= 1 && hasPatternFlag(words[cmdIdx+1:]))
+}
+
+func hasPatternFlag(words []string) bool {
+	for _, w := range words {
+		if w == "-e" || w == "-f" || strings.HasPrefix(w, "-e") || strings.HasPrefix(w, "-f") {
+			return true
+		}
+	}
+	return false
+}
+
 // codeExtensions maps artifacts a check_cmd must build, test or run
 // rather than only grep to their language. D-139 (issue #1014): the
 // code floor keys on the artifact's language, not a sandbox image,
@@ -83,6 +326,9 @@ func checkPlanGates(plan Plan, m Mission) error {
 	for _, u := range plan.Units {
 		if emptyOutputIdiom.MatchString(u.CheckCmd) {
 			return fmt.Errorf("mission runner: unit %q check_cmd pipes into grep -q '^$', which exits 1 on empty output as well as on filenames, so it can never pass; to assert a command prints nothing pipe it into %s instead", u.Title, emptyOutputHint)
+		}
+		if isGrepPipeline(u.CheckCmd) {
+			return fmt.Errorf("mission runner: unit %q check_cmd pipes grep into grep (`%s`), which can almost never pass on line-based files; use `&&` between independent assertions instead (e.g. grep -q A f && grep -q B f)", u.Title, u.CheckCmd)
 		}
 	}
 	if err := checkBootstrap(plan, m); err != nil {
@@ -466,12 +712,23 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 		}
 		switch {
 		case res.Passed:
+			if m.ReplanUsed {
+				if anchor, ok := dirtyArtifact(workRoot, u.CheckCmd, u.Artifacts); ok {
+					if !r.passesWithoutArtifact(ctx, backend, workRoot, u.CheckCmd, anchor) {
+						r.log.Info("plan probe: check_cmd already exits 0 on replan, accepted because artifact exists, is modified or untracked, and is named in check_cmd", "mission_id", m.ID, "unit", u.Title, "artifact", anchor)
+						continue
+					}
+				}
+			}
 			anchor := ""
 			if langs := codeLanguages(u.Artifacts); len(langs) > 0 {
 				anchor = anchorExample[langs[0]]
 			}
 			if anchor == "" {
 				anchor = "grep -q '<symbol the unit adds>' <artifact> && <toolchain call>"
+			}
+			if m.ReplanUsed {
+				return fmt.Errorf("mission runner: unit %q check_cmd `%s` already exits 0 on replan. If the artifact already exists from the earlier attempt, ensure it is listed in the unit's artifacts and named in check_cmd so the harness can verify it is modified or untracked; otherwise anchor the gate on content the unit adds, e.g. %s", u.Title, u.CheckCmd, anchor)
 			}
 			return fmt.Errorf("mission runner: unit %q check_cmd `%s` already exits 0 before any work was done, so it cannot tell done from not done. A toolchain call alone passes while the files are still missing (go test -run X matches nothing, gofmt -l prints nothing for absent files), so anchor the gate on content the unit adds, e.g. %s. A unit that adds no new content (a final format/verify unit) can have no such gate: remove it and put its commands into the code units' check_cmds", u.Title, u.CheckCmd, anchor)
 		case res.ExitCode == 127 || shellNotFound.MatchString(lastLine(res.Excerpt)):
@@ -484,6 +741,108 @@ func (r *nativeRunner) probeCheckCmds(ctx context.Context, m Mission, plan Plan)
 				continue
 			}
 			return fmt.Errorf("mission runner: unit %q check_cmd `%s` uses a command the sandbox does not have: %s", u.Title, u.CheckCmd, strings.TrimSpace(lastLine(res.Excerpt)))
+		}
+	}
+	return nil
+}
+
+// passesWithoutArtifact reports whether checkCmd still exits 0 when artifact
+// is temporarily removed from workRoot. A command that passes even without
+// its artifact (e.g. echo, true) cannot tell done from not done and must
+// not receive the replan waiver (issue #993).
+//
+// The artifact is parked outside the git worktree and restored after the
+// probe. If checkCmd recreates the artifact path during the check
+// (e.g. `test -f f || printf ... > f`), that newly created path is removed
+// before the original artifact is moved back.
+func (r *nativeRunner) passesWithoutArtifact(ctx context.Context, backend verifyBackend, workRoot, checkCmd, artifact string) bool {
+	if workRoot == "" || artifact == "" {
+		return true
+	}
+	fullPath := filepath.Join(workRoot, filepath.FromSlash(cleanArtifact(artifact)))
+	parentDir := filepath.Dir(workRoot)
+	parkDir, err := os.MkdirTemp(parentDir, ".replan-park-*")
+	if err != nil {
+		parkDir, err = os.MkdirTemp("", "replan-park-*")
+		if err != nil {
+			return true // fail safe: if we cannot create a park directory, do not grant waiver
+		}
+	}
+	defer func() { _ = os.RemoveAll(parkDir) }()
+
+	parkPath := filepath.Join(parkDir, filepath.Base(fullPath))
+	if err := movePath(fullPath, parkPath); err != nil {
+		return true // fail safe: if we cannot move artifact aside, do not grant waiver
+	}
+	defer func() {
+		// If checkCmd recreated the path during the probe, remove it before restoring original
+		_ = os.RemoveAll(fullPath)
+		_ = os.MkdirAll(filepath.Dir(fullPath), 0o750)
+		_ = movePath(parkPath, fullPath)
+	}()
+
+	res, err := runVerifyTimed(ctx, backend, workRoot, checkCmd, probeTimeout)
+	return err == nil && res.Passed
+}
+
+// movePath renames src to dst, falling back to copy and remove if cross-device.
+func movePath(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
+		return err
+	}
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	info, err := os.Lstat(src)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		if err := copyDir(src, dst); err != nil {
+			return err
+		}
+	} else {
+		if err := copyFile(src, dst); err != nil {
+			return err
+		}
+	}
+	return os.RemoveAll(src)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src) //nolint:gosec
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600) //nolint:gosec
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+func copyDir(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o750); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		s := filepath.Join(src, entry.Name())
+		d := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(s, d); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(s, d); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -524,6 +883,144 @@ func lastLine(s string) string {
 		}
 	}
 	return ""
+}
+
+// dirtyArtifact reports whether any of artifacts exists in the workspace
+// at workRoot, is modified or untracked according to `git status --porcelain`,
+// and is named in checkCmd (issue #993).
+// If checkCmd is non-empty, the artifact must be named by words in checkCmd.
+func dirtyArtifact(workRoot, checkCmd string, artifacts []string) (string, bool) {
+	if workRoot == "" || len(artifacts) == 0 {
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), gitOpTimeout)
+	defer cancel()
+	status, err := runGit(ctx, workRoot, "status", "--porcelain")
+	if err != nil {
+		return "", false
+	}
+	dirty := parseDirtyPaths(status)
+	for _, a := range artifacts {
+		p := cleanArtifact(a)
+		if !filepath.IsLocal(p) || !isPathDirty(dirty, p) {
+			continue
+		}
+		if checkCmd != "" && !cmdNamesArtifact(checkCmd, p) {
+			continue
+		}
+		fullPath := filepath.Join(workRoot, filepath.FromSlash(p))
+		if _, err := os.Lstat(fullPath); err == nil {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+// stripShellComments removes unquoted shell comments (# to end of line).
+func stripShellComments(s string) string {
+	var b strings.Builder
+	var inSingle, inDouble, escaped bool
+	n := len(s)
+	for i := 0; i < n; i++ {
+		c := s[i]
+		if escaped {
+			b.WriteByte(c)
+			escaped = false
+			continue
+		}
+		if c == '\\' && !inSingle {
+			escaped = true
+			b.WriteByte(c)
+			continue
+		}
+		if c == '\'' && !inDouble {
+			inSingle = !inSingle
+			b.WriteByte(c)
+			continue
+		}
+		if c == '"' && !inSingle {
+			inDouble = !inDouble
+			b.WriteByte(c)
+			continue
+		}
+		if !inSingle && !inDouble {
+			if c == '#' && (i == 0 || isShellWordSep(rune(s[i-1]))) {
+				for i < n && s[i] != '\n' {
+					i++
+				}
+				if i < n && s[i] == '\n' {
+					b.WriteByte('\n')
+				}
+				continue
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// cmdNamesArtifact reports whether cmd references artifact as a word or
+// enclosing path component, ignoring shell comments.
+func cmdNamesArtifact(cmd, artifact string) bool {
+	cmd = stripShellComments(cmd)
+	target := cleanArtifact(artifact)
+	if target == "" || target == "." {
+		return false
+	}
+	for _, word := range strings.FieldsFunc(cmd, isShellWordSep) {
+		p := cleanArtifact(word)
+		if p == "." {
+			continue
+		}
+		if p == target || strings.HasPrefix(p, target+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// parseDirtyPaths extracts modified and untracked file and directory paths
+// from `git status --porcelain` output.
+func parseDirtyPaths(status string) map[string]bool {
+	dirty := make(map[string]bool)
+	for _, line := range strings.Split(status, "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		rawPath := strings.TrimSpace(line[3:])
+		if rawPath == "" {
+			continue
+		}
+		if _, newPath, found := strings.Cut(rawPath, " -> "); found {
+			rawPath = newPath
+		}
+		if strings.HasPrefix(rawPath, "\"") && strings.HasSuffix(rawPath, "\"") {
+			if unquoted, err := strconv.Unquote(rawPath); err == nil {
+				rawPath = unquoted
+			}
+		}
+		p := cleanArtifact(rawPath)
+		if p != "" {
+			dirty[p] = true
+			if strings.HasSuffix(rawPath, "/") {
+				dirty[strings.TrimSuffix(p, "/")] = true
+			}
+		}
+	}
+	return dirty
+}
+
+// isPathDirty reports whether p or any enclosing directory prefix appears in dirty.
+func isPathDirty(dirty map[string]bool, p string) bool {
+	if dirty[p] {
+		return true
+	}
+	for dir := path.Dir(p); dir != "." && dir != "/"; dir = path.Dir(dir) {
+		if dirty[dir] {
+			return true
+		}
+	}
+	return false
 }
 
 // acceptPlan is parsePlan plus the gate checks that need the mission
