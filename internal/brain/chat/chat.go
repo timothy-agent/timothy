@@ -75,6 +75,7 @@ var ErrBadRequest = errors.New("bad request")
 type Gateway interface {
 	Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error)
 	RouteForRole(ctx context.Context, role string) (string, bool, error)
+	Decide(ctx context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error)
 }
 
 // SessionLog is the slice of the session store chat needs; tests fake
@@ -556,7 +557,42 @@ func (s *Service) dispatchAgent(ctx context.Context, message string) string {
 		return ""
 	}
 	candidates := s.candidates(ctx)
-	return agents.Dispatch(ctx, s.classify, message, candidates, "")
+	var decide agents.Decide
+	if s.gw != nil {
+		decide = DecideOverGateway(s.gw)
+	}
+	return agents.DispatchWithDecide(ctx, decide, s.classify, message, candidates, "")
+}
+
+// DecideOverGateway builds an agents.Decide that asks the "decide"
+// role's route for a fixed-choice answer on a decision model.
+// When the decide role is unbound (or the gateway lookup fails),
+// this returns an error so callers fall back to the prompt-based
+// classifier; behavior remains byte-identical to the unbound path.
+func DecideOverGateway(gw Gateway) agents.Decide {
+	return func(ctx context.Context, question string, options []string) (string, error) {
+		if gw == nil {
+			return "", fmt.Errorf("chat: decide: nil gateway")
+		}
+		route, ok, err := gw.RouteForRole(ctx, "decide")
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("chat: decide: decide role is unbound")
+		}
+		resp, err := gw.Decide(ctx, gwclient.DecideRequest{
+			Route:    route,
+			Kind:     "choice",
+			Question: question,
+			Options:  options,
+			Purpose:  "decide",
+		})
+		if err != nil {
+			return "", err
+		}
+		return resp.Choice, nil
+	}
 }
 
 // ClassifyOverGateway builds an agents.Classify that asks the
@@ -766,6 +802,15 @@ func ClassifyCollectionOverGateway(gw Gateway, log *slog.Logger) func(ctx contex
 
 		fallback := CollectionChoice{NewName: unsortedCollectionName}
 
+		if len(collections) > 0 {
+			if route, ok, err := gw.RouteForRole(ctx, "decide"); err == nil && ok {
+				choice := classifyCollectionViaDecide(ctx, gw, route, docTitle, docText, collections, fallback, log)
+				if choice != nil {
+					return *choice
+				}
+			}
+		}
+
 		var list strings.Builder
 		if len(collections) == 0 {
 			list.WriteString("No collections exist yet.")
@@ -837,6 +882,90 @@ func ClassifyCollectionOverGateway(gw Gateway, log *slog.Logger) func(ctx contex
 		log.Warn("classify collection: reply matched neither an existing id nor NEW:", "reply", truncateRunes(reply, 80))
 		return fallback
 	}
+}
+
+func classifyCollectionViaDecide(ctx context.Context, gw Gateway, route string, docTitle, docText string, collections []kb.Collection, fallback CollectionChoice, log *slog.Logger) *CollectionChoice {
+	var list strings.Builder
+	options := make([]string, 0, len(collections)+1)
+	for _, c := range collections {
+		fmt.Fprintf(&list, "%s: %s (%d docs) - %s\n", c.ID, c.Name, c.DocCount, c.Description)
+		options = append(options, c.ID)
+	}
+	options = append(options, "NEW")
+
+	docText = truncateRunes(docText, collectionClassifyDocRunes)
+	const decideSystemRule = "You file documents into a knowledge base. Given a document and a list of existing collections, reply with the best-matching existing collection, or propose NEW when nothing fits. Prefer the MOST SPECIFIC existing collection that fits the document's primary topic; propose NEW only when the primary topic is clearly narrower than every existing collection and is a topic more future documents could join. A broad collection is the wrong pick when a narrower on-topic one already exists, or when the document's topic deserves its own collection - do not use a catch-all just because it is easy."
+	q := fmt.Sprintf("%s\n\nExisting collections:\n%s\nDocument title: %s\n\n%s", decideSystemRule, list.String(), docTitle, docText)
+
+	resp, err := gw.Decide(ctx, gwclient.DecideRequest{
+		Route:    route,
+		Kind:     "choice",
+		Question: q,
+		Options:  options,
+		Purpose:  "kb_classify",
+	})
+	if err != nil {
+		log.Warn("classify collection: decide failed, falling back to chat classifier", "error", err)
+		return nil
+	}
+
+	choice := strings.TrimSpace(resp.Choice)
+	if strings.EqualFold(choice, "NEW") {
+		newName, newDesc := generateNewCollectionMeta(ctx, gw, docTitle, docText, log)
+		if newName != "" {
+			return &CollectionChoice{NewName: truncateRunes(newName, 80), NewDesc: truncateRunes(newDesc, 300)}
+		}
+		return &fallback
+	}
+
+	for _, c := range collections {
+		if strings.EqualFold(choice, c.ID) {
+			return &CollectionChoice{ExistingID: c.ID}
+		}
+	}
+
+	log.Warn("classify collection: decide returned unexpected choice", "choice", choice)
+	return nil
+}
+
+func generateNewCollectionMeta(ctx context.Context, gw Gateway, docTitle, docText string, log *slog.Logger) (name, desc string) {
+	route, ok, err := gw.RouteForRole(ctx, "summarize")
+	if err != nil || !ok {
+		route, ok, err = gw.RouteForRole(ctx, "default")
+		if err != nil || !ok {
+			log.Warn("classify collection: no route for new collection metadata generation")
+			return "", ""
+		}
+	}
+
+	const promptSystem = `You are naming a new knowledge base collection for a document. A new collection's name must be a SHORT GENERIC TOPIC CATEGORY of 1-3 words (like "AI Agents", "Scalability", "Code Review", "CVs") that many future documents could belong to, never a title describing this specific document. The description should state the topic's scope broadly. Reply with exactly one line in the format: <name> | <description>. No other text.`
+	user := fmt.Sprintf("Document title: %s\n\n%s", docTitle, truncateRunes(docText, collectionClassifyDocRunes))
+
+	events, err := gw.Stream(ctx, gwclient.StreamRequest{
+		Route:     route,
+		Purpose:   "kb_classify",
+		System:    promptSystem,
+		Messages:  []provider.Message{{Role: "user", Content: user}},
+		MaxTokens: 256,
+	})
+	if err != nil {
+		log.Warn("classify collection: new collection metadata stream failed", "error", err)
+		return "", ""
+	}
+
+	var b strings.Builder
+	for ev := range events {
+		if ev.Type == stream.EventChunk {
+			b.WriteString(ev.Text)
+		}
+	}
+	reply, _, _ := strings.Cut(strings.TrimSpace(b.String()), "\n")
+	reply = strings.TrimSpace(reply)
+	if rest, ok := strings.CutPrefix(reply, "NEW:"); ok {
+		reply = strings.TrimSpace(rest)
+	}
+	name, desc, _ = strings.Cut(reply, "|")
+	return strings.TrimSpace(name), strings.TrimSpace(desc)
 }
 
 // captionTimeout bounds one image-captioning gateway call (KB ingest

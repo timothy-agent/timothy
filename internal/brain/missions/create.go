@@ -73,6 +73,8 @@ type CreateRequest struct {
 type ResolveDeps struct {
 	// Classify answers the kind prompt when a request omits kind.
 	Classify func(ctx context.Context, prompt string) (string, error)
+	// Decide picks one option among options for question on a decision model.
+	Decide func(ctx context.Context, question string, options []string) (string, error)
 	// Agent resolves the request's agent; "" resolves the default agent.
 	Agent AgentResolver
 	// RouteForRole resolves a system role's route ("default").
@@ -109,7 +111,7 @@ func (e *RouteUnusableError) Error() string {
 func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (Mission, error) {
 	kind := req.Kind
 	if kind == "" {
-		kind = ClassifyKind(ctx, deps.Classify, req.Goal)
+		kind = ClassifyKindWithDecide(ctx, deps.Decide, deps.Classify, req.Goal)
 	}
 	harness := req.Harness
 	if harness == "native" {
@@ -236,6 +238,28 @@ func ResolveDefaults(ctx context.Context, req CreateRequest, deps ResolveDeps) (
 		return Mission{}, &RouteUnusableError{Route: r, Reason: reason}
 	}
 	return m, nil
+}
+
+// ClassifyKindWithDecide decides kind from goal using decide when available,
+// falling back to classify when decide is nil, unbound, or on error.
+func ClassifyKindWithDecide(ctx context.Context, decide func(ctx context.Context, question string, options []string) (string, error), classify func(ctx context.Context, prompt string) (string, error), goal string) string {
+	if decide != nil {
+		q := "Classify this mission goal based on its deliverable, not its topic.\n" +
+			"coding — the mission produces or changes code, scripts, or configuration files in a repository.\n" +
+			"general — the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n\n" +
+			"Goal: " + goal
+		choice, err := decide(ctx, q, []string{"coding", "general"})
+		if err == nil {
+			choice = strings.ToLower(strings.TrimSpace(choice))
+			if strings.HasPrefix(choice, KindCoding) {
+				return KindCoding
+			}
+			if strings.HasPrefix(choice, KindGeneral) {
+				return KindGeneral
+			}
+		}
+	}
+	return ClassifyKind(ctx, classify, goal)
 }
 
 // ClassifyKind decides kind from goal by deliverable, not topic: a book

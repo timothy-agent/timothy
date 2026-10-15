@@ -2,6 +2,7 @@ package gwclient
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -422,3 +423,71 @@ func TestInvalidateRoutesDropsMemoizedRouting(t *testing.T) {
 		t.Fatalf("hits after invalidate = %+v, want two each", hits)
 	}
 }
+
+func TestDecideSuccess(t *testing.T) {
+	t.Parallel()
+	var gotReq DecideRequest
+	c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/decide" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "bad method", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotReq); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"choice":"coding","scores":{"coding":0.95,"general":0.05},"provider":"laya-svc","model":"typed-decisions","ledger_id":"ledg-1"}`)
+	})
+
+	res, err := c.Decide(t.Context(), DecideRequest{
+		Kind:     "choice",
+		Question: "fix the bug",
+		Options:  []string{"coding", "general"},
+		Purpose:  "test_decide",
+	})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if gotReq.Kind != "choice" || gotReq.Question != "fix the bug" || len(gotReq.Options) != 2 {
+		t.Fatalf("gotReq = %+v, unexpected request payload", gotReq)
+	}
+	if res.Choice != "coding" || res.Provider != "laya-svc" || res.Model != "typed-decisions" || res.LedgerID != "ledg-1" {
+		t.Fatalf("res = %+v, unexpected response", res)
+	}
+	if res.Scores["coding"] != 0.95 {
+		t.Fatalf("res.Scores = %+v, want coding=0.95", res.Scores)
+	}
+}
+
+func TestDecideErrorHandling(t *testing.T) {
+	t.Parallel()
+	t.Run("503 unavailable", func(t *testing.T) {
+		t.Parallel()
+		c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprint(w, `routing configuration not loaded yet`)
+		})
+		_, err := c.Decide(t.Context(), DecideRequest{Kind: "yesno", Question: "is this valid"})
+		if !errors.Is(err, ErrGatewayUnavailable) {
+			t.Fatalf("err = %v, want ErrGatewayUnavailable", err)
+		}
+	})
+
+	t.Run("400 bad request", func(t *testing.T) {
+		t.Parallel()
+		c := gatewayStub(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(w, `bad request: invalid kind`)
+		})
+		_, err := c.Decide(t.Context(), DecideRequest{Kind: "invalid"})
+		if err == nil || !strings.Contains(err.Error(), "http 400") {
+			t.Fatalf("err = %v, want http 400 error", err)
+		}
+	})
+}
+

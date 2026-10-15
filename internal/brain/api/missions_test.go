@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SumonMSelim/timothy/internal/brain/agents"
 	"github.com/SumonMSelim/timothy/internal/brain/attachments"
 	"github.com/SumonMSelim/timothy/internal/brain/connectors"
 	"github.com/SumonMSelim/timothy/internal/brain/gwclient"
@@ -1062,6 +1063,122 @@ func TestClassifyKindAndLight(t *testing.T) {
 				t.Fatalf("classifyKindAndLight() = (%q, %v), want (%q, %v)", gotKind, gotLight, tc.wantKind, tc.wantLight)
 			}
 		})
+	}
+}
+
+// TestClassifyKindAndLightWithDecide table-tests kind and light classification
+// via decision models with fallback to prompt-based classify.
+func TestClassifyKindAndLightWithDecide(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		decide    agents.Decide
+		classify  agents.Classify
+		wantKind  string
+		wantLight bool
+	}{
+		{
+			"decide picks coding",
+			func(_ context.Context, q string, _ []string) (string, error) {
+				return "coding", nil
+			},
+			nil,
+			"coding",
+			false,
+		},
+		{
+			"decide picks general and light",
+			func(_ context.Context, q string, _ []string) (string, error) {
+				if strings.Contains(q, "single-pass") {
+					return "yes", nil
+				}
+				return "general", nil
+			},
+			nil,
+			"general",
+			true,
+		},
+		{
+			"decide picks general and full",
+			func(_ context.Context, q string, _ []string) (string, error) {
+				if strings.Contains(q, "single-pass") {
+					return "no", nil
+				}
+				return "general", nil
+			},
+			nil,
+			"general",
+			false,
+		},
+		{
+			"decide light error falls back to classify",
+			func(_ context.Context, q string, _ []string) (string, error) {
+				if strings.Contains(q, "single-pass") {
+					return "", errors.New("light fail")
+				}
+				return "general", nil
+			},
+			func(_ context.Context, _ string) (string, error) {
+				return "yes", nil
+			},
+			"general",
+			true,
+		},
+		{
+			"decide nil falls back to classify",
+			nil,
+			func(_ context.Context, _ string) (string, error) {
+				return "coding full", nil
+			},
+			"coding",
+			false,
+		},
+		{
+			"decide error falls back to classify",
+			func(_ context.Context, _ string, _ []string) (string, error) {
+				return "", errors.New("decide 503")
+			},
+			func(_ context.Context, _ string) (string, error) {
+				return "general light", nil
+			},
+			"general",
+			true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotKind, gotLight := classifyKindAndLightWithDecide(context.Background(), tc.decide, tc.classify, "some goal")
+			if gotKind != tc.wantKind || gotLight != tc.wantLight {
+				t.Fatalf("classifyKindAndLightWithDecide() = (%q, %v), want (%q, %v)", gotKind, gotLight, tc.wantKind, tc.wantLight)
+			}
+		})
+	}
+}
+
+// TestMissionsClassifyEndpointWithDecide covers POST /v1/missions/classify when
+// decide is wired, and verifies fallback to classify on decide failure.
+func TestMissionsClassifyEndpointWithDecide(t *testing.T) {
+	t.Parallel()
+	a, _, _ := testAPI(t, "tok", nil)
+	classify := func(ctx context.Context, prompt string) (string, error) {
+		return "general light", nil
+	}
+	decide := func(ctx context.Context, q string, _ []string) (string, error) {
+		return "coding", nil
+	}
+	m := mux(a)
+	a.registerMissions(m.Handle, missions.NewStore(pgpool.New(context.Background(), "postgres://invalid/nope", discard()), discard()), nil, nil, nil, nil, nil, nil, classify, nil, nil, nil, nil, nil, "", nil, nil, nil, nil, "", nil, decide)
+
+	req := httptest.NewRequest("POST", "/v1/missions/classify", strings.NewReader(`{"goal":"refactor gateway"}`))
+	req.Header.Set("Authorization", "Bearer tok")
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("classify code = %d %s, want 200", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"kind":"coding"`) || !strings.Contains(w.Body.String(), `"light":false`) {
+		t.Fatalf("classify body = %s, want kind coding, light false", w.Body.String())
 	}
 }
 

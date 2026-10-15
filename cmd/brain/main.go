@@ -447,6 +447,7 @@ func main() {
 	// from the same sources the handler's own fields use (issue #816).
 	missionResolve := missions.ResolveDeps{
 		Classify:     chat.ClassifyOverGateway(gwc),
+		Decide:       chat.DecideOverGateway(gwc),
 		Agent:        missionAgentResolver(agentReg),
 		RouteForRole: routeForRole,
 		RouteExists: func(ctx context.Context, name string) bool {
@@ -1230,7 +1231,7 @@ func main() {
 		agentReg, conns, goog, msft, mcpAuth, openrouterAuth, secrets, agent, packs, missionStore, missionDriver, missionNotifier,
 		missionWorkspace, resolveSecret, routeForRole, chat.ClassifyOverGateway(gwc), gwc.ResolveRoute, ledgerAgg.TopModelByMission, missionHub, attachmentStore, &http.Client{}, whisperURL, markitdownURL, cliproxyURL, cliproxyKey, token, app.Log, gwc, kbStore, mc, chat.ClassifyCollectionOverGateway(gwc, app.Log), chat.TitleOverGateway(gwc, app.Log), kbEnrich, destinationStore, destinationTest, workflowStore, workflowEngine, automationStore, eventStore, eventsKick, pdfService, captionImage, channelStore, channelService,
 		onboardingProbes(gwc, missionSandbox, store, missionStore, conns, channelStore, kbStore, automationStore, flags),
-		authStore, authKeyPair)
+		authStore, authKeyPair, chat.DecideOverGateway(gwc))
 
 	if err := app.Run(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		app.Log.Error("server exited", "error", err)
@@ -2481,6 +2482,10 @@ func (r turnRouter) Stream(ctx context.Context, req gwclient.StreamRequest) (<-c
 
 func (r turnRouter) RouteForRole(ctx context.Context, role string) (string, bool, error) {
 	return r.gw.RouteForRole(ctx, role)
+}
+
+func (r turnRouter) Decide(ctx context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+	return r.gw.Decide(ctx, req)
 }
 
 func rememberWithTurnTrust(mc *memclient.Client) builtin.RememberFunc {

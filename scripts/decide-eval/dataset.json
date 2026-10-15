@@ -1,0 +1,599 @@
+{
+  "missions": [
+    {
+      "goal": "Add a CHANGELOG.md file at the repository root with a version heading and one bullet point describing the initial release.",
+      "want_kind": "coding",
+      "want_light": false
+    },
+    {
+      "goal": "Add a SECURITY.md file at the repository root describing how to report a vulnerability.",
+      "want_kind": "coding",
+      "want_light": false
+    },
+    {
+      "goal": "Add an .editorconfig file at the repository root with root=true and basic UTF-8/LF settings.",
+      "want_kind": "coding",
+      "want_light": false
+    },
+    {
+      "goal": "Add a docs/FAQ.md file with two short frequently-asked questions and answers about this repo.",
+      "want_kind": "coding",
+      "want_light": false
+    },
+    {
+      "goal": "Add two files at the repository root, planned as two separate units: CHANGELOG.md with a version heading and one bullet point describing the initial release, and CONTRIBUTING.md with a short section on how to propose a change.",
+      "want_kind": "coding",
+      "want_light": false
+    },
+    {
+      "goal": "Add two files, planned as two separate units: SECURITY.md at the repository root describing how to report a vulnerability, and docs/USAGE.md with a short Usage section explaining what this fixture repo is for.",
+      "want_kind": "coding",
+      "want_light": false
+    },
+    {
+      "goal": "Add two files, planned as two separate units: docs/FAQ.md with two short frequently-asked questions and answers about this repo, and an .editorconfig at the repository root with root=true and basic UTF-8/LF settings.",
+      "want_kind": "coding",
+      "want_light": false
+    },
+    {
+      "goal": "Explain how the Retry-After header works with 503 responses, in a markdown file.",
+      "want_kind": "general",
+      "want_light": false
+    },
+    {
+      "goal": "Describe HTTP ETag headers and conditional requests, in a markdown file.",
+      "want_kind": "general",
+      "want_light": false
+    },
+    {
+      "goal": "Compare HTTP HEAD and GET requests and typical uses of HEAD, in a markdown file.",
+      "want_kind": "general",
+      "want_light": false
+    },
+    {
+      "goal": "Compare HTTP 301 and 308 redirects and when to use each, in a markdown file.",
+      "want_kind": "general",
+      "want_light": false
+    },
+    {
+      "goal": "Summarize what DNS TTL means and how it affects record changes, in a markdown file.",
+      "want_kind": "general",
+      "want_light": false
+    },
+    {
+      "goal": "Explain what an idempotent HTTP method is with examples, in a markdown file.",
+      "want_kind": "general",
+      "want_light": false
+    },
+    {
+      "goal": "Summarize what HTTP status code 429 means and when a client should retry.",
+      "want_kind": "general",
+      "want_light": true
+    },
+    {
+      "goal": "Explain how the Retry-After header works with 503 responses.",
+      "want_kind": "general",
+      "want_light": true
+    },
+    {
+      "goal": "Describe HTTP ETag headers and conditional requests.",
+      "want_kind": "general",
+      "want_light": true
+    },
+    {
+      "goal": "Explain CORS preflight requests and when browsers send them.",
+      "want_kind": "general",
+      "want_light": true
+    },
+    {
+      "goal": "Compare HTTP 301 and 308 redirects and when to use each.",
+      "want_kind": "general",
+      "want_light": true
+    },
+    {
+      "goal": "Describe the robots.txt format and how crawlers use it.",
+      "want_kind": "general",
+      "want_light": true
+    }
+  ],
+  "agents": [
+    {
+      "message": "How do I implement a thread-safe LRU cache in Go with sync.RWMutex?",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "coding"
+    },
+    {
+      "message": "Can you review this pull request diff for SQL injection vulnerabilities and race conditions?",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "coding"
+    },
+    {
+      "message": "Please write a polite email to decline an interview offer while keeping the connection open for the future",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "writer"
+    },
+    {
+      "message": "Draft a comprehensive technical blog post explaining Raft consensus in simple terms for junior engineers",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "writer"
+    },
+    {
+      "message": "What is the capital of Australia and what are its top historical landmarks?",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "general"
+    },
+    {
+      "message": "Can you calculate the time difference between Tokyo and New York and convert 100 EUR to USD?",
+      "candidates": [
+        {
+          "id": "coding",
+          "name": "coding",
+          "description": "Software engineer for writing code, debugging, and git repos"
+        },
+        {
+          "id": "writer",
+          "name": "writer",
+          "description": "Technical author and copy editor for prose and documentation"
+        },
+        {
+          "id": "general",
+          "name": "general",
+          "description": "Everyday questions and tasks on a strong all-round chain"
+        }
+      ],
+      "want_agent": "general"
+    }
+  ],
+  "kb_filing": [
+    {
+      "title": "Caching Strategies for CI/CD Pipelines",
+      "text": "# Caching Strategies for CI/CD Pipelines\n\nSlow CI pipelines cost teams far more time than the minutes shown on\nany single build. A pipeline that takes fifteen minutes when it could\ntake three discourages small commits and makes reviewers wait on\nchecks before merging.\n\n## Dependency caching\n\nCaching package manager directories, such as a language's module\ncache or a container layer cache, is usually the highest leverage\nchange available. A cache keyed on the lock file's hash invalidates\ncorrectly when dependencies change and stays valid otherwise, which\ncovers the common case where most commits do not touch dependencies\nat all.\n\n## Build artifact caching\n\nCompiled artifacts and generated code can be cached between runs when\nthe inputs are unchanged, but this requires a reliable way to detect\nthat inputs are actually unchanged. A cache keyed too loosely, on a\nbranch name rather than a content hash, produces stale artifacts that\npass locally and fail in production, which is worse than no cache at\nall.\n\n## Parallelization\n\nSplitting a test suite across multiple runners cuts wall clock time\nroughly in proportion to the number of runners, provided the split is\nbalanced by historical run time rather than by naive alphabetical\ngrouping. An unbalanced split leaves one runner as the long pole while\nothers sit idle, which erases most of the expected benefit.\n\n## Cache invalidation discipline\n\nThe classic problem with caching, knowing when to invalidate, applies\ndirectly to CI. A cache that never expires accumulates stale layers\nthat silently change build behavior over time. Pipelines should\nrebuild caches from scratch on a schedule, weekly is a common choice,\neven if no invalidation trigger fired, to catch drift before it causes\na hard to diagnose failure.",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "col-devops"
+    },
+    {
+      "title": "Choosing Database Indexes for Read Heavy Workloads",
+      "text": "# Choosing Database Indexes for Read Heavy Workloads\n\nAdding an index is not free: every index speeds up the reads it\nmatches while slowing down every write to that table, and consumes\ndisk space that grows with the table. Choosing which columns to index\nis a trade off, not a default to apply everywhere.\n\n## Matching indexes to query patterns\n\nAn index only helps a query if it matches the columns used in the\nquery's filter or sort, in an order the planner can use. A composite\nindex on columns A and B helps a query filtering on A alone, or on A\nand B together, but does not help a query filtering on B alone unless\na separate index exists for that access pattern.\n\n## Over indexing\n\nTables with many indexes suffer on every insert and update, since each\nindex has to be maintained alongside the base table. A common failure\nmode is adding a new index for every slow query reported in\nproduction without ever removing indexes that later queries made\nredundant, until the table's write path is dominated by index\nmaintenance rather than the actual write.\n\n## Partial and covering indexes\n\nA partial index, one that only covers rows matching a condition such\nas an active flag, can be far smaller and faster than a full index\nwhen the query only ever touches that subset of rows. A covering\nindex, one that includes every column a query needs so the planner\nnever has to touch the base table, trades index size for avoiding a\nsecond lookup, which matters most for queries run at high frequency.\n\n## Measuring before and after\n\nAny indexing decision should be checked against the query planner's\nactual execution plan before and after, since the planner sometimes\ndeclines to use a new index for reasons that are not obvious from the\nschema alone, such as the table being small enough that a sequential\nscan is already cheaper.",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "col-db"
+    },
+    {
+      "title": "Zero Downtime Istio Migration Risks",
+      "text": "# Zero Downtime Istio Migration Risks\n\nMigrating an existing cluster onto Istio without downtime carries a\nspecific set of risks that teams underestimate. The sidecar injection\nstep alone can break workloads that assume a single container per\npod, since liveness and readiness probes on the original container\nmay fail while the sidecar is still starting.\n\n## Sidecar rollout order\n\nRolling out sidecars namespace by namespace, rather than cluster wide,\nlimits the blast radius of a bad injection. Start with a low traffic\nnamespace, watch error rates for a full business cycle, then proceed.\nSkipping this staged rollout is the single most common cause of a\nfailed migration.\n\n## mTLS mode transitions\n\nIstio's permissive mode allows plaintext and mTLS traffic\nsimultaneously during migration, which is safer than jumping straight\nto strict mode. Flipping to strict mode before every workload in a\nnamespace has a sidecar causes silent connection failures that are\nhard to diagnose because the error looks like a generic timeout\nrather than a TLS handshake rejection.\n\n## Resource overhead\n\nEach sidecar proxy consumes CPU and memory that the original capacity\nplanning did not account for. Small clusters running near their node\nlimits can see pod scheduling failures once sidecars are injected\ncluster wide. Budget roughly 100 to 250 megabytes of memory and a\ntenth of a CPU core per sidecar as a starting estimate, then adjust\nfrom real usage.\n\n## Rollback plan\n\nEvery migration wave needs a tested rollback: removing the sidecar\ninjection label from a namespace and restarting its pods. Teams that\nskip rehearsing this step often discover during an actual incident\nthat rollback takes far longer than expected because of unexpected\ninteractions with existing network policies.\n\n## Observability gaps\n\nIstio's own telemetry can mask upstream failures if dashboards are\nnot updated to distinguish sidecar level metrics from application\nlevel metrics. Confirm before migrating that on call engineers can\ntell the difference between a proxy failure and an application\nfailure from the existing dashboards.",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "col-devops"
+    },
+    {
+      "title": "When a Service Mesh Pays Off on a Small Kubernetes Cluster",
+      "text": "# When a Service Mesh Pays Off on a Small Kubernetes Cluster\n\nA service mesh is not free. The operational cost of running one,\nincluding sidecar overhead, control plane maintenance, and the\nlearning curve for the team, has to be weighed against what it buys.\nFor a small Kubernetes cluster, the answer is often no, at least not\nyet.\n\n## Signals that favor adopting a mesh\n\nA cluster with more than a handful of services calling each other\nover the network benefits most, particularly once teams start asking\nfor consistent retries, timeouts, and circuit breaking without\nrewriting that logic in every service. Mutual TLS between services\nwithout touching application code is another strong reason: a mesh\ngives you encryption in transit and identity based authorization as\ninfrastructure rather than a library each team has to adopt\ncorrectly.\n\nMulti team clusters where different groups own different services\nalso benefit, since the mesh gives platform teams a single place to\nenforce traffic policy instead of chasing every team's ad hoc client\nlibrary configuration.\n\n## Signals that argue against it\n\nA cluster running fewer than ten services, especially if most calls\nare simple request and response between two or three components, is\nunlikely to see enough benefit to offset the added complexity. Small\nteams without dedicated platform engineers often underestimate the\nongoing maintenance a mesh control plane requires: version upgrades,\ncertificate rotation issues, and debugging a new network layer during\nincidents.\n\nIf the actual pain point is service discovery or basic load balancing,\nKubernetes already solves that natively, and a mesh adds overhead\nwithout addressing a real gap.\n\n## A practical migration path\n\nStart by introducing a mesh in a single namespace with clear traffic\npatterns and low risk, running in permissive mode so plaintext\ntraffic keeps working during the transition. Measure the resource\noverhead and the on call team's comfort level before expanding\ncluster wide. Teams that try to adopt a mesh everywhere at once, on a\ncluster that was already resource constrained, are the ones most\nlikely to regret the decision within the first quarter.\n\n## Bottom line\n\nFor a small cluster with a handful of services and no cross team\nownership problem, a service mesh rarely pays off soon enough to\njustify the cost. For a growing cluster with multiple teams and a\nreal need for consistent security and traffic policy, it usually\ndoes.",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "col-devops"
+    },
+    {
+      "title": "Operator Profile",
+      "text": "# Operator Profile\n\nExperienced infrastructure operator with a broad background across\ncloud platforms and container tooling. Comfortable working with\nKubernetes clusters, Istio service mesh configuration, Docker, and\nTerraform. Has touched GraphRAG pipelines, vector databases, and\nvarious LLM orchestration frameworks on internal projects.\n\n## Summary\n\nTen years of experience spanning platform engineering, developer\ntooling, and site reliability. Has deployed workloads on Kubernetes,\nconfigured Istio for traffic management, and set up CI/CD pipelines\nusing Jenkins and GitHub Actions. Familiar with Prometheus, Grafana,\nand the broader observability stack. Has also worked with GraphRAG\nand retrieval augmented generation concepts in a support capacity.\n\n## Skills\n\nKubernetes, Istio, Docker, Terraform, Ansible, Jenkins, GitHub\nActions, Prometheus, Grafana, AWS, GCP, Azure, Python, Go, GraphRAG,\nvector databases, PostgreSQL, Redis, Kafka, gRPC, service mesh,\nmicroservices, observability, CI/CD.\n\n## Experience\n\nPlatform engineer at a mid-size logistics company, responsible for\nmaintaining a fleet of Kubernetes clusters across three regions.\nIntroduced Istio for mutual TLS and traffic shaping between internal\nservices. Built dashboards in Grafana for on-call visibility and\nwrote runbooks for common incidents.\n\nPrior to that, worked as a DevOps consultant helping smaller teams set\nup their first CI/CD pipelines and containerize legacy applications.\nAdvised on when to introduce Kubernetes and when a simpler deployment\ntarget would serve the team better.\n\n## Education\n\nBachelor's degree in computer science. Certified Kubernetes\nAdministrator. Completed coursework on distributed systems and\nnetworking fundamentals.\n\n## Interests\n\nOpen source infrastructure tooling, homelab experimentation, and\nmentoring junior engineers on platform reliability practices.",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "col-team"
+    },
+    {
+      "title": "Chunking Strategy for Retrieval Augmented Generation",
+      "text": "# Chunking Strategy for Retrieval Augmented Generation\n\nThe way a document is split into chunks before embedding has more\nimpact on retrieval quality than most teams expect. Chunk boundaries\nthat cut a definition in half, or separate a claim from its\nsupporting example, hurt recall even when the embedding model itself\nis strong.\n\n## Fixed size versus structural chunking\n\nFixed size chunking, splitting every document into equal token\nwindows, is simple to implement but ignores document structure. A\nheading and its first paragraph can end up in different chunks,\nwhich weakens the semantic signal for a query that matches the\nheading's topic. Structural chunking, splitting along headings and\nparagraph boundaries, keeps a section's context together at the cost\nof variable chunk sizes.\n\n## Overlap and breadcrumbs\n\nAdding a small overlap between adjacent chunks, or prepending a\nbreadcrumb of the enclosing headings to each chunk's text, recovers\ncontext that a hard boundary would otherwise lose. A breadcrumb costs\nalmost nothing at embedding time and meaningfully improves recall for\nqueries that depend on knowing which section a chunk came from.\n\n## Chunk size trade offs\n\nVery small chunks, a sentence or two, tend to produce embeddings too\nnarrow to match a broader query, and flood a search result with near\nduplicate hits from the same document. Very large chunks dilute the\nembedding with unrelated content and reduce precision. A few hundred\nwords per chunk is a reasonable default for prose documents, with\nadjustments for tables and code blocks which behave differently under\neither scheme.\n\n## Testing chunking changes\n\nAny change to a chunking strategy should be evaluated against a fixed\nset of representative queries with known expected documents, since\nchunking interacts with the embedding model, the fusion method, and\nthe similarity floor in ways that are hard to predict from theory\nalone. A regression in recall after a chunking change is easy to miss\nwithout this kind of harness.",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "col-ai"
+    },
+    {
+      "title": "About Timothy",
+      "text": "Timothy is a self-hosted personal AI assistant. This page describes version `v0.1.0-alpha.120-dev`.\n\nIt runs as Go services, one PostgreSQL database and a React web UI under Docker Compose. The services are `brain` (the public API: chat, the agent loop and missions), `gateway` (the internal LLM gateway: provider routing and the cost ledger), `memoryd` (the internal memory service: pgvector recall), `sandboxd` (per-mission sandbox containers), `web` (the React UI), `searxng` (the metasearch backend for search_web), `markitdown` (file to markdown conversion), `ocr` (local image OCR), `whisper` (local speech to text, off unless enabled), and `pdfgen` (markdown to PDF for mission export, SVG to PNG for Knowledge captions).",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "col-core"
+    },
+    {
+      "title": "Skills",
+      "text": "Skills available in this build. A skill is a markdown pack with YAML frontmatter that shapes the agent's instructions.\n\n## email-research\nSearches, reads, and aggregates Gmail content, finding bookings, costs, topics, or senders, and summarizing or digesting threads.\n\n## research-brief\nSource-grounded factual research with verification and citations. Use when a question requires current or externally verifiable facts.\n\n## writing\nDrafts, rewrites, and edits prose in the owner's own voice, in Bangla or English, and keeps factual content controlled instead of fluent guesswork.",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "col-ai"
+    },
+    {
+      "title": "Grandmother's Authentic Strawberry Jam Recipe",
+      "text": "Ingredients: 2 lbs fresh strawberries, 4 cups granulated sugar, 1/4 cup lemon juice. Hull berries and crush in a wide saucepan. Bring to a rolling boil for 20 minutes until set. Pour into sterile jars.",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "NEW"
+    },
+    {
+      "title": "Feline Vaccination and Health Check Schedule",
+      "text": "Routine vaccination guide for domestic cats. Core vaccines include FVRCP (rhinotracheitis, calicivirus, panleukopenia) and rabies administered every 1 to 3 years depending on local veterinary guidelines.",
+      "collections": [
+        {
+          "id": "col-core",
+          "name": "Architecture & Platform",
+          "description": "Core platform architecture, microservices topology, and operational concepts",
+          "doc_count": 15
+        },
+        {
+          "id": "col-devops",
+          "name": "DevOps & CI/CD",
+          "description": "CI/CD pipelines, caching strategies, container deployment, and Istio service mesh",
+          "doc_count": 22
+        },
+        {
+          "id": "col-db",
+          "name": "Databases & Storage",
+          "description": "Database performance, index selection, query optimization, and storage engines",
+          "doc_count": 10
+        },
+        {
+          "id": "col-ai",
+          "name": "AI Skills & Search",
+          "description": "Agent skills, built-in tools, RAG chunking strategies, and retrieval augmented generation",
+          "doc_count": 18
+        },
+        {
+          "id": "col-team",
+          "name": "Team & Operators",
+          "description": "Platform operator backgrounds, site reliability engineering profiles, and team capabilities",
+          "doc_count": 5
+        }
+      ],
+      "want_choice": "NEW"
+    }
+  ]
+}

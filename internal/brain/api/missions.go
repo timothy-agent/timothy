@@ -76,7 +76,7 @@ type missionAttachmentStore interface {
 // (a nil *attachments.Store boxed here would be a non-nil interface
 // value) happens once, at the call site, same shape as
 // chat.Service.SetAttachments.
-func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string, string) (*gwclient.ResolvedRoute, error), topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, whisperURL string, caption func(context.Context, string, []byte) string) {
+func (a *API) registerMissions(handle func(pattern string, h http.Handler), store *missions.Store, driver *missions.Driver, notifier *missions.Notifier, agentReg *agents.Store, workspace *missions.Workspace, resolveSecret func(context.Context, string) (string, error), routeForRole func(context.Context, string) string, classify agents.Classify, codingExecutorDefault func(context.Context) string, resolveRoute func(context.Context, string, string, string) (*gwclient.ResolvedRoute, error), topModels func(context.Context, []string) (map[string]ledger.ModelUsed, error), conns *connectors.Manager, attachmentStore missionAttachmentStore, markitdownURL string, pdfService *pdfgenservice.Service, kbStore *kb.Store, kbIngest kbIngester, kbEnrich *kb.Enricher, whisperURL string, caption func(context.Context, string, []byte) string, decide ...agents.Decide) {
 	if store == nil {
 		return
 	}
@@ -104,8 +104,12 @@ func (a *API) registerMissions(handle func(pattern string, h http.Handler), stor
 			return a.Harness, true
 		}
 	}
+	var dec agents.Decide
+	if len(decide) > 0 {
+		dec = decide[0]
+	}
 	resolver := &attachmentResolver{store: attachmentStore, markitdownURL: markitdownURL, markitdownHTTP: &http.Client{}, whisperURL: whisperURL, whisperHTTP: &http.Client{}, caption: caption, enrich: kbEnrich, log: a.log}
-	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
+	h := &missionAPI{store: store, driver: driver, notifier: notifier, agentReg: agentReg, resolveAgentRoute: resolveAgentRoute, resolveAgentHarness: resolveAgentHarness, workspace: workspace, resolveSecret: resolveSecret, routeForRole: routeForRole, classify: classify, decide: dec, codingExecutorDefault: codingExecutorDefault, resolveRoute: resolveRoute, topModels: topModels, conns: conns, perms: a.perms, dir: a.dir, log: a.log, attachments: resolver, rawAttachments: attachmentStore, pdfService: pdfService, resolveReferences: a.svc.ResolveReferences, kbStore: kbStore, kbIngest: kbIngest, kbEnrich: kbEnrich}
 	handle("GET /v1/missions", a.auth(http.HandlerFunc(h.list)))
 	handle("POST /v1/missions", a.auth(http.HandlerFunc(h.create)))
 	handle("POST /v1/missions/classify", a.auth(http.HandlerFunc(h.classifyGoal)))
@@ -166,6 +170,9 @@ type missionAPI struct {
 	// endpoint; nil (no gateway wiring) makes every omitted kind default
 	// straight to "coding", same as any classify error.
 	classify agents.Classify
+	// decide answers kind and light on decision models for /v1/missions/classify;
+	// nil falls back to classify.
+	decide agents.Decide
 	// codingExecutorDefault resolves settings.ValueCodingExecutor for a
 	// coding mission's create request that omits harness; nil (no
 	// settings wiring) leaves it native.
@@ -838,6 +845,7 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 func (h *missionAPI) resolveDeps() missions.ResolveDeps {
 	deps := missions.ResolveDeps{
 		Classify:              h.classify,
+		Decide:                h.decide,
 		RouteForRole:          h.routeForRole,
 		RouteExists:           h.routeExists,
 		CodingExecutorDefault: h.codingExecutorDefault,
@@ -1070,6 +1078,47 @@ func classifyKindAndLight(ctx context.Context, classify agents.Classify, goal st
 	return kind, kind == "general" && light
 }
 
+// classifyLightWithDecide decides whether a general-kind goal is single-pass
+// using decide if available, falling back to classifyLight.
+func classifyLightWithDecide(ctx context.Context, decide agents.Decide, classify agents.Classify, goal string) bool {
+	if decide != nil {
+		q := "Is this goal a single-pass task deliverable in one response — a read, summary, lookup, or short write-up with no multi-step plan or file artifacts?\n\nGoal: " + goal
+		choice, err := decide(ctx, q, []string{"yes", "no"})
+		if err == nil {
+			choice = strings.ToLower(strings.TrimSpace(choice))
+			if choice == "yes" || strings.HasPrefix(choice, "yes") {
+				return true
+			}
+			if choice == "no" || strings.HasPrefix(choice, "no") {
+				return false
+			}
+		}
+	}
+	return classifyLight(ctx, classify, goal)
+}
+
+// classifyKindAndLightWithDecide answers both kind and light using decide if available,
+// falling back to classifyKindAndLight if decide is nil, unbound, or errors.
+func classifyKindAndLightWithDecide(ctx context.Context, decide agents.Decide, classify agents.Classify, goal string) (kind string, light bool) {
+	if decide != nil {
+		qKind := "Classify this mission goal based on its deliverable, not its topic.\n" +
+			"coding — the mission produces or changes code, scripts, or configuration files in a repository.\n" +
+			"general — the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n\n" +
+			"Goal: " + goal
+		choiceKind, err := decide(ctx, qKind, []string{"coding", "general"})
+		if err == nil {
+			choiceKind = strings.ToLower(strings.TrimSpace(choiceKind))
+			if strings.HasPrefix(choiceKind, "coding") {
+				return "coding", false
+			}
+			if strings.HasPrefix(choiceKind, "general") {
+				return "general", classifyLightWithDecide(ctx, decide, classify, goal)
+			}
+		}
+	}
+	return classifyKindAndLight(ctx, classify, goal)
+}
+
 // classifyGoal serves POST /v1/missions/classify: the same
 // classification create() falls back to when kind is omitted, exposed
 // standalone so the web UI's chip preview can show a mission's inferred
@@ -1088,7 +1137,7 @@ func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "goal is required")
 		return
 	}
-	kind, light := classifyKindAndLight(r.Context(), h.classify, req.Goal)
+	kind, light := classifyKindAndLightWithDecide(r.Context(), h.decide, h.classify, req.Goal)
 	hasPlan := classifyHasPlan(req.Goal)
 	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "light": light, "has_plan": hasPlan})
 }

@@ -13,6 +13,9 @@ import (
 // unit-testable without a live model.
 type Classify func(ctx context.Context, prompt string) (string, error)
 
+// Decide picks one option among options for question on a decision model.
+type Decide func(ctx context.Context, question string, options []string) (string, error)
+
 // Dispatch picks the agent whose profile best fits message, among
 // candidates (only enabled agents should be passed in), and returns
 // its id. A single candidate is returned without calling classify:
@@ -21,11 +24,39 @@ type Classify func(ctx context.Context, prompt string) (string, error)
 // the default agent's id): dispatch is an ergonomics layer, never a
 // hard gate on serving a session.
 func Dispatch(ctx context.Context, classify Classify, message string, candidates []Agent, fallbackID string) string {
+	return DispatchWithDecide(ctx, nil, classify, message, candidates, fallbackID)
+}
+
+// DispatchWithDecide picks the agent using decide when available, falling
+// back to classify when decide is nil, unbound, or on error.
+func DispatchWithDecide(ctx context.Context, decide Decide, classify Classify, message string, candidates []Agent, fallbackID string) string {
 	if len(candidates) == 0 {
 		return fallbackID
 	}
 	if len(candidates) == 1 {
 		return candidates[0].ID
+	}
+	if decide != nil {
+		var list strings.Builder
+		options := make([]string, len(candidates))
+		for i, a := range candidates {
+			options[i] = a.Name
+			if a.Description != "" {
+				fmt.Fprintf(&list, "- %s: %s\n", a.Name, a.Description)
+			} else {
+				fmt.Fprintf(&list, "- %s\n", a.Name)
+			}
+		}
+		q := fmt.Sprintf("Pick the single best-fit assistant profile for the user's message.\nProfiles:\n%s\nMessage: %s", list.String(), message)
+		choice, err := decide(ctx, q, options)
+		if err == nil {
+			choice = strings.TrimSpace(choice)
+			for _, a := range candidates {
+				if strings.EqualFold(choice, a.Name) || choice == a.ID || strings.HasPrefix(strings.ToLower(choice), strings.ToLower(a.Name)+":") {
+					return a.ID
+				}
+			}
+		}
 	}
 	if classify == nil {
 		return fallbackID

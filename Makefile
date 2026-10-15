@@ -196,6 +196,13 @@ canary-ecosystems:
 kb-eval:
 	./scripts/kb-eval/kb-eval.sh
 
+# Decision model evaluation gate (issue #1245): evaluates decision models
+# vs LLM fallback on accuracy, latency, and token consumption across
+# mission kind/light, agent auto-dispatch, and KB collection filing.
+decide-eval:
+	./scripts/decide-eval/decide-eval.sh
+
+
 # Builds the mission sandbox image, one for every mission (D-141,
 # deploy/sandbox.Dockerfile). Not a compose service: sandboxes are
 # containers brain creates dynamically via the Docker Go SDK, not

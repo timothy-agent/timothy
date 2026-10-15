@@ -587,3 +587,64 @@ func (c *Client) CreateProvider(ctx context.Context, p AdminProvider) (string, e
 	}
 	return out.ID, nil
 }
+
+// DecideRequest mirrors the gateway's POST /v1/decide request contract (D-163).
+type DecideRequest struct {
+	Route     string   `json:"route,omitempty"`
+	Kind      string   `json:"kind"` // "choice" | "yesno" | "score"
+	Question  string   `json:"question"`
+	Options   []string `json:"options,omitempty"`
+	Purpose   string   `json:"purpose,omitempty"`
+	SessionID string   `json:"session_id,omitempty"`
+	MissionID string   `json:"mission_id,omitempty"`
+}
+
+// DecideResponse is the typed answer from POST /v1/decide.
+type DecideResponse struct {
+	Choice   string             `json:"choice,omitempty"`
+	Score    *float64           `json:"score,omitempty"`
+	Scores   map[string]float64 `json:"scores,omitempty"`
+	Provider string             `json:"provider"`
+	Model    string             `json:"model"`
+	Native   bool               `json:"native"`
+	LedgerID string             `json:"ledger_id"`
+	Usage    *stream.Usage      `json:"usage,omitempty"`
+}
+
+// YesNo returns true if Choice is "yes", false if "no", or false if unset.
+func (r DecideResponse) YesNo() bool {
+	return r.Choice == "yes"
+}
+
+// Decide answers one fixed-choice, yes/no, or score question on a decide route.
+// Route is optional: empty resolves the decide role on the gateway side.
+func (c *Client) Decide(ctx context.Context, req DecideRequest) (DecideResponse, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return DecideResponse{}, fmt.Errorf("gwclient: marshal decide: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/decide", bytes.NewReader(body))
+	if err != nil {
+		return DecideResponse{}, fmt.Errorf("gwclient: request decide: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return DecideResponse{}, fmt.Errorf("%w: %v", ErrGatewayUnavailable, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusServiceUnavailable {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return DecideResponse{}, fmt.Errorf("%w: gateway http %d: %s", ErrGatewayUnavailable, resp.StatusCode, string(msg))
+	}
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return DecideResponse{}, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out DecideResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return DecideResponse{}, fmt.Errorf("gwclient: decode decide: %w", err)
+	}
+	return out, nil
+}
+
