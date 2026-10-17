@@ -1037,3 +1037,93 @@ describe('ProviderAdd subscription connect', () => {
   })
 })
 
+describe('ProviderAdd decision-model presets', () => {
+  it('renders Laya preset with visible Base URL and tests via decide probe', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 42, model: 'typed-decisions' })
+    vi.mocked(createProvider).mockResolvedValue('laya-id')
+    renderPage('laya')
+
+    expect(await screen.findByDisplayValue('Laya')).toBeInTheDocument()
+    const urlInput = screen.getByLabelText('Base URL')
+    expect(urlInput).toBeInTheDocument()
+    expect(urlInput).toHaveValue('http://laya:8000')
+    expect(screen.getByText('validated with a decide probe, becomes the default')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('typed-decisions')).toBeInTheDocument()
+
+    // Test connection
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await waitFor(() =>
+      expect(validateProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driver: 'laya',
+          base_url: 'http://laya:8000',
+        }),
+        'typed-decisions',
+      ),
+    )
+
+    // Add provider
+    const addBtn = await screen.findByRole('button', { name: 'Add provider' })
+    expect(addBtn).toBeEnabled()
+    fireEvent.click(addBtn)
+    await waitFor(() =>
+      expect(createProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Laya',
+          driver: 'laya',
+          base_url: 'http://laya:8000',
+          default_model: 'typed-decisions',
+        }),
+      ),
+    )
+  })
+
+  it('renders TypeSafe Jev preset with credential_ref and tests via decide probe', async () => {
+    vi.mocked(validateProvider).mockResolvedValue({ ok: true, latency_ms: 120, model: 'jev-latest' })
+    vi.mocked(setSecret).mockResolvedValue(undefined)
+    vi.mocked(createProvider).mockResolvedValue('jev-id')
+    renderPage('jev')
+
+    expect(await screen.findByDisplayValue('TypeSafe Jev')).toBeInTheDocument()
+    const keyInput = screen.getByPlaceholderText('jv_live_…')
+    expect(keyInput).toBeInTheDocument()
+    expect(screen.getByText('validated with a decide probe, becomes the default')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('jev-latest')).toBeInTheDocument()
+
+    fireEvent.change(keyInput, { target: { value: 'jv_live_secret123' } })
+
+    // Test connection
+    fireEvent.click(await screen.findByRole('button', { name: 'Test connection' }))
+    await waitFor(() =>
+      expect(validateProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driver: 'jev',
+          base_url: 'https://api.typesafe.ai',
+          credential_ref: 'JEV_API_KEY',
+        }),
+        'jev-latest',
+      ),
+    )
+
+    // Add provider
+    const addBtn = await screen.findByRole('button', { name: 'Add provider' })
+    expect(addBtn).toBeEnabled()
+    fireEvent.click(addBtn)
+    await waitFor(() =>
+      expect(setSecret).toHaveBeenCalledWith('JEV_API_KEY', 'jv_live_secret123'),
+    )
+    await waitFor(() =>
+      expect(createProvider).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'TypeSafe Jev',
+          driver: 'jev',
+          base_url: 'https://api.typesafe.ai',
+          default_model: 'jev-latest',
+          credential_ref: 'JEV_API_KEY',
+        }),
+      ),
+    )
+  })
+})
+
+

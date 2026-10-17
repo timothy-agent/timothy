@@ -290,6 +290,48 @@ describe('RouteEdit scored pipeline', () => {
       }),
     )
   })
+
+  it('renders a decide route with decision model and chat fallback chain and serving verdict', async () => {
+    const decideRoute: AdminRoute = {
+      name: 'decide',
+      strategy: 'ordered',
+      enabled: true,
+      capability: 'decide',
+      role: 'decide',
+      chain: [
+        { provider_id: 'p-laya', model: 'typed-decisions' },
+        { provider_id: 'p1', model: 'sonnet' },
+      ],
+      resolved: [
+        { provider_id: 'p-laya', provider_name: 'laya', model: 'typed-decisions', usable: true, latency_ms: 32 },
+        { provider_id: 'p1', provider_name: 'anthropic', model: 'sonnet', usable: true, latency_ms: 750 },
+      ],
+      serving: { provider_id: 'p-laya', model: 'typed-decisions' },
+    }
+    const deciderProviders: AdminProvider[] = [
+      ...providers,
+      {
+        id: 'p-laya',
+        name: 'laya',
+        kind: 'api',
+        driver: 'laya',
+        base_url: 'http://laya:8000',
+        default_model: 'typed-decisions',
+        credential_ref: '',
+        headers: {},
+        enabled: true,
+      },
+    ]
+    vi.mocked(listProviders).mockResolvedValue(deciderProviders)
+    vi.mocked(listRoutes).mockResolvedValue([orderedRoute, decideRoute])
+    renderRoute('decide', decideRoute)
+
+    expect(await screen.findByRole('heading', { name: 'decide' })).toBeInTheDocument()
+    expect(screen.getByText('serving').closest('[data-testid="pipeline-card"]')).toHaveTextContent(
+      'typed-decisions',
+    )
+    expect(screen.getByText('sonnet')).toBeInTheDocument()
+  })
 })
 
 describe('RouteEdit add-chain-entry provider and model pickers', () => {

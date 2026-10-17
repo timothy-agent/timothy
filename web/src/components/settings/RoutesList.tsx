@@ -34,8 +34,9 @@ const ROLES = [
   { key: 'embedding', label: 'Embeddings' },
   { key: 'vision', label: 'Vision' },
   { key: 'summarize', label: 'Summarize' },
+  { key: 'decide', label: 'Decide' },
 ]
-const CAPABILITIES = ['chat', 'embeddings', 'vision']
+const CAPABILITIES = ['chat', 'embeddings', 'vision', 'decide']
 
 export function RoutesList() {
   const [routes, setRoutes] = useState<AdminRoute[]>([])
@@ -92,8 +93,8 @@ export function RoutesList() {
         breadcrumbs={[{ label: 'Settings', href: '/settings' }, { label: area.label }]}
       />
       <div className="space-y-10">
-        <Panel title="System roles" description="Timothy needs one route bound to each of these 4 roles to work. A newly connected provider fills in whichever are still unbound.">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <Panel title="System roles" description="Timothy needs routes bound to the four core roles to work; decide is optional. A newly connected provider fills in whichever are still unbound.">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {ROLES.map((role) => {
               const bound = routes.find((r) => r.role === role.key)
               return (

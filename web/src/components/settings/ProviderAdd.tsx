@@ -275,6 +275,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
   const isBedrock = preset.driver === 'bedrock'
   const isAnthropic = preset.id === 'anthropic'
   const isCursor = preset.id === 'cursor'
+  const isDecider = preset.driver === 'laya' || preset.driver === 'jev'
   // isCli: Cursor creates a kind='cli' row (D-051) for coding missions.
   const isCli = isCursor
   // bedrockAmbient: the gateway's own cloud identity signs requests,
@@ -607,7 +608,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
             </Field>
           )}
 
-          {!isCli && preset.id === 'custom' && (
+          {!isCli && (preset.id === 'custom' || preset.id === 'laya') && (
             <Field label="Base URL">
               <Input
                 value={baseURL}
@@ -615,7 +616,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
                   setBaseURL(e.target.value)
                   invalidate()
                 }}
-                placeholder="https://…/v1"
+                placeholder={preset.baseURL || 'https://…/v1'}
               />
             </Field>
           )}
@@ -722,7 +723,14 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
           )}
 
           {!isCli && (
-            <Field label="Model" description="validated with a one-token completion, becomes the default">
+            <Field
+              label="Model"
+              description={
+                isDecider
+                  ? 'validated with a decide probe, becomes the default'
+                  : 'validated with a one-token completion, becomes the default'
+              }
+            >
               <ModelPicker
                 value={model}
                 onChange={(v) => {
@@ -735,7 +743,7 @@ export function ProviderAdd({ presetId: presetIdProp, embedded, onCreated, onCan
             </Field>
           )}
 
-          {!isCli && !isBedrock && (
+          {!isCli && !isBedrock && preset.id !== 'custom' && preset.id !== 'laya' && (
             <details className="group">
               <summary className="cursor-pointer text-sm font-medium text-muted-foreground transition hover:text-foreground">
                 Advanced: base URL
