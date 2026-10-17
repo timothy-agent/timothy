@@ -590,10 +590,10 @@ export interface AdminRoute {
   // score entries from recent ledger stats and declared prices.
   strategy: string
   enabled: boolean
-  // What this route can serve: 'chat' | 'embeddings' | 'vision'.
+  // What this route can serve: 'chat' | 'embeddings' | 'vision' | 'decide'.
   capability?: string
-  // Set when this route serves one of the 4 roles Timothy requires to
-  // work: 'default' | 'embedding' | 'vision' | 'summarize'. Absent for
+  // Set when this route serves one of the 5 roles Timothy requires to
+  // work: 'default' | 'embedding' | 'vision' | 'summarize' | 'decide'. Absent for
   // a plain, user-owned route.
   role?: string
   // Router try order with live stats: present for enabled routes once

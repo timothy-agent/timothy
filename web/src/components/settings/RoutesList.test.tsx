@@ -152,6 +152,32 @@ describe('RoutesList actions', () => {
     await waitFor(() => expect(setRouteRole).toHaveBeenCalledWith('default', 'default'))
   })
 
+  it('assigns the decide role to a route via the role picker', async () => {
+    vi.mocked(listRoutes).mockResolvedValue([base])
+    vi.mocked(setRouteRole).mockResolvedValue(undefined)
+    renderList()
+
+    await screen.findByText('default')
+    fireEvent.click(screen.getByRole('combobox', { name: 'Decide route' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'default' }))
+
+    await waitFor(() => expect(setRouteRole).toHaveBeenCalledWith('default', 'decide'))
+  })
+
+  it('creates a decide capability route when selected', async () => {
+    vi.mocked(listRoutes).mockResolvedValue([base])
+    vi.mocked(createRoute).mockResolvedValue('r-decide')
+    renderList()
+
+    await screen.findByText('default')
+    fireEvent.change(screen.getByLabelText('New route name'), { target: { value: 'decider' } })
+    fireEvent.click(screen.getByRole('combobox', { name: 'New route capability' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'decide' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add route' }))
+
+    await waitFor(() => expect(createRoute).toHaveBeenCalledWith('decider', 'decide'))
+  })
+
   it('toasts when toggling a route fails', async () => {
     vi.mocked(listRoutes).mockResolvedValue([base])
     vi.mocked(patchRoute).mockRejectedValue(new Error('locked'))
