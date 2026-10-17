@@ -173,10 +173,11 @@ var harnessChatOnly = map[string]bool{"pi": true}
 // "price", and "latency" score entries from recent ledger stats and
 // declared prices (empty means ordered).
 type RouteRow struct {
-	Name     string
-	Chain    []ChainEntry
-	Strategy string
-	Enabled  bool
+	Name        string
+	Description string
+	Chain       []ChainEntry
+	Strategy    string
+	Enabled     bool
 	// Capability is what this route can serve: "chat", "embeddings", or
 	// "vision" — replaces matching on the route's name to infer this.
 	Capability string
@@ -185,6 +186,12 @@ type RouteRow struct {
 	// "summarize". Empty for a plain, user-owned route. At most one
 	// route holds a given role (enforced by a partial unique index).
 	Role string
+}
+
+// RouteCandidate is one route eligible for chat auto-routing.
+type RouteCandidate struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 // catalogLookup is the slice of *catalog.Store attemptCapable/Prices/
@@ -197,17 +204,18 @@ type catalogLookup interface {
 // Snapshot is an immutable view of the routing configuration plus the
 // providers built from it. Store swaps whole snapshots atomically.
 type Snapshot struct {
-	rows       map[string]ProviderRow // by id
-	byName     map[string]ProviderRow
-	routes     map[string][]ChainEntry // enabled routes only
-	strategy   map[string]string       // route name -> chain strategy
-	capability map[string]string       // route name -> capability (all routes, not just enabled)
-	roleRoute  map[string]string       // role -> route name (all routes, not just enabled)
-	stats      map[string]ModelStats   // "provider/model" -> recent ledger stats
-	registry   *provider.Registry
-	healthy    map[string]bool   // by name: credential ref resolved and driver built
-	unhealthy  map[string]string // by name: reason, set whenever healthy[name] is false
-	cat        catalogLookup     // model capability/pricing source; nil-safe (permissive fallback)
+	rows        map[string]ProviderRow // by id
+	byName      map[string]ProviderRow
+	routes      map[string][]ChainEntry // enabled routes only
+	strategy    map[string]string       // route name -> chain strategy
+	capability  map[string]string       // route name -> capability (all routes, not just enabled)
+	roleRoute   map[string]string       // role -> route name (all routes, not just enabled)
+	description map[string]string       // route name -> description (all routes, not just enabled)
+	stats       map[string]ModelStats   // "provider/model" -> recent ledger stats
+	registry    *provider.Registry
+	healthy     map[string]bool   // by name: credential ref resolved and driver built
+	unhealthy   map[string]string // by name: reason, set whenever healthy[name] is false
+	cat         catalogLookup     // model capability/pricing source; nil-safe (permissive fallback)
 }
 
 // ModelStats are time-decayed aggregates from the recent cost ledger,
@@ -279,16 +287,17 @@ type BuildWarning struct {
 // fails.
 func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(string) string, cat catalogLookup) (*Snapshot, []BuildWarning) {
 	s := &Snapshot{
-		rows:       make(map[string]ProviderRow, len(provRows)),
-		byName:     make(map[string]ProviderRow, len(provRows)),
-		routes:     map[string][]ChainEntry{},
-		strategy:   map[string]string{},
-		capability: map[string]string{},
-		roleRoute:  map[string]string{},
-		healthy:    make(map[string]bool, len(provRows)),
-		unhealthy:  map[string]string{},
-		registry:   provider.NewRegistry(),
-		cat:        cat,
+		rows:        make(map[string]ProviderRow, len(provRows)),
+		byName:      make(map[string]ProviderRow, len(provRows)),
+		routes:      map[string][]ChainEntry{},
+		strategy:    map[string]string{},
+		capability:  map[string]string{},
+		roleRoute:   map[string]string{},
+		description: make(map[string]string, len(routeRows)),
+		healthy:     make(map[string]bool, len(provRows)),
+		unhealthy:   map[string]string{},
+		registry:    provider.NewRegistry(),
+		cat:         cat,
 	}
 
 	var warnings []BuildWarning
@@ -350,6 +359,7 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 
 	for _, r := range routeRows {
 		s.capability[r.Name] = r.Capability
+		s.description[r.Name] = r.Description
 		if r.Role != "" {
 			s.roleRoute[r.Role] = r.Name
 		}
@@ -359,6 +369,46 @@ func BuildSnapshot(provRows []ProviderRow, routeRows []RouteRow, lookup func(str
 		}
 	}
 	return s, warnings
+}
+
+// ChatRouteCandidates returns enabled chat routes that have a description,
+// plus the default role's route (D-164). System roles summarize, embedding,
+// vision, and decide stay out.
+func (s *Snapshot) ChatRouteCandidates() []RouteCandidate {
+	defaultRoute, _ := s.RouteForRole("default")
+	var candidates []RouteCandidate
+	for name := range s.routes {
+		if s.requiredCapability(name) != provider.CapChat {
+			continue
+		}
+		role := ""
+		for r, n := range s.roleRoute {
+			if n == name {
+				role = r
+				break
+			}
+		}
+		if role == "summarize" || role == "embedding" || role == "vision" || role == "decide" {
+			continue
+		}
+		desc := s.description[name]
+		if name == defaultRoute || desc != "" {
+			candidates = append(candidates, RouteCandidate{
+				Name:        name,
+				Description: desc,
+			})
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].Name == defaultRoute {
+			return true
+		}
+		if candidates[j].Name == defaultRoute {
+			return false
+		}
+		return candidates[i].Name < candidates[j].Name
+	})
+	return candidates
 }
 
 // RouteForRole returns the name of the route currently bound to role

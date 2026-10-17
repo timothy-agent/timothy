@@ -8,6 +8,7 @@ import { PageHeader } from '../timothy/page-header'
 import { PageShell } from '../timothy/page-shell'
 import { Alert, AlertDescription } from '../ui/alert'
 import { Button } from '../ui/button'
+import { Input } from '../ui/input'
 import {
   Select,
   SelectContent,
@@ -33,6 +34,7 @@ interface StagedRoute {
   strategy: string
   enabled: boolean
   chain: ChainEntry[]
+  description: string
 }
 
 function baselineFrom(route: AdminRoute): StagedRoute {
@@ -40,6 +42,7 @@ function baselineFrom(route: AdminRoute): StagedRoute {
     strategy: route.strategy || 'ordered',
     enabled: route.enabled,
     chain: route.chain,
+    description: route.description || '',
   }
 }
 
@@ -100,6 +103,7 @@ function RouteEditForm({
         strategy: staged.values.strategy,
         enabled: staged.values.enabled,
         chain: staged.values.chain,
+        description: staged.values.description,
       })
       toast.success('Route saved')
       const refetched = await doRefresh()
@@ -198,6 +202,21 @@ function RouteEditForm({
               <span className="text-sm text-muted-foreground">Enabled</span>
             </div>
           </div>
+          <Field
+            label="Description"
+            htmlFor="route-description"
+            optional
+            description="Matched by message intent during chat Auto routing"
+          >
+            {(props) => (
+              <Input
+                id={props.id}
+                value={staged.values.description}
+                onChange={(e) => staged.setField('description', e.target.value)}
+                placeholder="e.g. Software development, code review, debugging"
+              />
+            )}
+          </Field>
         </div>
 
         <div className="w-full space-y-4">

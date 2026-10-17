@@ -2487,6 +2487,14 @@ func (r turnRouter) Decide(ctx context.Context, req gwclient.DecideRequest) (gwc
 	return r.gw.Decide(ctx, req)
 }
 
+func (r turnRouter) ResolveRoute(ctx context.Context, name, harness, hint string) (*gwclient.ResolvedRoute, error) {
+	return r.gw.ResolveRoute(ctx, name, harness, hint)
+}
+
+func (r turnRouter) ChatRouteCandidates(ctx context.Context) ([]gwclient.RouteCandidate, error) {
+	return r.gw.ChatRouteCandidates(ctx)
+}
+
 func rememberWithTurnTrust(mc *memclient.Client) builtin.RememberFunc {
 	return func(ctx context.Context, content, memoryType string) (string, string, error) {
 		return mc.Add(ctx, content, memoryType, !tools.UntrustedToolOutputSeen(ctx))

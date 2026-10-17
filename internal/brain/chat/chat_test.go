@@ -151,6 +151,8 @@ type fakeGW struct {
 	decideRole string
 	decideReqs []gwclient.DecideRequest
 	decideFn   func(ctx context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error)
+	candidates []gwclient.RouteCandidate
+	resolveFn  func(ctx context.Context, name, harness, hint string) (*gwclient.ResolvedRoute, error)
 }
 
 func (g *fakeGW) RouteForRole(_ context.Context, role string) (string, bool, error) {
@@ -172,6 +174,24 @@ func (g *fakeGW) Decide(ctx context.Context, req gwclient.DecideRequest) (gwclie
 		return fn(ctx, req)
 	}
 	return gwclient.DecideResponse{}, nil
+}
+
+func (g *fakeGW) ResolveRoute(ctx context.Context, name, harness, hint string) (*gwclient.ResolvedRoute, error) {
+	if g.resolveFn != nil {
+		return g.resolveFn(ctx, name, harness, hint)
+	}
+	return &gwclient.ResolvedRoute{
+		Route: name,
+		Entries: []gwclient.ResolvedRouteEntry{
+			{Model: "default-model", Usable: true},
+		},
+	}, nil
+}
+
+func (g *fakeGW) ChatRouteCandidates(ctx context.Context) ([]gwclient.RouteCandidate, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.candidates, nil
 }
 
 func (g *fakeGW) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
@@ -233,6 +253,14 @@ func (erroringGW) Stream(context.Context, gwclient.StreamRequest) (<-chan stream
 
 func (erroringGW) Decide(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error) {
 	return gwclient.DecideResponse{}, errors.New("gateway unreachable")
+}
+
+func (erroringGW) ResolveRoute(context.Context, string, string, string) (*gwclient.ResolvedRoute, error) {
+	return nil, errors.New("gateway unreachable")
+}
+
+func (erroringGW) ChatRouteCandidates(context.Context) ([]gwclient.RouteCandidate, error) {
+	return nil, errors.New("gateway unreachable")
 }
 
 func okEvents(text string) []stream.StreamEvent {
@@ -3227,6 +3255,14 @@ func (g *slowGW) Decide(_ context.Context, _ gwclient.DecideRequest) (gwclient.D
 	return gwclient.DecideResponse{}, nil
 }
 
+func (g *slowGW) ResolveRoute(_ context.Context, name, _, _ string) (*gwclient.ResolvedRoute, error) {
+	return &gwclient.ResolvedRoute{Route: name, Entries: []gwclient.ResolvedRouteEntry{{Model: "m", Usable: true}}}, nil
+}
+
+func (g *slowGW) ChatRouteCandidates(context.Context) ([]gwclient.RouteCandidate, error) {
+	return nil, nil
+}
+
 func (g *slowGW) Stream(ctx context.Context, _ gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	ch := make(chan stream.StreamEvent)
 	go func() {
@@ -3756,3 +3792,276 @@ func TestChatAutoDispatchWithDecide(t *testing.T) {
 		t.Fatalf("req.Agent = %q, want researcher-id (dispatched via decide)", req.Agent)
 	}
 }
+
+func TestChatAutoRouteIntentPicksDescribedRoute(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{
+		events:     okEvents("hello"),
+		decideRole: "fast-decider",
+		candidates: []gwclient.RouteCandidate{
+			{Name: "default"},
+			{Name: "coding", Description: "Software engineering and coding"},
+		},
+		decideFn: func(_ context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			return gwclient.DecideResponse{Choice: "coding"}, nil
+		},
+		resolveFn: func(_ context.Context, name, _, _ string) (*gwclient.ResolvedRoute, error) {
+			return &gwclient.ResolvedRoute{
+				Route: name,
+				Entries: []gwclient.ResolvedRouteEntry{
+					{Model: "claude-sonnet-4-6", Usable: true},
+				},
+			}, nil
+		},
+	}
+	log := newFakeLog()
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "fix this bug"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	req := gw.lastChatRequest()
+	if req.Route != "coding" {
+		t.Fatalf("req.Route = %q, want coding", req.Route)
+	}
+	gw.mu.Lock()
+	nDecide := len(gw.decideReqs)
+	var firstDecide gwclient.DecideRequest
+	if nDecide > 0 {
+		firstDecide = gw.decideReqs[0]
+	}
+	gw.mu.Unlock()
+
+	if nDecide != 1 {
+		t.Fatalf("decide calls = %d, want 1", nDecide)
+	}
+	if firstDecide.Route != "fast-decider" {
+		t.Fatalf("decide route = %q, want fast-decider", firstDecide.Route)
+	}
+	if firstDecide.Purpose != "route_intent" {
+		t.Fatalf("decide purpose = %q, want route_intent", firstDecide.Purpose)
+	}
+	if len(firstDecide.Options) != 2 || firstDecide.Options[0] != "default" || firstDecide.Options[1] != "coding: Software engineering and coding" {
+		t.Fatalf("decide options = %+v, want [default, coding: Software engineering and coding]", firstDecide.Options)
+	}
+}
+
+func TestChatAutoRouteIntentFallsBackWhenUnusable(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{
+		events:     okEvents("hello"),
+		decideRole: "fast-decider",
+		candidates: []gwclient.RouteCandidate{
+			{Name: "default"},
+			{Name: "coding", Description: "Software engineering and coding"},
+		},
+		decideFn: func(_ context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			return gwclient.DecideResponse{Choice: "coding"}, nil
+		},
+		resolveFn: func(_ context.Context, name, _, _ string) (*gwclient.ResolvedRoute, error) {
+			if name == "coding" {
+				return &gwclient.ResolvedRoute{
+					Route: name,
+					Entries: []gwclient.ResolvedRouteEntry{
+						{Model: "broken-model", Usable: false, SkipReason: "no credentials"},
+					},
+				}, nil
+			}
+			return &gwclient.ResolvedRoute{
+				Route: name,
+				Entries: []gwclient.ResolvedRouteEntry{
+					{Model: "default-model", Usable: true},
+				},
+			}, nil
+		},
+	}
+	log := newFakeLog()
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "fix this bug"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	req := gw.lastChatRequest()
+	if req.Route != "default" {
+		t.Fatalf("req.Route = %q, want default (fallback from unusable picked route)", req.Route)
+	}
+}
+
+func TestChatAutoRouteIntentSkipsDecideWhenOnlyDefault(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{
+		events:     okEvents("hello"),
+		decideRole: "fast-decider",
+		candidates: []gwclient.RouteCandidate{
+			{Name: "default"},
+		},
+	}
+	log := newFakeLog()
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "hello"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	req := gw.lastChatRequest()
+	gw.mu.Lock()
+	nDecide := len(gw.decideReqs)
+	gw.mu.Unlock()
+	if nDecide != 0 {
+		t.Fatalf("decide calls = %d, want 0 when only default candidate exists", nDecide)
+	}
+	if req.Route != "default" {
+		t.Fatalf("req.Route = %q, want default", req.Route)
+	}
+}
+
+func TestChatAutoRouteIntentLeavesVisionAndAgentIntact(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{
+		events:     okEvents("hello"),
+		decideRole: "fast-decider",
+		candidates: []gwclient.RouteCandidate{
+			{Name: "default"},
+			{Name: "coding", Description: "Software engineering and coding"},
+		},
+		decideFn: func(_ context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			return gwclient.DecideResponse{Choice: "coding"}, nil
+		},
+	}
+	log := newFakeLog()
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
+		switch id {
+		case "custom-agent":
+			return agents.Agent{ID: "custom-agent", Name: "custom", Route: "agent-pinned-route"}, true
+		case "", "default":
+			return agents.Agent{ID: "default", Name: "general"}, true
+		default:
+			return agents.Agent{}, false
+		}
+	}
+	s := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
+
+	// Case 1: Agent specifies a route -> agent's route wins, decide is skipped.
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "fix bug", Agent: "custom-agent"})
+	if err != nil {
+		t.Fatalf("Chat 1: %v", err)
+	}
+	drain(t, ch)
+	if req := gw.lastChatRequest(); req.Route != "agent-pinned-route" {
+		t.Fatalf("req.Route = %q, want agent-pinned-route", req.Route)
+	}
+	gw.mu.Lock()
+	nDecide := len(gw.decideReqs)
+	gw.requests = nil
+	gw.decideReqs = nil
+	gw.mu.Unlock()
+	if nDecide != 0 {
+		t.Fatalf("decide called %d times for agent with pinned route, want 0", nDecide)
+	}
+
+	// Case 2: Message includes images -> vision role route wins, decide is skipped.
+	att := newFakeAttachments()
+	att.seed("img1", "image/png", []byte("fake-png-data"))
+	s.SetAttachments(att)
+
+	_, ch, err = s.Chat(t.Context(), Request{
+		SessionID:   "s2",
+		Message:     "look at this screenshot",
+		Attachments: []AttachmentRef{{ID: "img1"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat 2: %v", err)
+	}
+	drain(t, ch)
+	if req := gw.lastChatRequest(); req.Route != "vision" {
+		t.Fatalf("req.Route = %q, want vision", req.Route)
+	}
+	gw.mu.Lock()
+	nDecide2 := len(gw.decideReqs)
+	gw.mu.Unlock()
+	if nDecide2 != 0 {
+		t.Fatalf("decide called %d times for image message, want 0", nDecide2)
+	}
+}
+
+func TestChatAutoRouteIntentFallsBackWhenDecideUnboundOrErrors(t *testing.T) {
+	t.Parallel()
+
+	// Unbound decide role
+	gwUnbound := &fakeGW{
+		events: okEvents("hello"),
+		candidates: []gwclient.RouteCandidate{
+			{Name: "default"},
+			{Name: "coding", Description: "Software engineering and coding"},
+		},
+	}
+	sUnbound := newService(gwUnbound, newFakeLog())
+	_, ch, err := sUnbound.Chat(t.Context(), Request{SessionID: "s1", Message: "fix bug"})
+	if err != nil {
+		t.Fatalf("Chat unbound: %v", err)
+	}
+	drain(t, ch)
+	if req := gwUnbound.lastChatRequest(); req.Route != "default" {
+		t.Fatalf("req.Route = %q, want default when decide is unbound", req.Route)
+	}
+
+	// Erroring decide call
+	gwError := &fakeGW{
+		events:     okEvents("hello"),
+		decideRole: "fast-decider",
+		candidates: []gwclient.RouteCandidate{
+			{Name: "default"},
+			{Name: "coding", Description: "Software engineering and coding"},
+		},
+		decideFn: func(_ context.Context, _ gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			return gwclient.DecideResponse{}, fmt.Errorf("decide model failure")
+		},
+	}
+	sError := newService(gwError, newFakeLog())
+	_, ch, err = sError.Chat(t.Context(), Request{SessionID: "s2", Message: "fix bug"})
+	if err != nil {
+		t.Fatalf("Chat error: %v", err)
+	}
+	drain(t, ch)
+	if req := gwError.lastChatRequest(); req.Route != "default" {
+		t.Fatalf("req.Route = %q, want default when decide errors", req.Route)
+	}
+}
+
+func TestChatAutoRouteIntentRequiresExactMatch(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{
+		events:     okEvents("hello"),
+		decideRole: "fast-decider",
+		candidates: []gwclient.RouteCandidate{
+			{Name: "default"},
+			{Name: "coding", Description: "Software engineering and coding"},
+		},
+		decideFn: func(_ context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			// Case mismatch should not match "coding"
+			return gwclient.DecideResponse{Choice: "CODING"}, nil
+		},
+	}
+	log := newFakeLog()
+	s := newService(gw, log)
+
+	_, ch, err := s.Chat(t.Context(), Request{SessionID: "s1", Message: "fix this bug"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	req := gw.lastChatRequest()
+	if req.Route != "default" {
+		t.Fatalf("req.Route = %q, want default because CODING does not exactly match coding", req.Route)
+	}
+}
+

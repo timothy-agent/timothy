@@ -38,9 +38,10 @@ CREATE TABLE IF NOT EXISTS providers (
 -- the user can rename at will: code resolves "the route with
 -- role = X", never a literal name.
 CREATE TABLE IF NOT EXISTS routes (
-    id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name       text UNIQUE NOT NULL,
-    chain      jsonb NOT NULL DEFAULT '[]',
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        text UNIQUE NOT NULL,
+    description text NOT NULL DEFAULT '',
+    chain       jsonb NOT NULL DEFAULT '[]',
     strategy   text NOT NULL DEFAULT 'ordered'
         CHECK (strategy IN ('ordered', 'auto', 'price', 'latency')),
     enabled    boolean NOT NULL DEFAULT false,

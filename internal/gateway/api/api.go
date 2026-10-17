@@ -63,6 +63,7 @@ func Register(srv *httpserver.Server, store ConfigSource, rec ledger.Recorder, l
 	srv.Handle("POST /v1/decide", http.HandlerFunc(a.handleDecide))
 	srv.Handle("GET /v1/providers", http.HandlerFunc(a.handleProviders))
 	srv.Handle("GET /v1/routes/roles", http.HandlerFunc(a.handleRoleRoutes))
+	srv.Handle("GET /v1/routes/candidates", http.HandlerFunc(a.handleRouteCandidates))
 	srv.Handle("GET /v1/routes/{name}/resolve", http.HandlerFunc(a.handleResolveRoute))
 	srv.Handle("POST /internal/reload", http.HandlerFunc(a.handleReload))
 }
@@ -722,6 +723,16 @@ func (a *API) handleRoleRoutes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{"roles": roles})
+}
+
+// handleRouteCandidates reports enabled chat routes eligible for Auto routing (D-164).
+func (a *API) handleRouteCandidates(w http.ResponseWriter, r *http.Request) {
+	snap := a.store.Snapshot()
+	if snap == nil {
+		jsonError(w, http.StatusServiceUnavailable, "config_unavailable", "routing configuration not loaded yet")
+		return
+	}
+	writeJSON(w, map[string]any{"candidates": snap.ChatRouteCandidates()})
 }
 
 // resolveRouteEntry is one chain entry as returned by

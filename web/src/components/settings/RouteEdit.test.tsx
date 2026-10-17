@@ -133,6 +133,7 @@ describe('RouteEdit ordered pipeline', () => {
           { provider_id: 'p2', model: 'grok-4' },
           { provider_id: 'p1', model: 'sonnet' },
         ],
+        description: '',
       }),
     )
     expect(patchRoute).toHaveBeenCalledTimes(1)
@@ -161,6 +162,7 @@ describe('RouteEdit ordered pipeline', () => {
           { provider_id: 'p2', model: 'grok-4' },
           { provider_id: 'p1', model: 'sonnet' },
         ],
+        description: '',
       }),
     )
     expect(patchRoute).toHaveBeenCalledTimes(1)
@@ -197,6 +199,7 @@ describe('RouteEdit ordered pipeline', () => {
         strategy: 'ordered',
         enabled: true,
         chain: [{ provider_id: 'p1', model: 'sonnet' }],
+        description: '',
       }),
     )
     expect(patchRoute).toHaveBeenCalledTimes(1)
@@ -216,6 +219,30 @@ describe('RouteEdit ordered pipeline', () => {
     expect(patchRoute).not.toHaveBeenCalled()
     expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument()
     expect(screen.getByRole('switch', { name: 'default route enabled' })).toBeChecked()
+  })
+
+  it('description edits stage; Save sends one PATCH with the new description', async () => {
+    renderRoute('default')
+    await screen.findByTestId('pipeline')
+
+    const descInput = screen.getByLabelText(/^Description/)
+    fireEvent.change(descInput, { target: { value: 'Coding and code review' } })
+    expect(patchRoute).not.toHaveBeenCalled()
+    expect(await screen.findByText('Unsaved changes')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(patchRoute).toHaveBeenCalledWith('default', {
+        strategy: 'ordered',
+        enabled: true,
+        chain: [
+          { provider_id: 'p1', model: 'sonnet' },
+          { provider_id: 'p2', model: 'grok-4' },
+        ],
+        description: 'Coding and code review',
+      }),
+    )
+    expect(patchRoute).toHaveBeenCalledTimes(1)
   })
 
   it('zero PATCH before Save; a failed Save keeps state and renders an Alert with Retry', async () => {
@@ -287,6 +314,7 @@ describe('RouteEdit scored pipeline', () => {
         strategy: 'price',
         enabled: true,
         chain: [],
+        description: '',
       }),
     )
   })
@@ -419,6 +447,7 @@ describe('RouteEdit add-chain-entry provider and model pickers', () => {
           { provider_id: 'p2', model: 'grok-4' },
           { provider_id: 'p1', model: 'claude-opus-4-6' },
         ],
+        description: '',
       }),
     )
     expect(patchRoute).toHaveBeenCalledTimes(1)

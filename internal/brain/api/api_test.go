@@ -219,6 +219,19 @@ func (f *fakeGateway) Decide(_ context.Context, _ gwclient.DecideRequest) (gwcli
 	return gwclient.DecideResponse{}, nil
 }
 
+func (f *fakeGateway) ResolveRoute(_ context.Context, name, _, _ string) (*gwclient.ResolvedRoute, error) {
+	return &gwclient.ResolvedRoute{
+		Route: name,
+		Entries: []gwclient.ResolvedRouteEntry{
+			{Model: "default-model", Usable: true},
+		},
+	}, nil
+}
+
+func (f *fakeGateway) ChatRouteCandidates(_ context.Context) ([]gwclient.RouteCandidate, error) {
+	return nil, nil
+}
+
 func (f *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	f.calls++
 	if f.calls == 1 { // record the chat call, not the title call
