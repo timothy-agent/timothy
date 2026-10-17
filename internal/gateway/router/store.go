@@ -125,7 +125,7 @@ func (s *Store) Load(ctx context.Context) error {
 		return fmt.Errorf("router: providers rows: %w", err)
 	}
 
-	routeRows, err := tx.Query(ctx, `SELECT name, chain, strategy, enabled, capability, role FROM routes`)
+	routeRows, err := tx.Query(ctx, `SELECT name, chain, strategy, enabled, capability, role, description FROM routes`)
 	if err != nil {
 		return fmt.Errorf("router: query routes: %w", err)
 	}
@@ -138,7 +138,7 @@ func (s *Store) Load(ctx context.Context) error {
 			chainJSON []byte
 			role      *string
 		)
-		if err := routeRows.Scan(&row.Name, &chainJSON, &row.Strategy, &row.Enabled, &row.Capability, &role); err != nil {
+		if err := routeRows.Scan(&row.Name, &chainJSON, &row.Strategy, &row.Enabled, &row.Capability, &role, &row.Description); err != nil {
 			return fmt.Errorf("router: scan route: %w", err)
 		}
 		if err := json.Unmarshal(chainJSON, &row.Chain); err != nil {

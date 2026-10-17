@@ -84,9 +84,11 @@ type Client struct {
 	mu         sync.Mutex
 	windows    map[string]int
 	windowsExp time.Time
-	roles      map[string]string
-	rolesExp   time.Time
-	resolved   map[string]resolveCacheEntry
+	roles         map[string]string
+	rolesExp      time.Time
+	candidates    []RouteCandidate
+	candidatesExp time.Time
+	resolved      map[string]resolveCacheEntry
 }
 
 // resolveCacheEntry is one route's memoized ResolveRoute result.
@@ -199,12 +201,53 @@ func (c *Client) RouteForRole(ctx context.Context, role string) (string, bool, e
 	return name, ok, nil
 }
 
+// RouteCandidate is one route eligible for chat auto-routing.
+type RouteCandidate struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// ChatRouteCandidates fetches enabled chat routes eligible for Auto routing.
+func (c *Client) ChatRouteCandidates(ctx context.Context) ([]RouteCandidate, error) {
+	c.mu.Lock()
+	if c.candidates != nil && time.Now().Before(c.candidatesExp) {
+		candidates := c.candidates
+		c.mu.Unlock()
+		return candidates, nil
+	}
+	c.mu.Unlock()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/routes/candidates", nil)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: request: %w", err)
+	}
+	resp, err := c.http.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("gwclient: gateway unreachable: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+		return nil, fmt.Errorf("gwclient: gateway http %d: %s", resp.StatusCode, string(msg))
+	}
+	var out struct {
+		Candidates []RouteCandidate `json:"candidates"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("gwclient: decode candidates: %w", err)
+	}
+	c.mu.Lock()
+	c.candidates, c.candidatesExp = out.Candidates, time.Now().Add(windowsTTL)
+	c.mu.Unlock()
+	return out.Candidates, nil
+}
+
 // InvalidateRoutes drops the memoized roles and resolves so the next
 // lookup reads the gateway's current routing: setup readiness calls it
 // so a provider added seconds ago shows up without waiting out the TTL.
 func (c *Client) InvalidateRoutes() {
 	c.mu.Lock()
-	c.roles, c.rolesExp, c.resolved = nil, time.Time{}, nil
+	c.roles, c.rolesExp, c.resolved, c.candidates, c.candidatesExp = nil, time.Time{}, nil, nil, time.Time{}
 	c.mu.Unlock()
 }
 

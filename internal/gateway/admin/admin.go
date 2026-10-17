@@ -958,14 +958,15 @@ func (a *Admin) Delete(ctx context.Context, id string) error {
 // scores behind it. Both are empty for disabled routes (the snapshot
 // holds enabled routes only) or when no snapshot is loaded yet.
 type Route struct {
-	Name       string              `json:"name"`
-	Chain      []router.ChainEntry `json:"chain"`
-	Strategy   string              `json:"strategy"`
-	Enabled    bool                `json:"enabled"`
-	Capability string              `json:"capability"`
-	Role       string              `json:"role,omitempty"`
-	Resolved   []RouteEntryStatus  `json:"resolved,omitempty"`
-	Serving    *router.ChainEntry  `json:"serving,omitempty"`
+	Name        string              `json:"name"`
+	Description string              `json:"description"`
+	Chain       []router.ChainEntry `json:"chain"`
+	Strategy    string              `json:"strategy"`
+	Enabled     bool                `json:"enabled"`
+	Capability  string              `json:"capability"`
+	Role        string              `json:"role,omitempty"`
+	Resolved    []RouteEntryStatus  `json:"resolved,omitempty"`
+	Serving     *router.ChainEntry  `json:"serving,omitempty"`
 }
 
 // RouteEntryStatus is one resolved chain entry with the router's gate
@@ -1037,7 +1038,7 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 	if err != nil {
 		return nil, fmt.Errorf("admin routes: %w", err)
 	}
-	rows, err := db.Query(ctx, `SELECT name, chain, strategy, enabled, capability, role FROM routes ORDER BY name`)
+	rows, err := db.Query(ctx, `SELECT name, chain, strategy, enabled, capability, role, description FROM routes ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("admin routes: %w", err)
 	}
@@ -1050,7 +1051,7 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 			chain []byte
 			role  *string
 		)
-		if err := rows.Scan(&r.Name, &chain, &r.Strategy, &r.Enabled, &r.Capability, &role); err != nil {
+		if err := rows.Scan(&r.Name, &chain, &r.Strategy, &r.Enabled, &r.Capability, &role, &r.Description); err != nil {
 			return nil, fmt.Errorf("admin routes: %w", err)
 		}
 		if err := json.Unmarshal(chain, &r.Chain); err != nil {
@@ -1081,9 +1082,10 @@ func (a *Admin) Routes(ctx context.Context) ([]Route, error) {
 // mission column (D-051), and json.Unmarshal would otherwise silently
 // drop that key into a plain {provider_id, model} entry.
 type RoutePatch struct {
-	Chain    *json.RawMessage `json:"chain"`
-	Strategy *string          `json:"strategy"`
-	Enabled  *bool            `json:"enabled"`
+	Chain       *json.RawMessage `json:"chain"`
+	Strategy    *string          `json:"strategy"`
+	Enabled     *bool            `json:"enabled"`
+	Description *string          `json:"description"`
 }
 
 var validStrategies = map[string]bool{"ordered": true, "auto": true, "price": true, "latency": true}
@@ -1103,8 +1105,8 @@ func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) e
 		before    Route
 		chainJSON []byte
 	)
-	err = tx.QueryRow(ctx, `SELECT name, chain, strategy, enabled FROM routes WHERE name = $1`,
-		name).Scan(&before.Name, &chainJSON, &before.Strategy, &before.Enabled)
+	err = tx.QueryRow(ctx, `SELECT name, chain, strategy, enabled, description FROM routes WHERE name = $1`,
+		name).Scan(&before.Name, &chainJSON, &before.Strategy, &before.Enabled, &before.Description)
 	if err != nil {
 		return fmt.Errorf("route %s: %w", name, ErrNotFound)
 	}
@@ -1152,9 +1154,12 @@ func (a *Admin) PatchRoute(ctx context.Context, name string, patch RoutePatch) e
 	if patch.Enabled != nil {
 		after.Enabled = *patch.Enabled
 	}
+	if patch.Description != nil {
+		after.Description = strings.TrimSpace(*patch.Description)
+	}
 
-	if _, err := tx.Exec(ctx, `UPDATE routes SET chain = $2, strategy = $3, enabled = $4, updated_at = now()
-		WHERE name = $1`, name, jsonOr(after.Chain, "[]"), after.Strategy, after.Enabled); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE routes SET chain = $2, strategy = $3, enabled = $4, description = $5, updated_at = now()
+		WHERE name = $1`, name, jsonOr(after.Chain, "[]"), after.Strategy, after.Enabled, after.Description); err != nil {
 		return fmt.Errorf("admin route patch: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

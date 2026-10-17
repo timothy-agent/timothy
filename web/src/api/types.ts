@@ -585,6 +585,7 @@ export interface RouteEntryStatus {
 
 export interface AdminRoute {
   name: string
+  description?: string
   chain: ChainEntry[]
   // 'ordered' tries the chain as written; 'auto' | 'price' | 'latency'
   // score entries from recent ledger stats and declared prices.
