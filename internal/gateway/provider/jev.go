@@ -152,8 +152,12 @@ func (j *Jev) Decide(ctx context.Context, model string, req DecideRequest) (Deci
 	switch req.Kind {
 	case DecideChoice:
 		for _, o := range req.Options {
-			if ans.Choice == o {
-				return DecideResult{Choice: o, Scores: ans.Probabilities}, usage, nil
+			id := o
+			if cutID, _, ok := strings.Cut(o, ": "); ok {
+				id = cutID
+			}
+			if strings.EqualFold(ans.Choice, id) || strings.EqualFold(ans.Choice, o) {
+				return DecideResult{Choice: id, Scores: ans.Probabilities}, usage, nil
 			}
 		}
 		return DecideResult{}, usage, fmt.Errorf("jev: choice %q is not an allowed option", ans.Choice)
@@ -208,7 +212,11 @@ func jevBody(model string, req DecideRequest) jevRequest {
 		q.Type = "choice"
 		crit := make(map[string]string, len(req.Options))
 		for _, o := range req.Options {
-			crit[o] = o
+			if id, desc, ok := strings.Cut(o, ": "); ok {
+				crit[id] = desc
+			} else {
+				crit[o] = o
+			}
 		}
 		q.Criteria = crit
 	case DecideScore:
@@ -217,7 +225,10 @@ func jevBody(model string, req DecideRequest) jevRequest {
 	default: // DecideYesNo
 		q.Type = "noul"
 	}
-	state := req.Question
+	state := req.State
+	if state == "" {
+		state = req.Question
+	}
 	return jevRequest{Model: model, State: state, Questions: map[string]jevQuestion{jevQuestionID: q}}
 }
 

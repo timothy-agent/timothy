@@ -21,6 +21,7 @@ type decideRequest struct {
 	Route     string   `json:"route,omitempty"`
 	Kind      string   `json:"kind"`
 	Question  string   `json:"question"`
+	State     string   `json:"state,omitempty"`
 	Options   []string `json:"options,omitempty"`
 	Purpose   string   `json:"purpose,omitempty"` // ledger tag; defaults to "decide"
 	SessionID string   `json:"session_id,omitempty"`
@@ -30,9 +31,11 @@ type decideRequest struct {
 // decideResponse is the typed answer plus the entry that served it.
 type decideResponse struct {
 	provider.DecideResult
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	LedgerID string `json:"ledger_id"`
+	Provider string        `json:"provider"`
+	Model    string        `json:"model"`
+	Native   bool          `json:"native"`
+	LedgerID string        `json:"ledger_id"`
+	Usage    *stream.Usage `json:"usage,omitempty"`
 }
 
 // handleDecide answers one fixed-choice question on a decide route.
@@ -46,7 +49,7 @@ func (a *API) handleDecide(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	dreq := provider.DecideRequest{Kind: req.Kind, Question: req.Question, Options: req.Options}
+	dreq := provider.DecideRequest{Kind: req.Kind, Question: req.Question, State: req.State, Options: req.Options}
 	if err := decide.Validate(&dreq); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
@@ -113,7 +116,7 @@ func (a *API) handleDecide(w http.ResponseWriter, r *http.Request) {
 		}
 		entry.Status = "ok"
 		a.recordAttempt(r.Context(), entry)
-		writeJSON(w, decideResponse{DecideResult: res, Provider: att.ProviderName, Model: att.Model, LedgerID: entry.ID})
+		writeJSON(w, decideResponse{DecideResult: res, Provider: att.ProviderName, Model: att.Model, Native: effort == "", LedgerID: entry.ID, Usage: usage})
 		return
 	}
 	jsonError(w, http.StatusBadGateway, "chain_exhausted",

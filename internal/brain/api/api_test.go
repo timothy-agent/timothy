@@ -215,6 +215,10 @@ func (f *fakeGateway) RouteForRole(_ context.Context, role string) (string, bool
 	return role, true, nil
 }
 
+func (f *fakeGateway) Decide(_ context.Context, _ gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+	return gwclient.DecideResponse{}, nil
+}
+
 func (f *fakeGateway) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	f.calls++
 	if f.calls == 1 { // record the chat call, not the title call

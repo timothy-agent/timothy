@@ -118,3 +118,67 @@ func TestParseChoice(t *testing.T) {
 		}
 	}
 }
+
+func TestDispatchWithDecide(t *testing.T) {
+	agentsList := []Agent{
+		{ID: "general-id", Name: "general", Description: "everyday tasks"},
+		{ID: "coding-id", Name: "coding", Description: "software engineer"},
+	}
+
+	t.Run("decide success", func(t *testing.T) {
+		decide := func(_ context.Context, kind, question, state string, options []string) (string, error) {
+			if kind != "choice" {
+				t.Fatalf("kind = %q, want choice", kind)
+			}
+			if state != "fix race condition" {
+				t.Fatalf("state = %q, want message as state", state)
+			}
+			if len(options) != 2 || options[1] != "coding: software engineer" {
+				t.Fatalf("options = %v, want rich option labels", options)
+			}
+			return "coding", nil
+		}
+		classifyCalled := false
+		classify := func(context.Context, string) (string, error) {
+			classifyCalled = true
+			return "1", nil
+		}
+
+		got := DispatchWithDecide(context.Background(), decide, classify, "fix race condition", agentsList, "general-id")
+		if got != "coding-id" {
+			t.Fatalf("got = %q, want coding-id", got)
+		}
+		if classifyCalled {
+			t.Fatal("classify was called when decide succeeded")
+		}
+	})
+
+	t.Run("decide error falls back to classify", func(t *testing.T) {
+		decide := func(context.Context, string, string, string, []string) (string, error) {
+			return "", errors.New("decide unavailable")
+		}
+		classify := func(context.Context, string) (string, error) {
+			return "2", nil // coding-id
+		}
+
+		got := DispatchWithDecide(context.Background(), decide, classify, "fix race condition", agentsList, "general-id")
+		if got != "coding-id" {
+			t.Fatalf("got = %q, want coding-id via classify fallback", got)
+		}
+	})
+
+	t.Run("decide unrecognised choice falls back to classify", func(t *testing.T) {
+		decide := func(context.Context, string, string, string, []string) (string, error) {
+			return "unknown-role", nil
+		}
+		classify := func(context.Context, string) (string, error) {
+			return "1", nil
+		}
+
+		got := DispatchWithDecide(context.Background(), decide, classify, "hello", agentsList, "general-id")
+		if got != "general-id" {
+			t.Fatalf("got = %q, want general-id via classify fallback", got)
+		}
+	})
+}
+

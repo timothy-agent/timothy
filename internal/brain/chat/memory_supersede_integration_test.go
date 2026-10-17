@@ -27,6 +27,10 @@ func (supersedeSmokeGateway) RouteForRole(_ context.Context, role string) (strin
 	return role, true, nil
 }
 
+func (supersedeSmokeGateway) Decide(_ context.Context, _ gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+	return gwclient.DecideResponse{}, nil
+}
+
 func (supersedeSmokeGateway) Stream(_ context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	text := "I moved to Berlin."
 	if req.Purpose == "memory-extract" {

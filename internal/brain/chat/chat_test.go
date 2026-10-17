@@ -144,14 +144,34 @@ func (f *fakeLog) kinds(id string) []string {
 // fakeGW streams canned events and records requests. blockCh, when
 // set, delays the stream until closed (for cancellation tests).
 type fakeGW struct {
-	mu       sync.Mutex
-	requests []gwclient.StreamRequest
-	events   []stream.StreamEvent
-	blockCh  chan struct{}
+	mu         sync.Mutex
+	requests   []gwclient.StreamRequest
+	events     []stream.StreamEvent
+	blockCh    chan struct{}
+	decideRole string
+	decideReqs []gwclient.DecideRequest
+	decideFn   func(ctx context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error)
 }
 
 func (g *fakeGW) RouteForRole(_ context.Context, role string) (string, bool, error) {
+	if role == "decide" {
+		if g.decideRole != "" {
+			return g.decideRole, true, nil
+		}
+		return "", false, nil
+	}
 	return role, true, nil
+}
+
+func (g *fakeGW) Decide(ctx context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+	g.mu.Lock()
+	g.decideReqs = append(g.decideReqs, req)
+	fn := g.decideFn
+	g.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, req)
+	}
+	return gwclient.DecideResponse{}, nil
 }
 
 func (g *fakeGW) Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
@@ -209,6 +229,10 @@ func (erroringGW) RouteForRole(_ context.Context, role string) (string, bool, er
 
 func (erroringGW) Stream(context.Context, gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	return nil, errors.New("gateway unreachable")
+}
+
+func (erroringGW) Decide(context.Context, gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+	return gwclient.DecideResponse{}, errors.New("gateway unreachable")
 }
 
 func okEvents(text string) []stream.StreamEvent {
@@ -2520,6 +2544,7 @@ func TestClassifyCollectionOverGatewayFallsBackOnMalformedReply(t *testing.T) {
 	}
 }
 
+
 // TestValidTitle table-tests each rejection class and a set of
 // accepted titles, including a 6-word and a unicode one.
 func TestValidTitle(t *testing.T) {
@@ -3198,6 +3223,10 @@ func (g *slowGW) RouteForRole(_ context.Context, role string) (string, bool, err
 	return role, true, nil
 }
 
+func (g *slowGW) Decide(_ context.Context, _ gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+	return gwclient.DecideResponse{}, nil
+}
+
 func (g *slowGW) Stream(ctx context.Context, _ gwclient.StreamRequest) (<-chan stream.StreamEvent, error) {
 	ch := make(chan stream.StreamEvent)
 	go func() {
@@ -3629,5 +3658,101 @@ func TestResolveToolAllowDeferredLoadTool(t *testing.T) {
 				t.Fatalf("profile.Tools mutated: %v", profile.Tools)
 			}
 		})
+	}
+}
+
+// TestDecideOverGatewayResolvesDecideRole confirms DecideOverGateway
+// resolves the "decide" role and passes the request to Decide.
+func TestDecideOverGatewayResolvesDecideRole(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{
+		decideRole: "fast-decider",
+		decideFn: func(_ context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			return gwclient.DecideResponse{Choice: "option-b"}, nil
+		},
+	}
+	decide := DecideOverGateway(gw)
+	choice, err := decide(t.Context(), "choice", "which one?", "some-state", []string{"option-a", "option-b"})
+	if err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	if choice != "option-b" {
+		t.Fatalf("choice = %q, want option-b", choice)
+	}
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.decideReqs) != 1 {
+		t.Fatalf("Decide called %d times, want 1", len(gw.decideReqs))
+	}
+	if gw.decideReqs[0].Route != "fast-decider" {
+		t.Fatalf("route = %q, want fast-decider", gw.decideReqs[0].Route)
+	}
+	if gw.decideReqs[0].Kind != "choice" || gw.decideReqs[0].State != "some-state" {
+		t.Fatalf("req = %+v, want kind=choice, state=some-state", gw.decideReqs[0])
+	}
+}
+
+// TestDecideOverGatewayReturnsErrorWhenUnbound confirms DecideOverGateway
+// returns an error without making a request when the decide role is unbound.
+func TestDecideOverGatewayReturnsErrorWhenUnbound(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{} // decideRole is empty -> unbound
+	decide := DecideOverGateway(gw)
+	if _, err := decide(t.Context(), "choice", "which one?", "some-state", []string{"option-a", "option-b"}); err == nil {
+		t.Fatal("decide: want error when decide role is unbound")
+	}
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.decideReqs) != 0 {
+		t.Fatalf("Decide called %d times, want 0", len(gw.decideReqs))
+	}
+}
+
+// TestChatAutoDispatchWithDecide confirms that when the decide role is bound,
+// auto-dispatch selects the agent via decision model.
+func TestChatAutoDispatchWithDecide(t *testing.T) {
+	t.Parallel()
+	gw := &fakeGW{
+		decideRole: "decide-route",
+		decideFn: func(_ context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error) {
+			return gwclient.DecideResponse{Choice: "researcher"}, nil
+		},
+		events: okEvents("done"),
+	}
+	log := newFakeLog()
+	resolver := func(_ context.Context, id string) (agents.Agent, bool) {
+		switch id {
+		case "", "general-id":
+			return agents.Agent{ID: "general-id", Name: "general", Route: "default"}, true
+		case "researcher-id":
+			return agents.Agent{ID: "researcher-id", Name: "researcher", Route: "research"}, true
+		default:
+			return agents.Agent{}, false
+		}
+	}
+	svc := New(gw, log, nil, nil, staticBudget(60_000), nil, nil, nil, resolver, discard())
+	candidates := []agents.Agent{
+		{ID: "general-id", Name: "general", Description: "everyday tasks"},
+		{ID: "researcher-id", Name: "researcher", Description: "consults sources"},
+	}
+	svc.SetAutoDispatch(
+		func(context.Context) []agents.Agent { return candidates },
+		func(context.Context, string) (string, error) { return "general", nil },
+	)
+
+	_, ch, err := svc.Chat(t.Context(), Request{SessionID: "s1", Message: "what's the RFC say?", Agent: autoAgentName})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	drain(t, ch)
+
+	req := gw.lastChatRequest()
+	gw.mu.Lock()
+	defer gw.mu.Unlock()
+	if len(gw.decideReqs) != 1 {
+		t.Fatalf("Decide called %d times, want 1", len(gw.decideReqs))
+	}
+	if req.Agent != "researcher-id" {
+		t.Fatalf("req.Agent = %q, want researcher-id (dispatched via decide)", req.Agent)
 	}
 }

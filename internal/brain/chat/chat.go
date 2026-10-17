@@ -75,6 +75,7 @@ var ErrBadRequest = errors.New("bad request")
 type Gateway interface {
 	Stream(ctx context.Context, req gwclient.StreamRequest) (<-chan stream.StreamEvent, error)
 	RouteForRole(ctx context.Context, role string) (string, bool, error)
+	Decide(ctx context.Context, req gwclient.DecideRequest) (gwclient.DecideResponse, error)
 }
 
 // SessionLog is the slice of the session store chat needs; tests fake
@@ -556,7 +557,43 @@ func (s *Service) dispatchAgent(ctx context.Context, message string) string {
 		return ""
 	}
 	candidates := s.candidates(ctx)
-	return agents.Dispatch(ctx, s.classify, message, candidates, "")
+	var decide agents.Decide
+	if s.gw != nil {
+		decide = DecideOverGateway(s.gw)
+	}
+	return agents.DispatchWithDecide(ctx, decide, s.classify, message, candidates, "")
+}
+
+// DecideOverGateway builds an agents.Decide that asks the "decide"
+// role's route for a fixed-choice answer on a decision model.
+// When the decide role is unbound (or the gateway lookup fails),
+// this returns an error so callers fall back to the prompt-based
+// classifier; behavior remains byte-identical to the unbound path.
+func DecideOverGateway(gw Gateway) agents.Decide {
+	return func(ctx context.Context, kind, question, state string, options []string) (string, error) {
+		if gw == nil {
+			return "", fmt.Errorf("chat: decide: nil gateway")
+		}
+		route, ok, err := gw.RouteForRole(ctx, "decide")
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return "", fmt.Errorf("chat: decide: decide role is unbound")
+		}
+		resp, err := gw.Decide(ctx, gwclient.DecideRequest{
+			Route:    route,
+			Kind:     kind,
+			Question: question,
+			State:    state,
+			Options:  options,
+			Purpose:  "decide",
+		})
+		if err != nil {
+			return "", err
+		}
+		return resp.Choice, nil
+	}
 }
 
 // ClassifyOverGateway builds an agents.Classify that asks the

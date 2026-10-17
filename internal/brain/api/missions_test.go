@@ -1065,6 +1065,9 @@ func TestClassifyKindAndLight(t *testing.T) {
 	}
 }
 
+// TestClassifyKindAndLightWithDecide table-tests kind and light classification
+
+
 // TestClassifyHasPlan covers classifyHasPlan's shape heuristic (D-102,
 // issue #496): a goal shaped like an explicit numbered/step plan (two
 // or more distinct numbered/step lines) infers true; a plain goal, or
