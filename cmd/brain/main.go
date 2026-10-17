@@ -447,7 +447,6 @@ func main() {
 	// from the same sources the handler's own fields use (issue #816).
 	missionResolve := missions.ResolveDeps{
 		Classify:     chat.ClassifyOverGateway(gwc),
-		Decide:       chat.DecideOverGateway(gwc),
 		Agent:        missionAgentResolver(agentReg),
 		RouteForRole: routeForRole,
 		RouteExists: func(ctx context.Context, name string) bool {

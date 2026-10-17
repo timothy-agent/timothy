@@ -593,6 +593,7 @@ type DecideRequest struct {
 	Route     string   `json:"route,omitempty"`
 	Kind      string   `json:"kind"` // "choice" | "yesno" | "score"
 	Question  string   `json:"question"`
+	State     string   `json:"state,omitempty"`
 	Options   []string `json:"options,omitempty"`
 	Purpose   string   `json:"purpose,omitempty"`
 	SessionID string   `json:"session_id,omitempty"`

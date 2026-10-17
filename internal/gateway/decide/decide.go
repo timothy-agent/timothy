@@ -66,6 +66,10 @@ func Validate(req *provider.DecideRequest) error {
 func Prompt(req provider.DecideRequest) (system, user string) {
 	var b strings.Builder
 	b.WriteString(req.Question)
+	if req.State != "" {
+		b.WriteString("\n\n")
+		b.WriteString(req.State)
+	}
 	b.WriteString("\n\n")
 	if req.Kind == provider.DecideScore {
 		system = "You are a scorer. Reply with one number between 0 and 1 and nothing else."
@@ -135,9 +139,17 @@ func Parse(req provider.DecideRequest, text string) (provider.DecideResult, erro
 		}
 		return provider.DecideResult{Score: &score}, nil
 	}
+	ansID := answer
+	if cutAns, _, ok := strings.Cut(answer, ":"); ok {
+		ansID = strings.TrimSpace(cutAns)
+	}
 	for _, o := range req.Options {
-		if strings.EqualFold(answer, o) {
-			return provider.DecideResult{Choice: o}, nil
+		id := o
+		if cutID, _, ok := strings.Cut(o, ": "); ok {
+			id = cutID
+		}
+		if strings.EqualFold(answer, id) || strings.EqualFold(answer, o) || strings.EqualFold(ansID, id) {
+			return provider.DecideResult{Choice: id}, nil
 		}
 	}
 	return provider.DecideResult{}, fmt.Errorf("%w: %q is not an allowed option", ErrMalformed, truncate(text))

@@ -99,6 +99,36 @@ func TestJevDecideChoice(t *testing.T) {
 	}
 }
 
+func TestJevDecideChoiceWithStateAndDescriptions(t *testing.T) {
+	t.Parallel()
+	stub := newJevStub(t, `{"type":"choice","choice":"coding","probabilities":{"coding":0.9,"general":0.1}}`)
+	j := NewJev(JevConfig{Name: "jev", BaseURL: stub.srv.URL})
+
+	res, _, err := j.Decide(t.Context(), "typed-decisions", DecideRequest{
+		Kind:     DecideChoice,
+		Question: "Classify this goal.",
+		State:    "Write a go compiler",
+		Options:  []string{"coding: writes code", "general: documents"},
+	})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if res.Choice != "coding" {
+		t.Fatalf("res.Choice = %q, want coding", res.Choice)
+	}
+	if stub.got.State != "Write a go compiler" {
+		t.Fatalf("got.State = %q, want state separated from question", stub.got.State)
+	}
+	q := stub.got.Questions["q"]
+	if q.Instructions != "Classify this goal." {
+		t.Fatalf("q.Instructions = %q, want instructions separated from state", q.Instructions)
+	}
+	crit, ok := q.Criteria.(map[string]any)
+	if !ok || crit["coding"] != "writes code" || crit["general"] != "documents" {
+		t.Fatalf("crit = %+v, want split id: description", crit)
+	}
+}
+
 func TestJevDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	t.Parallel()
 	stub := newJevStub(t, `{"type":"choice","choice":"hallucinated","probabilities":{"coding":0.1,"research":0.85,"general":0.05},"confidence":0.8}`)

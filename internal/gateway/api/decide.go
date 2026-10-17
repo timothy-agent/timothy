@@ -21,6 +21,7 @@ type decideRequest struct {
 	Route     string   `json:"route,omitempty"`
 	Kind      string   `json:"kind"`
 	Question  string   `json:"question"`
+	State     string   `json:"state,omitempty"`
 	Options   []string `json:"options,omitempty"`
 	Purpose   string   `json:"purpose,omitempty"` // ledger tag; defaults to "decide"
 	SessionID string   `json:"session_id,omitempty"`
@@ -48,7 +49,7 @@ func (a *API) handleDecide(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return
 	}
-	dreq := provider.DecideRequest{Kind: req.Kind, Question: req.Question, Options: req.Options}
+	dreq := provider.DecideRequest{Kind: req.Kind, Question: req.Question, State: req.State, Options: req.Options}
 	if err := decide.Validate(&dreq); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad_request", err.Error())
 		return

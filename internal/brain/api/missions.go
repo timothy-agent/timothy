@@ -845,7 +845,6 @@ func (h *missionAPI) create(w http.ResponseWriter, r *http.Request) {
 func (h *missionAPI) resolveDeps() missions.ResolveDeps {
 	deps := missions.ResolveDeps{
 		Classify:              h.classify,
-		Decide:                h.decide,
 		RouteForRole:          h.routeForRole,
 		RouteExists:           h.routeExists,
 		CodingExecutorDefault: h.codingExecutorDefault,
@@ -1078,46 +1077,6 @@ func classifyKindAndLight(ctx context.Context, classify agents.Classify, goal st
 	return kind, kind == "general" && light
 }
 
-// classifyLightWithDecide decides whether a general-kind goal is single-pass
-// using decide if available, falling back to classifyLight.
-func classifyLightWithDecide(ctx context.Context, decide agents.Decide, classify agents.Classify, goal string) bool {
-	if decide != nil {
-		q := "Is this goal a single-pass task deliverable in one response — a read, summary, lookup, or short write-up with no multi-step plan or file artifacts?\n\nGoal: " + goal
-		choice, err := decide(ctx, q, []string{"yes", "no"})
-		if err == nil {
-			choice = strings.ToLower(strings.TrimSpace(choice))
-			if choice == "yes" || strings.HasPrefix(choice, "yes") {
-				return true
-			}
-			if choice == "no" || strings.HasPrefix(choice, "no") {
-				return false
-			}
-		}
-	}
-	return classifyLight(ctx, classify, goal)
-}
-
-// classifyKindAndLightWithDecide answers both kind and light using decide if available,
-// falling back to classifyKindAndLight if decide is nil, unbound, or errors.
-func classifyKindAndLightWithDecide(ctx context.Context, decide agents.Decide, classify agents.Classify, goal string) (kind string, light bool) {
-	if decide != nil {
-		qKind := "Classify this mission goal based on its deliverable, not its topic.\n" +
-			"coding — the mission produces or changes code, scripts, or configuration files in a repository.\n" +
-			"general — the output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general).\n\n" +
-			"Goal: " + goal
-		choiceKind, err := decide(ctx, qKind, []string{"coding", "general"})
-		if err == nil {
-			choiceKind = strings.ToLower(strings.TrimSpace(choiceKind))
-			if strings.HasPrefix(choiceKind, "coding") {
-				return "coding", false
-			}
-			if strings.HasPrefix(choiceKind, "general") {
-				return "general", classifyLightWithDecide(ctx, decide, classify, goal)
-			}
-		}
-	}
-	return classifyKindAndLight(ctx, classify, goal)
-}
 
 // classifyGoal serves POST /v1/missions/classify: the same
 // classification create() falls back to when kind is omitted, exposed
@@ -1137,7 +1096,7 @@ func (h *missionAPI) classifyGoal(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "bad_request", "goal is required")
 		return
 	}
-	kind, light := classifyKindAndLightWithDecide(r.Context(), h.decide, h.classify, req.Goal)
+	kind, light := classifyKindAndLight(r.Context(), h.classify, req.Goal)
 	hasPlan := classifyHasPlan(req.Goal)
 	writeJSON(w, http.StatusOK, map[string]any{"kind": kind, "light": light, "has_plan": hasPlan})
 }

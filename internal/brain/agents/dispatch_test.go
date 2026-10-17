@@ -126,11 +126,17 @@ func TestDispatchWithDecide(t *testing.T) {
 	}
 
 	t.Run("decide success", func(t *testing.T) {
-		decide := func(_ context.Context, question string, options []string) (string, error) {
-			if !strings.Contains(question, "fix race condition") {
-				t.Fatalf("question = %q, want message included", question)
+		decide := func(_ context.Context, kind, question, state string, options []string) (string, error) {
+			if kind != "choice" {
+				t.Fatalf("kind = %q, want choice", kind)
 			}
-			return "coding: software engineer", nil
+			if state != "fix race condition" {
+				t.Fatalf("state = %q, want message as state", state)
+			}
+			if len(options) != 2 || options[1] != "coding: software engineer" {
+				t.Fatalf("options = %v, want rich option labels", options)
+			}
+			return "coding", nil
 		}
 		classifyCalled := false
 		classify := func(context.Context, string) (string, error) {
@@ -148,7 +154,7 @@ func TestDispatchWithDecide(t *testing.T) {
 	})
 
 	t.Run("decide error falls back to classify", func(t *testing.T) {
-		decide := func(context.Context, string, []string) (string, error) {
+		decide := func(context.Context, string, string, string, []string) (string, error) {
 			return "", errors.New("decide unavailable")
 		}
 		classify := func(context.Context, string) (string, error) {
@@ -162,7 +168,7 @@ func TestDispatchWithDecide(t *testing.T) {
 	})
 
 	t.Run("decide unrecognised choice falls back to classify", func(t *testing.T) {
-		decide := func(context.Context, string, []string) (string, error) {
+		decide := func(context.Context, string, string, string, []string) (string, error) {
 			return "unknown-role", nil
 		}
 		classify := func(context.Context, string) (string, error) {

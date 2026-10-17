@@ -52,6 +52,7 @@ const (
 type DecideRequest struct {
 	Kind     string
 	Question string
+	State    string
 	// Options is the closed answer set for a choice (already yes/no
 	// for a yesno); empty for a score.
 	Options []string

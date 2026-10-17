@@ -96,6 +96,36 @@ func TestLayaDecideChoice(t *testing.T) {
 	}
 }
 
+func TestLayaDecideChoiceWithStateAndDescriptions(t *testing.T) {
+	t.Parallel()
+	stub := newLayaStub(t, `{"type":"choice","choice":"coding","probabilities":{"coding":0.9,"general":0.1}}`)
+	l := NewLaya(LayaConfig{Name: "laya", BaseURL: stub.srv.URL})
+
+	res, _, err := l.Decide(t.Context(), "typed-decisions", DecideRequest{
+		Kind:     DecideChoice,
+		Question: "Classify this goal.",
+		State:    "Write a go compiler",
+		Options:  []string{"coding: writes code", "general: documents"},
+	})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if res.Choice != "coding" {
+		t.Fatalf("res.Choice = %q, want coding", res.Choice)
+	}
+	if stub.got.State != "Write a go compiler" {
+		t.Fatalf("got.State = %q, want state separated from question", stub.got.State)
+	}
+	q := stub.got.Questions["q"]
+	if q.Instructions != "Classify this goal." {
+		t.Fatalf("q.Instructions = %q, want instructions separated from state", q.Instructions)
+	}
+	crit, ok := q.Criteria.(map[string]any)
+	if !ok || crit["coding"] != "writes code" || crit["general"] != "documents" {
+		t.Fatalf("crit = %+v, want split id: description", crit)
+	}
+}
+
 func TestLayaDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	t.Parallel()
 	stub := newLayaStub(t, `{"type":"choice","choice":"other","probabilities":{"other":1}}`)

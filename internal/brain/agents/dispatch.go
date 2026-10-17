@@ -13,8 +13,8 @@ import (
 // unit-testable without a live model.
 type Classify func(ctx context.Context, prompt string) (string, error)
 
-// Decide picks one option among options for question on a decision model.
-type Decide func(ctx context.Context, question string, options []string) (string, error)
+// Decide picks one option among options for question and state on a decision model.
+type Decide func(ctx context.Context, kind, question, state string, options []string) (string, error)
 
 // Dispatch picks the agent whose profile best fits message, among
 // candidates (only enabled agents should be passed in), and returns
@@ -37,22 +37,20 @@ func DispatchWithDecide(ctx context.Context, decide Decide, classify Classify, m
 		return candidates[0].ID
 	}
 	if decide != nil {
-		var list strings.Builder
 		options := make([]string, len(candidates))
 		for i, a := range candidates {
-			options[i] = a.Name
 			if a.Description != "" {
-				fmt.Fprintf(&list, "- %s: %s\n", a.Name, a.Description)
+				options[i] = fmt.Sprintf("%s: %s", a.Name, a.Description)
 			} else {
-				fmt.Fprintf(&list, "- %s\n", a.Name)
+				options[i] = a.Name
 			}
 		}
-		q := fmt.Sprintf("Pick the single best-fit assistant profile for the user's message.\nProfiles:\n%s\nMessage: %s", list.String(), message)
-		choice, err := decide(ctx, q, options)
+		q := "Pick the single best-fit assistant profile for the user's message."
+		choice, err := decide(ctx, "choice", q, message, options)
 		if err == nil {
 			choice = strings.TrimSpace(choice)
 			for _, a := range candidates {
-				if strings.EqualFold(choice, a.Name) || choice == a.ID || strings.HasPrefix(strings.ToLower(choice), strings.ToLower(a.Name)+":") {
+				if strings.EqualFold(choice, a.Name) || strings.EqualFold(choice, a.ID) {
 					return a.ID
 				}
 			}
