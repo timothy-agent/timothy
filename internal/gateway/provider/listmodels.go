@@ -14,7 +14,7 @@ import (
 // AvailableModel is one model reported by a provider's listing
 // endpoint. Only the id is normalized; providers disagree on the rest.
 // DisplayName is set only by drivers whose listing endpoint reports one
-// (cursor-cli); empty for the rest.
+// (cursor-cli, anthropic, bedrock); empty for the rest.
 //
 // Prices (USD per million tokens) and ContextLength are set only from a
 // listing that states them (openrouter.ai, D-173); nil is unknown,
@@ -31,8 +31,8 @@ type AvailableModel struct {
 }
 
 // ModelLister is implemented by providers whose API can enumerate its
-// models. Callers type-assert; a provider without it (bedrock) falls
-// back to manual model entry in the UI.
+// models. Callers type-assert; a provider without it gets the catalog
+// rows for its vendors instead (D-172).
 type ModelLister interface {
 	ListModels(ctx context.Context) ([]AvailableModel, error)
 }
@@ -142,6 +142,21 @@ func (o *OpenAICompat) ListModels(ctx context.Context) ([]AvailableModel, error)
 	}, IsOpenRouterHost(o.cfg.BaseURL))
 	if err != nil {
 		return nil, fmt.Errorf("openaicompat: list models: %w", err)
+	}
+	return models, nil
+}
+
+// ListModels implements ModelLister via GET {base_url}/models with the
+// chat call's auth and headers.
+func (o *OpenAIResponses) ListModels(ctx context.Context) ([]AvailableModel, error) {
+	models, err := listModels(ctx, o.client, o.cfg.BaseURL+"/models", func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+o.cfg.APIKey)
+		for k, v := range o.cfg.Headers {
+			req.Header.Set(k, v)
+		}
+	})
+	if err != nil {
+		return nil, fmt.Errorf("openai-responses: list models: %w", err)
 	}
 	return models, nil
 }
