@@ -82,6 +82,8 @@ export function useProviderModels(): ProviderModelOption[] | null {
         const perProvider = await Promise.all(
           enabled.map(async (p) => {
             try {
+              // The provider's one model list (D-172): a cliproxy row
+              // lists only its own vendor, and non-chat ids are gone.
               const listed = await availableModels(p.id)
               if (listed.length === 0 && p.default_model) {
                 return [
@@ -99,8 +101,8 @@ export function useProviderModels(): ProviderModelOption[] | null {
                 value: `${p.name}/${m.id}`,
               }))
             } catch {
-              // bedrock (and similar) cannot list: fall back to the
-              // provider's configured default_model when present.
+              // A failed listing (a rejected key, say) falls back to
+              // the provider's configured default_model when present.
               if (!p.default_model) return []
               return [
                 {

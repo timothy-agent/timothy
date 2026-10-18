@@ -636,6 +636,13 @@ export interface AvailableModel {
   max_input_tokens?: number | null
 }
 
+// ValidateResult is the add page's probe of an unsaved config. models
+// is that config's model list, null when the probe or the listing
+// failed.
+export interface ValidateResult extends TestResult {
+  models?: AvailableModel[] | null
+}
+
 // AdminAgent is one row of the agent registry (D-034): who serves a
 // session. Empty skills/tools = none allowed; empty route = the
 // default chain.

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Navigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { catalogModelsForProvider, listProviders, listRoutes, patchRoute } from '../../api/client'
+import { listProviders, listRoutes, patchRoute } from '../../api/client'
 import type { AdminProvider, AdminRoute, ChainEntry } from '../../api/types'
 import { Field, Form, FormActions } from '../timothy/field'
 import { PageHeader } from '../timothy/page-header'
@@ -17,7 +17,8 @@ import {
   SelectValue,
 } from '../ui/select'
 import { Switch } from '../ui/switch'
-import { catalogRowID, ModelPicker, type ModelSuggestion, useCatalogSearch } from './ModelPicker'
+import { ModelPicker } from './ModelPicker'
+import { listedSuggestions, typedIdHint, useModelList } from './modelList'
 import { Pipeline, type PipelineEntry } from './pipeline/Pipeline'
 import { reorder } from './pipeline/useReorderDrag'
 import { matchPreset } from '../../lib/providerPresets'
@@ -279,28 +280,17 @@ function AddChainEntry({
 
   const selected = providers.find((x) => x.id === providerID)
 
-  // Live type-ahead over the selected provider's candidate catalog
-  // rows, keyed on the typed model id.
-  const catalogSearch = useCallback(
-    (q: string) => (providerID ? catalogModelsForProvider(providerID, q) : Promise.resolve([])),
-    [providerID],
+  // The selected provider's model list (D-172), filtered client-side
+  // by ModelPicker as the user types.
+  const list = useModelList(providerID)
+  const suggestions = useMemo(
+    () => (selected ? listedSuggestions(list.models, selected.default_model) : []),
+    [selected, list.models],
   )
-  const catalogModels = useCatalogSearch(model, catalogSearch)
-
-  // Live catalog rows for the selected provider, same shape
-  // ProviderAdd/ProviderEdit feed ModelPicker, so price labels render
-  // the same way everywhere.
-  const suggestions: ModelSuggestion[] = useMemo(() => {
-    if (!selected) return []
-    return catalogModels.map((m) => ({
-      id: catalogRowID(m),
-      input_per_mtok: m.input_per_mtok,
-      output_per_mtok: m.output_per_mtok,
-    }))
-  }, [selected, catalogModels])
+  const noModels = !!selected && list.loaded && list.models.length === 0
 
   return (
-    <Field label="Add a provider to this chain">
+    <Field label="Add a provider to this chain" description={noModels ? typedIdHint : undefined}>
       {() => (
         <div className="flex flex-wrap items-center gap-2">
           <Select

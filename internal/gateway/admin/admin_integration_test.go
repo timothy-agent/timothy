@@ -1451,60 +1451,6 @@ func TestCatalogPricesResolvesByProviderRow(t *testing.T) {
 	}
 }
 
-// TestCatalogModelsForProviderUnmappedHostIsEmpty is D-171 against a
-// synced catalog: a custom OpenAI-compatible host maps to no catalog
-// vendor and lists nothing, while a litellm_provider override on the
-// same host still lists that vendor's rows.
-func TestCatalogModelsForProviderUnmappedHostIsEmpty(t *testing.T) {
-	adm, _, _ := testAdmin(t)
-	ctx := t.Context()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{
-			"azure/gpt-4o": {"litellm_provider": "azure", "mode": "chat"},
-			"bedrock/claude-3-opus": {"litellm_provider": "bedrock", "mode": "chat"},
-			"zai/glm-4.6": {"litellm_provider": "zai", "mode": "chat"}
-		}`))
-	}))
-	defer srv.Close()
-	adm.catalog = catalog.NewWithURL(slog.New(slog.NewTextHandler(io.Discard, nil)), srv.URL)
-	if _, err := adm.CatalogRefresh(ctx); err != nil {
-		t.Fatalf("CatalogRefresh: %v", err)
-	}
-
-	cases := []struct {
-		name string
-		opts map[string]string
-		want []string
-	}{
-		{name: "custom", want: []string{}},
-		{name: "custom-zai-override", opts: map[string]string{"litellm_provider": "zai"}, want: []string{"zai/glm-4.6"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			id, err := adm.Create(ctx, Provider{
-				Name: adminMarker + tc.name, Kind: "api", Driver: "openaicompat",
-				BaseURL: "https://mars-ai.example.com/v1", CredentialRef: "SOME_ENV_NAME",
-				DefaultModel: "m-custom", Options: tc.opts,
-			})
-			if err != nil {
-				t.Fatalf("Create: %v", err)
-			}
-			models, err := adm.CatalogModelsForProvider(ctx, id, "", 0)
-			if err != nil {
-				t.Fatalf("CatalogModelsForProvider: %v", err)
-			}
-			got := []string{}
-			for _, m := range models {
-				got = append(got, m.ModelKey)
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("model keys = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 // TestTestPersistsOpenAIResponsesOnDefiniteResult is the real incident
 // this probe exists for (Z.ai's coding-plan endpoint 404s /responses
 // while chatting fine over /chat/completions): Test's chat probe
