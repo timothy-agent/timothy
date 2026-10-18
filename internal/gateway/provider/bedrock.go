@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/bedrock"
+	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrock/types"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -112,8 +115,18 @@ type Bedrock struct {
 	cfg BedrockConfig
 
 	initOnce  sync.Once
+	awsCfg    aws.Config
 	client    *bedrockruntime.Client
 	clientErr error
+
+	// newControl builds the control-plane client ListModels calls; nil
+	// means bedrock.NewFromConfig.
+	newControl func(aws.Config) foundationModelLister
+}
+
+// foundationModelLister is the control-plane call ListModels makes.
+type foundationModelLister interface {
+	ListFoundationModels(ctx context.Context, params *bedrock.ListFoundationModelsInput, optFns ...func(*bedrock.Options)) (*bedrock.ListFoundationModelsOutput, error)
 }
 
 func NewBedrock(cfg BedrockConfig) *Bedrock {
@@ -200,6 +213,7 @@ func (b *Bedrock) lazyClient(ctx context.Context) (*bedrockruntime.Client, error
 			b.clientErr = fmt.Errorf("bedrock: load aws config: %w", err)
 			return
 		}
+		b.awsCfg = awsCfg
 		b.client = bedrockruntime.NewFromConfig(awsCfg)
 	})
 	return b.client, b.clientErr
@@ -747,6 +761,36 @@ func documentFromJSON(raw json.RawMessage) document.Interface {
 		return nil
 	}
 	return document.NewLazyDocument(v)
+}
+
+// ListModels implements ModelLister via the control plane's
+// ListFoundationModels in the row's region, with the same credentials
+// as chat. It keeps models that output text and accept on-demand
+// inference, so each id is one Converse accepts as ModelId.
+func (b *Bedrock) ListModels(ctx context.Context) ([]AvailableModel, error) {
+	if _, err := b.lazyClient(ctx); err != nil {
+		return nil, err
+	}
+	var control foundationModelLister
+	if b.newControl != nil {
+		control = b.newControl(b.awsCfg)
+	} else {
+		control = bedrock.NewFromConfig(b.awsCfg)
+	}
+	out, err := control.ListFoundationModels(ctx, &bedrock.ListFoundationModelsInput{})
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: list models: %w", err)
+	}
+	models := make([]AvailableModel, 0, len(out.ModelSummaries))
+	for _, m := range out.ModelSummaries {
+		if m.ModelId == nil ||
+			!slices.Contains(m.OutputModalities, bedrocktypes.ModelModalityText) ||
+			!slices.Contains(m.InferenceTypesSupported, bedrocktypes.InferenceTypeOnDemand) {
+			continue
+		}
+		models = append(models, AvailableModel{ID: *m.ModelId, DisplayName: aws.ToString(m.ModelName)})
+	}
+	return models, nil
 }
 
 // Embed uses InvokeModel with Titan embedding models
