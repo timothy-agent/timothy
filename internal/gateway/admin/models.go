@@ -98,7 +98,9 @@ func (a *Admin) modelList(ctx context.Context, p Provider, fetch modelFetch) ([]
 
 // liveModelList joins live ids with their exact catalog match in pool.
 // A match with a known non chat-like mode drops the id; an unmatched id
-// or a match without a mode stays.
+// or a match without a mode stays. The listing's own prices and context
+// length (D-173) fill in where the catalog states none, the same order
+// router.Snapshot.Prices uses.
 func liveModelList(live []provider.AvailableModel, pool []catalog.Model) []ListedModel {
 	byKey := make(map[string]catalog.Model, len(pool))
 	for _, m := range pool {
@@ -108,13 +110,19 @@ func liveModelList(live []provider.AvailableModel, pool []catalog.Model) []Liste
 	}
 	out := make([]ListedModel, 0, len(live))
 	for _, m := range live {
-		row := ListedModel{ID: m.ID, DisplayName: m.DisplayName, Source: modelSourceLive}
+		row := ListedModel{ID: m.ID, DisplayName: m.DisplayName, Source: modelSourceLive,
+			InputPerMTok: m.InputPerMTok, OutputPerMTok: m.OutputPerMTok, MaxInputTokens: m.ContextLength}
 		if key := catalog.Match(m.ID, pool); key != "" {
 			cm := byKey[key]
 			if cm.Mode != "" && !catalog.ChatLike(cm.Mode) {
 				continue
 			}
-			row.InputPerMTok, row.OutputPerMTok, row.MaxInputTokens = cm.InputPerMTok, cm.OutputPerMTok, cm.MaxInputTokens
+			if cm.InputPerMTok != nil || cm.OutputPerMTok != nil {
+				row.InputPerMTok, row.OutputPerMTok = cm.InputPerMTok, cm.OutputPerMTok
+			}
+			if cm.MaxInputTokens != nil {
+				row.MaxInputTokens = cm.MaxInputTokens
+			}
 		}
 		out = append(out, row)
 	}

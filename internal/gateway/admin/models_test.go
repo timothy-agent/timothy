@@ -51,6 +51,12 @@ func staticFetch(ids ...string) modelFetch {
 	}
 }
 
+func modelsFetch(models ...provider.AvailableModel) modelFetch {
+	return func(context.Context) ([]provider.AvailableModel, error) {
+		return models, nil
+	}
+}
+
 func ptrF(v float64) *float64 { return &v }
 func ptrI(v int64) *int64     { return &v }
 
@@ -104,6 +110,32 @@ func TestModelList(t *testing.T) {
 			p:     openai,
 			fetch: staticFetch("gpt-modeless"),
 			want:  []ListedModel{{ID: "gpt-modeless", Source: "live", InputPerMTok: ptrF(1)}},
+		},
+		{
+			name: "live price and context used when the catalog has no match",
+			p:    Provider{ID: "p-or", Name: "OpenRouter", Kind: "api", Driver: "openaicompat", BaseURL: "https://openrouter.ai/api/v1"},
+			fetch: modelsFetch(
+				provider.AvailableModel{ID: "openai/gpt-4o", InputPerMTok: ptrF(2.5), OutputPerMTok: ptrF(10), ContextLength: ptrI(128000)},
+				provider.AvailableModel{ID: "meta-llama/llama-3.3-70b-instruct:free", InputPerMTok: ptrF(0), OutputPerMTok: ptrF(0)},
+				provider.AvailableModel{ID: "openrouter/auto"},
+			),
+			want: []ListedModel{
+				{ID: "openai/gpt-4o", Source: "live", InputPerMTok: ptrF(2.5), OutputPerMTok: ptrF(10), MaxInputTokens: ptrI(128000)},
+				{ID: "meta-llama/llama-3.3-70b-instruct:free", Source: "live", InputPerMTok: ptrF(0), OutputPerMTok: ptrF(0)},
+				{ID: "openrouter/auto", Source: "live"},
+			},
+		},
+		{
+			name: "catalog price wins over a live price",
+			p:    openai,
+			fetch: modelsFetch(
+				provider.AvailableModel{ID: "gpt-4o", InputPerMTok: ptrF(99), OutputPerMTok: ptrF(99), ContextLength: ptrI(1)},
+				provider.AvailableModel{ID: "gpt-modeless", OutputPerMTok: ptrF(7), ContextLength: ptrI(4096)},
+			),
+			want: []ListedModel{
+				{ID: "gpt-4o", Source: "live", InputPerMTok: ptrF(2), OutputPerMTok: ptrF(8), MaxInputTokens: ptrI(128000)},
+				{ID: "gpt-modeless", Source: "live", InputPerMTok: ptrF(1), MaxInputTokens: ptrI(4096)},
+			},
 		},
 		{
 			name:  "unmapped host keeps every live id unpriced",

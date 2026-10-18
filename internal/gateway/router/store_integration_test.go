@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 	"github.com/SumonMSelim/timothy/internal/platform/migrate"
 	"github.com/SumonMSelim/timothy/internal/platform/pgpool"
 	"github.com/SumonMSelim/timothy/migrations"
@@ -282,6 +283,59 @@ func TestStoreLoadFailsOnInvalidRequestTimeout(t *testing.T) {
 	t.Setenv("ITEST_BAD_TIMEOUT_KEY", "test-key-value")
 	if err := s.Load(t.Context()); err == nil {
 		t.Fatal("Load succeeded with an invalid request_timeout, want error")
+	}
+}
+
+// TestStoreLoadCarriesLivePrices (D-173): a snapshot loaded from the
+// table prices an openrouter.ai row from the Store's live table, and
+// the row's own prices_by_model still wins.
+func TestStoreLoadCarriesLivePrices(t *testing.T) {
+	s := integrationStore(t)
+	db, err := s.db.Get()
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	_, _ = db.Exec(t.Context(), "DELETE FROM providers WHERE name = 'itest-openrouter'")
+	if _, err := db.Exec(t.Context(), `INSERT INTO providers
+		(name, kind, driver, base_url, default_model, credential_ref, options, enabled)
+		VALUES ('itest-openrouter', 'api', 'openaicompat', 'https://openrouter.ai/api/v1', 'openai/gpt-4o',
+			'ITEST_OPENROUTER_KEY',
+			jsonb_build_object('prices_by_model', '{"op/override":{"input_per_mtok":1,"output_per_mtok":2}}'), true)`); err != nil {
+		t.Fatalf("insert provider: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		conn, err := pgx.Connect(ctx, os.Getenv("DATABASE_URL"))
+		if err != nil {
+			t.Errorf("cleanup connect: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close(ctx) }()
+		if _, err := conn.Exec(ctx, "DELETE FROM providers WHERE name = 'itest-openrouter'"); err != nil {
+			t.Errorf("cleanup provider: %v", err)
+		}
+	})
+
+	s.live.set("itest-openrouter", []provider.AvailableModel{
+		{ID: "openai/gpt-4o", InputPerMTok: fp(2.5), OutputPerMTok: fp(10)},
+		{ID: "op/override", InputPerMTok: fp(9), OutputPerMTok: fp(9)},
+	})
+	t.Setenv("ITEST_OPENROUTER_KEY", "test-key-value")
+	if err := s.Load(t.Context()); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	snap := s.Snapshot()
+	if p := snap.Prices("itest-openrouter", "openai/gpt-4o"); p == nil || p.InputPerMTok != 2.5 || p.OutputPerMTok != 10 {
+		t.Fatalf("Prices(openai/gpt-4o) = %+v, want the live price", p)
+	}
+	if p := snap.Prices("itest-openrouter", "op/override"); p == nil || p.InputPerMTok != 1 || p.OutputPerMTok != 2 {
+		t.Fatalf("Prices(op/override) = %+v, want prices_by_model", p)
+	}
+	if p := snap.Prices("itest-openrouter", "unlisted/model"); p != nil {
+		t.Fatalf("Prices(unlisted/model) = %+v, want nil", p)
 	}
 }
 

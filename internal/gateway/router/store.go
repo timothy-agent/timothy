@@ -29,6 +29,7 @@ type Store struct {
 	cat    catalogLookup
 	log    *slog.Logger
 	snap   atomic.Pointer[Snapshot]
+	live   *livePrices
 }
 
 // NewStore wires a store; call Run to start loading. cat is the model
@@ -36,7 +37,7 @@ type Store struct {
 // providers.models column — nil is safe (capability gating and
 // pricing both fall back permissively/unpriced).
 func NewStore(db *pgpool.Pool, lookup func(string) string, cat catalogLookup, log *slog.Logger) *Store {
-	return &Store{db: db, lookup: lookup, cat: cat, log: log}
+	return &Store{db: db, lookup: lookup, cat: cat, log: log, live: newLivePrices()}
 }
 
 // Snapshot returns the current snapshot, nil before the first
@@ -61,6 +62,7 @@ func (s *Store) Run(ctx context.Context) {
 			continue
 		}
 	}
+	s.refreshLivePrices(ctx, s.Snapshot(), time.Now())
 
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -73,6 +75,7 @@ func (s *Store) Run(ctx context.Context) {
 				// Keep serving the last good snapshot.
 				s.log.Warn("config reload failed", "error", err)
 			}
+			s.refreshLivePrices(ctx, s.Snapshot(), time.Now())
 		}
 	}
 }
@@ -154,6 +157,7 @@ func (s *Store) Load(ctx context.Context) error {
 	}
 
 	snap, warnings := BuildSnapshot(provRows, routes, s.lookup, s.cat)
+	snap.live = s.live
 	for _, w := range warnings {
 		s.log.Warn("router: provider failed to build; marked unhealthy", "provider", w.Provider, "error", w.Err)
 	}

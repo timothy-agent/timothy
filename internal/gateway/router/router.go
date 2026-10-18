@@ -216,6 +216,7 @@ type Snapshot struct {
 	healthy     map[string]bool   // by name: credential ref resolved and driver built
 	unhealthy   map[string]string // by name: reason, set whenever healthy[name] is false
 	cat         catalogLookup     // model capability/pricing source; nil-safe (permissive fallback)
+	live        *livePrices       // listing-stated prices (D-173), shared across snapshots; nil-safe
 }
 
 // ModelStats are time-decayed aggregates from the recent cost ledger,
@@ -1176,6 +1177,13 @@ func (s *Snapshot) Prices(providerName, model string) *ModelPrices {
 	}
 	m, ok := s.catalogModel(row, model)
 	if !ok || (m.InputPerMTok == nil && m.OutputPerMTok == nil) {
+		// The provider's own listing is the last source (D-173).
+		if !statesPrices(row) {
+			return nil
+		}
+		if p, ok := s.live.get(row.Name, model); ok {
+			return &p
+		}
 		return nil
 	}
 	p := &ModelPrices{}
