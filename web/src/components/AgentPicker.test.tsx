@@ -4,14 +4,13 @@ import type { AdminProvider } from '../api/types'
 
 vi.mock('../api/client', () => ({
   availableModels: vi.fn(),
-  catalogModelsForProvider: vi.fn(),
   listAgents: vi.fn(),
   listProviders: vi.fn(),
   listRoutes: vi.fn(),
   searchCatalog: vi.fn(),
 }))
 
-import { availableModels, catalogModelsForProvider, listProviders, searchCatalog } from '../api/client'
+import { availableModels, listProviders, searchCatalog } from '../api/client'
 import { resetProviderModelsCache, useProviderModels } from './AgentPicker'
 
 function provider(over: Partial<AdminProvider>): AdminProvider {
@@ -56,7 +55,6 @@ describe('useProviderModels', () => {
     ])
     expect(availableModels).toHaveBeenCalledTimes(1)
     expect(availableModels).toHaveBeenCalledWith('p-cgpt')
-    expect(catalogModelsForProvider).not.toHaveBeenCalled()
     expect(searchCatalog).not.toHaveBeenCalled()
   })
 

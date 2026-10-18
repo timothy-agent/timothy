@@ -829,27 +829,6 @@ export async function searchCatalog(
   return models ?? []
 }
 
-// catalogModelsForProvider searches the synced catalog restricted to a
-// provider's candidate litellm_provider(s) (derived server-side from
-// its driver/base_url, or "anthropic" for a kind='cli' claude-cli row)
-//, for price lookups. Model pickers read availableModels instead
-// (D-172). q filters case-insensitive
-// substring on model_key; omitted fetches the provider's whole
-// candidate pool. limit defaults to the server's normal cap (50);
-// pass the server's max (200) for a page that wants the whole pool.
-export async function catalogModelsForProvider(
-  providerId: string,
-  q = '',
-  limit?: number,
-): Promise<CatalogModel[]> {
-  const params = new URLSearchParams({ ...(q ? { q } : {}), ...(limit ? { limit: String(limit) } : {}) })
-  const qs = params.size > 0 ? `?${params}` : ''
-  const { models } = await request<{ models: CatalogModel[] }>(
-    `/v1/admin/providers/${providerId}/catalog-models${qs}`,
-  )
-  return models ?? []
-}
-
 // catalogPrices resolves each (provider, model) pair within that
 // PROVIDER's own catalog candidates only (Analytics' unpriced-call
 // estimate): never the whole catalog, so a model name that collides

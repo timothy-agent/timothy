@@ -8,7 +8,6 @@ vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 vi.mock('../../api/client', () => ({
   availableModels: vi.fn(),
-  catalogModelsForProvider: vi.fn(),
   deleteProvider: vi.fn(),
   listProviders: vi.fn(),
   listSecretBackends: vi.fn(),
@@ -25,7 +24,6 @@ vi.mock('../../api/client', () => ({
 
 import {
   availableModels,
-  catalogModelsForProvider,
   deleteProvider,
   listProviders,
   listSecretBackends,
@@ -139,7 +137,6 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn()
   vi.clearAllMocks()
   vi.mocked(listProviders).mockResolvedValue([bedrockProvider])
-  vi.mocked(catalogModelsForProvider).mockResolvedValue([])
   vi.mocked(availableModels).mockResolvedValue([])
   vi.mocked(secretStatus).mockResolvedValue({ configured: false, backend: '' })
   vi.mocked(listSecretBackends).mockResolvedValue([
@@ -741,7 +738,6 @@ describe('ProviderEdit default model field', () => {
     fireEvent.click(await screen.findByRole('option', { name: /amazon\.nova-lite-v1:0/ }))
     expect(screen.queryByRole('option', { name: /amazon\.nova-pro-v1:0/ })).not.toBeInTheDocument()
     expect(patchProvider).not.toHaveBeenCalled()
-    expect(catalogModelsForProvider).not.toHaveBeenCalled()
 
     fireEvent.click(formSaveButton())
     await waitFor(() =>
@@ -806,7 +802,6 @@ describe('ProviderEdit models panel', () => {
     expect(screen.getByText('300k ctx')).toBeInTheDocument()
     expect(screen.getByText('house-model')).toBeInTheDocument()
     expect(screen.getByText('unpriced')).toBeInTheDocument()
-    expect(catalogModelsForProvider).not.toHaveBeenCalled()
 
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
     expect(screen.queryByRole('button', { name: 'Add' })).not.toBeInTheDocument()
@@ -887,7 +882,6 @@ describe('ProviderEdit cli (subscription) provider', () => {
     fireEvent.focus(input)
 
     expect(await screen.findByRole('option', { name: /claude-opus-4-6-20261015/ })).toBeInTheDocument()
-    expect(catalogModelsForProvider).not.toHaveBeenCalled()
   })
 
   it('hides the Test connection button since there is no chat driver to probe', async () => {
