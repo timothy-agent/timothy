@@ -387,7 +387,6 @@ func main() {
 		datasetPath   = flag.String("dataset", "", "path to dataset.json")
 		gatewayURL    = flag.String("gateway-url", "http://gateway:8081", "gateway base URL")
 		route         = flag.String("route", "", "gateway route for decide (empty uses default decide role, 'summarize' exercises LLM fallback)")
-		mode          = flag.String("mode", "live", "evaluation mode: 'live' (gateway API) or 'simulate'")
 		requireNative = flag.Bool("require-native", false, "fail if any decide answer came from the llm fallback instead of a native decision model")
 		maxLatencyMS  = flag.Int64("max-latency-ms", 300, "maximum latency ceiling in ms for native decision model")
 	)
@@ -411,12 +410,8 @@ func main() {
 
 	fmt.Printf("# Decision Model vs Shipping Classifier Evaluation Gate\n\n")
 	fmt.Printf("Dataset: %d missions, %d agent dispatch samples, %d KB documents\n", len(ds.Missions), len(ds.Agents), len(ds.KBFiling))
-	fmt.Printf("Gateway URL: %s | Mode: %s\n", *gatewayURL, *mode)
+	fmt.Printf("Gateway URL: %s\n", *gatewayURL)
 	fmt.Printf("Accuracy is reported as correct/total = percent [95%% Wilson interval].\n\n")
-
-	if *mode == "simulate" {
-		fmt.Println("Simulation mode disabled. Running live evaluation against gateway.")
-	}
 
 	r := runEval(context.Background(), NewEvaluator(*gatewayURL, *route), ds)
 

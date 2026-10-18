@@ -100,8 +100,8 @@ func TestDatasetNoPersonalData(t *testing.T) {
 		texts = append(texts, k.Title, k.Text)
 	}
 	banned := []*regexp.Regexp{
-		regexp.MustCompile(`[\w.+-]+@[\w-]+\.[\w.]+`),               // email
-		regexp.MustCompile(`(?i)https?://|www\.`),                   // link
+		regexp.MustCompile(`[\w.+-]+@[\w-]+\.[\w.]+`),                // email
+		regexp.MustCompile(`(?i)https?://|www\.`),                    // link
 		regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`), // IPv4
 		regexp.MustCompile(`(?i)\b(api[_-]?key|password|secret|token)\s*[:=]`),
 	}
