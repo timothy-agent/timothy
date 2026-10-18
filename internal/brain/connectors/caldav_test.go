@@ -199,12 +199,13 @@ func caldavToolByName(t *testing.T, src *caldavSource, name string) *tools.Tool 
 	return nil
 }
 
-func TestCalDAVListEventsDefaultWindow(t *testing.T) {
+func TestCalDAVListEventsWindow(t *testing.T) {
 	t.Parallel()
 	srv := caldavTestServer(t, nil)
 	src := testCalDAVSource(t, srv.URL)
 
-	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{}`))
+	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
+		json.RawMessage(`{"time_min":"2026-07-20T00:00:00Z","time_max":"2026-07-26T00:00:00Z"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -240,7 +241,8 @@ func TestCalDAVListEventsMaxResultsCap(t *testing.T) {
 	srv := caldavTestServer(t, nil)
 	src := testCalDAVSource(t, srv.URL)
 
-	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{"max_results":2}`))
+	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
+		json.RawMessage(`{"time_min":"2026-07-20T00:00:00Z","time_max":"2026-07-26T00:00:00Z","max_results":2}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -254,7 +256,8 @@ func TestCalDAVListEventsFormatsLines(t *testing.T) {
 	srv := caldavTestServer(t, nil)
 	src := testCalDAVSource(t, srv.URL)
 
-	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{}`))
+	out, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
+		json.RawMessage(`{"time_min":"2026-07-20T00:00:00Z","time_max":"2026-07-26T00:00:00Z"}`))
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -483,7 +486,8 @@ func TestCalDAVQueryEventsServerError(t *testing.T) {
 	srv := caldavTestServer(t, state)
 	src := testCalDAVSource(t, srv.URL)
 
-	_, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(), json.RawMessage(`{}`))
+	_, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
+		json.RawMessage(`{"time_min":"2026-07-20T00:00:00Z","time_max":"2026-07-26T00:00:00Z"}`))
 	if err == nil || !strings.Contains(err.Error(), "status 500") {
 		t.Fatalf("err = %v, want a caldavStatusError naming status 500", err)
 	}
@@ -581,7 +585,7 @@ func TestCalDAVListEventsTimeMinInvalidErrors(t *testing.T) {
 	src := testCalDAVSource(t, srv.URL)
 
 	_, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
-		json.RawMessage(`{"time_min":"not-a-timestamp"}`))
+		json.RawMessage(`{"time_min":"not-a-timestamp","time_max":"2026-07-26T00:00:00Z"}`))
 	if err == nil || !strings.Contains(err.Error(), "time_min must be RFC3339") {
 		t.Fatalf("err = %v, want a time_min RFC3339 error", err)
 	}
@@ -593,9 +597,33 @@ func TestCalDAVListEventsTimeMaxInvalidErrors(t *testing.T) {
 	src := testCalDAVSource(t, srv.URL)
 
 	_, err := caldavToolByName(t, src, "list_calendar_events").Execute(t.Context(),
-		json.RawMessage(`{"time_max":"not-a-timestamp"}`))
+		json.RawMessage(`{"time_min":"2026-07-20T00:00:00Z","time_max":"not-a-timestamp"}`))
 	if err == nil || !strings.Contains(err.Error(), "time_max must be RFC3339") {
 		t.Fatalf("err = %v, want a time_max RFC3339 error", err)
+	}
+}
+
+func TestCalDAVListEventsMissingTimeMinOrMaxErrors(t *testing.T) {
+	t.Parallel()
+	srv := caldavTestServer(t, nil)
+	src := testCalDAVSource(t, srv.URL)
+	tl := caldavToolByName(t, src, "list_calendar_events")
+
+	for _, tc := range []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{"missing both", `{}`, "time_min and time_max are required"},
+		{"missing time_max", `{"time_min":"2026-07-20T00:00:00Z"}`, "time_min and time_max are required"},
+		{"missing time_min", `{"time_max":"2026-07-26T00:00:00Z"}`, "time_min and time_max are required"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := tl.Execute(t.Context(), json.RawMessage(tc.input))
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Execute(%s) err = %v, want substring %q", tc.input, err, tc.wantErr)
+			}
+		})
 	}
 }
 
