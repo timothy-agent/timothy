@@ -17,8 +17,8 @@ type AvailableModel struct {
 }
 
 // ModelLister is implemented by providers whose API can enumerate its
-// models. Callers type-assert; a provider without it falls back to
-// manual model entry in the UI.
+// models. Callers type-assert; a provider without it gets the catalog
+// rows for its vendors instead (D-172).
 type ModelLister interface {
 	ListModels(ctx context.Context) ([]AvailableModel, error)
 }
