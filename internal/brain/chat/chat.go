@@ -598,25 +598,35 @@ func DecideOverGateway(gw Gateway) agents.Decide {
 	}
 }
 
+// routeIntentTimeout bounds the Auto turn's intent decide call: on an
+// install whose decide role falls back to the chat model, the call
+// costs whole seconds (D-164).
+const routeIntentTimeout = 1500 * time.Millisecond
+
 // resolveAutoRoute picks the model route for an Auto chat turn by message intent
 // using a decision model (D-164).
 //
 // Rules:
-// - If the decide role is unbound or errors, returns "" so caller falls back to default.
+// - If the decide role is unbound or its lookup fails, returns "" so caller falls back to default.
+// - If the session's last user message carries a RoutePick that is still usable,
+//   it is reused without a decide call, so the session stays on one route (D-018).
 // - Candidates are enabled chat routes that have a description, plus the default role's route.
 // - If only the default route is in the candidate set, skip decide and return "".
-// - The decide call picks one route from the candidate options.
-// - The picked name must match a candidate's name exactly.
-// - Usability gate: ResolveRoute verifies the picked route has at least one usable
-//   entry on the chat axis. If unusable, returns "" so caller falls back to default role,
-//   which still goes through the gateway's normal usability gate at stream time.
-func (s *Service) resolveAutoRoute(ctx context.Context, message string) string {
+// - The decide call picks one route from the candidate options under routeIntentTimeout.
+// - The picked name must match a candidate's name exactly and be usable on the chat axis.
+// - Once the decide call ran, the returned route is the session's pick: the matched
+//   route, or the default role's route when the call timed out, errored, matched
+//   nothing, or picked an unusable route.
+func (s *Service) resolveAutoRoute(ctx context.Context, sessionID string, events []session.Event, message string) string {
 	if s.gw == nil {
 		return ""
 	}
 	decideRoute, ok, err := s.gw.RouteForRole(ctx, "decide")
 	if err != nil || !ok {
 		return ""
+	}
+	if pinned := lastRoutePick(events); pinned != "" && s.chatRouteUsable(ctx, pinned) {
+		return pinned
 	}
 	candidates, err := s.gw.ChatRouteCandidates(ctx)
 	if err != nil || len(candidates) <= 1 {
@@ -643,48 +653,62 @@ func (s *Service) resolveAutoRoute(ctx context.Context, message string) string {
 		}
 	}
 	q := "Pick the single best-fit model route for the user's message."
-	resp, err := s.gw.Decide(ctx, gwclient.DecideRequest{
-		Route:    decideRoute,
-		Kind:     "choice",
-		Question: q,
-		State:    message,
-		Options:  options,
-		Purpose:  "route_intent",
+	dctx, cancel := context.WithTimeout(ctx, routeIntentTimeout)
+	resp, err := s.gw.Decide(dctx, gwclient.DecideRequest{
+		Route:     decideRoute,
+		Kind:      "choice",
+		Question:  q,
+		State:     message,
+		Options:   options,
+		Purpose:   "route_intent",
+		SessionID: sessionID,
 	})
+	cancel()
 	if err != nil {
-		return ""
+		return defaultRoute
 	}
 	choice := strings.TrimSpace(resp.Choice)
 	if idx := strings.Index(choice, ":"); idx > 0 {
 		choice = strings.TrimSpace(choice[:idx])
 	}
-	var picked string
 	for _, c := range candidates {
-		if choice == c.Name {
-			picked = c.Name
-			break
+		if choice == c.Name && s.chatRouteUsable(ctx, c.Name) {
+			return c.Name
 		}
 	}
-	if picked == "" {
-		return ""
-	}
+	return defaultRoute
+}
 
-	// Usability gate: verify the picked route has at least one usable entry on the chat axis.
-	resolved, err := s.gw.ResolveRoute(ctx, picked, "", "")
+// chatRouteUsable reports whether route has at least one usable entry
+// on the chat axis.
+func (s *Service) chatRouteUsable(ctx context.Context, route string) bool {
+	resolved, err := s.gw.ResolveRoute(ctx, route, "", "")
 	if err != nil || resolved == nil {
-		return ""
+		return false
 	}
-	usable := false
 	for _, entry := range resolved.Entries {
 		if entry.Usable {
-			usable = true
-			break
+			return true
 		}
 	}
-	if !usable {
-		return ""
+	return false
+}
+
+// lastRoutePick returns the RoutePick of the session's latest user
+// message, or "" when that message has none (an explicit route, an
+// agent's route, an image turn, or no decide call).
+func lastRoutePick(events []session.Event) string {
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Kind != session.KindUserMessage {
+			continue
+		}
+		var msg session.UserMessage
+		if err := json.Unmarshal(events[i].Payload, &msg); err != nil {
+			return ""
+		}
+		return msg.RoutePick
 	}
-	return picked
+	return ""
 }
 
 // ClassifyOverGateway builds an agents.Classify that asks the
@@ -1269,12 +1293,6 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	if route == "" {
 		route = profile.Route
 	}
-	if route == "" {
-		route = s.resolveAutoRoute(ctx, req.Message)
-	}
-	if route == "" {
-		route = s.roleRoute(ctx, "default")
-	}
 
 	sessionID := req.SessionID
 	if sessionID == "" {
@@ -1305,6 +1323,14 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 		return sessionID, nil, err
 	}
 	needsTitle := meta.Title == "" && !meta.Mission
+	var routePick string
+	if route == "" {
+		routePick = s.resolveAutoRoute(ctx, sessionID, events, req.Message)
+		route = routePick
+	}
+	if route == "" {
+		route = s.roleRoute(ctx, "default")
+	}
 	modelHint := req.ModelHint
 	route, modelHint = s.pinSensitiveRoute(ctx, events, route, modelHint)
 
@@ -1328,7 +1354,7 @@ func (s *Service) Chat(ctx context.Context, req Request) (string, <-chan stream.
 	bc.setCancel(cancel)
 
 	if _, err := s.log.Append(turnCtx, sessionID, session.KindUserMessage, session.UserMessage{
-		Text: req.Message, Route: route, Agent: profile.ID, ModelHint: modelHint, Images: images, Documents: documents,
+		Text: req.Message, Route: route, Agent: profile.ID, ModelHint: modelHint, RoutePick: routePick, Images: images, Documents: documents,
 	}); err != nil {
 		s.turnDone(sessionID)
 		return sessionID, nil, err
