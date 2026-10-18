@@ -39,13 +39,11 @@ const (
 	CapDecide Capability = "decide"
 )
 
-// Decision kinds (D-163). A choice picks one of the given options, a
-// yesno is a choice over the fixed yes/no pair, and a score is one
-// number in [0, 1].
+// Decision kinds (D-163). A choice picks one of the given options and
+// a yesno is a choice over the fixed yes/no pair.
 const (
 	DecideChoice = "choice"
 	DecideYesNo  = "yesno"
-	DecideScore  = "score"
 )
 
 // DecideRequest is one fixed-choice question for a decision model.
@@ -54,16 +52,15 @@ type DecideRequest struct {
 	Question string
 	State    string
 	// Options is the closed answer set for a choice (already yes/no
-	// for a yesno); empty for a score.
+	// for a yesno).
 	Options []string
 }
 
-// DecideResult is a typed answer: Choice for choice/yesno, Score for
-// score. Scores carries per-option probabilities when the model
-// reports them; the llm fallback never does.
+// DecideResult is a typed answer. Scores carries per-option
+// probabilities when the model reports them; the llm fallback never
+// does.
 type DecideResult struct {
 	Choice string             `json:"choice,omitempty"`
-	Score  *float64           `json:"score,omitempty"`
 	Scores map[string]float64 `json:"scores,omitempty"`
 }
 

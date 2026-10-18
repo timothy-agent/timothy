@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -64,9 +66,6 @@ func TestDecideChoiceOverSummarizeFallback(t *testing.T) {
 	if out.Choice != "research" || out.Provider != "one" || out.Model != "m1" || out.LedgerID == "" {
 		t.Fatalf("out = %+v", out)
 	}
-	if out.Score != nil {
-		t.Fatalf("score = %v on a choice", *out.Score)
-	}
 
 	entries := rec.all()
 	if len(entries) != 1 {
@@ -90,7 +89,7 @@ func TestDecideChoiceOverSummarizeFallback(t *testing.T) {
 	}
 }
 
-func TestDecideYesNoAndScore(t *testing.T) {
+func TestDecideYesNo(t *testing.T) {
 	t.Parallel()
 	a, _ := newAPI(decideSnapshot(t, oaiOK(t, "No.").URL, oaiFail(t).URL, nil))
 	w := postJSON(t, a.handleDecide, `{"kind":"yesno","question":"Is it done?"}`)
@@ -99,15 +98,6 @@ func TestDecideYesNoAndScore(t *testing.T) {
 	}
 	if out := decodeDecide(t, w.Body.Bytes()); out.Choice != "no" {
 		t.Fatalf("yesno out = %+v", out)
-	}
-
-	a, _ = newAPI(decideSnapshot(t, oaiOK(t, "0.8").URL, oaiFail(t).URL, nil))
-	w = postJSON(t, a.handleDecide, `{"kind":"score","question":"How relevant?"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("score code = %d body=%s", w.Code, w.Body.String())
-	}
-	if out := decodeDecide(t, w.Body.Bytes()); out.Score == nil || *out.Score != 0.8 || out.Choice != "" {
-		t.Fatalf("score out = %+v", out)
 	}
 }
 
@@ -229,6 +219,50 @@ func TestDecideMalformedFailsOverThenExhausts(t *testing.T) {
 	}
 }
 
+// TestDecideMalformedReplyLogsOneWarn: a malformed fallback reply,
+// including the empty text of a model that thought past its token cap,
+// logs one WARN naming provider, model, route and the reply's first 80
+// characters.
+func TestDecideMalformedReplyLogsOneWarn(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("abcdefghij", 20)
+	for _, tc := range []struct{ name, reply, quoted string }{
+		{"long", long, `"` + long[:80] + `..."`},
+		{"empty", "", `""`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			a, _ := newAPI(decideSnapshot(t, oaiOK(t, tc.reply).URL, oaiOK(t, "research").URL, nil))
+			var buf bytes.Buffer
+			a.log = slog.New(slog.NewJSONHandler(&buf, nil))
+			if w := postJSON(t, a.handleDecide, choiceBody); w.Code != http.StatusOK {
+				t.Fatalf("code = %d body=%s", w.Code, w.Body.String())
+			}
+			var warns []map[string]any
+			for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+				var rec map[string]any
+				if err := json.Unmarshal([]byte(line), &rec); err != nil {
+					t.Fatalf("log line %q: %v", line, err)
+				}
+				if rec["level"] == "WARN" {
+					warns = append(warns, rec)
+				}
+			}
+			if len(warns) != 1 {
+				t.Fatalf("warn logs = %v, want one", warns)
+			}
+			w := warns[0]
+			if w["provider"] != "one" || w["model"] != "m1" || w["route"] != "summarize" || w["code"] != "malformed_reply" {
+				t.Fatalf("warn = %v", w)
+			}
+			reason, _ := w["reason"].(string)
+			if !strings.Contains(reason, tc.quoted) {
+				t.Fatalf("reason = %q, want it to carry %s", reason, tc.quoted)
+			}
+		})
+	}
+}
+
 // nativeDecider is a decision-model driver: CapDecide without chat.
 type nativeDecider struct {
 	got provider.DecideRequest
@@ -303,7 +337,7 @@ func TestDecideValidation(t *testing.T) {
 	for _, body := range []string{
 		`{"kind":"choice","question":"q","options":["one"]}`,
 		`{"kind":"yesno","question":"q","options":["yes","no"]}`,
-		`{"kind":"score","question":"q","options":["a","b"]}`,
+		`{"kind":"score","question":"q"}`,
 		`{"kind":"rank","question":"q"}`,
 		`{"kind":"yesno"}`,
 		`not json`,
