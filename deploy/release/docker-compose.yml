@@ -161,6 +161,14 @@ services:
     image: ghcr.io/timothy-agent/timothy-laya:${TIMOTHY_VERSION:?set TIMOTHY_VERSION in .env}
     # internal-only: no published ports, no auth; gateway is the sole
     # caller, same trust boundary as searxng/markitdown.
+    # Healthy only once /health lists the default checkpoint. The image
+    # has no curl or wget, so python makes the request.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,os,urllib.request as r; h=json.load(r.urlopen('http://127.0.0.1:8000/health', timeout=4)); raise SystemExit(os.environ['LAYA_DEFAULT_MODEL'] not in h.get('loaded', []))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 120s
     # Evaluator memory footprint and CPU headroom for decision scoring.
     mem_limit: 2g
     cpus: 2.0
