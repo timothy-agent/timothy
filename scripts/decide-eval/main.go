@@ -118,7 +118,13 @@ type decideAPIResponse struct {
 	} `json:"usage"`
 }
 
-func (e *Evaluator) callDecide(ctx context.Context, kind, question, state string, options []string, purpose string) (string, int, string, string, bool, time.Duration, error) {
+// decideOption is one typed POST /v1/decide option; the reply's choice is its id.
+type decideOption struct {
+	ID          string `json:"id"`
+	Description string `json:"description,omitempty"`
+}
+
+func (e *Evaluator) callDecide(ctx context.Context, kind, question, state string, options []decideOption, purpose string) (string, int, string, string, bool, time.Duration, error) {
 	reqBody := map[string]any{
 		"kind":     kind,
 		"question": question,
@@ -467,9 +473,9 @@ func evalMissionPreview(ctx context.Context, e *Evaluator, missions []MissionSam
 
 		// Decide Kind (ClassifyKindWithDecide)
 		qKind := "Classify this mission goal based on its deliverable, not its topic."
-		optionsKind := []string{
-			"coding: produces or changes code, scripts, or configuration files in a repository",
-			"general: output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general)",
+		optionsKind := []decideOption{
+			{ID: "coding", Description: "produces or changes code, scripts, or configuration files in a repository"},
+			{ID: "general", Description: "output is a document, report, analysis, book, plan, or data gathering, even when its subject is programming, software, or coding (a book or article about coding is general)"},
 		}
 		choiceKind, kindTokens, prov, mod, native, kindDur, kindErr := e.callDecide(ctx, "choice", qKind, m.Goal, optionsKind, "kind")
 		kindDecideM.Latency += kindDur
@@ -570,13 +576,9 @@ func evalAgentDispatch(ctx context.Context, e *Evaluator, agents []AgentSample) 
 
 	for _, a := range agents {
 		// 1. Decide Path
-		options := make([]string, len(a.Candidates))
+		options := make([]decideOption, len(a.Candidates))
 		for i, c := range a.Candidates {
-			if c.Description != "" {
-				options[i] = fmt.Sprintf("%s: %s", c.Name, c.Description)
-			} else {
-				options[i] = c.Name
-			}
+			options[i] = decideOption{ID: c.Name, Description: c.Description}
 		}
 		qDecide := "Pick the single best-fit assistant profile for the user's message."
 		choice, tokens, prov, mod, native, dur, err := e.callDecide(ctx, "choice", qDecide, a.Message, options, "dispatch")
@@ -643,14 +645,14 @@ func evalKBFiling(ctx context.Context, e *Evaluator, kbFiles []KBFilingSample) (
 
 	for _, doc := range kbFiles {
 		var list strings.Builder
-		options := make([]string, 0, len(doc.Collections)+1)
+		options := make([]decideOption, 0, len(doc.Collections)+1)
 		for _, c := range doc.Collections {
-			entry := fmt.Sprintf("%s: %s (%d docs) - %s", c.ID, c.Name, c.DocCount, c.Description)
-			list.WriteString(entry)
+			desc := fmt.Sprintf("%s (%d docs) - %s", c.Name, c.DocCount, c.Description)
+			list.WriteString(c.ID + ": " + desc)
 			list.WriteByte('\n')
-			options = append(options, entry)
+			options = append(options, decideOption{ID: c.ID, Description: desc})
 		}
-		options = append(options, "NEW: propose a new collection when nothing fits")
+		options = append(options, decideOption{ID: "NEW", Description: "propose a new collection when nothing fits"})
 
 		truncatedText := truncateRunes(doc.Text, 4000)
 
