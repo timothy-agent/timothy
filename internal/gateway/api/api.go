@@ -506,9 +506,9 @@ func streamAttempt(ctx context.Context, att router.Attempt, completion provider.
 			if currency == "" && res.entry.Cost != nil {
 				currency = "USD"
 			}
-			// Preserve the driver's own ProviderState (D-067) — e.g. the
-			// openai-responses driver's previous_response_id — the caller
-			// must echo it back on the turn's next step.
+			// Preserve the driver's own ProviderState (D-067), e.g. the
+			// Responses API's previous_response_id: the caller must echo
+			// it back on the turn's next step.
 			var providerState json.RawMessage
 			if ev.Meta != nil {
 				providerState = ev.Meta.ProviderState

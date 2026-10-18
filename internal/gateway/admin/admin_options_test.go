@@ -110,6 +110,40 @@ func TestValidateOpenAIResponses(t *testing.T) {
 	}
 }
 
+func TestValidateProviderRejectsLegacyOpenAIResponsesDriver(t *testing.T) {
+	t.Parallel()
+	p := Provider{Name: "p", Kind: "api", Driver: "openai-responses", BaseURL: "https://api.openai.com/v1"}
+	if err := validateProvider(p); err == nil || !strings.Contains(err.Error(), "unknown driver") {
+		t.Fatalf("validateProvider error = %v, want unknown driver", err)
+	}
+}
+
+func TestIsResponsesMode(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		driver string
+		base   string
+		model  string
+		want   bool
+	}{
+		{name: "openaicompat on openai, codex", driver: "openaicompat", base: "https://api.openai.com/v1", model: "gpt-5.3-codex", want: true},
+		{name: "openaicompat on openai, chat model", driver: "openaicompat", base: "https://api.openai.com/v1", model: "gpt-4o"},
+		{name: "openaicompat elsewhere, codex", driver: "openaicompat", base: "https://openrouter.ai/api/v1", model: "gpt-5.3-codex"},
+		{name: "legacy openai-responses driver", driver: "openai-responses", base: "https://api.openai.com/v1", model: "gpt-5.3-codex"},
+	}
+	a := &Admin{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := Provider{Name: "p", Kind: "api", Driver: tt.driver, BaseURL: tt.base}
+			if got := a.isResponsesMode(t.Context(), p, tt.model); got != tt.want {
+				t.Fatalf("isResponsesMode = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidateProviderRejectsInvalidLitellmProvider(t *testing.T) {
 	t.Parallel()
 	p := Provider{Name: "p", Kind: "api", Driver: "openaicompat", Options: map[string]string{"litellm_provider": "not a token"}}

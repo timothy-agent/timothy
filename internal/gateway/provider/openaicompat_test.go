@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -598,6 +599,70 @@ func TestOpenAICompatReasoningEffortOverrideEmptyLeavesOtherDialsInPlace(t *test
 		t.Fatalf("reasoning_effort = %q, want the provider config to still apply when no override is set", gotEffort)
 	}
 }
+
+// TestOpenAICompatResponsesProviderStateRoundTrip pins D-067 on the
+// only path left to the Responses API: openaicompat on api.openai.com
+// with ResponsesMode set posts to /v1/responses, sends the incoming
+// previous_response_id, and returns the new response id as
+// Meta.ProviderState.
+func TestOpenAICompatResponsesProviderStateRoundTrip(t *testing.T) {
+	t.Parallel()
+	var gotPath, gotPreviousID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotPreviousID = decodeORSRequest(t, r).PreviousResponseID
+		orsWrite(w, "response.output_text.delta", `{"delta":"ok"}`)
+		orsWrite(w, "response.completed", `{"response":{"id":"resp_new","status":"completed"}}`)
+	}))
+	t.Cleanup(srv.Close)
+	target, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse server url: %v", err)
+	}
+
+	p := NewOpenAICompat(OpenAICompatConfig{
+		Name: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test",
+		Timeout: 10 * time.Second,
+	})
+	p.responses.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
+		return http.DefaultTransport.RoundTrip(r)
+	})}
+
+	state, _ := json.Marshal(orsState{Driver: orsDriverTag, PreviousResponseID: "resp_old"})
+	ch, err := p.Stream(t.Context(), CompletionRequest{
+		Model:         "gpt-5.3-codex",
+		ResponsesMode: true,
+		Messages:      []Message{{Role: "user", Content: "hi"}, {Role: "assistant", Content: "prior"}},
+		ProviderState: state,
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	events := collect(t, ch)
+
+	if gotPath != "/v1/responses" {
+		t.Fatalf("path = %q, want /v1/responses", gotPath)
+	}
+	if gotPreviousID != "resp_old" {
+		t.Fatalf("previous_response_id = %q, want resp_old", gotPreviousID)
+	}
+	done := events[len(events)-1]
+	if done.Type != stream.EventDone || done.Meta == nil {
+		t.Fatalf("last event = %+v, want done with Meta", done)
+	}
+	var out orsState
+	if err := json.Unmarshal(done.Meta.ProviderState, &out); err != nil {
+		t.Fatalf("unmarshal provider state: %v", err)
+	}
+	if out.PreviousResponseID != "resp_new" {
+		t.Fatalf("provider state = %+v, want previous_response_id resp_new", out)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestOpenAICompatAutoSwitchesToResponsesEndpoint(t *testing.T) {
 	t.Parallel()
