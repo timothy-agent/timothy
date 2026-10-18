@@ -62,21 +62,6 @@ func (o *OpenAICompat) ListModels(ctx context.Context) ([]AvailableModel, error)
 	return models, nil
 }
 
-// ListModels implements ModelLister via GET {base_url}/models with the
-// chat call's auth and headers.
-func (o *OpenAIResponses) ListModels(ctx context.Context) ([]AvailableModel, error) {
-	models, err := listModels(ctx, o.client, o.cfg.BaseURL+"/models", func(req *http.Request) {
-		req.Header.Set("Authorization", "Bearer "+o.cfg.APIKey)
-		for k, v := range o.cfg.Headers {
-			req.Header.Set(k, v)
-		}
-	})
-	if err != nil {
-		return nil, fmt.Errorf("openai-responses: list models: %w", err)
-	}
-	return models, nil
-}
-
 // ListModels implements ModelLister via GET {base_url}/v1/models.
 func (a *Anthropic) ListModels(ctx context.Context) ([]AvailableModel, error) {
 	models, err := listModels(ctx, a.client, a.cfg.BaseURL+"/v1/models", func(req *http.Request) {
