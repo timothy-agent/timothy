@@ -81,6 +81,9 @@ func TestParse(t *testing.T) {
 		{ID: "openai:gpt-5", Description: "flagship"},
 		{ID: "OpenAI:GPT-5-mini", Description: "cheap: fast"},
 	}}
+	period := provider.DecideRequest{Kind: "choice", Options: []provider.DecideOption{
+		{ID: "general", Description: "Everyday questions."}, {ID: "coding", Description: "Writes code."},
+	}}
 	yesno := provider.DecideRequest{Kind: "yesno", Options: ids("yes", "no")}
 	tests := []struct {
 		name       string
@@ -97,6 +100,7 @@ func TestParse(t *testing.T) {
 		{"two options is malformed", choice, "coding, research", "", true},
 		{"described option matches on id", described, "coding", "coding", false},
 		{"reply echoing the prompt line returns id", described, "Coding: writes code", "coding", false},
+		{"echoed prompt line whose description ends in a period", period, "**general: Everyday questions.**", "general", false},
 		{"description alone is malformed", described, "writes code", "", true},
 		{"id with trailing colon is malformed", described, "coding:", "", true},
 		{"colon id round-trips", colon, "openai:gpt-5", "openai:gpt-5", false},
