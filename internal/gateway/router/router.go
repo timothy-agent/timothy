@@ -102,6 +102,10 @@ type ProviderRow struct {
 	// entry can be corrected, which also means a stale override outlives
 	// a later-correct catalog price until someone removes it.
 	PricesByModel map[string]ModelPrices
+	// ListingPricesOff comes from options.listing_prices = "off" (D-173):
+	// the row's own /models listing is never used for prices. Absent or
+	// any other value leaves listing prices on.
+	ListingPricesOff bool
 }
 
 // reasoningEffortFor resolves model's effective reasoning_effort
@@ -1175,15 +1179,14 @@ func (s *Snapshot) Prices(providerName, model string) *ModelPrices {
 	if p, ok := row.PricesByModel[model]; ok {
 		return &p
 	}
-	m, ok := s.catalogModel(row, model)
-	if !ok || (m.InputPerMTok == nil && m.OutputPerMTok == nil) {
-		// The provider's own listing is the last source (D-173).
-		if !statesPrices(row) {
-			return nil
-		}
+	// The provider's own listing beats the catalog (D-173).
+	if statesPrices(row) {
 		if p, ok := s.live.get(row.Name, model); ok {
 			return &p
 		}
+	}
+	m, ok := s.catalogModel(row, model)
+	if !ok || (m.InputPerMTok == nil && m.OutputPerMTok == nil) {
 		return nil
 	}
 	p := &ModelPrices{}

@@ -8,11 +8,14 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/provider"
 )
 
-// D-173: LiteLLM's table has no openrouter rows, so an openaicompat row
-// on openrouter.ai is priced from its own /models listing. The Store
+// D-173: aggregators (OpenRouter, Kilo and others) state prices in
+// their own /models reply. Every openaicompat row is priced from its
+// listing unless options.listing_prices is "off". The listing beats the
+// LiteLLM catalog: it is what the provider charges, while the catalog
+// is the upstream vendor's list price, which a reseller may not match.
+// Order: prices_by_model, listing, catalog, else unknown. The Store
 // relists such rows in the background and keeps the last good table
-// across snapshot reloads; Snapshot.Prices reads it after
-// prices_by_model and the catalog.
+// across snapshot reloads.
 const (
 	livePriceInterval = 15 * time.Minute
 	livePriceTimeout  = 15 * time.Second
@@ -76,9 +79,10 @@ func (l *livePrices) set(providerName string, models []provider.AvailableModel) 
 	l.prices[providerName] = table
 }
 
-// statesPrices reports whether row's listing carries prices (D-173).
+// statesPrices reports whether row's listing prices are read (D-173).
+// A listing without a pricing block just yields an empty table.
 func statesPrices(row ProviderRow) bool {
-	return row.Driver == "openaicompat" && provider.IsOpenRouterHost(row.BaseURL)
+	return row.Driver == "openaicompat" && !row.ListingPricesOff
 }
 
 // refreshLivePrices relists every enabled, healthy row whose listing

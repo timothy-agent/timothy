@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 )
@@ -16,9 +15,9 @@ import (
 // DisplayName is set only by drivers whose listing endpoint reports one
 // (cursor-cli, anthropic, bedrock); empty for the rest.
 //
-// Prices (USD per million tokens) and ContextLength are set only from a
-// listing that states them (openrouter.ai, D-173); nil is unknown,
-// never zero. They are never decoded straight from a reply, so another
+// Prices (USD per million tokens) and ContextLength are set only from
+// an openaicompat listing that states them in OpenRouter's shape
+// (D-173); nil is unknown, never zero. They are never decoded straight from a reply, so another
 // driver's envelope cannot fill them by accident.
 type AvailableModel struct {
 	ID                string   `json:"id"`
@@ -44,7 +43,8 @@ func listModels(ctx context.Context, client *http.Client, url string, header fun
 }
 
 // fetchModels is listModels; priced also reads each entry's per-token
-// pricing and context_length, in openrouter.ai's shape.
+// pricing and context_length, in OpenRouter's shape, which other
+// aggregators copy.
 func fetchModels(ctx context.Context, client *http.Client, url string, header func(*http.Request), priced bool) ([]AvailableModel, error) {
 	resp, err := doWithRetry(ctx, client, maxRetries, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -120,26 +120,16 @@ func perMTok(raw json.RawMessage) *float64 {
 	return &v
 }
 
-// IsOpenRouterHost reports whether baseURL points to openrouter.ai, the
-// one listing whose stated prices the gateway reads (D-173).
-func IsOpenRouterHost(baseURL string) bool {
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		return false
-	}
-	return u.Hostname() == "openrouter.ai"
-}
-
-// ListModels implements ModelLister via GET {base_url}/models. On
-// openrouter.ai each model also carries its stated prices and context
-// length (D-173).
+// ListModels implements ModelLister via GET {base_url}/models. Each
+// model also carries the prices and context length its entry states in
+// OpenRouter's shape, on any host (D-173).
 func (o *OpenAICompat) ListModels(ctx context.Context) ([]AvailableModel, error) {
 	models, err := fetchModels(ctx, o.client, o.cfg.BaseURL+"/models", func(req *http.Request) {
 		req.Header.Set("Authorization", "Bearer "+o.cfg.APIKey)
 		for k, v := range o.cfg.Headers {
 			req.Header.Set(k, v)
 		}
-	}, IsOpenRouterHost(o.cfg.BaseURL))
+	}, true)
 	if err != nil {
 		return nil, fmt.Errorf("openaicompat: list models: %w", err)
 	}

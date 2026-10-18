@@ -231,6 +231,7 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 		OpenAIResponses        string `json:"openai_responses"`
 		LitellmProvider        string `json:"litellm_provider"`
 		PricesByModel          string `json:"prices_by_model"`
+		ListingPrices          string `json:"listing_prices"`
 	}
 	if err := json.Unmarshal(optionsJSON, &opts); err != nil {
 		return err
@@ -245,6 +246,7 @@ func applyProviderOptions(row *ProviderRow, optionsJSON []byte) error {
 	row.Auth = opts.Auth
 	row.AnthropicBaseURL = opts.AnthropicBaseURL
 	row.LitellmProvider = opts.LitellmProvider
+	row.ListingPricesOff = opts.ListingPrices == "off"
 	if opts.PricesByModel != "" {
 		if err := json.Unmarshal([]byte(opts.PricesByModel), &row.PricesByModel); err != nil {
 			return fmt.Errorf("prices_by_model: %w", err)

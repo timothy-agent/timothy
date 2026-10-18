@@ -627,6 +627,8 @@ export interface TestResult {
 // drivers whose listing endpoint reports one (cursor-cli). source says
 // whether the row came from the provider's live listing or the catalog
 // fallback; prices are per million tokens, null when unknown.
+// price_source names where the price came from (operator =
+// prices_by_model), absent when unknown.
 export interface AvailableModel {
   id: string
   display_name?: string
@@ -634,6 +636,7 @@ export interface AvailableModel {
   input_per_mtok?: number | null
   output_per_mtok?: number | null
   max_input_tokens?: number | null
+  price_source?: 'operator' | 'catalog' | 'listing'
 }
 
 // AdminAgent is one row of the agent registry (D-034): who serves a

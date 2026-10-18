@@ -32,13 +32,21 @@ func TestPricesLiveListing(t *testing.T) {
 	provRows := []ProviderRow{
 		{ID: "p1", Name: "openrouter", Kind: "api", Driver: "openaicompat", BaseURL: openRouterURL, Enabled: true,
 			PricesByModel: map[string]ModelPrices{"op/override": {InputPerMTok: 1, OutputPerMTok: 2}}},
-		{ID: "p2", Name: "other", Kind: "api", Driver: "openaicompat", BaseURL: "https://llm.example.com/v1", Enabled: true},
+		{ID: "p2", Name: "kilo", Kind: "api", Driver: "openaicompat", BaseURL: "https://kilocode.example/api/openrouter", Enabled: true},
+		{ID: "p3", Name: "kilo-off", Kind: "api", Driver: "openaicompat", BaseURL: "https://kilocode.example/api/openrouter", Enabled: true,
+			ListingPricesOff: true},
+		{ID: "p4", Name: "ant", Kind: "api", Driver: "anthropic", Enabled: true},
 	}
-	cat := &fakeCatalog{pool: []catalog.Model{catModel("catalog/model", "chat", fp(3))}}
+	cat := &fakeCatalog{pool: []catalog.Model{
+		catModel("catalog/model", "chat", fp(3)),
+		catModel("catalog/only", "chat", fp(4)),
+		catModel("op/override", "chat", fp(5)),
+	}}
 	snap, _ := BuildSnapshot(provRows, nil, func(string) string { return "" }, cat)
 	snap.live = newLivePrices()
-	snap.live.set("openrouter", openRouterListing())
-	snap.live.set("other", openRouterListing())
+	for _, row := range provRows {
+		snap.live.set(row.Name, openRouterListing())
+	}
 
 	tests := []struct {
 		name     string
@@ -52,12 +60,19 @@ func TestPricesLiveListing(t *testing.T) {
 			want: &ModelPrices{}},
 		{name: "prices_by_model wins", provider: "openrouter", model: "op/override",
 			want: &ModelPrices{InputPerMTok: 1, OutputPerMTok: 2}},
-		{name: "catalog wins over the listing", provider: "openrouter", model: "catalog/model",
+		{name: "listing wins over the catalog", provider: "openrouter", model: "catalog/model",
+			want: &ModelPrices{InputPerMTok: 9, OutputPerMTok: 9}},
+		{name: "catalog used when the listing states nothing", provider: "openrouter", model: "catalog/only",
+			want: &ModelPrices{InputPerMTok: 4}},
+		{name: "listing_prices off falls back to the catalog", provider: "kilo-off", model: "catalog/model",
 			want: &ModelPrices{InputPerMTok: 3}},
 		{name: "half priced model stays unknown", provider: "openrouter", model: "half/priced"},
 		{name: "unpriced model stays unknown", provider: "openrouter", model: "openrouter/auto"},
 		{name: "unlisted model stays unknown", provider: "openrouter", model: "nope/model"},
-		{name: "other hosts never read a live table", provider: "other", model: "openai/gpt-4o"},
+		{name: "any openaicompat host reads its listing", provider: "kilo", model: "openai/gpt-4o",
+			want: &ModelPrices{InputPerMTok: 2.5, OutputPerMTok: 10, CacheReadPerMTok: 1.25}},
+		{name: "listing_prices off ignores the table", provider: "kilo-off", model: "openai/gpt-4o"},
+		{name: "other drivers never read a live table", provider: "ant", model: "openai/gpt-4o"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -98,7 +113,10 @@ func TestRefreshLivePrices(t *testing.T) {
 		{ID: "p1", Name: "openrouter", Kind: "api", Driver: "openaicompat", BaseURL: openRouterURL, CredentialRef: "K", Enabled: true},
 		{ID: "p2", Name: "openrouter-off", Kind: "api", Driver: "openaicompat", BaseURL: openRouterURL, CredentialRef: "K", Enabled: false},
 		{ID: "p3", Name: "openrouter-nokey", Kind: "api", Driver: "openaicompat", BaseURL: openRouterURL, CredentialRef: "MISSING", Enabled: true},
-		{ID: "p4", Name: "openai", Kind: "api", Driver: "openaicompat", BaseURL: "https://api.openai.com/v1", CredentialRef: "K", Enabled: true},
+		{ID: "p4", Name: "kilo", Kind: "api", Driver: "openaicompat", BaseURL: "https://kilocode.example/api/openrouter", CredentialRef: "K", Enabled: true},
+		{ID: "p5", Name: "kilo-optout", Kind: "api", Driver: "openaicompat", BaseURL: "https://kilocode.example/api/openrouter", CredentialRef: "K", Enabled: true,
+			ListingPricesOff: true},
+		{ID: "p6", Name: "ant", Kind: "api", Driver: "anthropic", CredentialRef: "K", Enabled: true},
 	}
 	snap, _ := BuildSnapshot(provRows, nil, func(ref string) string {
 		if ref == "K" {
@@ -119,7 +137,7 @@ func TestRefreshLivePrices(t *testing.T) {
 
 	t0 := time.Now()
 	s.refreshLivePrices(t.Context(), snap, t0)
-	for name, want := range map[string]int{"openrouter": 1, "openrouter-off": 0, "openrouter-nokey": 0, "openai": 0} {
+	for name, want := range map[string]int{"openrouter": 1, "openrouter-off": 0, "openrouter-nokey": 0, "kilo": 1, "kilo-optout": 0, "ant": 0} {
 		if *calls[name] != want {
 			t.Fatalf("%s listed %d times, want %d", name, *calls[name], want)
 		}

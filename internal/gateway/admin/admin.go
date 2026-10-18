@@ -479,6 +479,9 @@ func validateProvider(p Provider) error {
 	if err := validateOpenAIResponses(p.Options); err != nil {
 		return err
 	}
+	if err := validateListingPrices(p.Options); err != nil {
+		return err
+	}
 	if err := validateBedrockAuth(p.Driver, p.CredentialRef, p.Options); err != nil {
 		return err
 	}
@@ -646,6 +649,19 @@ func validateOpenAIResponses(opts map[string]string) error {
 	}
 	if raw != "true" && raw != "false" {
 		return fmt.Errorf("options.openai_responses %q must be \"true\" or \"false\"", raw)
+	}
+	return nil
+}
+
+// validateListingPrices checks options.listing_prices (D-173), when
+// present, is "on" or "off".
+func validateListingPrices(opts map[string]string) error {
+	raw, ok := opts["listing_prices"]
+	if !ok || raw == "" {
+		return nil
+	}
+	if raw != "on" && raw != "off" {
+		return fmt.Errorf("options.listing_prices %q must be \"on\" or \"off\"", raw)
 	}
 	return nil
 }
@@ -836,6 +852,9 @@ func (a *Admin) Patch(ctx context.Context, id string, patch ProviderPatch) error
 			return err
 		}
 		if err := validateOpenAIResponses(*patch.Options); err != nil {
+			return err
+		}
+		if err := validateListingPrices(*patch.Options); err != nil {
 			return err
 		}
 	}

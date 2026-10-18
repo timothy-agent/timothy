@@ -110,6 +110,37 @@ func TestValidateOpenAIResponses(t *testing.T) {
 	}
 }
 
+func TestValidateListingPrices(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		opts    map[string]string
+		wantErr bool
+	}{
+		{name: "absent is valid", opts: map[string]string{}},
+		{name: "empty string is valid (unset)", opts: map[string]string{"listing_prices": ""}},
+		{name: "on is valid", opts: map[string]string{"listing_prices": "on"}},
+		{name: "off is valid", opts: map[string]string{"listing_prices": "off"}},
+		{name: "arbitrary value rejected", opts: map[string]string{"listing_prices": "false"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateListingPrices(tt.opts)
+			if tt.wantErr != (err != nil) {
+				t.Fatalf("validateListingPrices(%v) = %v, wantErr %v", tt.opts, err, tt.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "listing_prices") {
+				t.Fatalf("err = %v, want it to name listing_prices", err)
+			}
+			p := Provider{Name: "p", Kind: "api", Driver: "openaicompat", BaseURL: "https://llm.example.com/v1", Options: tt.opts}
+			if verr := validateProvider(p); (verr != nil) != tt.wantErr {
+				t.Fatalf("validateProvider = %v, wantErr %v", verr, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateProviderRejectsInvalidLitellmProvider(t *testing.T) {
 	t.Parallel()
 	p := Provider{Name: "p", Kind: "api", Driver: "openaicompat", Options: map[string]string{"litellm_provider": "not a token"}}

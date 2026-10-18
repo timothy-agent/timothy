@@ -332,23 +332,7 @@ func TestPerMTok(t *testing.T) {
 	}
 }
 
-func TestIsOpenRouterHost(t *testing.T) {
-	t.Parallel()
-	for url, want := range map[string]bool{
-		"https://openrouter.ai/api/v1":      true,
-		"https://openrouter.ai:443/api/v1":  true,
-		"https://api.openrouter.ai.evil/v1": false,
-		"https://api.openai.com/v1":         false,
-		"http://localhost:11434/v1":         false,
-		"::bad":                             false,
-	} {
-		if got := IsOpenRouterHost(url); got != want {
-			t.Errorf("IsOpenRouterHost(%q) = %v, want %v", url, got, want)
-		}
-	}
-}
-
-// openRouterModels is a trimmed openrouter.ai /models reply: a paid
+// openRouterModels is a trimmed OpenRouter-shaped /models reply: a paid
 // model, a :free model, a variable-price router, malformed values and
 // an entry without pricing.
 const openRouterModels = `{"data":[
@@ -361,18 +345,9 @@ const openRouterModels = `{"data":[
 	{"id":"bare/model"}
 ]}`
 
-// rewriteHost sends every request to target over plain http, keeping
-// the path.
-type rewriteHost struct{ target string }
-
-func (r rewriteHost) RoundTrip(req *http.Request) (*http.Response, error) {
-	req = req.Clone(req.Context())
-	req.URL.Scheme = "http"
-	req.URL.Host = r.target
-	return http.DefaultTransport.RoundTrip(req)
-}
-
-func TestOpenAICompatListModelsOpenRouterPricing(t *testing.T) {
+// The pricing block is read by shape on any host (an aggregator such as
+// Kilo here), not only on openrouter.ai.
+func TestOpenAICompatListModelsListingPricing(t *testing.T) {
 	t.Parallel()
 	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -381,15 +356,14 @@ func TestOpenAICompatListModelsOpenRouterPricing(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	p := NewOpenAICompat(OpenAICompatConfig{
-		Name: "openrouter", BaseURL: "https://openrouter.ai/api/v1", APIKey: "k", Timeout: 10 * time.Second,
+		Name: "kilo", BaseURL: srv.URL + "/api/openrouter", APIKey: "k", Timeout: 10 * time.Second,
 	})
-	p.client = &http.Client{Transport: rewriteHost{target: srv.Listener.Addr().String()}}
 
 	models, err := p.ListModels(t.Context())
 	if err != nil {
 		t.Fatalf("ListModels: %v", err)
 	}
-	if gotPath != "/api/v1/models" {
+	if gotPath != "/api/openrouter/models" {
 		t.Fatalf("path = %q", gotPath)
 	}
 	assertModels(t, models, []AvailableModel{
@@ -401,13 +375,31 @@ func TestOpenAICompatListModelsOpenRouterPricing(t *testing.T) {
 	})
 }
 
-func TestOpenAICompatListModelsIgnoresPricingOffOpenRouter(t *testing.T) {
+// A real listing with no pricing block (marsai) states no price; its
+// non-standard access field is not one.
+func TestOpenAICompatListModelsWithoutPricing(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"marsai/auto-free","object":"model","created":1791880906,"owned_by":"mars","label":"Free","label_color":"#6366f1","access":"free"},{"id":"marsai/claude-opus-4-7","object":"model","created":1791306238,"owned_by":"mars"}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	p := NewOpenAICompat(OpenAICompatConfig{Name: "marsai", BaseURL: srv.URL, APIKey: "k", Timeout: 10 * time.Second})
+
+	models, err := p.ListModels(t.Context())
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	assertModels(t, models, []AvailableModel{{ID: "marsai/auto-free"}, {ID: "marsai/claude-opus-4-7"}})
+}
+
+// Only the openaicompat driver reads listing prices.
+func TestAnthropicListModelsIgnoresPricing(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(openRouterModels))
 	}))
 	t.Cleanup(srv.Close)
-	p := NewOpenAICompat(OpenAICompatConfig{Name: "other", BaseURL: srv.URL, APIKey: "k", Timeout: 10 * time.Second})
+	p := NewAnthropic(AnthropicConfig{Name: "ant", BaseURL: srv.URL, APIKey: "k", Timeout: 10 * time.Second})
 
 	models, err := p.ListModels(t.Context())
 	if err != nil {
