@@ -1407,25 +1407,32 @@ func (a *Admin) setOpenAIResponses(ctx context.Context, id string, ok bool) erro
 	return nil
 }
 
+// ValidateResult is Validate's probe outcome plus the unsaved config's
+// model list (D-172), null when the probe failed or the listing did.
+type ValidateResult struct {
+	TestResult
+	Models []ListedModel `json:"models"`
+}
+
 // Validate runs the same one-token probe as Test against a provider
 // config that has NOT been persisted — the UI's validate-on-create.
 // The credential_ref must already resolve (the key is stored before
 // validation), so a passing validation means the provider is born
 // working.
-func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestResult, error) {
+func (a *Admin) Validate(ctx context.Context, p Provider, model string) (ValidateResult, error) {
 	if err := validateProvider(p); err != nil {
-		return TestResult{}, err
+		return ValidateResult{}, err
 	}
 	if model == "" {
 		model = p.DefaultModel
 	}
 	if model == "" {
-		return TestResult{}, fmt.Errorf("a model is required to validate a provider")
+		return ValidateResult{}, fmt.Errorf("a model is required to validate a provider")
 	}
 
 	timeout, err := parseRequestTimeout(p.Options)
 	if err != nil {
-		return TestResult{}, err
+		return ValidateResult{}, err
 	}
 	reg, err := provider.Build([]provider.Config{{
 		Name:            p.Name,
@@ -1440,7 +1447,7 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 		Timeout:         timeout,
 	}}, a.credentialLookup())
 	if err != nil {
-		return TestResult{}, err
+		return ValidateResult{}, err
 	}
 	drv, _ := reg.Get(p.Name)
 
@@ -1453,7 +1460,11 @@ func (a *Admin) Validate(ctx context.Context, p Provider, model string) (TestRes
 		res.ResponsesOK = a.probeResponses(ctx, p.BaseURL, p.CredentialRef, model, probeTO)
 	}
 	a.audit(ctx, "validate", "provider", p.Name, nil, res)
-	return res, nil
+	out := ValidateResult{TestResult: res}
+	if res.OK {
+		out.Models = a.validatedModels(ctx, p, model, drv)
+	}
+	return out, nil
 }
 
 // cliproxyVendorModels keeps only the ids a cliproxy row's vendor

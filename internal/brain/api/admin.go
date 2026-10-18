@@ -33,7 +33,6 @@ var adminRoutePatterns = []string{
 	"GET /v1/admin/catalog/models",
 	"POST /v1/admin/catalog/prices",
 	"GET /v1/admin/providers/{id}/catalog-suggestions",
-	"GET /v1/admin/providers/{id}/catalog-models",
 	"GET /v1/admin/routes",
 	"POST /v1/admin/routes",
 	"PATCH /v1/admin/routes/{name}",

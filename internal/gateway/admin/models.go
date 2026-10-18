@@ -55,6 +55,9 @@ func (a *Admin) AvailableModels(ctx context.Context, id string) ([]ListedModel, 
 	if err != nil {
 		return nil, err
 	}
+	if fetch != nil {
+		fetch = a.models.cached(p.ID, fetch)
+	}
 	return a.modelList(ctx, p, fetch)
 }
 
@@ -77,15 +80,37 @@ func (a *Admin) modelFetcher(p Provider) (modelFetch, error) {
 	if !ok {
 		return nil, fmt.Errorf("provider %s not in the serving snapshot; wait for the next reload", p.Name)
 	}
+	return listerFetch(drv), nil
+}
+
+// listerFetch returns drv's bounded listing call, nil when drv cannot
+// enumerate.
+func listerFetch(drv provider.Provider) modelFetch {
 	lister, ok := drv.(provider.ModelLister)
 	if !ok {
-		return nil, nil
+		return nil
 	}
 	return func(ctx context.Context) ([]provider.AvailableModel, error) {
 		lctx, cancel := context.WithTimeout(ctx, testTimeout)
 		defer cancel()
 		return lister.ListModels(lctx)
-	}, nil
+	}
+}
+
+// validatedModels is an unsaved config's model list for Validate,
+// listed uncached (the config has no id yet). model stands in for an
+// unset default_model, which candidate vendor matching reads. nil when
+// the listing fails: the probe already passed, so the list is advisory.
+func (a *Admin) validatedModels(ctx context.Context, p Provider, model string, drv provider.Provider) []ListedModel {
+	if p.DefaultModel == "" {
+		p.DefaultModel = model
+	}
+	models, err := a.modelList(ctx, p, listerFetch(drv))
+	if err != nil {
+		a.log.Warn("validate model list failed", "provider", p.Name, "error", err)
+		return nil
+	}
+	return models
 }
 
 // modelList builds p's list from fetch (nil: cannot list) and the
@@ -101,7 +126,7 @@ func (a *Admin) modelList(ctx context.Context, p Provider, fetch modelFetch) ([]
 	if fetch == nil {
 		return catalogModelList(pool, operator), nil
 	}
-	live, err := a.models.list(ctx, p.ID, fetch)
+	live, err := fetch(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -223,6 +248,13 @@ func (c *modelsCache) set(id string, models []provider.AvailableModel) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries[id] = modelsCacheEntry{models: models, fetchedAt: time.Now()}
+}
+
+// cached wraps fetch so its listing is served from and stored under id.
+func (c *modelsCache) cached(id string, fetch modelFetch) modelFetch {
+	return func(ctx context.Context) ([]provider.AvailableModel, error) {
+		return c.list(ctx, id, fetch)
+	}
 }
 
 // list returns id's cached listing or calls fetch.
