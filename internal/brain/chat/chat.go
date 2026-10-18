@@ -551,9 +551,9 @@ func (s *Service) SetTurnTimeout(d time.Duration) error {
 }
 
 // dispatchAgent resolves the "auto" sentinel to a real agent id via
-// agents.Dispatch. classify is built here (not injected verbatim as
-// Classify) so it always drains through this service's own Gateway:
-// a fresh call, not a lingering handle from setup time.
+// agents.DispatchWithDecide. With a gateway, decide alone answers and
+// any failure falls back to the default agent; classify serves only
+// when there is no gateway.
 func (s *Service) dispatchAgent(ctx context.Context, message string) string {
 	if s.candidates == nil || s.classify == nil {
 		return ""
@@ -566,25 +566,16 @@ func (s *Service) dispatchAgent(ctx context.Context, message string) string {
 	return agents.DispatchWithDecide(ctx, decide, s.classify, message, candidates, "")
 }
 
-// DecideOverGateway builds an agents.Decide that asks the "decide"
-// role's route for a fixed-choice answer on a decision model.
-// When the decide role is unbound (or the gateway lookup fails),
-// this returns an error so callers fall back to the prompt-based
-// classifier; behavior remains byte-identical to the unbound path.
+// DecideOverGateway builds an agents.Decide that asks the gateway for a
+// fixed-choice answer. Route stays empty so the gateway resolves the
+// decide role and falls back to the summarize role when decide is
+// unbound or empty (D-163): one chain serves the whole answer.
 func DecideOverGateway(gw Gateway) agents.Decide {
 	return func(ctx context.Context, kind, question, state string, options []string) (string, error) {
 		if gw == nil {
 			return "", fmt.Errorf("chat: decide: nil gateway")
 		}
-		route, ok, err := gw.RouteForRole(ctx, "decide")
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return "", fmt.Errorf("chat: decide: decide role is unbound")
-		}
 		resp, err := gw.Decide(ctx, gwclient.DecideRequest{
-			Route:    route,
 			Kind:     kind,
 			Question: question,
 			State:    state,

@@ -27,8 +27,10 @@ func Dispatch(ctx context.Context, classify Classify, message string, candidates
 	return DispatchWithDecide(ctx, nil, classify, message, candidates, fallbackID)
 }
 
-// DispatchWithDecide picks the agent using decide when available, falling
-// back to classify when decide is nil, unbound, or on error.
+// DispatchWithDecide picks the agent using decide when it is wired. The
+// gateway's decide endpoint already walks its whole fallback chain, so a
+// decide error or a choice matching no candidate returns fallbackID
+// without a classify call. classify serves only when decide is nil.
 func DispatchWithDecide(ctx context.Context, decide Decide, classify Classify, message string, candidates []Agent, fallbackID string) string {
 	if len(candidates) == 0 {
 		return fallbackID
@@ -47,14 +49,16 @@ func DispatchWithDecide(ctx context.Context, decide Decide, classify Classify, m
 		}
 		q := "Pick the single best-fit assistant profile for the user's message."
 		choice, err := decide(ctx, "choice", q, message, options)
-		if err == nil {
-			choice = strings.TrimSpace(choice)
-			for _, a := range candidates {
-				if strings.EqualFold(choice, a.Name) || strings.EqualFold(choice, a.ID) {
-					return a.ID
-				}
+		if err != nil {
+			return fallbackID
+		}
+		choice = strings.TrimSpace(choice)
+		for _, a := range candidates {
+			if strings.EqualFold(choice, a.Name) || strings.EqualFold(choice, a.ID) {
+				return a.ID
 			}
 		}
+		return fallbackID
 	}
 	if classify == nil {
 		return fallbackID
