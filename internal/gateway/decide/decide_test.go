@@ -3,6 +3,7 @@ package decide
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -10,18 +11,40 @@ import (
 	"github.com/SumonMSelim/timothy/internal/gateway/stream"
 )
 
+// ids builds options that carry only an id.
+func ids(names ...string) []provider.DecideOption {
+	opts := make([]provider.DecideOption, len(names))
+	for i, n := range names {
+		opts[i] = provider.DecideOption{ID: n}
+	}
+	return opts
+}
+
 func TestValidate(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
 		req      provider.DecideRequest
 		wantErr  string
-		wantOpts []string
+		wantOpts []provider.DecideOption
 	}{
-		{"choice keeps distinct trimmed options", provider.DecideRequest{Kind: "choice", Question: "q", Options: []string{" coding ", "research", "Coding", ""}}, "", []string{"coding", "research"}},
-		{"choice needs two options", provider.DecideRequest{Kind: "choice", Question: "q", Options: []string{"only"}}, "at least two", nil},
-		{"yesno gets the fixed pair", provider.DecideRequest{Kind: "yesno", Question: "q"}, "", []string{"yes", "no"}},
-		{"yesno rejects options", provider.DecideRequest{Kind: "yesno", Question: "q", Options: []string{"yes"}}, "takes no options", nil},
+		{"choice keeps distinct trimmed options", provider.DecideRequest{Kind: "choice", Question: "q", Options: ids(" coding ", "research", "Coding", "")}, "", ids("coding", "research")},
+		{"choice dedupes on id, first description wins", provider.DecideRequest{Kind: "choice", Question: "q", Options: []provider.DecideOption{
+			{ID: "coding", Description: " writes code "}, {ID: "CODING", Description: "other text"}, {ID: "research", Description: "finds sources"},
+		}}, "", []provider.DecideOption{{ID: "coding", Description: "writes code"}, {ID: "research", Description: "finds sources"}}},
+		{"same description on distinct ids is kept", provider.DecideRequest{Kind: "choice", Question: "q", Options: []provider.DecideOption{
+			{ID: "a", Description: "same"}, {ID: "b", Description: "same"},
+		}}, "", []provider.DecideOption{{ID: "a", Description: "same"}, {ID: "b", Description: "same"}}},
+		{"colon in id is kept verbatim", provider.DecideRequest{Kind: "choice", Question: "q", Options: []provider.DecideOption{
+			{ID: "openai:gpt-5", Description: "chat"}, {ID: "openai:gpt-5-mini"},
+		}}, "", []provider.DecideOption{{ID: "openai:gpt-5", Description: "chat"}, {ID: "openai:gpt-5-mini"}}},
+		{"description without id is dropped", provider.DecideRequest{Kind: "choice", Question: "q", Options: []provider.DecideOption{
+			{Description: "orphan"}, {ID: "a"}, {ID: "b"},
+		}}, "", ids("a", "b")},
+		{"choice needs two options", provider.DecideRequest{Kind: "choice", Question: "q", Options: ids("only")}, "at least two", nil},
+		{"choice needs two distinct ids", provider.DecideRequest{Kind: "choice", Question: "q", Options: []provider.DecideOption{{ID: "a", Description: "x"}, {ID: "A", Description: "y"}}}, "at least two", nil},
+		{"yesno gets the fixed pair", provider.DecideRequest{Kind: "yesno", Question: "q"}, "", ids("yes", "no")},
+		{"yesno rejects options", provider.DecideRequest{Kind: "yesno", Question: "q", Options: ids("yes")}, "takes no options", nil},
 		{"score is an unknown kind", provider.DecideRequest{Kind: "score", Question: "q"}, `unknown kind "score"`, nil},
 		{"unknown kind", provider.DecideRequest{Kind: "rank", Question: "q"}, `unknown kind "rank"`, nil},
 		{"empty question", provider.DecideRequest{Kind: "yesno", Question: "  "}, "question is required", nil},
@@ -40,8 +63,8 @@ func TestValidate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Validate: %v", err)
 			}
-			if strings.Join(req.Options, ",") != strings.Join(tc.wantOpts, ",") {
-				t.Fatalf("options = %v, want %v", req.Options, tc.wantOpts)
+			if !slices.Equal(req.Options, tc.wantOpts) {
+				t.Fatalf("options = %+v, want %+v", req.Options, tc.wantOpts)
 			}
 		})
 	}
@@ -49,8 +72,16 @@ func TestValidate(t *testing.T) {
 
 func TestParse(t *testing.T) {
 	t.Parallel()
-	choice := provider.DecideRequest{Kind: "choice", Options: []string{"coding", "research", "general"}}
-	yesno := provider.DecideRequest{Kind: "yesno", Options: []string{"yes", "no"}}
+	choice := provider.DecideRequest{Kind: "choice", Options: ids("coding", "research", "general")}
+	described := provider.DecideRequest{Kind: "choice", Options: []provider.DecideOption{
+		{ID: "coding", Description: "writes code"}, {ID: "general", Description: "documents"},
+	}}
+	colon := provider.DecideRequest{Kind: "choice", Options: []provider.DecideOption{
+		{ID: "openai", Description: "any OpenAI model"},
+		{ID: "openai:gpt-5", Description: "flagship"},
+		{ID: "OpenAI:GPT-5-mini", Description: "cheap: fast"},
+	}}
+	yesno := provider.DecideRequest{Kind: "yesno", Options: ids("yes", "no")}
 	tests := []struct {
 		name       string
 		req        provider.DecideRequest
@@ -64,9 +95,16 @@ func TestParse(t *testing.T) {
 		{"markdown bold", choice, "**research**", "research", false},
 		{"prose around the option is malformed", choice, "I think research fits best", "", true},
 		{"two options is malformed", choice, "coding, research", "", true},
-		{"option with id: desc returns id", provider.DecideRequest{Kind: "choice", Options: []string{"coding: writes code", "general: documents"}}, "coding", "coding", false},
-		{"reply with full label returns id", provider.DecideRequest{Kind: "choice", Options: []string{"coding: writes code", "general: documents"}}, "coding: writes code", "coding", false},
-		{"reply with id and colon returns id", provider.DecideRequest{Kind: "choice", Options: []string{"coding: writes code", "general: documents"}}, "coding:", "coding", false},
+		{"described option matches on id", described, "coding", "coding", false},
+		{"reply echoing the prompt line returns id", described, "Coding: writes code", "coding", false},
+		{"description alone is malformed", described, "writes code", "", true},
+		{"id with trailing colon is malformed", described, "coding:", "", true},
+		{"colon id round-trips", colon, "openai:gpt-5", "openai:gpt-5", false},
+		{"colon id is not cut to its prefix", colon, "openai", "openai", false},
+		{"colon id case-insensitive returns id as given", colon, "openai:gpt-5-MINI", "OpenAI:GPT-5-mini", false},
+		{"colon id quoted with period", colon, "`openai:gpt-5`.", "openai:gpt-5", false},
+		{"colon id echoing the prompt line", colon, "OpenAI:GPT-5-mini: cheap: fast", "OpenAI:GPT-5-mini", false},
+		{"unknown colon id is malformed", colon, "openai:gpt-4", "", true},
 		{"yes", yesno, "Yes", "yes", false},
 		{"maybe is malformed", yesno, "maybe", "", true},
 	}
@@ -96,7 +134,7 @@ func TestParse(t *testing.T) {
 // TestParseErrorTruncatesReply keeps a chatty reply short in the error.
 func TestParseErrorTruncatesReply(t *testing.T) {
 	t.Parallel()
-	_, err := Parse(provider.DecideRequest{Kind: "yesno", Options: []string{"yes", "no"}}, strings.Repeat("x", 200))
+	_, err := Parse(provider.DecideRequest{Kind: "yesno", Options: ids("yes", "no")}, strings.Repeat("x", 200))
 	if err == nil || len(err.Error()) > 160 {
 		t.Fatalf("err = %v, want a bounded message", err)
 	}
@@ -104,11 +142,13 @@ func TestParseErrorTruncatesReply(t *testing.T) {
 
 func TestPromptListsOptions(t *testing.T) {
 	t.Parallel()
-	system, user := Prompt(provider.DecideRequest{Kind: "choice", Question: "Which kind?", Options: []string{"coding", "research"}})
-	if !strings.Contains(system, "exactly one of the allowed options") {
+	system, user := Prompt(provider.DecideRequest{Kind: "choice", Question: "Which kind?", Options: []provider.DecideOption{
+		{ID: "coding", Description: "writes code"}, {ID: "research"}, {ID: "openai:gpt-5", Description: "flagship"},
+	}})
+	if !strings.Contains(system, "exactly one of the allowed option ids") {
 		t.Fatalf("system = %q", system)
 	}
-	for _, want := range []string{"Which kind?", "- coding\n", "- research\n"} {
+	for _, want := range []string{"Which kind?", "- coding: writes code\n", "- research\n", "- openai:gpt-5: flagship\n"} {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user prompt %q lacks %q", user, want)
 		}
@@ -157,7 +197,7 @@ func chunks(texts ...string) []stream.StreamEvent {
 func TestViaChatRunsLowEffortAndParses(t *testing.T) {
 	t.Parallel()
 	p := &scriptedProvider{events: append([]stream.StreamEvent{{Type: stream.EventReasoningChunk, Text: "hmm"}}, chunks("res", "earch")...)}
-	req := provider.DecideRequest{Kind: "choice", Question: "Which kind?", Options: []string{"coding", "research"}}
+	req := provider.DecideRequest{Kind: "choice", Question: "Which kind?", Options: ids("coding", "research")}
 
 	res, usage, err := ViaChat(t.Context(), p, "m1", req, true, "none")
 	if err != nil {
@@ -180,7 +220,7 @@ func TestViaChatRunsLowEffortAndParses(t *testing.T) {
 func TestViaChatMalformedKeepsUsage(t *testing.T) {
 	t.Parallel()
 	p := &scriptedProvider{events: chunks("Probably coding, but research also fits.")}
-	req := provider.DecideRequest{Kind: "choice", Question: "q", Options: []string{"coding", "research"}}
+	req := provider.DecideRequest{Kind: "choice", Question: "q", Options: ids("coding", "research")}
 
 	res, usage, err := ViaChat(t.Context(), p, "m1", req, false, "")
 	if !errors.Is(err, ErrMalformed) {
@@ -197,13 +237,13 @@ func TestViaChatMalformedKeepsUsage(t *testing.T) {
 func TestViaChatRelaysProviderErrors(t *testing.T) {
 	t.Parallel()
 	p := &scriptedProvider{events: []stream.StreamEvent{{Type: stream.EventError, Err: &stream.StreamError{Code: "http_500", Message: "boom"}}}}
-	_, _, err := ViaChat(t.Context(), p, "m1", provider.DecideRequest{Kind: "yesno", Question: "q", Options: []string{"yes", "no"}}, false, "")
+	_, _, err := ViaChat(t.Context(), p, "m1", provider.DecideRequest{Kind: "yesno", Question: "q", Options: ids("yes", "no")}, false, "")
 	if err == nil || !strings.Contains(err.Error(), "http_500") || errors.Is(err, ErrMalformed) {
 		t.Fatalf("err = %v, want the provider error", err)
 	}
 
 	p = &scriptedProvider{err: errors.New("bad request")}
-	if _, _, err := ViaChat(t.Context(), p, "m1", provider.DecideRequest{Kind: "yesno", Question: "q", Options: []string{"yes", "no"}}, false, ""); err == nil {
+	if _, _, err := ViaChat(t.Context(), p, "m1", provider.DecideRequest{Kind: "yesno", Question: "q", Options: ids("yes", "no")}, false, ""); err == nil {
 		t.Fatal("immediate Stream error not relayed")
 	}
 }

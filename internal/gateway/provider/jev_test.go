@@ -62,7 +62,7 @@ func TestJevDecideChoice(t *testing.T) {
 	res, usage, err := j.Decide(t.Context(), "jev-latest", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Which kind of mission is this?",
-		Options:  []string{"coding", "research", "general"},
+		Options:  optIDs("coding", "research", "general"),
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -107,7 +107,7 @@ func TestJevDecideChoiceWithStateAndDescriptions(t *testing.T) {
 		Kind:     DecideChoice,
 		Question: "Classify this goal.",
 		State:    "Write a go compiler",
-		Options:  []string{"coding: writes code", "general: documents"},
+		Options:  []DecideOption{{ID: "coding", Description: "writes code"}, {ID: "general", Description: "documents"}},
 	})
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
@@ -124,7 +124,7 @@ func TestJevDecideChoiceWithStateAndDescriptions(t *testing.T) {
 	}
 	crit, ok := q.Criteria.(map[string]any)
 	if !ok || crit["coding"] != "writes code" || crit["general"] != "documents" {
-		t.Fatalf("crit = %+v, want split id: description", crit)
+		t.Fatalf("crit = %+v, want each id mapped to its description", crit)
 	}
 }
 
@@ -136,7 +136,7 @@ func TestJevDecideChoiceOutsideOptionsIsAnError(t *testing.T) {
 	_, _, err := j.Decide(t.Context(), "jev-latest", DecideRequest{
 		Kind:     DecideChoice,
 		Question: "Which kind of mission is this?",
-		Options:  []string{"coding", "research", "general"},
+		Options:  optIDs("coding", "research", "general"),
 	})
 	if err == nil || !strings.Contains(err.Error(), "not an allowed option") {
 		t.Fatalf("err = %v, want 'not an allowed option'", err)
@@ -157,7 +157,7 @@ func TestJevDecideYesNo(t *testing.T) {
 			t.Parallel()
 			stub := newJevStub(t, `{"type":"noul","noul":`+tc.noul+`,"confidence":0.9}`)
 			j := NewJev(SystemOneConfig{Name: "jev", BaseURL: stub.srv.URL})
-			res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Does the user ask for a refund?", Options: []string{"yes", "no"}})
+			res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideYesNo, Question: "Does the user ask for a refund?", Options: optIDs("yes", "no")})
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
 			}
@@ -205,7 +205,7 @@ func TestJevURLVariations(t *testing.T) {
 		stub.srv.URL + "/v1/systemone",
 	} {
 		j := NewJev(SystemOneConfig{Name: "jev", BaseURL: u})
-		res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: []string{"yes", "no"}})
+		res, _, err := j.Decide(t.Context(), "", DecideRequest{Kind: DecideChoice, Question: "q", Options: optIDs("yes", "no")})
 		if err != nil {
 			t.Fatalf("url %s: Decide: %v", u, err)
 		}
