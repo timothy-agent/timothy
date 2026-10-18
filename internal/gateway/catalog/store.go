@@ -127,15 +127,19 @@ func (s *Store) Search(ctx context.Context, q, litellmProvider string, limit int
 
 // SearchProviders is Search's multi-provider sibling: q filters
 // case-insensitive substring on model_key as usual, but the provider
-// restriction is a set (nil/empty means no restriction) rather than a
+// restriction is a set rather than a
 // single exact value — the admin catalog-models endpoint's candidate
 // litellm_provider(s) from a driver/base_url can be more than one
-// (e.g. bedrock's "bedrock"/"bedrock_converse"). limit < 0 returns
+// (e.g. bedrock's "bedrock"/"bedrock_converse"). An empty set returns
+// an empty list, never the whole catalog (D-171). limit < 0 returns
 // every match (the provider listing's context-window source). An empty
 // query lists chat-like modes before the rest, still alphabetical
 // within each group, so a capped picker is not filled with embeddings
 // and image models that sort first.
 func (s *Store) SearchProviders(ctx context.Context, q string, litellmProviders []string, limit int) ([]Model, error) {
+	if len(litellmProviders) == 0 {
+		return []Model{}, nil
+	}
 	limit = clampSearchLimit(limit, true)
 	qLower := strings.ToLower(q)
 	want := make(map[string]bool, len(litellmProviders))
@@ -146,7 +150,7 @@ func (s *Store) SearchProviders(ctx context.Context, q string, litellmProviders 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return rankedMatches(s.entries, qLower, limit, true, func(e Entry) bool {
-		return len(want) == 0 || want[e.LitellmProvider]
+		return want[e.LitellmProvider]
 	}), nil
 }
 
@@ -252,8 +256,7 @@ func (s *Store) AllModels(ctx context.Context) ([]Model, error) {
 	return s.allProviders(ctx)
 }
 
-// allProviders returns the whole catalog, unpaginated — used when the
-// driver/host declares no litellm_provider restriction.
+// allProviders returns the whole catalog, unpaginated.
 func (s *Store) allProviders(ctx context.Context) ([]Model, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

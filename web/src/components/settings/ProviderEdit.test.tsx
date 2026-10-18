@@ -801,6 +801,26 @@ describe('ProviderEdit catalog models table', () => {
     expect(await screen.findByText('no catalog models found')).toBeInTheDocument()
   })
 
+  it('hints to type a model id when the provider has no catalog models', async () => {
+    vi.mocked(catalogModelsForProvider).mockResolvedValue([])
+    renderPage()
+
+    expect(await screen.findByText('Type a model id in Default model or on the Routing page.')).toBeInTheDocument()
+  })
+
+  it('drops the hint when a filter matches nothing', async () => {
+    vi.mocked(catalogModelsForProvider).mockResolvedValue([])
+    renderPage()
+
+    const filter = await screen.findByPlaceholderText('filter by model id…')
+    fireEvent.change(filter, { target: { value: 'nova' } })
+
+    await waitFor(() =>
+      expect(screen.queryByText('Type a model id in Default model or on the Routing page.')).not.toBeInTheDocument(),
+    )
+    expect(screen.getByText('no catalog models found')).toBeInTheDocument()
+  })
+
   it('debounces the filter box into a single catalog search call with the typed query', async () => {
     vi.mocked(catalogModelsForProvider).mockResolvedValue([])
     renderPage()
