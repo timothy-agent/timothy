@@ -789,9 +789,8 @@ export async function validateProvider(
   })
 }
 
-// availableModels proxies the provider's own model-listing endpoint.
-// Throws ChatError with status 422 when the driver cannot list models
-// (bedrock): callers fall back to manual entry.
+// availableModels fetches the provider's one model list (D-172): live
+// ids when the driver can list, else the catalog rows for its vendors.
 export async function availableModels(id: string): Promise<AvailableModel[]> {
   const { models } = await request<{ models: AvailableModel[] }>(
     `/v1/admin/providers/${id}/models`,

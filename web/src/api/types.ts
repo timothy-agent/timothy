@@ -622,12 +622,18 @@ export interface TestResult {
   responses_ok?: boolean
 }
 
-// AvailableModel is one model reported by a provider's own listing
-// endpoint (GET /v1/admin/providers/:id/models). display_name is set
-// only by drivers whose listing endpoint reports one (cursor-cli).
+// AvailableModel is one row of a provider's model list
+// (GET /v1/admin/providers/:id/models). display_name is set only by
+// drivers whose listing endpoint reports one (cursor-cli). source says
+// whether the row came from the provider's live listing or the catalog
+// fallback; prices are per million tokens, null when unknown.
 export interface AvailableModel {
   id: string
   display_name?: string
+  source?: 'live' | 'catalog'
+  input_per_mtok?: number | null
+  output_per_mtok?: number | null
+  max_input_tokens?: number | null
 }
 
 // AdminAgent is one row of the agent registry (D-034): who serves a
